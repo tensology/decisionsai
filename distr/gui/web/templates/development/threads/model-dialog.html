@@ -1,8 +1,13 @@
-<dialog class="studio-dialog model-dialog" id="model-dialog" aria-label="Model and performance">
+<dialog class="studio-dialog model-dialog" id="model-dialog" aria-label="Harness and model">
         <form method="dialog" id="model-form">
             <div class="model-menu-shell">
                 <div class="model-menu-main" id="model-menu-main">
-                    <button type="button" class="model-menu-row" data-model-pane="provider"><span>Provider</span><strong id="model-provider-value">Auto</strong><i aria-hidden="true">›</i></button>
+                    <button type="button" class="model-menu-row" data-model-pane="auto"><span>Auto</span><strong id="model-auto-value">Complexity route</strong><i aria-hidden="true">›</i></button>
+                    <div class="model-route-preview" id="model-route-preview" hidden>
+                        <small id="model-route-preview-text">Assessing…</small>
+                    </div>
+                    <button type="button" class="model-menu-row" data-model-pane="harness"><span>Harness</span><strong id="model-harness-value">Auto</strong><i aria-hidden="true">›</i></button>
+                    <button type="button" class="model-menu-row" id="model-provider-row" data-model-pane="provider"><span>Provider</span><strong id="model-provider-value">Choose provider</strong><i aria-hidden="true">›</i></button>
                     <button type="button" class="model-menu-row" data-model-pane="model"><span>Model</span><strong id="model-catalog-value">Automatic</strong><i aria-hidden="true">›</i></button>
                     <button type="button" class="model-menu-row" id="model-effort-row" data-model-pane="effort"><span>Effort</span><strong id="model-effort-value">Medium</strong><i aria-hidden="true">›</i></button>
                     <button type="button" class="model-menu-row" id="model-speed-row" data-model-pane="speed"><span>Speed</span><strong id="model-speed-value">Standard</strong><i aria-hidden="true">›</i></button>

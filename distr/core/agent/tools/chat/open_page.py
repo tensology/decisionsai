@@ -24,6 +24,9 @@ _PAGE_MAP = {
     # Development workspace
     "development":    "/development/",
     "development threads": "/development/",
+    "web ui":         "/development/",
+    "webui":          "/development/",
+    "web interface":  "/development/",
     "incoming":       "/development/incoming/",
     "automations":    "/development/automations/",
     "automation":     "/development/automations/",
@@ -176,8 +179,9 @@ class OpenPageTool(BaseTool):
     name: str = "open_page"
     description: str = (
         "Open a DecisionsAI web UI page in the default browser. "
-        "Use when the user says 'open chat', 'open preferences', 'open projects', etc. "
+        "Use when the user says open/show/bring up chat, development, the web UI, preferences, projects, etc. "
         f"Known pages: {_KNOWN_PAGES}. "
+        "Do not use smart_open for these in-app pages. "
         "For a specific ticket board (local, Jira, or Trello), use create_ticket with action='open_board' instead. "
         "Also handles 'new chat' by creating a fresh chat and opening the chat page."
     )

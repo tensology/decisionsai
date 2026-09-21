@@ -139,6 +139,7 @@ export function createSidebar({ context, actions, el }) {
         el('board-context-activate').classList.toggle('hidden', board?.provider !== 'decisions');
         el('board-context-activate').disabled = Boolean(board?.in_use);
         el('board-context-archive').classList.toggle('hidden', board?.provider !== 'decisions');
+        el('board-context-delete').classList.toggle('hidden', board?.provider !== 'decisions');
         const project = actions.projectById(board?.project_id);
         const openFolderButton = el('board-context-open-folder');
         openFolderButton.querySelector('.context-menu-label').textContent = `Show in ${actions.systemFileManagerLabel()}`;
@@ -203,8 +204,8 @@ export function createSidebar({ context, actions, el }) {
         if (!chat) return;
         state.contextThreadId = Number(chatId);
         const menu = el('thread-context-menu');
-        el('thread-context-pin').textContent = chat.pinned ? 'Unpin thread' : 'Pin thread';
-        el('thread-context-archive').textContent = chat.archived ? 'Restore thread' : 'Archive thread';
+        el('thread-context-pin').querySelector('.context-menu-label').textContent = chat.pinned ? 'Unpin thread' : 'Pin thread';
+        el('thread-context-archive').querySelector('.context-menu-label').textContent = chat.archived ? 'Restore thread' : 'Archive thread';
         menu.classList.remove('hidden');
         menu.style.left = `${Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8)}px`;
         menu.style.top = `${Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8)}px`;
@@ -295,72 +296,10 @@ export function createSidebar({ context, actions, el }) {
         el('board-edit-folder').value = board?.folder_location || board?.default_project_folder || '';
         el('board-edit-terminals').value = board?.startup_instructions || '';
         el('delete-board-button').classList.toggle('hidden', !board || board.provider !== 'decisions');
-        el('board-link-workflow').innerHTML =
-            '<option value="">No default workflow</option>' +
-            context.workflows
-                .map(
-                    (workflow) =>
-                        `<option value="${Number(workflow.id)}"${Number(board?.default_workflow_id) === Number(workflow.id) ? ' selected' : ''}>${actions.escapeHtml(workflow.name || 'Untitled workflow')}</option>`
-                )
-                .join('');
-        el('board-whatsapp-jid').value = '';
-        el('board-whatsapp-name').value = '';
-        el('board-whatsapp-auto').checked = false;
-        el('board-whatsapp-add').disabled = !board || board.provider !== 'decisions';
-        if (board?.provider === 'decisions') await loadBoardWhatsAppLinks(board);
-        else el('board-whatsapp-links').innerHTML = '<p>Save the local board before linking WhatsApp.</p>';
         closeBoardContextMenu();
         state.contextBoardKey = board?.key || '';
         el('board-link-dialog').showModal();
         window.setTimeout(() => el('board-edit-name').focus(), 0);
-    }
-
-    async function loadBoardWhatsAppLinks(board) {
-        try {
-            const links = await actions.api(`/tickets/boards/${Number(board.local_id || board.id)}/whatsapp-links`);
-            el('board-whatsapp-links').innerHTML = links.length
-                ? links
-                      .map(
-                          (link) =>
-                              `<div class="channel-link-row"><div><strong>${actions.escapeHtml(link.contact_name || link.phone_number || link.phone_jid)}</strong><small>${actions.escapeHtml(link.phone_jid)}${link.auto_snapshot ? ' · automatic snapshots' : ' · manual snapshots'}</small></div><button type="button" data-board-link-remove="${Number(link.id)}" aria-label="Remove WhatsApp link">×</button></div>`
-                      )
-                      .join('')
-                : '<p>No WhatsApp people or groups linked.</p>';
-            el('board-whatsapp-links')
-                .querySelectorAll('[data-board-link-remove]')
-                .forEach((button) =>
-                    button.addEventListener('click', async () => {
-                        await actions.unlinkIncomingChannel(Number(board.local_id || board.id), Number(button.dataset.boardLinkRemove));
-                        await loadBoardWhatsAppLinks(board);
-                    })
-                );
-        } catch (error) {
-            el('board-whatsapp-links').innerHTML = `<p>${actions.escapeHtml(error.message || 'Could not load WhatsApp links.')}</p>`;
-        }
-    }
-
-    async function addBoardWhatsAppLink() {
-        const board = actions.boardByKey(el('board-link-dialog').dataset.boardKey);
-        const jid = el('board-whatsapp-jid').value.trim();
-        if (!board || !jid) return;
-        try {
-            await actions.api(`/tickets/boards/${Number(board.local_id || board.id)}/whatsapp-links`, {
-                method: 'POST',
-                body: {
-                    phone_jid: jid,
-                    contact_name: el('board-whatsapp-name').value.trim(),
-                    auto_snapshot: el('board-whatsapp-auto').checked
-                }
-            });
-            el('board-whatsapp-jid').value = '';
-            el('board-whatsapp-name').value = '';
-            el('board-whatsapp-auto').checked = false;
-            await loadBoardWhatsAppLinks(board);
-            await actions.refreshIncomingData();
-            actions.toast('WhatsApp channel linked.');
-        } catch (error) {
-            actions.toast(error.message || 'Could not link WhatsApp.', 'error');
-        }
     }
 
     async function saveBoardLink(event) {
@@ -368,12 +307,10 @@ export function createSidebar({ context, actions, el }) {
         const board = actions.boardByKey(el('board-link-dialog').dataset.boardKey);
         const name = el('board-edit-name').value.trim();
         if (!name) return;
-        const workflowId = Number(el('board-link-workflow').value || 0) || null;
         const body = {
             name,
             folder_location: el('board-edit-folder').value.trim(),
-            startup_instructions: el('board-edit-terminals').value,
-            default_workflow_id: workflowId || 0
+            startup_instructions: el('board-edit-terminals').value
         };
         try {
             if (!board) {
@@ -391,8 +328,7 @@ export function createSidebar({ context, actions, el }) {
                         method: 'POST',
                         body: {
                             name,
-                            default_project_id: board.project_id || 0,
-                            default_workflow_id: workflowId || 0
+                            default_project_id: board.project_id || 0
                         }
                     }
                 );
@@ -428,31 +364,26 @@ export function createSidebar({ context, actions, el }) {
         }
     }
 
-    function openBoardDeleteDialog() {
-        const board = actions.boardByKey(el('board-link-dialog').dataset.boardKey);
+    async function deleteBoard(board) {
         if (!board || board.provider !== 'decisions') return;
-        el('board-delete-dialog').dataset.boardKey = board.key;
-        el('delete-board-repository').checked = false;
         const path = board.folder_location || board.default_project_folder || '';
-        el('delete-board-repository').disabled = !path;
-        el('delete-board-repository-path').textContent = path || 'No project folder configured';
-        el('board-link-dialog').close();
-        el('board-delete-dialog').showModal();
-    }
-
-    async function deleteBoard(event) {
-        event.preventDefault();
-        const board = actions.boardByKey(el('board-delete-dialog').dataset.boardKey);
-        if (!board) return;
+        const decision = await actions.confirmAction({
+            title: 'Delete project?',
+            message: 'This removes the project, board, tickets, Development threads, time relationships, and stored snapshot files.',
+            confirmLabel: 'Delete',
+            danger: true,
+            checkbox: path ? { label: `Also delete repository folder (${path})`, checked: false } : null
+        });
+        const confirmed = decision === true || Boolean(decision?.confirmed);
+        if (!confirmed) return;
         try {
-            const removeRepository = el('delete-board-repository').checked;
+            const removeRepository = Boolean(decision?.checked);
             await actions.api(`/tickets/boards/${Number(board.local_id || board.id)}?delete_repository=${removeRepository}`, { method: 'DELETE' });
-            el('board-delete-dialog').close();
             if (context.selectedBoardKey === board.key) actions.showEmptyTask();
             await actions.refreshShell({ preserveConversation: true });
-            actions.toast(removeRepository ? 'Board, linked data, and repository deleted.' : 'Board and linked data deleted.');
+            actions.toast(removeRepository ? 'Project, linked data, and repository deleted.' : 'Project and linked data deleted.');
         } catch (error) {
-            actions.toast(error.message || 'Could not delete the board.', 'error');
+            actions.toast(error.message || 'Could not delete the project.', 'error');
         }
     }
 
@@ -639,6 +570,11 @@ export function createSidebar({ context, actions, el }) {
                 actions.toast(error.message || 'Could not archive the board.', 'error');
             }
         });
+        el('board-context-delete').addEventListener('click', async () => {
+            const board = actions.boardByKey(state.contextBoardKey);
+            closeBoardContextMenu();
+            await deleteBoard(board);
+        });
         el('board-context-terminals').addEventListener('click', () => {
             if (state.contextBoardKey) actions.openBoardTerminals(state.contextBoardKey);
         });
@@ -664,9 +600,11 @@ export function createSidebar({ context, actions, el }) {
         });
         el('board-link-form').addEventListener('submit', saveBoardLink);
         el('board-folder-browse').addEventListener('click', browseBoardFolder);
-        el('board-whatsapp-add').addEventListener('click', addBoardWhatsAppLink);
-        el('delete-board-button').addEventListener('click', openBoardDeleteDialog);
-        el('board-delete-form').addEventListener('submit', deleteBoard);
+        el('delete-board-button').addEventListener('click', () => {
+            const board = actions.boardByKey(el('board-link-dialog').dataset.boardKey);
+            el('board-link-dialog').close();
+            deleteBoard(board);
+        });
         el('boards-show-more').addEventListener('click', () => {
             state.boardsExpanded = !state.boardsExpanded;
             renderSidebar();

@@ -20,12 +20,12 @@ ITEM_TYPES = {
     "brief": ("Outcome brief", "markdown", "# Outcome brief\n\n## Outcome\n\nDescribe the result this board should deliver.\n\n## Boundaries\n\n- In scope\n- Out of scope\n"),
     "prd": ("Product requirements", "markdown", "# Product requirements\n\n## Outcome\n\n## Users\n\n## Requirements\n\n- FR-001: \n\n## Open questions\n\n"),
     "frac": ("Functional requirements", "markdown", "# Functional requirements and acceptance criteria\n\n## FR-001\n\nRequirement.\n\n- AC-001.1: Given ..., when ..., then ...\n"),
-    "wireframe": ("Wireframes", "html", "# Wireframes\n\nDescribe the primary screen, its actions, and its loading and error states. The preview turns this into a vector storyboard.\n"),
+    "wireframe": ("Wireframes", "wire", "screen \"New screen\" device=desktop\n  stack\n    heading \"Primary screen\"\n    text \"Describe the user journey and states.\"\n    button \"Continue\" variant=primary\n"),
     "erd": ("Entity relationship diagram", "mermaid", "erDiagram\n    PROJECT ||--o{ ITEM : contains\n    ITEM ||--o{ REVISION : versions\n"),
     "diagram": ("System diagram", "mermaid", "flowchart LR\n    User --> DecisionsAI\n    DecisionsAI --> Project\n"),
     "decision": ("Decision", "markdown", "# Decision\n\n## Context\n\n## Decision\n\n## Consequences\n\n"),
     "architecture": ("Architecture and ERD", "mermaid", "erDiagram\n    PROJECT ||--o{ ITEM : contains\n    ITEM ||--o{ REVISION : versions\n"),
-    "flows": ("Flows and wireframes", "html", "# Flows and wireframes\n\nDescribe the primary user journey and the screen states that need to be designed. The preview turns this into a vector storyboard.\n"),
+    "flows": ("Flows and wireframes", "wire", "screen \"Primary flow\" device=desktop\n  stack\n    heading \"Primary screen\"\n    text \"Describe the user journey and the screen states.\"\n"),
     "skills": ("Skills and instructions", "markdown", "# Skills and instructions\n\n## Required skills\n\n- Identify the skills needed to deliver this plan.\n\n## Working instructions\n\n- Keep implementation aligned with the approved requirements.\n"),
     "handover": ("Handover", "markdown", "# Handover\n\n## What is ready\n\n## Open items\n\n## Next actions\n\n- Confirm the unresolved decisions before execution.\n"),
     "file_structure": ("File structure", "markdown", "# File structure\n\nThis is the bounded file tree observed in the linked project. It is regenerated only when you explicitly ask Plan to inspect the project.\n"),
@@ -147,7 +147,7 @@ def build_approved_tickets(workspace_id: int) -> dict[str, Any]:
                     complexity="medium",
                     position=len(lane.tickets),
                     linked_project_id=board.default_project_id,
-                    linked_workflow_id=board.default_workflow_id,
+                    linked_workflow_id=None,
                     source_provider="plan",
                     source_external_id=stable_key,
                     source_label=workspace.board_name,
@@ -213,8 +213,151 @@ def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, pr
         db.refresh(row)
         count = db.query(func.count(PlanItem.id)).filter(PlanItem.workspace_id == row.id).scalar() or 0
         payload = _workspace_payload(row, count)
-    ensure_plan_scaffold(payload["id"])
     return get_workspace(payload["id"]) or payload
+
+
+def open_project_plan(*, board_key: str, board_provider: str, board_name: str, project_id: int | None = None) -> dict[str, Any]:
+    """Ensure the board plan workspace, scaffold sections, and fill them from the project."""
+    payload = ensure_workspace(
+        board_key=board_key,
+        board_provider=board_provider,
+        board_name=board_name,
+        project_id=project_id,
+    )
+    if payload.get("project_id") and payload.get("root_path"):
+        ensure_plan_scaffold(int(payload["id"]))
+        materialize_project_scan(int(payload["id"]), force=False)
+        return get_workspace(int(payload["id"])) or payload
+    return payload
+
+
+def _default_scaffold_content(item_type: str) -> str:
+    return str(ITEM_TYPES.get(item_type, ("", "", ""))[2] or "")
+
+
+def _item_is_replaceable(item: dict[str, Any], *, force: bool) -> bool:
+    if force:
+        return True
+    if item.get("is_starter"):
+        return True
+    item_type = str(item.get("item_type") or "")
+    content = str(item.get("content") or "").strip()
+    default = _default_scaffold_content(item_type).strip()
+    if default and content == default:
+        return True
+    # First revision shells that are still near-empty can be filled once.
+    # After any real edit (revision_count > 1), soft scan leaves them alone.
+    if (
+        int(item.get("revision_count") or 0) <= 1
+        and len(content) < 80
+        and item_type in {"brief", "prd", "frac", "architecture", "flows"}
+    ):
+        return True
+    return False
+
+
+def materialize_project_scan(workspace_id: int, *, force: bool = False, instruction: str = "") -> dict[str, Any]:
+    """Fill plan sections from a deterministic project inspection.
+
+    Same path for every linked project. Never invents project-specific hacks.
+    By default only replaces starter / empty scaffold content. ``force=True``
+    (Scan project) refreshes the derived sections even if previously filled.
+    """
+    from distr.core.planning.project_scan import scan_project
+
+    detail = get_workspace(int(workspace_id))
+    if detail is None:
+        raise LookupError("Plan workspace not found.")
+    if not detail.get("project_id"):
+        raise ValueError("Link a project folder to this board first.")
+    with get_session() as db:
+        project = db.get(Project, int(detail["project_id"]))
+        if project is None or not project.folder_location:
+            raise ValueError("Link a project folder to this board first.")
+        project_name = str(project.name or detail.get("board_name") or "Project")
+        project_root = Path(project.folder_location).expanduser().resolve()
+    if not project_root.is_dir():
+        raise ValueError("The linked project folder is unavailable.")
+
+    scanned = scan_project(project_root, project_name=project_name)
+    artifacts = scanned["artifacts"]
+    has_signal = bool(scanned["summary"]["route_count"] or scanned["summary"]["model_count"])
+    if not force and not has_signal:
+        return {
+            "action": "scanned",
+            "workspace": get_workspace(int(workspace_id)),
+            "updated": [],
+            "skipped": list(artifacts.keys()),
+            "summary": scanned["summary"],
+            "message": "No routes or models detected yet; scaffold left in place.",
+        }
+    updated: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    by_type = {str(item.get("item_type")): item for item in detail.get("items") or []}
+    note = instruction or "Project scan"
+    for item_type, content in artifacts.items():
+        item = by_type.get(item_type)
+        if item is None:
+            created = create_item(
+                workspace_id=int(workspace_id),
+                item_type=item_type,
+                content=content,
+                source="discovery",
+                instruction=note,
+            )
+            updated.append(created)
+            continue
+        if not _item_is_replaceable(item, force=force):
+            skipped.append(item_type)
+            continue
+        refreshed = update_item(
+            int(item["id"]),
+            content=content,
+            expected_revision=int(item.get("revision_count") or 1),
+            source="discovery",
+            instruction=note,
+            workspace_id=int(workspace_id),
+        )
+        if refreshed:
+            updated.append(refreshed)
+    # Keep file structure honest after every scan.
+    tree = by_type.get("file_structure")
+    tree_content = _file_tree_content(project_root, detail.get("root_path") or "")
+    if tree is None:
+        updated.append(
+            create_item(
+                workspace_id=int(workspace_id),
+                item_type="file_structure",
+                content=tree_content,
+                source="discovery",
+                instruction=note,
+            )
+        )
+    elif _item_is_replaceable(tree, force=force) or force:
+        refreshed = update_item(
+            int(tree["id"]),
+            content=tree_content,
+            expected_revision=int(tree.get("revision_count") or 1),
+            source="discovery",
+            instruction=note,
+            workspace_id=int(workspace_id),
+        )
+        if refreshed:
+            updated.append(refreshed)
+
+    workspace = get_workspace(int(workspace_id))
+    return {
+        "action": "scanned",
+        "workspace": workspace,
+        "updated": [item.get("item_type") for item in updated],
+        "skipped": skipped,
+        "summary": scanned["summary"],
+        "message": (
+            f"Scanned {scanned['summary']['route_count']} routes and {scanned['summary']['model_count']} models. "
+            f"Updated {len(updated)} plan section(s)."
+            + (f" Left curated sections unchanged: {', '.join(skipped)}." if skipped else "")
+        ),
+    }
 
 
 def get_workspace(workspace_id: int) -> dict[str, Any] | None:
@@ -226,6 +369,10 @@ def get_workspace(workspace_id: int) -> dict[str, Any] | None:
         payload = _workspace_payload(row, count)
         items = db.query(PlanItem).filter(PlanItem.workspace_id == row.id).order_by(PlanItem.sort_order, PlanItem.id).all()
         payload["items"] = [_item_payload(item, _revision_count(db, item.id)) for item in items]
+        for item in payload["items"]:
+            original = db.query(PlanItemRevision).filter_by(item_id=item["id"], revision=1).one_or_none()
+            if original and original.source == "scaffold" and item["revision_count"] == 1:
+                item["is_starter"] = True
         payload["summary"] = _workspace_summary(items)
     return payload
 
@@ -283,7 +430,7 @@ def _write_managed_file(db, workspace: PlanWorkspace, item: PlanItem, previous_h
     if not workspace.root_path:
         return
     if not item.file_path:
-        suffix = {"markdown": ".md", "mermaid": ".mmd", "html": ".html"}.get(item.content_format, ".txt")
+        suffix = {"markdown": ".md", "mermaid": ".mmd", "html": ".html", "wire": ".wire"}.get(item.content_format, ".txt")
         item.file_path = str(Path(workspace.root_path).expanduser().resolve() / f"{item.id}-{_slug(item.title)}{suffix}")
     stage_write(db, workspace, item, previous_hash)
 
@@ -403,6 +550,103 @@ def update_item(item_id: int, *, title: str | None = None, content: str | None =
     return payload
 
 
+def apply_agent_edits(workspace_id: int, *, edits: list[dict], expected_revisions: dict,
+                      instruction: str, source: str = "agent") -> list[dict[str, Any]]:
+    """Commit a linked set of planning edits together, never an arbitrary file write.
+
+    All input and disk conflicts are checked before committing any revision. File
+    projections are recoverable outbox writes, so a filesystem failure is reported
+    separately and cannot make a partially committed database plan.
+    """
+    if not isinstance(edits, list) or len(edits) > 40:
+        raise ValueError("A planning turn can change at most 40 artifacts.")
+    allowed = {"wireframe": {"wire", "html"}, "flows": {"wire", "mermaid"},
+               "erd": {"mermaid"}, "architecture": {"mermaid"}, "diagram": {"mermaid"},
+               **{kind: {"markdown"} for kind in ("brief", "prd", "frac", "skills", "handover", "decision", "file_structure")}}
+    clean = []
+    seen = set()
+    for edit in edits:
+        if not isinstance(edit, dict) or set(edit) - {"id", "item_type", "title", "content", "content_format", "expected_revision"}:
+            raise ValueError("Unknown planning edit fields.")
+        if not isinstance(edit.get("content"), str) or len(edit["content"]) > 200_000:
+            raise ValueError("Each artifact needs text content of at most 200,000 characters.")
+        title = edit.get("title")
+        if title is not None and (not isinstance(title, str) or not title.strip() or len(title) > 200):
+            raise ValueError("Artifact titles must contain 1 to 200 characters.")
+        item_id = edit.get("id")
+        if item_id is not None and (type(item_id) is not int or item_id < 1 or item_id in seen):
+            raise ValueError("Each existing artifact may be changed only once per turn.")
+        if item_id is not None:
+            seen.add(item_id)
+        if edit.get("content_format") == "wire":
+            from distr.core.planning.validation import validate_wireframe
+            validate_wireframe(edit["content"])
+        clean.append(dict(edit))
+    results = []
+    with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            from sqlalchemy import text
+            db.execute(text("BEGIN IMMEDIATE"))
+        workspace = db.get(PlanWorkspace, int(workspace_id), with_for_update=True)
+        if workspace is None:
+            raise LookupError("Plan workspace not found.")
+        rows = db.query(PlanItem).filter_by(workspace_id=workspace.id).all()
+        by_id = {item.id: item for item in rows}
+        actual = {str(item.id): _revision_count(db, item.id) for item in rows}
+        expected = {str(key): value for key, value in expected_revisions.items()}
+        if actual != expected:
+            raise ValueError("The plan changed while the agent was responding. No artifact changes were applied. Retry with the current plan.")
+        position = max((item.sort_order for item in rows), default=-1) + 1
+        for edit in clean:
+            item_id = edit.get("id")
+            item = by_id.get(item_id) if item_id is not None else None
+            if item_id is not None and item is None:
+                raise LookupError("Artifact does not belong to this plan.")
+            kind = edit.get("item_type") or (item.item_type if item else "")
+            fmt = edit.get("content_format") or (item.content_format if item else "")
+            if kind not in allowed or fmt not in allowed[kind]:
+                raise ValueError("Unsupported planning artifact type or format.")
+            if item and (kind != item.item_type or fmt != item.content_format):
+                raise ValueError("Create a new artifact to change its type or format.")
+            if fmt == "wire" and edit.get("content_format") != "wire":
+                # Existing artifacts may inherit their format. That must not
+                # bypass the same renderer validation as explicitly typed edits.
+                from distr.core.planning.validation import validate_wireframe
+                validate_wireframe(edit["content"])
+            if item and edit.get("expected_revision", actual[str(item.id)]) != actual[str(item.id)]:
+                raise ValueError("The artifact revision is stale.")
+            previous_hash = item.content_hash if item else None
+            if item is None:
+                if not edit.get("title"):
+                    raise ValueError("New artifacts need a title.")
+                item = PlanItem(workspace_id=workspace.id, item_type=kind, content_format=fmt,
+                                title=edit["title"].strip(), content=edit["content"], sort_order=position)
+                position += 1
+                db.add(item)
+                db.flush()
+                revision = 1
+            else:
+                item.title = edit.get("title", item.title).strip()
+                item.content = edit["content"]
+                item.status = "draft"
+                revision = actual[str(item.id)] + 1
+            _write_managed_file(db, workspace, item, previous_hash=previous_hash)
+            db.add(PlanItemRevision(item_id=item.id, revision=revision, title=item.title,
+                                   content=item.content, status=item.status or "draft",
+                                   source=source, instruction=instruction))
+            results.append(_item_payload(item, revision))
+        from distr.core.planning.validation import validate_plan_references, project_image_ids
+        validate_plan_references([
+            {"title": item.title, "item_type": item.item_type,
+             "content_format": item.content_format, "content": item.content or ""}
+            for item in db.query(PlanItem).filter_by(workspace_id=workspace.id).all()
+        ], asset_ids=project_image_ids(db, workspace.project_id))
+        db.commit()
+    for result in results:
+        result["file_sync_error"] = _finish_file_projection(result["id"])
+    return results
+
+
 def list_revisions(item_id: int) -> list[dict[str, Any]]:
     with get_session() as db:
         rows = db.query(PlanItemRevision).filter(PlanItemRevision.item_id == int(item_id)).order_by(PlanItemRevision.revision.desc()).all()
@@ -415,46 +659,12 @@ def list_revisions(item_id: int) -> list[dict[str, Any]]:
 
 
 def discover_project(workspace_id: int, *, instruction: str) -> dict[str, Any]:
-    with get_session() as db:
-        workspace = db.get(PlanWorkspace, int(workspace_id))
-        project = db.get(Project, int(workspace.project_id)) if workspace and workspace.project_id else None
-        if workspace is None:
-            raise LookupError("Plan workspace not found.")
-        if project is None or not project.folder_location:
-            raise ValueError("Link a project folder to this board first.")
-        project_root = Path(project.folder_location).expanduser().resolve()
-        if not project_root.is_dir():
-            raise ValueError("The linked project folder is unavailable.")
-        names = sorted(path.name for path in project_root.iterdir() if not path.name.startswith(".") and path.resolve() != Path(workspace.root_path).resolve())[:60]
-        readme = next((project_root / name for name in ("README.md", "README", "readme.md") if (project_root / name).is_file()), None)
-        readme_excerpt = readme.read_text(encoding="utf-8", errors="replace")[:6000].strip() if readme else ""
-        existing = db.query(PlanItem).filter(
-            PlanItem.workspace_id == workspace.id,
-            PlanItem.item_type == "project_overview",
-        ).one_or_none()
-        existing_revision = _revision_count(db, existing.id) if existing else 0
-    content = "# Project overview\n\n"
-    content += f"Observed in `{project_root}`.\n\n## Top-level contents\n\n"
-    content += "\n".join(f"- {name}" for name in names) or "- No visible files found"
-    if readme_excerpt:
-        content += f"\n\n## README excerpt\n\n{readme_excerpt}\n"
-    content += "\n\n## Next questions\n\n- Which behavior is current, and which behavior is proposed?\n- Which requirements need acceptance criteria?\n"
-    if existing and existing.content == content:
-        return {"action": "discovered", "item": _item_payload(existing, existing_revision), "message": "The project overview is unchanged."}
-    if existing:
-        item = create_item(workspace_id=workspace_id, item_type="discovery_proposal", title="Project overview proposal", content=content, content_format="markdown", source="discovery", instruction=instruction)
-        return {"action": "proposed", "item": item, "message": "Created a discovery proposal. Your maintained overview is unchanged."}
-    else:
-        item = create_item(
-            workspace_id=workspace_id,
-            item_type="project_overview",
-            title="Project overview",
-            content=content,
-            content_format="markdown",
-            source="discovery",
-            instruction=instruction,
-        )
-    return {"action": "discovered", "item": item}
+    """Force a full project scan into plan sections (same for every linked project)."""
+    return materialize_project_scan(
+        int(workspace_id),
+        force=True,
+        instruction=instruction or "Scan project",
+    )
 
 
 def apply_instruction(workspace_id: int, *, instruction: str, item_id: int | None = None) -> dict[str, Any]:
@@ -476,13 +686,27 @@ def apply_instruction(workspace_id: int, *, instruction: str, item_id: int | Non
                     raise LookupError("Plan item not found.")
                 content = f"{item.content.rstrip()}\n\n{text[len(append_prefix):].strip()}\n"
             return {"action": "updated", "item": update_item(item_id, content=content, source="language", instruction=text, expected_revision=expected_revision, workspace_id=workspace_id)}
+        if lower in {"approve", "approve this", "mark approved", "approve this item"}:
+            return {"action": "updated", "item": update_item(item_id, status="approved", source="language", instruction=text, expected_revision=expected_revision, workspace_id=workspace_id)}
+        if lower in {"send for review", "mark for review", "review this", "mark review"}:
+            return {"action": "updated", "item": update_item(item_id, status="review", source="language", instruction=text, expected_revision=expected_revision, workspace_id=workspace_id)}
         if lower.startswith("replace with "):
             return {"action": "updated", "item": update_item(item_id, content=text[13:].strip(), source="language", instruction=text, expected_revision=expected_revision, workspace_id=workspace_id)}
         if lower.startswith("rename to "):
             return {"action": "updated", "item": update_item(item_id, title=text[10:].strip(), source="language", instruction=text, expected_revision=expected_revision, workspace_id=workspace_id)}
         return {"action": "needs_detail", "message": "Use append, replace with, or rename to for this item."}
     lower = text.lower()
-    if any(phrase in lower for phrase in ("generate from project", "scan project", "discover project", "analyze project")):
+    if any(
+        phrase in lower
+        for phrase in (
+            "generate from project",
+            "scan project",
+            "discover project",
+            "analyze project",
+            "rebuild plan",
+            "rebuild from project",
+        )
+    ):
         return discover_project(workspace_id, instruction=text)
     aliases = (
         ("wireframe", ("wireframe",)),

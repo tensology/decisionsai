@@ -160,6 +160,9 @@ def test_forces_desktop_control_tools_for_audited_phrases():
         assert "window_management" in forced_tool_names_for_text(request), request
 
     assert "launch_app" in forced_tool_names_for_text("Can you bring up Spotify?")
+    assert "open_page" in forced_tool_names_for_text("Bring up the web UI")
+    assert "open_project" in forced_tool_names_for_text("Bring up the project")
+    assert "create_ticket" in forced_tool_names_for_text("Bring up the ticket board")
     assert "smart_open" in forced_tool_names_for_text("Can you open up my Downloads folder?")
 
     mouse_tools = forced_tool_names_for_text("Move the mouse to the Save button")

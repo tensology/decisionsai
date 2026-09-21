@@ -1,5 +1,5 @@
 """Request contracts retained by the Development HTTP API."""
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 class WorkflowCreateRequest(BaseModel):
     name: str = "Untitled Workflow"
@@ -138,6 +138,7 @@ class StudioTaskCreateRequest(BaseModel):
     board_ticket_lane: Optional[str] = None
     provider: Optional[str] = None
     model_name: Optional[str] = None
+    backend: Optional[str] = None
     route_mode: str = "auto"
     execution_profile: str = "code"
     autonomy_level: str = "full"
@@ -192,6 +193,7 @@ class StudioThreadControlsRequest(BaseModel):
 
 class StudioModelRouteRequest(BaseModel):
     route_mode: str = "auto"
+    backend: Optional[str] = None
     provider: Optional[str] = None
     model_name: Optional[str] = None
     reasoning_effort: Optional[str] = None
@@ -287,6 +289,21 @@ class PlanItemUpdateRequest(BaseModel):
 class PlanInstructionRequest(BaseModel):
     instruction: str
     item_id: Optional[int] = None
+
+
+class PlanMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=20000)
+    provider: str = Field(min_length=1, max_length=80)
+    model_name: str = Field(min_length=1, max_length=200)
+    tab: str = "wireframes"
+    item_id: Optional[int] = None
+    page_id: Optional[str] = Field(default=None, max_length=256)
+    attachments: list[int] = Field(default_factory=list, max_length=8)
+
+
+class PlanBuildRequest(BaseModel):
+    provider: str = Field(min_length=1, max_length=80)
+    model_name: str = Field(min_length=1, max_length=200)
 
 
 class ProjectOpsPlanRequest(BaseModel):

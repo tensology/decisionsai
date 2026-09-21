@@ -1,3 +1,6 @@
+import sys
+import threading
+import types
 from types import SimpleNamespace
 
 from distr.app.agent_lifecycle import AgentLifecycleMixin
@@ -98,3 +101,69 @@ def test_live_agent_gets_a_probe_before_timeout(monkeypatch):
         (("agent_health_probe", {"probe_id": sent[0][0][1]["probe_id"]}), {"ensure_alive": False})
     ]
     assert app._agent_health_probe_sent_at == 10.0
+
+
+def test_agent_restart_replaces_queues(monkeypatch):
+    class _Queue:
+        def cancel_join_thread(self):
+            self.cancelled = True
+
+        def close(self):
+            self.closed = True
+
+    class _Context:
+        def Queue(self):
+            return _Queue()
+
+        def Process(self, *args, **kwargs):
+            return SimpleNamespace(pid=123, start=lambda: None)
+
+    class _Timer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    fake_worker = types.ModuleType("distr.app.agent_worker")
+    fake_worker.run_agent_session = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "distr.app.agent_worker", fake_worker)
+    monkeypatch.setattr("distr.app.agent_lifecycle.load_settings_from_db", lambda: {})
+    monkeypatch.setattr("distr.core.process_tracker.register_child_pid", lambda pid: None)
+    monkeypatch.setattr("distr.core.signals.set_agent_event_queue", lambda queue: None)
+    monkeypatch.setattr("distr.app.agent_lifecycle.threading.Timer", _Timer)
+
+    old_command_queue = _Queue()
+    old_event_queue = _Queue()
+    class _App(AgentLifecycleMixin):
+        pass
+
+    app = _App()
+    app.__dict__.update(
+        _quitting=False,
+        _reload_lock=threading.Lock(),
+        _agent_starting=False,
+        _reloading_agent=True,
+        agent_process=None,
+        settings={},
+        selected_input_device=None,
+        selected_output_device=None,
+        agent_command_queue=old_command_queue,
+        agent_event_queue=old_event_queue,
+        confirmation_results_dict={},
+        screen_info_cache={},
+        mp_context=_Context(),
+        _pending_chat_id_for_agent=None,
+        _agent_generation=1,
+        initiative_service=SimpleNamespace(event_queue=old_event_queue),
+        _send_initial_states=lambda: None,
+    )
+
+    AgentLifecycleMixin.start_agent_session(app, skip_welcome=True)
+
+    assert app._agent_generation == 2
+    assert app.agent_command_queue is not old_command_queue
+    assert app.agent_event_queue is not old_event_queue
+    assert app.initiative_service.event_queue is app.agent_event_queue
+    assert old_command_queue.closed is True
+    assert old_event_queue.closed is True

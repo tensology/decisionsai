@@ -182,27 +182,40 @@ def complete_execution_session(
     success: bool,
     output_packet: dict[str, Any] | None = None,
     error: str = "",
+    status: str | None = None,
 ) -> None:
     if not session_id:
         return
     ensure_project_execution_tables()
-    status = "completed" if success else "failed"
+    clean_status = str(status or "").strip().lower()
+    if clean_status not in {"completed", "failed", "cancelled", "canceled"}:
+        clean_status = "completed" if success else "failed"
+    if clean_status == "canceled":
+        clean_status = "cancelled"
     safe_output_packet = _redact_persisted_execution_value(output_packet or {})
     safe_error = str(_redact_persisted_execution_value(error or ""))
+    now = utc_now_naive()
     with get_session() as session:
         row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
         if not row:
             return
-        row.status = status
+        row.status = clean_status
         row.output_packet = _json_dumps(safe_output_packet)
         row.error = safe_error
-        row.completed_at = utc_now_naive()
-        row.updated_at = utc_now_naive()
+        row.completed_at = now
+        row.updated_at = now
+        event_type = "session_cancelled" if clean_status == "cancelled" else "session_completed"
+        if clean_status == "cancelled":
+            message = safe_error or "Project execution session cancelled."
+        elif clean_status == "completed":
+            message = "Project execution session completed."
+        else:
+            message = "Project execution session failed."
         session.add(ProjectExecutionEvent(
             session_id=row.id,
-            event_type="session_completed",
-            status=status,
-            message="Project execution session completed." if success else "Project execution session failed.",
+            event_type=event_type,
+            status=clean_status,
+            message=message,
             payload=_json_dumps(safe_output_packet),
         ))
         session.commit()
@@ -212,14 +225,14 @@ def complete_execution_session(
             emit_orchestration_event(
                 source=row.route_backend or "executor",
                 event_type="execution_session_completed",
-                status=status,
+                status=clean_status,
                 workflow_id=row.workflow_id,
                 run_id=row.run_id,
                 step_id=row.step_id,
                 ticket_id=row.ticket_id,
                 project_id=row.project_id,
                 execution_session_id=row.id,
-                summary="Project execution session completed." if success else "Project execution session failed.",
+                summary=message,
                 payload=safe_output_packet,
                 evidence={"error": safe_error} if safe_error else {},
             )
@@ -232,7 +245,7 @@ def complete_execution_session(
         except Exception:
             pass
 
-    if success:
+    if clean_status == "completed":
         try:
             packet = safe_output_packet
             summary = str(packet.get("output") or "").strip()

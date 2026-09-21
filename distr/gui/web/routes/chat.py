@@ -1002,6 +1002,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                             "remote_continuation": bool(development.get("remote_continuation")),
                             "reasoning_effort": model_route.get("reasoning_effort") or "medium",
                             "service_tier": model_route.get("service_tier") or "standard",
+                            "backend": model_route.get("backend") or "",
                             "archived": bool(chat.is_archived),
                         }
                     )
@@ -1042,11 +1043,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             voice_provider_id = normalize_voice_provider(voice_provider_raw)
             _display_map = {d.id: d.name.split(" (")[0] for d in tts_registry.all_providers()}
             voice_provider = _display_map.get(voice_provider_id, voice_provider_id.title())
+            from distr.core.chat import resolve_voice_model_from_global_settings
+
             voice_model_raw = (
-                settings.get("kokoro_voice")
-                or settings.get("openai_voice")
-                or settings.get("elevenlabs_voice")
-                or ""
+                resolve_voice_model_from_global_settings(voice_provider_id, settings) or ""
             ).strip() or "—"
             voice_model = (
                 _voice_model_to_display_name(voice_provider, voice_model_raw, settings)
@@ -1277,6 +1277,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         "remote_continuation": bool(development.get("remote_continuation")),
                         "reasoning_effort": model_route.get("reasoning_effort") or "medium",
                         "service_tier": model_route.get("service_tier") or "standard",
+                        "backend": model_route.get("backend") or "",
                         "archived": bool(root_chat.is_archived),
                         "voice_provider": voice_provider,
                         # Keep runtime/raw voice ID for agent swapping, and provide a

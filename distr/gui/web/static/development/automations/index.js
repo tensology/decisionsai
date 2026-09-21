@@ -248,7 +248,7 @@ export function createAutomations({ context, actions, el }) {
         const trigger = event.currentTarget;
         const status = String(automation.status || 'active').toLowerCase();
         const toggle = menu.querySelector('[data-scheduled-menu-action="toggle"]');
-        toggle.textContent = status === 'paused' ? 'Resume' : 'Pause';
+        toggle.querySelector('.context-menu-label').textContent = status === 'paused' ? 'Resume' : 'Pause';
         toggle.dataset.nextAction = status === 'paused' ? 'resume' : 'pause';
         menu.classList.remove('hidden');
         trigger.setAttribute('aria-expanded', 'true');

@@ -8,7 +8,8 @@ const PROVIDERS = [
         docsUrl: 'https://www.tensology.com/admin/integrations/integrationcredential/',
         helper: 'Generate a DecisionsAI audience key in Tensology admin, then validate and save it here.',
         infoHtml: 'Open <a href="https://www.tensology.com/admin/integrations/integrationcredential/" target="_blank">Tensology Admin</a>, create a DecisionsAI API connection linked to your developer account, and copy the one-time key here.',
-        color: 'from-orange-400/25 to-blue-500/10'
+        color: 'from-orange-400/25 to-blue-500/10',
+        iconPath: '/assets/img/providers/tensology.png'
     },
     {
         id: 'openai',
@@ -57,6 +58,18 @@ const PROVIDERS = [
         infoHtml: 'Get your ElevenLabs API key from <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank">ElevenLabs</a> → Profile Settings → API Keys',
         color: 'from-violet-400/25 to-fuchsia-500/10',
         iconPath: '/assets/img/providers/elevenlabs.png'
+    },
+    {
+        id: 'fishaudio',
+        name: 'Fish Audio',
+        keyField: 'key',
+        blurb: 'Cloud TTS with the Fish Audio voice library, including S2.1 Pro free.',
+        docsLabel: 'Fish Audio API keys',
+        docsUrl: 'https://fish.audio/app/api-keys',
+        helper: 'Paste a Fish Audio API key to unlock the voice library in Settings and chat.',
+        infoHtml: 'Get your API key at <a href="https://fish.audio/app/api-keys" target="_blank" rel="noopener">fish.audio/app/api-keys</a>. TTS uses model <code>s2.1-pro-free</code> by default. Docs: <a href="https://docs.fish.audio/developer-guide/core-features/text-to-speech" target="_blank" rel="noopener">Fish Audio TTS</a>.',
+        color: 'from-teal-400/25 to-cyan-500/10',
+        iconPath: '/assets/img/providers/fishaudio.png'
     },
     {
         id: 'assemblyai',
@@ -482,7 +495,7 @@ function renderThirdPartyProviderList() {
     if (!listEl) return;
     listEl.innerHTML = PROVIDERS.map(function (provider) {
         return '' +
-            '<div class="relative w-full h-full text-center rounded-xl border p-6 transition-colors cursor-pointer ' + thirdPartyCardStateClasses(provider.id) + '" role="button" tabindex="0" onclick="selectThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\')" ondblclick="openThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();selectThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\');}">' +
+            '<div data-provider-id="' + escapeThirdPartyHtml(provider.id) + '" class="relative w-full h-full text-center rounded-xl border p-6 transition-colors cursor-pointer ' + thirdPartyCardStateClasses(provider.id) + '" role="button" tabindex="0" onclick="selectThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\')" ondblclick="openThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();selectThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\');}">' +
                 '<span role="button" tabindex="0" class="absolute top-3 right-3 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-[#565869] bg-[#0d1117] text-[#ececf1] shadow-sm transition-colors hover:border-[#f97316] hover:text-white" aria-label="Edit ' + escapeThirdPartyHtml(provider.name) + '" onclick="event.stopPropagation(); openThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();openThirdPartyProvider(\'' + escapeThirdPartyHtml(provider.id) + '\');}">' +
                     '<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
                         '<path d="m14.7 5.3 4 4"></path>' +

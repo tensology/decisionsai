@@ -353,6 +353,10 @@ class SystemInfoTool(BaseTool):
                     'enabled': settings.get('elevenlabs_enabled', False),
                     'validated': settings.get('elevenlabs_key', '').strip() != '',
                 },
+                'fishaudio': {
+                    'enabled': settings.get('fishaudio_enabled', False),
+                    'validated': settings.get('fishaudio_key', '').strip() != '',
+                },
                 'assemblyai': {
                     'enabled': settings.get('assemblyai_enabled', False),
                     'validated': settings.get('assemblyai_key', '').strip() != '',

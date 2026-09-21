@@ -1,10 +1,79 @@
 """Planning HTTP boundary. Existing URLs remain compatible."""
-from fastapi.responses import JSONResponse
+from fastapi import File, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 import asyncio
-from .models import PlanFileReconcileRequest, PlanInstructionRequest, PlanItemCreateRequest, PlanItemUpdateRequest, PlanWorkspaceEnsureRequest
+import logging
+from .models import PlanBuildRequest, PlanMessageRequest, PlanFileReconcileRequest, PlanInstructionRequest, PlanItemCreateRequest, PlanItemUpdateRequest, PlanWorkspaceEnsureRequest
+
+logger = logging.getLogger(__name__)
+
+
+async def _plan_call(function, *args, **kwargs):
+    try:
+        return JSONResponse(await asyncio.to_thread(function, *args, **kwargs))
+    except LookupError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except Exception:
+        logger.exception("Plan operation failed")
+        return JSONResponse({"detail": "The planning operation failed. Your saved artifacts are retained. Check the selected model and retry."}, status_code=500)
 
 
 def register_routes(router, templates):
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/attachments/{asset_id}/preview-info")
+    async def plan_pdf_info(workspace_id: int, asset_id: int):
+        from distr.core.planning.assets import pdf_preview_info
+        return await _plan_call(pdf_preview_info, workspace_id, asset_id)
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/attachments/{asset_id}/preview")
+    async def plan_pdf_preview(workspace_id: int, asset_id: int, page: int = 1):
+        from distr.core.planning.assets import render_pdf_page
+        try:
+            data = await asyncio.to_thread(render_pdf_page, workspace_id, asset_id, page)
+            return Response(data, media_type="image/png", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/conversation")
+    async def plan_conversation(workspace_id: int):
+        from distr.core.planning.conversation import get_conversation
+        return await _plan_call(get_conversation, workspace_id)
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/messages")
+    async def plan_message(workspace_id: int, data: PlanMessageRequest):
+        from distr.core.planning.conversation import send_message
+        return await _plan_call(send_message, workspace_id, **data.model_dump())
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/build")
+    async def plan_build(workspace_id: int, data: PlanBuildRequest):
+        from distr.core.planning.conversation import generate_build
+        return await _plan_call(generate_build, workspace_id, **data.model_dump())
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/attachments")
+    async def plan_attach(workspace_id: int, file: UploadFile = File(...)):
+        from distr.core.planning.assets import MAX_FILE_BYTES, add_asset
+        try:
+            data = await file.read(MAX_FILE_BYTES + 1)
+            return await _plan_call(add_asset, workspace_id, name=file.filename, data=data)
+        finally:
+            await file.close()
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/attachments/{asset_id}")
+    async def plan_attachment(workspace_id: int, asset_id: int):
+        from distr.core.planning.assets import asset_path
+        try:
+            path, asset = await asyncio.to_thread(asset_path, workspace_id, asset_id)
+            return FileResponse(path, media_type=asset["mime_type"], filename=asset["name"],
+                                content_disposition_type="inline",
+                                headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'"})
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
+
     @router.get("/workflows/studio/plan-workspaces")
     async def workflow_studio_plan_workspaces():
         from distr.core.planning.service import list_workspaces
@@ -15,10 +84,10 @@ def register_routes(router, templates):
     @router.post("/workflows/studio/plan-workspaces")
     async def workflow_studio_ensure_plan_workspace(data: PlanWorkspaceEnsureRequest):
         try:
-            from distr.core.planning.service import ensure_workspace
+            from distr.core.planning.service import open_project_plan
 
             return JSONResponse(await asyncio.to_thread(
-                ensure_workspace,
+                open_project_plan,
                 board_key=data.board_key,
                 board_provider=data.board_provider,
                 board_name=data.board_name,
@@ -74,6 +143,24 @@ def register_routes(router, templates):
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=409)
 
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/scan")
+    async def workflow_studio_scan_plan_workspace(workspace_id: int):
+        try:
+            from distr.core.planning.service import materialize_project_scan
+
+            return JSONResponse(
+                await asyncio.to_thread(
+                    materialize_project_scan,
+                    workspace_id,
+                    force=True,
+                    instruction="Scan project",
+                )
+            )
+        except LookupError as e:
+            return JSONResponse({"detail": str(e)}, status_code=404)
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=409)
 
     @router.post("/workflows/studio/plan-workspaces/{workspace_id}/instructions")
     async def workflow_studio_plan_instruction(workspace_id: int, data: PlanInstructionRequest):

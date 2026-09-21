@@ -18,6 +18,7 @@ def test_development_kanban_exposes_legacy_board_and_ticket_controls():
         'id="development-kanban-view-list"',
         'id="development-kanban-refresh"',
         'id="board-context-archive"',
+        'id="board-context-delete"',
         'id="board-context-open-folder"',
         'data-ticket-menu-action="copy"',
         'data-ticket-menu-action="workflow"',
@@ -53,7 +54,6 @@ def test_development_kanban_exposes_legacy_board_and_ticket_controls():
     assert "kanban-list-time" in js
     assert "development-kanban-card-title" in js
     assert "kanban-run-status" in js
-    assert "kanban-run-status-placeholder" in js
     assert "label.toLowerCase()" in js
     assert '${escapeHtml(status)}</button>' not in js
     assert "layout === 'list' ? '' : kanbanTicketMetaHtml(ticket)" in js

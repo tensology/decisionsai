@@ -120,6 +120,8 @@ class ThirdPartySettings(BaseModel):
     nvidia_key: str = ""
     pixazo_enabled: bool = False
     pixazo_key: str = ""
+    fishaudio_enabled: bool = False
+    fishaudio_key: str = ""
     masko_enabled: bool = False
     masko_key: str = ""
     composio_enabled: bool = False
@@ -170,6 +172,8 @@ class GeneralSettings(BaseModel):
     voxcpm_voice: str = "default"
     pixazo_voice: str = "voxcpm"
     pixazo_dit_steps: int = Field(default=6, ge=4, le=30)
+    fishaudio_voice: str = "9a9cf47702da476aa4629e2506d4a857"
+    fishaudio_tts_model: str = "s2.1-pro-free"
     supertonic_voice: str = "M1"
     chatterbox_voice: str = "default"
     playback_speed: float = 1.0

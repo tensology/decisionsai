@@ -2241,11 +2241,10 @@ def _prepare_local_ticket_thread_draft(body: TicketThreadDraftRequest) -> dict:
     }
 
 
-# ── External board detail cache (stale-while-revalidate; refresh in daemon threads) ──
+# ── External board detail cache (keep until reload or a cache miss after create) ──
 _BOARD_DETAIL_LOCK = threading.Lock()
 _BOARD_DETAIL_CACHE: dict = {}
 _BOARD_DETAIL_REFRESHING: set = set()
-_BOARD_DETAIL_STALE_AFTER_SEC = 45.0
 
 _EXTERNAL_BOARD_LIST_LOCK = threading.Lock()
 _EXTERNAL_BOARD_LIST_CACHE: dict = {}
@@ -2414,7 +2413,8 @@ def _copy_external_ticket_into_lane(
 ) -> dict:
     """Insert or reuse a copied external ticket on a local lane."""
     effective_project_id = linked_project_id if linked_project_id is not None else board.default_project_id
-    effective_workflow_id = linked_workflow_id if linked_workflow_id is not None else board.default_workflow_id
+    # ponytail: workflows attach in-thread via run_workflow; boards do not own a default
+    effective_workflow_id = linked_workflow_id
     existing_external_ticket = _find_existing_external_copy(
         session,
         external_source,
@@ -3669,7 +3669,7 @@ def create_routes():
                 description=payload.description or "", priority=payload.priority or "medium",
                 complexity=complexity,
                 position=max_pos + 1,
-                linked_workflow_id=board.default_workflow_id if board else None,
+                linked_workflow_id=None,
                 linked_project_id=board.default_project_id if board else None,
                 linked_snippet_id=board.default_snippet_id if board else None,
                 linked_action_id=board.default_action_id if board else None,
@@ -4181,11 +4181,11 @@ def create_routes():
                             t = queue_copy
                         else:
                             t.workflow_queue_position = 0
-                    # Empty selection in UI means "inherit from board default".
+                    # Empty selection clears the link; workflows are chosen in-thread.
                     t.linked_workflow_id = (
                         payload.linked_workflow_id
                         if payload.linked_workflow_id is not None
-                        else (board.default_workflow_id if board else None)
+                        else None
                     )
                     if t.linked_workflow_id and not t.workflow_queue_position:
                         max_pos = (
@@ -4622,14 +4622,12 @@ def create_routes():
                 source_external_id=payload.external_id,
                 source_url=payload.external_url,
                 source_label=payload.external_source,
-                linked_workflow_id=board.default_workflow_id,
+                linked_workflow_id=None,
                 linked_project_id=board.default_project_id,
             )
             s.add(ticket)
             s.flush()
-            # Inherit board defaults
-            if board.default_workflow_id:
-                ticket.linked_workflow_id = board.default_workflow_id
+            # Inherit board project default only; workflows attach in-thread.
             if board.default_project_id:
                 ticket.linked_project_id = board.default_project_id
             s.flush()
@@ -4796,7 +4794,7 @@ def create_routes():
                                 result["sent_to_project"] = False
                                 result["project_error"] = str(e)
             if payload.auto_send_to_workflow:
-                workflow_id = ticket.linked_workflow_id or board.default_workflow_id
+                workflow_id = ticket.linked_workflow_id
                 if workflow_id:
                     try:
                         from distr.core.workflow.work_dispatch import dispatch_work_item
@@ -5642,11 +5640,7 @@ def create_routes():
         board_id: str,
         force_refresh: bool = False,
     ):
-        """Return cached external board immediately; refresh from Trello/Jira in a background thread when stale.
-
-        Set force_refresh=true (query) when the user hits Re-sync: fetches and returns a fresh snapshot so
-        board counts/cards match the provider after the request completes.
-        """
+        """Return the cached Jira/Trello board. Remote fetch only on first miss or force_refresh=true (Reload)."""
         if provider not in ("trello", "jira"):
             raise HTTPException(400, "Provider must be 'trello' or 'jira'")
         key = _external_board_detail_cache_key(provider, board_id)
@@ -5659,16 +5653,12 @@ def create_routes():
             out["cache_ready"] = True
             out["cache_stale"] = False
             return JSONResponse(out)
-        now = time.time()
         with _BOARD_DETAIL_LOCK:
             ent = _BOARD_DETAIL_CACHE.get(key)
         if ent and ent.get("ready"):
             out = _merge_external_board_local_config(provider, board_id, ent["body"])
-            age = now - ent["t"]
             out["cache_ready"] = True
-            out["cache_stale"] = age > _BOARD_DETAIL_STALE_AFTER_SEC
-            if out["cache_stale"]:
-                _schedule_external_board_detail_refresh(provider, board_id, key)
+            out["cache_stale"] = False
             return JSONResponse(out)
 
         _schedule_external_board_detail_refresh(provider, board_id, key)
@@ -6037,11 +6027,10 @@ source: kanban_ticket_{t.id}
             # Keep only scalar identifiers/names to avoid detached ORM access outside session scope.
             board_id_value = (lane.board_id if lane else None)
             board_name_value = board.name if board else None
-            board_default_workflow_id = board.default_workflow_id if board else None
 
-            workflow_id = payload.workflow_id or t.linked_workflow_id or board_default_workflow_id
+            workflow_id = payload.workflow_id or t.linked_workflow_id
             if not workflow_id:
-                raise HTTPException(400, "No workflow linked to this ticket or board")
+                raise HTTPException(400, "No workflow linked to this ticket; start a workflow from the thread")
 
             if payload.workflow_id:
                 t.linked_workflow_id = payload.workflow_id
@@ -6530,7 +6519,7 @@ source: kanban_ticket_{t.id}
                 priority=priority,
                 complexity=complexity,
                 position=max_pos + 1,
-                linked_workflow_id=board.default_workflow_id,
+                linked_workflow_id=None,
                 linked_project_id=board.default_project_id,
                 linked_snippet_id=board.default_snippet_id,
                 linked_action_id=board.default_action_id,

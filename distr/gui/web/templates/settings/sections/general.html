@@ -458,6 +458,23 @@
                             the OpenBMB repo’s “real-time” path is local GPU streaming, not this hosted endpoint.
                         </p>
                     </div>
+
+                    <!-- Fish Audio TTS model -->
+                    <div id="fishaudio_voice_options" class="hidden md:col-span-2 w-full border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                        <label for="fishaudio_tts_model" class="block text-sm font-semibold text-[#ececf1] mb-2">Fish Audio TTS model:</label>
+                        <select id="fishaudio_tts_model" name="fishaudio_tts_model"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
+                            <option value="s2.1-pro-free">s2.1-pro-free (default, fair-use)</option>
+                            <option value="s2.1-pro">s2.1-pro</option>
+                            <option value="s2-pro">s2-pro</option>
+                            <option value="s1">s1</option>
+                        </select>
+                        <p class="text-xs text-[#7a7c8c] mt-2">
+                            Uses the Fish Audio voice library. Pick a voice above after adding a key in API Keys.
+                            Speech-to-speech stays on OpenAI Realtime; this is the text-to-speech path.
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>

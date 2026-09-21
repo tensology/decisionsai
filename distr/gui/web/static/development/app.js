@@ -4,23 +4,23 @@ import { createThreadSession } from './threads/session.js';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js';
+import { createPlanning } from './planning/index.js?v=20260917-plan-scaffold';
 
-import { createSidebar } from './sidebar/index.js';
+import { createSidebar } from './sidebar/index.js?v=20260916-delete-project';
 
-import { createAutomations } from './automations/index.js';
+import { createAutomations } from './automations/index.js?v=20260916-menus-icons';
 
 import { createIncoming } from './incoming/index.js';
 
 import { createWorkflows } from './workflows/index.js';
 
-import { createBoards } from './boards/index.js';
+import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
 import { createTerminals } from './terminals/index.js';
 
 import { createThreadsTranscript } from './threads/transcript/index.js?v=20260906-1';
 
-import { createThreadsComposer } from './threads/composer/index.js';
+import { createThreadsComposer } from './threads/composer/index.js?v=20260917-model-steps';
 
 import { createThreadsInspector } from './threads/inspector/index.js?v=20260906-1';
 
@@ -52,12 +52,13 @@ const state = {
     controlState: { channels: {}, interactions: [], commands: [], controls: {} },
     currentTab: 'run',
     selectedProjectId: null,
-    draft: {
+        draft: {
         project_id: null,
         title: '',
         route_mode: 'auto',
         provider: '',
         model_name: '',
+        backend: '',
         execution_profile: 'code',
         autonomy_level: 'full',
         permission_mode: 'standard',
@@ -71,6 +72,8 @@ const state = {
     projectContext: null,
     providers: [],
     modelCatalogs: {},
+    cliModelCatalogs: {},
+    cliModelMessages: {},
     skills: [],
     modelMenuPane: '',
     polling: null,
@@ -580,42 +583,7 @@ function renderBoardPicker() {
 }
 
 function renderComposerWorkflowPicker() {
-    const picker = el('composer-workflow-picker');
-    if (!picker) return;
-    const selectedId = Number(state.currentWorkflow?.id || state.draft.workflow_id || 0);
-    const selected = state.workflows.find((workflow) => Number(workflow.id) === selectedId) || null;
-    const locked = Boolean(state.currentChat && isActiveAgentRun(state.currentRun));
-    const button = el('composer-workflow-button');
-    el('composer-workflow-label').textContent = selected?.name || 'Direct agent';
-    picker.classList.toggle('locked', locked);
-    button.disabled = locked;
-    button.title = locked ? 'Workflow cannot change during an active run' : 'Choose how this thread should execute';
-    const menu = el('composer-workflow-menu');
-    if (locked) menu.classList.add('hidden');
-    const projectId = Number(state.currentChat?.project_id || state.draft.project_id || 0);
-    const relevant = state.workflows.filter(
-        (workflow) => !projectId || !workflows.workflowProjectId(workflow) || workflows.workflowProjectId(workflow) === projectId
-    );
-    menu.innerHTML =
-        pickerOptionHtml({
-            key: '',
-            label: 'Direct agent',
-            meta: 'One agent turn without a reusable workflow',
-            selected: !selected
-        }) +
-        relevant
-            .map((workflow) =>
-                pickerOptionHtml({
-                    key: String(workflow.id),
-                    label: workflow.name || 'Untitled workflow',
-                    meta: `${Number(workflow.step_count || workflows.workflowStepList(workflow).length || 0)} steps`,
-                    selected: Number(workflow.id) === selectedId
-                })
-            )
-            .join('');
-    menu.querySelectorAll('[data-picker-key]').forEach((option) =>
-        option.addEventListener('click', () => selectComposerWorkflow(Number(option.dataset.pickerKey || 0)))
-    );
+    /* ponytail: workflow is chosen by the model in-thread, not pre-bound in the composer */
 }
 
 async function selectComposerWorkflow(workflowId) {
@@ -630,20 +598,18 @@ async function selectComposerWorkflow(workflowId) {
             state.currentWorkflow = id ? await api(`/workflows/${id}`) : null;
             state.draft.workflow_id = id;
             state.currentChat.development_workflow_id = id;
-            toast(id ? 'Workflow linked to this thread.' : 'Thread set to direct agent execution.');
         } catch (error) {
             toast(error.message || 'Could not change the thread workflow.', 'error');
         }
     } else {
         state.draft.workflow_id = id;
     }
-    renderComposerWorkflowPicker();
     threads_inspector.renderInspector();
 }
 
 function closePickerMenus() {
-    ['composer-board-menu', 'composer-ticket-menu', 'composer-workflow-menu'].forEach((id) => el(id)?.classList.add('hidden'));
-    ['composer-board-button', 'composer-ticket-button', 'composer-workflow-button'].forEach((id) => el(id)?.setAttribute('aria-expanded', 'false'));
+    ['composer-board-menu', 'composer-ticket-menu'].forEach((id) => el(id)?.classList.add('hidden'));
+    ['composer-board-button', 'composer-ticket-button'].forEach((id) => el(id)?.setAttribute('aria-expanded', 'false'));
 }
 
 function togglePicker(buttonId, menuId) {
@@ -655,6 +621,45 @@ function togglePicker(buttonId, menuId) {
 }
 
 const pendingBoardLoads = new Map();
+const EXTERNAL_BOARD_STORE = 'decisions.developmentExternalBoardDetails';
+
+function readStoredExternalBoard(boardKey) {
+    try {
+        const row = JSON.parse(window.localStorage.getItem(EXTERNAL_BOARD_STORE) || '{}')[boardKey];
+        if (row && Array.isArray(row.lanes) && row.lanes.length) return row;
+    } catch (_) {
+        /* quota / parse */
+    }
+    return null;
+}
+
+function writeStoredExternalBoard(boardKey, detail) {
+    if (!detail || !Array.isArray(detail.lanes) || !detail.lanes.length) return;
+    try {
+        const all = JSON.parse(window.localStorage.getItem(EXTERNAL_BOARD_STORE) || '{}');
+        all[boardKey] = {
+            name: detail.name || '',
+            url: detail.url || '',
+            lanes: detail.lanes,
+            can_create_ticket: detail.can_create_ticket !== false,
+            cache_ready: true
+        };
+        window.localStorage.setItem(EXTERNAL_BOARD_STORE, JSON.stringify(all));
+    } catch (_) {
+        /* quota */
+    }
+}
+
+function clearStoredExternalBoard(boardKey) {
+    try {
+        const all = JSON.parse(window.localStorage.getItem(EXTERNAL_BOARD_STORE) || '{}');
+        delete all[boardKey];
+        window.localStorage.setItem(EXTERNAL_BOARD_STORE, JSON.stringify(all));
+    } catch (_) {
+        /* ignore */
+    }
+}
+
 function loadBoardTickets(boardKey, options = {}) {
     const pending = pendingBoardLoads.get(boardKey);
     if (pending) return options.force ? pending.then(() => loadBoardTickets(boardKey, options)) : pending;
@@ -664,19 +669,39 @@ function loadBoardTickets(boardKey, options = {}) {
 }
 
 async function performBoardLoad(boardKey, options) {
-    if (!boardKey || (state.boardTicketLoads[boardKey] && !options?.force)) return state.boardDetails[boardKey] || null;
+    if (!boardKey) return null;
     const board = boardByKey(boardKey);
     if (!board) return;
+    const external = board.provider === 'jira' || board.provider === 'trello';
+    if (external && options?.remote) clearStoredExternalBoard(boardKey);
+    if (!options?.force && !options?.remote) {
+        if (state.boardTicketLoads[boardKey] && state.boardDetails[boardKey]) return state.boardDetails[boardKey];
+        const stored = external ? readStoredExternalBoard(boardKey) : null;
+        if (stored) {
+            cacheBoardDetail(board, stored);
+            state.boardTicketLoads[boardKey] = true;
+            syncTicketSelect();
+            if (state.workspaceMode === 'kanban' && state.selectedBoardKey === boardKey) boards.renderKanbanWorkspace();
+            return stored;
+        }
+    }
+    if (state.boardTicketLoads[boardKey] && !options?.force) return state.boardDetails[boardKey] || null;
     state.boardTicketLoads[boardKey] = true;
     try {
         const externalPath = `/tickets/external-boards/${encodeURIComponent(board.provider)}/${encodeURIComponent(board.external_id || board.id)}${options?.remote ? '?force_refresh=true' : ''}`;
         const detail = board.provider === 'decisions' ? await api(`/tickets/boards/${Number(board.local_id || board.id)}`) : await api(externalPath);
-        cacheBoardDetail(board, detail);
-        if (board.provider !== 'decisions' && detail.cache_ready === false) {
-            delete state.boardTicketLoads[boardKey];
-            window.setTimeout(() => {
-                if (state.selectedBoardKey === boardKey) loadBoardTickets(boardKey);
-            }, 1500);
+        if (external && detail.cache_ready === false && !options?.remote) {
+            const stored = readStoredExternalBoard(boardKey);
+            if (stored) {
+                cacheBoardDetail(board, stored);
+            } else {
+                delete state.boardTicketLoads[boardKey];
+                window.setTimeout(() => {
+                    if (state.selectedBoardKey === boardKey) loadBoardTickets(boardKey);
+                }, 1500);
+            }
+        } else {
+            cacheBoardDetail(board, detail);
         }
     } catch (error) {
         state.boardTickets[boardKey] = [];
@@ -709,6 +734,7 @@ function cacheBoardDetail(board, detail) {
             raw: ticket
         }))
     );
+    if (board.provider === 'jira' || board.provider === 'trello') writeStoredExternalBoard(board.key, detail);
 }
 
 function syncTicketSelect() {
@@ -958,7 +984,6 @@ function startBoardDevelopment(boardKey, options) {
         boardScoped: true,
         skipTicketLoad: Boolean(options?.skipTicketLoad)
     });
-    toast('New board thread ready.');
 }
 
 async function startNewDevelopmentFromSidebar() {
@@ -1272,6 +1297,10 @@ async function loadChat(chatId, options) {
         state.draft.route_mode = chat.route_mode || 'auto';
         state.draft.provider = chat.provider || '';
         state.draft.model_name = chat.model_name || '';
+        state.draft.backend = chat.backend || '';
+        if (state.draft.route_mode === 'manual' && !['pi', 'cursor', 'codex', 'claude_code'].includes(String(state.draft.backend || '').toLowerCase())) {
+            state.draft.backend = 'pi';
+        }
         state.draft.reasoning_effort = chat.reasoning_effort || state.draft.reasoning_effort || 'medium';
         state.draft.service_tier = chat.service_tier || state.draft.service_tier || 'standard';
         state.draft.execution_profile = chat.execution_profile || 'code';
@@ -1794,11 +1823,13 @@ function bindEvents() {
     el('thread-form').addEventListener('submit', saveThread);
     el('composer-board-button').addEventListener('click', () => togglePicker('composer-board-button', 'composer-board-menu'));
     el('composer-ticket-button').addEventListener('click', () => togglePicker('composer-ticket-button', 'composer-ticket-menu'));
-    el('composer-workflow-button').addEventListener('click', () => togglePicker('composer-workflow-button', 'composer-workflow-menu'));
     el('composer-permission-select').addEventListener('change', changeComposerPermission);
     el('composer-time-toggle').addEventListener('click', () => updateThreadTime(state.threadTime && !state.threadTime.paused ? 'pause' : 'play'));
     el('studio-composer').addEventListener('submit', threads_composer.sendPrompt);
-    el('task-prompt').addEventListener('input', resizePrompt);
+    el('task-prompt').addEventListener('input', () => {
+        resizePrompt();
+        threads_composer.scheduleRoutePreview();
+    });
     el('task-prompt').addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -2199,15 +2230,24 @@ const threads_transcript = createThreadsTranscript({
         get currentRun() {
             return state.currentRun;
         },
+        get currentWorkflow() {
+            return state.currentWorkflow;
+        },
         get skills() {
             return state.skills;
+        },
+        get workflows() {
+            return state.workflows;
         }
     },
     actions: {
         bindConversationActions: (...args) => bindConversationActions(...args),
         escapeHtml: (...args) => escapeHtml(...args),
         formatSeconds: (...args) => formatSeconds(...args),
-        statusLabel: (...args) => statusLabel(...args)
+        isActiveAgentRun: (...args) => isActiveAgentRun(...args),
+        statusLabel: (...args) => statusLabel(...args),
+        workflowRunId: (...args) => workflowRunId(...args),
+        workflowStepList: (...args) => workflows.workflowStepList(...args)
     },
     el,
     token
@@ -2268,6 +2308,18 @@ const threads_composer = createThreadsComposer({
         },
         set modelCatalogs(value) {
             state.modelCatalogs = value;
+        },
+        get cliModelCatalogs() {
+            return state.cliModelCatalogs;
+        },
+        set cliModelCatalogs(value) {
+            state.cliModelCatalogs = value;
+        },
+        get cliModelMessages() {
+            return state.cliModelMessages;
+        },
+        set cliModelMessages(value) {
+            state.cliModelMessages = value;
         },
         get modelMenuPane() {
             return state.modelMenuPane;
@@ -2396,6 +2448,9 @@ const threads_inspector = createThreadsInspector({
         },
         get draft() {
             return state.draft;
+        },
+        get routingAssessment() {
+            return state.routingAssessment;
         },
         get editingCommandId() {
             return state.editingCommandId;

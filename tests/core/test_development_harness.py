@@ -248,6 +248,10 @@ def test_direct_development_prompt_uses_ide_harness_without_workflow(tmp_path, m
 
     monkeypatch.setattr("distr.core.project_cli_backends.harness.dispatch_harness", fake_dispatch)
     monkeypatch.setattr("distr.core.skills.catalog.filter_known_skill_ids", lambda skill_ids: list(skill_ids))
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+        lambda backend_id, settings=None: {"status": {"ready": True}, "next_step": ""},
+    )
 
     result = harness.dispatch_development_prompt(
         chat_id,
@@ -368,6 +372,10 @@ def test_completed_turn_can_start_a_later_turn_in_the_same_thread(tmp_path, monk
         )
 
     monkeypatch.setattr("distr.core.project_cli_backends.harness.dispatch_harness", fake_dispatch)
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+        lambda backend_id, settings=None: {"status": {"ready": True}, "next_step": ""},
+    )
 
     first = harness.dispatch_development_prompt(chat_id, "First instruction", dispatch_async=False)
     second = harness.dispatch_development_prompt(chat_id, "Follow-up instruction", dispatch_async=False)
@@ -390,6 +398,10 @@ def test_large_multi_phase_thread_request_launches_owned_orchestrator(tmp_path, 
     monkeypatch.setattr(
         "distr.core.workflow.developer_workflow.resolve_development_workflow",
         lambda **_kwargs: 44,
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.planning.plan_workflow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("planner unavailable in test")),
     )
 
     def dispatch(**kwargs):
@@ -433,6 +445,10 @@ def test_plan_mode_keeps_the_direct_harness_read_only(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr("distr.core.project_cli_backends.harness.dispatch_harness", fake_dispatch)
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+        lambda backend_id, settings=None: {"status": {"ready": True}, "next_step": ""},
+    )
     harness.dispatch_development_prompt(chat_id, "Plan the feature", dispatch_async=False)
 
     assert captured["context"].adapter_options["read_only_expected"] is True
@@ -576,6 +592,16 @@ def test_auto_development_route_preserves_configured_free_fallback(monkeypatch):
         "distr.core.pi_preflight.resolve_coding_cli_config",
         lambda project_id=None: ("ollama", "ornith:9b", "/tmp/project"),
     )
+    monkeypatch.setattr(
+        "distr.core.kanban.ticket_policy.resolve_ticket_cli_route",
+        lambda project, complexity, board=None: {
+            "complexity": complexity,
+            "backend": "claude_code",
+            "model": "opus",
+            "fallback_backend": "pi",
+            "fallback_model": "muse-glimmer:30b-mlx",
+        },
+    )
 
     backend, model, options, complexity = harness._route(
         project,
@@ -596,3 +622,62 @@ def test_auto_development_route_preserves_configured_free_fallback(monkeypatch):
     assert options["fallback_backend"] == "pi"
     assert options["fallback_model"] == "muse-glimmer:30b-mlx"
     assert options["fallback_model_provider"] == "ollama"
+
+
+def test_manual_development_route_honors_pinned_harness(monkeypatch):
+    project = SimpleNamespace(id=2, coding_backend="pi", coding_backend_model="")
+    backend, model, options, complexity = harness._route(
+        project,
+        {
+            "model_route": {
+                "route_mode": "manual",
+                "backend": "cursor",
+                "provider": "",
+                "model_name": "auto",
+            }
+        },
+        {"complexity": "low", "route": {"backend": "codex", "model": "gpt-5"}},
+    )
+    assert (backend, model, complexity) == ("cursor", "auto", "low")
+    assert "model_provider" not in options or options.get("model_provider") in ("", None)
+
+
+def test_manual_development_route_defaults_missing_backend_to_pi(monkeypatch):
+    project = SimpleNamespace(id=2, coding_backend="codex", coding_backend_model="gpt-5")
+    monkeypatch.setattr(
+        "distr.core.pi_preflight.resolve_coding_cli_config",
+        lambda project_id=None: ("ollama", "local", "/tmp/project"),
+    )
+    backend, model, options, complexity = harness._route(
+        project,
+        {
+            "model_route": {
+                "route_mode": "manual",
+                "backend": "",
+                "provider": "ollama",
+                "model_name": "local",
+            }
+        },
+        {"complexity": "high", "route": {"backend": "codex", "model": "gpt-5"}},
+    )
+    assert (backend, model, complexity) == ("pi", "local", "high")
+    assert options["model_provider"] == "ollama"
+
+
+def test_manual_development_route_keeps_cli_pin_over_assessment(monkeypatch):
+    project = SimpleNamespace(id=2, coding_backend="pi", coding_backend_model="")
+    backend, model, options, complexity = harness._route(
+        project,
+        {
+            "model_route": {
+                "route_mode": "manual",
+                "backend": "codex",
+                "provider": "",
+                "model_name": "auto",
+            }
+        },
+        {"complexity": "low", "route": {"backend": "pi", "model": "local"}},
+    )
+    assert (backend, model, complexity) == ("codex", "auto", "low")
+    assert options["model_provider"] == "openai"
+

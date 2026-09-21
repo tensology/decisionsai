@@ -103,18 +103,42 @@ class FastActionDetector:
         self.CLIPBOARD_PATTERN = re.compile(r'\b(clipboard|clip board|copied|clipped)\b', re.IGNORECASE)
         self.SELECTION_PATTERN = re.compile(r'\b(selected|selection|highlighted|text)\b', re.IGNORECASE)
         
+        # Spoken "bring up" is an open verb, not a generic app-focus.
+        # Ticket board / product page / project beat "bring up <remainder>".
+        _polite = r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
+        _open = r'(?:open|show|launch|go\s+to|bring\s+up)'
+
         # Action patterns - ordered by specificity (most specific first)
         self.action_patterns = [
             # === DECISIONSAI INTERNAL SURFACES ===
+            (re.compile(
+                _polite + _open +
+                r'\s+(?:the\s+)?(?:ticket\s+boards?|kanban(?:\s+board)?|boards?\s+view)\b',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "create_ticket",
+             {"action": "open_board", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            # Spoken lists ("web UI, development, ticket boards") still mean the board.
+            (re.compile(
+                _polite + _open +
+                r'\s+.{0,80}?\b(?:web\s*ui|web\s*interface|development)\b.{0,80}?\b(?:ticket\s+boards?|kanban(?:\s+board)?)\b',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "create_ticket",
+             {"action": "open_board", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # Resolve known product pages before generic window/screenshot tools.
             (re.compile(
-                r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
-                r'(?:open|show|launch|go\s+to)\s+(?:the\s+)?(?:decisions\s*ai\s+)?'
-                r'(chat|development|incoming|automations?|terminals?|reports?)'
-                r'(?:\s+(?:web\s*ui|window|page|section))?'
-                r'(?:\s+in\s+(?:brave|chrome|safari|firefox|the\s+browser))?\s*[.?!]?\s*$',
+                _polite + _open + r'\s+(?:the\s+)?(?:decisions\s*ai\s+)?'
+                r'(chat|development|incoming|automations?|terminals?|reports?|'
+                r'web\s*ui|web\s*interface|webui)'
+                r'(?:\s+(?:web\s*ui|window|page|section|interface))?'
+                r'(?:\s+in\s+(?:brave|chrome|safari|firefox|the\s+browser))?',
                 re.IGNORECASE),
              ActionType.OPEN_WINDOW, "open_page", {"page": "__INTERNAL_PAGE_MATCH__"}, False, "done"),
+            (re.compile(
+                _polite + _open +
+                r'\s+(?:the\s+|this\s+|a\s+|my\s+)?project(?:\s+folder)?'
+                r'(?:\s+in\s+(?:cursor|codex))?(?!\s+ticket)',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "open_project", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
 
             # === DEVELOPER / CODEX / CURSOR CONTEXT QUESTIONS ===
             (re.compile(r'\b(can|do|could)\s+you\b.*\b(see|know|tell|answer|access)\b.*\b(working|work|doing|inside|in)\b.*\b(codex|codecs|cursor)\b', re.IGNORECASE),
@@ -580,19 +604,8 @@ class FastActionDetector:
             # === TICKET BOARD (deep-link via create_ticket open_board) ===
             (re.compile(
                 r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?'
-                r'open\s+(?:the\s+)?(?:ticket\s+board|kanban(?:\s+board)?|boards?\s+view)\b',
-                re.IGNORECASE),
-             ActionType.OPEN_WINDOW, "create_ticket",
-             {"action": "open_board", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(
-                r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?'
-                r'open\s+(?:the\s+)?(?:(local|jira|trello)\s+)?(.+?)\s+(?:ticket\s+)?board\b',
-                re.IGNORECASE),
-             ActionType.OPEN_WINDOW, "create_ticket",
-             {"action": "open_board", "text": "__ORIGINAL_TEXT__", "board_name": "__BOARD_NAME_MATCH__", "source_provider": "__BOARD_SOURCE_MATCH__"}, False, "done"),
-            (re.compile(
-                r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?'
-                r'(?:show|go\s+to)\s+(?:the\s+)?(?:(local|jira|trello)\s+)?(.+?)\s+(?:ticket\s+)?board\b',
+                r'(?:open|show|go\s+to|launch|bring\s+up)\s+(?:the\s+)?'
+                r'(?:(local|jira|trello)\s+)?(.+?)\s+(?:ticket\s+)?board\b',
                 re.IGNORECASE),
              ActionType.OPEN_WINDOW, "create_ticket",
              {"action": "open_board", "text": "__ORIGINAL_TEXT__", "board_name": "__BOARD_NAME_MATCH__", "source_provider": "__BOARD_SOURCE_MATCH__"}, False, "done"),
@@ -621,30 +634,38 @@ class FastActionDetector:
             (re.compile(r'^(?:(exit|quit)(?:\s+(?:the\s+)?(app|application|decisions))?|close\s+(?:the\s+)?(app|application|decisions))\.?$', re.IGNORECASE),
              ActionType.EXIT_APP, "exit_app", {"text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
             
+            # === OPEN WINDOW/APP (fast detection for common apps) ===
+            # Before generic "bring up X" so sites are not treated as desktop apps.
+            (re.compile(r'\b(?:open|bring\s+up)\s+gmail\.?$', re.IGNORECASE), 
+             ActionType.OPEN_WINDOW, "open_window", {"app_name": "gmail", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\b(?:open|bring\s+up)\s+my\s+gmail\.?$', re.IGNORECASE), 
+             ActionType.OPEN_WINDOW, "open_window", {"app_name": "gmail", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\b(?:open|bring\s+up)\s+youtube\.?$', re.IGNORECASE), 
+             ActionType.OPEN_WINDOW, "open_window", {"app_name": "youtube", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\b(?:open|bring\s+up)\s+(?:the\s+)?google(?:\.com)?\.?$', re.IGNORECASE), 
+             ActionType.OPEN_WINDOW, "open_window", {"app_name": "google", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+
             # === FOCUS / SWITCH APP (smart_open — always-on in tool retrieval) ===
             # Polite phrasing must not hit conversational_patterns ("can you ...") without these rows.
             # Note: no bare "switch to X" here — collides with mode_control ("switch to continuous", "switch to PTT").
+            # "bring up" only for a short app/site name. Product surfaces are handled above.
             (re.compile(
                 r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
-                r'(?:focus\s+(?:on\s+)?|bring\s+(?:up\s+)?(?:the\s+)?|activate\s+)'
+                r'(?:focus\s+(?:on\s+)?|activate\s+)'
                 r'(.+?)(?:\s+please)?\s*[.?!]?\s*$',
                 re.IGNORECASE),
              ActionType.OPEN_WINDOW, "smart_open",
-             # text must be the app name too — SmartOpenTool._open_application prefers text over target.
              {"target": "__FOCUS_APP_NAME__", "text": "__FOCUS_APP_NAME__"}, False, "done"),
-            
-            # === OPEN WINDOW/APP (fast detection for common apps) ===
-            # Gmail
-            (re.compile(r'\bopen\s+gmail\.?$', re.IGNORECASE), 
-             ActionType.OPEN_WINDOW, "open_window", {"app_name": "gmail", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\bopen\s+my\s+gmail\.?$', re.IGNORECASE), 
-             ActionType.OPEN_WINDOW, "open_window", {"app_name": "gmail", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            # YouTube
-            (re.compile(r'\bopen\s+youtube\.?$', re.IGNORECASE), 
-             ActionType.OPEN_WINDOW, "open_window", {"app_name": "youtube", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            # Google
-            (re.compile(r'\bopen\s+google\.?$', re.IGNORECASE), 
-             ActionType.OPEN_WINDOW, "open_window", {"app_name": "google", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(
+                r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
+                r'bring\s+up\s+(?:the\s+|a\s+|my\s+)?'
+                r'(?!website\b|window\b|page\b|section\b|boards?\b|projects?\b|it\b|that\b)'
+                r'([A-Za-z][\w.+-]{0,24}(?:\s+[A-Za-z][\w.+-]{0,24}){0,2})'
+                r'(?:\s+please)?\s*[.?!]?\s*$',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "smart_open",
+             {"target": "__FOCUS_APP_NAME__", "text": "__FOCUS_APP_NAME__"}, False, "done"),
+           
             # Twitter/X - extract app name from text
             (re.compile(r'\bopen\s+(twitter|x)\.?$', re.IGNORECASE), 
              ActionType.OPEN_WINDOW, "open_window", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
@@ -1250,6 +1271,9 @@ class FastActionDetector:
                             "automation": "automations",
                             "terminal": "terminals",
                             "report": "reports",
+                            "web ui": "development",
+                            "web interface": "development",
+                            "webui": "development",
                         }.get(page, page)
                 
                 logger.info(f"FastActionDetector: MATCHED '{text}' -> {action_type.value} (tool: {tool_name}, copy_first: {needs_copy})")

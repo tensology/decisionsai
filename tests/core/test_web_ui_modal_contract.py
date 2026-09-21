@@ -103,3 +103,70 @@ def test_first_party_web_ui_does_not_use_native_confirm_dialogs():
             offenders.append(rel_text)
 
     assert offenders == []
+
+
+def test_development_board_dialog_is_clean_and_whatsapp_lives_on_incoming():
+    board = read("distr/gui/web/templates/development/sidebar/board-dialog.html")
+    incoming = read("distr/gui/web/templates/development/incoming/link-dialog.html")
+    index = read("distr/gui/web/templates/development/index.html")
+    css = read("distr/gui/web/static/development/shell.css")
+    sidebar_js = read("distr/gui/web/static/development/sidebar/index.js")
+    incoming_js = read("distr/gui/web/static/development/incoming/index.js")
+
+    assert "Board project" not in board
+    assert "Incoming WhatsApp" not in board
+    assert "board-whatsapp" not in board
+    assert "board-link-workflow" not in board
+    assert "Default workflow" not in board
+    assert 'class="danger-button hidden" id="delete-board-button"' in board
+    assert 'class="primary-button">Save board' in board
+    assert 'class="secondary-button">Cancel' in board
+    assert "delete-dialog.html" not in index
+    assert "board-delete-dialog" not in sidebar_js
+    assert "incoming-link-auto" in incoming
+    assert "Create snapshot tickets automatically" in incoming
+    assert "el('incoming-link-auto').checked" in incoming_js
+    assert "auto_snapshot: enabled" in incoming_js
+    assert ".danger-button" in css
+    assert ".decisions-confirm-ok" in read("distr/gui/web/static/shared/css/base.css")
+
+
+def test_development_workflows_live_in_the_thread_not_board_or_composer():
+    board = read("distr/gui/web/templates/development/sidebar/board-dialog.html")
+    ticket = read("distr/gui/web/templates/development/boards/ticket-dialog.html")
+    ticket_menu = read("distr/gui/web/templates/development/boards/ticket-menu.html")
+    composer = read("distr/gui/web/templates/development/threads/composer.html")
+    transcript = read("distr/gui/web/static/development/threads/transcript/index.js")
+    styles = read("distr/gui/web/static/development/threads/styles.css")
+    kanban = read("distr/gui/web/routes/kanban.py")
+    run_tool = read("distr/core/agent/tools/step_runner/workflow_tools.py")
+
+    assert "board-link-workflow" not in board
+    assert "Run workflow" not in ticket
+    assert "Run workflow" not in ticket_menu
+    assert "composer-workflow" not in composer
+    assert "thread-workflow-runner" in transcript
+    assert "liveWorkflowRunnerHtml" in transcript
+    assert ".thread-workflow-ring" in styles
+    assert "linked_workflow_id=board.default_workflow_id" not in kanban
+    assert "no open Development thread" in run_tool
+    assert "chat_id=int(host_chat_id)" in run_tool
+
+
+def test_development_model_menu_is_harness_first():
+    dialog = read("distr/gui/web/templates/development/threads/model-dialog.html")
+    composer = read("distr/gui/web/static/development/threads/composer/index.js")
+    threads = read("distr/core/workflow/development_threads.py")
+    harness = read("distr/core/workflow/development_harness.py")
+    assessment = read("distr/gui/web/routes/development/threads.py")
+
+    assert 'data-model-pane="harness"' in dialog
+    assert 'data-model-pane="auto"' in dialog
+    assert 'id="model-route-preview"' in dialog
+    assert "data-model-pane=\"provider\"" not in dialog
+    assert "HARNESS_OPTIONS" in composer
+    assert "scheduleRoutePreview" in composer
+    assert 'backend: clean_backend if mode == "manual" else ""' in threads or '"backend": clean_backend' in threads
+    assert 'pinned_backend in {"pi", "cursor", "codex", "claude_code"}' in harness
+    assert "resolve_ticket_cli_route" in assessment
+    assert "plan_workflow" in harness

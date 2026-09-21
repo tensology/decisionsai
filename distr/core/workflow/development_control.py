@@ -16,11 +16,13 @@ from distr.core.chat_turns import redact_metadata, redact_text
 from distr.core.db import Chat, Settings, get_session
 from distr.core.db.projects import Project
 from distr.core.db.time import utc_now_naive
-from distr.core.db.workflow import DevelopmentCommand, DevelopmentWorkItem, StudioArtifact
+from distr.core.db.workflow import DevelopmentCommand, DevelopmentTimeEntry, DevelopmentWorkItem, StudioArtifact
 from distr.core.workflow.development_threads import development_thread_metadata, is_development_thread
 
 
 COMMAND_STATUSES = {"queued", "delivered", "completed", "cancelled", "failed"}
+# Reject syncing absurd thread totals into tickets (e.g. cancelled workflow ghosts).
+MAX_TICKET_TIME_SYNC_SECONDS = 12 * 60 * 60
 
 
 def _require_development_root(db, chat_id: int) -> Chat:
@@ -264,6 +266,50 @@ def _thread_time_payload(item: DevelopmentWorkItem, now: datetime | None = None)
     }
 
 
+def _time_entry_payload(row: DevelopmentTimeEntry) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "chat_id": int(row.chat_id),
+        "work_item_id": int(row.work_item_id),
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+        "seconds": max(0, int(row.seconds or 0)),
+        "source": str(row.source or "play"),
+    }
+
+
+def _list_time_entries_for_item(db, chat_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
+    rows = (
+        db.query(DevelopmentTimeEntry)
+        .filter(DevelopmentTimeEntry.chat_id == int(chat_id))
+        .order_by(DevelopmentTimeEntry.started_at.desc(), DevelopmentTimeEntry.id.desc())
+        .limit(max(1, min(int(limit), 200)))
+        .all()
+    )
+    return [_time_entry_payload(row) for row in rows]
+
+
+def _close_running_segment(db, item: DevelopmentWorkItem, now: datetime, source: str) -> int:
+    """Close an open segment into DevelopmentTimeEntry; return new accumulated seconds."""
+    prior = max(0, int(item.time_accumulated_seconds or 0))
+    if item.time_paused or not item.time_started_at:
+        return prior
+    started = item.time_started_at
+    segment = max(0, int((now - started).total_seconds()))
+    total = prior + segment
+    db.add(
+        DevelopmentTimeEntry(
+            work_item_id=int(item.id),
+            chat_id=int(item.chat_id),
+            started_at=started,
+            ended_at=now,
+            seconds=segment,
+            source=str(source or "play"),
+        )
+    )
+    return total
+
+
 def _sync_ticket_time(db, item: DevelopmentWorkItem, seconds: int) -> None:
     if item.local_ticket_id is None:
         return
@@ -271,8 +317,13 @@ def _sync_ticket_time(db, item: DevelopmentWorkItem, seconds: int) -> None:
     from distr.core.kanban.ticket_time_tracking import format_time_tracking_seconds
 
     ticket = db.get(KanbanTicket, int(item.local_ticket_id))
-    if ticket is not None:
-        ticket.time_spent = format_time_tracking_seconds(max(0, int(seconds))) if seconds else ""
+    if ticket is None:
+        return
+    clean = max(0, int(seconds or 0))
+    if clean > MAX_TICKET_TIME_SYNC_SECONDS:
+        # Keep existing ticket string rather than writing multi-day ghosts.
+        return
+    ticket.time_spent = format_time_tracking_seconds(clean) if clean else ""
 
 
 def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 180) -> dict[str, Any]:
@@ -297,10 +348,11 @@ def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 180) -> d
             ) if value is not None)
             if not agent_active and (now - activity_at).total_seconds() >= auto_pause_after_seconds:
                 pause_at = activity_at + timedelta(seconds=auto_pause_after_seconds)
-                item.time_accumulated_seconds = _thread_time_payload(item, pause_at)["seconds"]
+                item.time_accumulated_seconds = _close_running_segment(db, item, pause_at, "auto_pause")
                 item.time_started_at = None
                 item.time_paused = True
         payload = _thread_time_payload(item, now)
+        payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
         db.commit()
         return payload
@@ -317,6 +369,7 @@ def resume_thread_time(chat_id: int, *, _session_provider=None) -> dict[str, Any
         item.time_paused = False
         item.time_last_activity_at = now
         payload = _thread_time_payload(item, now)
+        payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
         db.commit()
         return payload
@@ -329,10 +382,11 @@ def pause_thread_time(chat_id: int) -> dict[str, Any]:
         if item is None:
             raise LookupError("Development thread not found.")
         if not item.time_paused and item.time_started_at:
-            item.time_accumulated_seconds = _thread_time_payload(item, now)["seconds"]
+            item.time_accumulated_seconds = _close_running_segment(db, item, now, "play")
         item.time_started_at = None
         item.time_paused = True
         payload = _thread_time_payload(item, now)
+        payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
         db.commit()
         return payload
@@ -344,10 +398,24 @@ def reset_thread_time(chat_id: int, *, seconds: int = 0) -> dict[str, Any]:
         item = db.query(DevelopmentWorkItem).filter_by(chat_id=int(chat_id)).first()
         if item is None:
             raise LookupError("Development thread not found.")
-        item.time_accumulated_seconds = max(0, int(seconds or 0))
+        if not item.time_paused and item.time_started_at:
+            _close_running_segment(db, item, now, "play")
+        clean = max(0, int(seconds or 0))
+        db.add(
+            DevelopmentTimeEntry(
+                work_item_id=int(item.id),
+                chat_id=int(item.chat_id),
+                started_at=now,
+                ended_at=now,
+                seconds=clean,
+                source="reset" if clean == 0 else "manual",
+            )
+        )
+        item.time_accumulated_seconds = clean
         item.time_started_at = now if not item.time_paused else None
         item.time_last_activity_at = now
         payload = _thread_time_payload(item, now)
+        payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
         db.commit()
         return payload

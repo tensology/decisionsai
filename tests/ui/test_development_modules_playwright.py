@@ -140,6 +140,44 @@ def test_slow_thread_load_cannot_reopen_chat_after_switching_to_plan(page: Page)
 
 
 @pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
+def test_reports_tabs_switch_and_survive_run_outage(page: Page, width, height):
+    _install_api(page, [])
+    page.set_viewport_size({"width": width, "height": height})
+    page.route("**/api/workflows/studio/reports?*", lambda route: route.fulfill(json={"items": [
+        {"id": "workflow:1", "kind": "workflow", "name": "Release verification", "status": "completed", "started_at": "2026-09-05T09:00:00", "duration_seconds": 48},
+        {"id": "automation:2", "kind": "automation", "name": "Morning checks", "status": "failed", "started_at": "2026-09-05T09:01:00", "duration_seconds": 3},
+    ]}))
+    page.route("**/api/workflows/studio/reports/time?*", lambda route: route.fulfill(json={"items": [
+        {"id": "time:1", "chat_id": 17, "thread_title": "Timed thread", "ticket_title": "DEV-1", "ticket_key": "DEV-1", "board_key": "decisions:1", "started_at": "2026-09-05T09:00:00", "ended_at": "2026-09-05T09:05:00", "seconds": 300, "source": "play"},
+    ]}))
+    page.goto(BASE + "/development/reports/")
+    expect(page.locator("#reports-tab-runs")).to_be_visible()
+    expect(page.locator("#reports-tab-time")).to_be_visible()
+    expect(page.locator("#reports-results tbody tr")).to_have_count(2)
+    output = ROOT / "artifacts/development-refactor-2026-09-05"
+    output.mkdir(exist_ok=True)
+    page.screenshot(path=str(output / f"reports-populated-{width}.png"), full_page=True, animations="disabled")
+    if width < 680:
+        page.locator(".reports-table-scroll").evaluate("node => node.scrollLeft = node.scrollWidth")
+        page.screenshot(path=str(output / f"reports-details-{width}.png"), full_page=True, animations="disabled")
+    page.locator("#reports-source").select_option("automation")
+    expect(page.locator("#reports-results tbody tr")).to_have_count(1)
+    page.locator("#reports-status").select_option("failed")
+    expect(page.locator("#reports-results tbody tr")).to_have_count(1)
+    expect(page.locator("#reports-results")).to_contain_text("Morning checks")
+    page.locator("#reports-tab-time").click()
+    expect(page.locator("#reports-heading")).to_have_text("Time log")
+    expect(page.locator("#reports-results")).to_contain_text("Timed thread")
+    expect(page.locator("#reports-results")).to_contain_text("5m")
+    page.locator("#reports-tab-runs").click()
+    page.route("**/api/workflows/studio/reports?*", lambda route: route.fulfill(status=503, json={"detail": "Temporary report outage"}))
+    page.locator("#reports-refresh").click()
+    expect(page.locator("#reports-results")).to_contain_text("Use Refresh to retry")
+    page.locator("#reports-source").select_option("workflow")
+    expect(page.locator("#reports-results")).to_contain_text("Use Refresh to retry")
+
+
+@pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
 def test_file_review_and_reports_have_independent_actions(page: Page, width, height):
     workspace, requests = install_plan(page)
     workspace["items"][0]["file_path"] = "/tmp/fixture/planning/brief.md"
@@ -163,26 +201,6 @@ def test_file_review_and_reports_have_independent_actions(page: Page, width, hei
     page.get_by_role("button", name="Import reviewed file").click()
     expect(page.locator("#plan-editor")).to_have_value("Externally edited brief")
     assert imports == [{"expected_revision": 1, "file_hash": "reviewed-hash", "action": "import"}]
-    page.route("**/api/workflows/studio/reports?*", lambda route: route.fulfill(json={"items": [
-        {"id": "workflow:1", "kind": "workflow", "name": "Release verification", "status": "completed", "started_at": "2026-09-05T09:00:00", "duration_seconds": 48},
-        {"id": "automation:2", "kind": "automation", "name": "Morning checks", "status": "failed", "started_at": "2026-09-05T09:01:00", "duration_seconds": 3},
-    ]}))
-    page.goto(BASE + "/development/reports/")
-    expect(page.locator("#reports-results tbody tr")).to_have_count(2)
-    page.screenshot(path=str(output / f"reports-populated-{width}.png"), full_page=True, animations="disabled")
-    if width < 680:
-        page.locator(".reports-table-scroll").evaluate("node => node.scrollLeft = node.scrollWidth")
-        page.screenshot(path=str(output / f"reports-details-{width}.png"), full_page=True, animations="disabled")
-    page.locator("#reports-source").select_option("automation")
-    expect(page.locator("#reports-results tbody tr")).to_have_count(1)
-    page.locator("#reports-status").select_option("failed")
-    expect(page.locator("#reports-results tbody tr")).to_have_count(1)
-    expect(page.locator("#reports-results")).to_contain_text("Morning checks")
-    page.route("**/api/workflows/studio/reports?*", lambda route: route.fulfill(status=503, json={"detail": "Temporary report outage"}))
-    page.locator("#reports-refresh").click()
-    expect(page.locator("#reports-results")).to_contain_text("Use Refresh to retry")
-    page.locator("#reports-source").select_option("workflow")
-    expect(page.locator("#reports-results")).to_contain_text("Use Refresh to retry")
 
 
 def test_empty_workflow_cannot_be_started_from_the_library(page: Page):

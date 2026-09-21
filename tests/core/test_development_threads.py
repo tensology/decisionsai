@@ -376,6 +376,7 @@ def test_model_route_is_thread_owned_and_does_not_mutate_reusable_workflow(monke
     result = update_development_model_route(
         chat_id,
         route_mode="manual",
+        backend="codex",
         provider="openai",
         model_name="gpt-5-codex",
         reasoning_effort="high",
@@ -383,12 +384,29 @@ def test_model_route_is_thread_owned_and_does_not_mutate_reusable_workflow(monke
     )
 
     assert result["model_name"] == "gpt-5-codex"
+    assert result["backend"] == "codex"
     with get_session() as db:
         chat = db.get(Chat, chat_id)
         metadata = development_thread_metadata(chat)
         assert chat.route_mode == "manual"
         assert chat.provider == "openai"
+        assert metadata["model_route"]["backend"] == "codex"
         assert metadata["model_route"]["reasoning_effort"] == "high"
         assert metadata["model_route"]["service_tier"] == "priority"
     assert workflow_updates == []
     assert step_updates == []
+
+
+def test_manual_model_route_defaults_empty_backend_to_pi():
+    chat_id = ensure_development_thread(workflow_id=44, title="Default pi pin")
+    result = update_development_model_route(
+        chat_id,
+        route_mode="manual",
+        backend="",
+        provider="ollama",
+        model_name="local",
+    )
+    assert result["backend"] == "pi"
+    with get_session() as db:
+        chat = db.get(Chat, chat_id)
+        assert development_thread_metadata(chat)["model_route"]["backend"] == "pi"

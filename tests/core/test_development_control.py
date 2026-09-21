@@ -197,9 +197,11 @@ def test_thread_owned_time_can_play_pause_reset_and_auto_pause(development_db):
 
     reset = control.reset_thread_time(development_db["chat_id"], seconds=95)
     assert reset["seconds"] >= 95
+    assert any(entry["source"] in {"manual", "reset", "play"} for entry in reset.get("entries") or [])
     paused = control.pause_thread_time(development_db["chat_id"])
     assert paused["paused"] is True
     assert paused["seconds"] >= 95
+    assert any(int(entry["seconds"]) >= 0 for entry in paused.get("entries") or [])
 
     control.resume_thread_time(development_db["chat_id"])
     with development_db["session"]() as db:
@@ -217,6 +219,32 @@ def test_thread_owned_time_can_play_pause_reset_and_auto_pause(development_db):
     auto_paused = control.thread_time_state(development_db["chat_id"])
     assert auto_paused["paused"] is True
     assert 330 <= auto_paused["seconds"] <= 345
+    assert any(entry["source"] == "auto_pause" for entry in auto_paused.get("entries") or [])
+    assert any(int(entry.get("seconds") or 0) >= 0 for entry in auto_paused.get("entries") or [])
+    assert all("started_at" in entry and "ended_at" in entry for entry in auto_paused.get("entries") or [])
+
+
+def test_ticket_time_sync_rejects_runaway_totals(development_db):
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+    with development_db["session"]() as db:
+        item = db.query(DevelopmentWorkItem).filter_by(chat_id=development_db["chat_id"]).one()
+        board = KanbanBoard(name="Time board")
+        db.add(board)
+        db.flush()
+        lane = KanbanLane(board_id=board.id, name="Doing", position=0)
+        db.add(lane)
+        db.flush()
+        ticket = KanbanTicket(title="Timed", lane_id=lane.id, time_spent="10m")
+        db.add(ticket)
+        db.flush()
+        item.local_ticket_id = ticket.id
+        db.commit()
+        ticket_id = ticket.id
+    control.reset_thread_time(development_db["chat_id"], seconds=control.MAX_TICKET_TIME_SYNC_SECONDS + 60)
+    with development_db["session"]() as db:
+        ticket = db.get(KanbanTicket, ticket_id)
+        assert ticket.time_spent == "10m"
 
 
 def test_clear_context_preserves_transcript(development_db):

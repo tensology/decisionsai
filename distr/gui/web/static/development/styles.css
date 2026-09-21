@@ -3,7 +3,7 @@
 @import './threads/styles.css';
 @import './sidebar/styles.css';
 @import './boards/styles.css';
-@import './planning/styles.css';
+@import './planning/styles.css?v=20260916-plan-composer';
 @import './incoming/styles.css';
 @import './automations/styles.css';
 @import './workflows/styles.css';

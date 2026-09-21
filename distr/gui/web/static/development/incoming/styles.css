@@ -75,12 +75,14 @@
 .incoming-conversation-scope small { color: var(--studio-muted); font-size: 7px; }
 .incoming-board { color: var(--studio-muted); font-size: 8px; }
 .incoming-link-dialog-body { display: grid; gap: 12px; padding: 14px 16px 0; }
-.incoming-link-dialog-body > p { margin: 0; color: var(--studio-muted); font-size: 8px; line-height: 1.5; }
-.incoming-current-links { display: grid; border: 1px solid var(--studio-line); border-radius: 7px; }
-.incoming-current-links > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px; border-bottom: 1px solid var(--studio-line); font-size: 8px; }
+.incoming-link-dialog-body > p { margin: 0; color: #d1d5db; font-size: 0.82rem; line-height: 1.5; }
+.incoming-current-links { display: grid; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 6px; }
+.incoming-current-links > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px; border-bottom: 1px solid rgba(255, 255, 255, 0.13); font-size: 0.82rem; }
 .incoming-current-links > div:last-child { border-bottom: 0; }
-.incoming-current-links > div button { min-height: 26px; padding: 0; border: 0; background: transparent; color: #ffaaa2; font-size: 7px; }
-.incoming-current-links > small { padding: 9px; color: var(--studio-muted); font-size: 7px; }
+.incoming-current-links > div button { min-height: 2.25rem; padding: 0 0.5rem; border: 0; background: transparent; color: #fecaca; font-size: 0.82rem; font-weight: 700; }
+.incoming-current-links > small { padding: 9px; color: #9ca3af; font-size: 0.82rem; }
+.incoming-link-auto { display: inline-flex !important; align-items: center; gap: 6px; margin: 0; color: #d1d5db; font-size: 0.75rem; }
+.incoming-link-auto input { width: 1rem; height: 1rem; accent-color: #f97316; }
 .incoming-links h2, .terminal-command-summary h2 { margin: 0 0 10px; font-size: 9px; }
 .incoming-links > p, .channel-link-list > p { color: var(--studio-muted); font-size: 8px; line-height: 1.5; }
 .incoming-gmail-layout { display: grid; min-height: 430px; grid-template-columns: minmax(210px, 32%) minmax(0, 1fr); overflow: hidden; border: 1px solid var(--studio-line); border-radius: 8px; background: rgba(8,14,41,.42); }

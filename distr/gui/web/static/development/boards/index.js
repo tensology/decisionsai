@@ -23,7 +23,7 @@ export function createBoards({ context, actions, el }) {
 
     function kanbanTicketStatusHtml(ticket) {
         const status = String(ticket.workflow_status || '').toLowerCase();
-        if (!status) return '<span class="kanban-run-status-placeholder" aria-hidden="true"></span>';
+        if (!status) return '';
         const active = ['running', 'waiting', 'paused', 'queued', 'initializing'].includes(status);
         const tone = ['failed', 'error'].includes(status)
             ? 'red'
@@ -78,6 +78,25 @@ export function createBoards({ context, actions, el }) {
         return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
     }
 
+    function kanbanIntakeLane(lanes) {
+        return (
+            lanes.find((lane) => {
+                const name = String(lane.name || lane.title || '')
+                    .trim()
+                    .toLowerCase();
+                return name === 'backlog' || name.includes('backlog');
+            }) ||
+            lanes[0] ||
+            null
+        );
+    }
+
+    function kanbanNewTicketButton(lane, lanes) {
+        const intake = kanbanIntakeLane(lanes);
+        if (!intake || String(intake.id || intake.key || intake.name) !== String(lane.id || lane.key || lane.name)) return '';
+        return `<button type="button" class="kanban-lane-add" data-kanban-new-ticket="${actions.escapeHtml(lane.id || lane.key || lane.name)}" aria-label="New ticket">+</button>`;
+    }
+
     function kanbanListDescriptionHtml(description) {
         if (!description) return '';
         return `<span class="development-kanban-list-description" title="${actions.escapeHtml(description)}"><span class="development-kanban-list-description-track"><span>${actions.escapeHtml(description)}</span></span></span>`;
@@ -113,9 +132,10 @@ export function createBoards({ context, actions, el }) {
             layout === 'list'
                 ? `<span class="kanban-list-time" title="Time logged" aria-label="Time logged ${formatKanbanDuration(ticket.time_spent)}">${formatKanbanDuration(ticket.time_spent)}</span>`
                 : '';
+        const statusHtml = kanbanTicketStatusHtml(ticket);
         return `<article class="development-kanban-card${layout === 'list' ? ' list-row' : ''}" draggable="true" tabindex="0" role="button" data-kanban-ticket="${actions.escapeHtml(key)}" data-ticket-id="${actions.escapeHtml(id)}" aria-label="Open ${actions.escapeHtml(title)}">
-            <div class="development-kanban-card-head"><span class="development-kanban-card-badges">${showSource ? `<span class="kanban-source">${actions.escapeHtml(actions.providerName(source))}</span>` : ''}${complexity ? `<span class="kanban-complexity">${actions.escapeHtml(String(complexity).replaceAll('_', ' '))}</span>` : ''}${priority ? `<span class="kanban-priority ${actions.escapeHtml(String(priority).toLowerCase())}">${actions.escapeHtml(priority)}</span>` : ''}${listTime}</span><button type="button" class="development-kanban-ticket-menu" data-kanban-menu aria-label="Ticket actions" title="Ticket actions">•••</button></div>
-            <div class="development-kanban-card-copy"><span class="development-kanban-card-title">${kanbanTicketStatusHtml(ticket)}<strong title="${actions.escapeHtml(title)}">${actions.escapeHtml(title)}</strong></span>${layout === 'list' ? listDescription : description ? `<p>${actions.escapeHtml(description)}</p>` : ''}${layout === 'list' ? '' : kanbanTicketMetaHtml(ticket)}</div>
+            <div class="development-kanban-card-head"><span class="development-kanban-card-badges">${layout === 'list' ? statusHtml : ''}${showSource ? `<span class="kanban-source">${actions.escapeHtml(actions.providerName(source))}</span>` : ''}${complexity ? `<span class="kanban-complexity">${actions.escapeHtml(String(complexity).replaceAll('_', ' '))}</span>` : ''}${priority ? `<span class="kanban-priority ${actions.escapeHtml(String(priority).toLowerCase())}">${actions.escapeHtml(priority)}</span>` : ''}${listTime}</span><button type="button" class="development-kanban-ticket-menu" data-kanban-menu aria-label="Ticket actions" title="Ticket actions">•••</button></div>
+            <div class="development-kanban-card-copy"><span class="development-kanban-card-title">${layout === 'list' ? '' : statusHtml}<strong title="${actions.escapeHtml(title)}">${actions.escapeHtml(title)}</strong></span>${layout === 'list' ? listDescription : description ? `<p>${actions.escapeHtml(description)}</p>` : ''}${layout === 'list' ? '' : kanbanTicketMetaHtml(ticket)}</div>
             <footer>${ticket.source_chat_id ? '<span class="kanban-thread-link">Thread linked</span>' : '<span></span>'}<span>${Array.isArray(ticket.files) && ticket.files.length ? `${ticket.files.length} file${ticket.files.length === 1 ? '' : 's'}` : ''}</span></footer>
         </article>`;
     }
@@ -126,7 +146,7 @@ export function createBoards({ context, actions, el }) {
                 const tickets = lane.tickets || lane.cards || [];
                 const laneId = lane.id || lane.key || lane.name;
                 return `<section class="development-kanban-lane" data-kanban-lane="${actions.escapeHtml(laneId)}">
-                <header><strong>${actions.escapeHtml(lane.name || lane.title || 'Untitled lane')}</strong><span>${tickets.length}</span></header>
+                <header><strong>${actions.escapeHtml(lane.name || lane.title || 'Untitled lane')}</strong><span>${tickets.length}</span>${kanbanNewTicketButton(lane, lanes)}</header>
                 <div class="development-kanban-card-list" data-kanban-dropzone="${actions.escapeHtml(laneId)}">${tickets.map((ticket) => kanbanCardHtml(board, lane, ticket, 'board')).join('')}</div>
             </section>`;
             })
@@ -189,7 +209,7 @@ export function createBoards({ context, actions, el }) {
                 const collapsedByDefault = ['done', 'complete', 'completed'].includes(laneName);
                 const collapsed = state.collapsedKanbanLanes.has(laneKey) || (collapsedByDefault && !state.expandedKanbanLanes.has(laneKey));
                 return `<section class="development-kanban-list-section${collapsed ? ' collapsed' : ''}" data-kanban-lane="${actions.escapeHtml(laneId)}">
-                <button type="button" class="development-kanban-list-heading" data-kanban-lane-toggle="${actions.escapeHtml(laneId)}" aria-expanded="${String(!collapsed)}"><span aria-hidden="true">›</span><strong>${actions.escapeHtml(lane.name || lane.title || 'Untitled lane')}</strong><small>${tickets.length}</small></button>
+                <div class="development-kanban-list-heading-row"><button type="button" class="development-kanban-list-heading" data-kanban-lane-toggle="${actions.escapeHtml(laneId)}" aria-expanded="${String(!collapsed)}"><span aria-hidden="true">›</span><strong>${actions.escapeHtml(lane.name || lane.title || 'Untitled lane')}</strong><small>${tickets.length}</small></button>${kanbanNewTicketButton(lane, lanes)}</div>
                 <div class="development-kanban-list-body" data-kanban-dropzone="${actions.escapeHtml(laneId)}">${tickets.map((ticket) => kanbanCardHtml(board, lane, ticket, 'list')).join('')}</div>
             </section>`;
             })
@@ -198,7 +218,7 @@ export function createBoards({ context, actions, el }) {
 
     function bindKanbanWorkspaceInteractions(board, lanesNode) {
         lanesNode.querySelectorAll('[data-kanban-ticket]').forEach((card) => {
-            card.addEventListener('click', (event) => {
+            card.addEventListener('dblclick', (event) => {
                 if (event.target.closest('[data-kanban-menu], [data-ticket-run-status]')) return;
                 openKanbanTicketDialog(card.dataset.kanbanTicket);
             });
@@ -242,6 +262,12 @@ export function createBoards({ context, actions, el }) {
                 renderKanbanWorkspace();
             })
         );
+        lanesNode.querySelectorAll('[data-kanban-new-ticket]').forEach((button) =>
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                openKanbanTicketDialog('', button.dataset.kanbanNewTicket);
+            })
+        );
         lanesNode.querySelectorAll('[data-kanban-dropzone]').forEach((zone) => {
             zone.addEventListener('dragover', (event) => {
                 event.preventDefault();
@@ -267,10 +293,11 @@ export function createBoards({ context, actions, el }) {
         el('development-kanban-view-label').textContent = boardMode ? 'Kanban' : 'List';
         const refreshButton = el('development-kanban-refresh');
         const external = board && (board.provider === 'jira' || board.provider === 'trello');
-        refreshButton.classList.toggle('hidden', !board);
-        refreshButton.setAttribute('aria-label', external ? `Re-sync ${actions.providerName(board.provider)} board` : 'Refresh board');
-        refreshButton.title = refreshButton.getAttribute('aria-label');
-        el('development-kanban-edit-board').classList.toggle('hidden', !board || board.provider !== 'decisions');
+        refreshButton.classList.toggle('hidden', !external);
+        if (external) {
+            refreshButton.setAttribute('aria-label', `Re-sync ${actions.providerName(board.provider)} board`);
+            refreshButton.title = refreshButton.getAttribute('aria-label');
+        }
         el('development-kanban-more').classList.toggle('hidden', !board);
     }
 
@@ -339,10 +366,10 @@ export function createBoards({ context, actions, el }) {
     async function forceRefreshKanbanBoard() {
         const board = actions.boardByKey(context.selectedBoardKey);
         if (!board) return;
-        const button = el('development-kanban-refresh');
-        button.disabled = true;
-        button.classList.add('refreshing');
         const external = board.provider === 'jira' || board.provider === 'trello';
+        const button = el('development-kanban-refresh');
+        if (button.classList.contains('refreshing')) return;
+        button.classList.add('refreshing');
         setKanbanStatus(external ? `Re-syncing ${actions.providerName(board.provider)}...` : 'Refreshing board...');
         try {
             await actions.loadBoardTickets(board.key, {
@@ -354,7 +381,6 @@ export function createBoards({ context, actions, el }) {
         } catch (error) {
             setKanbanStatus(error.message || `Could not refresh ${actions.providerName(board.provider)}.`, 'error');
         } finally {
-            button.disabled = false;
             button.classList.remove('refreshing');
         }
     }
@@ -383,10 +409,8 @@ export function createBoards({ context, actions, el }) {
         const menu = el('ticket-context-menu');
         const local = board.provider === 'decisions';
         const hasProject = Boolean(ticket.raw?.linked_project_id || context.boardDetails[board.key]?.default_project_id || board.project_id);
-        const hasWorkflow = Boolean(ticket.raw?.linked_workflow_id || context.boardDetails[board.key]?.default_workflow_id);
         const threadButton = menu.querySelector('[data-ticket-menu-action="thread"]');
-        threadButton.textContent = ticket.source_chat_id ? 'Open Thread' : 'Create Thread';
-        menu.querySelector('[data-ticket-menu-action="workflow"]').classList.toggle('hidden', !local || !hasWorkflow);
+        threadButton.querySelector('.context-menu-label').textContent = kanbanThreadActionLabel(ticket);
         menu.querySelector('[data-ticket-menu-action="agent"]').classList.toggle('hidden', !local || !hasProject);
         menu.querySelector('[data-ticket-menu-action="project"]').classList.toggle('hidden', !local || !hasProject);
         menu.querySelector('[data-ticket-menu-action="delete"]').classList.toggle('hidden', !local);
@@ -422,11 +446,10 @@ export function createBoards({ context, actions, el }) {
     async function runKanbanTicketAction(ticket, action) {
         if (!ticket?.ticket_id) return;
         const endpoints = {
-            workflow: `/tickets/tickets/${ticket.ticket_id}/send-to-workflow`,
             agent: `/tickets/tickets/${ticket.ticket_id}/send-to-cli`,
             project: `/tickets/tickets/${ticket.ticket_id}/send-to-project`
         };
-        const labels = { workflow: 'workflow', agent: 'Codex', project: 'project' };
+        const labels = { agent: 'Codex', project: 'project' };
         const endpoint = endpoints[action];
         if (!endpoint) return;
         setKanbanStatus(`Sending ticket to ${labels[action]}...`);
@@ -573,7 +596,11 @@ export function createBoards({ context, actions, el }) {
         el('kanban-ticket-todo-input').parentElement.classList.toggle('hidden', !editable);
     }
 
-    function openKanbanTicketDialog(ticketKey) {
+    function kanbanThreadActionLabel(ticket) {
+        return ticket?.source_chat_id ? 'Open Thread' : 'Start Thread';
+    }
+
+    function openKanbanTicketDialog(ticketKey, laneId) {
         const board = actions.boardByKey(context.selectedBoardKey);
         if (!board) return;
         const ticket = ticketKey ? kanbanTicketByKey(ticketKey) : null;
@@ -584,9 +611,7 @@ export function createBoards({ context, actions, el }) {
         form.dataset.ticketKey = ticket?.key || '';
         form.dataset.creating = String(creating);
         el('kanban-ticket-id').value = ticket?.id || '';
-        const providerLabel = el('kanban-ticket-provider');
-        providerLabel.textContent = board.provider === 'decisions' ? '' : `${actions.providerName(board.provider)} ticket`;
-        providerLabel.classList.toggle('hidden', board.provider === 'decisions');
+        el('kanban-ticket-provider').classList.add('hidden');
         el('kanban-ticket-heading').textContent = creating ? 'New ticket' : ticket.ticket_title;
         el('kanban-ticket-title').value = ticket?.ticket_title || '';
         el('kanban-ticket-description').value = ticket?.text || '';
@@ -598,18 +623,19 @@ export function createBoards({ context, actions, el }) {
                     `<option value="${actions.escapeHtml(lane.id || lane.key || lane.name)}">${actions.escapeHtml(lane.name || lane.title || 'Untitled lane')}</option>`
             )
             .join('');
-        el('kanban-ticket-lane').value = String(ticket?.lane_id || lanes[0]?.id || lanes[0]?.key || lanes[0]?.name || '');
+        el('kanban-ticket-lane').value = String(
+            ticket?.lane_id || laneId || kanbanIntakeLane(lanes)?.id || lanes[0]?.id || lanes[0]?.key || lanes[0]?.name || ''
+        );
         ['kanban-ticket-title', 'kanban-ticket-description', 'kanban-ticket-priority', 'kanban-ticket-lane'].forEach((id) => {
             el(id).disabled = externalExisting;
         });
         el('kanban-ticket-complexity').disabled = externalExisting;
         el('kanban-ticket-complexity-field').classList.toggle('hidden', board.provider !== 'decisions');
-        el('kanban-ticket-readonly').classList.toggle('hidden', !externalExisting);
         el('kanban-ticket-save').classList.toggle('hidden', externalExisting);
         el('kanban-ticket-delete').classList.toggle('hidden', creating || board.provider !== 'decisions');
         const createThreadButton = el('kanban-ticket-create-thread');
         createThreadButton.classList.toggle('hidden', creating);
-        createThreadButton.textContent = ticket?.source_chat_id ? 'Open thread' : 'Create thread';
+        createThreadButton.textContent = kanbanThreadActionLabel(ticket);
         createThreadButton.disabled = false;
         const raw = ticket?.raw || {};
         const materialRows = Array.isArray(raw.attachments) && raw.attachments.length ? raw.attachments : raw.files || [];
@@ -626,7 +652,6 @@ export function createBoards({ context, actions, el }) {
         sourceLink.href = ticket?.external_url || '#';
         const localExisting = Boolean(ticket && board.provider === 'decisions');
         const detail = context.boardDetails[board.key] || {};
-        el('kanban-ticket-run-workflow').classList.toggle('hidden', !localExisting || !(raw.linked_workflow_id || detail.default_workflow_id));
         el('kanban-ticket-run-agent').classList.toggle('hidden', !localExisting || !(raw.linked_project_id || detail.default_project_id || board.project_id));
         el('kanban-ticket-dialog').showModal();
         if (!externalExisting) window.setTimeout(() => el('kanban-ticket-title').focus(), 0);
@@ -904,17 +929,15 @@ export function createBoards({ context, actions, el }) {
             if ((draft.warnings || []).length) actions.toast(draft.warnings[0], 'error');
         } catch (error) {
             button.disabled = false;
-            button.textContent = 'Create thread';
+            button.textContent = kanbanThreadActionLabel(ticket);
             actions.toast(error.message || 'Could not prepare the ticket thread.', 'error');
         }
     }
 
     function bindEvents() {
-        el('development-kanban-new-ticket').addEventListener('click', () => openKanbanTicketDialog(''));
         el('development-kanban-refresh').addEventListener('click', forceRefreshKanbanBoard);
         el('development-kanban-view-board').addEventListener('click', () => setKanbanViewMode('board'));
         el('development-kanban-view-list').addEventListener('click', () => setKanbanViewMode('list'));
-        el('development-kanban-edit-board').addEventListener('click', () => actions.openBoardLinkDialog(context.selectedBoardKey));
         el('development-kanban-more').addEventListener('click', (event) => {
             event.stopPropagation();
             actions.openBoardContextMenu(event, context.selectedBoardKey);
@@ -931,7 +954,6 @@ export function createBoards({ context, actions, el }) {
         el('kanban-ticket-attachments-tab').addEventListener('click', () => setKanbanTicketTab('attachments'));
         el('kanban-ticket-todos-tab').addEventListener('click', () => setKanbanTicketTab('todos'));
         el('kanban-ticket-create-thread').addEventListener('click', createThreadFromKanbanTicket);
-        el('kanban-ticket-run-workflow').addEventListener('click', () => runKanbanTicketAction(currentKanbanDialogTicket(), 'workflow'));
         el('kanban-ticket-run-agent').addEventListener('click', () => runKanbanTicketAction(currentKanbanDialogTicket(), 'agent'));
         el('kanban-ticket-delete').addEventListener('click', deleteKanbanTicket);
         el('kanban-ticket-add-link').addEventListener('click', addKanbanTicketLink);

@@ -1,15 +1,20 @@
 <div class="board-context-menu hidden" id="board-context-menu" role="menu" tabindex="-1">
-            <button type="button" id="board-context-refresh" role="menuitem"><span aria-hidden="true">↻</span><span class="context-menu-label">Refresh Board</span></button>
-            <button type="button" id="board-context-list" role="menuitem"><span aria-hidden="true">☷</span><span class="context-menu-label">List View</span></button>
-            <button type="button" id="board-context-kanban" role="menuitem"><span aria-hidden="true">▦</span><span class="context-menu-label">Board View</span></button>
-            <button type="button" id="board-context-new-ticket" role="menuitem"><span aria-hidden="true">＋</span><span class="context-menu-label">New Ticket</span></button>
-            <button type="button" id="board-context-new-chat" role="menuitem"><span aria-hidden="true">□</span><span class="context-menu-label">New Thread</span></button>
-            <button type="button" id="board-context-plan" role="menuitem"><span aria-hidden="true">≡</span><span class="context-menu-label">Plan</span></button>
-            <button type="button" id="board-context-activate" role="menuitem"><span aria-hidden="true">○</span><span class="context-menu-label">Set as Active</span></button>
-            <button type="button" id="board-context-edit" role="menuitem"><span aria-hidden="true">⌁</span><span class="context-menu-label">Edit Board</span></button>
-            <button type="button" id="board-context-open-folder" role="menuitem"><span aria-hidden="true">▱</span><span class="context-menu-label">Show in File Manager</span></button>
-            <button type="button" id="board-context-terminals" role="menuitem"><span aria-hidden="true">›_</span><span class="context-menu-label">Terminals</span></button>
-            <button type="button" class="context-menu-subitem" id="board-context-terminal-toggle" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z"/></svg><span class="context-menu-label">Start Terminals</span></button>
-            <button type="button" id="board-context-pin" role="menuitem"><span aria-hidden="true">⌖</span><span class="context-menu-label">Pin Board</span></button>
-            <button type="button" id="board-context-archive" role="menuitem"><span aria-hidden="true">□</span><span class="context-menu-label">Archive Board</span></button>
+            <p class="context-menu-heading">Create</p>
+            <button type="button" id="board-context-new-ticket" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg><span class="context-menu-label">New Ticket</span></button>
+            <button type="button" id="board-context-new-chat" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 4.5h9v6.5H6.5L3.5 13z"/></svg><span class="context-menu-label">New Thread</span></button>
+            <button type="button" id="board-context-plan" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.5 4h7M4.5 8h7M4.5 12h4.5"/><path d="M3 4h.5M3 8h.5M3 12h.5"/></svg><span class="context-menu-label">Plan</span></button>
+            <p class="context-menu-heading">View</p>
+            <button type="button" id="board-context-kanban" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="3.5" height="9" rx=".6"/><rect x="6.25" y="3.5" width="3.5" height="9" rx=".6"/><rect x="10" y="3.5" width="3.5" height="9" rx=".6"/></svg><span class="context-menu-label">Board View</span></button>
+            <button type="button" id="board-context-list" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 4h9M3.5 8h9M3.5 12h9"/></svg><span class="context-menu-label">List View</span></button>
+            <button type="button" id="board-context-refresh" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.6"/><path d="M13.5 2.5v3h-3"/></svg><span class="context-menu-label">Refresh Board</span></button>
+            <p class="context-menu-heading">Board</p>
+            <button type="button" id="board-context-edit" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M9.5 4.2 11.8 6.5 6 12.3H3.7V10z"/><path d="M8.4 5.3l2.3 2.3"/></svg><span class="context-menu-label">Edit Board</span></button>
+            <button type="button" id="board-context-activate" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M5.5 8.2 7.2 10l3.4-4"/></svg><span class="context-menu-label">Set as Active</span></button>
+            <button type="button" id="board-context-open-folder" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 5.5h4l1.2 1.5H13v5.5H3z"/></svg><span class="context-menu-label">Show in File Manager</span></button>
+            <button type="button" id="board-context-pin" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M6 3.5h4l-.6 3.2 1.8 1.6v1.2H4.8V8.3l1.8-1.6zM8 9.5v3"/></svg><span class="context-menu-label">Pin Board</span></button>
+            <p class="context-menu-heading">Terminals</p>
+            <button type="button" id="board-context-terminals" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M5 7l2 1.5L5 10M8.5 10.5h2.5"/></svg><span class="context-menu-label">Open</span></button>
+            <button type="button" id="board-context-terminal-toggle" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z"/></svg><span class="context-menu-label">Start Terminals</span></button>
+            <button type="button" class="danger-menu-item" id="board-context-archive" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 5h10v1.5H3zm1.5 1.5h7V12h-7zM6.5 8.5h3"/></svg><span class="context-menu-label">Archive Board</span></button>
+            <button type="button" class="danger-menu-item" id="board-context-delete" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 5.5h8M6.5 5.5V4h3v1.5M5.5 5.5 6 13h4l.5-7.5"/></svg><span class="context-menu-label">Delete project</span></button>
         </div>

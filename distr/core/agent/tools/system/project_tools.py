@@ -1439,6 +1439,7 @@ class OpenProjectTool(BaseTool):
 
     Triggers (use this tool for these):
     - "Open the project"
+    - "Bring up the project"
     - "Open this project"
     - "Open the project folder"
     - "Open project in Cursor"
@@ -1457,6 +1458,7 @@ class OpenProjectTool(BaseTool):
         """Get triggers for open project."""
         return [
             "open the project", "open this project", "open project",
+            "bring up the project", "bring up this project",
             "open project folder", "open in cursor", "open in codex"
         ]
 

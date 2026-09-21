@@ -72,6 +72,191 @@
 
 .thread-status-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: var(--studio-accent); }
 
+.studio-message.workflow-runner { margin: 2px 0 8px; }
+
+.thread-workflow-runner {
+    display: grid;
+    gap: 10px;
+    width: min(100%, 320px);
+    margin: 0 auto;
+    padding: 12px 14px 16px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(23, 33, 65, .88), rgba(12, 18, 36, .92));
+    box-shadow: 0 10px 28px rgba(0,0,0,.18);
+}
+
+.thread-workflow-runner.done { opacity: .92; }
+
+.thread-workflow-runner-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+
+.thread-workflow-runner-head strong {
+    overflow: hidden;
+    color: var(--studio-text);
+    font-size: 12px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread-workflow-runner-head span {
+    flex: 0 0 auto;
+    color: var(--studio-muted);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+
+.thread-workflow-ring {
+    position: relative;
+    width: min(100%, 236px);
+    aspect-ratio: 1;
+    margin: 0 auto;
+}
+
+.thread-workflow-path {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.thread-workflow-path circle {
+    fill: none;
+    stroke: #3d4b72;
+    stroke-width: 1.2;
+    stroke-dasharray: 2.4 2.1;
+}
+
+.thread-workflow-nodes {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.thread-workflow-node {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    width: 54px;
+    gap: 3px;
+    justify-items: center;
+    transform: translate(-50%, -50%) rotate(calc(var(--step-angle) * 1deg)) translateY(-96px) rotate(calc(var(--step-angle) * -1deg));
+    text-align: center;
+}
+
+.thread-workflow-node b {
+    display: grid;
+    width: 22px;
+    height: 22px;
+    place-content: center;
+    border: 1px solid #445275;
+    border-radius: 50%;
+    background: #121a32;
+    color: #c5cee0;
+    font-size: 9px;
+    font-variant-numeric: tabular-nums;
+}
+
+.thread-workflow-node span {
+    display: -webkit-box;
+    overflow: hidden;
+    max-width: 62px;
+    color: var(--studio-muted);
+    font-size: 8px;
+    line-height: 1.2;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.thread-workflow-node.done b { border-color: #4faa75; color: #8fd9ad; background: rgba(79,170,117,.12); }
+.thread-workflow-node.running b {
+    border-color: var(--studio-green);
+    color: #dff8ea;
+    background: rgba(104, 211, 145, .16);
+    box-shadow: 0 0 0 4px rgba(104, 211, 145, .08);
+    animation: thread-workflow-pulse 1.8s ease-out infinite;
+}
+.thread-workflow-node.waiting b { border-color: #f59e0b; color: #f6d58a; }
+.thread-workflow-node.failed b { border-color: var(--studio-red); color: #f3a0a7; }
+
+.thread-workflow-core {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    width: 88px;
+    height: 88px;
+    place-content: center;
+    border-radius: 50%;
+    background: #172141;
+    color: var(--studio-text);
+    text-align: center;
+    transform: translate(-50%, -50%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.05), 0 10px 24px rgba(0,0,0,.24);
+}
+
+.thread-workflow-core span {
+    color: var(--studio-green);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+.thread-workflow-core strong {
+    margin-top: 2px;
+    font-size: 24px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.thread-workflow-core small {
+    display: -webkit-box;
+    overflow: hidden;
+    max-width: 72px;
+    margin: 4px auto 0;
+    color: var(--studio-muted);
+    font-size: 8px;
+    line-height: 1.25;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.thread-workflow-runner.done .thread-workflow-core span { color: #9aa8c8; }
+
+.thread-workflow-runner[data-status="waiting"] .thread-workflow-core span,
+.thread-workflow-runner[data-status="paused"] .thread-workflow-core span { color: #f6d58a; }
+
+.thread-workflow-runner[data-status="failed"] .thread-workflow-core span,
+.thread-workflow-runner[data-status="error"] .thread-workflow-core span { color: #f3a0a7; }
+
+@keyframes thread-workflow-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(104, 211, 145, .08); }
+    50% { box-shadow: 0 0 0 7px rgba(104, 211, 145, .03); }
+}
+
+@media (max-width: 640px) {
+    .thread-workflow-node {
+        width: 44px;
+        transform: translate(-50%, -50%) rotate(calc(var(--step-angle) * 1deg)) translateY(-78px) rotate(calc(var(--step-angle) * -1deg));
+    }
+    .thread-workflow-node span { max-width: 48px; }
+    .thread-workflow-core { width: 76px; height: 76px; }
+    .thread-workflow-core strong { font-size: 20px; }
+}
+
 .message-avatar { display: none; }
 
 .message-body { min-width: 0; color: var(--studio-text); font-size: 12px; line-height: 1.48; }
@@ -555,6 +740,18 @@
 .model-menu-row > strong { max-width: 205px; overflow: hidden; color: var(--studio-muted); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 
 .model-menu-row > i { color: var(--studio-dim); font-size: 21px; font-style: normal; text-align: right; }
+
+.model-route-preview {
+    margin: 0 9px 6px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    background: rgba(255,255,255,.04);
+    color: var(--studio-muted);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.model-route-preview[hidden] { display: none; }
 
 .model-menu-note { margin: 4px 9px 2px; padding-top: 8px; border-top: 1px solid var(--studio-line); color: var(--studio-dim); font-size: 9px; line-height: 1.4; }
 

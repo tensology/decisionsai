@@ -300,6 +300,24 @@ class DevelopmentWorkItem(Base):
     modified_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
 
 
+class DevelopmentTimeEntry(Base):
+    """Closed time interval for one Development thread (ledger beside the counter)."""
+
+    __tablename__ = "development_time_entries"
+    __table_args__ = (
+        Index("ix_development_time_entries_chat_started", "chat_id", "started_at"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    work_item_id = Column(Integer, ForeignKey("development_work_items.id"), nullable=False)
+    chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=False)
+    seconds = Column(Integer, nullable=False, default=0)
+    source = Column(String, nullable=False, default="play")  # play, auto_pause, manual, reset
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+
+
 class PlanWorkspace(Base):
     """One durable planning workspace for a Development board."""
 

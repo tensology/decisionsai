@@ -42,7 +42,45 @@ def _tts_online_provider_verified(settings: dict, provider_id: str) -> bool:
         from distr.core.third_party_keys import pixazo_enabled
 
         return pixazo_enabled()
+    if provider_id == "fishaudio":
+        return bool(settings.get("fishaudio_enabled")) and bool(
+            str(settings.get("fishaudio_key") or "").strip()
+        )
     return True
+
+
+def fold_db_custom_voices(voices: list, rows) -> list:
+    """Prefer local custom_voices rows over API clones of the same id/name."""
+    merged = list(voices or [])
+    db_ids: set[str] = set()
+    db_names: set[str] = set()
+    for row in rows or []:
+        status = row[3]
+        if status != "ready":
+            continue
+        vid = str(row[2] or f"custom_{row[0]}")
+        db_ids.add(vid)
+        db_ids.add(str(row[0]))
+        db_names.add((row[1] or "").replace("⭐ ", "").strip().lower())
+        merged.append({
+            "id": vid,
+            "name": f"⭐ {row[1]}",
+            "custom": True,
+            "custom_voice_id": row[0],
+            "provider_voice_id": vid,
+            "custom_source": "database",
+        })
+    if not db_ids and not db_names:
+        return merged
+
+    def _keep(voice: dict) -> bool:
+        if voice.get("custom_voice_id"):
+            return True
+        vid = str(voice.get("id") or "")
+        name = (voice.get("name") or "").replace("⭐ ", "").strip().lower()
+        return vid not in db_ids and name not in db_names
+
+    return [voice for voice in merged if _keep(voice)]
 
 
 def _tts_provider_eligible_for_dropdown(
@@ -162,13 +200,16 @@ def register_routes(router, templates):
             elif provider_id == "pixazo":
                 from distr.core.agent.services.tts.pixazo_descriptor import PIXAZO_VOICES
                 voices = [dict(v) for v in PIXAZO_VOICES]
+            elif provider_id == "fishaudio":
+                from distr.core.agent.services.tts.registry import tts_registry
+                voices = tts_registry.get("fishaudio").get_voices()
         except Exception as e:
             logger.warning("Could not load voices for %s: %s", provider_id, e)
 
         # Append custom voices from DB (status=ready)
         # For ElevenLabs: API cloned voices are already marked custom above.
         # DB entries take precedence — replace API-cloned entries that match DB records.
-        if provider_id in ("kokoro", "elevenlabs", "coqui", "supertonic", "pixazo"):
+        if provider_id in ("kokoro", "elevenlabs", "coqui", "supertonic", "pixazo", "fishaudio"):
             try:
                 from distr.core.db import get_session
                 from sqlalchemy import text
@@ -179,33 +220,9 @@ def register_routes(router, templates):
                         "WHERE provider = :p AND status != 'failed'"
                     ), {"p": provider_id}).fetchall()
                     logger.info("Custom voices for %s: %s", provider_id, [(r[0], r[1], r[2], r[3]) for r in rows])
-                    custom_provider_ids = set()
-                    custom_names = set()
-                    for row in rows:
-                        if row[3] != "ready":
-                            continue
-                        vid = row[2] or f"custom_{row[0]}"
-                        custom_provider_ids.add(vid)
-                        custom_names.add(row[1].strip().lower())
-                        voices.append({
-                            "id": vid,
-                            "name": f"⭐ {row[1]}",
-                            "custom": True,
-                            "custom_voice_id": row[0],
-                            "provider_voice_id": vid,
-                            "custom_source": "database",
-                        })
-                    logger.info("Custom IDs: %s, Custom names: %s", custom_provider_ids, custom_names)
-                    # Remove duplicates: drop non-DB entries whose id or name matches a DB custom voice
-                    # This covers both plain API entries and api_cloned entries that have a DB counterpart
-                    if custom_provider_ids or custom_names:
-                        before = len(voices)
-                        voices = [v for v in voices if
-                            (v.get("custom") and not v.get("api_cloned")) or (
-                                v["id"] not in custom_provider_ids and
-                                v.get("name", "").replace("⭐ ", "").strip().lower() not in custom_names
-                            )]
-                        logger.info("Dedup: %d -> %d voices", before, len(voices))
+                    before = len(voices)
+                    voices = fold_db_custom_voices(voices, rows)
+                    logger.info("Folded custom voices for %s: %d -> %d", provider_id, before, len(voices))
                 finally:
                     session.close()
             except Exception as e:
@@ -373,8 +390,8 @@ def register_routes(router, templates):
 
         if not name:
             return JSONResponse({"error": "Name is required"}, status_code=400)
-        if provider not in ("elevenlabs", "kokoro", "coqui", "supertonic", "pixazo"):
-            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, coqui, supertonic, or pixazo"}, status_code=400)
+        if provider not in ("elevenlabs", "kokoro", "coqui", "supertonic", "pixazo", "fishaudio"):
+            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, coqui, supertonic, pixazo, or fishaudio"}, status_code=400)
 
         # Check ElevenLabs limit (max 5 custom voices)
         session = get_session()
@@ -467,7 +484,7 @@ def register_routes(router, templates):
             if not voice:
                 return JSONResponse({"error": "Not found"}, status_code=404)
 
-            # Delete ElevenLabs voice from their API if applicable
+            # Delete remote clone when the vendor owns it
             if voice.provider == "elevenlabs" and voice.provider_voice_id:
                 try:
                     from distr.core.settings import load_settings_from_db
@@ -479,6 +496,18 @@ def register_routes(router, templates):
                         client.voices.delete(voice.provider_voice_id)
                 except Exception as e:
                     logger.warning("Could not delete ElevenLabs voice %s: %s", voice.provider_voice_id, e)
+            elif voice.provider == "fishaudio" and voice.provider_voice_id:
+                try:
+                    from distr.core.settings import load_settings_from_db
+                    from distr.core.agent.services.tts.fishaudio_client import delete_voice_model
+
+                    settings = load_settings_from_db()
+                    delete_voice_model(
+                        (settings.get("fishaudio_key") or "").strip(),
+                        voice.provider_voice_id,
+                    )
+                except Exception as e:
+                    logger.warning("Could not delete Fish Audio voice %s: %s", voice.provider_voice_id, e)
 
             # Delete audio files
             if voice.audio_dir and os.path.isdir(voice.audio_dir):
@@ -507,6 +536,24 @@ def register_routes(router, templates):
             return JSONResponse({"success": True})
         except Exception as e:
             logger.warning("Could not delete ElevenLabs voice %s: %s", voice_id, e)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @router.delete("/fishaudio-voices/{voice_id}")
+    async def delete_fishaudio_voice_by_provider_id(voice_id: str):
+        """Delete a Fish studio clone that is not stored in the local custom_voices table."""
+        try:
+            from distr.core.settings import load_settings_from_db
+            from distr.core.agent.services.tts.fishaudio_client import delete_voice_model
+
+            settings = load_settings_from_db()
+            api_key = (settings.get("fishaudio_key") or "").strip()
+            if not api_key:
+                return JSONResponse({"error": "No Fish Audio API key configured"}, status_code=400)
+            delete_voice_model(api_key, voice_id)
+            _invalidate_voices_cache("fishaudio")
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.warning("Could not delete Fish Audio voice %s: %s", voice_id, e)
             return JSONResponse({"error": str(e)}, status_code=500)
 
     @router.get("/custom-voices/{voice_id}/reference-audio")

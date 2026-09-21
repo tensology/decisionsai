@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframe renderer visual fixture</title>
+<style>
+body{margin:0;background:#eef1f5;font:14px/1.5 system-ui;color:#182230}
+header{padding:12px 20px;border-bottom:1px solid #cbd2dc;display:flex;gap:20px;align-items:center}
+select{font:inherit;padding:6px 12px}iframe{display:block;width:100%;height:calc(100dvh - 65px);border:0}
+</style>
+<header>Renderer fixture <select aria-label="Example"><option value="form">Form and navigation</option><option value="components">Components</option></select></header>
+<iframe title="Rendered wireframe" sandbox=""></iframe>
+<script type="module">
+import {renderWireframe} from '/static/development/planning/wireframe.js';
+const examples = {
+form: `screen Customers
+  nav
+    link Customers route=/customers active
+    link Orders route=/orders
+    link Settings route=/settings
+  divider
+  heading Customers
+  form "New customer"
+    grid columns=2
+      input "First name" placeholder="First name"
+      input "Last name" placeholder="Last name"
+    input "Email address" type=email placeholder="name@example.com"
+    input Phone type=tel
+    select "Customer type" options="Individual|Business"
+    checkbox "Receive order updates" checked
+    row
+      button "Save customer" primary
+      button Cancel`,
+components: `screen Components
+  heading "Customer account"
+  tabs
+    tab Overview active
+    tab Activity
+    tab Documents
+  grid columns=2
+    section "Contact preferences"
+      toggle "Email notifications" checked
+      checkbox "Include attachments"
+      radio "Weekly summary" checked name=frequency
+      slider "Notification limit" value=40
+      badge Active
+      textarea Notes placeholder="Add a note" rows=3
+    section "Schedule"
+      calendar "Follow-up" value=2026-09-14
+      date "Next contact" value=2026-09-21
+      button "Save preferences" primary`
+};
+const picker = document.querySelector('select');
+function render(){const result=renderWireframe(examples[picker.value]);document.querySelector('iframe').srcdoc=result.html;}
+picker.addEventListener('change',render);render();
+</script>
+</html>

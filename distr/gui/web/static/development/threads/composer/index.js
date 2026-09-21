@@ -1,21 +1,192 @@
 import { providerLabel as lookupProviderLabel, catalogModels as lookupCatalogModels } from '../../shared/models.js';
 // Owns threads composer rendering, interactions, and private view state.
 export function createThreadsComposer({ context, actions, el, token }) {
+    const HARNESS_OPTIONS = [
+        { id: 'pi', label: 'Pi' },
+        { id: 'cursor', label: 'Cursor' },
+        { id: 'codex', label: 'Codex' },
+        { id: 'claude_code', label: 'Claude Code' }
+    ];
+    const KNOWN_HARNESS_IDS = new Set(HARNESS_OPTIONS.map((item) => item.id));
+    let routePreviewTimer = null;
+
+    function knownHarnessId(id) {
+        const wanted = String(id || '').toLowerCase();
+        return KNOWN_HARNESS_IDS.has(wanted) ? wanted : '';
+    }
+
+    function harnessLabel(id) {
+        const wanted = knownHarnessId(id);
+        return HARNESS_OPTIONS.find((item) => item.id === wanted)?.label || (wanted ? wanted.replace(/_/g, ' ') : 'Auto');
+    }
+
+    function ensureManualBackend() {
+        if (context.draft.route_mode === 'manual' && !knownHarnessId(context.draft.backend)) {
+            context.draft.backend = 'pi';
+        }
+    }
+
+    function harnessDefaultProvider(backend) {
+        if (backend === 'codex') return 'openai';
+        if (backend === 'claude_code') return 'anthropic';
+        if (backend === 'cursor') return 'cursor';
+        if (backend === 'pi') return String(context.draft.provider || 'ollama').toLowerCase();
+        return String(backend || '').toLowerCase();
+    }
+
+    function cliModels(backend) {
+        const id = String(backend || '').toLowerCase();
+        const catalogs = context.cliModelCatalogs || {};
+        return Array.isArray(catalogs[id]) ? catalogs[id] : null;
+    }
+
+    async function ensureCliModels(backend) {
+        const id = knownHarnessId(backend);
+        if (!id || id === 'pi') return [];
+        const cached = cliModels(id);
+        if (cached) return cached;
+        if (!context.cliModelCatalogs) context.cliModelCatalogs = {};
+        if (!context.cliModelMessages) context.cliModelMessages = {};
+        const projectId = Number(context.currentChat?.project_id || context.selectedProjectId || context.draft.project_id || 0);
+        let path = `/projects/cli-models?backend_id=${encodeURIComponent(id)}`;
+        if (projectId) path += `&project_id=${encodeURIComponent(String(projectId))}`;
+        try {
+            const data = await actions.api(path);
+            const models = Array.isArray(data.models) ? data.models : [];
+            context.cliModelCatalogs[id] = models;
+            context.cliModelMessages[id] = String(data.message || '').trim();
+            return models;
+        } catch (error) {
+            context.cliModelCatalogs[id] = [];
+            context.cliModelMessages[id] = error?.message || 'Could not load models for this harness.';
+            return [];
+        }
+    }
+
+    function modelRowsForHarness(backend, query = '') {
+        const id = knownHarnessId(backend);
+        let models = id === 'pi' ? [] : cliModels(id) || [];
+        const selected = String(context.draft.model_name || '').trim();
+        if (
+            selected &&
+            selected.toLowerCase() !== 'auto' &&
+            !models.some((model) => String(model.id || model.name || model).toLowerCase() === selected.toLowerCase())
+        ) {
+            models = [{ id: selected, name: selected }, ...models];
+        }
+        const normalizedQuery = String(query || '')
+            .trim()
+            .toLowerCase();
+        const withoutAuto = models.filter((model) => String(model.id || model.name || model).toLowerCase() !== 'auto');
+        if (!normalizedQuery) return withoutAuto;
+        return withoutAuto.filter((model) => {
+            const modelId = String(model.id || model.name || model);
+            const name = String(model.name || model.id || model);
+            return `${name} ${modelId}`.toLowerCase().includes(normalizedQuery);
+        });
+    }
+
     function updateModelLabel() {
+        ensureManualBackend();
         const mode = context.draft.route_mode || 'auto';
         const effort = String(context.draft.reasoning_effort || 'medium')
             .replace(/^./, (char) => char.toUpperCase())
             .replace('Xhigh', 'Extra high');
         const autoRoute = context.routingAssessment?.route || {};
-        const autoModel = String(autoRoute.model || '').replace(/:free$/i, '');
-        const assessed = autoModel ? `${autoModel} · Free` : 'Selecting free model';
+        const assessedHarness = knownHarnessId(autoRoute.backend);
+        const complexity = String(context.routingAssessment?.complexity || '').toLowerCase();
+        const autoModel = String(autoRoute.model || 'auto').replace(/:free$/i, '');
         const manualEffort = modelOptionValues('effort').length ? ` · ${effort}` : '';
         const speed = context.draft.service_tier === 'priority' && modelOptionValues('speed').length ? ' · Fast' : '';
-        const fullLabel = mode === 'auto' ? `Auto · ${assessed}${speed}` : `Pinned · ${context.draft.model_name || 'Choose model'}${manualEffort}${speed}`;
+        let fullLabel;
+        if (mode === 'auto') {
+            if (!context.routingAssessment) {
+                fullLabel = `Auto${speed}`;
+            } else if (assessedHarness) {
+                const assessedModel = String(autoRoute.model || '').replace(/:free$/i, '');
+                fullLabel = `Auto · ${harnessLabel(assessedHarness)}${
+                    assessedModel && assessedModel.toLowerCase() !== 'auto' ? ` · ${assessedModel}` : ''
+                }${complexity ? ` · ${complexity}` : ''}${speed}`;
+            } else {
+                fullLabel = `Auto${complexity ? ` · ${complexity}` : ''}${speed}`;
+            }
+        } else {
+            const pinnedModel = String(context.draft.model_name || autoModel || 'auto').replace(/:free$/i, '');
+            const harness = harnessLabel(context.draft.backend || 'pi');
+            const provider =
+                knownHarnessId(context.draft.backend) === 'pi' && context.draft.provider
+                    ? ` · ${lookupProviderLabel(context.draft.provider, context.providers)}`
+                    : '';
+            fullLabel = `${harness}${provider} · ${pinnedModel}${manualEffort}${speed}`;
+        }
         el('model-label').textContent = fullLabel;
-        const fallback = autoRoute.fallback_model ? ` Fallback: ${autoRoute.fallback_model}.` : '';
-        el('model-button').title =
-            mode === 'auto' ? `${fullLabel}.${fallback}` : context.routingAssessment?.reason ? `${fullLabel}. ${context.routingAssessment.reason}` : fullLabel;
+        const reason = context.routingAssessment?.reason || '';
+        el('model-button').title = reason ? `${fullLabel}. ${reason}` : fullLabel;
+        syncRoutePreview();
+    }
+
+    function syncRoutePreview() {
+        const preview = el('model-route-preview');
+        const text = el('model-route-preview-text');
+        if (!preview || !text) return;
+        const automatic = context.draft.route_mode !== 'manual';
+        preview.hidden = !automatic;
+        if (!automatic) return;
+        const assessment = context.routingAssessment;
+        if (!assessment) {
+            text.textContent = 'Type a prompt to preview harness routing.';
+            return;
+        }
+        const route = assessment.route || {};
+        const assessedHarness = knownHarnessId(route.backend);
+        const parts = [
+            assessment.complexity || 'medium',
+            assessedHarness ? harnessLabel(assessedHarness) : 'Auto',
+            route.model || 'auto',
+            assessment.execution_mode || 'direct'
+        ];
+        text.textContent = parts.join(' · ') + (assessment.reason ? ` — ${assessment.reason}` : '');
+    }
+
+    async function refreshRoutingAssessment(instruction) {
+        const prompt = String(instruction || el('task-prompt')?.value || '').trim();
+        if (context.draft.route_mode !== 'auto') return null;
+        if (!prompt) {
+            context.routingAssessment = null;
+            updateModelLabel();
+            return null;
+        }
+        try {
+            const ticket = context.attachments.find((item) => item.ticket_id || item.board_ticket_key) || {};
+            const hasImages = context.attachments.some(
+                (item) => item.sourceLabel === 'Image' || String(item.text || '').includes('MIME type: image/')
+            );
+            context.routingAssessment = await actions.api('/workflows/studio/routing-assessment', {
+                method: 'POST',
+                body: {
+                    instruction: prompt,
+                    ticket_title: ticket.ticket_title || ticket.label || '',
+                    ticket_description: ticket.text || '',
+                    has_images: hasImages,
+                    recent_messages: (context.currentChat?.messages || []).slice(-6).map((message) => message.content || message.text || '')
+                }
+            });
+            updateModelLabel();
+            return context.routingAssessment;
+        } catch (_) {
+            return context.routingAssessment;
+        }
+    }
+
+    function scheduleRoutePreview() {
+        window.clearTimeout(routePreviewTimer);
+        if (context.draft.route_mode !== 'auto') {
+            syncRoutePreview();
+            return;
+        }
+        routePreviewTimer = window.setTimeout(() => {
+            refreshRoutingAssessment().catch(() => {});
+        }, 450);
     }
 
     function updateModeLabel() {
@@ -74,6 +245,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
             board_ticket_lane: boardTicket?.lane_name || undefined,
             provider: context.draft.provider || undefined,
             model_name: context.draft.model_name || undefined,
+            backend: context.draft.route_mode === 'manual' ? context.draft.backend || undefined : undefined,
             route_mode: context.draft.route_mode,
             execution_profile: context.draft.execution_profile,
             autonomy_level: context.draft.autonomy_level,
@@ -114,18 +286,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         }
         if (context.draft.route_mode === 'auto' && !context.editingCommandId) {
             try {
-                const ticket = context.attachments.find((item) => item.ticket_id || item.board_ticket_key) || {};
-                context.routingAssessment = await actions.api('/workflows/studio/routing-assessment', {
-                    method: 'POST',
-                    body: {
-                        instruction: prompt,
-                        ticket_title: ticket.ticket_title || ticket.label || '',
-                        ticket_description: ticket.text || '',
-                        has_images: hasImages,
-                        recent_messages: (context.currentChat?.messages || []).slice(-6).map((message) => message.content || message.text || '')
-                    }
-                });
-                updateModelLabel();
+                await refreshRoutingAssessment(prompt);
             } catch (_) {
                 context.routingAssessment = null;
             }
@@ -337,13 +498,29 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     function syncModelMenu() {
+        ensureManualBackend();
         const automatic = context.draft.route_mode !== 'manual';
+        const backend = knownHarnessId(context.draft.backend);
+        const needsProvider = !automatic && backend === 'pi';
         const effortOptions = modelOptionValues('effort');
         const speedOptions = modelOptionValues('speed');
         if (effortOptions.length && !effortOptions.includes(context.draft.reasoning_effort)) context.draft.reasoning_effort = effortOptions[0];
         if (speedOptions.length && !speedOptions.includes(context.draft.service_tier)) context.draft.service_tier = speedOptions[0];
-        el('model-provider-value').textContent = automatic ? 'Auto' : providerLabel(context.draft.provider);
-        el('model-catalog-value').textContent = automatic ? 'Automatic' : context.draft.model_name || 'Choose model';
+        const autoRoute = context.routingAssessment?.route || {};
+        const assessedHarness = knownHarnessId(autoRoute.backend);
+        el('model-auto-value').textContent = automatic
+            ? `${assessedHarness ? harnessLabel(assessedHarness) : 'Auto'}${context.routingAssessment?.complexity ? ` · ${context.routingAssessment.complexity}` : ''}`
+            : 'Off';
+        el('model-harness-value').textContent = automatic ? 'Auto' : harnessLabel(backend || 'pi');
+        el('model-provider-value').textContent = needsProvider
+            ? providerLabel(context.draft.provider || harnessDefaultProvider('pi'))
+            : automatic
+              ? 'Auto'
+              : harnessLabel(backend || 'pi');
+        el('model-provider-row').classList.toggle('hidden', automatic || !needsProvider);
+        el('model-catalog-value').textContent = automatic
+            ? autoRoute.model || 'Automatic'
+            : context.draft.model_name || 'Choose model';
         el('model-effort-value').textContent = optionLabel(context.draft.reasoning_effort || 'medium');
         el('model-speed-value').textContent = optionLabel(context.draft.service_tier || 'standard');
         el('model-effort-row').classList.toggle('hidden', !effortOptions.length);
@@ -356,51 +533,103 @@ export function createThreadsComposer({ context, actions, el, token }) {
         return `<button type="button" class="model-choice${selected ? ' selected' : ''}" role="menuitemradio" aria-checked="${selected ? 'true' : 'false'}" data-model-choice="${actions.escapeHtml(value)}"><span>${actions.escapeHtml(label)}</span><small>${selected ? '✓' : actions.escapeHtml(meta || '')}</small></button>`;
     }
 
+    function renderPiModelChoices(query = '') {
+        const provider = String(context.draft.provider || '').trim();
+        if (!provider) {
+            return '<div class="model-menu-note">Choose a provider first.</div>';
+        }
+        const models = catalogModels(provider);
+        const normalizedQuery = String(query || '')
+            .trim()
+            .toLowerCase();
+        const filteredModels = normalizedQuery
+            ? models.filter((model) => {
+                  const id = String(model.id || model.name || model);
+                  const name = String(model.name || model.id || model);
+                  return `${name} ${id}`.toLowerCase().includes(normalizedQuery);
+              })
+            : models;
+        if (!filteredModels.length) {
+            return `<div class="model-menu-note">${models.length ? 'No matching models.' : 'No available models were returned by this provider.'}</div>`;
+        }
+        return filteredModels
+            .map((model) => {
+                const id = String(model.id || model.name || model);
+                const name = String(model.name || model.id || model);
+                return modelChoiceHtml(
+                    name,
+                    id,
+                    id.toLowerCase() === String(context.draft.model_name || '').toLowerCase(),
+                    model.context_window ? `${Math.round(Number(model.context_window) / 1000)}k context` : ''
+                );
+            })
+            .join('');
+    }
+
+    function renderCliModelChoices(query = '') {
+        const backend = knownHarnessId(context.draft.backend);
+        const loaded = cliModels(backend);
+        if (loaded === null) return '<div class="model-menu-note">Loading models…</div>';
+        const filteredModels = modelRowsForHarness(backend, query);
+        const hint = String((context.cliModelMessages || {})[backend] || '').trim();
+        const selected = String(context.draft.model_name || 'auto').toLowerCase();
+        return (
+            modelChoiceHtml('Auto', 'auto', selected === 'auto', 'Harness default') +
+            (filteredModels.length
+                ? filteredModels
+                      .map((model) => {
+                          const id = String(model.id || model.name || model);
+                          const name = String(model.name || model.id || model);
+                          const meta = model.tier ? String(model.tier) : '';
+                          return modelChoiceHtml(name, id, id.toLowerCase() === selected, meta);
+                      })
+                      .join('')
+                : `<div class="model-menu-note">${hint || (query ? 'No matching models.' : 'No models returned for this harness.')}</div>`)
+        );
+    }
+
     function renderModelPaneChoices(pane, query = '') {
         const list = el('model-submenu-list');
-        if (pane === 'provider') {
-            list.innerHTML =
-                modelChoiceHtml('Auto', 'auto', context.draft.route_mode !== 'manual', 'Best route for each step') +
-                context.providers
-                    .map((provider) => {
-                        const id = String(provider.id || provider);
+        if (pane === 'auto') {
+            list.innerHTML = modelChoiceHtml(
+                'Auto',
+                'auto',
+                context.draft.route_mode !== 'manual',
+                'Route by prompt complexity'
+            );
+        } else if (pane === 'harness') {
+            list.innerHTML = HARNESS_OPTIONS.map((item) =>
+                modelChoiceHtml(
+                    item.label,
+                    item.id,
+                    context.draft.route_mode === 'manual' && item.id === String(context.draft.backend || '').toLowerCase(),
+                    item.id === 'pi' ? 'Local / any provider' : 'CLI harness'
+                )
+            ).join('');
+        } else if (pane === 'provider') {
+            if (context.draft.route_mode !== 'manual' || context.draft.backend !== 'pi') {
+                list.innerHTML = '<div class="model-menu-note">Provider applies to the Pi harness only.</div>';
+            } else {
+                const selected = String(context.draft.provider || '').toLowerCase();
+                list.innerHTML = (context.providers || [])
+                    .map((row) => {
+                        const id = String(row.id || row);
                         return modelChoiceHtml(
-                            String(provider.name || provider.id || provider),
+                            String(row.name || id),
                             id,
-                            context.draft.route_mode === 'manual' && id.toLowerCase() === String(context.draft.provider || '').toLowerCase(),
+                            id.toLowerCase() === selected,
                             `${catalogModels(id).length} models`
                         );
                     })
-                    .join('');
+                    .join('') || '<div class="model-menu-note">No providers available.</div>';
+            }
         } else if (pane === 'model') {
-            if (context.draft.route_mode !== 'manual' || !context.draft.provider) {
-                list.innerHTML = '<div class="model-menu-note">Choose a provider first.</div>';
+            if (context.draft.route_mode !== 'manual' || !context.draft.backend) {
+                list.innerHTML = '<div class="model-menu-note">Choose a harness first.</div>';
+            } else if (context.draft.backend === 'pi') {
+                list.innerHTML = renderPiModelChoices(query);
             } else {
-                const models = catalogModels(context.draft.provider);
-                const normalizedQuery = String(query || '')
-                    .trim()
-                    .toLowerCase();
-                const filteredModels = normalizedQuery
-                    ? models.filter((model) => {
-                          const id = String(model.id || model.name || model);
-                          const name = String(model.name || model.id || model);
-                          return `${name} ${id}`.toLowerCase().includes(normalizedQuery);
-                      })
-                    : models;
-                list.innerHTML = filteredModels.length
-                    ? filteredModels
-                          .map((model) => {
-                              const id = String(model.id || model.name || model);
-                              const name = String(model.name || model.id || model);
-                              return modelChoiceHtml(
-                                  name,
-                                  id,
-                                  id.toLowerCase() === String(context.draft.model_name || '').toLowerCase(),
-                                  model.context_window ? `${Math.round(Number(model.context_window) / 1000)}k context` : ''
-                              );
-                          })
-                          .join('')
-                    : `<div class="model-menu-note">${models.length ? 'No matching models.' : 'No available models were returned by this provider.'}</div>`;
+                list.innerHTML = renderCliModelChoices(query);
             }
         } else {
             const values = modelOptionValues(pane);
@@ -415,16 +644,29 @@ export function createThreadsComposer({ context, actions, el, token }) {
         );
     }
 
-    function openModelPane(pane) {
+    async function openModelPane(pane) {
+        if (pane === 'model' && context.draft.route_mode === 'manual' && context.draft.backend === 'pi' && !String(context.draft.provider || '').trim()) {
+            pane = 'provider';
+        }
+        if (pane === 'provider' && (context.draft.route_mode !== 'manual' || context.draft.backend !== 'pi')) {
+            pane = 'harness';
+        }
         context.modelMenuPane = pane;
         const search = el('model-submenu-search');
-        el('model-submenu-title').textContent = pane === 'provider' ? 'Provider' : pane === 'model' ? 'Model' : pane === 'effort' ? 'Effort' : 'Speed';
+        const titles = { auto: 'Auto', harness: 'Harness', provider: 'Provider', model: 'Model', effort: 'Effort', speed: 'Speed' };
+        el('model-submenu-title').textContent = titles[pane] || 'Models';
         search.classList.toggle('hidden', pane !== 'model');
         el('model-submenu-header').classList.toggle('model-search-visible', pane === 'model');
         search.value = '';
-        renderModelPaneChoices(pane);
         el('model-menu-main').classList.add('hidden');
         el('model-submenu').classList.remove('hidden');
+        if (pane === 'model' && context.draft.route_mode === 'manual' && knownHarnessId(context.draft.backend) && context.draft.backend !== 'pi') {
+            renderModelPaneChoices(pane);
+            positionModelDialog();
+            await ensureCliModels(context.draft.backend);
+            if (context.modelMenuPane !== 'model') return;
+        }
+        renderModelPaneChoices(pane);
         positionModelDialog();
         if (pane === 'model') window.setTimeout(() => search.focus(), 0);
     }
@@ -438,22 +680,42 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     async function selectModelChoice(pane, value) {
-        if (pane === 'provider') {
-            if (value === 'auto') {
-                context.draft.route_mode = 'auto';
-                context.draft.provider = '';
-                context.draft.model_name = '';
-                closeModelPane();
-                await persistModelRoute();
-                return;
-            }
-            context.draft.route_mode = 'manual';
-            context.draft.provider = value;
+        if (pane === 'auto') {
+            context.draft.route_mode = 'auto';
+            context.draft.backend = '';
+            context.draft.provider = '';
             context.draft.model_name = '';
-            openModelPane('model');
+            closeModelPane();
+            await persistModelRoute();
+            scheduleRoutePreview();
             return;
         }
-        if (pane === 'model') context.draft.model_name = value;
+        if (pane === 'harness') {
+            context.draft.route_mode = 'manual';
+            context.draft.backend = value;
+            context.draft.provider = value === 'pi' ? '' : harnessDefaultProvider(value);
+            context.draft.model_name = value === 'pi' ? '' : 'auto';
+            context.routingAssessment = null;
+            if (value === 'pi') {
+                await openModelPane('provider');
+                return;
+            }
+            await persistModelRoute();
+            await openModelPane('model');
+            return;
+        }
+        if (pane === 'provider') {
+            context.draft.route_mode = 'manual';
+            context.draft.backend = 'pi';
+            context.draft.provider = value;
+            context.draft.model_name = '';
+            await openModelPane('model');
+            return;
+        }
+        if (pane === 'model') {
+            context.draft.model_name = value;
+            if (!context.draft.provider) context.draft.provider = harnessDefaultProvider(context.draft.backend);
+        }
         if (pane === 'effort') context.draft.reasoning_effort = value;
         if (pane === 'speed') context.draft.service_tier = value;
         closeModelPane();
@@ -465,6 +727,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         if (!dialog.open) dialog.show();
         closeModelPane();
         positionModelDialog();
+        scheduleRoutePreview();
         try {
             const providersData = await actions.api('/llms/available-providers');
             context.providers = providersData.providers || [];
@@ -480,6 +743,11 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 })
             );
             context.modelCatalogs = Object.fromEntries(catalogs);
+            const backend = knownHarnessId(context.draft.backend);
+            if (context.draft.route_mode === 'manual' && backend && backend !== 'pi') {
+                if (context.cliModelCatalogs) delete context.cliModelCatalogs[backend];
+                await ensureCliModels(backend);
+            }
             syncModelMenu();
             positionModelDialog();
         } catch (error) {
@@ -542,8 +810,10 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     async function persistModelRoute() {
+        ensureManualBackend();
         const routeMode = context.draft.route_mode || 'auto';
-        if (routeMode === 'manual' && !context.draft.model_name) return;
+        if (routeMode === 'manual' && !context.draft.backend) return;
+        if (routeMode === 'manual' && context.draft.backend === 'pi' && !context.draft.model_name) return;
         if (routeMode === 'manual') context.routingAssessment = null;
         try {
             window.localStorage.setItem('decisions-development-reasoning-effort', context.draft.reasoning_effort);
@@ -559,8 +829,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
             try {
                 const payload = {
                     route_mode: routeMode,
-                    provider: routeMode === 'manual' ? context.draft.provider : null,
-                    model_name: routeMode === 'manual' ? context.draft.model_name : null,
+                    backend: routeMode === 'manual' ? context.draft.backend : null,
+                    provider: routeMode === 'manual' ? context.draft.provider || harnessDefaultProvider(context.draft.backend) : null,
+                    model_name: routeMode === 'manual' ? context.draft.model_name || 'auto' : null,
                     reasoning_effort: modelOptionValues('effort').length ? context.draft.reasoning_effort : null,
                     service_tier: modelOptionValues('speed').length ? context.draft.service_tier : null
                 };
@@ -568,7 +839,11 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 Object.assign(context.currentChat, updated);
                 const listItem = context.chats.find((chat) => Number(chat.id) === Number(updated.id));
                 if (listItem) Object.assign(listItem, updated);
-                actions.toast(routeMode === 'auto' ? 'Automatic routing enabled.' : `${providerLabel(context.draft.provider)} · ${context.draft.model_name}`);
+                actions.toast(
+                    routeMode === 'auto'
+                        ? 'Automatic harness routing enabled.'
+                        : `${harnessLabel(context.draft.backend)} · ${context.draft.model_name || 'auto'}`
+                );
             } catch (error) {
                 actions.toast(error.message, 'error');
                 return;
@@ -1195,6 +1470,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         runComposerAttachmentAction,
         sendPrompt,
         setRunMode,
+        scheduleRoutePreview,
         startWorkflow,
         stopRun,
         toggleComposerActionMenu,

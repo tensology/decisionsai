@@ -8,3 +8,8 @@ def register_routes(router, templates):
     async def development_reports(limit: int = Query(100, ge=1, le=200)):
         from distr.core.reports.service import list_reports
         return JSONResponse(await asyncio.to_thread(list_reports, limit=limit))
+
+    @router.get("/workflows/studio/reports/time")
+    async def development_time_reports(limit: int = Query(100, ge=1, le=200)):
+        from distr.core.reports.service import list_time_entries
+        return JSONResponse(await asyncio.to_thread(list_time_entries, limit=limit))

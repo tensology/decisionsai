@@ -5,6 +5,8 @@ Eliminates duplicate streaming code across chat.py, web routes, etc.
 """
 
 import logging
+import base64
+import re
 from typing import Dict, Any, Generator, List, Optional, Tuple
 
 from distr.core.llm_errors import LLMModelError
@@ -264,6 +266,43 @@ def create_stream(
 # ---- private streaming helpers ----
 
 
+def _provider_image_messages(messages, provider):
+    """Translate inline OpenAI image blocks without fetching remote URLs.
+
+    Text-only messages and provider-native blocks retain their existing shape.
+    Input messages are never mutated.
+    """
+    converted = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list) or not any(b.get("type") == "image_url" for b in content):
+            converted.append(message)
+            continue
+        text_parts, images, blocks = [], [], []
+        for block in content:
+            if block.get("type") == "text":
+                text_parts.append(block["text"])
+                blocks.append(dict(block))
+            elif block.get("type") == "image_url":
+                url = block.get("image_url", {}).get("url", "")
+                match = re.fullmatch(r"data:(image/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)", url)
+                if not match:
+                    raise ValueError("Image input must contain inline supported image data.")
+                media_type, data = match.groups()
+                decoded = base64.b64decode(data, validate=True)
+                if not decoded or len(decoded) > 8 * 1024 * 1024:
+                    raise ValueError("Image input exceeds the supported size.")
+                images.append(decoded)
+                blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+            else:
+                raise ValueError("Unsupported block mixed with image input.")
+        if provider == "ollama":
+            converted.append({**message, "content": "\n\n".join(text_parts), "images": images})
+        else:
+            converted.append({**message, "content": blocks})
+    return converted
+
+
 def _stream_ollama(
     model: str, messages: List[Dict[str, str]], settings: Dict[str, Any]
 ) -> Generator[str, None, None]:
@@ -271,7 +310,7 @@ def _stream_ollama(
 
     ollama_url = settings.get("ollama_url", "http://localhost:11434/")
     client = Client(host=ollama_url)
-    stream = client.chat(model=model, messages=messages, stream=True)
+    stream = client.chat(model=model, messages=_provider_image_messages(messages, "ollama"), stream=True)
     for chunk in stream:
         if chunk and "message" in chunk:
             token = chunk["message"].get("content", "")
@@ -313,7 +352,7 @@ def _stream_anthropic(
     client = Anthropic(api_key=api_key)
     system = None
     chat_messages = []
-    for m in messages:
+    for m in _provider_image_messages(messages, "anthropic"):
         if m.get("role") == "system":
             system = m.get("content", "")
         else:

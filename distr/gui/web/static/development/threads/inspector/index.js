@@ -8,17 +8,42 @@ export function createThreadsInspector({ context, actions, el, token }) {
     }
 
     function currentRoute() {
-        const runRoute = context.currentRun?.latest_backend_handoff || {};
+        const run = context.currentRun || {};
+        const outcome = run.outcome || {};
+        const runRoute = run.latest_backend_handoff || {};
+        const assessment = context.routingAssessment || {};
+        const assessed = assessment.route || {};
+        const auto = (context.currentChat?.route_mode || context.draft.route_mode) === 'auto';
+        const harness =
+            outcome.backend_id ||
+            run.backend_id ||
+            runRoute.backend_id ||
+            context.draft.backend ||
+            assessed.backend ||
+            'Auto';
+        const runtime =
+            outcome.runtime_id ||
+            run.runtime_id ||
+            runRoute.runtime_id ||
+            '';
         return {
-            provider: runRoute.backend_id || context.currentRun?.backend_id || context.currentChat?.provider || context.draft.provider || 'Auto',
-            model: runRoute.model || context.currentRun?.model || context.currentChat?.model_name || context.draft.model_name || 'Best available',
+            provider: harness,
+            runtime,
+            model:
+                runRoute.model ||
+                run.model ||
+                context.draft.model_name ||
+                assessed.model ||
+                context.currentChat?.model_name ||
+                'Best available',
             reason:
                 runRoute.route_rationale ||
                 runRoute.selection_reason ||
-                context.currentRun?.selection_reason ||
-                ((context.currentChat?.route_mode || context.draft.route_mode) === 'auto'
-                    ? 'Selected automatically from the instruction, required tools, cost, and model health.'
-                    : 'Pinned manually for this thread.')
+                run.selection_reason ||
+                assessment.reason ||
+                (auto
+                    ? `Deterministic ${assessment.complexity || 'medium'} complexity route.`
+                    : `Pinned ${harness} harness for this thread.`)
         };
     }
 
@@ -29,7 +54,7 @@ export function createThreadsInspector({ context, actions, el, token }) {
     function automationSectionHtml(chat) {
         const automation = automationForChat(chat?.id);
         if (!automation) {
-            return `<section class="inspect-section"><div class="inspect-title">Automation</div><button class="wide-button" data-create-automation="1">Automate this thread</button></section>`;
+            return `<section class="inspect-section"><div class="inspect-title">Automation</div><button class="wide-button" data-create-automation="1">Automate this thread</button><button class="wide-button" data-schedule-prompt="1">Schedule this prompt</button></section>`;
         }
         const paused = String(automation.status || '').toLowerCase() === 'paused';
         return `<section class="inspect-section">
@@ -99,11 +124,17 @@ export function createThreadsInspector({ context, actions, el, token }) {
 
     function inspectorWorkflowHtml() {
         const workflow = context.currentWorkflow;
+        const route = currentRoute();
+        const routeRows = [
+            `<div class="surface-row">Harness<span>${actions.escapeHtml(route.provider || 'Auto')}</span></div>`,
+            route.runtime ? `<div class="surface-row">Runtime<span>${actions.escapeHtml(route.runtime)}</span></div>` : '',
+            `<div class="surface-row">Model<span>${actions.escapeHtml(route.model || 'auto')}</span></div>`
+        ].join('');
         if (!workflow)
-            return '<section class="inspect-section"><div class="inspect-title">Execution route</div><div class="surface-row">Mode<span>Direct agent</span></div></section>';
+            return `<section class="inspect-section"><div class="inspect-title">Execution route</div><div class="surface-row">Mode<span>Direct agent</span></div>${routeRows}</section>`;
         const steps = actions.workflowStepList(workflow);
         const currentStepId = Number(context.currentRun?.current_step_id || context.currentRun?.step_id || 0);
-        return `<section class="inspect-section"><div class="inspect-title">Workflow <span>${actions.escapeHtml(actions.statusLabel(context.currentRun?.status || 'ready'))}</span></div><button type="button" class="workflow-thread-link" data-open-thread-workflow="${Number(workflow.id)}"><strong>${actions.escapeHtml(workflow.name || 'Workflow')}</strong><small>${steps.length} steps · Open workflow</small></button><div class="workflow-thread-steps">${steps.map((step, index) => planItemHtml(step, index, currentStepId)).join('')}</div></section>`;
+        return `<section class="inspect-section"><div class="inspect-title">Workflow <span>${actions.escapeHtml(actions.statusLabel(context.currentRun?.status || 'ready'))}</span></div><button type="button" class="workflow-thread-link" data-open-thread-workflow="${Number(workflow.id)}"><strong>${actions.escapeHtml(workflow.name || 'Workflow')}</strong><small>${steps.length} steps · Open workflow</small></button>${routeRows}<div class="workflow-thread-steps">${steps.map((step, index) => planItemHtml(step, index, currentStepId)).join('')}</div></section>`;
     }
 
     function inspectorRunHtml() {
@@ -117,6 +148,7 @@ export function createThreadsInspector({ context, actions, el, token }) {
         return `
             ${commandQueueHtml()}
             ${inspectorWorkflowHtml()}
+            ${automationSectionHtml(chat)}
             ${waiting ? `<section class="inspect-section"><div class="waiting-card"><strong>Input required${interaction?.telegram_linked ? ' in web or Telegram' : ''}</strong><p>${actions.escapeHtml(run?.worker_question || run?.waiting_prompt || 'Review the pending development checkpoint.')}</p><div class="waiting-actions">${interaction ? interactionActions.map((action) => `<button data-interaction-token="${actions.escapeHtml(interaction.token)}" data-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(actions.actionLabel(action))}</button>`).join('') : '<button data-continue-run="1">Continue</button><button data-focus-steer="1">Add guidance</button>'}</div>${interactionActions.includes('feedback') ? '<small>Or type revision guidance in the composer.</small>' : ''}</div></section>` : ''}
             <section class="inspect-section inspector-activity-section">
                 <div class="inspect-title">Conversation <span>${rows.length} recent</span></div>
@@ -372,6 +404,7 @@ export function createThreadsInspector({ context, actions, el, token }) {
             .forEach((button) => button.addEventListener('click', () => runApprovedPlan(Number(button.dataset.planRun))));
         content.querySelector('[data-continue-run]')?.addEventListener('click', actions.continueRun);
         content.querySelector('[data-create-automation]')?.addEventListener('click', () => actions.openAutomationDialog(null));
+        content.querySelector('[data-schedule-prompt]')?.addEventListener('click', () => schedulePromptFromThread());
         content
             .querySelectorAll('[data-edit-automation]')
             .forEach((button) =>
@@ -423,6 +456,21 @@ export function createThreadsInspector({ context, actions, el, token }) {
             actions.copyText(file?.diff || '', 'File changes copied.');
         });
         content.querySelector('[data-inspector-undo]')?.addEventListener('click', actions.undoTurnChanges);
+    }
+
+    async function schedulePromptFromThread() {
+        if (!context.currentChat?.id) return;
+        try {
+            const result = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/schedule`, {
+                method: 'POST',
+                body: {}
+            });
+            actions.toast(result.message || 'Scheduled from this prompt.');
+            await actions.refreshShell({ preserveConversation: true });
+            renderInspector();
+        } catch (error) {
+            actions.toast(error.message || 'Could not schedule this prompt.', 'error');
+        }
     }
 
     function editQueuedCommand(commandId) {

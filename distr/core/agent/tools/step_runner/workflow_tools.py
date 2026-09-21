@@ -425,9 +425,16 @@ class RunWorkflowTool(BaseTool):
                     f"ticket_ids={','.join(str(ticket_id) for ticket_id in ticket_ids)}"
                 )
             from distr.core.workflow.work_dispatch import dispatch_work_item
+
+            host_chat_id = self._current_chat_id()
+            if host_chat_id is None:
+                return (
+                    "Failed to start workflow: no open Development thread. "
+                    "Open or continue a thread, then call run_workflow so the steps run inside that conversation."
+                )
             result = dispatch_work_item(
                 workflow_id=int(workflow_id),
-                chat_id=self._current_chat_id(),
+                chat_id=int(host_chat_id),
                 context=context or "",
                 source_type="agent_tool",
                 dispatch_async=True,
@@ -436,7 +443,11 @@ class RunWorkflowTool(BaseTool):
                 return f"Failed to start workflow: {result['error']}"
             run_id = result.get("run_id")
             _remember_workflow_context(workflow_id=workflow_id, run_id=run_id)
-            return f"Workflow run started in Development (run ID {run_id}, thread {result.get('chat_id')}). Steps are executing in sequence."
+            return (
+                f"Workflow run started in this Development thread "
+                f"(run ID {run_id}, thread {result.get('chat_id') or host_chat_id}). "
+                f"Steps are executing in sequence inside the conversation."
+            )
         except Exception as e:
             logger.error("run_workflow failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"

@@ -262,6 +262,8 @@ def save_general_settings(data) -> None:
         "voxcpm_voice",
         "pixazo_voice",
         "pixazo_dit_steps",
+        "fishaudio_voice",
+        "fishaudio_tts_model",
         "supertonic_voice",
         "chatterbox_voice",
     )
@@ -719,6 +721,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("gemini_enabled", "gemini_key"),
         ("nvidia_enabled", "nvidia_key"),
         ("pixazo_enabled", "pixazo_key"),
+        ("fishaudio_enabled", "fishaudio_key"),
         ("masko_enabled", "masko_key"),
         ("tensology_enabled", "tensology_key"),
     ]:

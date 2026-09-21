@@ -334,7 +334,7 @@ export function createIncoming({ context, actions, el }) {
             ? conversation.links
                   .map(
                       (link) =>
-                          `<div><span>${actions.escapeHtml(link.board_name || 'Board')}</span><button type="button" data-incoming-unlink="${Number(link.id)}" data-board-id="${Number(link.board_id)}" aria-label="Unlink ${actions.escapeHtml(link.board_name || 'board')}">Remove</button></div>`
+                          `<div><span>${actions.escapeHtml(link.board_name || 'Board')}</span><label class="incoming-link-auto"><input type="checkbox" data-incoming-auto="${Number(link.id)}" data-board-id="${Number(link.board_id)}"${link.auto_snapshot ? ' checked' : ''}><span>Auto snapshot</span></label><button type="button" data-incoming-unlink="${Number(link.id)}" data-board-id="${Number(link.board_id)}" aria-label="Unlink ${actions.escapeHtml(link.board_name || 'board')}">Remove</button></div>`
                   )
                   .join('')
             : '<small>Not linked to a board.</small>';
@@ -346,6 +346,14 @@ export function createIncoming({ context, actions, el }) {
                     el('incoming-link-dialog').close();
                 })
             );
+        el('incoming-current-links')
+            .querySelectorAll('[data-incoming-auto]')
+            .forEach((input) =>
+                input.addEventListener('change', async () => {
+                    await toggleIncomingAutoSnapshot(Number(input.dataset.boardId), Number(input.dataset.incomingAuto), input.checked);
+                })
+            );
+        el('incoming-link-auto').checked = false;
         const linkedBoardIds = new Set(conversation.links.map((link) => Number(link.board_id)));
         const options = context.boards.filter((board) => board.provider === 'decisions' && !linkedBoardIds.has(Number(board.local_id || board.id)));
         el('incoming-link-board').innerHTML =
@@ -367,7 +375,7 @@ export function createIncoming({ context, actions, el }) {
                 body: {
                     phone_jid: conversation.threadId,
                     contact_name: conversation.label,
-                    auto_snapshot: false
+                    auto_snapshot: el('incoming-link-auto').checked
                 }
             });
             el('incoming-link-dialog').close('saved');
@@ -505,6 +513,21 @@ export function createIncoming({ context, actions, el }) {
         await actions.loadBoardTickets(board.key);
         const ticket = (context.boardTickets[board.key] || []).find((row) => Number(row.id) === Number(ticketId));
         if (ticket) actions.openKanbanTicketDialog(ticket.key);
+    }
+
+    async function toggleIncomingAutoSnapshot(boardId, linkId, enabled) {
+        try {
+            await actions.api(`/tickets/boards/${boardId}/whatsapp-links/${linkId}`, {
+                method: 'PATCH',
+                body: { auto_snapshot: enabled }
+            });
+            await refreshIncomingData({ force: true });
+            actions.toast(enabled ? 'Automatic snapshots enabled.' : 'Automatic snapshots turned off.');
+        } catch (error) {
+            actions.toast(error.message || 'Could not update automatic snapshots.', 'error');
+            const conversation = incomingConversations('whatsapp').find((row) => row.key === state.incomingLinkConversationKey);
+            if (conversation) openIncomingLinkDialog(conversation.key);
+        }
     }
 
     async function unlinkIncomingChannel(boardId, linkId) {

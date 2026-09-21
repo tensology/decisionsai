@@ -24,6 +24,38 @@ from distr.core.workflow.development_threads import development_thread_metadata
 
 
 ACTIVE_EXECUTION_STATUSES = {"initializing", "queued", "running", "waiting"}
+CLI_BACKENDS = {"pi", "cursor", "codex", "claude_code"}
+
+
+def _output_justifies_noop(output: str) -> bool:
+    lowered = str(output or "").strip().lower()
+    return any(token in lowered for token in ("no changes needed", "already", "nothing to"))
+
+
+def _turn_outcome(
+    *,
+    backend_id: str,
+    runtime_id: str,
+    success: bool,
+    result: Any,
+    changes: dict[str, Any],
+    summary: str,
+    noop: bool = False,
+) -> dict[str, Any]:
+    evidence = result.evidence if isinstance(getattr(result, "evidence", None), dict) else {}
+    tool_counts = evidence.get("tool_counts") if isinstance(evidence.get("tool_counts"), dict) else {}
+    files = changes.get("files") if isinstance(changes.get("files"), list) else []
+    payload = {
+        "backend_id": str(backend_id or ""),
+        "runtime_id": str(runtime_id or ""),
+        "success": bool(success),
+        "tool_counts": tool_counts,
+        "git_change_count": len(files),
+        "summary": str(summary or "")[:2000],
+    }
+    if noop:
+        payload["noop"] = True
+    return payload
 
 
 def _prompt_expects_project_change(prompt: str, *, autonomy_level: str) -> bool:
@@ -372,9 +404,9 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, **changes: Any
         next_status = str(execution.get("status") or "").strip().lower()
         if ticket is not None and next_status in {
             "initializing", "queued", "running", "waiting", "paused",
-            "completed", "failed", "cancelled",
+            "completed", "completed_noop", "failed", "cancelled",
         }:
-            ticket.workflow_status = next_status
+            ticket.workflow_status = "completed" if next_status == "completed_noop" else next_status
         db.commit()
     _notify()
     return execution
@@ -523,6 +555,9 @@ def _project_and_scope(chat_id: int) -> tuple[Any, dict[str, Any], int | None, i
 
 
 def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -> tuple[str, str, dict[str, Any], str]:
+    from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
+    from distr.core.project_cli_backends import normalize_backend_id
+
     model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
     mode = str(model_route.get("route_mode") or "auto").strip().lower()
     complexity = str(assessment.get("complexity") or "medium").strip().lower()
@@ -533,18 +568,42 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
         "service_tier": str(model_route.get("service_tier") or "standard"),
         "required_capabilities": ["tools", "files"],
     }
+    pinned_backend = normalize_backend_id(model_route.get("backend") or "") if mode == "manual" else ""
     if mode == "manual":
+        if pinned_backend not in {"pi", "cursor", "codex", "claude_code"}:
+            pinned_backend = "pi"
         provider = str(model_route.get("provider") or "").strip().lower()
         model = str(model_route.get("model_name") or "auto").strip() or "auto"
+        if not provider:
+            if pinned_backend == "codex":
+                provider = "openai"
+            elif pinned_backend == "claude_code":
+                provider = "anthropic"
+            elif pinned_backend == "pi":
+                try:
+                    from distr.core.pi_preflight import resolve_coding_cli_config
+
+                    provider, _, _ = resolve_coding_cli_config(int(project.id) if int(project.id) > 0 else None)
+                    provider = str(provider or "ollama").strip().lower()
+                except Exception:
+                    provider = "ollama"
         if provider:
             adapter_options["model_provider"] = provider
-        return "pi", model, adapter_options, complexity
+        return pinned_backend, model, adapter_options, complexity
 
     assessed = assessment.get("route") if isinstance(assessment.get("route"), dict) else {}
-    backend = str(assessed.get("backend") or project.coding_backend or "pi").strip().lower()
-    model = str(assessed.get("model") or project.coding_backend_model or "auto").strip() or "auto"
+    resolved = resolve_ticket_cli_route(project, complexity, board=None)
+    backend = str(
+        assessed.get("backend") or resolved.get("backend") or project.coding_backend or "pi"
+    ).strip().lower()
+    backend = normalize_backend_id(backend)
+    model = str(
+        assessed.get("model") or resolved.get("model") or project.coding_backend_model or "auto"
+    ).strip() or "auto"
     if assessed.get("model_provider"):
         adapter_options["model_provider"] = str(assessed["model_provider"]).strip().lower()
+    elif resolved.get("model_provider"):
+        adapter_options["model_provider"] = str(resolved["model_provider"]).strip().lower()
     elif backend in {"codex", "openai"}:
         adapter_options["model_provider"] = "openai"
     elif backend in {"claude", "claude_code", "anthropic"}:
@@ -557,12 +616,16 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
             adapter_options["model_provider"] = str(provider or "ollama").strip().lower()
         except Exception:
             adapter_options["model_provider"] = "openrouter" if model.lower().endswith(":free") else "ollama"
-    fallback_backend = str(assessed.get("fallback_backend") or "").strip().lower()
-    fallback_model = str(assessed.get("fallback_model") or "").strip()
+    fallback_backend = str(
+        assessed.get("fallback_backend") or resolved.get("fallback_backend") or ""
+    ).strip().lower()
+    fallback_model = str(assessed.get("fallback_model") or resolved.get("fallback_model") or "").strip()
     if fallback_backend and fallback_model:
         adapter_options["fallback_backend"] = fallback_backend
         adapter_options["fallback_model"] = fallback_model
-        fallback_provider = str(assessed.get("fallback_model_provider") or "").strip().lower()
+        fallback_provider = str(
+            assessed.get("fallback_model_provider") or resolved.get("fallback_model_provider") or ""
+        ).strip().lower()
         if not fallback_provider:
             if fallback_backend in {"codex", "openai"}:
                 fallback_provider = "openai"
@@ -580,6 +643,11 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
                     fallback_provider = "openrouter" if fallback_model.lower().endswith(":free") else "ollama"
         if fallback_provider:
             adapter_options["fallback_model_provider"] = fallback_provider
+    if backend == "codex":
+        for key in ("codex_reasoning_effort", "codex_service_tier"):
+            value = assessed.get(key) or resolved.get(key)
+            if value:
+                adapter_options[key] = value
     return backend, model, adapter_options, complexity
 
 
@@ -948,7 +1016,10 @@ async def _run_execution(
                 "change_expected": _prompt_expects_project_change(prompt, autonomy_level=autonomy_level),
             },
         )
-        runtime_id = select_turn_runtime_id(request)
+        runtime_id = select_turn_runtime_id(
+            request,
+            runtime_id="cli_harness" if backend in {"pi", "cursor", "codex", "claude_code"} else "",
+        )
         runtime_metadata = _metadata_with_runtime_identity(
             metadata,
             backend=backend,
@@ -982,6 +1053,42 @@ async def _run_execution(
             turn_id=turn_id,
             runtime_id=runtime_id,
         )
+        if backend in CLI_BACKENDS:
+            from distr.core.project_cli_backends.catalog_probe import probe_cli_backend
+
+            probe = probe_cli_backend(backend)
+            ready = bool((probe.get("status") or {}).get("ready"))
+            if not ready:
+                reason = str(
+                    probe.get("next_step")
+                    or (probe.get("status") or {}).get("message")
+                    or f"{backend} is not ready."
+                ).strip()
+                message = f"Pinned harness `{backend}` is not ready: {reason}"
+                _write_response(chat_id, turn_id, message)
+                _update_execution(
+                    chat_id,
+                    job_id=job_id,
+                    status="failed",
+                    backend_id=backend,
+                    runtime_id=runtime_id,
+                    completed_at=utc_now_naive().isoformat(),
+                    error=message,
+                    summary=message[:2000],
+                    activity_status="failed",
+                    outcome={
+                        "backend_id": backend,
+                        "runtime_id": runtime_id,
+                        "success": False,
+                        "tool_counts": {},
+                        "git_change_count": 0,
+                        "summary": message[:2000],
+                    },
+                )
+                if tool_event_id:
+                    finish_tool(tool_event_id, success=False, summary=message[:1000], detail=message)
+                terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=message)
+                return
         result = await execute_turn(
             request,
             on_event=on_event,
@@ -1000,6 +1107,29 @@ async def _run_execution(
             str(project.folder_location or ""),
             dict(current.get("git_status_before") or {}),
         )
+        git_change_count = len(changes.get("files") or [])
+        change_expected = bool(request.metadata.get("change_expected"))
+        # Only flag no-ops when we could observe a real git baseline in the project folder.
+        git_baseline = _git_project_root(str(project.folder_location or "")) is not None
+        noop = bool(
+            change_expected
+            and success
+            and not waiting
+            and git_baseline
+            and git_change_count == 0
+            and not _output_justifies_noop(output)
+        )
+        if noop:
+            status = "completed_noop"
+        outcome = _turn_outcome(
+            backend_id=str(result.backend_id or backend),
+            runtime_id=str(result.runtime_id or runtime_id),
+            success=success,
+            result=result,
+            changes=changes,
+            summary=response,
+            noop=noop,
+        )
         _write_response(chat_id, turn_id, response)
         _update_execution(
             chat_id,
@@ -1016,6 +1146,7 @@ async def _run_execution(
             activity_status=status,
             git_status_after=_git_status_snapshot(str(project.folder_location or "")),
             changes=changes,
+            outcome=outcome,
         )
         if tool_event_id:
             finish_tool(tool_event_id, success=success, summary=response[:1000], detail=error)
@@ -1039,6 +1170,14 @@ async def _run_execution(
             status="failed",
             completed_at=utc_now_naive().isoformat(),
             error=message,
+            outcome={
+                "backend_id": backend,
+                "runtime_id": "",
+                "success": False,
+                "tool_counts": {},
+                "git_change_count": 0,
+                "summary": message[:2000],
+            },
         )
         if tool_event_id:
             finish_tool(tool_event_id, success=False, summary=message, detail=message)
@@ -1257,6 +1396,8 @@ def dispatch_development_prompt(
     if not clean:
         raise ValueError("A development instruction is required.")
     project, metadata, ticket_id, board_id = _project_and_scope(int(chat_id))
+    if metadata.get("source_type") == "plan_workspace":
+        raise ValueError("Use the Plan conversation for planning edits. Plan threads cannot dispatch application code changes.")
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
         autonomy_level = str(autonomy_override or root.autonomy_level or "full").strip().lower()
@@ -1282,14 +1423,68 @@ def dispatch_development_prompt(
         execution_mode["mode"] == "workflow"
         and autonomy_level not in {"plan", "approval"}
     ):
-        from distr.core.workflow.developer_workflow import resolve_development_workflow
+        from distr.core.workflow.planning import plan_workflow
         from distr.core.workflow.work_dispatch import dispatch_work_item
 
-        workflow_id = int(metadata.get("workflow_id") or 0) or resolve_development_workflow(
-            project_id=int(project.id) if int(project.id) > 0 else None,
-            ticket_id=ticket_id,
-            board_key=metadata.get("board_key"),
-        )
+        existing_workflow_id = int(metadata.get("workflow_id") or 0) or None
+        workflow_id = existing_workflow_id
+        if workflow_id is None:
+            try:
+                planned_id = plan_workflow(clean, chat_id=int(chat_id), name=None)
+            except Exception as exc:
+                message = str(exc).strip() or "Could not plan a development workflow."
+                ChatService.append_assistant_notice(
+                    int(chat_id),
+                    f"{message} Falling back to the canonical Development workflow.",
+                )
+                planned_id = None
+            if planned_id:
+                try:
+                    from distr.core.workflow.development_threads import mark_development_thread
+
+                    mark_development_thread(
+                        int(chat_id),
+                        workflow_id=int(planned_id),
+                        ticket_id=ticket_id,
+                        board_key=metadata.get("board_key"),
+                        board_provider=metadata.get("board_provider"),
+                        board_ticket_key=metadata.get("board_ticket_key"),
+                        board_ticket_title=metadata.get("board_ticket_title"),
+                        board_ticket_lane=metadata.get("board_ticket_lane"),
+                    )
+                    workflow_id = int(planned_id)
+                except Exception as exc:
+                    ChatService.append_assistant_notice(
+                        int(chat_id),
+                        f"Could not bind the planned workflow ({exc}). Falling back to the canonical Development workflow.",
+                    )
+                    workflow_id = None
+        if workflow_id is None:
+            from distr.core.workflow.developer_workflow import resolve_development_workflow
+
+            workflow_id = resolve_development_workflow(
+                project_id=int(project.id) if int(project.id) > 0 else None,
+                ticket_id=ticket_id,
+                board_key=metadata.get("board_key"),
+            )
+        model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
+        pinned_backend = str(model_route.get("backend") or "").strip().lower()
+        if str(model_route.get("route_mode") or "").strip().lower() == "manual" and pinned_backend not in CLI_BACKENDS:
+            pinned_backend = "pi"
+        run_metadata = {
+            "routing_assessment": assessment,
+            "execution_mode_decision": execution_mode,
+            "skill_ids": list(skill_ids or []),
+            "use_playwright": bool(use_playwright),
+            "model_route": model_route,
+        }
+        if pinned_backend in CLI_BACKENDS:
+            run_metadata["execution_route"] = {
+                "backend": pinned_backend,
+                "model": str(model_route.get("model_name") or "auto"),
+                "model_provider": str(model_route.get("provider") or ""),
+                "source": "thread_model_route",
+            }
         result = dispatch_work_item(
             workflow_id=int(workflow_id),
             chat_id=int(chat_id),
@@ -1298,12 +1493,7 @@ def dispatch_development_prompt(
             board_id=board_id,
             ticket_id=ticket_id,
             source_type="development_thread_orchestrator",
-            run_metadata={
-                "routing_assessment": assessment,
-                "execution_mode_decision": execution_mode,
-                "skill_ids": list(skill_ids or []),
-                "use_playwright": bool(use_playwright),
-            },
+            run_metadata=run_metadata,
             dispatch_async=dispatch_async,
         )
         return {
@@ -1311,6 +1501,7 @@ def dispatch_development_prompt(
             "direct": False,
             "execution_mode": "workflow",
             "orchestrator_agent": "workflow_orchestrator",
+            "workflow_generated": existing_workflow_id is None,
         }
     persistent_attachments = _linked_ticket_attachments(ticket_id)
     turn_attachments = _safe_turn_attachments(
@@ -1376,7 +1567,36 @@ def dispatch_development_prompt(
 
 def stop_development_execution(chat_id: int) -> dict[str, Any]:
     state = development_execution_state(int(chat_id))
+    cancelled_workflow = False
+    try:
+        from distr.core.db.workflow import AutoWorkflowRun
+        from distr.core.workflow.dispatcher import cancel_run
+
+        with get_session() as db:
+            active_runs = (
+                db.query(AutoWorkflowRun)
+                .filter(
+                    AutoWorkflowRun.chat_id == int(chat_id),
+                    AutoWorkflowRun.status.in_(["running", "waiting"]),
+                )
+                .order_by(AutoWorkflowRun.id.desc())
+                .all()
+            )
+            run_ids = [int(row.id) for row in active_runs]
+        for run_id in run_ids:
+            cancelled_workflow = cancel_run(run_id) or cancelled_workflow
+    except Exception:
+        pass
+
     if str(state.get("status") or "").lower() not in ACTIVE_EXECUTION_STATUSES:
+        if cancelled_workflow:
+            try:
+                from distr.core.workflow.development_control import pause_thread_time
+
+                pause_thread_time(int(chat_id))
+            except Exception:
+                pass
+            return {**state, "stopped": True, "workflow_cancelled": True}
         return {**state, "stopped": False}
     from distr.core.chat_turns import terminal_turn
     from distr.core.project_cli_backends.registry import terminate_backend_process
@@ -1390,6 +1610,19 @@ def stop_development_execution(chat_id: int) -> dict[str, Any]:
         execution_id=int(chat_id),
         execution_kind="development",
     )
+    session_id = state.get("execution_session_id")
+    if session_id:
+        try:
+            from distr.core.kanban.project_execution import complete_execution_session
+
+            complete_execution_session(
+                int(session_id),
+                success=False,
+                error="Stopped by the user.",
+                status="cancelled",
+            )
+        except Exception:
+            pass
     updated = _update_execution(
         int(chat_id),
         job_id=str(state.get("job_id") or "") or None,
@@ -1403,4 +1636,15 @@ def stop_development_execution(chat_id: int) -> dict[str, Any]:
         turn_id=int(state["turn_id"]) if state.get("turn_id") else None,
         summary="Stopped by the user.",
     )
-    return {**updated, "direct": True, "stopped": cooperative_stop or process_stop}
+    try:
+        from distr.core.workflow.development_control import pause_thread_time
+
+        pause_thread_time(int(chat_id))
+    except Exception:
+        pass
+    return {
+        **updated,
+        "direct": True,
+        "stopped": cooperative_stop or process_stop or cancelled_workflow,
+        "workflow_cancelled": cancelled_workflow,
+    }

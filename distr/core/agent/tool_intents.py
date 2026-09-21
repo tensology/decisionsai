@@ -99,6 +99,18 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "open_page",
+        (
+            r"\b(open|show|launch|go\s+to|bring\s+up)\b.{0,80}\b(web\s*ui|web\s*interface|development(?:\s+section)?)\b",
+        ),
+    ),
+    (
+        "open_project",
+        (
+            r"\b(open|bring\s+up|show|launch)\b.{0,20}\b(?:the\s+|this\s+|a\s+|my\s+)?project\b(?!s\b)(?!\s+ticket)",
+        ),
+    ),
+    (
         "smart_open",
         (
             r"\b(open|bring\s+up|show)\b.*\b(downloads?|documents?|desktop|home)\s+folder\b",
@@ -132,8 +144,8 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\b(sync|latest|activity|overview|list|show|read|open|snapshot|create|make|draft|reply|send)\b.+\bwhats\s*app\b",
             r"\b(groups?|chats?|threads?)\b.+\b(messages?|photos?|screenshots?|voice\s+notes?)\b",
             r"\b(messages?|photos?|screenshots?|voice\s+notes?)\b.+\b(groups?|chats?|threads?)\b",
-            r"\b(open|show|go\s+to|switch\s+to|launch)\b.+\b(ticket\s+board|kanban(?:\s+board)?)\b",
-            r"\b(ticket\s+board|kanban(?:\s+board)?)\b.+\b(open|show)\b",
+            r"\b(open|show|go\s+to|switch\s+to|launch|bring\s+up)\b.+\b(ticket\s+boards?|kanban(?:\s+board)?)\b",
+            r"\b(ticket\s+boards?|kanban(?:\s+board)?)\b.+\b(open|show|bring\s+up)\b",
             r"\b(open|show|go\s+to|launch)\b.+\b(?:jira|trello|local)\b.+\bboard\b",
             r"\b(open|show|go\s+to)\b.+\bboard\b.*\b(jira|trello|local)\b",
         ),

@@ -176,6 +176,7 @@ def update_development_model_route(
     chat_id: int,
     *,
     route_mode: str,
+    backend: str | None = None,
     provider: str | None = None,
     model_name: str | None = None,
     reasoning_effort: str | None = None,
@@ -183,14 +184,24 @@ def update_development_model_route(
     _session_provider=None,
 ) -> dict[str, Any]:
     """Persist one thread's model route without mutating its reusable workflow."""
+    from distr.core.project_cli_backends import normalize_backend_id
+
     session_provider = _session_provider or get_session
     mode = _clean(route_mode).lower() or "auto"
     if mode not in {"auto", "manual"}:
         raise ValueError("route_mode must be auto or manual")
+    clean_backend = normalize_backend_id(backend) if _clean(backend) else ""
+    if mode == "manual" and clean_backend not in {"pi", "cursor", "codex", "claude_code"}:
+        # Empty or unknown pin defaults to Pi (same product default as Auto fallback).
+        clean_backend = "pi"
+    if mode == "auto":
+        clean_backend = ""
     clean_provider = _clean(provider).lower()
-    clean_model = _clean(model_name)
-    if mode == "manual" and (not clean_provider or not clean_model):
-        raise ValueError("A provider and model are required for manual routing.")
+    clean_model = _clean(model_name) or ("auto" if mode == "manual" and clean_backend != "pi" else "")
+    if mode == "manual" and clean_backend == "pi" and (not clean_provider or not clean_model):
+        raise ValueError("Pi needs a provider and model.")
+    if mode == "manual" and clean_backend in {"codex", "claude_code"} and not clean_provider:
+        clean_provider = "openai" if clean_backend == "codex" else "anthropic"
     effort = _clean(reasoning_effort).lower()
     tier = _clean(service_tier).lower()
     if effort and effort not in {"low", "medium", "high", "xhigh"}:
@@ -206,6 +217,7 @@ def update_development_model_route(
         workflow_id = int(metadata.get("workflow_id") or 0) or None
         route = {
             "route_mode": mode,
+            "backend": clean_backend if mode == "manual" else "",
             "provider": clean_provider if mode == "manual" else "",
             "model_name": clean_model if mode == "manual" else "",
             "reasoning_effort": effort,
@@ -218,8 +230,8 @@ def update_development_model_route(
         root.params = json.dumps(params)
         root.route_mode = mode
         if mode == "manual":
-            root.provider = clean_provider
-            root.model_name = clean_model
+            root.provider = clean_provider or clean_backend
+            root.model_name = clean_model or "auto"
         db.commit()
 
     return {

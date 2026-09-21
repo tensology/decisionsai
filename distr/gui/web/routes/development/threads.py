@@ -48,7 +48,7 @@ def register_routes(router, templates):
     @router.post("/workflows/studio/routing-assessment")
     async def workflow_studio_routing_assessment(data: StudioRoutingAssessmentRequest):
         """Assess operational complexity and failure signals before an automatic route is chosen."""
-        from distr.core.kanban.ticket_policy import _global_complexity_route, infer_ticket_complexity
+        from distr.core.kanban.ticket_policy import infer_ticket_complexity, resolve_ticket_cli_route
 
         instruction = str(data.instruction or "").strip()
         combined = "\n".join(
@@ -77,7 +77,9 @@ def register_routes(router, templates):
             complexity = "medium"
         if complexity == "medium" and ("risk" in signals or {"blocked", "failure"}.issubset(signals)):
             complexity = "high"
-        route = dict(_global_complexity_route(complexity))
+        resolved = resolve_ticket_cli_route(None, complexity, board=None)
+        route = dict(resolved)
+        route.pop("complexity", None)
         if data.has_images and route.get("model") not in {"", "auto"}:
             route["model"] = "auto"
         from distr.core.workflow.execution_mode import choose_development_execution_mode
@@ -90,6 +92,7 @@ def register_routes(router, templates):
                 "signals": signals,
             },
         )
+        harness = str(route.get("backend") or "pi")
         return JSONResponse({
             "complexity": complexity,
             "operational_state": operational_state,
@@ -99,7 +102,11 @@ def register_routes(router, templates):
             "execution_mode": execution_mode["mode"],
             "execution_mode_reason": execution_mode["reason"],
             "execution_mode_signals": execution_mode["signals"],
-            "reason": f"{complexity.title()} complexity" + (f" with {', '.join(signals)} signals" if signals else " based on the instruction scope"),
+            "reason": (
+                f"{complexity.title()} → {harness}"
+                + (f" · {execution_mode['mode']}" if execution_mode.get("mode") else "")
+                + (f" with {', '.join(signals)} signals" if signals else "")
+            ),
         })
 
 
@@ -219,6 +226,7 @@ def register_routes(router, templates):
                 update_development_model_route,
                 int(chat_id),
                 route_mode=route_mode,
+                backend=str(data.backend or "").strip() if route_mode == "manual" else None,
                 provider=provider if route_mode == "manual" else None,
                 model_name=model_name if route_mode == "manual" else None,
                 reasoning_effort=str(data.reasoning_effort or "medium").strip().lower(),
@@ -328,6 +336,8 @@ def register_routes(router, templates):
                 if chat is None or chat.parent_id is not None:
                     return JSONResponse({"detail": "Development thread not found."}, status_code=404)
                 metadata = development_thread_metadata(chat)
+                if metadata.get("source_type") == "plan_workspace":
+                    return JSONResponse({"detail": "Continue this conversation in Plan so edits remain scoped to planning artifacts."}, status_code=409)
                 if not metadata:
                     return JSONResponse({"detail": "This conversation is not a development thread."}, status_code=409)
                 autonomy_level = str(chat.autonomy_level or "full").strip().lower()
@@ -620,5 +630,4 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Studio skill capture failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
-
 

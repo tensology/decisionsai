@@ -39,6 +39,23 @@ def _is_available_model_entry(model) -> bool:
 
 def _supports_llm_type(model, llm_type: str, provider_key: str) -> bool:
     """Return True when a catalog model is suitable for the requested LLM type."""
+    if llm_type == "planning":
+        # Plan consumes text JSON, and its own services apply validated changes.
+        # Tool calling is not required. Do not offer non-chat endpoints merely
+        # because a provider omitted its supports_tools flag.
+        row = model if isinstance(model, dict) else {"id": str(model)}
+        ident = str(row.get("id") or row.get("name") or "").lower()
+        excluded = ("embedding", "rerank", "moderation", "whisper", "transcribe",
+                    "transcription", "realtime", "tts", "dall-e", "gpt-image")
+        if any(token in ident for token in excluded):
+            return False
+        inputs = row.get("input_modalities") or []
+        outputs = row.get("output_modalities") or []
+        if inputs and "text" not in {str(value).lower() for value in inputs}:
+            return False
+        if outputs and "text" not in {str(value).lower() for value in outputs}:
+            return False
+        return True
     if not isinstance(model, dict):
         return llm_type != "image"
 
@@ -423,11 +440,15 @@ def register_routes(router, templates):
 
     @router.get("/llms/available-providers")
     @route_handler("get available LLM providers", fallback={"providers": [{"id": "ollama", "name": "Ollama"}]})
-    async def get_available_llm_providers():
+    async def get_available_llm_providers(type: str = ""):
         """Return only LLM providers that are configured (enabled + API key). Ollama always available."""
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
         providers = [{"id": "ollama", "name": "Ollama"}]
+        if type == 'planning':
+            from distr.core.project_cli_backends.codex_proposal import available_models
+            if available_models():
+                providers.append({'id':'codex', 'name':'OpenAI'})
         _provider_checks = [
             ("openai", "OpenAI", "openai_enabled", "openai_key"),
             ("anthropic", "Anthropic", "anthropic_enabled", "anthropic_key"),
@@ -539,6 +560,9 @@ def register_routes(router, templates):
     @route_handler("get models", fallback={"models": []})
     async def get_llm_models(type: str, provider: str):
         """Get available models for a specific LLM type and provider."""
+        if type == 'planning' and provider == 'codex':
+            from distr.core.project_cli_backends.codex_proposal import available_models
+            return JSONResponse({'models': available_models()})
         from distr.core.chat import provider_slug
         from distr.core.services.model_catalog_cache import (
             get_or_fetch_model_catalog,
@@ -618,7 +642,7 @@ def register_routes(router, templates):
                 return isinstance(m, dict)
 
             filtered = [m for m in models if _supports_llm_type(m, type, provider_key)]
-            if type == "image":
+            if type in {"image", "planning"}:
                 models = filtered
             elif filtered:
                 models = filtered

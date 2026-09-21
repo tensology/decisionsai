@@ -372,7 +372,12 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         if (/tdd/.test(signal)) return 'TDD guide';
         if (/security/.test(signal)) return 'Security reviewer';
         if (/review/.test(signal)) return 'Code reviewer';
-        if (/development_agent/.test(signal)) return 'Development agent';
+        if (/development_agent|cursor_agent/.test(signal)) {
+            if (/cursor/.test(signal) || /cursor/i.test(String(event?.title || event?.agent_name || ''))) {
+                return 'Cursor';
+            }
+            return 'Development agent';
+        }
         if (/tool_compiler/.test(signal)) return 'Tool builder';
         return String(event?.title || 'Development agent');
     }
@@ -466,7 +471,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return `<section class="turn-activity-timeline turn-event-stream${failed ? ' failed' : ''}" aria-label="Activity for this response">${rows}</section>`;
     }
 
-    function messageHtml(message, index, latestAssistantIndex, turnActivity = null, instruction = '', durableActivityKeys = new Set()) {
+    function messageHtml(message, index, latestAssistantIndex, turnActivity = null, instruction = '', durableActivityKeys = new Set(), messages = []) {
         const role = message.role || 'assistant';
         if (role === 'user') {
             const presentation = userMessagePresentation(message);
@@ -478,10 +483,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             return `<div class="activity-group">${activityHtml(Object.assign({}, tool, { timestamp: message.timestamp }))}</div>`;
         }
         if (role === 'workflow') {
-            const workflow = message.workflow_event || {};
-            return `<article class="studio-message"><div class="message-avatar">AI</div><div class="message-body">
-                <div class="message-workflow"><span class="workflow-label">${actions.escapeHtml(workflow.phase || workflow.type || 'Workflow')}</span><strong>${actions.escapeHtml(workflow.summary || message.content || workflow.workflow_name || 'Workflow update')}</strong><small>${actions.escapeHtml(actions.statusLabel(workflow.status))}</small></div>
-                </div></article>`;
+            return workflowMessageHtml(message, index, messages);
         }
         const ticketMove = ticketMovePresentation(message);
         if (ticketMove) return ticketMoveHtml(message, ticketMove);
@@ -534,8 +536,11 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             return [fallbackLabel, fallbackDetail];
         }
         const toolName = String(latest?.metadata?.tool_name || latest?.tool_name || latest?.title || '').toLowerCase();
-        if (/agent|reviewer|subagent/.test(toolName)) return ['Waiting for', turnEventAgentName(latest)];
-        if (/pytest|test\b|vitest|jest|playwright test|cypress|lint|ruff/.test(`${toolName} ${turnCommand(latest)}`))
+        if (/agent|reviewer|subagent/.test(toolName)) {
+            const agent = turnEventAgentName(latest);
+            if (/cursor/i.test(agent) || /cursor/.test(toolName)) return ['Cursor is working', ''];
+            return ['Working with', agent];
+        }        if (/pytest|test\b|vitest|jest|playwright test|cypress|lint|ruff/.test(`${toolName} ${turnCommand(latest)}`))
             return ['Running', 'tests', turnCommand(latest)];
         if (/replace_text|write_file|edit|patch/.test(toolName)) return ['Editing', 'files'];
         if (/run_command|terminal|shell|command/.test(toolName)) return ['Running', 'a command', turnCommand(latest)];
@@ -543,6 +548,106 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         if (/search_files|search|rg/.test(toolName)) return ['Searching', 'the project'];
         if (/read_file|list_files|read|list/.test(toolName)) return ['Reading', 'project files'];
         return [fallbackLabel, fallbackDetail];
+    }
+
+    function workflowDefinitionFor(event = {}) {
+        const workflowId = Number(event.workflow_id || context.currentWorkflow?.id || 0);
+        if (workflowId && Number(context.currentWorkflow?.id) === workflowId) return context.currentWorkflow;
+        if (workflowId && Array.isArray(context.workflows)) {
+            return context.workflows.find((item) => Number(item.id) === workflowId) || null;
+        }
+        return context.currentWorkflow || null;
+    }
+
+    function workflowStepStatuses(steps, run, event = {}) {
+        const runStatus = String(run?.status || event.status || 'ready').toLowerCase();
+        const currentStepId = Number(run?.current_step_id || run?.step_id || event.step_id || 0);
+        const currentIndex = steps.findIndex((step) => Number(step.id) === currentStepId);
+        const completed = ['completed', 'success', 'succeeded', 'done', 'cancelled', 'canceled'].includes(runStatus);
+        const failed = ['failed', 'error'].includes(runStatus);
+        return steps.map((step, index) => {
+            if (completed) return { ...step, status: 'done' };
+            if (!currentStepId && !runStatus) return { ...step, status: 'pending' };
+            if (currentIndex < 0) {
+                if (Number(step.id) === currentStepId) {
+                    return { ...step, status: failed ? 'failed' : runStatus === 'waiting' || runStatus === 'paused' ? 'waiting' : 'running' };
+                }
+                return { ...step, status: 'pending' };
+            }
+            if (index < currentIndex) return { ...step, status: 'done' };
+            if (index > currentIndex) return { ...step, status: 'pending' };
+            if (failed) return { ...step, status: 'failed' };
+            if (runStatus === 'waiting' || runStatus === 'paused') return { ...step, status: 'waiting' };
+            return { ...step, status: 'running' };
+        });
+    }
+
+    function workflowRunnerHtml({ workflow, run = null, event = {}, mode = 'live' } = {}) {
+        const steps = actions.workflowStepList?.(workflow) || (Array.isArray(workflow?.steps) ? workflow.steps : []);
+        if (!steps.length && !event.summary && !workflow?.name) return '';
+        const namedSteps = steps.length
+            ? steps
+            : [{ id: event.step_id || 1, name: event.step_name || event.phase || 'Step', position: 0 }];
+        const statusSteps = workflowStepStatuses(namedSteps, run, event);
+        const count = statusSteps.length;
+        const runStatus = String(run?.status || event.status || (mode === 'done' ? 'completed' : 'running')).toLowerCase();
+        const activeIndex = Math.max(
+            0,
+            statusSteps.findIndex((step) => ['running', 'waiting', 'failed'].includes(String(step.status || '').toLowerCase()))
+        );
+        const title = workflow?.name || event.workflow_name || 'Workflow';
+        const summary = event.summary || event.phase || statusSteps[activeIndex]?.name || `${count} steps`;
+        const nodes = statusSteps
+            .map((step, index) => {
+                const angle = (360 * index) / Math.max(count, 1);
+                const status = String(step.status || 'pending').toLowerCase();
+                return `<li class="thread-workflow-node ${status}" style="--step-angle:${angle}" title="${actions.escapeHtml(step.name || `Step ${index + 1}`)}"><b>${index + 1}</b><span>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</span></li>`;
+            })
+            .join('');
+        return `<article class="studio-message workflow-runner" data-workflow-runner="${mode}" data-run-id="${actions.escapeHtml(String(run?.id || event.run_id || ''))}">
+            <div class="thread-workflow-runner ${mode}" data-status="${actions.escapeHtml(runStatus)}" role="status" aria-live="${mode === 'live' ? 'polite' : 'off'}">
+                <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><span>${actions.escapeHtml(actions.statusLabel(runStatus))}</span></div>
+                <div class="thread-workflow-ring" style="--step-count:${count}">
+                    <svg class="thread-workflow-path" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="38"></circle></svg>
+                    <ol class="thread-workflow-nodes">${nodes}</ol>
+                    <div class="thread-workflow-core"><span>${actions.escapeHtml(mode === 'done' ? 'Done' : actions.statusLabel(runStatus))}</span><strong>${count}</strong><small>${actions.escapeHtml(summary)}</small></div>
+                </div>
+            </div>
+        </article>`;
+    }
+
+    function liveWorkflowRunnerHtml() {
+        const run = context.currentRun;
+        const workflow = context.currentWorkflow;
+        if (!run || run.direct || !workflow || !actions.isActiveAgentRun?.(run)) return '';
+        return workflowRunnerHtml({ workflow, run, mode: 'live' });
+    }
+
+    function workflowMessageHtml(message, index = 0, messages = []) {
+        const event = message.workflow_event || {};
+        if (actions.isActiveAgentRun?.(context.currentRun) && context.currentWorkflow && !context.currentRun?.direct) {
+            return '';
+        }
+        const eventRunId = Number(event.run_id || 0);
+        if (eventRunId) {
+            let lastIndex = -1;
+            messages.forEach((item, itemIndex) => {
+                if ((item.role || '') === 'workflow' && Number(item.workflow_event?.run_id || 0) === eventRunId) lastIndex = itemIndex;
+            });
+            if (lastIndex >= 0 && lastIndex !== index) return '';
+        }
+        const workflow = workflowDefinitionFor(event);
+        const matchingRun =
+            context.currentRun && !context.currentRun.direct && Number(actions.workflowRunId?.(context.currentRun) || 0) === eventRunId
+                ? context.currentRun
+                : { status: event.status, current_step_id: event.step_id, step_id: event.step_id };
+        const done = !['initializing', 'queued', 'running', 'waiting', 'paused'].includes(String(matchingRun.status || event.status || '').toLowerCase());
+        return workflowRunnerHtml({
+            workflow: workflow || { name: event.workflow_name || 'Workflow', steps: [] },
+            run: matchingRun,
+            event,
+            mode: done ? 'done' : 'live'
+        });
     }
 
     function durableTurnActivity(chat) {
@@ -605,9 +710,29 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const html = durableTurnActivity(context.currentChat);
         if (!html) {
             if (current) current.remove();
+        } else if (current) {
+            current.outerHTML = html;
+        } else {
+            list.insertAdjacentHTML('beforeend', html);
+        }
+        syncLiveWorkflowRunner();
+    }
+
+    function syncLiveWorkflowRunner() {
+        if (!context.currentChat) return;
+        const list = el('message-list');
+        const current = list.querySelector('[data-workflow-runner="live"]');
+        const html = liveWorkflowRunnerHtml();
+        if (!html) {
+            if (current) current.remove();
             return;
         }
-        if (current) current.outerHTML = html;
+        if (current) {
+            current.outerHTML = html;
+            return;
+        }
+        const active = list.querySelector('.active-turn');
+        if (active) active.insertAdjacentHTML('beforebegin', html);
         else list.insertAdjacentHTML('beforeend', html);
     }
 
@@ -631,9 +756,9 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         list.innerHTML = `${messages
             .map((message, index) => {
                 const rowId = message.chat_row_id == null ? '' : String(message.chat_row_id);
-                return messageHtml(message, index, latestAssistantIndex, turnsByRow.get(rowId), instructionsByRow.get(rowId) || '', durableActivityKeys);
+                return messageHtml(message, index, latestAssistantIndex, turnsByRow.get(rowId), instructionsByRow.get(rowId) || '', durableActivityKeys, messages);
             })
-            .join('')}${durableTurnActivity(chat)}`;
+            .join('')}${liveWorkflowRunnerHtml()}${durableTurnActivity(chat)}`;
         list.classList.remove('hidden');
         actions.bindConversationActions(list, messages);
         const conversation = el('conversation');
@@ -642,6 +767,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         });
     }
     return {
+        assistantMarkdown,
         gitStatusEntries,
         messageTime,
         renderConversation,

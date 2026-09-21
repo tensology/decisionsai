@@ -128,6 +128,7 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
     # Sanitize display name — phonemizer/espeak can't handle newlines or special chars
     display_name = re.sub(r'\s+', ' ', display_name).strip()
     pixazo_dit_steps = None
+    fishaudio_tts_model = None
     if provider == "pixazo":
         from distr.core.pixazo_client import pixazo_dit_steps_from_settings
 
@@ -143,6 +144,11 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
     cache_seed = f"{test_text}:{speed}"
     if pixazo_dit_steps is not None:
         cache_seed = f"{cache_seed}:{pixazo_dit_steps}"
+    if provider == "fishaudio":
+        from distr.core.agent.services.tts.fishaudio_config import resolve_fishaudio_tts_model
+
+        fishaudio_tts_model = resolve_fishaudio_tts_model(settings.get("fishaudio_tts_model"))
+        cache_seed = f"{cache_seed}:{fishaudio_tts_model}"
     text_hash = hashlib.md5(cache_seed.encode()).hexdigest()[:8]
     out_file = os.path.join(TMP_DIR, f"tts_{provider}_{voice}_{text_hash}_web.wav")
 

@@ -1397,6 +1397,8 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
         return vp
     if 'elevenlabs' in vp:
         return vp  # ElevenLabs voices are dynamic (API IDs or names), trust the provider
+    if 'fishaudio' in vp or vp == 'fish':
+        return vp  # Fish Audio voices are library/model IDs
 
     # Voice doesn't match claimed provider — try to detect the correct one
     # Keep claimed Coqui when the stored id is Kokoro-shaped (legacy rows); Coqui TTS remaps invalid speakers.

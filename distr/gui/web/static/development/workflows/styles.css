@@ -212,7 +212,7 @@
 .workflow-memory-section { padding: 0; }
 .workflow-memory-panel { display: grid; justify-items: start; gap: 12px; padding: 4px 16px 18px; }
 .workflow-memory-content { width: 100%; font-size: 9px; }
-.workflow-step-dialog header p { margin: 4px 0 0; color: var(--studio-muted); font-size: 10px; }
+.workflow-step-dialog header p { margin: 4px 0 0; color: #d1d5db; font-size: 0.82rem; }
 .workflow-step-dialog #workflow-step-form > .dialog-fieldset, .workflow-step-dialog #workflow-step-form > .workflow-step-advanced { margin: 13px 16px 0; }
 .workflow-step-advanced { border-top: 1px solid var(--studio-line); border-bottom: 1px solid var(--studio-line); }
 .workflow-step-advanced > summary { padding: 11px 0; color: var(--studio-muted); cursor: pointer; font-size: 10px; font-weight: 650; }

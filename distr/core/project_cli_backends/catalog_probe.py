@@ -29,6 +29,7 @@ VERIFIED_MODEL_SOURCES = {
     "anthropic-api",
     "codex-cli",
     "cursor-api",
+    "cursor-cli",
     "kiro-cli",
     "opencode-cli",
     "pi-models",
@@ -102,17 +103,75 @@ def kiro_models(settings: dict) -> tuple[list[dict], str, str]:
     return [model_entry("auto", "kiro", "Auto", scope="scoped")], "kiro-unverified", "Kiro did not return a verified model list. Only Auto is available."
 
 
-def cursor_api_models(settings: dict) -> tuple[list[dict], str, str]:
+def cursor_cli_models() -> tuple[list[dict], str, str]:
+    """Prefer account-login catalog from cursor-agent; no API key required."""
     fallback = [
         model_entry("auto", "cursor", "Auto", scope="scoped"),
         model_entry("composer-2.5", "cursor", scope="scoped"),
         model_entry("composer-2.5-fast", "cursor", scope="scoped", tier="low"),
+        model_entry("cursor-grok-4.6-medium", "cursor", "Cursor Grok 4.6 Medium", scope="scoped", free=False),
+        model_entry("grok-4.5", "cursor", "Grok 4.5", scope="available", free=False),
+        model_entry("gpt-5.3-codex", "cursor", scope="available", free=False),
+        model_entry("gpt-5.5-medium", "cursor", scope="available", free=False),
+    ]
+    path = None
+    try:
+        from distr.core.project_cli_backends.registry import _first_executable
+
+        path = _first_executable(["cursor-agent", "agent"])
+    except Exception:
+        path = None
+    if not path:
+        return fallback, "cursor-defaults", "cursor-agent not found; showing Cursor defaults."
+    try:
+        result = subprocess.run(
+            [path, "--list-models"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={k: v for k, v in os.environ.items() if k not in {"CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"}},
+        )
+    except Exception as exc:
+        return fallback, "cursor-defaults", f"Could not list Cursor CLI models: {exc}."
+    text = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
+    low = text.lower()
+    if "authentication required" in low or "not logged in" in low:
+        return fallback, "cursor-defaults", "Cursor CLI not logged in. Run: cursor-agent login"
+    models: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("tip:") or "available model" in line.lower():
+            continue
+        # Formats: "id - Name" or bare id
+        if " - " in line:
+            mid, name = line.split(" - ", 1)
+            mid, name = mid.strip(), name.strip()
+        else:
+            mid, name = line, line
+        if mid:
+            models.append(model_entry(mid, "cursor", name or mid, scope="scoped", free=False))
+    if not models:
+        return fallback, "cursor-defaults", "Cursor CLI returned no models; showing defaults."
+    return dedupe_model_entries([fallback[0]] + models), "cursor-cli", ""
+
+
+def cursor_api_models(settings: dict) -> tuple[list[dict], str, str]:
+    # Account CLI catalog first (subscription models). API key path is intentionally secondary.
+    cli_models, cli_source, cli_message = cursor_cli_models()
+    if cli_source == "cursor-cli":
+        return cli_models, cli_source, cli_message
+    fallback = [
+        model_entry("auto", "cursor", "Auto", scope="scoped"),
+        model_entry("composer-2.5", "cursor", scope="scoped"),
+        model_entry("composer-2.5-fast", "cursor", scope="scoped", tier="low"),
+        model_entry("cursor-grok-4.6-medium", "cursor", "Cursor Grok 4.6 Medium", scope="scoped", free=False),
+        model_entry("grok-4.5", "cursor", "Grok 4.5", scope="available", free=False),
         model_entry("gpt-5.3-codex", "cursor", scope="available", free=False),
         model_entry("gpt-5.5-medium", "cursor", scope="available", free=False),
     ]
     api_key = _cursor_api_key()
     if not api_key:
-        return fallback, "cursor-defaults", "No Cursor API key configured; showing Cursor defaults."
+        return cli_models, cli_source, cli_message or "No Cursor API key; use cursor-agent login for subscription models."
     req = urllib.request.Request(
         "https://api.cursor.com/v0/models",
         headers={

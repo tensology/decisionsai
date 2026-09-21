@@ -61,8 +61,9 @@ class SmartOpenTool(BaseTool):
     name: str = "smart_open"
     description: str = """🎯 SMART OPEN - Intelligently opens URLs, applications, or files.
     
-    CRITICAL: Use this tool when the user wants to open ANYTHING - URL, application, or file.
-    This tool automatically detects what type of target it is and handles it appropriately.
+    Use this tool to open a URL, desktop application, or a named file.
+    Do not use this for DecisionsAI pages (web UI, development, ticket board) — use open_page
+    or create_ticket action=open_board. Do not use this to open the active project — use open_project.
     
     DETECTION LOGIC (automatic):
     1. If target contains "://" or starts with "http", "https", "file://" → Open as URL in browser
@@ -170,10 +171,11 @@ class SmartOpenTool(BaseTool):
     def _open_application(self, app_name: str, text: str) -> str:
         """Open an application."""
         try:
+            requested = (app_name or text).strip()
             if platform.system() == "Darwin":
                 from distr.core.agent.tools.input.window_ops import LaunchAppTool
 
-                return LaunchAppTool()._run(executable=(app_name or text).strip())
+                return LaunchAppTool()._run(executable=requested)
             from distr.core.actions.desktop import open_app
 
             requested_name = (text or app_name or "").strip()
@@ -274,7 +276,13 @@ class SmartOpenTool(BaseTool):
             result = self._open_application(target, text or target)
             
             # If application open was successful, return
-            if "Error" not in result or "Successfully" in result:
+            if "Error" not in result and "failed" not in result.lower() and "Unable to find" not in result:
+                return result
+
+            # ponytail: app-like names are not files. Fuzzy file fallback is how
+            # "Brave" opened Leaves.jpg; only search files when the target looks like one.
+            if not self._is_file(target) and os.path.sep not in target and len(target.split()) <= 4:
+                logger.info("SmartOpenTool: Application failed, not falling back to file search")
                 return result
             
             # 4. If application failed, try as file (maybe it's a file without extension)

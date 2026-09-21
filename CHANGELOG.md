@@ -12,13 +12,23 @@ The reason for the change is simple: planning is the focal point. If the outcome
 
 The release also brings in Impeccable Skills, ECC, and a broader, more refined skill set, along with the dependency updates needed to keep the harnesses and providers current. The aim is to keep the work consistent even when the implementation moves between different stacks, including SaaS-style applications and Tailwind-based interfaces. A shared UI DSL layer can give those frameworks a common standard and reduce drift while the agent works.
 
-The quickest way in is still the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent, or `Control + Command` to dictate into the app in front of you. Both shortcuts can be changed in Preferences. Voice now supports OpenAI Realtime speech-to-speech as well as the separate speech-to-text and text-to-speech path, with ElevenLabs streaming and current voice models available in the latter. Telegram, WhatsApp, and the local web interface feed into the same project and Development flow when the work needs more than a single answer.
+The quickest way in is still the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent, or `Control + Command` to dictate into the app in front of you. Both shortcuts can be changed in Preferences. Voice now supports OpenAI Realtime speech-to-speech as well as the separate speech-to-text and text-to-speech path, with ElevenLabs streaming, Fish Audio's voice library, and current voice models available in the latter. Telegram, WhatsApp, and the local web interface feed into the same project and Development flow when the work needs more than a single answer.
 
 You can [download or clone the repository](https://github.com/tensology/decisionsai) and use it with your existing projects. DecisionsAI is moving toward handling more work without supervision, while still showing what happened and asking when your decision matters.
 
 1. Download DecisionsAI and open the Oracle or local web interface.
 2. Connect one project folder.
 3. Send the first request through the Oracle, Chat, or Telegram.
+
+---
+
+## [2.9.1] - 2026-09-21
+
+### Fish Audio is a real TTS provider now
+
+Fish Audio sits next to ElevenLabs in Settings and chat. Paste an API key under Third Party Vendors, pick Fish Audio (Online) in Voice Setup, and the dropdown loads the public library for that key (English first, licensed packs tagged) instead of cloning copies that already exist on the account. Default synthesis is `s2.1-pro-free`. Speech-to-speech stays on OpenAI Realtime.
+
+Custom clones still go through the studio upload path when you actually need a new voice. Edit personality only shows for voices saved in the local database, so the pencil next to delete opens the modal again instead of failing on library-only rows. Setup can bind Fish, ElevenLabs, and Pixazo to library IDs that the keys already return (`scripts/setup_tts_voices.py`). Third Party Vendors now shows the Fish Audio mark from fish.audio and the Tensology mark from the Tensology GitHub org.
 
 ---
 
@@ -70,13 +80,13 @@ The release adds lifecycle, identity, merge, reconnect, steering, provider, work
 
 ### It remembers you left five hours ago
 
-If you talk to DecisionsAI in the morning, go do something else, and come back at night, it should not act like you are a stranger. It now notices the gap. It can see what you were last working on — the project, the ticket, the notes left behind — and pick up from there instead of changing the subject to random board stuff.
+If you talk to DecisionsAI in the morning, go do something else, and come back at night, it should not act like you are a stranger. It now notices the gap. It can see what you were last working on .  the project, the ticket, the notes left behind .  and pick up from there instead of changing the subject to random board stuff.
 
 ### Initiative stays out of the way until it helps
 
-Initiative is the bit that can nudge you when work is waiting. Daily planning still lives under Automations. Initiative’s job is simpler: suggest one next useful thing, and only when it makes sense. If you have been away a while, it tries to continue from your last project notes first, rather than pestering you about unrelated tasks.
+Initiative is the bit that can nudge you when work is waiting. Daily planning still lives under Automations. Initiative's job is simpler: suggest one next useful thing, and only when it makes sense. If you have been away a while, it tries to continue from your last project notes first, rather than pestering you about unrelated tasks.
 
-### It can notice what is on your screen — without slowing chat down
+### It can notice what is on your screen .  without slowing chat down
 
 DecisionsAI can quietly keep a light idea of which app is in front of you. It does not take screenshots for this, and it does not dump a giant description into the chat. The check runs in the background. If nothing changed, it does not keep repeating itself. After a day it throws that info away so old screen context does not clog things up. If it ever needs a closer look, it can still dig in on purpose.
 
@@ -94,7 +104,7 @@ Before suggesting a brand new workflow, DecisionsAI looks at what you already se
 
 ### Auto model choice is still yours to see
 
-Model settings are still in one place. For each difficulty level you can lock a provider and model, or choose **Auto**. Auto means “pick something sensible for this step.” If a paid option cannot run, it should say so and offer a free way forward instead of silently failing. Whatever you pin stays pinned. Auto is not a secret second settings page.
+Model settings are still in one place. For each difficulty level you can lock a provider and model, or choose **Auto**. Auto means "pick something sensible for this step." If a paid option cannot run, it should say so and offer a free way forward instead of silently failing. Whatever you pin stays pinned. Auto is not a secret second settings page.
 
 ### Telegram is the same work, not a side chat
 
@@ -106,7 +116,7 @@ Boards still move **Backlog → In Progress → QA → Complete**. The website i
 
 ### Memory stays with the project
 
-Useful notes travel with the project, not with whichever tool happened to do the last step. Facts, decisions, files, what failed, what to try next — that can move with you if the work changes hands between tools. You should not have to re-explain the same project every time.
+Useful notes travel with the project, not with whichever tool happened to do the last step. Facts, decisions, files, what failed, what to try next .  that can move with you if the work changes hands between tools. You should not have to re-explain the same project every time.
 
 ---
 
@@ -114,7 +124,7 @@ Useful notes travel with the project, not with whichever tool happened to do the
 
 ### Automations you can actually set and forget
 
-Automations got a cleaner home: create them, edit them, schedule them, run them, and see what they did. Next to **Add Automation** there is a gear with ready-made starters — daily plan, WhatsApp into tickets, morning inbox scan, work pulse, timesheet export, end-of-day wrap, weekly board review, and more. Pick one, then tweak it. There is a calendar for scheduled runs, and a live timer for time tracking that can export onto boards. Scheduled jobs run in the background so chat stays usable.
+Automations got a cleaner home: create them, edit them, schedule them, run them, and see what they did. Next to **Add Automation** there is a gear with ready-made starters .  daily plan, WhatsApp into tickets, morning inbox scan, work pulse, timesheet export, end-of-day wrap, weekly board review, and more. Pick one, then tweak it. There is a calendar for scheduled runs, and a live timer for time tracking that can export onto boards. Scheduled jobs run in the background so chat stays usable.
 
 ### Workflows as simple step lists
 
@@ -126,7 +136,7 @@ You can also send a ticket to chat first to talk it through before starting the 
 
 ### Works with your coding tools
 
-Setup connects DecisionsAI to tools like Codex, Cursor, Claude Code, and Pi in one pass — skills, helpers, and recommended extras included. From chat, DecisionsAI can also find and continue coding sessions you already have open.
+Setup connects DecisionsAI to tools like Codex, Cursor, Claude Code, and Pi in one pass .  skills, helpers, and recommended extras included. From chat, DecisionsAI can also find and continue coding sessions you already have open.
 
 ### All the model picks on one page
 
@@ -136,7 +146,7 @@ Conversational, coding, vision, images, computer use, workflow steps, and the bo
 
 The desktop helper can look at the screen and help with clicks, typing, and waiting for things to appear. Spoken replies after tool use are more reliable. Voice can go to Telegram or the remote web UI depending on where you are.
 
-The remote control focuses on Snippets, Agent chat, and Dictate — hold to talk, tap to type, listen as it speaks, and stop when you want.
+The remote control focuses on Snippets, Agent chat, and Dictate .  hold to talk, tap to type, listen as it speaks, and stop when you want.
 
 ### Boards and WhatsApp
 

@@ -175,6 +175,45 @@ class AgentLifecycleMixin:
             logger.info(f"Sending initial listening state to agent: {listening_enabled}")
             self._send_command_to_agent('set_listening', {'enabled': listening_enabled})
 
+    def _replace_agent_queues(self):
+        """Create fresh IPC queues so a killed worker cannot poison the next session."""
+        old_queues = (
+            getattr(self, "agent_command_queue", None),
+            getattr(self, "agent_event_queue", None),
+        )
+        self.agent_command_queue = self.mp_context.Queue()
+        self.agent_event_queue = self.mp_context.Queue()
+
+        try:
+            from distr.core.signals import set_agent_event_queue
+
+            set_agent_event_queue(self.agent_event_queue)
+        except Exception as exc:
+            logger.warning("Could not register new agent event queue: %s", exc)
+        if hasattr(self, "initiative_service") and self.initiative_service:
+            self.initiative_service.event_queue = self.agent_event_queue
+
+        for queue in old_queues:
+            if queue is None:
+                continue
+            try:
+                queue.cancel_join_thread()
+            except Exception:
+                pass
+            try:
+                queue.close()
+            except Exception as exc:
+                logger.debug("Could not close old agent IPC queue: %s", exc)
+
+        logger.info("Recreated agent IPC queues for restart")
+
+    def _prepare_agent_ipc_for_start(self):
+        """Keep the initial queues, then replace them on every agent restart."""
+        generation = getattr(self, "_agent_generation", 0)
+        if generation:
+            self._replace_agent_queues()
+        self._agent_generation = generation + 1
+
     def start_agent_session(self, skip_welcome=False, chat_id=None):
         """Start the agent session in a separate process."""
         from distr.app.agent_worker import run_agent_session
@@ -220,6 +259,7 @@ class AgentLifecycleMixin:
                     )
             logger.info(f"start_agent_session: effective_chat_id={effective_chat_id}")
 
+            self._prepare_agent_ipc_for_start()
             self.agent_process = self.mp_context.Process(
                 target=run_agent_session,
                 args=(self.settings, self.selected_input_device, self.selected_output_device,

@@ -158,6 +158,7 @@ class Settings(Base):
     gemini_enabled = Column(Boolean, default=False)
     nvidia_enabled = Column(Boolean, default=False)
     pixazo_enabled = Column(Boolean, default=False)
+    fishaudio_enabled = Column(Boolean, default=False)
 
     # Provider Keys/URLs
     assemblyai_key = Column(String, default='')
@@ -175,6 +176,9 @@ class Settings(Base):
     pixazo_key = Column(String, default='')
     pixazo_voice = Column(String, default='voxcpm')
     pixazo_dit_steps = Column(Integer, default=6)
+    fishaudio_key = Column(String, default='')
+    fishaudio_voice = Column(String, default='9a9cf47702da476aa4629e2506d4a857')
+    fishaudio_tts_model = Column(String, default='s2.1-pro-free')
 
     last_listening_state = Column(Boolean, default=True)
     hands_free_mode = Column(Boolean, default=False)
@@ -659,6 +663,10 @@ try:
                 ("pixazo_key", "VARCHAR DEFAULT ''"),
                 ("pixazo_voice", "VARCHAR DEFAULT 'voxcpm'"),
                 ("pixazo_dit_steps", "INTEGER DEFAULT 6"),
+                ("fishaudio_enabled", "BOOLEAN DEFAULT 0"),
+                ("fishaudio_key", "VARCHAR DEFAULT ''"),
+                ("fishaudio_voice", "VARCHAR DEFAULT '9a9cf47702da476aa4629e2506d4a857'"),
+                ("fishaudio_tts_model", "VARCHAR DEFAULT 's2.1-pro-free'"),
                 ("video_llm_provider", "VARCHAR DEFAULT ''"),
                 ("video_llm_model", "VARCHAR DEFAULT ''"),
                 # Cursor project CLI provider

@@ -98,6 +98,7 @@ scripts/*
 !scripts/harness_doctor.py
 !scripts/prefetch_local_models.py
 !scripts/preflight_local.py
+!scripts/setup_tts_voices.py
 !scripts/setup_project_clis.sh
 !scripts/setup_workflow_loop_smoke.py
 !scripts/verify_agent_harness_setup.py

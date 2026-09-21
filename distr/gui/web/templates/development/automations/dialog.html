@@ -1,6 +1,6 @@
 <dialog class="studio-dialog" id="automation-dialog">
         <form method="dialog" id="automation-form">
-            <header><div><span>Automation</span><h2 id="automation-dialog-title">Automate this development</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close automation dialog">×</button></header>
+            <header><div><h2 id="automation-dialog-title">Automate this development</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close automation dialog">×</button></header>
             <input id="automation-id" type="hidden">
             <label>Name<input id="automation-name" type="text" autocomplete="off" required></label>
             <label>Instruction<textarea id="automation-instruction" rows="4" required></textarea></label>
@@ -32,6 +32,6 @@
                 <div class="dialog-row"><label>Fallback provider<select id="automation-fallback-provider"><option value="">None</option></select></label><label>Fallback model<select id="automation-fallback-model"><option value="">None</option></select></label></div>
                 <p class="context-help">The fallback is attempted only when the primary provider or model is unavailable.</p>
             </details>
-            <menu><button type="button" class="danger-text-button hidden" id="delete-automation-button">Delete automation</button><span class="menu-spacer"></span><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button" id="save-automation-button">Create automation</button></menu>
+            <menu><button type="button" class="danger-button hidden" id="delete-automation-button">Delete automation</button><span class="menu-spacer"></span><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button" id="save-automation-button">Create automation</button></menu>
         </form>
     </dialog>

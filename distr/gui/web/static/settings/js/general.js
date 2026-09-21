@@ -6,7 +6,7 @@ let _ttsProviders = [];
 // Fetch and cache TTS providers (called once on init)
 async function loadTTSProviders() {
     try {
-        const resp = await fetch('/api/tts/providers');
+        const resp = await fetch('/api/tts/providers', { cache: 'no-store' });
         if (resp.ok) _ttsProviders = await resp.json();
     } catch (e) {
         console.error('Failed to load TTS providers:', e);
@@ -34,6 +34,14 @@ function setVoiceOptionMetadata(option, voice) {
     if (voice.provider_voice_id) option.dataset.providerVoiceId = voice.provider_voice_id;
     if (voice.custom_source) option.dataset.customSource = voice.custom_source;
     if (voice.category) option.dataset.category = voice.category;
+}
+
+function customVoiceDbIdFromOption(option) {
+    if (!option) return '';
+    if (option.dataset.customVoiceId) return option.dataset.customVoiceId;
+    const value = option.value || '';
+    if (/^custom_\d+$/.test(value)) return value.slice('custom_'.length);
+    return '';
 }
 
 // Load general settings from backend
@@ -134,6 +142,11 @@ async function loadGeneralSettings() {
         if (pixazoOpts) pixazoOpts.classList.toggle('hidden', voiceProvider !== 'pixazo');
         if (pixazoSteps) pixazoSteps.value = String(settings.pixazo_dit_steps !== undefined ? settings.pixazo_dit_steps : 6);
 
+        const fishaudioOpts = document.getElementById('fishaudio_voice_options');
+        const fishaudioModelEl = document.getElementById('fishaudio_tts_model');
+        if (fishaudioOpts) fishaudioOpts.classList.toggle('hidden', voiceProvider !== 'fishaudio');
+        if (fishaudioModelEl) fishaudioModelEl.value = settings.fishaudio_tts_model || 's2.1-pro-free';
+
         // Load oracle settings
         document.getElementById('restore_position').checked = settings.restore_position !== undefined ? settings.restore_position : true;
         // Show/hide custom voice button based on provider
@@ -187,6 +200,7 @@ async function saveGeneralSettings() {
             openai_tts_model: (document.getElementById('openai_tts_model') || {}).value || 'tts-1',
             openai_tts_instructions: ((document.getElementById('openai_tts_instructions') || {}).value || '').trim(),
             pixazo_dit_steps: parseInt(document.getElementById('pixazo_dit_steps')?.value || '6', 10),
+            fishaudio_tts_model: (document.getElementById('fishaudio_tts_model') || {}).value || 's2.1-pro-free',
             restore_position: document.getElementById('restore_position').checked,
             oracle_position: document.getElementById('oracle_position').value,
             global_ptt_hotkey_enabled: document.getElementById('shortcuts_global_ptt_hotkey_enabled') ? document.getElementById('shortcuts_global_ptt_hotkey_enabled').checked : true,
@@ -762,6 +776,8 @@ function _initGeneral() {
             if (openaiEl) openaiEl.classList.toggle('hidden', p !== 'openai');
             const pixazoEl = document.getElementById('pixazo_voice_options');
             if (pixazoEl) pixazoEl.classList.toggle('hidden', p !== 'pixazo');
+            const fishaudioEl = document.getElementById('fishaudio_voice_options');
+            if (fishaudioEl) fishaudioEl.classList.toggle('hidden', p !== 'fishaudio');
             _updateCustomVoiceButton(p);
         });
     }
@@ -809,7 +825,8 @@ function _updateDeleteButton() {
     const delBtn = document.getElementById('delete_custom_voice_btn');
     const editBtn = document.getElementById('edit_custom_voice_btn');
     if (delBtn) delBtn.classList.toggle('hidden', !isCustom);
-    if (editBtn) editBtn.classList.toggle('hidden', !isCustom);
+    // Personality lives on the local custom_voices row. API-only clones can be deleted, not edited.
+    if (editBtn) editBtn.classList.toggle('hidden', !customVoiceDbIdFromOption(selected));
 }
 
 // Delete the currently selected custom voice
@@ -851,8 +868,11 @@ async function _resolveAndDeleteCustomVoice(provider, voiceId, voiceName, select
         }
 
         const providerVoiceId = selectedOption && selectedOption.dataset.providerVoiceId;
-        if (provider === 'elevenlabs' && providerVoiceId) {
-            const delResp = await fetch('/api/elevenlabs-voices/' + encodeURIComponent(providerVoiceId), { method: 'DELETE' });
+        if ((provider === 'elevenlabs' || provider === 'fishaudio') && providerVoiceId) {
+            const endpoint = provider === 'fishaudio'
+                ? '/api/fishaudio-voices/'
+                : '/api/elevenlabs-voices/';
+            const delResp = await fetch(endpoint + encodeURIComponent(providerVoiceId), { method: 'DELETE' });
             if (!delResp.ok) {
                 const err = await delResp.json();
                 throw new Error(err.error || 'Delete failed');
@@ -882,9 +902,11 @@ async function _resolveAndDeleteCustomVoice(provider, voiceId, voiceName, select
                 const err = await delResp.json();
                 throw new Error(err.error || 'Delete failed');
             }
-        } else if (provider === 'elevenlabs') {
-            // Cloned voice on ElevenLabs but not in local DB — delete via API directly
-            const delResp = await fetch('/api/elevenlabs-voices/' + encodeURIComponent(voiceId), { method: 'DELETE' });
+        } else if (provider === 'elevenlabs' || provider === 'fishaudio') {
+            const endpoint = provider === 'fishaudio'
+                ? '/api/fishaudio-voices/'
+                : '/api/elevenlabs-voices/';
+            const delResp = await fetch(endpoint + encodeURIComponent(voiceId), { method: 'DELETE' });
             if (!delResp.ok) {
                 const err = await delResp.json();
                 throw new Error(err.error || 'Delete failed');
@@ -1150,6 +1172,17 @@ async function _refreshProviderVoices() {
 // ── Edit Custom Voice Modal ───────────────────────────────────────────
 
 // Open the edit modal for the currently selected custom voice
+function _showEditVoiceModal(id, name, personality) {
+    document.getElementById('edit_voice_id').value = id;
+    document.getElementById('edit_voice_name').textContent = name;
+    document.getElementById('edit_voice_personality').value = personality || '';
+    document.getElementById('edit_voice_error').classList.add('hidden');
+    const modal = document.getElementById('edit_voice_modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    document.getElementById('edit_voice_personality').focus();
+}
+
 async function openEditCustomVoiceModal() {
     const voiceSelect = document.getElementById('tts_voice');
     const selected = voiceSelect && voiceSelect.selectedOptions[0];
@@ -1157,41 +1190,34 @@ async function openEditCustomVoiceModal() {
 
     const provider = document.getElementById('tts_provider').value;
     const voiceId = selected.value;
-    const dbId = selected.dataset.customVoiceId;
+    const providerVoiceId = selected.dataset.providerVoiceId || voiceId;
+    const fallbackName = selected.textContent.replace(/^⭐\s*/, '');
+    let dbId = customVoiceDbIdFromOption(selected);
 
-    if (dbId) {
-        document.getElementById('edit_voice_id').value = dbId;
-        document.getElementById('edit_voice_name').textContent = selected.textContent.replace(/^⭐\s*/, '');
-    }
-
-    // Fetch custom voices from DB to find the matching one and get personality
     try {
         const resp = await fetch('/api/custom-voices?provider=' + encodeURIComponent(provider));
-        if (!resp.ok) throw new Error('Failed to fetch custom voices');
-        const customs = await resp.json();
-        const match = customs.find(cv =>
-            (dbId && String(cv.id) === String(dbId)) ||
-            cv.provider_voice_id === voiceId ||
-            'custom_' + cv.id === voiceId
-        );
-        if (!match) {
-            showNotification('Custom voice not found in database', 'error');
-            return;
+        if (resp.ok) {
+            const customs = await resp.json();
+            const match = (Array.isArray(customs) ? customs : []).find(cv =>
+                (dbId && String(cv.id) === String(dbId)) ||
+                cv.provider_voice_id === voiceId ||
+                cv.provider_voice_id === providerVoiceId ||
+                'custom_' + cv.id === voiceId
+            );
+            if (match) {
+                _showEditVoiceModal(match.id, match.name || fallbackName, match.personality || '');
+                return;
+            }
         }
-
-        document.getElementById('edit_voice_id').value = match.id;
-        document.getElementById('edit_voice_name').textContent = match.name;
-        document.getElementById('edit_voice_personality').value = match.personality || '';
-        document.getElementById('edit_voice_error').classList.add('hidden');
-
-        const modal = document.getElementById('edit_voice_modal');
-        modal.classList.remove('hidden');
-        modal.classList.add('flex');
-        document.getElementById('edit_voice_personality').focus();
     } catch (e) {
         console.error('openEditCustomVoiceModal error:', e);
-        showNotification('Failed to load voice data: ' + e.message, 'error');
     }
+
+    if (dbId) {
+        _showEditVoiceModal(dbId, fallbackName, '');
+        return;
+    }
+    showNotification('Custom voice not found in database', 'error');
 }
 
 // Close the edit modal

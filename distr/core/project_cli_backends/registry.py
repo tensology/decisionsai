@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from concurrent.futures import ThreadPoolExecutor, wait
+import io
 import json
 import logging
 import os
@@ -11,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from typing import Any, Optional
@@ -29,6 +32,294 @@ logger = logging.getLogger(__name__)
 # valid tool result into a false model failure.
 PI_JSONL_STREAM_LIMIT = 4 * 1024 * 1024
 PI_WORKFLOW_REPORT_FINALIZATION_TIMEOUT_SECONDS = 300.0
+
+# Verified against installed @earendil-works/pi-coding-agent CLI and loader.
+# Older Pi versions must advertise every isolation flag or fail closed.
+_PROPOSAL_FLAGS = ("--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates",
+                   "--no-context-files", "--no-themes", "--no-session", "--no-approve", "--offline")
+_PROPOSAL_MAX_INPUT = 200_000
+_PROPOSAL_MAX_OUTPUT = 160_000
+_PROPOSAL_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+_PROPOSAL_MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024
+_PROPOSAL_MAX_IMAGE_PIXELS = 16_000_000
+
+
+class ProposalValidationError(ValueError):
+    """Only fixed, locally authored messages belong in this public diagnostic."""
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _proposal_images(options: dict[str, Any]) -> list[tuple[str, bytes]]:
+    """Decode only inline images, never URLs or caller-controlled paths."""
+    blocks = options.get("proposal_images", [])
+    if not isinstance(blocks, list) or len(blocks) > 8:
+        raise ValueError("Proposal accepts at most eight inline image blocks.")
+    result = []
+    total = 0
+    for block in blocks:
+        if (not isinstance(block, dict) or set(block) != {"type", "image_url"}
+                or block["type"] != "image_url" or not isinstance(block["image_url"], dict)
+                or set(block["image_url"]) - {"url", "detail"}):
+            raise ValueError("Invalid proposal image block.")
+        url = block["image_url"].get("url")
+        if not isinstance(url, str) or len(url) > ((_PROPOSAL_MAX_IMAGE_BYTES + 2) // 3) * 4 + 40:
+            raise ValueError("Proposal image exceeds the byte limit.")
+        match = re.fullmatch(r"data:image/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/=]+)", url)
+        if not match:
+            raise ValueError("Proposal images must be supported inline base64 image data.")
+        kind, encoded = match.groups()
+        data = base64.b64decode(encoded, validate=True)
+        total += len(data)
+        if not data or len(data) > _PROPOSAL_MAX_IMAGE_BYTES or total > _PROPOSAL_MAX_TOTAL_IMAGE_BYTES:
+            raise ValueError("Proposal images exceed the byte limits.")
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format != {"png": "PNG", "jpeg": "JPEG", "webp": "WEBP", "gif": "GIF"}[kind]:
+                raise ValueError("Proposal image MIME type does not match its data.")
+            if image.width * image.height > _PROPOSAL_MAX_IMAGE_PIXELS or getattr(image, "n_frames", 1) != 1:
+                raise ValueError("Proposal requires a single-frame image of at most 16 megapixels.")
+            image.verify()
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()  # Reject truncated pixel data, not just invalid headers.
+        result.append(({"jpeg": ".jpg"}.get(kind, "." + kind), data))
+    return result
+
+
+def _proposal_command(pi_path: str, task: ProjectTask) -> list[str]:
+    options = task.adapter_options
+    provider = str(options.get("model_provider") or "").strip()
+    model = str(task.model or "").strip()
+    if not provider or not model or model.lower() in {"auto", "default"}:
+        raise ValueError("Proposal mode requires an explicit Pi provider and exact model ID.")
+    if any(c.isspace() for c in provider + model) or provider.startswith("-") or model.startswith("-"):
+        raise ValueError("Invalid proposal route.")
+    if task.ticket_id or task.board_id or task.workflow_id or task.run_id:
+        raise ValueError("Proposal mode cannot bind execution work or a board.")
+    if any(options.get(key) for key in options if key.startswith("fallback")):
+        raise ValueError("Proposal mode does not permit fallback routing.")
+    if any(options.get(key) for key in ("attachments", "attachment_ids", "images", "image_paths")):
+        raise ValueError("Use proposal_images inline blocks; image paths and generic attachments are forbidden.")
+    if ("images" in task.required_capabilities or "images" in (options.get("required_capabilities") or [])) and not options.get("proposal_images"):
+        raise ValueError("Image capability was requested without proposal_images data.")
+    if not isinstance(task.instruction, str) or not task.instruction.strip() or len(task.instruction) > _PROPOSAL_MAX_INPUT:
+        raise ValueError("Proposal input must contain 1 to 200000 characters.")
+    system = options.get("proposal_system", "")
+    if not isinstance(system, str) or len(system) > 32_000 or "\x00" in system:
+        raise ProposalValidationError("invalid_system", "Proposal system must be a string of at most 32000 characters.")
+    fixed = "Return only the requested JSON proposal using the supplied context. Do not execute actions."
+    # Pi resolves a system argument as a file if that path exists. This fixed
+    # non-path prefix in the empty cwd prevents caller text becoming a filename.
+    system = "Plan proposal system instructions (literal text):\n" + system if system.strip() else fixed
+    return [pi_path, "--print", "--mode", "json", *_PROPOSAL_FLAGS,
+            "--provider", provider, "--model", model, "--thinking", "off",
+            "--system-prompt", system]
+
+
+def _proposal_preflight(command: list[str], *, cwd: str, env: dict[str, str], require_images: bool = False) -> None:
+    """Local CLI inspection only. Never asks a model or echoes auth diagnostics."""
+    help_result = subprocess.run([command[0], "--help"], cwd=cwd, env=env,
+                                 capture_output=True, text=True, timeout=10, check=True)
+    if not all(flag in help_result.stdout for flag in _PROPOSAL_FLAGS):
+        raise ProposalValidationError("isolation_flags", "Installed Pi does not support all required proposal isolation flags.")
+    if require_images and "@files" not in help_result.stdout:
+        raise ValueError("Installed Pi does not advertise image file arguments.")
+    catalog = subprocess.run([command[0], *_PROPOSAL_FLAGS, "--list-models"], cwd=cwd, env=env,
+                             capture_output=True, text=True, timeout=15, check=True)
+    provider, model = command[command.index("--provider") + 1], command[command.index("--model") + 1]
+    # Pi otherwise fuzzy-matches IDs and can synthesize fallback model records.
+    matches = [line.split() for line in catalog.stdout.splitlines() if line.split()[:2] == [provider, model]]
+    if len(catalog.stdout) > 4_000_000 or len(matches) != 1:
+        raise ProposalValidationError("catalog_route", "Selected provider/model is not an exact available Pi catalog entry.")
+    if require_images and (len(matches[0]) != 6 or matches[0][-1] != "yes"):
+        raise ProposalValidationError("catalog_vision", "Selected Pi model does not advertise image input support.")
+    if require_images:
+        # Pi's SDK independently strips images when images.blockImages is set,
+        # even for vision models. Respect that setting by rejecting, not silently
+        # downgrading the request or modifying the user's global configuration.
+        agent_dir = Path(env.get("PI_CODING_AGENT_DIR") or (Path.home() / ".pi" / "agent")).expanduser()
+        if not agent_dir.is_absolute():
+            agent_dir = Path(cwd) / agent_dir
+        settings_file = agent_dir / "settings.json"
+        if settings_file.exists():
+            if settings_file.stat().st_size > 1_000_000:
+                raise ValueError("Cannot verify Pi image settings.")
+            settings = json.loads(settings_file.read_text(encoding="utf-8"))
+            image_settings = settings.get("images", {})
+            if not isinstance(image_settings, dict) or image_settings.get("blockImages", False) is not False:
+                raise ProposalValidationError("images_disabled", "Pi image input is disabled or its settings cannot be verified.")
+
+
+async def _send_pi_proposal(task: ProjectTask, on_event: Optional[EventCallback]) -> BackendTaskResult:
+    """Tool-free ephemeral Pi transport; supplied context is the only project input.
+
+    Deliberately bypass RPC, project snapshots, skill/handoff enrichment and
+    workflow finalization. The caller owns proposal persistence and application.
+    Global Pi provider/auth configuration is retained, but no project resources
+    or persistent sessions are loaded. Inline images use private, verified files.
+    """
+    from distr.core.pi_rpc import PiRpcSession
+
+    process = None
+    stage = "input_validation"
+    evidence = {"protocol_events": 0, "assistant_messages": 0, "agent_end": False, "output_chars": 0}
+    try:
+        pi_path = PiRpcSession.find_pi()
+        if not pi_path:
+            raise ProposalValidationError("route_unavailable", "Pi is not installed.")
+        command = _proposal_command(pi_path, task)
+        images = _proposal_images(task.adapter_options)
+        image_protocol_bytes = sum(((len(data) + 2) // 3) * 4 for _, data in images)
+        timeout = task.adapter_options.get("timeout_seconds", 180)
+        if type(timeout) not in (int, float) or not 1 <= timeout <= 600:
+            raise ValueError("Proposal timeout must be between 1 and 600 seconds.")
+        env = {**os.environ, "PI_OFFLINE": "1", "PI_TELEMETRY": "0", "NO_COLOR": "1"}
+        # No model-selected path, shared project cwd or ancestor context files.
+        with tempfile.TemporaryDirectory(prefix="decisions-pi-proposal-") as cwd:
+            stage = "preflight"
+            await asyncio.to_thread(_proposal_preflight, command, cwd=cwd, env=env, require_images=bool(images))
+            stage = "image_staging"
+            for index, (suffix, data) in enumerate(images):
+                target = Path(cwd) / f"proposal-image-{index + 1}{suffix}"
+                with target.open("xb") as image_file:
+                    image_file.write(data)
+                target.chmod(0o600)
+                # Only generated absolute image paths enter argv. Source text
+                # stays on stdin, where @ references are never file arguments.
+                command.append("@" + str(target))
+            stage = "launch"
+            process = await asyncio.create_subprocess_exec(
+                *command, cwd=cwd, env=env, stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                limit=max(PI_JSONL_STREAM_LIMIT, image_protocol_bytes + 2_000_000),
+            )
+            _register_oneshot_process(task.project_id, "pi", process, board_id=None,
+                                     execution_id=_task_execution_id(task), execution_kind=_task_execution_kind(task))
+            async def collect():
+                nonlocal stage
+                stage = "stdin"
+                process.stdin.write(task.instruction.encode("utf-8"))
+                await process.stdin.drain()
+                process.stdin.close()
+                final = None
+                ended = False
+                wire_bytes = 0
+                delta_chars = 0
+                images_observed = not images
+                stage = "stream"
+                while raw := await process.stdout.readline():
+                    try:
+                        event = json.loads(raw)
+                    except (ValueError, UnicodeError):
+                        wire_bytes += len(raw)
+                        if wire_bytes > 8_000_000 + 2 * image_protocol_bytes:
+                            raise ProposalValidationError("protocol_limit", "Proposal protocol output exceeded its limit.")
+                        continue  # CLI diagnostics are not proposal output.
+                    if not isinstance(event, dict):
+                        wire_bytes += len(raw)
+                        if wire_bytes > 8_000_000 + 2 * image_protocol_bytes:
+                            raise ProposalValidationError("protocol_limit", "Proposal protocol output exceeded its limit.")
+                        continue
+                    evidence["protocol_events"] += 1
+                    kind = event.get("type")
+                    # Pi repeats the complete growing assistant message in each
+                    # update. Charging every snapshot as new output makes valid
+                    # responses hit a quadratic traffic limit. Updates remain
+                    # bounded by readline's limit, event count, delta count and
+                    # the overall deadline; other protocol data has a byte cap.
+                    if kind != "message_update":
+                        wire_bytes += len(raw)
+                    if (wire_bytes > 8_000_000 + 2 * image_protocol_bytes
+                            or evidence["protocol_events"] > 4 * _PROPOSAL_MAX_OUTPUT + 256):
+                        raise ProposalValidationError("protocol_limit", "Proposal protocol output exceeded its limit.")
+                    message = event.get("message") or {}
+                    if kind in {"message_start", "message_end"} and isinstance(message, dict) and message.get("role") == "user":
+                        content = message.get("content")
+                        if isinstance(content, list):
+                            images_observed = sum(isinstance(block, dict) and block.get("type") == "image"
+                                                  and bool(block.get("data")) for block in content) == len(images)
+                    if kind in {"tool_execution_start", "tool_execution_end"}:
+                        raise ProposalValidationError("tool_violation", "Pi violated the proposal tool restriction.")
+                    if kind == "error" or event.get("errorMessage"):
+                        raise ProposalValidationError("provider_error", "Selected Pi provider failed to generate a proposal.")
+                    update = event.get("assistantMessageEvent") or {}
+                    if update.get("type") == "text_delta":
+                        delta_chars += len(str(update.get("delta") or ""))
+                        if delta_chars > _PROPOSAL_MAX_OUTPUT:
+                            raise ProposalValidationError("output_limit", "Proposal output exceeded its limit.")
+                        evidence["output_chars"] = delta_chars
+                        _emit(on_event, event)
+                    if kind == "message_end" and (event.get("message") or {}).get("role") == "assistant":
+                        message = event["message"]
+                        evidence["assistant_messages"] += 1
+                        if message.get("stopReason") == "length":
+                            raise ProposalValidationError("model_length", "The model hit its output token limit before completing JSON.")
+                        if message.get("errorMessage") or message.get("stopReason") in {"error", "aborted", "length", "toolUse"}:
+                            raise ProposalValidationError("model_incomplete", "Pi did not complete the proposal.")
+                        if any(block.get("type") == "toolCall" for block in message.get("content", []) if isinstance(block, dict)):
+                            raise ValueError("Pi attempted a tool call in proposal mode.")
+                        if final is not None:
+                            raise ProposalValidationError("multiple_messages", "Pi returned multiple proposal messages.")
+                        final = _pi_message_text(message)
+                        evidence["output_chars"] = len(final)
+                        if len(final) > _PROPOSAL_MAX_OUTPUT:
+                            raise ProposalValidationError("output_limit", "Proposal output exceeded its limit.")
+                    if kind == "agent_end":
+                        ended = True
+                        evidence["agent_end"] = True
+                        break
+                if not ended or final is None:
+                    raise ProposalValidationError("incomplete_stream", "Pi returned an incomplete proposal stream.")
+                if not images_observed:
+                    raise ProposalValidationError("images_missing", "Pi did not report all supplied images in its user input.")
+                stage = "json_validation"
+                # Preserve the complete JSON text; never compact or reconstruct it.
+                def pairs(items):
+                    value = {}
+                    for key, item in items:
+                        if key in value:
+                            raise ValueError("Duplicate proposal JSON key.")
+                        value[key] = item
+                    return value
+                parsed = json.loads(final, object_pairs_hook=pairs,
+                                    parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Invalid JSON constant.")))
+                if not isinstance(parsed, dict):
+                    raise ValueError("Proposal output must be a JSON object.")
+                stage = "process_exit"
+                if await process.wait() != 0:
+                    raise ProposalValidationError("process_exit", "Pi exited unsuccessfully.")
+                return final
+            try:
+                output = await asyncio.wait_for(collect(), timeout=float(timeout))
+                return BackendTaskResult(True, "pi", "pi_proposal", output=output, session_id=task.audit_id,
+                                         diagnostics={"stage": "complete", "code": "ok", **evidence})
+            finally:
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=2)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await process.wait()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Provider diagnostics can contain credentials; callers get no raw stderr.
+        code = (exc.code if isinstance(exc, ProposalValidationError) else
+                "timeout" if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) else
+                "invalid_json" if stage == "json_validation" else "operation_failed")
+        code = {"catalog_route": "route_unavailable", "provider_error": "model_error"}.get(code, code)
+        message = str(exc) if isinstance(exc, ProposalValidationError) else "The proposal operation failed; inspect its safe stage and code."
+        return BackendTaskResult(False, "pi", "pi_proposal",
+                                 error=f"Pi proposal failed [{stage}/{code}]: {message}",
+                                 diagnostics={"proposal_error": {"stage": stage, "code": code, **evidence,
+                                              "exit_code": process.returncode if process is not None else None}},
+                                 session_id=task.audit_id)
+    finally:
+        if process is not None:
+            _clear_oneshot_process(task.project_id, "pi", process, board_id=None,
+                                   execution_id=_task_execution_id(task), execution_kind=_task_execution_kind(task))
 
 DEFAULT_BACKEND_ID = "pi"
 
@@ -940,6 +1231,9 @@ class PiBackend(ProjectCliBackend):
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
         from distr.core.pi_rpc import PiRpcSession, get_or_create_rpc_session
 
+        if task.adapter_options.get("proposal_only"):
+            return await _send_pi_proposal(task, on_event)
+
         pi_path = PiRpcSession.find_pi()
         if not pi_path:
             return BackendTaskResult(False, self.id, "pi", error=self.setup_instructions, session_id=task.audit_id)
@@ -1423,6 +1717,9 @@ class OneShotCliBackend(ProjectCliBackend):
         return events, remainder
 
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
+        if task.adapter_options.get("proposal_only"):
+            return BackendTaskResult(False, self.id, self.id, error="This backend does not support proposal_only.",
+                                     diagnostics={"proposal_error": {"stage": "input_validation", "code": "route_unavailable"}})
         status = self.setup_status()
         if not status.ready or not status.path:
             msg = (status.message or status.setup_instructions or f"{self.name} is not ready.").strip()
@@ -1597,13 +1894,16 @@ class CursorBackend(OneShotCliBackend):
     name = "Cursor CLI"
     description = "Cursor's project coding CLI backend."
     executable_candidates = ["cursor-agent"]
-    command_args = ["--trust", "-p"]
+    # Account/login auth + live stream so Development UI is not stuck on "Waiting".
+    command_args = ["--trust", "-p", "--output-format", "stream-json", "--stream-partial-output"]
+    structured_jsonl = True
     setup_instructions = (
         "Install Cursor CLI support from Cursor, then make sure the cursor-agent command is on PATH."
     )
 
     def _subprocess_env(self) -> dict[str, str]:
         env = super()._subprocess_env()
+        # Prefer account login. Only inject API key when explicitly configured.
         key = _cursor_api_key()
         if key:
             env["CURSOR_API_KEY"] = key
@@ -1630,8 +1930,8 @@ class CursorBackend(OneShotCliBackend):
             status.ready = False
             status.state = "auth_required"
             status.message = (
-                "Cursor CLI authentication required. Add a Cursor API key in Third Party API Keys, "
-                "set CURSOR_API_KEY, or run cursor-agent login."
+                "Cursor CLI authentication required. Run: cursor-agent login "
+                "(account/subscription auth). API key is optional and not preferred."
             )
             status.setup_required = True
             status.can_receive_remote_handoff = False
@@ -1676,6 +1976,136 @@ class CursorBackend(OneShotCliBackend):
         if task.model and task.model != "auto":
             cmd += ["--model", task.model]
         return cmd + [self._callback_instruction(task) + task.instruction]
+
+    def _protocol_events(
+        self,
+        text: str,
+        buffered: str = "",
+        *,
+        flush: bool = False,
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Map Cursor stream-json lines into Decisions turn protocol events."""
+        events, remainder = super()._protocol_events(text, buffered, flush=flush)
+        mapped: list[dict[str, Any]] = []
+        for event in events:
+            kind = str(event.get("type") or "").lower()
+            subtype = str(event.get("subtype") or "").lower()
+            if kind == "assistant":
+                message = event.get("message") if isinstance(event.get("message"), dict) else {}
+                content = message.get("content") if isinstance(message, dict) else None
+                chunks: list[str] = []
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and str(part.get("type") or "") == "text":
+                            piece = str(part.get("text") or "")
+                            if piece:
+                                chunks.append(piece)
+                elif isinstance(content, str) and content:
+                    chunks.append(content)
+                for piece in chunks:
+                    mapped.append(
+                        {
+                            "type": "message_update",
+                            "assistantMessageEvent": {"type": "text_delta", "delta": piece},
+                        }
+                    )
+                continue
+            if kind == "thinking":
+                thought = str(event.get("text") or "").strip()
+                if subtype == "delta" and thought:
+                    mapped.append(
+                        {
+                            "type": "status",
+                            "backend": self.id,
+                            "message": thought[:240],
+                            "summary": "Thinking…",
+                        }
+                    )
+                elif subtype == "completed":
+                    mapped.append(
+                        {
+                            "type": "status",
+                            "backend": self.id,
+                            "message": "Finished thinking.",
+                            "summary": "Thinking complete",
+                        }
+                    )
+                continue
+            if kind == "tool_call" or kind.startswith("tool"):
+                tool_name = str(
+                    event.get("name")
+                    or event.get("tool")
+                    or (event.get("toolCall") or {}).get("name")
+                    or "tool"
+                )
+                started = subtype in {"", "started", "start", "begin"} or kind.endswith("start")
+                mapped.append(
+                    {
+                        "type": "tool_execution_start" if started else "tool_execution_end",
+                        "toolName": tool_name,
+                        "toolCallId": str(event.get("id") or event.get("call_id") or tool_name),
+                        "summary": f"{tool_name.replace('_', ' ').title()} {'started' if started else 'finished'}.",
+                    }
+                )
+                continue
+            if kind == "result":
+                result_text = str(event.get("result") or "").strip()
+                if result_text and subtype != "error":
+                    mapped.append(
+                        {
+                            "type": "message_update",
+                            "assistantMessageEvent": {"type": "text_delta", "delta": result_text},
+                        }
+                    )
+                if subtype == "error" or event.get("is_error"):
+                    mapped.append(
+                        {
+                            "type": "error",
+                            "message": result_text or "Cursor CLI reported an error.",
+                        }
+                    )
+                continue
+            if kind in {"system", "user"}:
+                continue
+            mapped.append(event)
+        return mapped, remainder
+
+    def _result_output(self, output: str) -> str:
+        """Prefer the final result/assistant text from stream-json over raw wire log."""
+        text = str(output or "").strip()
+        final = ""
+        assistants: list[str] = []
+        for line in text.splitlines():
+            try:
+                event = json.loads(line)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = str(event.get("type") or "").lower()
+            if kind == "result" and not event.get("is_error"):
+                piece = str(event.get("result") or "").strip()
+                if piece:
+                    final = piece
+            elif kind == "assistant":
+                message = event.get("message") if isinstance(event.get("message"), dict) else {}
+                content = message.get("content") if isinstance(message, dict) else None
+                if isinstance(content, list):
+                    chunks = [
+                        str(part.get("text") or "")
+                        for part in content
+                        if isinstance(part, dict) and str(part.get("type") or "") == "text"
+                    ]
+                    joined = "".join(chunks).strip()
+                    if joined:
+                        assistants.append(joined)
+                elif isinstance(content, str) and content.strip():
+                    assistants.append(content.strip())
+        if final:
+            return _compact_cli_output(final, limit=12_000)
+        if assistants:
+            return _compact_cli_output(assistants[-1], limit=12_000)
+        return super()._result_output(text)
 
 
 
@@ -1741,6 +2171,9 @@ class IdeHandoffBackend(ProjectCliBackend):
         return status
 
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
+        if task.adapter_options.get("proposal_only"):
+            return BackendTaskResult(False, self.id, self.id, error="This backend does not support proposal_only.",
+                                     diagnostics={"proposal_error": {"stage": "input_validation", "code": "route_unavailable"}})
         from .ide_handoff import (
             build_ide_callback_meta,
             open_ide_project,
@@ -2561,6 +2994,27 @@ async def run_project_task(
     board_id_override: Optional[int] = None,
     adapter_options: Optional[dict[str, Any]] = None,
 ) -> BackendTaskResult:
+    if (adapter_options or {}).get("proposal_only"):
+        # This branch precedes snapshots, database execution records, instruction
+        # enrichment and normal backend normalization (which defaults unknown IDs
+        # to Pi). No project execution context is enriched here. Individual CLIs
+        # may still include their own global instructions or skill metadata.
+        selected = str(backend_id_override or getattr(project, "coding_backend", "") or "").strip().lower()
+        if selected not in {"pi", "codex"}:
+            return BackendTaskResult(False, selected, "proposal_rejected",
+                                     error="This backend does not support restricted planning proposals.",
+                                     diagnostics={"proposal_error": {"stage": "input_validation", "code": "route_unavailable"}})
+        task = ProjectTask(project_id=int(project.id), project_name=project.name or "",
+                           folder="", instruction=instruction, chat_id=chat_id, audit_id=audit_id,
+                           run_id=run_id, workflow_id=workflow_id, step_id=step_id,
+                           origin="proposal", ticket_id=ticket_id, board_id=board_id_override,
+                           model=str(model_override or ""),
+                           adapter_options=dict(adapter_options or {}),
+                           required_capabilities=list((adapter_options or {}).get("required_capabilities") or []))
+        if selected == "codex":
+            from .codex_proposal import send_codex_proposal
+            return await send_codex_proposal(task, on_event)
+        return await PiBackend().send_task(task, on_event)
     from distr.core.kanban.project_execution import (
         append_execution_event,
         complete_execution_session,

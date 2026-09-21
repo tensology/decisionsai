@@ -196,7 +196,12 @@ class CliHarnessTurnRuntime:
             if raw_type in {"agent_start", "agent_end"}:
                 backend = str(raw.get("backend") or request.route.backend_id or "Development").strip()
                 role = str(request.route.adapter_options.get("step_role") or "").strip().lower()
-                title = "Code reviewer" if role in {"review", "validation"} else f"{backend.title()} worker"
+                if role in {"review", "validation"}:
+                    title = "Code reviewer"
+                elif backend.lower() == "cursor":
+                    title = "Cursor"
+                else:
+                    title = f"{backend.replace('_', ' ').title()} worker"
                 details = {
                     "call_id": f"worker:{backend}",
                     "title": title,
@@ -224,6 +229,8 @@ class CliHarnessTurnRuntime:
                             tool_name=(
                                 "review_agent"
                                 if role in {"review", "validation"}
+                                else "cursor_agent"
+                                if backend.lower() == "cursor"
                                 else "development_agent"
                             ),
                             execution_session_id=(
@@ -235,6 +242,50 @@ class CliHarnessTurnRuntime:
                         )
                     )
                 return
+            if raw_type in {"tool_execution_start", "tool_execution_end", "tool_start", "tool_end"}:
+                tool_payload = raw.get("tool") if isinstance(raw.get("tool"), dict) else {}
+                tool_name = str(
+                    raw.get("toolName")
+                    or raw.get("tool_name")
+                    or raw.get("name")
+                    or tool_payload.get("name")
+                    or (raw.get("tool") if isinstance(raw.get("tool"), str) else "")
+                    or "tool"
+                ).strip() or "tool"
+                title = tool_name.replace("_", " ").title()
+                call_id = str(raw.get("toolCallId") or raw.get("call_id") or raw.get("id") or tool_name)
+                started = raw_type.endswith("start")
+                if on_event:
+                    on_event(
+                        TurnEvent(
+                            kind=TurnEventKind.TOOL_STARTED if started else TurnEventKind.TOOL_COMPLETED,
+                            status=TurnStatus.WORKING if started else TurnStatus.UPDATING,
+                            summary=str(raw.get("summary") or f"{title} {'started' if started else 'finished'}."),
+                            runtime_id=self.runtime_id,
+                            tool_name=tool_name,
+                            execution_session_id=(
+                                int(raw["execution_session_id"])
+                                if raw.get("execution_session_id")
+                                else None
+                            ),
+                            details={
+                                "call_id": call_id,
+                                "title": title,
+                                "status": "running" if started else "success",
+                                "backend": str(request.route.backend_id or ""),
+                            },
+                        )
+                    )
+                return
+            if raw_type in {"heartbeat", "status"} and str(request.route.backend_id or "").lower() in {
+                "cursor",
+                "claude_code",
+            }:
+                summary = str(
+                    raw.get("summary")
+                    or raw.get("message")
+                    or f"{str(request.route.backend_id or 'Harness').replace('_', ' ').title()} is working…"
+                )[:1000]
             command = raw.get("command") if raw_type == "command_start" else None
             if isinstance(command, list):
                 command = " ".join(str(part) for part in command)
@@ -251,7 +302,11 @@ class CliHarnessTurnRuntime:
                             if raw.get("execution_session_id")
                             else None
                         ),
-                        details={**dict(raw), **({"command": str(command)} if command else {})},
+                        details={
+                            **dict(raw),
+                            **({"command": str(command)} if command else {}),
+                            "backend": str(request.route.backend_id or ""),
+                        },
                     )
                 )
 
@@ -290,5 +345,7 @@ class CliHarnessTurnRuntime:
             error=str((result.error if result else "") or ""),
             waits_for_human=bool(result and result.waits_for_human),
             execution_session_id=handle.execution_session_id,
-            evidence=dict(getattr(handle, "evidence", {}) or {}),
+            evidence={**dict(getattr(handle, "evidence", {}) or {}),
+                      **({"proposal_error": (getattr(result, "diagnostics", {}) or {}).get("proposal_error")}
+                         if options.get("proposal_only") else {})},
         )

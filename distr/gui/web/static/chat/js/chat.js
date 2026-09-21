@@ -329,7 +329,7 @@ let _ttsProviders = null;
 async function _ensureTTSProviders() {
     if (_ttsProviders) return _ttsProviders;
     try {
-        const resp = await fetch('/api/tts/providers');
+        const resp = await fetch('/api/tts/providers', { cache: 'no-store' });
         if (resp.ok) _ttsProviders = await resp.json();
     } catch (e) {
         console.error('Failed to load TTS providers:', e);
@@ -5989,7 +5989,7 @@ function updateChatSettingsDisplay(settings) {
 
 // ── Custom Voice Management for Chat UI ──────────────────────────────────
 
-const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui', 'supertonic', 'pixazo']);
+const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui', 'supertonic', 'pixazo', 'fishaudio']);
 let _chatCvAudioMode = 'upload';
 let _chatCvRecordedBlob = null;
 let _chatCvMediaRecorder = null;
@@ -6017,10 +6017,11 @@ function updateChatVoiceButtons(context) {
     const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
     const supportsCustom = _CHAT_CV_PROVIDERS.has(provider);
     const isCustomVoice = selected && selected.dataset.custom === '1';
+    const dbId = selected && (selected.dataset.customVoiceId || (/^custom_\d+$/.test(selected.value || '') ? selected.value.split('_')[1] : ''));
 
     if (customBtn) customBtn.style.display = supportsCustom ? '' : 'none';
     if (deleteBtn) deleteBtn.style.display = isCustomVoice ? '' : 'none';
-    if (editBtn) editBtn.style.display = isCustomVoice ? '' : 'none';
+    if (editBtn) editBtn.style.display = dbId ? '' : 'none';
 }
 
 (function() {
@@ -6064,7 +6065,8 @@ function openChatCustomVoiceModal(context) {
 
     document.getElementById('chatCv_provider').value = provider;
     document.getElementById('chatCv_context').value = context;
-    document.getElementById('chatCv_providerLabel').textContent = provider.charAt(0).toUpperCase() + provider.slice(1);
+    const providerLabels = { fishaudio: 'Fish Audio', elevenlabs: 'ElevenLabs', pixazo: 'Pixazo', coqui: 'Coqui', supertonic: 'Supertonic', kokoro: 'Kokoro' };
+    document.getElementById('chatCv_providerLabel').textContent = providerLabels[provider] || (provider.charAt(0).toUpperCase() + provider.slice(1));
     document.getElementById('chatCv_name').value = '';
     document.getElementById('chatCv_personality').value = '';
     const promptEl = document.getElementById('chatCv_prompt');
@@ -6290,7 +6292,9 @@ async function deleteChatCustomVoice(context) {
     try {
         const url = dbId
             ? '/api/custom-voices/' + encodeURIComponent(dbId)
-            : '/api/elevenlabs-voices/' + encodeURIComponent(providerVoiceId);
+            : (providerEl.value === 'fishaudio'
+                ? '/api/fishaudio-voices/' + encodeURIComponent(providerVoiceId)
+                : '/api/elevenlabs-voices/' + encodeURIComponent(providerVoiceId));
         const r = await fetch(url, { method: 'DELETE' });
         if (!r.ok) {
             const data = await r.json().catch(() => ({}));
@@ -6312,18 +6316,29 @@ async function editChatCustomVoice(context) {
     const voiceId = voiceEl.value;
     const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
     if (!selected || selected.dataset.custom !== '1') return;
-    const dbId = selected.dataset.customVoiceId || (voiceId && voiceId.startsWith('custom_') ? voiceId.split('_')[1] : '');
-    if (!dbId) return;
-    const voiceName = selected.textContent || voiceId;
+    const providerVoiceId = selected.dataset.providerVoiceId || voiceId;
+    let dbId = selected.dataset.customVoiceId || (voiceId && voiceId.startsWith('custom_') ? voiceId.split('_')[1] : '');
+    const voiceName = (selected.textContent || voiceId).replace(/^⭐\s*/, '');
+    let personality = '';
 
-    // Fetch current personality
     try {
-        const r = await fetch('/api/custom-voices?provider=' + (getChatVoiceProviderEl(context)?.value || ''));
+        const r = await fetch('/api/custom-voices?provider=' + encodeURIComponent(getChatVoiceProviderEl(context)?.value || ''));
         const voices = await r.json();
-        const cv = (Array.isArray(voices) ? voices : []).find(v => String(v.id) === dbId);
-        document.getElementById('chatEditVoicePersonality').value = cv?.personality || '';
-    } catch (e) { /* ignore */ }
+        const cv = (Array.isArray(voices) ? voices : []).find(v =>
+            (dbId && String(v.id) === String(dbId)) ||
+            v.provider_voice_id === voiceId ||
+            v.provider_voice_id === providerVoiceId ||
+            'custom_' + v.id === voiceId
+        );
+        if (cv) {
+            dbId = String(cv.id);
+            personality = cv.personality || '';
+        }
+    } catch (e) { /* still open if we already have a db id */ }
 
+    if (!dbId) return;
+
+    document.getElementById('chatEditVoicePersonality').value = personality;
     document.getElementById('chatEditVoiceId').value = dbId;
     document.getElementById('chatEditVoiceName').textContent = voiceName;
     document.getElementById('chatEditVoiceError').classList.add('hidden');
@@ -6331,6 +6346,7 @@ async function editChatCustomVoice(context) {
     modal.classList.remove('hidden');
     modal.classList.add('flex');
 }
+window.editChatCustomVoice = editChatCustomVoice;
 
 function closeChatEditVoiceModal() {
     const modal = document.getElementById('chatEditVoiceModal');

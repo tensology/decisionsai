@@ -287,6 +287,10 @@ class ChatManagerCore:
                         from distr.core.agent.services.tts.registry import tts_registry
                         retired_id = normalize_voice_provider(tts_provider)
                         agent_name = tts_registry.get(retired_id).resolve_display_name("", {})
+                    elif tts_provider == "Pixazo (VoxCPM)":
+                        agent_name = getattr(settings, "pixazo_voice", None) or "VoxCPM"
+                    elif tts_provider == "Fish Audio (Online)":
+                        agent_name = getattr(settings, "fishaudio_voice", None) or "Fish Audio"
                     elif tts_provider == "Supertonic (Offline)":
                         supertonic_voice = (
                             getattr(settings, "supertonic_voice", "M1") or "M1"

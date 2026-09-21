@@ -172,6 +172,9 @@ class LaunchAppTool(BaseTool):
         if not app:
             return "Error: executable is required (e.g. Terminal, TextEdit, Google Chrome)"
         try:
+            from distr.core.actions.desktop import APP_ALIASES
+
+            app = APP_ALIASES.get(" ".join(app.lower().split()), app)
             result = _call_sidecar("launch_app", {"executable": app})
             if result.get("success"):
                 record_action("launch_app", "success", {"executable": app, "pid": result.get("pid")})

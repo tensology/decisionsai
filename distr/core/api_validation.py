@@ -336,6 +336,13 @@ def validate_pixazo(api_key: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def validate_fishaudio(api_key: str) -> tuple[bool, str]:
+    """Validate Fish Audio API key via the public voice-model list."""
+    from distr.core.agent.services.tts.fishaudio_client import probe_api_key
+
+    return probe_api_key(api_key)
+
+
 def validate_tensology(api_key: str) -> tuple[bool, str]:
     """Validate the key audience and required central-workspace capabilities."""
     try:
@@ -391,6 +398,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "nvidia": validate_nvidia,
         "masko": validate_masko,
         "pixazo": validate_pixazo,
+        "fishaudio": validate_fishaudio,
         "tensology": validate_tensology,
     }
 

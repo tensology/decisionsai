@@ -68,6 +68,8 @@ def register_routes(router, templates):
             "voxcpm_voice": settings.get("voxcpm_voice", "default"),
             "pixazo_voice": settings.get("pixazo_voice", "voxcpm"),
             "pixazo_dit_steps": int(settings.get("pixazo_dit_steps") or 6),
+            "fishaudio_voice": settings.get("fishaudio_voice", "9a9cf47702da476aa4629e2506d4a857"),
+            "fishaudio_tts_model": settings.get("fishaudio_tts_model", "s2.1-pro-free"),
             "supertonic_voice": settings.get("supertonic_voice", "M1"),
             "chatterbox_voice": settings.get("chatterbox_voice", "default"),
             "playback_speed": settings.get("playback_speed", 1.0),

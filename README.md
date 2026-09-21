@@ -443,6 +443,7 @@ You do not need to understand this stack to use DecisionsAI. These are the main 
 | [OpenAI](https://openai.com/) | OpenAI language, vision, and tool-capable models |
 | [Anthropic](https://www.anthropic.com/) | Claude language and coding models |
 | [ElevenLabs](https://elevenlabs.io/) | Cloud TTS with voice cloning |
+| [Fish Audio](https://fish.audio/) | Cloud TTS with the S2.1 Pro voice library |
 | [AssemblyAI](https://www.assemblyai.com/) | Advanced transcription and speech recognition |
 
 ---

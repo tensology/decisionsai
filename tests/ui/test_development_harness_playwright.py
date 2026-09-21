@@ -140,7 +140,16 @@ def _install_api(
             {
                 "role": "workflow",
                 "content": "Implementation started",
-                "workflow_event": {"phase": "Develop", "summary": "Implementation started", "status": "running"},
+                "workflow_event": {
+                    "phase": "Develop",
+                    "summary": "Implementation started",
+                    "status": "running",
+                    "run_id": 99,
+                    "workflow_id": 44,
+                    "workflow_name": "Development execution",
+                    "step_id": 1,
+                    "step_name": "Inspect",
+                },
             },
             {
                 "role": "tool",
@@ -264,6 +273,8 @@ def _install_api(
             return
         payload = None
         if path == "/api/workflows/studio/reports":
+            payload = {"items": []}
+        elif path == "/api/workflows/studio/reports/time":
             payload = {"items": []}
         elif path == "/api/workflows/studio/plan-workspaces" and request.method == "GET":
             payload = {"items": []}
@@ -546,7 +557,9 @@ def _install_api(
                 "id": 99,
                 "execution_kind": "workflow",
                 "workflow_id": 44,
+                "chat_id": 17,
                 "status": run_status or ("running" if live_activity else "waiting"),
+                "current_step_id": 1,
                 "steerable": True,
                 "execution_session_id": "terminal-42" if live_activity else None,
                 "runtime_snapshot": {"urls": [TEST_BASE_URL + "/workflows/"]} if live_activity else None,
@@ -600,6 +613,8 @@ def _install_api(
             payload = {"success": True, "id": 6}
         elif path == "/api/tickets/boards/80/whatsapp-links" and request.method == "POST":
             payload = {"success": True, "id": 6}
+        elif path == "/api/tickets/boards/70/whatsapp-links/5" and request.method == "PATCH":
+            payload = {"success": True}
         elif path == "/api/tickets/boards/70/whatsapp-links/5" and request.method == "DELETE":
             payload = {"success": True}
         elif path == "/api/tickets/boards/70/whatsapp-snapshot-ticket":
@@ -701,6 +716,21 @@ def _install_api(
             payload = {"ok": False, "summary": {"ready": 8, "missing": 2}, "repair_actions": [{"name": "Codex projection", "reason": "missing"}]}
         elif path == "/api/workflows/studio/tasks/17/skills":
             payload = {"status": "created", "summary": "Saved reusable skill.", "artifacts": [{"path": "/tmp/project/.decisions/skills/ui/SKILL.md"}]}
+        elif path == "/api/workflows/studio/tasks/17/schedule" and request.method == "POST":
+            created = {
+                "id": "auto_1",
+                "name": "Harness schedule",
+                "instruction": "Keep the harness green.",
+                "status": "active",
+                "automation_type": "scheduled_instruction",
+                "source_config": {},
+                "schedule": {"kind": "daily", "time": "09:00", "timezone": "Africa/Johannesburg"},
+                "action_config": {"development_chat_id": 17, "run_in_new_thread": False, "backend": "pi"},
+                "next_run_at": "2026-08-26T07:00:00+00:00",
+                "last_run_at": None,
+            }
+            automations[:] = [created]
+            payload = {"success": True, "automation": created, "message": "Scheduled from this prompt."}
         elif path == "/api/workflows/studio/artifacts/12" and request.method == "PATCH":
             body = json.loads(request.post_data or "{}")
             payload = {"id": 12, "title": "Implementation brief", "status": body.get("status"), "content": "Ready brief", "metadata": {}}
@@ -809,6 +839,33 @@ def _install_api(
                 "reasoning_efforts": ["low", "medium", "high"],
                 "service_tiers": ["standard", "priority"],
             }] if "provider=openai" in request.url else [{"id": "claude-test", "name": "Claude Test"}])}
+        elif path.startswith("/api/projects/cli-models"):
+            backend = "cursor"
+            if "backend_id=" in request.url:
+                backend = request.url.split("backend_id=", 1)[1].split("&", 1)[0]
+            models_by_backend = {
+                "cursor": [
+                    {"id": "auto", "name": "Auto"},
+                    {"id": "cursor-grok-4.6-medium", "name": "Cursor Grok 4.6 Medium"},
+                    {"id": "composer-2.5", "name": "Composer 2.5"},
+                    {"id": "gpt-5.3-codex", "name": "GPT-5.3 Codex"},
+                ],
+                "codex": [
+                    {"id": "auto", "name": "Auto"},
+                    {"id": "gpt-5.3-codex", "name": "GPT-5.3 Codex"},
+                ],
+                "claude_code": [
+                    {"id": "auto", "name": "Auto"},
+                    {"id": "claude-sonnet-4", "name": "Claude Sonnet 4"},
+                ],
+            }
+            payload = {
+                "backend_id": backend,
+                "models": models_by_backend.get(backend, [{"id": "auto", "name": "Auto"}]),
+                "source": "test-mock",
+                "message": "",
+                "supports_model_picker": True,
+            }
         elif path == "/api/workflows/studio/tasks/17/messages":
             if message_validation_error:
                 route.fulfill(
@@ -830,7 +887,20 @@ def _install_api(
             payload = {"id": 17, **body, "workflow_id": 44}
         elif path == "/api/workflows/studio/routing-assessment":
             body = json.loads(request.post_data or "{}")
-            payload = {"complexity": "high" if "production" in body.get("instruction", "").lower() else "medium", "operational_state": "neutral", "signals": ["vision"] if body.get("has_images") else [], "route": {"backend": "pi", "model_provider": "openrouter", "model": "leader/sota:free", "fallback_backend": "pi", "fallback_model": "local-coder:30b"}, "reason": "Selected from the free model leaderboard"}
+            payload = {
+                "complexity": "high" if "production" in body.get("instruction", "").lower() else "medium",
+                "operational_state": "neutral",
+                "signals": ["vision"] if body.get("has_images") else [],
+                "route": {
+                    "backend": "codex" if "production" in body.get("instruction", "").lower() else "cursor",
+                    "model_provider": "openai",
+                    "model": "auto",
+                    "fallback_backend": "pi",
+                    "fallback_model": "local-coder:30b",
+                },
+                "execution_mode": "direct",
+                "reason": "Medium → cursor",
+            }
         elif path == "/api/workflows/44/run":
             payload = {"success": True, "run_id": 99}
         elif path == "/api/workflows/44/steps/1/execute":
@@ -958,11 +1028,12 @@ def test_tray_deep_links_open_board_views_and_automations(page: Page):
     expect(page.locator("#development-kanban-board")).to_have_text("Decisions delivery")
     expect(page.locator("#kanban-workspace .task-breadcrumb strong")).to_have_text("Kanban")
     expect(page.locator("#kanban-workspace")).not_to_contain_text("Local board")
-    expect(page.locator("#development-kanban-refresh")).to_be_visible()
-    expect(page.locator("#development-kanban-refresh")).to_have_attribute("aria-label", "Refresh board")
-    expect(page.locator("#development-kanban-edit-board")).to_be_visible()
-    expect(page.locator("#development-kanban-new-ticket")).to_be_visible()
-    page.locator("#development-kanban-new-ticket").click()
+    expect(page.locator("#development-kanban-refresh")).to_be_hidden()
+    expect(page.locator("#development-kanban-more")).to_be_visible()
+    expect(page.locator("#development-kanban-edit-board")).to_have_count(0)
+    expect(page.locator("#development-kanban-new-ticket")).to_have_count(0)
+    expect(page.locator('[data-kanban-lane="701"] [data-kanban-new-ticket]')).to_be_visible()
+    page.locator('[data-kanban-lane="701"] [data-kanban-new-ticket]').click()
     expect(page.locator("#kanban-ticket-dialog")).to_be_visible()
     page.get_by_role("button", name="Close ticket details").click()
     expect(page.locator("#kanban-ticket-dialog")).to_be_hidden()
@@ -977,7 +1048,8 @@ def test_tray_deep_links_open_board_views_and_automations(page: Page):
     page.set_viewport_size({"width": 375, "height": 812})
     page.wait_for_timeout(400)
     expect(page.locator("#kanban-workspace .task-breadcrumb strong")).to_be_visible()
-    expect(page.locator("#development-kanban-new-ticket")).to_be_visible()
+    expect(page.locator('[data-kanban-lane="701"] [data-kanban-new-ticket]')).to_be_visible()
+    expect(page.locator("#development-kanban-new-ticket")).to_have_count(0)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.screenshot(path="/private/tmp/development-kanban-breadcrumb-compact.png", full_page=True)
 
@@ -1470,9 +1542,10 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     page.locator('[data-board-select="jira:jira-1"]').click(button="right")
     expect(page.locator("#board-context-menu")).to_be_visible()
     assert page.evaluate("document.activeElement.id") == "board-context-menu"
-    expect(page.locator("#board-context-menu [role='menuitem']")).to_have_count(13)
+    expect(page.locator("#board-context-menu [role='menuitem']")).to_have_count(14)
+    expect(page.locator("#board-context-menu .context-menu-heading")).to_have_text(["Create", "View", "Board", "Terminals"])
     expect(page.locator("#board-context-menu")).not_to_contain_text("Incoming")
-    assert page.locator("#board-context-menu").bounding_box()["width"] <= 140
+    assert page.locator("#board-context-menu").bounding_box()["width"] <= 186
     assert page.locator("#board-context-new-chat").bounding_box()["height"] <= 26
     expect(page.locator("#board-context-pin")).to_have_css("background-color", "rgba(0, 0, 0, 0)")
     page.screenshot(path="/private/tmp/development-harness-board-context.png", full_page=True)
@@ -1530,17 +1603,24 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator("#task-inspector")).to_be_hidden()
 
     page.locator("#model-button").click()
-    expect(page.locator("#model-provider-value")).to_have_text("Auto")
-    page.locator('[data-model-pane="provider"]').click()
+    expect(page.locator("#model-auto-value")).to_be_visible()
+    expect(page.locator("#model-harness-value")).to_have_text("Auto")
+    page.locator('[data-model-pane="harness"]').click()
     expect(page.locator("#model-submenu-list .model-choice")).to_have_count(4)
     expect(page.locator("#model-submenu-list .model-choice").first).to_be_visible()
     submenu_box = page.locator("#model-submenu").bounding_box()
     assert submenu_box and submenu_box["height"] > 80
     page.screenshot(path="/private/tmp/development-harness-models.png", full_page=True)
-    page.get_by_role("menuitemradio", name=re.compile("OpenAI")).click()
+    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Provider")
+    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(3)
+    expect(page.locator("#model-submenu-list .model-choice").filter(has_text="Provider ·")).to_have_count(0)
+    page.get_by_role("menuitemradio", name=re.compile(r"^OpenAI\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Model")
+    expect(page.locator("#model-submenu-list .model-choice").filter(has_text="Provider ·")).to_have_count(0)
     expect(page.locator("#model-submenu-search")).to_be_visible()
     page.locator("#model-submenu-search").fill("GPT Test")
-    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(1)
+    expect(page.locator("#model-submenu-list .model-choice").filter(has_text="GPT Test")).to_have_count(1)
     back_box = page.locator("#model-submenu-back").bounding_box()
     header_box = page.locator("#model-submenu-header").bounding_box()
     assert back_box and header_box
@@ -1555,9 +1635,29 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     page.get_by_role("menuitemradio", name=re.compile("GPT Test")).click()
     page.locator('[data-model-pane="effort"]').click()
     page.get_by_role("menuitemradio", name="High", exact=True).click()
-    expect(page.locator("#model-label")).to_have_text("Pinned · gpt-test · High")
+    expect(page.locator("#model-label")).to_have_text("Pi · OpenAI · gpt-test · High")
     page.wait_for_timeout(100)
     assert ("PATCH", "/api/workflows/studio/tasks/17/model-route") in requests
+    page.keyboard.press("Escape")
+
+    page.locator("#model-button").click()
+    expect(page.locator("#model-provider-row")).to_be_visible()
+    expect(page.locator("#model-provider-value")).to_have_text("OpenAI")
+    expect(page.locator("#model-catalog-value")).to_have_text("gpt-test")
+    page.locator('[data-model-pane="harness"]').click()
+    page.get_by_role("menuitemradio", name=re.compile(r"^Cursor\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Model")
+    expect(page.locator("#model-submenu-list .model-choice").filter(has_text="Cursor Grok")).to_have_count(1)
+    page.get_by_role("menuitemradio", name=re.compile("Cursor Grok 4.6 Medium")).click()
+    expect(page.locator("#model-label")).to_have_text("Cursor · cursor-grok-4.6-medium")
+    page.locator("#model-button").click()
+    expect(page.locator("#model-provider-row")).to_be_hidden()
+    expect(page.locator("#model-catalog-value")).to_have_text("cursor-grok-4.6-medium")
+    page.locator('[data-model-pane="harness"]').click()
+    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
+    page.get_by_role("menuitemradio", name=re.compile(r"^OpenAI\b")).click()
+    page.get_by_role("menuitemradio", name=re.compile("GPT Test")).click()
+    expect(page.locator("#model-label")).to_have_text("Pi · OpenAI · gpt-test · High")
     page.keyboard.press("Escape")
 
     expect(page.locator("#composer-board-picker")).to_be_hidden()
@@ -1720,7 +1820,12 @@ def test_run_mode_and_contextual_automation_are_functional(page: Page):
     expect(page.locator("#mode-label")).to_have_text("Goal")
 
     _open_details(page)
-    expect(page.get_by_role("button", name="Automate this thread", exact=True)).to_have_count(0)
+    expect(page.get_by_role("button", name="Automate this thread", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Schedule this prompt", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Schedule this prompt", exact=True).click()
+    page.wait_for_timeout(150)
+    assert ("POST", "/api/workflows/studio/tasks/17/schedule") in requests
+    expect(page.get_by_role("button", name="Edit schedule", exact=True)).to_be_visible()
     expect(page.locator('[data-tab="goal"]')).to_be_visible()
 
 
@@ -1934,7 +2039,9 @@ def test_live_agent_tool_changes_and_evidence_are_visible_without_empty_tabs(pag
     page.goto(URL)
 
     messages = page.locator("#message-list")
-    expect(messages.get_by_text("Implementation started", exact=True)).to_be_visible()
+    expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
+    expect(page.locator(".thread-workflow-runner")).to_contain_text("Development execution")
+    expect(page.locator(".thread-workflow-node.running")).to_contain_text("Inspect")
     expect(messages.get_by_text("Terminal", exact=True)).to_be_visible()
     expect(messages.get_by_text("Running the focused test suite", exact=True)).to_be_visible()
     expect(messages.get_by_text("I found the affected route and I am verifying the change.")).to_be_visible()
@@ -1942,6 +2049,7 @@ def test_live_agent_tool_changes_and_evidence_are_visible_without_empty_tabs(pag
     expect(page.locator("#message-list")).not_to_contain_text("Working through the task")
     expect(page.locator("#message-list")).not_to_contain_text("Stop turn")
     expect(page.locator("#message-list")).not_to_contain_text("Steer")
+    expect(page.locator(".message-workflow")).to_have_count(0)
     expect(page.locator(".active-turn-history .active-turn-action")).to_have_count(3)
     expect(page.locator(".active-turn-history")).to_contain_text("Inspected project")
     expect(page.locator(".active-turn-history")).to_contain_text("Updated files")
@@ -2083,7 +2191,7 @@ def test_completed_direct_thread_message_dispatches_without_a_workflow(page: Pag
     assert ("POST", "/api/workflows/studio/tasks/17/messages") in requests
     assert submitted_messages[-1]["message"] == instruction
     assert "create a ticket" not in submitted_messages[-1]["message"].lower()
-    expect(page.locator("#model-label")).to_have_text("Auto · leader/sota · Free")
+    expect(page.locator("#model-label")).to_have_text("Auto · Cursor · medium")
     assert not any(path == "/api/workflows/44/run" for _, path in requests)
 
     follow_up = "Now tighten the spacing and keep the existing implementation"
@@ -2375,9 +2483,15 @@ def test_compact_actions_workflows_provider_groups_and_board_linking(page: Page)
     page.locator('[data-board-select="decisions:70"]').click(button="right")
     page.get_by_role("menuitem", name="Edit Board").click()
     expect(page.locator("#board-link-dialog")).to_be_visible()
+    expect(page.locator("#board-link-title")).to_have_text("Edit Decisions delivery")
+    expect(page.get_by_text("Board project")).to_have_count(0)
+    expect(page.locator("#board-whatsapp-add")).to_have_count(0)
+    expect(page.locator("#board-link-dialog")).not_to_contain_text("Incoming WhatsApp")
+    expect(page.locator("#board-link-dialog")).not_to_contain_text("Create snapshot tickets automatically")
     expect(page.locator("#board-edit-folder")).to_have_value("/tmp/decisions")
     page.locator("#board-edit-terminals").fill("npm run dev\nnpm run worker")
-    page.locator("#board-link-workflow").select_option("44")
+    expect(page.locator("#board-link-workflow")).to_have_count(0)
+    expect(page.locator("#board-link-dialog")).not_to_contain_text("Default workflow")
     page.locator("#board-link-form").get_by_role("button", name="Save board").click()
     expect(page.locator("#board-link-dialog")).not_to_be_visible()
     assert ("PUT", "/api/tickets/boards/70") in requests
@@ -2433,22 +2547,19 @@ def test_workflows_three_dot_menu_routes_workflow_cancel(page: Page):
     assert ("POST", "/api/workflows/44/cancel-run/99") in requests
 
 
-def test_thread_workflow_picker_links_and_unlinks_an_idle_thread(page: Page):
+def test_thread_shows_circular_workflow_runner_while_run_is_active(page: Page):
     requests: list[tuple[str, str]] = []
-    _install_api(page, requests, run_status="completed")
+    _install_api(page, requests, live_activity=True)
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(URL)
 
-    expect(page.locator("#composer-workflow-label")).to_have_text("Development execution")
-    page.locator("#composer-workflow-button").click()
-    page.locator("#composer-workflow-menu").get_by_role("option", name=re.compile("Direct agent")).click()
-    expect(page.locator("#composer-workflow-label")).to_have_text("Direct agent")
-
-    page.locator("#composer-workflow-button").click()
-    page.locator("#composer-workflow-menu").get_by_role("option", name=re.compile("Development execution")).click()
-    expect(page.locator("#composer-workflow-label")).to_have_text("Development execution")
+    expect(page.locator("#composer-workflow-button")).to_have_count(0)
+    expect(page.locator("#composer-workflow-menu")).to_have_count(0)
+    expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
+    expect(page.locator(".thread-workflow-runner-head")).to_contain_text("Development execution")
+    expect(page.locator(".thread-workflow-node")).to_contain_text("Inspect")
+    expect(page.locator(".thread-workflow-node.running b")).to_have_text("1")
     expect(page.locator("#inspector-content")).to_contain_text("Open workflow")
-    assert requests.count(("PATCH", "/api/workflows/studio/tasks/17/controls")) == 2
 
 
 def test_workflow_cards_and_editor_are_responsive(page: Page):
@@ -2518,7 +2629,7 @@ def test_board_actions_and_thread_owned_time_are_operable(page: Page):
     assert ("POST", "/api/workflows/studio/tasks/17/time/pause") in requests
     page.locator('[data-board-select="decisions:70"]').click(button="right")
     expect(page.locator("#board-context-terminal-toggle")).to_contain_text("Stop Terminals")
-    page.get_by_role("menuitem", name="Terminals", exact=True).click()
+    page.get_by_role("menuitem", name="Open", exact=True).click()
     expect(page.locator("#terminal-workspace")).to_be_visible()
     expect(page.locator("#sidebar-terminals-toggle")).to_have_class(re.compile(r"\bactive\b"))
     expect(page).to_have_url(TEST_BASE_URL + "/development/boards/decisions/70/terminals/")
@@ -2702,8 +2813,7 @@ def test_external_kanban_moves_use_cache_and_refresh_only_on_request(page: Page)
     expect(page.locator("#development-kanban-refresh")).to_have_attribute("aria-label", "Re-sync Trello board")
 
     page.locator('[data-board-select="decisions:70"]').click()
-    expect(page.locator("#development-kanban-refresh")).to_be_visible()
-    expect(page.locator("#development-kanban-refresh")).to_have_attribute("aria-label", "Refresh board")
+    expect(page.locator("#development-kanban-refresh")).to_be_hidden()
     page.screenshot(path="/private/tmp/development-kanban-external-refresh.png", full_page=True)
 
 
@@ -2716,7 +2826,7 @@ def test_local_ticket_delete_is_left_aligned_and_requires_confirmation(page: Pag
     page.goto(URL)
 
     page.locator('[data-board-select="decisions:70"]').click()
-    page.locator('[data-kanban-ticket="decisions:42"]').click()
+    page.locator('[data-kanban-ticket="decisions:42"]').dblclick()
     dialog = page.locator("#kanban-ticket-dialog")
     expect(dialog.locator("#kanban-ticket-title")).to_have_css("color", "rgb(248, 250, 252)")
     expect(dialog.locator("#kanban-ticket-description")).to_have_css("color", "rgb(248, 250, 252)")
@@ -2733,8 +2843,10 @@ def test_local_ticket_delete_is_left_aligned_and_requires_confirmation(page: Pag
     footer_box = dialog.locator("menu").bounding_box()
     dialog_box = dialog.bounding_box()
     assert title_box is not None and description_box is not None and complexity_box is not None and footer_box is not None and dialog_box is not None
-    assert abs(title_box["y"] - complexity_box["y"]) <= 1
+    assert abs(title_box["width"] - description_box["width"]) <= 1
+    assert complexity_box["y"] > title_box["y"]
     assert footer_box["y"] - (description_box["y"] + description_box["height"]) <= 32
+    expect(dialog.get_by_role("button", name="Open Thread")).to_be_visible()
     page.screenshot(path="/private/tmp/development-ticket-dialog-compact.png", full_page=True)
     assert dialog_box["height"] < 650
     page.set_viewport_size({"width": 375, "height": 812})
@@ -2775,7 +2887,7 @@ def test_ticket_delete_checkbox_can_preserve_the_linked_thread(page: Page):
     page.goto(URL)
 
     page.locator('[data-board-select="decisions:70"]').click()
-    page.locator('[data-kanban-ticket="decisions:42"]').click()
+    page.locator('[data-kanban-ticket="decisions:42"]').dblclick()
     page.get_by_role("button", name="Delete", exact=True).click()
     confirmation = page.locator("#decisions-confirm-modal")
     delete_thread = confirmation.get_by_role("checkbox", name="Also delete linked thread")
@@ -2795,11 +2907,13 @@ def test_ticket_material_creates_a_reviewable_thread_draft_without_submitting(pa
     page.goto(URL)
 
     page.locator('[data-board-select="jira:jira-1"]').click()
-    page.locator('[data-kanban-ticket="jira:DEV-99"]').click()
+    page.locator('[data-kanban-ticket="jira:DEV-99"]').dblclick()
     dialog = page.locator("#kanban-ticket-dialog")
     expect(dialog).to_be_visible()
     expect(dialog).not_to_contain_text("Work on ticket")
-    expect(dialog.get_by_role("button", name="Create thread")).to_be_visible()
+    expect(dialog).not_to_contain_text("Jira ticket")
+    expect(dialog).not_to_contain_text("External ticket details")
+    expect(dialog.get_by_role("button", name="Start Thread")).to_be_visible()
     expect(page.locator("#kanban-ticket-tabs")).to_be_visible()
     expect(dialog.get_by_role("tab", name="Details")).to_have_attribute("aria-selected", "true")
     expect(page.locator("#kanban-ticket-details-panel")).to_be_visible()
@@ -2820,9 +2934,9 @@ def test_ticket_material_creates_a_reviewable_thread_draft_without_submitting(pa
     assert attachment_panel.evaluate("node => node.scrollHeight > node.clientHeight")
     attachment_panel.evaluate("node => { node.scrollTop = node.scrollHeight; }")
     assert attachment_panel.evaluate("node => node.scrollTop > 0")
-    expect(dialog.get_by_role("button", name="Create thread")).to_be_visible()
+    expect(dialog.get_by_role("button", name="Start Thread")).to_be_visible()
 
-    dialog.get_by_role("button", name="Create thread").click()
+    dialog.get_by_role("button", name="Start Thread").click()
     expect(dialog).to_be_hidden()
     expect(page.locator("#task-prompt")).to_have_value("Jira visual review\n\nReview the custom composer")
     expect(page.locator("#composer-context")).to_contain_text("composer.png")
@@ -2896,6 +3010,7 @@ def test_incoming_channels_automation_rules_and_step_models_are_operable(page: P
     unlinked = page.locator('[data-incoming-conversation="whatsapp:27820000000@s.whatsapp.net"]')
     unlinked.click(button="right")
     expect(page.locator("#incoming-link-dialog")).to_be_visible()
+    expect(page.locator("#incoming-link-auto")).to_be_visible()
     page.locator("#incoming-link-board").select_option("80")
     page.locator("#incoming-link-dialog").get_by_role("button", name="Link board").click()
     assert ("POST", "/api/tickets/boards/80/whatsapp-links") in requests
@@ -3086,13 +3201,17 @@ def test_auto_routing_is_visible_and_manual_image_incompatibility_blocks_send(pa
     page.locator("#new-thread-button").click()
     page.locator("#task-prompt").fill("Repair the production workflow migration")
     page.locator("#send-button").click()
-    expect(page.locator("#model-label")).to_have_text("Auto · leader/sota · Free")
+    expect(page.locator("#model-label")).to_have_text("Auto · Codex · high")
     assert ("POST", "/api/workflows/studio/routing-assessment") in requests
 
     page.goto(URL)
     page.locator("#model-button").click()
-    page.locator('[data-model-pane="provider"]').click()
-    page.get_by_role("menuitemradio", name=re.compile("Anthropic")).click()
+    page.locator('[data-model-pane="harness"]').click()
+    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(4)
+    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Provider")
+    page.get_by_role("menuitemradio", name=re.compile(r"^Anthropic\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Model")
     page.get_by_role("menuitemradio", name=re.compile("Claude Test")).click()
     expect(page.locator("#model-effort-row")).to_be_hidden()
     expect(page.locator("#model-speed-row")).to_be_hidden()
@@ -3534,8 +3653,12 @@ def test_image_drop_turns_red_for_a_model_without_vision(page: Page):
     _install_api(page, requests)
     page.goto(URL)
     page.locator("#model-button").click()
-    page.locator('[data-model-pane="provider"]').click()
-    page.get_by_role("menuitemradio", name=re.compile("Anthropic")).click()
+    page.locator('[data-model-pane="harness"]').click()
+    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(4)
+    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Provider")
+    page.get_by_role("menuitemradio", name=re.compile(r"^Anthropic\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Model")
     page.get_by_role("menuitemradio", name=re.compile("Claude Test")).click()
     page.locator("#model-dialog").evaluate("node => node.close()")
     page.wait_for_timeout(100)

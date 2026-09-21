@@ -678,6 +678,15 @@ T("Can you focus on brave?", "fast_action", "OPEN_WINDOW",
 T("Please bring up Safari", "fast_action", "OPEN_WINDOW",
   description="Bring up application routes to smart_open")
 
+T("Can you bring up the web UI interface, the development section, the ticket boards or whatever?", "fast_action", "OPEN_WINDOW",
+  description="Spoken list of product surfaces is a board/page open, not a random app")
+
+T("Bring up the project", "fast_action", "OPEN_WINDOW",
+  description="Bring up the project opens the active project")
+
+T("Bring up Google", "fast_action", "OPEN_WINDOW",
+  description="Bring up a website/app name")
+
 T("Show me how to create a React component", "llm",
   category="ambiguous",
   description="'Show me how' is educational")

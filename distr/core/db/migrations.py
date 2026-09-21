@@ -2662,3 +2662,21 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
             conn.commit()
     except Exception as e:
         logger.warning("Development thread time migration failed: %s", e)
+
+    for col, col_def in (
+        ("fishaudio_enabled", "BOOLEAN DEFAULT 0"),
+        ("fishaudio_key", "VARCHAR DEFAULT ''"),
+        ("fishaudio_voice", "VARCHAR DEFAULT '9a9cf47702da476aa4629e2506d4a857'"),
+        ("fishaudio_tts_model", "VARCHAR DEFAULT 's2.1-pro-free'"),
+    ):
+        try:
+            with Session() as session:
+                session.execute(text(f"SELECT {col} FROM settings LIMIT 1"))
+        except Exception:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col} {col_def}"))
+                    conn.commit()
+                    logger.info("Added %s column to settings table", col)
+                except Exception as e:
+                    logger.warning("Could not add %s column: %s", col, e)

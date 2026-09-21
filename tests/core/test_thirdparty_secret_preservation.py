@@ -29,6 +29,8 @@ def _thirdparty_payload(**overrides):
         "nvidia_key": "",
         "pixazo_enabled": False,
         "pixazo_key": "",
+        "fishaudio_enabled": False,
+        "fishaudio_key": "",
         "composio_enabled": False,
         "composio_key": "",
         "masko_enabled": False,
@@ -144,3 +146,30 @@ def test_thirdparty_save_keeps_submitted_key_even_when_provider_is_disabled(
     saved = save_settings.call_args.args[0]
     assert saved["openai_enabled"] is False
     assert saved["openai_key"] == "sk-replacement"
+
+
+@patch("distr.core.services.settings_service._safe_emit")
+@patch("distr.core.services.settings_service.save_settings_to_db")
+@patch(
+    "distr.core.services.settings_service.load_settings_from_db",
+    return_value={
+        "fishaudio_enabled": True,
+        "fishaudio_key": "sk-existing-fish",
+    },
+)
+def test_thirdparty_save_preserves_fishaudio_key_when_payload_key_is_blank(
+    _load,
+    save_settings,
+    _emit,
+):
+    from distr.core.services.settings_service import save_thirdparty_settings
+
+    with patch("distr.core.services.settings_service.signal_manager"):
+        save_thirdparty_settings(
+            _thirdparty_payload(fishaudio_enabled=True, fishaudio_key=""),
+            resolve_secret_update,
+        )
+
+    saved = save_settings.call_args.args[0]
+    assert saved["fishaudio_enabled"] is True
+    assert saved["fishaudio_key"] == "sk-existing-fish"

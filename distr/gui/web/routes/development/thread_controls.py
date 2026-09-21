@@ -191,6 +191,76 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=500)
 
 
+    @router.post("/workflows/studio/tasks/{chat_id}/schedule")
+    async def workflow_studio_schedule_prompt(chat_id: int):
+        """Create a daily Automation from the thread's last user prompt and pinned harness."""
+        try:
+            from distr.core.automation.store import create_automation
+            from distr.core.db import Chat, get_session
+            from distr.core.workflow.development_threads import development_thread_metadata
+
+            with get_session() as db:
+                root = db.get(Chat, int(chat_id))
+                if root is None or root.parent_id is not None:
+                    return JSONResponse({"detail": "Chat not found."}, status_code=404)
+                metadata = development_thread_metadata(root)
+                model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
+                title = (root.title or "Development").strip() or "Development"
+                project_id = int(root.project_id) if root.project_id else None
+                route_mode = str(model_route.get("route_mode") or root.route_mode or "auto").strip().lower()
+                provider = str(model_route.get("provider") or root.provider or "")
+                model_name = str(model_route.get("model_name") or root.model_name or "")
+                last_prompt = ""
+                child = (
+                    db.query(Chat)
+                    .filter(Chat.parent_id == int(chat_id), Chat.input.isnot(None))
+                    .order_by(Chat.id.desc())
+                    .first()
+                )
+                if child is not None:
+                    last_prompt = str(child.input or "").strip()
+                if not last_prompt:
+                    last_prompt = str(root.input or "").strip()
+            if not last_prompt:
+                return JSONResponse({"detail": "Send a prompt in this thread before scheduling."}, status_code=422)
+            backend = str(model_route.get("backend") or "").strip().lower()
+            if route_mode == "manual" and backend not in {"pi", "cursor", "codex", "claude_code"}:
+                backend = "pi"
+            action_config = {
+                "development_chat_id": int(chat_id),
+                "run_in_new_thread": False,
+                "backend": backend if route_mode == "manual" else "",
+                "model_provider": provider,
+                "model": model_name,
+                "reasoning_effort": str(model_route.get("reasoning_effort") or "medium"),
+                "adaptive_model_routing": route_mode != "manual",
+            }
+            if project_id is not None:
+                action_config["linked_project_id"] = project_id
+            automation = await asyncio.to_thread(
+                create_automation,
+                name=f"{title} schedule",
+                automation_type="scheduled_instruction",
+                status="active",
+                instruction=last_prompt,
+                preset_id="",
+                schedule={"kind": "daily", "time": "09:00"},
+                action_config=action_config,
+                project_id=project_id,
+                thread_chat_id=int(chat_id),
+            )
+            return JSONResponse(
+                {
+                    "success": True,
+                    "automation": automation,
+                    "message": "Scheduled daily from this thread's last prompt.",
+                }
+            )
+        except Exception as e:
+            logger.error("Studio schedule-from-thread failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+
     @router.get("/workflows/studio/control-state")
     async def workflow_studio_control_state(run_id: Optional[int] = None, chat_id: Optional[int] = None):
         """Return safe cross-surface status and pending controls for Development."""

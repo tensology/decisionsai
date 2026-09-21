@@ -198,8 +198,9 @@ def test_reports_http_route_reads_scoped_records_and_enforces_limit(automation_d
     with automation_db() as db:
         definition = Automation(name="Report fixture")
         db.add(definition); db.flush()
-        db.add(AutomationRun(automation_id=definition.id, status="completed", started_at=utc_now() - timedelta(seconds=50), completed_at=utc_now()))
-        db.add(AutomationRun(automation_id=definition.id, status="dispatch_accepted"))
+        automation_id = definition.id
+        db.add(AutomationRun(automation_id=automation_id, status="completed", started_at=utc_now() - timedelta(seconds=50), completed_at=utc_now()))
+        db.add(AutomationRun(automation_id=automation_id, status="dispatch_accepted"))
         db.commit()
     app = FastAPI()
     from fastapi import APIRouter
@@ -213,6 +214,41 @@ def test_reports_http_route_reads_scoped_records_and_enforces_limit(automation_d
     assert response.json()["items"][0]["duration_seconds"] == 50
     assert client.get("/api/workflows/studio/reports?limit=201").status_code == 422
 
+    with automation_db() as db:
+        from distr.core.db.workflow import DevelopmentTimeEntry, DevelopmentWorkItem
+        from distr.core.db import Chat
+        chat = Chat(title="Timed thread", params="{}")
+        db.add(chat)
+        db.flush()
+        item = DevelopmentWorkItem(chat_id=chat.id, identity_key=f"thread:{chat.id}")
+        db.add(item)
+        db.flush()
+        db.add(
+            DevelopmentTimeEntry(
+                work_item_id=item.id,
+                chat_id=chat.id,
+                started_at=utc_now() - timedelta(minutes=5),
+                ended_at=utc_now(),
+                seconds=300,
+                source="play",
+            )
+        )
+        db.add(
+            AutomationRun(
+                automation_id=automation_id,
+                status="cancelled",
+                started_at=utc_now() - timedelta(days=10),
+                completed_at=utc_now(),
+            )
+        )
+        db.commit()
+    time_response = client.get("/api/workflows/studio/reports/time?limit=10")
+    assert time_response.status_code == 200
+    assert any(row["seconds"] == 300 for row in time_response.json()["items"])
+    runaway = client.get("/api/workflows/studio/reports?limit=50")
+    cancelled = [row for row in runaway.json()["items"] if row["status"] == "cancelled"]
+    assert cancelled
+    assert all(row["duration_seconds"] is None for row in cancelled)
 
 def test_restart_pauses_unacknowledged_first_class_and_legacy_dispatches(automation_db, monkeypatch):
     from distr.core.automation.scheduler import reconcile_automation_startup_state

@@ -1,16 +1,16 @@
 <section class="kanban-workspace hidden" id="kanban-workspace" aria-label="Board Kanban">
                 <header class="development-kanban-header">
+                    <button type="button" class="icon-button" id="development-kanban-more" aria-label="Board actions" title="Board actions" aria-haspopup="menu">⋯</button>
                     <div class="task-breadcrumb development-kanban-breadcrumb"><span id="development-kanban-board">Board</span><i>/</i><strong id="development-kanban-view-label">Kanban</strong></div>
                     <div class="development-kanban-status hidden" id="development-kanban-status" role="status"></div>
                     <div class="development-kanban-actions">
+                        <button type="button" class="icon-button" id="development-kanban-refresh" aria-label="Refresh board" title="Refresh board">
+                            <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.6"/><path d="M13.5 2.5v3h-3"/></svg>
+                        </button>
                         <div class="development-kanban-view-toggle" role="group" aria-label="Ticket view">
                             <button type="button" id="development-kanban-view-board" class="active" aria-pressed="true">Board</button>
                             <button type="button" id="development-kanban-view-list" aria-pressed="false">List</button>
                         </div>
-                        <button type="button" class="icon-button" id="development-kanban-refresh" aria-label="Refresh board" title="Refresh board">↻</button>
-                        <button type="button" class="icon-button" id="development-kanban-edit-board" aria-label="Edit board" title="Edit board">⌁</button>
-                        <button type="button" class="icon-button" id="development-kanban-more" aria-label="Board actions" title="Board actions" aria-haspopup="menu">⋯</button>
-                        <button type="button" class="secondary-button" id="development-kanban-new-ticket">New ticket</button>
                     </div>
                 </header>
                 <div class="development-kanban-lanes" id="development-kanban-lanes" aria-live="polite"></div>
