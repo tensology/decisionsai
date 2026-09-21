@@ -71,6 +71,74 @@ def test_synthesize_sends_model_header_and_reference_id(monkeypatch):
     assert captured["json"]["text"] == "Hello"
     assert captured["json"]["reference_id"] == DEFAULT_FISHAUDIO_VOICE
     assert captured["json"]["prosody"]["speed"] == 1.1
+    assert captured["json"]["latency"] == "normal"
+
+
+def test_iter_pcm_audio_streams_chunks(monkeypatch):
+    import asyncio
+
+    import msgpack
+
+    from distr.core.agent.services.tts import fishaudio_client
+
+    captured = {}
+    chunks_out = []
+
+    class _WS:
+        def __init__(self):
+            self.sent = []
+            self._out = [
+                msgpack.packb({"event": "audio", "audio": b"\x01\x00"}, use_bin_type=True),
+                msgpack.packb({"event": "audio", "audio": b"\x02\x00\x03\x00"}, use_bin_type=True),
+                msgpack.packb({"event": "finish", "reason": "stop"}, use_bin_type=True),
+            ]
+
+        async def send(self, data):
+            self.sent.append(msgpack.unpackb(data, raw=False))
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._out:
+                raise StopAsyncIteration
+            return self._out.pop(0)
+
+    ws = _WS()
+
+    class _CM:
+        async def __aenter__(self):
+            return ws
+
+        async def __aexit__(self, *args):
+            return False
+
+    def _connect(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("additional_headers")
+        return _CM()
+
+    monkeypatch.setattr(fishaudio_client.websockets, "connect", _connect)
+
+    async def _collect():
+        async for chunk in fishaudio_client.iter_pcm_audio(
+            "sk-test",
+            "Hello",
+            reference_id=DEFAULT_FISHAUDIO_VOICE,
+            model="s2.1-pro-free",
+        ):
+            chunks_out.append(chunk)
+
+    asyncio.run(_collect())
+    assert chunks_out == [b"\x01\x00", b"\x02\x00\x03\x00"]
+    assert captured["url"] == "wss://api.fish.audio/v1/tts/live"
+    assert captured["headers"]["model"] == "s2.1-pro-free"
+    events = [m["event"] for m in ws.sent]
+    assert events == ["start", "text", "flush", "stop"]
+    assert ws.sent[0]["request"]["format"] == "pcm"
+    assert ws.sent[0]["request"]["latency"] == "low"
+    assert "chunk_length" not in ws.sent[0]["request"]
+    assert ws.sent[1]["text"] == "Hello"
 
 
 def test_list_voices_merges_owned_and_library(monkeypatch):
@@ -385,22 +453,17 @@ def test_create_voice_model_sends_multipart(monkeypatch, tmp_path):
 
 def test_fishaudio_run_tts_yields_transport_audio_frames(monkeypatch):
     import asyncio
-    import io
-    import wave
 
     from distr.core.agent.libs import AudioRawFrame, OutputAudioRawFrame, TTSStartedFrame
     from distr.core.agent.services.tts.fishaudio import FishAudioTTSService
 
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(44100)
-        wav.writeframes(b"\x00\x10" * 4410)
+    async def _pcm_chunks(*args, **kwargs):
+        yield b"\x00\x10" * 2000
+        yield b"\x00\x10" * 2410
 
     monkeypatch.setattr(
-        "distr.core.agent.services.tts.fishaudio_client.synthesize_audio",
-        lambda *args, **kwargs: buf.getvalue(),
+        "distr.core.agent.services.tts.fishaudio_client.iter_pcm_audio",
+        _pcm_chunks,
     )
     service = FishAudioTTSService(api_key="sk-test", voice_id="voice-1", voice_name="Demo")
 

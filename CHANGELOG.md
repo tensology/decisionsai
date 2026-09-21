@@ -30,6 +30,8 @@ Fish Audio sits next to ElevenLabs in Settings and chat. Paste an API key under 
 
 Custom clones still go through the studio upload path when you actually need a new voice. Edit personality only shows for voices saved in the local database, so the pencil next to delete opens the modal again instead of failing on library-only rows. Setup can bind Fish, ElevenLabs, and Pixazo to library IDs that the keys already return (`scripts/setup_tts_voices.py`). Third Party Vendors now shows the Fish Audio mark from fish.audio and the Tensology mark from the Tensology GitHub org.
 
+Speech itself now comes over Fish's live WebSocket as PCM, still on `s2.1-pro-free`, so the agent can start talking before the full clip exists. A one-shot HTTP download was leaving a several-second hole before first audio. Settings samples still write a WAV. Opening chat or Voice Setup no longer stalls the rest of the web UI while Fish and ElevenLabs fetch their libraries.
+
 ---
 
 ## [2.9.0] - 2026-09-11

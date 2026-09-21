@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+import msgpack
+import websockets
 
 from distr.core.agent.services.tts.fishaudio_config import (
     DEFAULT_FISHAUDIO_AGENT,
@@ -19,6 +22,7 @@ from distr.core.agent.services.tts.fishaudio_config import (
 logger = logging.getLogger(__name__)
 
 FISHAUDIO_API = "https://api.fish.audio"
+FISHAUDIO_TTS_LIVE = "wss://api.fish.audio/v1/tts/live"
 _TTS_TIMEOUT = 45.0
 _LIST_TIMEOUT = 15.0
 _CLONE_TIMEOUT = 60.0
@@ -53,6 +57,42 @@ def _raise_for_status(resp: httpx.Response, action: str) -> None:
     raise ValueError(f"Fish Audio {action} failed (HTTP {resp.status_code}){suffix}")
 
 
+def _tts_request(
+    api_key: str,
+    text: str,
+    *,
+    reference_id: str = "",
+    model: str | None = None,
+    speed: float = 1.0,
+    audio_format: str = "wav",
+    sample_rate: int = 44100,
+    latency: str = "normal",
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    key = (api_key or "").strip()
+    if not key:
+        raise ValueError("Fish Audio API key is required")
+    spoken = (text or "").strip()
+    if not spoken:
+        raise ValueError("Fish Audio TTS requires text")
+    body: dict[str, Any] = {
+        "text": spoken,
+        "format": audio_format,
+        "normalize": True,
+        "latency": latency,
+        "prosody": {"speed": max(0.5, min(2.0, float(speed)))},
+    }
+    if audio_format in {"wav", "pcm"}:
+        body["sample_rate"] = int(sample_rate)
+    voice = (reference_id or "").strip()
+    if voice and voice.lower() not in {"default", "fish", "fish audio"}:
+        body["reference_id"] = voice
+    return (
+        f"{FISHAUDIO_API}/v1/tts",
+        _headers(key, model=resolve_fishaudio_tts_model(model)),
+        body,
+    )
+
+
 def synthesize_audio(
     api_key: str,
     text: str,
@@ -62,38 +102,90 @@ def synthesize_audio(
     speed: float = 1.0,
     audio_format: str = "wav",
     sample_rate: int = 44100,
-    latency: str = "balanced",
+    latency: str = "normal",
 ) -> bytes:
     """POST /v1/tts and return raw audio bytes."""
-    key = (api_key or "").strip()
-    if not key:
-        raise ValueError("Fish Audio API key is required")
-    spoken = (text or "").strip()
-    if not spoken:
-        raise ValueError("Fish Audio TTS requires text")
-    wire_model = resolve_fishaudio_tts_model(model)
-    body: dict[str, Any] = {
-        "text": spoken,
-        "format": audio_format,
-        "normalize": True,
-        "latency": latency,
-        "prosody": {"speed": max(0.5, min(2.0, float(speed)))},
-    }
-    if audio_format == "wav":
-        body["sample_rate"] = int(sample_rate)
-    voice = (reference_id or "").strip()
-    if voice and voice.lower() not in {"default", "fish", "fish audio"}:
-        body["reference_id"] = voice
+    url, headers, body = _tts_request(
+        api_key,
+        text,
+        reference_id=reference_id,
+        model=model,
+        speed=speed,
+        audio_format=audio_format,
+        sample_rate=sample_rate,
+        latency=latency,
+    )
     with httpx.Client(timeout=_TTS_TIMEOUT) as client:
-        resp = client.post(
-            f"{FISHAUDIO_API}/v1/tts",
-            headers=_headers(key, model=wire_model),
-            json=body,
-        )
+        resp = client.post(url, headers=headers, json=body)
     _raise_for_status(resp, "TTS")
     if not resp.content:
         raise ValueError("Fish Audio TTS returned no audio")
     return resp.content
+
+
+async def iter_pcm_audio(
+    api_key: str,
+    text: str,
+    *,
+    reference_id: str = "",
+    model: str | None = None,
+    speed: float = 1.0,
+    sample_rate: int = 44100,
+    latency: str = "low",
+):
+    """Yield s16le PCM from the live TTS WebSocket. HTTP chunked still buffers the full clip."""
+    _, headers, body = _tts_request(
+        api_key,
+        text,
+        reference_id=reference_id,
+        model=model,
+        speed=speed,
+        audio_format="pcm",
+        sample_rate=sample_rate,
+        latency=latency,
+    )
+    spoken = body["text"]
+    body["text"] = ""
+    extra_headers = {
+        "Authorization": headers["Authorization"],
+        "model": headers["model"],
+    }
+    async with websockets.connect(
+        FISHAUDIO_TTS_LIVE,
+        additional_headers=extra_headers,
+        max_size=None,
+        open_timeout=_TTS_TIMEOUT,
+        close_timeout=5,
+    ) as ws:
+        await ws.send(msgpack.packb({"event": "start", "request": body}, use_bin_type=True))
+        await ws.send(msgpack.packb({"event": "text", "text": spoken}, use_bin_type=True))
+        await ws.send(msgpack.packb({"event": "flush"}, use_bin_type=True))
+        await ws.send(msgpack.packb({"event": "stop"}, use_bin_type=True))
+        try:
+            async for raw in ws:
+                if not isinstance(raw, (bytes, bytearray, memoryview)):
+                    continue
+                msg = msgpack.unpackb(raw, raw=False)
+                if not isinstance(msg, dict):
+                    continue
+                event = msg.get("event")
+                if event == "audio":
+                    audio = msg.get("audio")
+                    if isinstance(audio, memoryview):
+                        audio = audio.tobytes()
+                    elif isinstance(audio, bytearray):
+                        audio = bytes(audio)
+                    if isinstance(audio, bytes) and audio:
+                        yield audio
+                elif event == "finish":
+                    if msg.get("reason") == "error":
+                        raise ValueError(str(msg.get("message") or "Fish Audio live TTS failed"))
+                    break
+                elif event == "error":
+                    detail = {k: msg.get(k) for k in ("message", "code", "reason", "status") if msg.get(k) is not None}
+                    raise ValueError(str(detail or "Fish Audio live TTS failed"))
+        except websockets.exceptions.ConnectionClosed:
+            return
 
 
 def clone_audio_paths(audio_files: list[str]) -> list[str]:
@@ -233,35 +325,33 @@ def list_voices(api_key: str) -> list[dict]:
     key = (api_key or "").strip()
     if not key:
         return []
-    owned: list[dict] = []
-    english: list[dict] = []
-    popular: list[dict] = []
-    licensed: list[dict] = []
-    try:
-        owned = _list_models(key, {"self": "true", "page_size": "50"})
-    except Exception as exc:
-        logger.warning("Fish Audio owned-voice list failed: %s", exc)
-    try:
-        english = _list_models(key, {"language": "en", "page_size": "40", "sort_by": "score"})
-    except Exception as exc:
-        logger.warning("Fish Audio English voice list failed: %s", exc)
-    try:
-        popular = _list_models(key, {"page_size": "30", "sort_by": "score"})
-    except Exception as exc:
-        logger.warning("Fish Audio popular voice list failed: %s", exc)
-    try:
-        licensed = _list_models(
-            key,
-            {"licensed": "true", "page_size": "50", "sort_by": "task_count"},
-        )
-    except Exception as exc:
-        logger.warning("Fish Audio licensed voice list failed: %s", exc)
+    queries = (
+        ("owned", {"self": "true", "page_size": "50"}),
+        ("english", {"language": "en", "page_size": "40", "sort_by": "score"}),
+        ("popular", {"page_size": "30", "sort_by": "score"}),
+        ("licensed", {"licensed": "true", "page_size": "50", "sort_by": "task_count"}),
+    )
+    buckets: dict[str, list[dict]] = {name: [] for name, _ in queries}
+
+    def _fetch(name: str, params: dict[str, Any]) -> tuple[str, list[dict]]:
+        try:
+            return name, _list_models(key, params)
+        except Exception as exc:
+            logger.warning("Fish Audio %s-voice list failed: %s", name, exc)
+            return name, []
+
+    # ponytail: four independent GETs; ThreadPoolExecutor, asyncio if this is ever called from a running loop
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_fetch, name, params) for name, params in queries]
+        for fut in as_completed(futures):
+            name, rows = fut.result()
+            buckets[name] = rows
     seen: set[str] = set()
     out: list[dict] = []
-    _extend_unique(out, seen, owned, custom=True)
-    _extend_unique(out, seen, english)
-    _extend_unique(out, seen, popular)
-    _extend_unique(out, seen, licensed)
+    _extend_unique(out, seen, buckets["owned"], custom=True)
+    _extend_unique(out, seen, buckets["english"])
+    _extend_unique(out, seen, buckets["popular"])
+    _extend_unique(out, seen, buckets["licensed"])
     if DEFAULT_FISHAUDIO_VOICE not in seen:
         out.insert(0, {"id": DEFAULT_FISHAUDIO_VOICE, "name": DEFAULT_FISHAUDIO_AGENT})
     return out

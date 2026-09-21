@@ -3,6 +3,7 @@ Voices routes — /tts/providers, /voices/*, /custom-voices/*, /elevenlabs-voice
 """
 from fastapi import Request
 from fastapi.responses import JSONResponse
+import asyncio
 import os
 
 from distr.core.paths import DB_DIR
@@ -182,11 +183,12 @@ def register_routes(router, templates):
                 settings = load_settings_from_db()
                 api_key = settings.get("elevenlabs_key", "").strip()
                 if api_key:
-                    from elevenlabs import ElevenLabs
-                    client = ElevenLabs(api_key=api_key)
-                    el_voices = client.voices.get_all().voices
-                    voices = []
-                    voices = [_elevenlabs_api_voice_entry(v) for v in el_voices]
+                    def _el_voices():
+                        from elevenlabs import ElevenLabs
+                        client = ElevenLabs(api_key=api_key)
+                        return [_elevenlabs_api_voice_entry(v) for v in client.voices.get_all().voices]
+
+                    voices = await asyncio.get_running_loop().run_in_executor(None, _el_voices)
             elif provider_id == "openai":
                 from distr.core.settings import load_settings_from_db
                 _oa_settings = load_settings_from_db()
@@ -202,7 +204,9 @@ def register_routes(router, templates):
                 voices = [dict(v) for v in PIXAZO_VOICES]
             elif provider_id == "fishaudio":
                 from distr.core.agent.services.tts.registry import tts_registry
-                voices = tts_registry.get("fishaudio").get_voices()
+                voices = await asyncio.get_running_loop().run_in_executor(
+                    None, tts_registry.get("fishaudio").get_voices
+                )
         except Exception as e:
             logger.warning("Could not load voices for %s: %s", provider_id, e)
 
@@ -241,10 +245,9 @@ def register_routes(router, templates):
 
         settings = load_settings_from_db()
         result = []
-        for p in TTS_PROVIDERS:
-            if not p["enabled"]:
-                continue
-            voices = await _get_voices_for_provider(p["id"])
+        enabled = [p for p in TTS_PROVIDERS if p["enabled"]]
+        voice_lists = await asyncio.gather(*[_get_voices_for_provider(p["id"]) for p in enabled])
+        for p, voices in zip(enabled, voice_lists):
             if not _tts_provider_eligible_for_dropdown(settings, p, voices):
                 continue
             entry = {

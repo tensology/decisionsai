@@ -1,4 +1,4 @@
-"""Fish Audio cloud TTS — sync REST, OpenAI pipeline framing."""
+"""Fish Audio cloud TTS — live PCM stream, OpenAI pipeline framing."""
 
 from __future__ import annotations
 
@@ -11,13 +11,21 @@ from distr.core.agent.libs import (
     PIPECAT_AVAILABLE,
     PYDUB_AVAILABLE,
     SOUNDFILE_AVAILABLE,
+    AudioRawFrame,
+    ErrorFrame,
+    OutputAudioRawFrame,
     TTSService,
+    TTSStartedFrame,
+    TTSStoppedFrame,
     sf,
 )
 from distr.core.agent.services.tts.fishaudio_config import resolve_fishaudio_tts_model
 from distr.core.agent.services.tts.openai import OpenAITTSService
 
 logger = logging.getLogger(__name__)
+
+_FISH_PCM_RATE = 44100
+_FISH_PCM_FRAME_BYTES = 1764  # 20 ms, mono s16le at 44.1 kHz
 
 
 class FishAudioTTSService(OpenAITTSService):
@@ -59,7 +67,7 @@ class FishAudioTTSService(OpenAITTSService):
         self._total_audio_duration = 0.0
         self._tts_started_emitted = False
         self._processed_sentences = set()
-        self._tts_sentence_batch_size = 2
+        self._tts_sentence_batch_size = 1
         self._sentence_batch_hold: list[str] = []
         self._last_processed_text_hash = None
         self._llm_response_started_at = 0.0
@@ -69,6 +77,37 @@ class FishAudioTTSService(OpenAITTSService):
             self.voice_name,
             self.model,
         )
+
+    def get_sample_rate(self) -> int:
+        return _FISH_PCM_RATE
+
+    def _pcm_frame(self, audio: bytes):
+        if self._speech_volume != 1.0:
+            samples = np.frombuffer(audio, dtype="<i2").astype(np.float32)
+            samples = np.clip(samples * self._speech_volume, -32768, 32767)
+            audio = samples.astype("<i2").tobytes()
+        FrameClass = OutputAudioRawFrame if OutputAudioRawFrame else AudioRawFrame
+        frame = FrameClass(audio=audio, sample_rate=_FISH_PCM_RATE, num_channels=1)
+        if not hasattr(frame, "id") or frame.id is None:
+            frame.id = self._frame_id_counter
+            self._frame_id_counter += 1
+        if not hasattr(frame, "transport_destination"):
+            frame.transport_destination = None
+        if not hasattr(frame, "pts"):
+            frame.pts = None
+        return frame
+
+    def _emit_tts_started_event(self):
+        if not self._tts_session_active or self._tts_started_emitted:
+            return
+        self._tts_started_emitted = True
+        if self.event_queue:
+            try:
+                self.event_queue.put(
+                    ("tts_started", {"source": "direct_desktop"}), block=False
+                )
+            except Exception:
+                pass
 
     def _generate_audio(self, text: str):
         from distr.core.agent.services.tts.fishaudio_client import synthesize_audio
@@ -82,8 +121,8 @@ class FishAudioTTSService(OpenAITTSService):
             model=self.model,
             speed=self.playback_speed,
             audio_format="wav",
-            sample_rate=44100,
-            latency="balanced",
+            sample_rate=_FISH_PCM_RATE,
+            latency="normal",
         )
         if not SOUNDFILE_AVAILABLE:
             raise ImportError("soundfile is required for Fish Audio WAV decode")
@@ -91,3 +130,54 @@ class FishAudioTTSService(OpenAITTSService):
         if audio_data.ndim > 1:
             audio_data = np.mean(audio_data, axis=1)
         return audio_data.astype(np.float32), int(sample_rate)
+
+    async def run_tts(self, text: str):
+        if self._cancelled:
+            logger.debug("TTS: run_tts() called but cancelled - returning")
+            return
+
+        yield TTSStartedFrame()
+        if self._cancelled:
+            return
+
+        from distr.core.agent.services.tts.fishaudio_client import iter_pcm_audio
+        from distr.core.agent.services.tts.fishaudio_descriptor import FishAudioDescriptor
+
+        audio_duration_seconds = 0.0
+        pending = b""
+        yielded_audio_bytes = 0
+        try:
+            vid = FishAudioDescriptor().resolve_reference_id(self.voice_id)
+            async for chunk in iter_pcm_audio(
+                self._fishaudio_api_key,
+                text,
+                reference_id=vid,
+                model=self.model,
+                speed=self.playback_speed,
+                sample_rate=_FISH_PCM_RATE,
+                latency="low",
+            ):
+                if self._cancelled:
+                    break
+                pending += bytes(chunk)
+                while len(pending) >= _FISH_PCM_FRAME_BYTES:
+                    frame_bytes = pending[:_FISH_PCM_FRAME_BYTES]
+                    pending = pending[_FISH_PCM_FRAME_BYTES:]
+                    self._emit_tts_started_event()
+                    yielded_audio_bytes += len(frame_bytes)
+                    yield self._pcm_frame(frame_bytes)
+                    if self._cancelled:
+                        break
+            if not self._cancelled and pending:
+                aligned = pending[: len(pending) - (len(pending) % 2)]
+                if aligned:
+                    self._emit_tts_started_event()
+                    yielded_audio_bytes += len(aligned)
+                    yield self._pcm_frame(aligned)
+            audio_duration_seconds = yielded_audio_bytes / 2 / _FISH_PCM_RATE
+        except Exception as e:
+            logger.error("Fish Audio streaming failed: %s", e, exc_info=True)
+            yield ErrorFrame(error=str(e))
+            audio_duration_seconds = 0
+        yield TTSStoppedFrame()
+        self._total_audio_duration += audio_duration_seconds

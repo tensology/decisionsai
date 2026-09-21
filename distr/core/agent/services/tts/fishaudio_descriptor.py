@@ -127,16 +127,7 @@ class FishAudioDescriptor(TTSProviderDescriptor):
     def resolve_display_name(self, voice_id: str, settings: dict, voice_name: str | None = None) -> str:
         if voice_name and voice_name.strip() and voice_name.strip() != voice_id:
             return voice_name.strip()
-        vm = (voice_id or "").strip()
-        if not vm:
-            return DEFAULT_FISHAUDIO_AGENT
-        try:
-            for entry in self.get_voices():
-                if entry.get("id") == vm:
-                    return str(entry.get("name") or vm).replace("⭐ ", "").strip()
-        except Exception:
-            pass
-        return vm
+        return (voice_id or "").strip() or DEFAULT_FISHAUDIO_AGENT
 
     def normalize_voice(self, raw_voice: str, settings: dict) -> str:
         return self.resolve_reference_id(raw_voice, settings or {})
