@@ -73,12 +73,21 @@ def test_whatsapp_message_to_ticket_to_qa_reply_review_chain(monkeypatch, tmp_pa
     assert durable["status"] == "ticket_created"
     assert str(message_id) in durable["message_ids"]
 
-    review = lifecycle.prepare_completed_reply(
+    monkeypatch.setattr(lifecycle, "_set_run_waiting_kind", lambda *_a, **_k: None)
+    monkeypatch.setattr(lifecycle, "_clear_run_waiting_kind", lambda *_a, **_k: None)
+    monkeypatch.setattr(lifecycle, "notify_telegram_verification", lambda *_a, **_k: True)
+    monkeypatch.setattr(lifecycle, "notify_telegram_deploy", lambda *_a, **_k: True)
+    monkeypatch.setattr(lifecycle, "notify_telegram_review", lambda *_a, **_k: True)
+
+    gate = lifecycle.begin_post_completion_gates(
         ticket_id=ticket_id, run_id=77, status="completed",
         result_summary="The button was changed and browser validation passed.",
     )
-    assert review and "browser validation passed" in review["draft"]
-    decision = lifecycle.handle_telegram_reply(f"wa:{review['token']}:leave", chat_id=99)
+    assert gate and gate["gate_kind"] == "verification"
+    deploy = lifecycle.handle_telegram_reply(f"wv:{gate['token']}:ok", chat_id=99)
+    settled = lifecycle.handle_telegram_reply(f"wd:{deploy['token']}:dev", chat_id=99)
+    assert settled.get("draft") and "browser validation passed" in settled["draft"]
+    decision = lifecycle.handle_telegram_reply(f"wa:{settled['token']}:leave", chat_id=99)
     assert "left the reply" in decision["text"]
     with engine.connect() as conn:
         final_state = conn.execute(text(
@@ -90,4 +99,9 @@ def test_whatsapp_message_to_ticket_to_qa_reply_review_chain(monkeypatch, tmp_pa
             ), {"id": ticket_id}).fetchall()
         ]
     assert final_state == "reply_draft_ready"
-    assert audit_statuses == ["source_ingested", "awaiting_reply_review", "reply_draft_ready"]
+    assert "source_ingested" in audit_statuses
+    assert "awaiting_verification" in audit_statuses
+    assert "awaiting_deploy_assist" in audit_statuses
+    assert "deploy_settled" in audit_statuses
+    assert "awaiting_reply_review" in audit_statuses
+    assert "reply_draft_ready" in audit_statuses

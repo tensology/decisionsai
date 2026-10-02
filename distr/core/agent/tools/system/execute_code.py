@@ -43,6 +43,63 @@ COMMON_TYPO_CORRECTIONS = {
 }
 
 
+
+# Patterns that mean the user explicitly asked to deliver a file via Telegram.
+TELEGRAM_SEND_HINT_PATTERNS = (
+    "telegram",
+    "tell the gram",
+    "send to telegram",
+    "send by telegram",
+    "send via telegram",
+    "send through telegram",
+    "send it to telegram",
+    "send that to telegram",
+    "send to my telegram",
+    "send telegram",
+)
+
+
+def _is_telegram_sourced(kwargs=None) -> bool:
+    """True when this turn originated from Telegram (kwargs or thread flag)."""
+    import threading
+
+    kwargs = kwargs or {}
+    if kwargs.get("is_telegram_request"):
+        return True
+    if getattr(threading.current_thread(), "telegram_request", False):
+        return True
+    for thread in threading.enumerate():
+        if getattr(thread, "telegram_request", False):
+            return True
+    return False
+
+
+def _user_explicitly_asked_telegram(text: str) -> bool:
+    """True when the user message explicitly asks to send/upload to Telegram."""
+    if not text:
+        return False
+    text_lower = str(text).lower()
+    return any(p in text_lower for p in TELEGRAM_SEND_HINT_PATTERNS)
+
+
+def _should_append_telegram_send_hint(**kwargs) -> bool:
+    """Only hint send_file_to_telegram for Telegram-sourced or explicit-ask turns."""
+    if _is_telegram_sourced(kwargs):
+        return True
+    text = kwargs.get("last_user_message") or kwargs.get("text") or ""
+    return _user_explicitly_asked_telegram(str(text))
+
+
+def _maybe_telegram_action_required(file_path: str, hint: bool) -> str:
+    """Return ACTION REQUIRED hint text, or empty string when desktop-only."""
+    if not hint:
+        return ""
+    return (
+        f'\n\n[ACTION REQUIRED: Call send_file_to_telegram with file_path="{file_path}" '
+        f"to send this file]"
+    )
+
+
 def _suggest_typo_fix(error_msg: str) -> Optional[str]:
     """Suggest fixes for common typos in error messages."""
     if 'NameError' in error_msg and 'is not defined' in error_msg:
@@ -297,13 +354,21 @@ Corrected code:"""
                 logger.error(f"Error calling LLM to fix code: {e}", exc_info=True)
                 return None
     
-    def _execute_code_with_retry(self, code: str, description: Optional[str] = None) -> str:
+    def _execute_code_with_retry(
+        self,
+        code: str,
+        description: Optional[str] = None,
+        *,
+        hint_telegram_send: bool = False,
+    ) -> str:
         """
         Execute code with automatic retry and LLM-based fixing.
         
         Args:
             code: Python code to execute
             description: Optional description for logging
+            hint_telegram_send: When True, append send_file_to_telegram ACTION REQUIRED
+                for file-path results (Telegram-sourced or explicit user ask only).
             
         Returns:
             Execution result or error message
@@ -316,7 +381,9 @@ Corrected code:"""
                 logger.info(f"Retrying code execution (attempt {attempt + 1}/{MAX_CODE_FIX_RETRIES + 1})")
             
             # Execute the code
-            result = self._execute_code_once(current_code, description)
+            result = self._execute_code_once(
+                current_code, description, hint_telegram_send=hint_telegram_send
+            )
             
             # Do not send hard safety refusals through LLM "fix" retries
             if (
@@ -370,7 +437,7 @@ Corrected code:"""
         Args:
             code: Python code to execute
             description: Optional description for logging
-            **kwargs: Additional arguments (ignored)
+            **kwargs: May include last_user_message / is_telegram_request for Telegram hint gating
             
         Returns:
             Execution result or error message
@@ -399,15 +466,26 @@ Corrected code:"""
                 logger.info(f"[EXECUTE_CODE] Converted escaped tabs to real tabs")
         
         # Use retry mechanism with LLM-based code fixing
-        return self._execute_code_with_retry(code, description)
+        hint_telegram_send = _should_append_telegram_send_hint(**kwargs)
+        return self._execute_code_with_retry(
+            code, description, hint_telegram_send=hint_telegram_send
+        )
     
-    def _execute_code_once(self, code: str, description: Optional[str] = None) -> str:
+    def _execute_code_once(
+        self,
+        code: str,
+        description: Optional[str] = None,
+        *,
+        hint_telegram_send: bool = False,
+    ) -> str:
         """
         Execute Python code once (single attempt, no retries).
         
         Args:
             code: Python code to execute
             description: Optional description for logging
+            hint_telegram_send: When True, append send_file_to_telegram ACTION REQUIRED
+                for file-path results (Telegram-sourced or explicit user ask only).
             
         Returns:
             Execution result or error message
@@ -605,9 +683,17 @@ Corrected code:"""
                         if path_match:
                             potential_path = os.path.expanduser(path_match.group(1).strip())
                             if os.path.exists(potential_path) and os.path.isfile(potential_path):
-                                # Add explicit instruction for tool chaining - the LLM should call send_file_to_telegram
-                                result += f"\n\n[ACTION REQUIRED: Call send_file_to_telegram with file_path=\"{potential_path}\" to send this file]"
-                                logger.info(f"[EXECUTE_CODE] File path found in result: {potential_path} - added ACTION REQUIRED hint for tool chaining")
+                                # Only chain to Telegram when the turn is Telegram-sourced or user asked.
+                                hint = _maybe_telegram_action_required(potential_path, hint_telegram_send)
+                                if hint:
+                                    result += hint
+                                    logger.info(
+                                        f"[EXECUTE_CODE] File path found in result: {potential_path} - added ACTION REQUIRED hint for tool chaining"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[EXECUTE_CODE] File path found in result: {potential_path} - skipping Telegram ACTION REQUIRED (desktop-only)"
+                                    )
                     return result
                 else:
                     return "Code executed successfully (no output)"
@@ -681,7 +767,9 @@ Corrected code:"""
                                         result_parts.append(f"Result: {result_value}")
                                         # Check if result is a file path for tool chaining
                                         if isinstance(result_value, str) and os.path.exists(result_value) and os.path.isfile(result_value):
-                                            result_parts.append(f"\n[ACTION REQUIRED: Call send_file_to_telegram with file_path=\"{result_value}\" to send this file]")
+                                            hint = _maybe_telegram_action_required(result_value, hint_telegram_send)
+                                            if hint:
+                                                result_parts.append(hint)
                                 return "\n".join(result_parts) if result_parts else "Code executed successfully (auto-fixed SyntaxError)"
                             except Exception as fix_err:
                                 logger.warning(f"Auto-fix for SyntaxError failed: {fix_err}")
@@ -740,7 +828,9 @@ Corrected code:"""
                                         result_parts.append(f"Result: {result_value}")
                                         # Check if result is a file path for tool chaining
                                         if isinstance(result_value, str) and os.path.exists(result_value) and os.path.isfile(result_value):
-                                            result_parts.append(f"\n[ACTION REQUIRED: Call send_file_to_telegram with file_path=\"{result_value}\" to send this file]")
+                                            hint = _maybe_telegram_action_required(result_value, hint_telegram_send)
+                                            if hint:
+                                                result_parts.append(hint)
                                 return "\n".join(result_parts) if result_parts else "Code executed successfully (auto-fixed NameError)"
                             except Exception as fix_err:
                                 logger.warning(f"Auto-fix failed: {fix_err}")
@@ -807,7 +897,9 @@ Corrected code:"""
                                         result_parts.append(f"Result: {result_value}")
                                         # Check if result is a file path for tool chaining
                                         if isinstance(result_value, str) and os.path.exists(result_value) and os.path.isfile(result_value):
-                                            result_parts.append(f"\n[ACTION REQUIRED: Call send_file_to_telegram with file_path=\"{result_value}\" to send this file]")
+                                            hint = _maybe_telegram_action_required(result_value, hint_telegram_send)
+                                            if hint:
+                                                result_parts.append(hint)
                                 return "\n".join(result_parts) if result_parts else "Code executed successfully (auto-fixed NameError)"
                             except Exception as fix_err:
                                 logger.warning(f"Auto-fix failed: {fix_err}")

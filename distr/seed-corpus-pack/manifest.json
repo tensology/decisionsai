@@ -1,0 +1,100 @@
+{
+  "id": "seed-corpus-pack",
+  "version": 2,
+  "created_at_local": "2026-10-02 SAST",
+  "root": "distr/seed-corpus-pack",
+  "profiles": [
+    "profiles/ecommerce.json",
+    "profiles/trading-robot.json"
+  ],
+  "sections": [
+    {
+      "id": "01-entity-domain",
+      "load": true,
+      "summary": "Entity graph, glossary, MODEL-INFERENCE expansion"
+    },
+    {
+      "id": "02-ui-conventions",
+      "load": true,
+      "summary": "Admin + customer UI patterns"
+    },
+    {
+      "id": "03-done-states-frac",
+      "load": true,
+      "summary": "FRAC template + done-states"
+    },
+    {
+      "id": "04-verify-feedback-loops",
+      "load": true,
+      "summary": "Verify/evidence loop"
+    },
+    {
+      "id": "05-pdf-backend-frontend",
+      "load": true,
+      "summary": "PDF/BE/FE conventions"
+    },
+    {
+      "id": "06-harness-ops",
+      "load": true,
+      "summary": "ECC/fallow + skills index"
+    },
+    {
+      "id": "07-agent-behavior",
+      "load": true,
+      "summary": "Vagueness dial + get-shit-done heuristics"
+    },
+    {
+      "id": "08-premium-quality-gate",
+      "load": true,
+      "summary": "NON-NEGOTIABLE premium styling gate"
+    },
+    {
+      "id": "09-page-stencils",
+      "load": true,
+      "summary": "Page-type stencils (funnel/dashboard/CRUD/portal/admin)"
+    },
+    {
+      "id": "domains",
+      "load": true,
+      "summary": "Merrypak + trading extracts"
+    },
+    {
+      "id": "profiles",
+      "load": true,
+      "summary": "Per-domain boot profiles"
+    },
+    {
+      "id": "vendor",
+      "load": true,
+      "summary": "ecommerce-foundations + open-dashboard"
+    },
+    {
+      "id": "external",
+      "load": false,
+      "summary": "Vision2Web subset on demand"
+    },
+    {
+      "id": "copied-skills",
+      "load": false,
+      "summary": "Curated skills; load via profile/gate"
+    }
+  ],
+  "load_order_default": "profiles/ecommerce.json",
+  "mempalace_wing": "seed_corpus_pack",
+  "policy": {
+    "no_source_edits": true,
+    "no_commit_unless_asked": true,
+    "local_only": true
+  },
+  "behavioral_layers": {
+    "vagueness_dial": "07-agent-behavior/VAGUENESS-DIAL.md",
+    "get_shit_done": "07-agent-behavior/GET-SHIT-DONE.md",
+    "premium_quality_gate": "08-premium-quality-gate/QUALITY-GATE.md",
+    "page_stencils": "09-page-stencils/",
+    "model_inference": "01-entity-domain/MODEL-INFERENCE.md"
+  },
+  "mempalace_status": "done",
+  "mempalace_drawers": 7916,
+  "bundled_for": "DecisionsAI",
+  "palace_path_default": "~/.decisions/mempalace/palace"
+}

@@ -17,7 +17,7 @@ from distr.core.mcp.config import (
     save_mcp_config,
     server_names_to_reconnect,
 )
-from distr.core.mcp.client import MCPClientHub
+from distr.core.mcp.client import MCPClientHub, MCPServerSession
 
 
 def test_load_malformed_json_returns_empty(tmp_path) -> None:
@@ -73,6 +73,61 @@ def test_save_roundtrip_atomic(tmp_path) -> None:
     got = load_mcp_config(p)
     assert got.servers[0].name == "s1"
     assert got.servers[0].env == frozenset({("K", "v")})
+
+
+def test_remote_bearer_env_roundtrip_does_not_persist_secret(tmp_path) -> None:
+    p = tmp_path / "mcp_config.json"
+    doc = MCPConfigDocument(servers=(MCPServerConfig(
+        name="jev",
+        transport="sse",
+        url="https://www.jevai.org/api/mcp",
+        bearer_token_env_var="JEV_API_KEY",
+    ),))
+
+    save_mcp_config(doc, p)
+
+    raw = p.read_text(encoding="utf-8")
+    assert "JEV_API_KEY" in raw
+    assert "Authorization" not in raw
+    loaded = load_mcp_config(p).servers[0]
+    assert loaded.bearer_token_env_var == "JEV_API_KEY"
+
+
+def test_remote_bearer_env_is_injected_only_when_connecting(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeStreamableSession:
+        def __init__(self, url, headers):
+            captured["url"] = url
+            captured["headers"] = headers
+
+        def start(self):
+            captured["started"] = True
+
+        def is_alive(self):
+            return True
+
+        def stop(self):
+            return None
+
+    monkeypatch.setenv("JEV_API_KEY", "jev-runtime-only-secret")
+    monkeypatch.setattr(
+        "distr.core.mcp.streamable_sdk.StreamableSdkSession",
+        FakeStreamableSession,
+    )
+    monkeypatch.setattr("distr.core.mcp.streamable_sdk.mcp_sdk_available", lambda: True)
+    config = MCPServerConfig(
+        name="jev",
+        transport="sse",
+        url="https://www.jevai.org/api/mcp",
+        bearer_token_env_var="JEV_API_KEY",
+    )
+
+    MCPServerSession("jev").connect_sse(config)
+
+    assert captured["started"] is True
+    assert captured["headers"] == {"Authorization": "Bearer jev-runtime-only-secret"}
+    assert config.headers == frozenset()
 
 
 def test_reorder_servers_no_reconnect() -> None:

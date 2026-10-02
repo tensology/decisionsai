@@ -45,16 +45,39 @@ def register_routes(router, templates):
         })
 
 
+    @router.get("/workflows/studio/local-harness-presets")
+    async def workflow_studio_local_harness_presets():
+        """Return dynamic local Ollama workers from live ollama list /api/tags (no pulls)."""
+        from distr.core.workflow.development_harness import available_local_harness_workers
+
+        def _load():
+            workers = available_local_harness_workers()
+            available_ids = [str(row.get("id") or "") for row in workers if row.get("id")]
+            return {
+                "presets": workers,  # legacy key
+                "workers": workers,
+                "catalog": workers,
+                "available_ids": available_ids,
+            }
+
+        try:
+            return JSONResponse(await asyncio.to_thread(_load))
+        except Exception as exc:
+            logger.warning("local-harness-presets probe failed: %s", exc, exc_info=True)
+            # Fail closed: empty picker when the probe errors.
+            return JSONResponse({"presets": [], "workers": [], "catalog": [], "available_ids": []})
+
     @router.post("/workflows/studio/routing-assessment")
     async def workflow_studio_routing_assessment(data: StudioRoutingAssessmentRequest):
         """Assess operational complexity and failure signals before an automatic route is chosen."""
         from distr.core.kanban.ticket_policy import infer_ticket_complexity, resolve_ticket_cli_route
 
         instruction = str(data.instruction or "").strip()
-        combined = "\n".join(
+        routing_text = "\n".join(
             [instruction, data.ticket_title or "", data.ticket_description or ""]
             + [str(item or "") for item in (data.recent_messages or [])[-6:]]
-        ).lower()
+        )
+        combined = routing_text.lower()
         complexity = infer_ticket_complexity(
             data.ticket_title or instruction[:160],
             f"{data.ticket_description}\n{instruction}",
@@ -72,6 +95,23 @@ def register_routes(router, templates):
             signals.append("risk")
         if data.has_images:
             signals.append("vision")
+        from distr.core.laya_runtime import assess_request, get_mode
+
+        laya_mode = get_mode()
+        laya_assessment = {"mode": laya_mode, "used": False}
+        if laya_mode != "off":
+            try:
+                candidate = await asyncio.to_thread(assess_request, routing_text)
+                use_candidate = laya_mode == "prefer" or candidate["confidence"] >= 0.60
+                laya_assessment.update(candidate)
+                laya_assessment["used"] = use_candidate
+                if use_candidate:
+                    complexity = candidate["complexity"]
+                    if candidate["is_sensitive"] and "risk" not in signals:
+                        signals.append("risk")
+            except Exception as exc:
+                logger.warning("Laya routing failed; using deterministic fallback: %s", exc)
+                laya_assessment["fallback_reason"] = str(exc)
         operational_state = "blocked" if "blocked" in signals else "failing" if "failure" in signals else "risk" if "risk" in signals else "neutral"
         if complexity == "low" and signals:
             complexity = "medium"
@@ -102,6 +142,8 @@ def register_routes(router, templates):
             "execution_mode": execution_mode["mode"],
             "execution_mode_reason": execution_mode["reason"],
             "execution_mode_signals": execution_mode["signals"],
+            "decision_engine": "laya" if laya_assessment["used"] else "heuristic",
+            "laya": laya_assessment,
             "reason": (
                 f"{complexity.title()} → {harness}"
                 + (f" · {execution_mode['mode']}" if execution_mode.get("mode") else "")
@@ -630,4 +672,3 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Studio skill capture failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
-

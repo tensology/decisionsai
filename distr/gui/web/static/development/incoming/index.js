@@ -8,6 +8,7 @@ export function createIncoming({ context, actions, el }) {
         incomingLoad: null,
         incomingLoadedAt: 0,
         incomingFilter: 'whatsapp',
+        selectedTelegramThreadKey: '',
         selectedIncomingConversationKey: '',
         incomingLinkConversationKey: '',
         selectedGmailThreadKey: '',
@@ -30,7 +31,7 @@ export function createIncoming({ context, actions, el }) {
         const grouped = new Map();
         state.incoming.forEach((item) => {
             const source = String(item.source || 'unknown').toLowerCase();
-            if (!['whatsapp', 'gmail', 'mailshot'].includes(source)) return;
+            if (!['whatsapp', 'gmail', 'mailshot', 'telegram'].includes(source)) return;
             const threadId = String(item.source_thread_id || item.sender || item.key || 'unknown');
             const key = `${source}:${threadId}`;
             if (!grouped.has(key)) grouped.set(key, { key, source, threadId, messages: [] });
@@ -241,6 +242,8 @@ export function createIncoming({ context, actions, el }) {
         el('incoming-panel-whatsapp').classList.toggle('hidden', state.incomingFilter !== 'whatsapp');
         el('incoming-panel-gmail').classList.toggle('hidden', state.incomingFilter !== 'gmail');
         el('incoming-panel-mailshot').classList.toggle('hidden', state.incomingFilter !== 'mailshot');
+        const telegramPanel = el('incoming-panel-telegram');
+        if (telegramPanel) telegramPanel.classList.toggle('hidden', state.incomingFilter !== 'telegram');
         if (!whatsappConversations.some((conversation) => conversation.key === state.selectedIncomingConversationKey)) {
             state.selectedIncomingConversationKey =
                 whatsappConversations.find((conversation) => conversation.links.length)?.key || whatsappConversations[0]?.key || '';
@@ -320,6 +323,41 @@ export function createIncoming({ context, actions, el }) {
             ? '<div class="incoming-reader-empty"><strong>Mailshot is not available</strong><p>Reconnect Tensology to open and read Mailshot messages here.</p></div>'
             : gmailReaderHtml(selectedMailshotThread);
         bindIncomingActions(el('incoming-mailshot-reader'));
+
+        const telegramConversations = incomingConversations('telegram');
+        const telegramCountEl = el('incoming-telegram-count');
+        if (telegramCountEl) telegramCountEl.textContent = String(telegramConversations.length);
+        if (!telegramConversations.some((conversation) => conversation.key === state.selectedTelegramThreadKey)) {
+            state.selectedTelegramThreadKey = telegramConversations[0]?.key || '';
+        }
+        const telegramList = el('incoming-telegram-list');
+        const telegramStatus = state.incomingChannels.telegram || {};
+        if (telegramList) {
+            telegramList.innerHTML = state.incomingError
+                ? `<div class="incoming-channel-error"><strong>Could not load Telegram</strong><p>${actions.escapeHtml(state.incomingError)}</p></div>`
+                : telegramStatus.error
+                  ? `<div class="incoming-channel-error"><strong>Telegram unavailable</strong><p>${actions.escapeHtml(telegramStatus.error)}</p></div>`
+                  : telegramConversations.length
+                    ? telegramConversations
+                          .map((conversation) => mailThreadButtonHtml(conversation, state.selectedTelegramThreadKey, 'data-incoming-telegram-thread'))
+                          .join('')
+                    : '<div class="incoming-reader-empty"><strong>No Telegram messages yet</strong><p>Group and channel messages stored for triage will appear here.</p></div>';
+            telegramList.querySelectorAll('[data-incoming-telegram-thread]').forEach((button) =>
+                button.addEventListener('click', () => {
+                    state.selectedTelegramThreadKey = button.dataset.incomingTelegramThread || '';
+                    renderIncomingWorkspace();
+                })
+            );
+        }
+        const selectedTelegramThread = telegramConversations.find((conversation) => conversation.key === state.selectedTelegramThreadKey) || null;
+        const telegramReader = el('incoming-telegram-reader');
+        if (telegramReader) {
+            telegramReader.innerHTML = telegramStatus.error
+                ? `<div class="incoming-reader-empty"><strong>Telegram unavailable</strong><p>${actions.escapeHtml(telegramStatus.error)}</p></div>`
+                : gmailReaderHtml(selectedTelegramThread);
+            bindIncomingActions(telegramReader);
+        }
+
     }
 
     function openIncomingLinkDialog(conversationKey) {
@@ -472,9 +510,23 @@ export function createIncoming({ context, actions, el }) {
         const boardId = Number(item.board_id || actionScope?.querySelector('[data-incoming-board]')?.value || 0);
         const board = context.boards.find((row) => Number(row.local_id || row.id) === boardId);
         try {
-            const result = await actions.api('/workflows/intake/ingest', {
+            const isGmail = String(item.source || '').toLowerCase() === 'gmail';
+            const result = await actions.api(
+                isGmail ? '/workflows/incoming/gmail/ingest' : '/workflows/intake/ingest',
+                {
                 method: 'POST',
-                body: {
+                body: isGmail
+                    ? {
+                        subject: item.subject || item.conversation_label || '',
+                        text: item.text || item.snippet || 'Incoming Gmail message',
+                        source_thread_id: item.source_thread_id || '',
+                        source_message_id: item.source_message_id || '',
+                        sender: item.sender || '',
+                        board_hint: board?.name || '',
+                        project_hint: board?.name || '',
+                        force_ticket: true
+                    }
+                    : {
                     source: item.source,
                     user_text: `Create a ticket: ${item.text || 'Incoming request'}`,
                     source_thread_id: item.source_thread_id || '',

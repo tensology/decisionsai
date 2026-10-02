@@ -131,3 +131,24 @@ def list_time_entries(*, limit=100):
         "limit": limit,
         "description": "Closed Development thread time intervals. The live counter is separate until paused.",
     }
+
+
+def list_cost_entries(*, limit=100, display=None, project_id=None, client_key=None, run_id=None, source=None):
+    """Reports facade over the durable cost ledger."""
+    from distr.core.cost_ledger.service import list_entries
+
+    return list_entries(
+        limit=limit,
+        display=display,
+        project_id=project_id,
+        client_key=client_key,
+        run_id=run_id,
+        source=source,
+    )
+
+
+def cost_rollups(*, display=None):
+    """Project / client / SAST-day cost rollups for the Reports Costs tab."""
+    from distr.core.cost_ledger.service import cost_rollups as _rollups
+
+    return _rollups(display=display)

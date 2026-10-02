@@ -1,0 +1,5 @@
+- `../copied-skills/decisionsai/verification-before-completion/`
+- `../copied-skills/decisionsai/{qa-tester,webapp-testing,test-driven-development,pre-flight-review,systematic-debugging,session-retro}`
+- `../copied-skills/superpowers/verification-before-completion/`
+- `../copied-skills/builderio/`, `../copied-skills/ponytail/`, `../copied-skills/gstack/qa`
+- `../copied-skills/fallow/security-agent-verification.md`

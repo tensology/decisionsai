@@ -1596,7 +1596,7 @@ def _workflow_board_ticket_payload(
     *,
     linked_project: Optional[Project] = None,
 ) -> dict:
-    return {
+    payload = {
         "id": ticket.id,
         "title": ticket.title,
         "description": ticket.description or "",
@@ -1618,6 +1618,15 @@ def _workflow_board_ticket_payload(
         "source_chat_id": ticket.source_chat_id,
         **_ticket_source_payload(ticket),
     }
+    # Minimal live Jira status surface for board/thread/Incoming consumers.
+    if str(ticket.external_source or "").lower() == "jira" or str(ticket.source_provider or "").lower() == "jira":
+        try:
+            from distr.core.kanban.jira_work_lifecycle import jira_status_surface_for_ticket
+
+            payload.update(jira_status_surface_for_ticket(int(ticket.id)))
+        except Exception:
+            pass
+    return payload
 
 
 def _apply_ticket_source_fields(t: KanbanTicket, payload: BaseModel) -> None:
@@ -1849,7 +1858,7 @@ class SpawnWorkflowForTicketRequest(BaseModel):
     preset_slug: Optional[str] = None
     workflow_name: Optional[str] = None
     start_run: bool = True
-    skip_human_checkpoints: bool = True
+    skip_human_checkpoints: bool = False
     force: bool = False
     link_board_default: bool = False
     steps: Optional[list[dict[str, Any]]] = None

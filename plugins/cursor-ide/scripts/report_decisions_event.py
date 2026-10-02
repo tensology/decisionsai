@@ -235,6 +235,80 @@ def _body_for(
     )
 
 
+def _locks_path(surface: str) -> Path:
+    return Path.home() / ".decisions" / "ide-threads" / f"{surface}.json"
+
+
+def _read_locks(surface: str) -> dict:
+    try:
+        data = json.loads(_locks_path(surface).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_lock(surface: str, folder: str, thread_id: str, seen_at: float) -> None:
+    if not thread_id:
+        return
+    path = _locks_path(surface)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    locks = _read_locks(surface)
+    locks[folder] = {"thread_id": thread_id, "seen_at": seen_at}
+    path.write_text(json.dumps(locks), encoding="utf-8")
+
+
+def _discover_cursor_thread(folder: str) -> tuple[str, float]:
+    """Newest Cursor IDE agent transcript for this project folder."""
+    slug = folder.lstrip("/").replace("/", "-")
+    root = Path.home() / ".cursor" / "projects" / slug / "agent-transcripts"
+    if not root.is_dir():
+        return "", 0.0
+    best_id, best_mtime = "", 0.0
+    try:
+        children = list(root.iterdir())
+    except Exception:
+        return "", 0.0
+    for child in children:
+        if not child.is_dir():
+            continue
+        path = child / f"{child.name}.jsonl"
+        if not path.is_file():
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            continue
+        if mtime >= best_mtime:
+            best_id, best_mtime = child.name, mtime
+    return best_id, best_mtime
+
+
+def _resolve_plugin_thread_id(args: argparse.Namespace) -> str:
+    """Lock this Cursor IDE chat. Development harness sessions are a different surface."""
+    folder = str(Path(args.cwd or os.getcwd()).expanduser().resolve())
+    args.cwd = folder
+    surface = (args.source or "cursor").strip().lower() or "cursor"
+    explicit = str(args.thread_id or "").strip()
+    current = _read_locks(surface).get(folder)
+    current = current if isinstance(current, dict) else {}
+    locked = str(current.get("thread_id") or "")
+    locked_seen = float(current.get("seen_at") or 0)
+    found_id, found_at = _discover_cursor_thread(folder) if surface == "cursor" else ("", 0.0)
+    if explicit:
+        chosen, seen = explicit, max(found_at, locked_seen, 1.0)
+    elif args.new_thread:
+        chosen, seen = found_id, found_at
+    elif found_id and found_at > locked_seen:
+        chosen, seen = found_id, found_at
+    elif locked:
+        chosen, seen = locked, locked_seen
+    else:
+        chosen, seen = found_id, found_at
+    if chosen:
+        _write_lock(surface, folder, chosen, seen or 1.0)
+    return chosen
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Report a Cursor event to DecisionsAI.")
     parser.add_argument("--callback-url", default="")
@@ -255,10 +329,12 @@ def main() -> int:
     parser.add_argument("--project-id", type=int, default=None)
     parser.add_argument("--payload-json", default="")
     parser.add_argument("--evidence-json", default="")
-    parser.add_argument("--thread-id", default="", help="Codex thread id or Cursor chat id for orchestrator linking.")
+    parser.add_argument("--thread-id", default="", help="Cursor IDE chat id. The reporter locks this for the project.")
+    parser.add_argument("--new-thread", action="store_true", help="Start a new Cursor IDE thread lock for this project.")
     parser.add_argument("--strict", action="store_true", help="Return non-zero and print errors when DecisionsAI is offline.")
     args = parser.parse_args()
 
+    args.thread_id = _resolve_plugin_thread_id(args)
     _apply_packet_meta(args)
     target_url = args.callback_url or f"{args.api_base.rstrip('/')}/api/ide/sessions/event"
     bridge_endpoint = _is_workflow_bridge_url(target_url)
@@ -308,6 +384,8 @@ def main() -> int:
         if outputs:
             sys.stdout.write(outputs[-1])
             sys.stdout.write("\n")
+        if args.thread_id:
+            sys.stdout.write(f"thread_id={args.thread_id}\n")
         return 0
 
     code, text = _post_event(
@@ -326,6 +404,8 @@ def main() -> int:
     if text:
         sys.stdout.write(text)
         sys.stdout.write("\n")
+    if args.thread_id:
+        sys.stdout.write(f"thread_id={args.thread_id}\n")
     return code
 
 

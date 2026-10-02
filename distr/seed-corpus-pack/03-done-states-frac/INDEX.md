@@ -1,0 +1,5 @@
+- `../copied-skills/ecc/PLAN-PRD-PATTERN.md`, `plan-prd.md`, `plan.md`
+- `../copied-skills/mattpocock/to-prd/`
+- `../copied-skills/decisionsai/{writing-plans,executing-plans,brainstorming,verification-before-completion}`
+- `../copied-skills/superpowers/` (same family)
+- `../domains/ecommerce/merrypak/planning/`

@@ -1,0 +1,76 @@
+💡 Order/Quote/Invoice Numbering System
+1. Document Type Prefix and Suffix
+Each type of transaction (Order, Quote, Invoice) must follow a consistent format:
+Prefix: Single capital letter
+I for Gateway Payment (Invoice)
+B for Order
+Q for Quote
+
+
+Suffix: Always W
+Numeric Body: 4+ digit sequence starting at 1000 (e.g. B1000W, Q1000W, etc.)
+
+Example sequences:
+First Gateway Payment: I1000W, then I1001W, I1002W, …
+First Order: B1000W, then B1001W, B1002W, …
+First Quote: Q1000W, then Q1001W, Q1002W, …
+Each document type must maintain its own sequence independently.
+2. Client Reference Field
+An optional (free) text input field (e.g. client_ref) must be present on all order capture forms, where the client can input their own internal reference/order number.
+3. Invoice Account Number Logic
+Every invoice must be associated with an account number.
+
+
+If not manually captured, check if one has recently been added to the associated value card in D3.
+
+
+If no account number is available, fall back to default:
+WEBORDER for Order payments
+WEBCRC for Credit Card
+
+
+🧠 Audit Note:
+
+Editing account numbers post-invoicing has legal and data integrity implications and affects 10+ data files.
+Proceeding with Sales Orders first (no automatic invoice generation on Day 1) is advisable until tested/audited.
+
+🧪 Basic Python Implementation Example
+
+
+class SequenceGenerator:
+   def __init__(self, prefix, start=1000, suffix="W"):
+       self.prefix = prefix.upper()
+       self.suffix = suffix.upper()
+       self.current = start - 1
+
+
+   def next(self):
+       self.current += 1
+       return f"{self.prefix}{self.current}{self.suffix}"
+
+
+
+
+# Generators for different types
+gateway_seq = SequenceGenerator(prefix="I")   # I1000W (Gateway payments)
+order_seq = SequenceGenerator(prefix="B")     # B1000W (Orders)
+quote_seq = SequenceGenerator(prefix="Q")     # Q1000W (Quotes)
+
+
+# Sample usage
+print(gateway_seq.next())   # I1000W (Gateway payment)
+print(order_seq.next())     # B1000W (Order)
+print(order_seq.next())     # B1001W (Order)
+print(quote_seq.next())     # Q1000W (Quote)
+
+
+# Client reference field example
+invoice = {
+   "web_order_number": gateway_seq.next(),  # I1000W (Gateway payment)
+   "client_ref": "INTERNAL-456A"           # Captured from web form
+}
+order = {
+   "web_order_number": order_seq.next(),   # B1000W (Order)
+   "client_ref": "CLIENT-789B"             # Captured from web form
+}
+print(order)

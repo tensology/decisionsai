@@ -31,6 +31,14 @@ def _resolve_surface(surface: IdeSurface, *, project: str = "", query: str = "")
         return "codex"
     if "cursor" in text:
         return "cursor"
+    try:
+        from distr.core.ide_threads.lock import load_state
+
+        locked = str(load_state().get("active_surface") or "")
+        if locked in {"cursor", "codex"}:
+            return locked
+    except Exception:
+        logger.debug("ide thread lock lookup failed", exc_info=True)
     return "codex"
 
 
@@ -84,14 +92,30 @@ def ide_thread_action(
     if act not in ("list", "read", "status", "prompt", "amend"):
         return {"success": False, "error": f"Unknown action: {action}"}
 
-    resolved_surface = _resolve_surface(_normalize_surface(surface), project=project, query=query)
+    resolved_surface = _resolve_surface(
+        _normalize_surface(surface),
+        project=project,
+        query=f"{query} {instruction} {amendment}",
+    )
     project_row, folder = _resolve_project(project=project, project_id=project_id, cwd=cwd)
+    resolved_project_id = project_id or (int(project_row["id"]) if project_row else None)
+    project_name = project or (str(project_row.get("name") or "") if project_row else "")
+    thread_id, session_id, folder = _apply_lock(
+        action=act,
+        surface=resolved_surface,
+        thread_id=thread_id,
+        session_id=session_id,
+        project=project_name,
+        project_id=resolved_project_id,
+        folder=folder or cwd,
+        new_thread=new_thread,
+    )
 
     if act == "list":
         if resolved_surface == "cursor":
             threads = cursor_adapter.list_threads(
                 project=project,
-                project_id=project_id or (int(project_row["id"]) if project_row else None),
+                project_id=resolved_project_id,
                 cwd=folder or cwd,
                 limit=limit,
             )
@@ -107,7 +131,7 @@ def ide_thread_action(
                 query=query,
                 project=project,
                 cwd=folder or cwd,
-                project_id=project_id or (int(project_row["id"]) if project_row else None),
+                project_id=resolved_project_id,
                 limit_events=limit_messages,
             )
         else:
@@ -127,7 +151,7 @@ def ide_thread_action(
                 query=query,
                 project=project,
                 cwd=folder or cwd,
-                project_id=project_id or (int(project_row["id"]) if project_row else None),
+                project_id=resolved_project_id,
             )
         else:
             data = codex_adapter.thread_status(thread_id=thread_id, query=query, project=project)
@@ -154,12 +178,20 @@ def ide_thread_action(
                 model=model,
                 resume=not new_thread,
             )
+        _remember_if_locked(
+            surface=resolved_surface,
+            project=project_name,
+            project_id=resolved_project_id,
+            folder=folder or cwd,
+            thread_id=thread_id,
+            result=result,
+        )
         _record_prompt_session(
             surface=resolved_surface,
             folder=folder or cwd,
             project_row=project_row,
             instruction=text,
-            thread_id=thread_id,
+            thread_id=str(result.get("thread_id") or thread_id or ""),
             result=result,
         )
         return {"success": bool(result.get("success")), "action": act, **result}
@@ -183,16 +215,90 @@ def ide_thread_action(
             folder=folder or cwd,
             model=model,
         )
+    _remember_if_locked(
+        surface=resolved_surface,
+        project=project_name,
+        project_id=resolved_project_id,
+        folder=folder or cwd,
+        thread_id=thread_id,
+        result=result,
+    )
     _record_prompt_session(
         surface=resolved_surface,
         folder=folder or cwd,
         project_row=project_row,
         instruction=text,
-        thread_id=thread_id,
+        thread_id=str(result.get("thread_id") or thread_id or ""),
         result=result,
         event_type="user_steer",
     )
     return {"success": bool(result.get("success")), "action": act, **result}
+
+
+def _apply_lock(
+    *,
+    action: str,
+    surface: str,
+    thread_id: str,
+    session_id: int | None,
+    project: str,
+    project_id: int | None,
+    folder: str,
+    new_thread: bool,
+) -> tuple[str, int | None, str]:
+    """Fill a missing thread id from the lock. A new thread does not resume it."""
+    if new_thread or action not in {"read", "status", "prompt", "amend"}:
+        return thread_id, session_id, folder
+    if (thread_id or "").strip():
+        return thread_id, session_id, folder
+    try:
+        from distr.core.ide_threads.lock import resolve_lock
+
+        locked = resolve_lock(surface=surface, project=project, project_id=project_id)
+    except Exception:
+        logger.debug("ide thread lock resolve failed", exc_info=True)
+        return thread_id, session_id, folder
+    if not locked:
+        return thread_id, session_id, folder
+    return (
+        str(locked.get("thread_id") or ""),
+        session_id or (int(locked["session_id"]) if locked.get("session_id") else None),
+        folder or str(locked.get("folder") or ""),
+    )
+
+
+def _remember_if_locked(
+    *,
+    surface: str,
+    project: str,
+    project_id: int | None,
+    folder: str,
+    thread_id: str,
+    result: dict[str, Any],
+) -> None:
+    if not result.get("success"):
+        return
+    tid = str(result.get("thread_id") or thread_id or "").strip()
+    if not tid:
+        return
+    try:
+        from distr.core.ide_threads.lock import remember_lock
+
+        remembered = remember_lock(
+            surface=surface,
+            thread_id=tid,
+            project=project or str(result.get("project") or ""),
+            project_id=project_id,
+            folder=folder or str(result.get("folder") or ""),
+            session_id=result.get("session_id") if isinstance(result.get("session_id"), int) else None,
+        )
+    except Exception:
+        logger.debug("ide thread lock save failed", exc_info=True)
+        return
+    if remembered:
+        result["thread_id"] = tid
+        result["locked"] = True
+        result["lock_surface"] = surface
 
 
 def _record_prompt_session(
@@ -279,6 +385,8 @@ def format_ide_thread_result(result: dict[str, Any]) -> str:
     if action in ("prompt", "amend"):
         if result.get("success"):
             voice = f"I sent that to {surface}."
+            if result.get("locked"):
+                voice += " I'll keep that thread for follow-ups on this project."
             preview = str(result.get("output_preview") or "")[:220]
             if preview:
                 voice += f" It replied: {preview}"

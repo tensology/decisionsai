@@ -1,0 +1,4 @@
+screen "Primary flow" device=desktop
+  stack
+    heading "Primary screen"
+    text "Describe the user journey and the screen states."

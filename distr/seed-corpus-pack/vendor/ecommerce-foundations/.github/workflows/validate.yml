@@ -1,0 +1,147 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml jsonschema
+
+      - name: Validate plugin and marketplace manifests + skill frontmatter
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys, os, re
+          from pathlib import Path
+
+          try:
+              import yaml
+          except ImportError:
+              print("FAIL: pyyaml not installed")
+              sys.exit(1)
+
+          ROOT = Path(".").resolve()
+          errors = []
+
+          KEBAB = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+          SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
+
+          def load_json(path: Path):
+              try:
+                  return json.loads(path.read_text(encoding="utf-8"))
+              except FileNotFoundError:
+                  errors.append(f"Missing required file: {path}")
+              except json.JSONDecodeError as e:
+                  errors.append(f"Invalid JSON in {path}: {e}")
+              return None
+
+          # ---- plugin.json ----------------------------------------------------
+          plugin_path = ROOT / ".claude-plugin" / "plugin.json"
+          plugin = load_json(plugin_path)
+          if plugin is not None:
+              if "name" not in plugin:
+                  errors.append("plugin.json: missing required field `name`")
+              elif not KEBAB.match(plugin["name"]):
+                  errors.append(
+                      f"plugin.json: `name` must be kebab-case (got {plugin['name']!r})"
+                  )
+              if "version" in plugin and not SEMVER.match(plugin["version"]):
+                  errors.append(
+                      f"plugin.json: `version` must be semver (got {plugin['version']!r})"
+                  )
+              if "author" in plugin and not isinstance(plugin["author"], dict):
+                  errors.append("plugin.json: `author` must be an object")
+
+          # ---- marketplace.json ----------------------------------------------
+          mp_path = ROOT / ".claude-plugin" / "marketplace.json"
+          mp = load_json(mp_path)
+          if mp is not None:
+              for field in ("name", "owner", "plugins"):
+                  if field not in mp:
+                      errors.append(f"marketplace.json: missing required field `{field}`")
+              if "name" in mp and not KEBAB.match(mp["name"]):
+                  errors.append(
+                      f"marketplace.json: `name` must be kebab-case (got {mp['name']!r})"
+                  )
+              if isinstance(mp.get("owner"), dict):
+                  if "name" not in mp["owner"]:
+                      errors.append("marketplace.json: `owner.name` is required")
+              elif "owner" in mp:
+                  errors.append("marketplace.json: `owner` must be an object")
+              if isinstance(mp.get("plugins"), list):
+                  for i, p in enumerate(mp["plugins"]):
+                      if not isinstance(p, dict):
+                          errors.append(
+                              f"marketplace.json: plugins[{i}] must be an object"
+                          )
+                          continue
+                      for f in ("name", "source"):
+                          if f not in p:
+                              errors.append(
+                                  f"marketplace.json: plugins[{i}] missing `{f}`"
+                              )
+              elif "plugins" in mp:
+                  errors.append("marketplace.json: `plugins` must be an array")
+
+          # ---- skills/<name>/SKILL.md ----------------------------------------
+          skills_dir = ROOT / "skills"
+          if skills_dir.is_dir():
+              for entry in sorted(skills_dir.iterdir()):
+                  if not entry.is_dir():
+                      continue
+                  skill_md = entry / "SKILL.md"
+                  if not skill_md.exists():
+                      errors.append(f"{entry}: missing SKILL.md")
+                      continue
+                  text = skill_md.read_text(encoding="utf-8")
+                  if not text.startswith("---"):
+                      errors.append(f"{skill_md}: must start with YAML frontmatter")
+                      continue
+                  parts = text.split("---", 2)
+                  if len(parts) < 3:
+                      errors.append(f"{skill_md}: malformed YAML frontmatter")
+                      continue
+                  try:
+                      fm = yaml.safe_load(parts[1]) or {}
+                  except yaml.YAMLError as e:
+                      errors.append(f"{skill_md}: YAML parse error: {e}")
+                      continue
+                  if not isinstance(fm, dict):
+                      errors.append(f"{skill_md}: frontmatter must be a mapping")
+                      continue
+                  if "description" not in fm:
+                      errors.append(f"{skill_md}: missing `description` in frontmatter")
+                  name = fm.get("name")
+                  if name is not None:
+                      if not KEBAB.match(str(name)):
+                          errors.append(
+                              f"{skill_md}: `name` must be kebab-case (got {name!r})"
+                          )
+                      if str(name) != entry.name:
+                          errors.append(
+                              f"{skill_md}: frontmatter `name` ({name!r}) must equal "
+                              f"directory name ({entry.name!r})"
+                          )
+
+          # ---- report ---------------------------------------------------------
+          if errors:
+              print("Validation FAILED:")
+              for err in errors:
+                  print(f"  - {err}")
+              sys.exit(1)
+          print("Validation OK")
+          PYEOF

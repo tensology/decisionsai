@@ -46,6 +46,7 @@ class ActionType(Enum):
     CHANGE_ORACLE = "change_oracle"           # Change oracle/globe image
     CHANGE_MODE = "change_mode"               # Change input mode (PTT/Continuous)
     MOUSE_MOVEMENT = "mouse_movement"          # Move mouse
+    WINDOW_MOVE_TO_SCREEN = "window_move_to_screen"  # Move app/window to display by index
     MOUSE_ACTION = "mouse_action"             # Mouse click/scroll
     KEYBOARD_SHORTCUT = "keyboard_shortcut"    # Keyboard shortcuts
     MEDIA_CONTROL = "media_control"            # Media playback control
@@ -707,8 +708,44 @@ class FastActionDetector:
             (re.compile(r'\bscroll\s+(up|down)\.?$', re.IGNORECASE), 
              ActionType.MOUSE_ACTION, "mouse_actions", {"action": "__SCROLL_MATCH__", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             
+            # === WINDOW / APP → SCREEN (must beat mouse_movement "screen N" patterns) ===
+            # Utterances that name a window/app must use real display-index geometry via
+            # window_management → set_window_bounds, never mouse center guesses.
+            (re.compile(
+                r'\b(?:move|send|put|place)\s+(?:the\s+|my\s+)?'
+                r'(?:window|app|application|terminal|codex|codecs|chrome|safari|finder|spotify|'
+                r'notes|calculator|textedit|brave|slack|code|cursor|iterm|warp)\b'
+                r'.{0,40}\b(?:to\s+|on\s+|onto\s+)?(?:the\s+)?'
+                r'(?:(?:first|second|third|fourth|fifth|left|right|center|centre|primary)\s+)?'
+                r'(?:screen|monitor|display)\b',
+                re.IGNORECASE),
+             ActionType.WINDOW_MOVE_TO_SCREEN, "window_management",
+             {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(
+                r'\b(?:move|send|put|place)\s+'
+                r'(?:(?:the|my)\s+)?'
+                r'(?!(?:mouse|mask|mass|miles|mice|moss|cursor|pointer|the|my)\b)'
+                r'([A-Za-z][\w.-]{2,40})'
+                r'(?:\s+(?:window|app|application))?\s+'
+                r'(?:to|on|onto)\s+(?:the\s+)?'
+                r'(?:(?:first|second|third|fourth|fifth|\d+|one|two|three|four|five|left|right)\s+)?'
+                r'(?:screen|monitor|display)\b',
+                re.IGNORECASE),
+             ActionType.WINDOW_MOVE_TO_SCREEN, "window_management",
+             {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(
+                r'\b(?:move|send|put|place)\s+(?:the\s+|my\s+)?'
+                r'(?:window|app|application)\s+'
+                r'(?:to|on|onto)\s+(?:the\s+)?'
+                r'(?:screen|monitor|display)\s*'
+                r'(\d+|one|two|three|four|five|first|second|third|fourth|fifth)\b',
+                re.IGNORECASE),
+             ActionType.WINDOW_MOVE_TO_SCREEN, "window_management",
+             {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+
             # === MOUSE MOVEMENT ===
             # "move mouse to screen X", "move to screen 1/2/3", "screen 1/2/3" - MUST come before "center" pattern
+            # Guard: do NOT match when a window/app is the move subject (window_move_to_screen above).
             (re.compile(r'\b(move\s+)?(mouse\s+)?(to\s+)?screen\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move to the third screen", "the second screen", "first monitor" - ordinal patterns
@@ -1099,16 +1136,28 @@ class FastActionDetector:
                 # CRITICAL SAFEGUARD: If this is a simple "left" or "right" mouse movement pattern,
                 # and "top" or "bottom" appear in the text, skip it (corner patterns should have matched first)
                 # This prevents "move mouse top left" from matching as "move mouse left"
-                if tool_name == "mouse_movement" and tool_args.get("action") == "move":
-                    # Check if "left" or "right" appears in the matched text and "top" or "bottom" appear in the full text
-                    matched_text = match.group(0).lower()
+                if tool_name == "mouse_movement":
                     text_lower = text.lower()
-                    
-                    # If the match contains "left" or "right" AND the full text contains "top" or "bottom", skip it
-                    if (("left" in matched_text or "right" in matched_text) and 
-                        ("top" in text_lower or "bottom" in text_lower)):
-                        logger.debug(f"FastAction: Skipping simple left/right match - 'top' or 'bottom' found in text '{text[:50]}...' (corner pattern should match instead)")
-                        continue  # Skip this match, continue to next pattern
+                    # Window/app subjects must never become mouse_movement — prefer
+                    # window_move_to_screen / window_management (screen-index geometry).
+                    if re.search(
+                        r'\b(?:move|send|put|place)\b.{0,60}\b(?:window|app|application|terminal|codex|codecs|chrome|safari|finder|spotify)\b',
+                        text_lower,
+                    ) and re.search(r'\b(?:screen|monitor|display)\b', text_lower):
+                        logger.debug(
+                            "FastAction: Skipping mouse_movement — window/app move-to-screen intent in '%s'",
+                            text[:60],
+                        )
+                        continue
+                    if tool_args.get("action") == "move":
+                        # Check if "left" or "right" appears in the matched text and "top" or "bottom" appear in the full text
+                        matched_text = match.group(0).lower()
+
+                        # If the match contains "left" or "right" AND the full text contains "top" or "bottom", skip it
+                        if (("left" in matched_text or "right" in matched_text) and
+                            ("top" in text_lower or "bottom" in text_lower)):
+                            logger.debug(f"FastAction: Skipping simple left/right match - 'top' or 'bottom' found in text '{text[:50]}...' (corner pattern should match instead)")
+                            continue  # Skip this match, continue to next pattern
                 
                 # Copy and customize tool_args
                 final_args = tool_args.copy()
@@ -1293,7 +1342,13 @@ class FastActionDetector:
                     )
                     import re as _re
                     is_mouse_target = any(_re.search(p, text, _re.IGNORECASE) for p in _mouse_target_patterns)
-                    if is_mouse_target:
+                    # Pure "move mouse to screen N" is mouse_movement, not a visual target.
+                    is_screen_move = bool(_re.search(
+                        r'\b(?:mouse|mask|cursor|pointer)\b.{0,40}\b(?:screen|monitor|display)\b',
+                        text,
+                        _re.IGNORECASE,
+                    ))
+                    if is_mouse_target and not is_screen_move:
                         logger.info(
                             "FastActionDetector: mouse target detected — deferring to LLM planner: '%s'",
                             text[:80],
@@ -1307,6 +1362,9 @@ class FastActionDetector:
                             confidence=0.0,
                             original_text=text,
                         )
+                    if is_mouse_target and is_screen_move:
+                        # Let later mouse_movement patterns handle screen-index moves.
+                        continue
 
                 if action_type == ActionType.DOCUMENT_CONVERT:
                     explicit_input_path = self._extract_document_input_path(text)

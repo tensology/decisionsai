@@ -119,7 +119,8 @@ def transcribe_wav_for_configured_engine(
 
         if not WHISPER_AVAILABLE:
             return "Whisper.cpp", "ERROR: pywhispercpp not available"
-        model_id = (stt_cfg.get("model") if isinstance(stt_cfg, dict) else None) or "base.en"
+        from distr.core.paths import WHISPER_MODEL_SIZE
+        model_id = (stt_cfg.get("model") if isinstance(stt_cfg, dict) else None) or WHISPER_MODEL_SIZE
         svc = WhisperSTTService(model_path=model_id, event_queue=None, is_hands_free=False)
         try:
             text = svc.transcribe_file(os.path.abspath(wav_path)) or ""

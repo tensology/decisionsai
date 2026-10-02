@@ -5,10 +5,15 @@ import asyncio
 import logging
 from typing import Callable
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from ._shared import OllamaPullRequest, LLMSettings, route_handler
 
 logger = logging.getLogger(__name__)
+
+
+class LayaActionRequest(BaseModel):
+    action: str
 
 
 def _is_available_model_entry(model) -> bool:
@@ -202,6 +207,7 @@ def register_routes(router, templates):
     @route_handler("load LLMs settings")
     async def get_llms_settings():
         """Get current LLMs settings from DB (conversational_llm_*, coding_llm_*, vision_llm_*, image_llm_*)."""
+        from distr.core.laya_runtime import get_mode
         from distr.core.settings import load_settings_from_db
         from distr.core.agent.constants import DEFAULT_OLLAMA_MODELS_BY_TYPE
         settings = load_settings_from_db()
@@ -254,6 +260,7 @@ def register_routes(router, templates):
             "project_cli_medium_codex_speed": (settings.get("project_cli_medium_codex_speed") or "").strip(),
             "project_cli_high_codex_intelligence": (settings.get("project_cli_high_codex_intelligence") or "").strip(),
             "project_cli_high_codex_speed": (settings.get("project_cli_high_codex_speed") or "").strip(),
+            "laya_mode": get_mode(),
             "instant_dictation": settings.get("instant_dictation", True),
         })
 
@@ -261,6 +268,7 @@ def register_routes(router, templates):
     @route_handler("save LLMs settings")
     async def save_llms_settings(settings_data: LLMSettings):
         """Save LLMs settings to DB."""
+        from distr.core.laya_runtime import get_mode
         from distr.core.settings import load_settings_from_db, save_settings_to_db
 
         settings = load_settings_from_db()
@@ -289,6 +297,7 @@ def register_routes(router, templates):
                 (s.get("project_cli_medium_model") or "").strip(),
                 (s.get("project_cli_high_backend") or "").strip().lower(),
                 (s.get("project_cli_high_model") or "").strip(),
+                get_mode(),
             )
 
         _fp_before = _agent_llm_settings_fingerprint(settings)
@@ -372,6 +381,8 @@ def register_routes(router, templates):
             settings_data.project_cli_high_codex_intelligence
         )
         settings["project_cli_high_codex_speed"] = normalize_codex_speed(settings_data.project_cli_high_codex_speed)
+        from distr.core.laya_runtime import set_mode
+        set_mode(settings_data.laya_mode)
         settings["instant_dictation"] = bool(settings_data.instant_dictation)
 
         save_settings_to_db(settings)
@@ -406,6 +417,31 @@ def register_routes(router, templates):
                 )
 
         return JSONResponse({"success": True, "message": "LLMs settings saved"})
+
+    @router.get("/llms/laya/status")
+    @route_handler("load Laya status")
+    async def get_laya_status():
+        from distr.core.laya_runtime import status
+
+        return JSONResponse(await asyncio.to_thread(status))
+
+    @router.post("/llms/laya/action")
+    @route_handler("run Laya action")
+    async def post_laya_action(data: LayaActionRequest):
+        from distr.core import laya_runtime
+
+        action = str(data.action or "").strip().lower()
+        handlers = {
+            "install": laya_runtime.install,
+            "update": laya_runtime.install,
+            "test": laya_runtime.test_integration,
+            "remove": laya_runtime.remove,
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            return JSONResponse({"detail": "Unknown Laya action"}, status_code=422)
+        result = await asyncio.to_thread(handler)
+        return JSONResponse({"success": True, "result": result, "status": laya_runtime.status()})
 
     @router.get("/llms/s2s-locks")
     @route_handler("get S2S UI lock matrix", fallback={

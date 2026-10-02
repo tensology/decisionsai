@@ -355,6 +355,19 @@ class TelegramMessagesMixin:
             text_lower = text.lower().strip()
 
             try:
+                from distr.core.kanban.whatsapp_intake_approval import handle_telegram_reply as handle_wa_intake_reply
+
+                wa_intake = handle_wa_intake_reply(text, chat_id=chat_id)
+                if wa_intake:
+                    self.send_to_telegram(
+                        wa_intake.get("text") or "WhatsApp intake updated.",
+                        reply_markup=wa_intake.get("reply_markup"),
+                    )
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] WhatsApp intake approval routing failed: %s", exc, exc_info=True)
+
+            try:
                 from distr.core.kanban.whatsapp_work_lifecycle import handle_telegram_reply
 
                 whatsapp_review = handle_telegram_reply(text, chat_id=chat_id)
@@ -1138,13 +1151,50 @@ class TelegramMessagesMixin:
 
         try:
             # Text callbacks are handled before batching; voice notes only become
-            # actionable after transcription, so resolve their workflow decision here.
+            # actionable after transcription, so resolve pending approvals here.
             if input_type == "voice":
+                voice_chat_id = getattr(self, "_telegram_batch_thread_id", None)
+                try:
+                    from distr.core.kanban.whatsapp_intake_approval import (
+                        handle_telegram_reply as handle_wa_intake_reply,
+                    )
+
+                    wa_intake = handle_wa_intake_reply(combined, chat_id=voice_chat_id)
+                    if wa_intake:
+                        self._stop_typing_loop()
+                        self.send_to_telegram(
+                            wa_intake.get("text") or "WhatsApp intake updated.",
+                            reply_markup=wa_intake.get("reply_markup"),
+                        )
+                        return
+                except Exception as exc:
+                    logger.error(
+                        "[Telegram] Voice WhatsApp intake approval routing failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                try:
+                    from distr.core.kanban.whatsapp_work_lifecycle import handle_telegram_reply
+
+                    whatsapp_review = handle_telegram_reply(combined, chat_id=voice_chat_id)
+                    if whatsapp_review:
+                        self._stop_typing_loop()
+                        self.send_to_telegram(
+                            whatsapp_review.get("text") or "WhatsApp draft updated.",
+                            reply_markup=whatsapp_review.get("reply_markup"),
+                        )
+                        return
+                except Exception as exc:
+                    logger.error(
+                        "[Telegram] Voice WhatsApp reply review routing failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
                 from distr.core.workflow.interactions import handle_telegram_workflow_reply, workflow_reply_message
 
                 workflow_reply = handle_telegram_workflow_reply(
                     combined,
-                    chat_id=getattr(self, "_telegram_batch_thread_id", None),
+                    chat_id=voice_chat_id,
                     resolver_id=str(getattr(self, "telegram_user_id", "") or ""),
                     source="telegram_voice",
                     background=True,

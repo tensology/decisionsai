@@ -1,0 +1,146 @@
+# SYNTHESIZED from ecommerce-foundations (domain-vocabulary + order-lifecycle + related)
+# + DecisionsAI/mattpocock domain-modeling conventions.
+# Label: SYNTHESIZED — not a verbatim copy. Cross-check vendor/ecommerce-foundations/skills/.
+version: 1
+provenance:
+  synthesized: true
+  sources:
+    - vendor/ecommerce-foundations/skills/domain-vocabulary
+    - vendor/ecommerce-foundations/skills/order-lifecycle
+    - vendor/ecommerce-foundations/skills/cart-lifecycle
+    - vendor/ecommerce-foundations/skills/payment-flows
+    - vendor/ecommerce-foundations/skills/inventory-management
+    - vendor/ecommerce-foundations/skills/catalog-and-product-modeling
+    - copied-skills/decisionsai/domain-modeling
+    - copied-skills/mattpocock/domain-modeling
+  notes: >
+    Orthogonal axes for Order (payment_state, fulfillment_state, lifecycle_state).
+    Money as amount+currency. Inventory: on_hand / committed / reserved / available(derived).
+
+contexts:
+  - id: identity
+    entities: [Customer, Account, User, Guest, Address, PaymentMethod]
+  - id: catalog
+    entities: [Product, Variant, SKU, Bundle, Category, Collection, Attribute, Option, PriceList]
+  - id: commerce
+    entities: [Cart, Quote, Order, LineItem, OrderItem]
+  - id: payment
+    entities: [PaymentIntent, Authorization, Capture, Refund, Void, Dispute]
+  - id: fulfillment
+    entities: [Fulfillment, Shipment, FulfillmentLine, Location, Carrier]
+  - id: inventory
+    entities: [InventoryLevel, Reservation, SafetyStock]
+  - id: returns
+    entities: [Return, RMA, RestockDecision]
+  - id: channel
+    entities: [Channel, TaxRule, Promotion, Discount]
+
+entities:
+  Customer:
+    context: identity
+    definition: Real-world buyer; may exist without Account (guest).
+    fields: [id, name, email, phone, addresses[], payment_methods[], created_at]
+    relations:
+      - {to: Account, type: optional_one, note: guest has none}
+      - {to: Order, type: one_to_many}
+      - {to: Cart, type: one_to_many}
+  Account:
+    context: identity
+    definition: Authenticated persistent record for a Customer.
+    relations:
+      - {to: User, type: many_to_many, note: B2B / impersonation}
+      - {to: Customer, type: one_to_one_or_many}
+  User:
+    context: identity
+    definition: Auth principal; orthogonal to Customer (admins are Users, not Customers).
+  Product:
+    context: catalog
+    definition: Sellable concept; stock/price usually live on Variant.
+    relations:
+      - {to: Variant, type: one_to_many, required: true}
+      - {to: Category, type: many_to_one}
+      - {to: Collection, type: many_to_many}
+  Variant:
+    context: catalog
+    definition: Configurable unit of stock and price; carries SKU.
+    fields: [id, product_id, sku, options{}, list_price, sale_price]
+    relations:
+      - {to: InventoryLevel, type: one_to_many, note: per Location}
+      - {to: LineItem, type: referenced_by}
+  Cart:
+    context: commerce
+    definition: Mutable purchase draft; expires; belongs to Customer or anonymous session.
+    relations:
+      - {to: LineItem, type: one_to_many}
+      - {to: Customer, type: optional_one}
+      - {to: Quote, type: may_become}
+      - {to: Order, type: commits_to}
+  Quote:
+    context: commerce
+    definition: B2B frozen terms offer derived from Cart.
+  Order:
+    context: commerce
+    definition: Committed purchase; append-only commitment with attached state changes.
+    axes:
+      payment_state: [pending, authorized, paid, partially_paid, partially_refunded, refunded, voided]
+      fulfillment_state: [unfulfilled, allocated, ready_to_ship, partially_fulfilled, shipped, delivered, partially_returned, returned]
+      lifecycle_state: [draft, placed, in_progress, shipped, completed, cancelled, refunded, partially_completed]
+    invariants:
+      - Order items immutable after placement (amendments are new artifacts).
+      - Address/price/tax snapshotted at placement.
+      - Transitions idempotent.
+      - payment and fulfillment axes are orthogonal.
+    relations:
+      - {to: OrderItem, type: one_to_many}
+      - {to: Customer, type: many_to_one}
+      - {to: PaymentIntent, type: one_to_many}
+      - {to: Fulfillment, type: one_to_many}
+      - {to: Return, type: one_to_many}
+  LineItem:
+    context: commerce
+    definition: Variant + qty + unit price + tax/discount; used in Cart/Quote/Order stages.
+  OrderItem:
+    context: commerce
+    definition: Order-stage LineItem with price-at-commitment freeze.
+  PaymentIntent:
+    context: payment
+    definition: Processor-side aggregate wrapping payment for an Order.
+    transitions: [authorize, capture, void, refund]
+  Fulfillment:
+    context: fulfillment
+    definition: Sub-aggregate of Order items fulfilled together (location/vendor/time).
+    relations:
+      - {to: Shipment, type: one_to_many}
+      - {to: FulfillmentLine, type: one_to_many}
+      - {to: Location, type: many_to_one}
+  Shipment:
+    context: fulfillment
+    fields: [id, carrier, tracking_number, shipped_at, delivered_at]
+  InventoryLevel:
+    context: inventory
+    fields: [variant_id, location_id, on_hand, committed, reserved, safety_stock]
+    derived:
+      available: "on_hand - committed - reserved - safety_stock"
+  Location:
+    context: fulfillment
+    definition: Warehouse/store/FC holding on-hand inventory.
+  Return:
+    context: returns
+    definition: Post-delivery return/RMA; may trigger restock + refund compensation.
+  Channel:
+    context: channel
+    definition: Storefront/market scope for price lists, tax, catalog visibility.
+  Money:
+    context: commerce
+    definition: Value object {amount_minor_units: int, currency: ISO4217}; never bare float.
+
+flows:
+  checkout:
+    steps: [cart_mutate, address, shipping, tax, payment, review, place_order]
+    produces: Order
+  auth_capture:
+    steps: [authorize, fulfill_or_ship, capture]
+  cancel:
+    compensates: [release_reservations, void_or_refund, emit_OrderCancelled]
+  return_refund:
+    steps: [request_return, approve, receive, restock_decision, refund]

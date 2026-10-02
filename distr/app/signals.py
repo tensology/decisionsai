@@ -42,7 +42,7 @@ class SignalBridgeMixin:
         source: str = "web",
         intake_context=None,
     ) -> bool:
-        """Intercept explicit work commands while preserving normal conversation."""
+        """Route explicit cmds and work-intent through WorkIntake; casual chat continues."""
         clean = str(message or "").strip()
         if not clean:
             return False
@@ -57,12 +57,36 @@ class SignalBridgeMixin:
             if isinstance(supplied_metadata, dict):
                 metadata.update(supplied_metadata)
 
+            project_hint = str(
+                context.get("project_hint")
+                or metadata.get("project_id")
+                or metadata.get("active_project_id")
+                or metadata.get("project_name")
+                or ""
+            ).strip()
+            # Prefer the Chat thread's linked project so typed/oracle work lands
+            # on the correct board without requiring an explicit project name.
+            if not project_hint and str(chat_id or "").isdigit():
+                try:
+                    from distr.core.db import Chat, get_session
+                    from distr.core.workflow.development_threads import resolve_conversational_chat_id
+
+                    with get_session() as session:
+                        resolved = resolve_conversational_chat_id(session, int(chat_id))
+                        chat = session.get(Chat, int(resolved or chat_id))
+                        if chat is not None and getattr(chat, "project_id", None):
+                            project_hint = str(int(chat.project_id))
+                            metadata.setdefault("active_project_id", int(chat.project_id))
+                except Exception:
+                    logger.debug("Work intake project lookup failed", exc_info=True)
+
             intake = WorkIntake(
                 source=source,
                 user_text=clean,
                 source_thread_id=str(chat_id or ""),
                 source_message_id=str(context.get("source_message_id") or ""),
                 requested_outcome=str(context.get("requested_outcome") or ""),
+                project_hint=project_hint,
                 metadata=metadata,
             )
             # The generated UID is authoritative. Carry it through the agent

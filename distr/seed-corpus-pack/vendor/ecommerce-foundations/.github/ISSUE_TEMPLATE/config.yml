@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/oa2p-solutions/ecommerce-foundations/discussions
+    about: Use GitHub Discussions for open-ended questions about commerce patterns, vocabulary, or how to apply a skill.

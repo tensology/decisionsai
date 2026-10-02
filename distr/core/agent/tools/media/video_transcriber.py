@@ -19,6 +19,8 @@ from typing import Optional, Dict, Any, List, Tuple
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from distr.core.paths import WHISPER_MODEL_SIZE
+
 logger = logging.getLogger(__name__)
 
 
@@ -118,7 +120,7 @@ class AssemblyAIBackend(TranscriptionBackend):
 class WhisperCppBackend(TranscriptionBackend):
     """Whisper.cpp local backend"""
     
-    def __init__(self, model: str = "base.en"):
+    def __init__(self, model: str = WHISPER_MODEL_SIZE):
         self.model = model
     
     def get_name(self) -> str:

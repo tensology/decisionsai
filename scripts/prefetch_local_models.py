@@ -65,7 +65,8 @@ def prefetch_whisper() -> None:
         print(f"    ⚠ Skip: whisper service import failed ({e})")
         return
 
-    model_id = (os.environ.get("DECISIONSAI_PREFETCH_WHISPER_MODEL") or "base.en").strip() or "base.en"
+    from distr.core.paths import WHISPER_MODEL_SIZE
+    model_id = (os.environ.get("DECISIONSAI_PREFETCH_WHISPER_MODEL") or WHISPER_MODEL_SIZE).strip() or WHISPER_MODEL_SIZE
     try:
         with suppress_stderr():
             m = pwc.Model(

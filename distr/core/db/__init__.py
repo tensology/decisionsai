@@ -249,6 +249,10 @@ class Settings(Base):
     # Composio Connect MCP (Settings → API Keys → Composio; legacy column name rube_token)
     rube_enabled = Column(Boolean, default=False)
     rube_token = Column(String, default='')
+
+    # Jev decision-routing MCP (Settings -> API Keys -> JevAI)
+    jev_enabled = Column(Boolean, default=False)
+    jev_key = Column(String, default='')
     
     # Note: Jira and Trello accounts are now stored in connected_accounts JSON field
     # Individual columns removed to support multiple accounts
@@ -682,6 +686,8 @@ try:
                 # Masko (AI skin generation)
                 ("masko_enabled", "BOOLEAN DEFAULT 0"),
                 ("masko_key", "VARCHAR DEFAULT ''"),
+                ("jev_enabled", "BOOLEAN DEFAULT 0"),
+                ("jev_key", "VARCHAR DEFAULT ''"),
                 ("tensology_enabled", "BOOLEAN DEFAULT 0"),
                 ("tensology_url", "VARCHAR DEFAULT 'https://www.tensology.com'"),
                 ("tensology_key", "VARCHAR DEFAULT ''"),

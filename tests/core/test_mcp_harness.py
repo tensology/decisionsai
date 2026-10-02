@@ -133,3 +133,40 @@ def test_headroom_default_merge_preserves_an_explicit_user_entry(tmp_path):
     config = json.loads(path.read_text(encoding="utf-8"))
     assert config["servers"][0]["enabled"] is False
     assert config["servers"][0]["command"] == ["custom-headroom"]
+
+
+def test_jev_key_enables_default_mcp_for_all_targets(tmp_path, monkeypatch):
+    from distr.core.mcp_harness import recalibrate_mcp_harness
+
+    monkeypatch.setenv("JEV_API_KEY", "jev-test-key")
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {"jev_enabled": True, "jev_key": "jev-test-key"},
+    )
+    cursor_dir = tmp_path / ".cursor"
+    cursor_dir.mkdir(parents=True)
+    (cursor_dir / "mcp.json").write_text('{"mcpServers": {}}\n', encoding="utf-8")
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / "config.toml").write_text('model = "gpt-5"\n', encoding="utf-8")
+
+    result = recalibrate_mcp_harness(home=tmp_path)
+
+    assert "jev" in result["cursor_merged"]
+    assert "jev" in result["codex_merged"]
+    assert "jev" in result["decisions_merged"]
+    cursor = json.loads((cursor_dir / "mcp.json").read_text(encoding="utf-8"))
+    assert cursor["mcpServers"]["jev"]["headers"]["Authorization"] == "Bearer ${env:JEV_API_KEY}"
+    assert "jev-test-key" not in json.dumps(cursor)
+    codex = (codex_dir / "config.toml").read_text(encoding="utf-8")
+    assert '[mcp_servers.jev]' in codex
+    assert 'bearer_token_env_var = "JEV_API_KEY"' in codex
+    native = json.loads(
+        (tmp_path / ".decisions" / "models" / "mcp_config.json").read_text(encoding="utf-8")
+    )
+    jev = next(server for server in native["servers"] if server["name"] == "jev")
+    assert jev["transport"] == "sse"
+    assert jev["url"] == "https://www.jevai.org/api/mcp"
+    assert jev["bearer_token_env_var"] == "JEV_API_KEY"
+    assert "headers" not in jev
+    assert "jev-test-key" not in json.dumps(native)

@@ -78,3 +78,20 @@ def test_mcp_post_duplicate_names(mcp_client):
     }
     r = client.post("/api/mcp", json=body)
     assert r.status_code == 422
+
+
+def test_mcp_remote_bearer_env_roundtrip(mcp_client):
+    client, tmp = mcp_client
+    body = {"servers": [{
+        "name": "jev",
+        "enabled": True,
+        "transport": "sse",
+        "url": "https://www.jevai.org/api/mcp",
+        "bearer_token_env_var": "JEV_API_KEY",
+    }]}
+
+    assert client.post("/api/mcp", json=body).status_code == 200
+    saved = json.loads((tmp / "mcp_config.json").read_text(encoding="utf-8"))
+    assert saved["servers"][0]["bearer_token_env_var"] == "JEV_API_KEY"
+    assert "Authorization" not in saved["servers"][0]
+    assert client.get("/api/mcp").json()["servers"][0]["bearer_token_env_var"] == "JEV_API_KEY"

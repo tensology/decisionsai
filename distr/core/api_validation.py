@@ -9,6 +9,16 @@ import json
 
 logger = logging.getLogger(__name__)
 
+JEV_MCP_URL = "https://www.jevai.org/api/mcp"
+JEV_EXPECTED_TOOLS = {
+    "jev_route_model",
+    "jev_guard_tool_call",
+    "jev_route_task",
+    "jev_check_research",
+    "jev_review_completion",
+    "jev_decide",
+}
+
 
 def _normalize_api_key(key: str) -> str:
     """Normalize pasted API keys to token-only format."""
@@ -374,6 +384,48 @@ def validate_tensology(api_key: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def validate_jev(api_key: str) -> tuple[bool, str]:
+    """Validate Jev auth and tool discovery without consuming decision quota."""
+    try:
+        payload = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {},
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            JEV_MCP_URL,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        # Streamable HTTP servers may return JSON directly or as an SSE data line.
+        if raw.lstrip().startswith("data:"):
+            raw = next(
+                (line[5:].strip() for line in raw.splitlines() if line.startswith("data:")),
+                "",
+            )
+        body = json.loads(raw)
+        tools = ((body.get("result") or {}).get("tools") or [])
+        names = {str(tool.get("name") or "") for tool in tools if isinstance(tool, dict)}
+        missing = sorted(JEV_EXPECTED_TOOLS - names)
+        if missing:
+            return False, "Jev MCP connected but did not advertise: " + ", ".join(missing)
+        return True, ""
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return False, "Invalid JevAI personal key"
+        return False, f"JevAI returned HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def validate_provider(provider: str, key: str) -> tuple[bool, str]:
     """
     Validate API key for any provider.
@@ -400,6 +452,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "pixazo": validate_pixazo,
         "fishaudio": validate_fishaudio,
         "tensology": validate_tensology,
+        "jev": validate_jev,
     }
 
     validator = validators.get(provider.lower())

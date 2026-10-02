@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import hashlib
 import json
+import os
 import mimetypes
 import re
 import subprocess
@@ -22,9 +24,230 @@ from distr.core.db.projects import Project
 from distr.core.db.time import utc_now_naive
 from distr.core.workflow.development_threads import development_thread_metadata
 
+logger = logging.getLogger(__name__)
 
 ACTIVE_EXECUTION_STATUSES = {"initializing", "queued", "running", "waiting"}
 CLI_BACKENDS = {"pi", "cursor", "codex", "claude_code"}
+# Local Ollama workers appear beside Pi/Cursor/Codex. The picker source of truth
+# is the live installed catalog (ollama list /api/tags) — not a hard-coded list.
+# Optional label hints + legacy alias ids only; models are never pulled here.
+LOCAL_OLLAMA_WORKER_PREFIX = "local_ollama:"
+LOCAL_OLLAMA_LABEL_HINTS = {
+    "qwen3.8:27b": "Qwen 3.8 27B",
+    "muse-glimmer:30b-mlx": "Glimmer",
+}
+# Older UI pinned these synthetic harness ids; map them to exact Ollama tags.
+LEGACY_LOCAL_WORKER_ALIASES = {
+    "qwen38_27b": "qwen3.8:27b",
+    "glimmer": "muse-glimmer:30b-mlx",
+}
+# Kept for callers/tests that still import the old name; not the picker source of truth.
+LOCAL_HARNESS_PRESETS = {
+    alias: {
+        "backend": "pi",
+        "model": model,
+        "provider": "ollama",
+        "label": LOCAL_OLLAMA_LABEL_HINTS.get(model, model),
+    }
+    for alias, model in LEGACY_LOCAL_WORKER_ALIASES.items()
+}
+
+
+def local_ollama_worker_id(model: str) -> str:
+    tag = str(model or "").strip()
+    return f"{LOCAL_OLLAMA_WORKER_PREFIX}{tag}" if tag else ""
+
+
+def parse_local_ollama_worker(backend: str | None) -> str | None:
+    """Return the Ollama model tag for a local-worker harness id, else None."""
+    raw = str(backend or "").strip()
+    if not raw:
+        return None
+    lower = raw.lower()
+    if lower.startswith(LOCAL_OLLAMA_WORKER_PREFIX):
+        tag = raw[len(LOCAL_OLLAMA_WORKER_PREFIX) :].strip()
+        return tag or None
+    legacy = LEGACY_LOCAL_WORKER_ALIASES.get(lower)
+    if legacy:
+        return legacy
+    preset = LOCAL_HARNESS_PRESETS.get(lower)
+    if preset:
+        return str(preset.get("model") or "").strip() or None
+    return None
+
+
+def local_ollama_worker_label(model: str) -> str:
+    tag = str(model or "").strip()
+    if not tag:
+        return "Ollama"
+    return LOCAL_OLLAMA_LABEL_HINTS.get(tag, tag)
+
+
+def _is_excluded_local_worker_model(model: str) -> bool:
+    lower = str(model or "").strip().lower()
+    if not lower:
+        return True
+    if any(token in lower for token in ("embed", "embedding", "nomic-embed")):
+        return True
+    # Cloud tags stay selectable via Pi + provider; local workers are on-box only.
+    # Covers ":cloud", "80b-cloud", "24b-cloud", etc.
+    tag = lower.rsplit(":", 1)[-1]
+    if "cloud" in tag:
+        return True
+    return False
+
+
+def _ollama_reachable_installed_ids() -> set[str] | None:
+    """Return installed Ollama model ids when the daemon is reachable.
+
+    Returns None when Ollama cannot be listed (not installed / not running),
+    so callers can fail closed instead of treating absence as an empty catalog.
+    """
+    ids: set[str] = set()
+    listed = False
+    try:
+        from distr.gui.utils.get_ollama_models import get_installed_ollama_models
+
+        for entry in get_installed_ollama_models() or []:
+            mid = str(entry.get("id") or "").strip()
+            if mid:
+                ids.add(mid)
+                listed = True
+    except Exception:
+        logger.debug("get_installed_ollama_models failed for local harness probe", exc_info=True)
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            listed = True
+            for line in result.stdout.strip().splitlines()[1:]:
+                parts = line.split()
+                if parts:
+                    ids.add(parts[0])
+    except Exception:
+        logger.debug("ollama list failed for local harness probe", exc_info=True)
+    if not listed:
+        try:
+            import urllib.request
+
+            host = (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+            if not host.startswith(("http://", "https://")):
+                host = "http://" + host
+            req = urllib.request.Request(host + "/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as response:
+                payload = json.loads(response.read().decode("utf-8") or "{}")
+            listed = True
+            for entry in payload.get("models") or []:
+                mid = str(entry.get("name") or entry.get("model") or "").strip()
+                if mid:
+                    ids.add(mid)
+        except Exception:
+            logger.debug("ollama /api/tags failed for local harness probe", exc_info=True)
+    if not listed:
+        return None
+    return ids
+
+
+def local_harness_model_is_available(
+    model: str,
+    *,
+    installed: set[str] | None = None,
+) -> bool:
+    """True when the exact Ollama tag is installed and Ollama is reachable."""
+    tag = str(model or "").strip()
+    if not tag or _is_excluded_local_worker_model(tag):
+        return False
+    ids = installed if installed is not None else _ollama_reachable_installed_ids()
+    if ids is None:
+        return False
+    return tag in ids
+
+
+def local_harness_preset_is_available(
+    preset_id: str,
+    *,
+    installed: set[str] | None = None,
+) -> bool:
+    """Compatibility wrapper: legacy alias or local_ollama:<tag> worker ids."""
+    tag = parse_local_ollama_worker(preset_id)
+    if not tag:
+        return False
+    return local_harness_model_is_available(tag, installed=installed)
+
+
+def available_local_harness_workers() -> list[dict[str, Any]]:
+    """Dynamic local workers for the picker = installed on-box Ollama chat models."""
+    installed = _ollama_reachable_installed_ids()
+    if installed is None:
+        return []
+    rows: list[dict[str, Any]] = []
+    for tag in sorted(installed, key=lambda m: (local_ollama_worker_label(m).lower(), m.lower())):
+        if _is_excluded_local_worker_model(tag):
+            continue
+        rows.append(
+            {
+                "id": local_ollama_worker_id(tag),
+                "backend": "pi",
+                "model": tag,
+                "provider": "ollama",
+                "label": local_ollama_worker_label(tag),
+                "installed": True,
+                "reachable": True,
+            }
+        )
+    return rows
+
+
+def available_local_harness_presets() -> list[dict[str, Any]]:
+    """Alias for available_local_harness_workers (legacy name)."""
+    return available_local_harness_workers()
+
+
+def resolve_local_harness_selection(backend: str | None, model_name: str | None = None) -> dict[str, Any] | None:
+    """Resolve a manual local-worker selection into Pi + Ollama route fields."""
+    tag = parse_local_ollama_worker(backend)
+    if not tag:
+        # Also accept explicit pi+ollama pin that originated from a local worker.
+        return None
+    return {
+        "worker_id": local_ollama_worker_id(tag),
+        "backend": "pi",
+        "model": tag,
+        "provider": "ollama",
+        "label": local_ollama_worker_label(tag),
+        "local_harness_preset": local_ollama_worker_id(tag),
+    }
+
+
+def _unload_ollama_model(model: str) -> None:
+    """Best-effort unload after a local harness preset finishes (no pulls)."""
+    model_id = str(model or "").strip()
+    if not model_id:
+        return
+    try:
+        import json
+        import urllib.request
+
+        host = (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+        if not host.startswith(("http://", "https://")):
+            host = "http://" + host
+        payload = json.dumps({"model": model_id, "keep_alive": 0}).encode("utf-8")
+        req = urllib.request.Request(
+            host + "/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            response.read()
+        logger.info("Unloaded local harness model %s (keep_alive=0)", model_id)
+    except Exception:
+        logger.debug("Could not unload local harness model %s", model_id, exc_info=True)
+
 
 
 def _output_justifies_noop(output: str) -> bool:
@@ -122,6 +345,31 @@ def _git_status_snapshot(folder: str) -> dict[str, str]:
     return snapshot
 
 
+def _git_untracked_fingerprints(folder: str, status: dict[str, str] | None = None) -> dict[str, str]:
+    """Fingerprint untracked files so mid-run edits stay visible.
+
+    Git porcelain keeps ``??`` after content changes. Status-only baselines
+    therefore hide edits to files that were already untracked when the turn
+    started. Content hashes close that gap for the harness change counter.
+    """
+    root = _git_project_root(folder)
+    if root is None:
+        return {}
+    snapshot = status if status is not None else _git_status_snapshot(str(root))
+    fingerprints: dict[str, str] = {}
+    for relative, entry_status in snapshot.items():
+        if entry_status != "??":
+            continue
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            fingerprints[relative] = _file_fingerprint(candidate)
+    return fingerprints
+
+
 def _file_fingerprint(path: Path) -> str:
     if not path.exists():
         return "missing"
@@ -134,12 +382,36 @@ def _file_fingerprint(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _turn_change_manifest(folder: str, before: dict[str, str]) -> dict[str, Any]:
+def _turn_change_manifest(
+    folder: str,
+    before: dict[str, str],
+    *,
+    before_untracked: dict[str, str] | None = None,
+) -> dict[str, Any]:
     root = _git_project_root(folder)
     if root is None:
         return {"files": [], "additions": 0, "deletions": 0, "reversible": False}
     after = _git_status_snapshot(str(root))
-    paths = sorted(path for path in after if before.get(path) != after.get(path))
+    before_fps = {
+        str(path): str(digest)
+        for path, digest in dict(before_untracked or {}).items()
+        if path and digest
+    }
+    after_fps = _git_untracked_fingerprints(str(root), after)
+
+    def _untracked_content_changed(path: str) -> bool:
+        return (
+            before.get(path) == "??"
+            and after.get(path) == "??"
+            and bool(before_fps.get(path))
+            and before_fps.get(path) != after_fps.get(path)
+        )
+
+    paths = sorted(
+        path
+        for path in after
+        if before.get(path) != after.get(path) or _untracked_content_changed(path)
+    )
     files: list[dict[str, Any]] = []
     total_additions = 0
     total_deletions = 0
@@ -156,6 +428,10 @@ def _turn_change_manifest(folder: str, before: dict[str, str]) -> dict[str, Any]
                 additions = len(candidate.read_text(encoding="utf-8", errors="replace").splitlines())
             except OSError:
                 additions = 0
+            # Content-only edits to an already-untracked file still need a
+            # non-zero counter so Studio does not classify the turn as noop.
+            if additions == 0 and _untracked_content_changed(relative):
+                additions = 1
         else:
             result = subprocess.run(
                 ["git", "-C", str(root), "diff", "--numstat", "HEAD", "--", relative],
@@ -437,11 +713,13 @@ def _append_streamed_output(chat_id: int, *, job_id: str, delta: str) -> str:
 
 
 def development_execution_state(chat_id: int) -> dict[str, Any]:
+    terminal_reconciliation: dict[str, Any] | None = None
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
         if root is None or root.parent_id is not None:
             raise LookupError("Development thread not found.")
         execution = dict(development_thread_metadata(root).get("execution") or {})
+        persisted_status = str(execution.get("status") or "").lower()
         session_id = execution.get("execution_session_id")
         if session_id:
             from distr.core.db.kanban import ProjectExecutionSession
@@ -461,6 +739,22 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                 output = _json(row.output_packet)
                 if output:
                     execution["output_packet"] = output
+                row_status = str(row.status or "").lower()
+                if row_status in {"completed", "failed", "cancelled"} and row_status != persisted_status:
+                    terminal_reconciliation = {
+                        "status": row_status,
+                        "backend_id": row.route_backend or execution.get("backend_id") or "",
+                        "model": row.selected_model or execution.get("model") or "auto",
+                        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                        "error": row.error or execution.get("error") or "",
+                        "activity_status": row_status,
+                    }
+    if terminal_reconciliation is not None:
+        execution = _update_execution(
+            int(chat_id),
+            job_id=str(execution.get("job_id") or "") or None,
+            **terminal_reconciliation,
+        )
     if (
         execution.get("runtime_id") == "native"
         and str(execution.get("status") or "").lower() in ACTIVE_EXECUTION_STATUSES
@@ -569,6 +863,20 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
         "required_capabilities": ["tools", "files"],
     }
     pinned_backend = normalize_backend_id(model_route.get("backend") or "") if mode == "manual" else ""
+    local_sel = resolve_local_harness_selection(model_route.get("backend")) if mode == "manual" else None
+    if mode == "manual" and local_sel:
+        pinned_backend = normalize_backend_id(local_sel["backend"])
+        model = str(local_sel["model"])
+        available = local_harness_model_is_available(model)
+        adapter_options = {
+            **adapter_options,
+            "model_provider": local_sel["provider"],
+            "local_harness_preset": local_sel["local_harness_preset"],
+            "keep_alive": "5m",
+            "unload_when_done": True,
+            "local_harness_available": available,
+        }
+        return pinned_backend, model, adapter_options, complexity
     if mode == "manual":
         if pinned_backend not in {"pi", "cursor", "codex", "claude_code"}:
             pinned_backend = "pi"
@@ -1053,6 +1361,48 @@ async def _run_execution(
             turn_id=turn_id,
             runtime_id=runtime_id,
         )
+        local_preset = str((adapter_options or {}).get("local_harness_preset") or "").strip()
+        local_tag = parse_local_ollama_worker(local_preset) or (
+            str(model or "").strip() if local_preset else ""
+        )
+        if local_preset and local_tag:
+            # Fail closed when a local Ollama worker was pinned but is missing/unreachable.
+            # UI builds the picker from live ollama list; this is the run-time backstop (no pull).
+            available = (adapter_options or {}).get("local_harness_available")
+            if available is None:
+                available = local_harness_model_is_available(local_tag)
+            if not available:
+                tag = local_tag
+                message = (
+                    f"Local Ollama worker `{local_ollama_worker_label(tag)}` is not installed or Ollama is unreachable "
+                    f"(expected tag `{tag}`). Install the model locally or pick another worker. "
+                    "Decisions will not pull models automatically."
+                )
+                _write_response(chat_id, turn_id, message)
+                _update_execution(
+                    chat_id,
+                    job_id=job_id,
+                    status="failed",
+                    backend_id=backend,
+                    model=model,
+                    runtime_id=runtime_id,
+                    completed_at=utc_now_naive().isoformat(),
+                    error=message,
+                    summary=message[:2000],
+                    activity_status="failed",
+                    outcome={
+                        "backend_id": backend,
+                        "runtime_id": runtime_id,
+                        "success": False,
+                        "tool_counts": {},
+                        "git_change_count": 0,
+                        "summary": message[:2000],
+                    },
+                )
+                if tool_event_id:
+                    finish_tool(tool_event_id, success=False, summary=message[:1000], detail=message)
+                terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=message)
+                return
         if backend in CLI_BACKENDS:
             from distr.core.project_cli_backends.catalog_probe import probe_cli_backend
 
@@ -1106,6 +1456,11 @@ async def _run_execution(
         changes = _turn_change_manifest(
             str(project.folder_location or ""),
             dict(current.get("git_status_before") or {}),
+            before_untracked={
+                str(path): str(digest)
+                for path, digest in dict(current.get("git_untracked_before") or {}).items()
+                if path and digest
+            },
         )
         git_change_count = len(changes.get("files") or [])
         change_expected = bool(request.metadata.get("change_expected"))
@@ -1154,6 +1509,11 @@ async def _run_execution(
             complete_turn(chat_id, turn_id=turn_id, display_text=response)
         else:
             terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=error or response)
+        if (
+            bool((adapter_options or {}).get("unload_when_done"))
+            and str((adapter_options or {}).get("model_provider") or "").lower() == "ollama"
+        ):
+            _unload_ollama_model(model)
         if not waiting:
             _start_next_queued_instruction(chat_id)
     except TurnCancelled:
@@ -1469,21 +1829,34 @@ def dispatch_development_prompt(
             )
         model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
         pinned_backend = str(model_route.get("backend") or "").strip().lower()
-        if str(model_route.get("route_mode") or "").strip().lower() == "manual" and pinned_backend not in CLI_BACKENDS:
+        local_sel = resolve_local_harness_selection(pinned_backend)
+        if (
+            str(model_route.get("route_mode") or "").strip().lower() == "manual"
+            and pinned_backend not in CLI_BACKENDS
+            and local_sel is None
+        ):
             pinned_backend = "pi"
         run_metadata = {
             "routing_assessment": assessment,
-            "execution_mode_decision": execution_mode,
             "skill_ids": list(skill_ids or []),
             "use_playwright": bool(use_playwright),
             "model_route": model_route,
         }
-        if pinned_backend in CLI_BACKENDS:
+        if pinned_backend in CLI_BACKENDS or local_sel is not None:
             run_metadata["execution_route"] = {
-                "backend": pinned_backend,
-                "model": str(model_route.get("model_name") or "auto"),
-                "model_provider": str(model_route.get("provider") or ""),
+                "backend": (local_sel["backend"] if local_sel else pinned_backend),
+                "model": (
+                    str(local_sel["model"])
+                    if local_sel
+                    else str(model_route.get("model_name") or "auto")
+                ),
+                "model_provider": (
+                    str(local_sel["provider"])
+                    if local_sel
+                    else str(model_route.get("provider") or "")
+                ),
                 "source": "thread_model_route",
+                "local_harness_preset": local_sel["local_harness_preset"] if local_sel else "",
             }
         result = dispatch_work_item(
             workflow_id=int(workflow_id),
@@ -1508,10 +1881,22 @@ def dispatch_development_prompt(
         [*(attachments or []), *persistent_attachments],
         project_folder=str(project.folder_location or ""),
     )
-    from distr.core.skills.catalog import filter_known_skill_ids
+    from distr.core.skills.catalog import filter_known_skill_ids, infer_skills_for_ticket
 
     turn_skill_ids = filter_known_skill_ids(list(skill_ids or []))[:12]
+    if not turn_skill_ids:
+        # Fill gaps: route skills inferred from the ticket/prompt into CLI harness context.
+        inferred = infer_skills_for_ticket(
+            "\n".join(part for part in (clean, str((metadata or {}).get("ticket_title") or "")) if part),
+            limit=5,
+        )
+        turn_skill_ids = filter_known_skill_ids(list(inferred or []))[:12]
     backend, model, _, _ = _route(project, metadata, assessment)
+    git_status_before = _git_status_snapshot(str(project.folder_location or ""))
+    git_untracked_before = _git_untracked_fingerprints(
+        str(project.folder_location or ""),
+        git_status_before,
+    )
     execution = _update_execution(
         int(chat_id),
         job_id=job_id,
@@ -1527,7 +1912,8 @@ def dispatch_development_prompt(
         streamed_output="",
         activity_status="thinking",
         runtime_id="cli_harness",
-        git_status_before=_git_status_snapshot(str(project.folder_location or "")),
+        git_status_before=git_status_before,
+        git_untracked_before=git_untracked_before,
     )
     tool_event_id, _, _ = start_tool(
         int(chat_id),

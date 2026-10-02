@@ -53,6 +53,8 @@ DEFAULT_RUN_SETTINGS = {
     "concurrency_scope": "project",
     "max_parallel_tickets": 3,
     "branch_per_ticket": True,
+    # ON by default so Telegram pre-work approve fires for Development + WorkIntake.
+    "human_checkpoints": True,
 }
 
 
@@ -72,6 +74,7 @@ def _workflow_run_settings(wf: AutoWorkflow) -> Dict[str, Any]:
     except Exception:
         settings["max_parallel_tickets"] = 3
     settings["branch_per_ticket"] = bool(settings.get("branch_per_ticket"))
+    settings["human_checkpoints"] = bool(settings.get("human_checkpoints"))
     return settings
 
 
@@ -984,18 +987,15 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
         logger.debug("Could not persist terminal ticket telemetry for run %d", run_id, exc_info=True)
 
     # A ticket created from WhatsApp keeps its source relationship through the
-    # run. Successful, validated work produces an unsent client draft and a
-    # Telegram review decision; failed work records the failure without
-    # pretending a reply is ready.
+    # run. Successful work opens verification → deploy assist → (only then) an
+    # unsent client draft Telegram review; failed work records the failure
+    # without pretending a reply is ready.
     try:
         with get_session() as db:
             lifecycle_run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
             lifecycle_ticket_id = int(lifecycle_run.ticket_id) if lifecycle_run and lifecycle_run.ticket_id else None
         if lifecycle_ticket_id:
-            from distr.core.kanban.whatsapp_work_lifecycle import (
-                notify_telegram_review,
-                prepare_completed_reply,
-            )
+            from distr.core.kanban.whatsapp_work_lifecycle import notify_post_completion
 
             result_summary = ""
             if isinstance(run_result, dict):
@@ -1008,14 +1008,13 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                         result_summary = str((completed_steps[-1] or {}).get("result") or "")
             elif run_result:
                 result_summary = str(run_result)
-            review = prepare_completed_reply(
+            # verify → learn (if rejected) → deploy assist → client draft
+            notify_post_completion(
                 ticket_id=lifecycle_ticket_id,
                 run_id=run_id,
                 status=status,
                 result_summary=result_summary[:1200],
             )
-            if review:
-                notify_telegram_review(review)
     except Exception:
         logger.exception("Could not prepare WhatsApp completion draft for run %d", run_id)
 
@@ -1049,6 +1048,22 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
             )
             if jira_review:
                 notify_telegram_jira_review(jira_review)
+            # Optional auto status transition (default cautious/off).
+            try:
+                from distr.core.settings import load_settings_from_db
+
+                settings = load_settings_from_db() or {}
+                auto_key = str(settings.get("jira_auto_transition_on_cli_complete") or "").strip().lower()
+                if auto_key in {"1", "true", "yes", "on"} and str(status or "").lower() == "completed":
+                    from distr.core.kanban.jira_work_lifecycle import maybe_auto_transition_jira_on_complete
+
+                    maybe_auto_transition_jira_on_complete(
+                        ticket_id=int(jira_ticket_id),
+                        run_id=int(run_id),
+                        target_status=str(settings.get("jira_auto_transition_target_status") or "Done"),
+                    )
+            except Exception:
+                logger.debug("Jira auto-transition skipped", exc_info=True)
     except Exception:
         logger.exception("Could not prepare Jira completion review for run %d", run_id)
 

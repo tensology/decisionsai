@@ -1,0 +1,26 @@
+{
+  "state_version": 2,
+  "status": "configured",
+  "detected": {
+    "codex": true,
+    "claude": true,
+    "cursor": true,
+    "pi": true,
+    "cline": false
+  },
+  "written": [
+    "/Users/paul/plugins/decisions-codex/skills/decisions-composio",
+    "/Users/paul/.codex/skills/decisions-composio",
+    "/Users/paul/.claude/skills/decisions-composio",
+    "/Users/paul/.pi/skills/decisions-composio",
+    "/Users/paul/.cursor/skills/decisions-composio",
+    "/Users/paul/.cursor/commands/decisions-composio.md",
+    "/Users/paul/.codex/commands/decisions-composio.md",
+    "/Users/paul/.claude/commands/decisions-composio.md",
+    "/Users/paul/.pi/commands/decisions-composio.md",
+    "/Users/paul/plugins/decisions-codex/skills/decisions-composio-harness/SKILL.md"
+  ],
+  "mcp_entries": [
+    "composio_connect"
+  ]
+}

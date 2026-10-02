@@ -1,0 +1,11 @@
+**/node_modules/
+**/.git/
+**/.cache/
+**/__pycache__/
+**/*.pyc
+vendor/open-dashboard/bun.lock
+vendor/**/dist/
+external/Vision2Web/.cache/
+MEMPALACE-*.log
+# Mining writes project artifacts into this pack dir; keep out of git
+entities.json

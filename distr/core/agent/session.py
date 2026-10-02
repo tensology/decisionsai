@@ -45,7 +45,7 @@ from .libs import (
     sd,
 )
 from distr.core.agent.transport import HotSwappableLocalAudioTransport
-from distr.core.audio.echo_canceller import ReferenceBuffer, NLMSEchoCanceller
+from distr.core.audio.echo_canceller import ReferenceBuffer, WebRTCAECFilter, resolve_aec_reference_delay_ms
 from distr.core.audio.timing import AudioTiming
 from .services import WhisperSTTService
 try:
@@ -71,6 +71,7 @@ from distr.core.chat_manager import ChatManagerCore
 from distr.core.signals import signal_manager
 from distr.core.db import get_session, Chat, Settings
 from distr.core.llm_factory import normalize_provider
+from distr.core.paths import WHISPER_MODEL_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class AgentSession:
     DEFAULT_CONFIG = {
         'stt': {
             'engine': 'whisper',
-            'model_path': 'base.en'
+            'model_path': WHISPER_MODEL_SIZE
         },
         'llm': {
             'engine': 'ollama',
@@ -112,9 +113,9 @@ class AgentSession:
         'audio': {
             'input_sample_rate': 16000,
             'output_sample_rate': 44100,  # Stable playback rate; transport resamples TTS to this
-            # Optional calibration for speaker/driver/acoustic delay. Keep zero
-            # as the safe default until a device-specific measurement exists.
-            'aec_reference_delay_ms': 0.0,
+            # Speaker/driver/acoustic delay for WebRTC AEC3 (ReferenceBuffer
+            # pull + AudioProcessor.stream_delay_ms). 0/unset resolves to 40ms.
+            'aec_reference_delay_ms': 40.0,
             'input_device': None,  # None = system default
             'output_device': None  # None = system default
         },
@@ -1669,22 +1670,35 @@ class AgentSession:
         self.logger.debug("Set pipecat logging to WARNING level")
         
         # Create AEC (Acoustic Echo Cancellation) filter and shared reference buffer.
-        # The reference buffer carries the speaker output signal; the NLMS filter
+        # The reference buffer carries the speaker output signal; WebRTC AEC3
         # subtracts it from the mic input before the VAD ever sees it.
         aec_ref_buf = ReferenceBuffer(
             max_duration_secs=2.0,
             sample_rate=audio_config['output_sample_rate'],
         )
-        aec_filter = NLMSEchoCanceller(
+        aec_delay_ms = resolve_aec_reference_delay_ms(
+            audio_config.get('aec_reference_delay_ms', 40.0)
+        )
+
+        def _persist_aec_delay(delay_ms: float) -> None:
+            # Sweep tools can call filter.set_reference_delay_ms(..., persist=True).
+            try:
+                from distr.core.services.settings_service import update_setting
+                update_setting('aec_reference_delay_ms', float(delay_ms))
+            except Exception as exc:
+                self.logger.debug("Could not persist aec_reference_delay_ms: %s", exc)
+            audio_config['aec_reference_delay_ms'] = float(delay_ms)
+
+        aec_filter = WebRTCAECFilter(
             reference_buffer=aec_ref_buf,
-            # The laptop speaker path has a long room/driver tail. The
-            # shorter, faster filter was leaving correlated residual peaks
-            # large enough to wake VAD, so use the physically measured stable
-            # setting from the MacBook loopback sweep.
-            filter_length=1600,   # 100ms impulse response @ 16kHz
-            mu=0.05,
             output_sample_rate=audio_config['output_sample_rate'],
-            reference_delay_ms=audio_config.get('aec_reference_delay_ms', 0.0),
+            reference_delay_ms=aec_delay_ms,
+            persist_delay_callback=_persist_aec_delay,
+        )
+        self.logger.info(
+            "AEC: WebRTCAECFilter ready (delay_ms=%.1f, output_sr=%s)",
+            aec_delay_ms,
+            audio_config['output_sample_rate'],
         )
         
         self.transport = HotSwappableLocalAudioTransport(
@@ -1703,8 +1717,8 @@ class AgentSession:
             output_device_name=audio_config.get('output_device') or 'System Default',
         )
         
-        # Give the STT service access to the AEC reference buffer so it can
-        # gate VAD interruptions during TTS playback (echo suppression).
+        # Give the STT service access to the AEC reference buffer so it knows
+        # when TTS is playing (continuous re-interrupt / metrics).
         audio_timing = AudioTiming()
         if self.stt_service is not None:
             self.stt_service._aec_ref_buf = aec_ref_buf

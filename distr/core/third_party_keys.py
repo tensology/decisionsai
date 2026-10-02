@@ -52,6 +52,23 @@ def composio_enabled() -> bool:
         return bool(composio_api_key())
 
 
+def jev_api_key() -> str:
+    """JevAI personal key used by its remote decision-routing MCP."""
+    return settings_secret("JEV_API_KEY", settings_fields=("jev_key",))
+
+
+def jev_enabled() -> bool:
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db() or {}
+        if settings.get("jev_enabled"):
+            return bool(jev_api_key())
+        return False
+    except Exception:
+        return bool(jev_api_key())
+
+
 def fal_api_key() -> str:
     return settings_secret("FAL_KEY", settings_fields=("fal_key",))
 
@@ -80,6 +97,11 @@ def sync_third_party_env_keys() -> None:
     pixazo = pixazo_api_key()
     if pixazo:
         os.environ["PIXAZO_API_KEY"] = pixazo
+    jev = jev_api_key()
+    if jev and jev_enabled():
+        os.environ["JEV_API_KEY"] = jev
+    else:
+        os.environ.pop("JEV_API_KEY", None)
 
 
 def exa_api_key() -> str:

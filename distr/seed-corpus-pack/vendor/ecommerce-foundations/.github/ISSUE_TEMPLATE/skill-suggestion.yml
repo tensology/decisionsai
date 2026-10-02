@@ -1,0 +1,82 @@
+name: Skill suggestion
+description: Propose a new skill, or a substantive addition to an existing one.
+title: "[skill] "
+labels: ["skill-suggestion"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      description: Is this a new skill or an addition to an existing one?
+      options:
+        - New skill
+        - Addition to an existing skill
+    validations:
+      required: true
+
+  - type: input
+    id: name
+    attributes:
+      label: Skill name (kebab-case)
+      description: Either the proposed new skill name, or the existing skill to extend.
+      placeholder: returns-and-rmas
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and motivation
+      description: What is the skill (or addition) about? Why does the package need it? Which agent decisions does it inform?
+      placeholder: |
+        The skill covers the decision space of [topic]. Without it, an agent working on [task type] has to invent vocabulary and patterns from training data.
+    validations:
+      required: true
+
+  - type: textarea
+    id: variation
+    attributes:
+      label: Variation dimensions
+      description: Which axes does the pattern adapt along? (Business model, product type, geography, customer model, etc.)
+      placeholder: |
+        - B2C vs B2B vs marketplace
+        - Physical vs digital vs service
+        - Single-region vs multi-region
+    validations:
+      required: true
+
+  - type: textarea
+    id: sources
+    attributes:
+      label: Candidate sources
+      description: Which primary sources cover this domain? Two or more required per the triangulation rule.
+      placeholder: |
+        - https://docs.medusajs.com/...
+        - https://docs.stripe.com/...
+        - https://docs.shopify.dev/...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      description: Where does this belong?
+      options:
+        - Core (universal commerce concept)
+        - Cross-cutting (idempotency / webhooks / saga / domain-events style)
+        - Vertical pack (pharmacy, marketplace, subscriptions, etc.) → wrong repo
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Design principles
+      options:
+        - label: The proposed skill frames a decision space; it does not prescribe a single answer.
+          required: true
+        - label: The skill is not platform-specific (no "use Stripe", "use Medusa").
+          required: true
+        - label: The skill is not vertical-specific (no pharmacy, marketplace, subscriptions).
+          required: true

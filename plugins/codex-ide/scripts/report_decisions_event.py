@@ -171,7 +171,7 @@ def _event_body(
         "workflow_id": args.workflow_id,
         "run_id": args.run_id,
         "thread_id": args.thread_id,
-        "payload": _json_arg(args.payload_json),
+        "payload": _with_thread_payload(args),
         "evidence": _json_arg(args.evidence_json),
         "harness": args.harness or args.source,
         "project_folder": _project_folder(args),
@@ -314,6 +314,87 @@ def _body_for(
     )
 
 
+def _with_thread_payload(args: argparse.Namespace) -> dict:
+    payload = _json_arg(args.payload_json)
+    thread_id = str(getattr(args, "thread_id", "") or "").strip()
+    if thread_id:
+        payload["thread_id"] = thread_id
+        payload["external_thread_id"] = thread_id
+    return payload
+
+
+def _locks_path(surface: str) -> Path:
+    return Path.home() / ".decisions" / "ide-threads" / f"{surface}.json"
+
+
+def _read_locks(surface: str) -> dict:
+    try:
+        data = json.loads(_locks_path(surface).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_lock(surface: str, folder: str, thread_id: str, seen_at: float) -> None:
+    if not thread_id:
+        return
+    path = _locks_path(surface)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    locks = _read_locks(surface)
+    locks[folder] = {"thread_id": thread_id, "seen_at": seen_at}
+    path.write_text(json.dumps(locks), encoding="utf-8")
+
+
+def _discover_codex_thread(folder: str) -> tuple[str, float]:
+    """Newest Codex IDE thread whose cwd is this project."""
+    import sqlite3
+
+    db = Path.home() / ".codex" / "state_5.sqlite"
+    if not db.is_file():
+        return "", 0.0
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        rows = conn.execute(
+            "select id, cwd, coalesce(updated_at_ms, updated_at * 1000) "
+            "from threads order by 3 desc limit 40"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return "", 0.0
+    folder_key = folder.rstrip("/")
+    for thread_id, cwd, updated in rows:
+        text = str(cwd or "").rstrip("/")
+        if text == folder_key or text.startswith(folder_key + "/"):
+            return str(thread_id or ""), float(updated or 0) / 1000.0
+    return "", 0.0
+
+
+def _resolve_plugin_thread_id(args: argparse.Namespace) -> str:
+    """Lock this Codex IDE thread. Development harness sessions are a different surface."""
+    folder = str(Path(args.cwd or os.getcwd()).expanduser().resolve())
+    args.cwd = folder
+    surface = (args.source or "codex").strip().lower() or "codex"
+    explicit = str(args.thread_id or "").strip()
+    current = _read_locks(surface).get(folder)
+    current = current if isinstance(current, dict) else {}
+    locked = str(current.get("thread_id") or "")
+    locked_seen = float(current.get("seen_at") or 0)
+    found_id, found_at = _discover_codex_thread(folder) if surface == "codex" else ("", 0.0)
+    if explicit:
+        chosen, seen = explicit, max(found_at, locked_seen, 1.0)
+    elif args.new_thread:
+        chosen, seen = found_id, found_at
+    elif found_id and found_at > locked_seen:
+        chosen, seen = found_id, found_at
+    elif locked:
+        chosen, seen = locked, locked_seen
+    else:
+        chosen, seen = found_id, found_at
+    if chosen:
+        _write_lock(surface, folder, chosen, seen or 1.0)
+    return chosen
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Report a Codex event to DecisionsAI.")
     parser.add_argument("--callback-url", default="")
@@ -337,13 +418,16 @@ def main() -> int:
     parser.add_argument("--ticket-id", type=int, default=None)
     parser.add_argument("--board-id", type=int, default=None)
     parser.add_argument("--project-id", type=int, default=None)
-    parser.add_argument("--thread-id", default="")
+    parser.add_argument("--thread-id", default="", help="Codex IDE thread id. The reporter locks this for the project.")
+    parser.add_argument("--new-thread", action="store_true", help="Start a new Codex IDE thread lock for this project.")
     parser.add_argument("--session-id", default="")
     parser.add_argument("--payload-json", default="")
     parser.add_argument("--evidence-json", default="")
     parser.add_argument("--strict", action="store_true", help="Return non-zero and print errors when DecisionsAI is offline.")
     args = parser.parse_args()
 
+    if (args.source or "").strip().lower() == "codex" and not _uses_harness_endpoint(args, args.callback_url or ""):
+        args.thread_id = _resolve_plugin_thread_id(args)
     _apply_packet_meta(args)
     target_url = _target_url(args)
     bridge_endpoint = _is_workflow_bridge_url(target_url)
@@ -395,6 +479,8 @@ def main() -> int:
         if outputs and (not harness_endpoint or _debug_enabled()):
             sys.stdout.write(outputs[-1])
             sys.stdout.write("\n")
+        if args.thread_id and not harness_endpoint:
+            sys.stdout.write(f"thread_id={args.thread_id}\n")
         return 0
 
     code, text = _post_event(
@@ -414,6 +500,8 @@ def main() -> int:
     if text and (not harness_endpoint or _debug_enabled()):
         sys.stdout.write(text)
         sys.stdout.write("\n")
+    if args.thread_id and not harness_endpoint:
+        sys.stdout.write(f"thread_id={args.thread_id}\n")
     return code
 
 

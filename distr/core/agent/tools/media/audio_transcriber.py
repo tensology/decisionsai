@@ -7,6 +7,8 @@ Runs as a separate process to avoid blocking.
 """
 
 from typing import Optional, Any
+
+from distr.core.paths import WHISPER_MODEL_SIZE
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import logging
@@ -77,7 +79,7 @@ def _transcribe_with_assemblyai(audio_file_path: str, api_key: str) -> Optional[
         return None
 
 
-def _transcribe_with_whispercpp(audio_file_path: str, model: str = "base.en") -> Optional[str]:
+def _transcribe_with_whispercpp(audio_file_path: str, model: str = WHISPER_MODEL_SIZE) -> Optional[str]:
     """Transcribe audio file using Whisper.cpp."""
     try:
         from distr.core.agent.libs import pwc, WHISPER_AVAILABLE
@@ -334,7 +336,7 @@ class AudioTranscriberTool(BaseTool):
             from distr.core.settings import load_settings_from_db
             settings = load_settings_from_db()
             assemblyai_key = settings.get('assemblyai_key', '') if settings.get('assemblyai_enabled', False) else None
-            whisper_model = "base.en"  # Default Whisper model
+            whisper_model = WHISPER_MODEL_SIZE
             
             # Get current chat ID for notifications
             chat_id = None

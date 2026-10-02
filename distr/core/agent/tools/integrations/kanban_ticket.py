@@ -3362,15 +3362,13 @@ class KanbanTicketTool(BaseTool):
                             ticket_id_val,
                         )
                     try:
-                        from distr.core.kanban.whatsapp_work_lifecycle import notify_telegram_review, prepare_completed_reply
-                        review = prepare_completed_reply(
+                        from distr.core.kanban.whatsapp_work_lifecycle import notify_post_completion
+                        notify_post_completion(
                             ticket_id=ticket_id_val,
                             run_id=int(audit_id or 0),
                             status="completed",
                             result_summary=str(result.output or "")[:1200],
                         )
-                        if review:
-                            notify_telegram_review(review)
                     except Exception:
                         logger.exception("Could not prepare WhatsApp CLI completion draft")
                     try:

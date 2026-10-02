@@ -59,6 +59,12 @@ def append_run_steering_entry(
         )
     except Exception:
         pass
+    try:
+        from distr.core.mempalace.wiring import dual_write_steering
+
+        dual_write_steering(message=text, run_id=run_id, event_type=event_type)
+    except Exception:
+        pass
     return True
 
 

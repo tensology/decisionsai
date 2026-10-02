@@ -737,6 +737,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             )
 
             forced_names = forced_tool_names_for_text(last_user_message)
+            hold_locked_ide_thread = False
+            try:
+                from distr.core.ide_threads.lock import hold_ide_thread_for_message
+
+                hold_locked_ide_thread = hold_ide_thread_for_message(last_user_message)
+            except Exception:
+                hold_locked_ide_thread = False
             active_workflow_names = set(
                 getattr(self, "_active_workflow_tool_names", set())
             )
@@ -755,6 +762,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 if tool is not None and name not in retrieved_names:
                     retrieved.append(tool)
                     retrieved_names.add(name)
+
+            if hold_locked_ide_thread and "ide_thread" not in retrieved_names:
+                locked_tool = self._tools_dict.get("ide_thread")
+                if locked_tool is not None:
+                    retrieved.append(locked_tool)
+                    retrieved_names.add("ide_thread")
 
             sticky_names = set(getattr(self, "_sticky_tool_names", set()))
             sticky = [t for t in self._tools if t.name not in retrieved_names and t.name in sticky_names]
@@ -838,7 +851,209 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             logger.debug("_get_filtered_tools fallback: %s", e)
             return self._tools
 
+    def _maybe_inject_rag_context(self, text: str) -> str:
+        """When a local RAG index exists, prepend retrieved context for chat replies."""
+        clean = str(text or "").strip()
+        if not clean or len(clean.split()) < 3:
+            return clean
+        # MemPalace path when flag ON (LlamaIndex store left intact for rollback).
+        try:
+            from distr.core.mempalace.wiring import prefer_read_rag_context
+
+            mp_ctx = prefer_read_rag_context(clean)
+            if mp_ctx:
+                block = "[Retrieved project context — MemPalace]\n" + mp_ctx[:2500]
+                logger.info("MemPalace RAG inject (%d chars)", len(mp_ctx))
+                return block + "\n\nUser request:\n" + clean
+        except Exception:
+            logger.debug("MemPalace RAG inject skipped", exc_info=True)
+        try:
+            from pathlib import Path as _Path
+            from distr.core.agent.services.rag.integration import query_rag
+
+            index_path = _Path("./llama_index_storage")
+            if not index_path.exists() or not any(index_path.iterdir()):
+                return clean
+            result = query_rag(clean)
+            if not isinstance(result, dict) or not result.get("success"):
+                return clean
+            answer = str(result.get("response") or result.get("answer") or "").strip()
+            sources = result.get("sources") or result.get("source_nodes") or []
+            if not answer and not sources:
+                return clean
+            source_bits = []
+            for item in (sources or [])[:4]:
+                if isinstance(item, dict):
+                    label = item.get("file_name") or item.get("source") or item.get("id") or ""
+                else:
+                    label = str(item)
+                if label:
+                    source_bits.append(str(label))
+            block = "[Retrieved project context]\n" + (answer[:2500] if answer else "(context snippets)")
+            if source_bits:
+                block += "\nSources: " + ", ".join(source_bits)
+            logger.info("RAG auto-query injected (%d chars, %d sources)", len(answer), len(source_bits))
+            return block + "\n\nUser request:\n" + clean
+        except Exception:
+            logger.debug("RAG auto-query skipped", exc_info=True)
+            return clean
+
+    def _try_route_work_intake(self, text: str, *, source: str = "web") -> bool:
+
+        """Route work-intent utterances through WorkIntake (voice/oracle front door).
+
+        Typed Chat already hits WorkIntake in the desktop signal bridge. Oracle/PTT
+        transcriptions land here first — bridge via intake/dispatch so Development
+        threads are created without loading them into the Chat agent (409 wall).
+        """
+        clean = str(text or "").strip()
+        if not clean:
+            return False
+        try:
+            from distr.core.work_intake import WorkIntake, get_work_intake_service
+
+            chat_id = None
+            project_hint = ""
+            metadata: dict = {}
+            if getattr(self, "chat_manager", None):
+                try:
+                    chat_id = self.chat_manager.get_current_chat()
+                except Exception:
+                    chat_id = None
+            if chat_id is not None:
+                metadata["chat_id"] = int(chat_id)
+                try:
+                    from distr.core.db import Chat, get_session
+
+                    with get_session() as session:
+                        chat = session.get(Chat, int(chat_id))
+                        if chat is not None and getattr(chat, "project_id", None):
+                            project_hint = str(int(chat.project_id))
+                            metadata["active_project_id"] = int(chat.project_id)
+                except Exception:
+                    logger.debug("Agent work-intake project lookup failed", exc_info=True)
+
+            intake = WorkIntake(
+                source=source,
+                user_text=clean,
+                source_thread_id=str(chat_id or ""),
+                project_hint=project_hint,
+                metadata=metadata,
+            )
+            decision = get_work_intake_service().ingest(intake)
+            if not decision.handled:
+                return False
+            reply = decision.response_text or "Your request was routed."
+            if chat_id is not None and getattr(self, "chat_manager", None):
+                try:
+                    self.chat_manager.add_assistant_message(int(chat_id), reply)
+                except Exception:
+                    logger.debug("Could not persist work-intake reply on chat", exc_info=True)
+            if getattr(self, "event_queue", None) and chat_id is not None:
+                try:
+                    self.event_queue.put(
+                        ("chat_message", {"chat_id": int(chat_id), "role": "assistant", "content": reply}),
+                        block=False,
+                    )
+                except Exception:
+                    pass
+            logger.info(
+                "Agent voice/oracle routed via WorkIntake action=%s ticket=%s run=%s",
+                decision.action.value,
+                decision.ticket_id,
+                decision.workflow_run_id,
+            )
+            return True
+        except Exception:
+            logger.exception("Agent WorkIntake routing failed; continuing conversational path")
+            return False
+
+    def _should_defer_type_text_fast_action(self, fast_action, text: str) -> bool:
+        """Debounce type_text FAs so partial/growing ASR utterances do not double-fire.
+
+        Returns True when the FA must not execute now (caller should skip FA / not
+        drop the turn unless it was already handled). Also mutates tool_args['text']
+        to a suffix delta when a longer transcript supersedes a recently typed prefix.
+        """
+        from distr.core.agent.services.llm.fast_action_detector import ActionType
+
+        if fast_action is None or fast_action.action_type != ActionType.TYPE_TEXT:
+            return False
+        clean = str(text or "").strip()
+        if not clean:
+            return True
+
+        tool_args = getattr(fast_action, "tool_args", {}) or {}
+        if tool_args.get("source") == "clipboard":
+            return False
+
+        # Very short unpunctuated fragments are often mid-utterance ASR slices —
+        # skip FA only (caller should continue without treating as handled).
+        has_delimiter = bool(re.search(r'["\u201c\u201d\'\u2018\u2019<>]', clean))
+        if (
+            not has_delimiter
+            and not re.search(r'[.!?]$', clean)
+            and len(clean.split()) < 3
+        ):
+            logger.info("TypeText FA deferred — utterance looks uncommitted: %r", clean[:80])
+            setattr(self, "_type_text_fa_soft_defer", True)
+            return True
+
+        now = time.monotonic()
+        previous = str(getattr(self, "_last_type_text_fa_text", "") or "")
+        previous_at = float(getattr(self, "_last_type_text_fa_at", 0.0) or 0.0)
+        setattr(self, "_type_text_fa_soft_defer", False)
+        if previous and (now - previous_at) <= 1.5:
+            prev_norm = previous.lower().strip()
+            cur_norm = clean.lower().strip()
+            if cur_norm == prev_norm:
+                logger.info("TypeText FA suppressed — duplicate within debounce window")
+                return True
+            if prev_norm.startswith(cur_norm) and len(cur_norm) < len(prev_norm):
+                logger.info("TypeText FA suppressed — shorter prefix of recent type utterance")
+                return True
+            if cur_norm.startswith(prev_norm) and len(cur_norm) > len(prev_norm):
+                # Already typed the prefix; only type the new suffix to avoid double-fire.
+                typed_payload = str(tool_args.get("text") or clean)
+                # Prefer stripping the spoken command prefix ("type ") then prior payload.
+                suffix = clean[len(previous):]
+                if not suffix.strip():
+                    return True
+                # If tool_args carries the full command, extract only new content after prior.
+                prior_content = previous
+                for prefix in ("type ", "dictate ", "type out ", "dictate out "):
+                    if prior_content.lower().startswith(prefix):
+                        prior_content = prior_content[len(prefix):]
+                        break
+                content = typed_payload
+                for prefix in ("type ", "dictate ", "type out ", "dictate out "):
+                    if content.lower().startswith(prefix):
+                        content = content[len(prefix):]
+                        break
+                if content.lower().startswith(prior_content.lower()):
+                    delta = content[len(prior_content):]
+                else:
+                    delta = suffix
+                delta = delta.lstrip(" ,.;:")
+                if not delta:
+                    logger.info("TypeText FA suppressed — superseding utterance added no new text")
+                    return True
+                tool_args = dict(tool_args)
+                tool_args["text"] = delta
+                fast_action.tool_args = tool_args
+                logger.info(
+                    "TypeText FA delta-only for superseding utterance (%d→%d chars, delta=%r)",
+                    len(previous),
+                    len(clean),
+                    delta[:40],
+                )
+
+        self._last_type_text_fa_text = clean
+        self._last_type_text_fa_at = now
+        return False
+
     def _check_fast_actions(self):
+
         """Check if the last user message triggers a fast action (bypasses LLM).
 
         Returns a DetectedAction if a fast action is found, or None.
@@ -883,6 +1098,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 return replay
         fast_action = detect_fast_action(last_message)
         if fast_action and fast_action.confidence >= 0.9 and fast_action.action_type not in (ActionType.CONVERSATIONAL, ActionType.UNKNOWN):
+            if self._should_defer_type_text_fast_action(fast_action, last_message):
+                return None
             return fast_action
         if normalized not in repeat_phrases:
             self._last_repeatable_fast_action = None
@@ -1803,6 +2020,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             text,
             source="telegram" if is_telegram else "chat",
         )
+        if isinstance(user_message_content, str):
+            user_message_content = self._maybe_inject_rag_context(user_message_content)
         image_path = get_image_path_from_context(uploaded_image_path)
 
         if image_path and os.path.exists(image_path):
@@ -2050,6 +2269,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 logger.warning("Duplicate user message detected: '%s...' — skipping", text[:50])
                 return
 
+            # Voice/oracle front door: work-intent → WorkIntake → Development thread
+            # (do not load Dev threads into Chat agent; bridge via intake/dispatch).
+            if self._try_route_work_intake(text, source="web"):
+                current_chat_id = self._ensure_user_message_persisted(text)
+                self._messages.append({"role": "user", "content": text})
+                return
+
             # Fast action detection
             from distr.core.agent.services.llm.bulk_instruction import should_bypass_fast_action_detection
             has_clipboard_context = any(
@@ -2066,6 +2292,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 and fast_action.action_type != ActionType.CONVERSATIONAL
                 and (fast_action.action_type != ActionType.UNKNOWN or fast_action.tool_name)
             )
+            if can_execute_directly:
+                if self._should_defer_type_text_fast_action(fast_action, text):
+                    if getattr(self, "_type_text_fa_soft_defer", False):
+                        logger.info("⚡ TYPE_TEXT FA soft-deferred; continuing without FA")
+                        can_execute_directly = False
+                    else:
+                        logger.info("⚡ TYPE_TEXT FA suppressed (debounce/duplicate)")
+                        return
             if can_execute_directly:
                 logger.info("⚡ FAST ACTION: %s (confidence %.2f)", fast_action.action_type.value, fast_action.confidence)
                 self._processed_fast_actions.clear()

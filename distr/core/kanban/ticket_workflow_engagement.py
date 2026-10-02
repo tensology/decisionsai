@@ -98,6 +98,16 @@ def build_operator_waiting_message(
         )
     if kind in {"step_review", "run_briefing", "pre_execution_approval"}:
         return f"{subject} is waiting for your approval before {phase}. Reply to approve or stop the run."
+    if kind == "verification_review":
+        return (
+            f"{subject} finished work and is waiting for your verification. "
+            "Say it looks good to continue to deploy assist, or say what is wrong so I can learn."
+        )
+    if kind == "deploy_assist":
+        return (
+            f"{subject} is waiting for deploy assist. "
+            "Confirm Production or Development (decision only — nothing will be deployed)."
+        )
     if kind == "worker_needs_input":
         return f"{subject} needs a short clarification before it can continue with {phase}."
     return f"{subject} is waiting at {phase}. The current state and details are recorded in Decisions."

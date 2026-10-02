@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base, Chat
-from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, ProjectExecutionSession
 from distr.core.db.projects import Project
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, DevelopmentWorkItem
 from distr.core.workflow import service
@@ -194,6 +194,60 @@ def test_direct_execution_updates_reconcile_linked_ticket_status(tmp_path, monke
 
     with factory() as db:
         assert db.get(KanbanTicket, ticket_id).workflow_status == "waiting"
+
+
+def test_execution_state_persists_terminal_provider_status_to_chat_and_ticket(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(development_harness, "get_session", lambda: _session(factory))
+    monkeypatch.setattr(development_harness, "_notify", lambda: None)
+    with factory() as db:
+        board = KanbanBoard(name="Development")
+        db.add(board)
+        db.flush()
+        lane = KanbanLane(board_id=board.id, name="Doing")
+        db.add(lane)
+        db.flush()
+        ticket = KanbanTicket(title="Interrupted local run", lane_id=lane.id, workflow_status="running")
+        session = ProjectExecutionSession(
+            ticket_id=None,
+            project_id=7,
+            route_type="project_cli",
+            route_backend="pi",
+            selected_model="qwen3.8:27b",
+            status="cancelled",
+            error="Standalone provider session was interrupted by app restart.",
+        )
+        db.add_all([ticket, session])
+        db.flush()
+        chat = Chat(
+            title="Interrupted local run",
+            params=json.dumps({"development": {"execution": {
+                "status": "running",
+                "job_id": "local-job",
+                "execution_session_id": session.id,
+            }}}),
+        )
+        db.add(chat)
+        db.flush()
+        db.add(DevelopmentWorkItem(
+            chat_id=chat.id,
+            identity_key="ticket:interrupted",
+            local_ticket_id=ticket.id,
+        ))
+        db.commit()
+        chat_id, ticket_id = chat.id, ticket.id
+
+    state = development_harness.development_execution_state(chat_id)
+
+    assert state["status"] == "cancelled"
+    assert state["error"] == "Standalone provider session was interrupted by app restart."
+    with factory() as db:
+        stored_chat = db.get(Chat, chat_id)
+        stored_execution = json.loads(stored_chat.params)["development"]["execution"]
+        assert stored_execution["status"] == "cancelled"
+        assert db.get(KanbanTicket, ticket_id).workflow_status == "cancelled"
 
 
 def test_workflow_cancel_reconciles_linked_ticket_status(monkeypatch):

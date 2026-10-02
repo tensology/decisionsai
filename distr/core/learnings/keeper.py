@@ -190,6 +190,12 @@ def log_learning(
 
         # Auto-compact if too many entries for this key
         _maybe_compact(learnings_file, key)
+        try:
+            from distr.core.mempalace.wiring import dual_write_learning
+
+            dual_write_learning(insight=insight, key=key, learning_type=entry_type)
+        except Exception:
+            logger.debug("mempalace dual-write learning skipped", exc_info=True)
         return True
     except OSError as e:
         logger.warning("Failed to log learning: %s", e)

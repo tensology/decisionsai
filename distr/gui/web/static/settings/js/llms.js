@@ -328,6 +328,10 @@ async function loadLLMsSettings(opts) {
         }
         const settings = await response.json();
 
+        const layaMode = settings.laya_mode || 'off';
+        const layaModeInput = document.querySelector(`input[name="laya_mode"][value="${layaMode}"]`);
+        if (layaModeInput) layaModeInput.checked = true;
+
         populateSttOptions(settings);
         const instantDictation = document.getElementById('instant_dictation');
         if (instantDictation) {
@@ -381,6 +385,7 @@ async function loadLLMsSettings(opts) {
         await Promise.all(modelLoadTasks);
 
         await populateProjectCliRoutes(settings);
+        await loadLayaStatus();
         updateDownloadButtonVisibility();
         await refreshS2sLocksUi();
         if (opts.forceModelReload && typeof window.showNotification === 'function') {
@@ -464,6 +469,7 @@ async function saveLLMsSettings() {
             project_cli_medium_model: document.getElementById('project_cli_medium_model')?.value || 'auto',
             project_cli_high_backend: document.getElementById('project_cli_high_backend')?.value || 'codex',
             project_cli_high_model: document.getElementById('project_cli_high_model')?.value || 'gpt-5.3-codex',
+            laya_mode: document.querySelector('input[name="laya_mode"]:checked')?.value || 'off',
             instant_dictation: document.getElementById('instant_dictation') ? document.getElementById('instant_dictation').checked : true
         };
 
@@ -1304,6 +1310,7 @@ function initLLMEnhancements() {
     ensureProjectCliStatusPills();
     ensureBenchmarkButtons();
     ensureBenchmarkModal();
+    initLayaControls();
     const { saveBtn } = _getLLMActionButtons();
     if (saveBtn && saveBtn.id === 'llms_inline_save' && saveBtn.dataset.bound !== '1') {
         saveBtn.dataset.bound = '1';
@@ -1311,6 +1318,75 @@ function initLLMEnhancements() {
             saveLLMsSettings();
         });
     }
+}
+
+async function loadLayaStatus() {
+    const statusEl = document.getElementById('laya_status');
+    if (!statusEl) return;
+    try {
+        const response = await fetch('/api/llms/laya/status');
+        if (!response.ok) throw new Error('Status check failed');
+        const status = await response.json();
+        statusEl.textContent = status.installed
+            ? `Installed ${status.version} · ${String(status.device || '').toUpperCase()} · ${status.mode === 'off' ? 'off' : status.connected ? 'connected' : 'ready'}`
+            : 'Not installed';
+        statusEl.className = status.installed
+            ? 'rounded-full border border-[#166534] bg-[#12352d] px-3 py-1 text-xs text-[#86efac]'
+            : 'rounded-full border border-[#854d0e] bg-[#352d12] px-3 py-1 text-xs text-[#fde68a]';
+        document.querySelectorAll('input[name="laya_mode"]').forEach(function (input) {
+            input.disabled = !status.installed && input.value !== 'off';
+        });
+        ['laya_update', 'laya_test', 'laya_remove'].forEach(function (id) {
+            const button = document.getElementById(id);
+            if (button) button.disabled = !status.installed;
+        });
+        const selected = document.querySelector(`input[name="laya_mode"][value="${status.mode || 'off'}"]`);
+        if (selected) selected.checked = true;
+    } catch (error) {
+        statusEl.textContent = error.message;
+    }
+}
+
+async function runLayaAction(action, button) {
+    if (action === 'remove' && !window.confirm('Remove the dedicated Laya environment and disable Laya routing?')) return;
+    const resultEl = document.getElementById('laya_test_result');
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = action === 'test' ? 'Testing...' : 'Working...';
+    if (resultEl) resultEl.textContent = action === 'test' ? 'Starting Laya and checking MCP tools...' : '';
+    try {
+        const response = await fetch('/api/llms/laya/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action })
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || 'Laya action failed');
+        if (resultEl) {
+            if (action === 'test') {
+                const result = payload.result || {};
+                const assessment = result.assessment || {};
+                resultEl.textContent = `${(result.tools || []).length} MCP tools found. Test route: ${assessment.complexity || 'unknown'} (${Math.round((assessment.confidence || 0) * 100)}% minimum confidence).`;
+            } else {
+                resultEl.textContent = action === 'remove' ? 'Laya removed.' : 'Laya is ready.';
+            }
+        }
+        await loadLayaStatus();
+    } catch (error) {
+        if (resultEl) resultEl.textContent = error.message;
+    } finally {
+        button.disabled = false;
+        button.textContent = original;
+    }
+}
+
+function initLayaControls() {
+    ['install', 'update', 'test', 'remove'].forEach(function (action) {
+        const button = document.getElementById(`laya_${action}`);
+        if (!button || button.dataset.bound === '1') return;
+        button.dataset.bound = '1';
+        button.addEventListener('click', function () { runLayaAction(action, button); });
+    });
 }
 
 function setActiveLLMSubtab(tabName) {

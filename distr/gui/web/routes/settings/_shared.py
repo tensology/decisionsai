@@ -126,6 +126,8 @@ class ThirdPartySettings(BaseModel):
     masko_key: str = ""
     composio_enabled: bool = False
     composio_key: str = ""
+    jev_enabled: bool = False
+    jev_key: str = ""
     tensology_enabled: bool = False
     tensology_key: str = ""
 
@@ -279,6 +281,7 @@ class LLMSettings(BaseModel):
     project_cli_medium_codex_speed: str = ""
     project_cli_high_codex_intelligence: str = ""
     project_cli_high_codex_speed: str = ""
+    laya_mode: str = "off"
     instant_dictation: bool = True
 
 

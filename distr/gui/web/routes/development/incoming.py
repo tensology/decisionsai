@@ -80,3 +80,30 @@ def register_routes(router, templates):
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+    @router.post("/workflows/incoming/gmail/ingest")
+    async def workflow_incoming_gmail_ingest(request: Request):
+        """Promote a displayed Gmail thread into WorkIntake(source=gmail)."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            from distr.core.incoming.service import ingest_gmail_as_work
+
+            decision = await asyncio.to_thread(
+                ingest_gmail_as_work,
+                subject=str((body or {}).get("subject") or ""),
+                body=str((body or {}).get("text") or (body or {}).get("body") or ""),
+                message_id=str((body or {}).get("source_message_id") or (body or {}).get("message_id") or ""),
+                thread_id=str((body or {}).get("source_thread_id") or (body or {}).get("thread_id") or ""),
+                sender=str((body or {}).get("sender") or ""),
+                board_hint=str((body or {}).get("board_hint") or ""),
+                project_hint=str((body or {}).get("project_hint") or ""),
+                force_ticket=bool((body or {}).get("force_ticket", True)),
+            )
+            return JSONResponse({"success": True, "decision": decision})
+        except Exception as e:
+            logger.error("Gmail WorkIntake ingest failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+

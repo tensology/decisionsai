@@ -1,0 +1,2 @@
+LIVE_REF=/Users/paul/development/WORK/CRYSTALLOGIC/www.merrypak.co.za
+NOTE=Paul called this Meripack; folder is Merrypak / www.merrypak.co.za

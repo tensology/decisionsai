@@ -23,6 +23,24 @@ from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
 
 # Default settings
 DEFAULT_SETTINGS = {
+    # Cautious default: off. Set true to auto-move Jira issues on CLI completion.
+    "jira_auto_transition_on_cli_complete": False,
+    "jira_auto_transition_target_status": "Done",
+
+    # Prefer DECISIONSAI_WHATSAPP_DRY_RUN=1 for local claim/review without live relay POST.
+    "whatsapp_send_dry_run": False,
+
+    # MemPalace as consolidated memory backend (default ON — dual-write + prefer-read).
+    # Soft-fails if chromadb/mempalace missing. Env: DECISIONS_MEMPALACE_MEMORY_BACKEND=0 to disable.
+    "mempalace_memory_backend": True,
+
+    # Durable cost ledger (default ON for local recording). Env: DECISIONS_COST_LEDGER_ENABLED.
+    # Recording is a no-op when False. Not yet a Settings ORM column — DEFAULT + env only.
+    "cost_ledger_enabled": True,
+    # Invoice display: blended (one figure) | explicit (tokens + provider + resource).
+    # Env: DECISIONS_COST_INVOICE_DISPLAY. UI query param display= overrides for view only.
+    "cost_invoice_display": "blended",
+
     'load_splash_sound': True,
     'show_about': False,
     'welcome_greet_me': True,
@@ -61,6 +79,8 @@ DEFAULT_SETTINGS = {
     'fishaudio_key': '',
     'fishaudio_voice': '9a9cf47702da476aa4629e2506d4a857',
     'fishaudio_tts_model': 's2.1-pro-free',
+    'jev_enabled': False,
+    'jev_key': '',
     'ollama_enabled': True,
     'ollama_url': 'http://localhost:11434/',
     'accepted_eula': False,

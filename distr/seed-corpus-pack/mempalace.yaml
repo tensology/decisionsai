@@ -1,0 +1,35 @@
+wing: seed_corpus_pack
+rooms:
+- name: domains
+  description: Files from domains/
+  keywords:
+  - domains
+  - domains
+- name: pack_state
+  description: Files from pack-state/
+  keywords:
+  - pack_state
+  - pack-state
+- name: copied_skills
+  description: Files from copied-skills/
+  keywords:
+  - copied_skills
+  - copied-skills
+- name: external
+  description: Files from external/
+  keywords:
+  - external
+  - external
+- name: profiles
+  description: Files from profiles/
+  keywords:
+  - profiles
+  - profiles
+- name: vendor
+  description: Files from vendor/
+  keywords:
+  - vendor
+  - vendor
+- name: general
+  description: Files that don't fit other rooms
+  keywords: []

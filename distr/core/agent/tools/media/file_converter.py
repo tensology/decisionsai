@@ -288,7 +288,8 @@ def _transcribe_to_text(input_path: str, output_path: str, chat_manager=None, ch
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
         assemblyai_key = settings.get('assemblyai_key', '') if settings.get('assemblyai_enabled', False) else None
-        whisper_model = "base.en"  # Default Whisper model
+        from distr.core.paths import WHISPER_MODEL_SIZE
+        whisper_model = WHISPER_MODEL_SIZE
         
         transcript = None
         

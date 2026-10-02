@@ -79,6 +79,17 @@ def append_ledger(
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    try:
+        from distr.core.mempalace.wiring import dual_write_workspace_event
+
+        dual_write_workspace_event(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            message=entry.get("message") or "",
+            event_type=event_type,
+        )
+    except Exception:
+        pass
 
 
 def write_handoff(

@@ -45,6 +45,13 @@ Blockers: ...
    is fallback transport for automation or setup checks, not the canonical
    conversation. Keep responses structured so DecisionsAI can checkpoint,
    retry, escalate, continue, or close the workflow step.
+
+   This chat is the Cursor IDE thread for the open project. It is independent
+   of the Decisions Development section and whichever harness that section is
+   using. A follow-up from the user stays in this chat. Report every turn with
+   the reporter. It prints `thread_id=` and locks that Cursor chat id for the
+   project. Pass `--thread-id` with that value on later reports in this chat.
+   Pass `--new-thread` only when the user asked to start a new Cursor chat.
 10. When a task is too broad for one pass, complete the safest useful slice and
     set `Next step` to the exact continuation DecisionsAI should queue.
 11. Apply the DecisionsAI harness prerequisites on every implementation task:

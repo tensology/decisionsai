@@ -613,6 +613,9 @@ else
     echo -e "${GREEN}✓${NC} Dependencies already installed"
 fi
 
+# pywhispercpp's own submodule lags whisper.cpp. Rebuild when the stamp is missing.
+"$SCRIPT_DIR/scripts/install_pywhispercpp.sh" "$VENV_DIR"
+
 # Local STT/TTS caches (Vosk dir, Whisper gguf warm) — same idea as Whisper’s lazy download, but up front.
 # Opt out: DECISIONS_AI_SKIP_MODEL_PREFETCH=1 ./bin/decisions.sh
 prefetch_local_models_bootstrap() {

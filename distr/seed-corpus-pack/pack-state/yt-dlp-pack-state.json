@@ -1,0 +1,30 @@
+{
+  "state_version": 1,
+  "status": "configured",
+  "detected": {
+    "codex": true,
+    "claude": true,
+    "cursor": true,
+    "pi": true,
+    "cline": false
+  },
+  "fingerprint": "e7a6e32acaaa6442e610920dabdd85ce3f245d1eff35593dc6e39ede42380d4b",
+  "written": [
+    "/Users/paul/plugins/decisions-codex/skills/decisions-yt-dlp",
+    "/Users/paul/.codex/skills/decisions-yt-dlp",
+    "/Users/paul/.claude/skills/decisions-yt-dlp",
+    "/Users/paul/.pi/skills/decisions-yt-dlp",
+    "/Users/paul/.cursor/skills/decisions-yt-dlp",
+    "/Users/paul/.cursor/commands/decisions-yt-dlp.md",
+    "/Users/paul/.codex/commands/decisions-yt-dlp.md",
+    "/Users/paul/.claude/commands/decisions-yt-dlp.md",
+    "/Users/paul/.pi/commands/decisions-yt-dlp.md",
+    "/Users/paul/plugins/decisions-codex/skills/decisions-yt-dlp-harness/SKILL.md"
+  ],
+  "package": {
+    "installed": true
+  },
+  "version": "2026.08.19",
+  "reference_path": "/Users/paul/development/TENSOLOGY/DECISIONS/reference/yt-dlp",
+  "registry_path": "/Users/paul/.decisions/harness/yt-dlp-registry.json"
+}

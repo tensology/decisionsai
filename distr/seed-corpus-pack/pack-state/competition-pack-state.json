@@ -1,0 +1,67 @@
+{
+  "state_version": 1,
+  "status": "configured",
+  "vendor_ready": true,
+  "vendor": {
+    "name": "competition-pack",
+    "description": "Ponytail (minimal-code discipline) and Fallow (JS/TS codebase intelligence) vendored for DecisionsAI harness projection.",
+    "components": [
+      {
+        "id": "ponytail",
+        "source": "https://github.com/DietrichGebert/ponytail",
+        "commit": "99139a25d07e3523d3f6871419798dda600db49a",
+        "reference_path": "../reference/ponytail",
+        "license": "MIT"
+      },
+      {
+        "id": "fallow",
+        "source": "https://github.com/fallow-rs/fallow",
+        "commit": "dfaf4dc8d18b0ca7f29d49e3b800492bfe524661",
+        "reference_path": "../reference/fallow",
+        "license": "MIT"
+      }
+    ],
+    "vendored_by": "DecisionsAI"
+  },
+  "detected": {
+    "codex": true,
+    "claude": true,
+    "cursor": true,
+    "pi": true,
+    "cline": false
+  },
+  "fingerprint": "47bea8baea8d375e98d1325fb069dc211320e354b70220e6e3ea85dfb7a19416",
+  "registry_path": "/Users/paul/.decisions/harness/competition-skills-registry.json",
+  "written": [
+    "/Users/paul/plugins/decisions-codex/skills/ponytail",
+    "/Users/paul/plugins/decisions-codex/skills/ponytail-audit",
+    "/Users/paul/plugins/decisions-codex/skills/ponytail-debt",
+    "/Users/paul/plugins/decisions-codex/skills/ponytail-help",
+    "/Users/paul/plugins/decisions-codex/skills/ponytail-review",
+    "/Users/paul/plugins/decisions-codex/skills/fallow",
+    "/Users/paul/.claude/skills/ponytail",
+    "/Users/paul/.claude/skills/ponytail-audit",
+    "/Users/paul/.claude/skills/ponytail-debt",
+    "/Users/paul/.claude/skills/ponytail-help",
+    "/Users/paul/.claude/skills/ponytail-review",
+    "/Users/paul/.claude/skills/fallow",
+    "/Users/paul/.cursor/skills/ponytail",
+    "/Users/paul/.cursor/skills/ponytail-audit",
+    "/Users/paul/.cursor/skills/ponytail-debt",
+    "/Users/paul/.cursor/skills/ponytail-help",
+    "/Users/paul/.cursor/skills/ponytail-review",
+    "/Users/paul/.cursor/skills/fallow",
+    "/Users/paul/.pi/skills/ponytail",
+    "/Users/paul/.pi/skills/ponytail-audit",
+    "/Users/paul/.pi/skills/ponytail-debt",
+    "/Users/paul/.pi/skills/ponytail-help",
+    "/Users/paul/.pi/skills/ponytail-review",
+    "/Users/paul/.pi/skills/fallow",
+    "/Users/paul/plugins/decisions-codex/skills/decisions-competition-harness/SKILL.md"
+  ],
+  "fallow_cli": {
+    "installed": false,
+    "reason": "skipped"
+  },
+  "node_available": true
+}

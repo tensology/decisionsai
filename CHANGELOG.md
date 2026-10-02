@@ -6,7 +6,7 @@
 
 DecisionsAI is a development agent and workspace that lives on your computer. Talk to it, type in Chat, or send it something from your phone. It can use your files, apps, models, coding tools, and connected services to carry out work instead of only giving you an answer.
 
-Version 2.9.0 is the point where the product becomes much more deliberately development-led. The old ticket board / workflows experience has been reworked into a project-scoped Development area that brings planning, incoming work, boards, terminals, workflows, reports, and durable threads into one place. The system tray and surrounding web surfaces have been reworked around that same flow.
+Version 2.9.0 is the point where the product becomes much more deliberately development-led. Version **2.9.2** layers MemPalace (default on) with a shipped seed corpus, hardens conversational turn-taking, and tightens WhatsApp / Telegram gates around the same Development home. The old ticket board / workflows experience has been reworked into a project-scoped Development area that brings planning, incoming work, boards, terminals, workflows, reports, and durable threads into one place. The system tray and surrounding web surfaces have been reworked around that same flow.
 
 The reason for the change is simple: planning is the focal point. If the outcome is shaped properly first, the work can be broken into sensible tasks and each task can be routed by complexity to the right model, CLI, or harness without the user needing to care which one is running underneath. The planning system is still being built out, including a compact language for describing plans and UI structure that can compile into the underlying implementation, much like CoffeeScript compiles to JavaScript, alongside Mermaid JS for ERDs and clearer PRD documents. The direction is now clear: better plans mean less doom prompting and better output.
 
@@ -19,6 +19,38 @@ You can [download or clone the repository](https://github.com/tensology/decision
 1. Download DecisionsAI and open the Oracle or local web interface.
 2. Connect one project folder.
 3. Send the first request through the Oracle, Chat, or Telegram.
+
+---
+
+## [2.9.2] - 2026-10-02
+
+### Fish Audio is in the voice stack
+
+Fish Audio is a first-class TTS provider next to ElevenLabs: API key under Third Party Vendors, library picker in Voice Setup, default `s2.1-pro-free`, and speech streamed over Fish's live WebSocket as PCM so the agent can start talking before the full clip exists. Speech-to-speech stays on OpenAI Realtime. Custom clones still go through the studio upload path when you actually need a new voice.
+
+### Conversational turn-taking cleaned up
+
+Continuous conversation echo handling moved off the homemade NLMS filter onto WebRTC AEC3 (`pywebrtc-audio`) with a calibrated speaker→mic reference delay. STT provider adapters and the local audio transport were thinned so turn-taking, interruption cleanup, and playback stay on one clearer path. Push-to-talk remains independent.
+
+### MemPalace memory is default-on, with a shipped seed corpus
+
+The consolidated memory backend flag `mempalace_memory_backend` defaults **on**. When it is on, Decisions dual-writes useful memory into a Decisions-owned palace at `~/.decisions/mempalace/palace` and prefers MemPalace on read, with legacy stores kept as fallback. A curated pack lives at `distr/seed-corpus-pack` (planning conventions, page stencils, entity/domain notes, harness ops, agent heuristics). The macOS app build already rsyncs all of `distr/`, so the pack ships in the install. On first run, when `chromadb` / `mempalace` are available, Decisions mines the pack in the background into wing `seed_corpus_pack`. Soft-fails with a setup message if those optional deps are missing—the GUI still starts. Disable with Settings or `DECISIONS_MEMPALACE_MEMORY_BACKEND=0`.
+
+### Development planning and harness honesty
+
+Planning, incoming, boards, terminals, workflows, reports, and threads keep sharing one project home. The CLI harness change counter now fingerprints untracked files by content, so mid-run edits to files that were already `??` when the turn started still show up instead of looking like a noop. IDE thread locking, development harness projection, MCP harness wiring, and related studio/runtime contracts received fixes so active execution looks like what actually happened.
+
+### WhatsApp intake and Telegram judgment stay gated
+
+WhatsApp-sourced work can stage behind a Telegram yes / no / add approval before a ticket is created (`whatsapp_intake_approval`). QA → reply drafting still waits for you; the agent does not send merely because a worker finished. Per-skill judgment memory records looks-good / redo / terrible events and may draft a **propose-only** skill change for you to approve—never auto-rewrites a shipped skill.
+
+### Desktop does not auto-upload to Telegram
+
+Sending a file to Telegram from a desktop turn now requires a Telegram-sourced request or an explicit ask. A prior tool result that happens to include a file path is no longer enough to trigger an upload.
+
+### Back-end cleanups across the board
+
+Work intake, WhatsApp lifecycle and reconnect backoff, Telegram message/mixin paths, workflow briefing and spawn/dispatch, steppers, learnings keeper, MCP client/config, third-party keys (including optional Jev), cost-ledger recording hooks, security on settings routes, and a long list of matching tests were cleaned up or fixed so the same Development story holds from voice, Chat, Telegram, and WhatsApp.
 
 ---
 

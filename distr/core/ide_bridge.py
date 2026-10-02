@@ -83,18 +83,52 @@ def _project_dict(project: Project | None) -> dict[str, Any] | None:
     }
 
 
+def _plugin_session_query(db, project_id: int, source: str):
+    """IDE plugin chats only. Development harness runs carry a workflow or run id."""
+    return (
+        db.query(ProjectExecutionSession)
+        .filter(ProjectExecutionSession.project_id == int(project_id))
+        .filter(ProjectExecutionSession.route_type == "ide_bridge")
+        .filter(ProjectExecutionSession.route_backend == source)
+        .filter(ProjectExecutionSession.workflow_id.is_(None))
+        .filter(ProjectExecutionSession.run_id.is_(None))
+    )
+
+
 def _latest_open_session(project_id: int, source: str) -> dict[str, Any] | None:
     with get_session() as session:
         row = (
-            session.query(ProjectExecutionSession)
-            .filter(ProjectExecutionSession.project_id == int(project_id))
-            .filter(ProjectExecutionSession.route_type == "ide_bridge")
-            .filter(ProjectExecutionSession.route_backend == source)
+            _plugin_session_query(session, project_id, source)
             .filter(ProjectExecutionSession.status.notin_(TERMINAL_STATUSES))
             .order_by(ProjectExecutionSession.updated_at.desc(), ProjectExecutionSession.started_at.desc())
             .first()
         )
         return serialize_execution_session(row, include_events=True) if row else None
+
+
+def _session_for_external_thread(project_id: int, source: str, thread_id: str) -> dict[str, Any] | None:
+    """Resume the Cursor or Codex chat with this id, including after a completed turn."""
+    wanted = _clean(thread_id)
+    if not wanted:
+        return None
+    with get_session() as session:
+        rows = (
+            _plugin_session_query(session, project_id, source)
+            .order_by(ProjectExecutionSession.updated_at.desc(), ProjectExecutionSession.started_at.desc())
+            .limit(40)
+            .all()
+        )
+        for row in rows:
+            packet = _loads_packet(row.input_packet)
+            current = _clean(packet.get("external_thread_id") or packet.get("thread_id"))
+            if current != wanted:
+                continue
+            if row.status in TERMINAL_STATUSES:
+                row.status = "running"
+                row.completed_at = None
+                session.commit()
+            return serialize_execution_session(row, include_events=True)
+    return None
 
 
 def _session_chat_id(session_data: dict[str, Any] | None) -> int | None:
@@ -151,6 +185,7 @@ def ensure_ide_session(
     session_id: int | None = None,
     chat_id: int | None = None,
     allow_chat_creation: bool = True,
+    external_thread_id: str = "",
 ) -> dict[str, Any]:
     """Create or resume a Decisions project session for an IDE conversation."""
 
@@ -167,9 +202,15 @@ def ensure_ide_session(
                 data = serialize_execution_session(row, include_events=True)
                 return {"project": project, "session": data, "chat_id": _session_chat_id(data)}
 
-    existing = _latest_open_session(int(project["id"]), source)
-    if existing:
-        return {"project": project, "session": existing, "chat_id": _session_chat_id(existing)}
+    thread_id = _clean(external_thread_id)
+    if thread_id:
+        matched = _session_for_external_thread(int(project["id"]), source, thread_id)
+        if matched:
+            return {"project": project, "session": matched, "chat_id": _session_chat_id(matched)}
+    else:
+        existing = _latest_open_session(int(project["id"]), source)
+        if existing:
+            return {"project": project, "session": existing, "chat_id": _session_chat_id(existing)}
 
     if not chat_id and not allow_chat_creation:
         chat_id = ChatService.get_current_chat_id()
@@ -194,6 +235,8 @@ def ensure_ide_session(
             "cwd": _canonical_folder(cwd),
             "chat_id": input_chat_id,
             "source": source,
+            "external_thread_id": thread_id,
+            "surface": "ide_plugin",
         },
     )
     append_execution_event(
@@ -206,7 +249,8 @@ def ensure_ide_session(
             "project": project,
             "surface": source,
             "subtype": "ide_session_started",
-            "thread_id": str(input_chat_id or ""),
+            "thread_id": thread_id or str(input_chat_id or ""),
+            "external_thread_id": thread_id,
             "is_workflow_attached": False,
         },
     )
@@ -232,6 +276,16 @@ def record_ide_event(
     evidence: dict[str, Any] | None = None,
     allow_chat_creation: bool = True,
 ) -> dict[str, Any]:
+    external_thread_id = ""
+    if isinstance(payload, dict):
+        nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        external_thread_id = str(
+            payload.get("external_thread_id")
+            or payload.get("thread_id")
+            or nested.get("external_thread_id")
+            or nested.get("thread_id")
+            or ""
+        ).strip()
     bridge = ensure_ide_session(
         source=source,
         cwd=cwd,
@@ -239,6 +293,7 @@ def record_ide_event(
         session_id=session_id,
         chat_id=chat_id,
         allow_chat_creation=allow_chat_creation,
+        external_thread_id=external_thread_id,
     )
     session_data = bridge["session"]
     session_id = int(session_data["id"])

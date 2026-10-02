@@ -301,7 +301,7 @@ def prompt_thread(
     if not executable:
         return {"success": False, "error": "cursor-agent not found on PATH", "surface": "cursor"}
 
-    cmd = [executable, "--trust", "-p"]
+    cmd = [executable, "--trust", "-p", "--output-format", "stream-json"]
     if model and model not in ("auto", "default"):
         cmd += ["--model", model]
     tid = (thread_id or "").strip()
@@ -326,13 +326,16 @@ def prompt_thread(
             env=env,
         )
         output = ((result.stdout or "") + ("\n" + result.stderr if result.stderr else "")).strip()
+        from distr.core.ide_threads.lock import summarize_cli_output
+
+        captured_id, preview = summarize_cli_output(output)
         return {
             "success": result.returncode == 0,
             "surface": "cursor",
-            "thread_id": tid or None,
+            "thread_id": captured_id or tid or None,
             "command": cmd[:-1] + ["<instruction>"],
-            "output_preview": output[:4000],
-            "error": "" if result.returncode == 0 else (output[:2000] or f"cursor-agent exited {result.returncode}"),
+            "output_preview": preview or output[:4000],
+            "error": "" if result.returncode == 0 else (preview[:2000] or output[:2000] or f"cursor-agent exited {result.returncode}"),
         }
     except subprocess.TimeoutExpired:
         return {"success": False, "surface": "cursor", "error": "cursor-agent timed out after 600s"}

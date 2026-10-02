@@ -44,7 +44,7 @@ def spawn_workflow_for_ticket(
     workflow_input: dict[str, Any] | None = None,
     link_board_default: bool = False,
     start_run: bool = True,
-    skip_human_checkpoints: bool = True,
+    skip_human_checkpoints: bool = False,
     force: bool = False,
     run_metadata: dict[str, Any] | None = None,
     dispatch_async: bool = True,

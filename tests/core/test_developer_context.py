@@ -121,7 +121,7 @@ def test_explicit_thread_scope_wins_and_plan_is_carried_into_context(monkeypatch
     assert context.active_thread["project_id"] == 9
     assert context.active_plan == plan
     prompt = context.to_prompt_text()
-    assert "active_thread: chat=42" in prompt
+    assert "development_harness_thread: chat=42" in prompt
     assert "active_plan: #5 CV Parser board" in prompt
     assert "plan_artifacts: brief, prd, wireframe" in prompt
 

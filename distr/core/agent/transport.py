@@ -339,8 +339,9 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         self._aec_ref_buf = aec_reference_buffer
         
         # Reference to input transport — set by HotSwappableLocalAudioTransport
-        # after both transports are created. Used to toggle _allow_interruptions
-        # during TTS playback so the echo gate in STT is the sole decision-maker.
+        # after both transports are created. Kept for diagnostics / future use;
+        # hands-free barge-in now relies on Pipecat native interruptions + AEC
+        # rather than clearing _allow_interruptions during TTS.
         self._input_transport = None
         
         self._original_sample_rate = getattr(params, 'audio_out_sample_rate', None) or getattr(params, 'output_sample_rate', 24000)
@@ -377,11 +378,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         # next response starts.
         self._pipeline_cut = False
         self._force_silence = False  # When True, write silence instead of audio
-        # ponytail: PTT interrupt_tts races the response it just captured. TTS
-        # already ignores InterruptionFrame for 2s after LLMFullResponseStartFrame;
-        # transport must too or it dumps the process queue and the user hears nothing.
+        # Response-start timestamp kept for diagnostics. The previous 2s
+        # stale-InterruptionFrame bypass was removed so hands-free barge-in
+        # is immediate; PTT races are handled by the idle-state guard below.
         self._tts_response_started_at = 0.0
-        self._STALE_INTERRUPT_GRACE_SEC = 2.0
         
         # Stream health tracking — detect dead PortAudio streams and recover
         self._stream_error_count = 0
@@ -741,18 +741,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         logger.debug(f"Transport output speed set to {self._speed:.2f}x (Mapped: {mapped_speed:.2f}x)")
 
     def _begin_tts_response(self):
-        """Unmute for a new spoken response and start the stale-PTT grace window."""
+        """Unmute for a new spoken response."""
         self._pipeline_cut = False
         self._force_silence = False
         self._tts_response_started_at = time.monotonic()
-
-    def _is_stale_tts_interrupt(self) -> bool:
-        started = float(getattr(self, "_tts_response_started_at", 0.0) or 0.0)
-        if started <= 0:
-            return False
-        return (time.monotonic() - started) < float(
-            getattr(self, "_STALE_INTERRUPT_GRACE_SEC", 2.0)
-        )
 
     def _ensure_frame_attributes(self, frame):
         """Ensure frame has required attributes for BaseOutputTransport."""
@@ -1057,10 +1049,8 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             # Signal AEC that speaker is active
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(True)
-            # Suppress Pipecat's automatic VAD→InterruptionFrame during TTS.
-            # The echo gate in STT decides barge-in via energy check.
-            if self._input_transport is not None:
-                self._input_transport._allow_interruptions = False
+            # Keep Pipecat native interruptions enabled during TTS so
+            # hands-free barge-in is authoritative (AEC cleans the mic path).
 
             # New response starting — clear any leftover interrupt state
             self._pipeline_cut = False
@@ -1093,15 +1083,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             timing = getattr(self, "_audio_timing", None)
             if timing is not None:
                 timing.mark("interruption_acknowledged")
-            if (
-                self._is_stale_tts_interrupt()
-                and not getattr(self, "_accept_bargein_interrupt", False)
-            ):
-                logger.info(
-                    "Transport: Ignoring stale InterruptionFrame (%.0fms since TTS response start)",
-                    (time.monotonic() - self._tts_response_started_at) * 1000,
-                )
-                return
             if self._state in (AudioPlaybackState.IDLE, AudioPlaybackState.COMPLETED):
                 # PTT always broadcasts InterruptionFrame, even when nothing is
                 # playing. Dumping the process queue here deletes the
@@ -1113,9 +1094,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             # Signal AEC that speaker stopped
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(False)
-            # Restore Pipecat's automatic interruptions
-            if self._input_transport is not None:
-                self._input_transport._allow_interruptions = True
             
             # Cancel pending playback_finished
             if self._pending_playback_finished_task and not self._pending_playback_finished_task.done():
@@ -1157,17 +1135,14 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         
         # ── TTSStoppedFrame / EndFrame / LLMFullResponseEndFrame ────────
         elif isinstance(frame, (TTSStoppedFrame, EndFrame, LLMFullResponseEndFrame)):
-            # On full-response end, restore auto-interruptions but keep AEC
-            # reference buffer active until playback actually finishes.
+            # Keep AEC reference buffer active until playback actually finishes.
             # The speaker hardware buffer still has audio draining — if we
-            # deactivate AEC now, the echo gate won't engage and the mic
-            # picks up the tail-end echo as "user speech" (the agent
-            # transcribes its own TTS output).
+            # deactivate AEC now, the mic picks up the tail-end echo as
+            # "user speech" (the agent transcribes its own TTS output).
             if isinstance(frame, (EndFrame, LLMFullResponseEndFrame)):
                 # DON'T deactivate AEC here — do it in _wait_for_playback_complete
                 # after the hardware has finished draining.
-                if self._input_transport is not None:
-                    self._input_transport._allow_interruptions = True
+                pass
 
         # ── Flush audio buffer on TTS lifecycle frames ──────────────────
         if isinstance(frame, (TTSStoppedFrame, EndFrame, LLMFullResponseEndFrame)):
@@ -1310,8 +1285,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._log_output_route(reason="first audio frame", force=True)
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(True)
-            if self._input_transport is not None:
-                self._input_transport._allow_interruptions = False
             if self._state == AudioPlaybackState.COMPLETED:
                 self._total_output_bytes = 0
                 self._total_audio_duration = 0.0
@@ -1392,7 +1365,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     # Stamp the reference after the output transport accepts
                     # the frame. Pushing before the blocking device write
                     # makes the reference lead the acoustic signal by the
-                    # driver's queued audio, which prevents NLMS alignment.
+                    # driver's queued audio, which breaks AEC alignment.
                     if self._aec_ref_buf is not None:
                         self._aec_ref_buf.push(processed_audio)
 
@@ -1615,7 +1588,6 @@ class HotSwappableLocalAudioTransport(LocalAudioTransport):
                 aec_reference_buffer=self._aec_ref_buf,
                 output_device_name=self._output_device_name,
             )
-            # Give output transport a reference to input so it can toggle
-            # _allow_interruptions during TTS playback.
+            # Give output transport a reference to input (diagnostics / future use).
             self._output._input_transport = self.input()
         return self._output

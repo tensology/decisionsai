@@ -1,0 +1,29 @@
+{
+  "name": "ecommerce-foundations",
+  "description": "Marketplace serving the ecommerce-foundations plugin: platform-agnostic ecommerce domain knowledge for AI coding agents.",
+  "owner": {
+    "name": "Oscar Arocha",
+    "email": "oa2psolutions@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "ecommerce-foundations",
+      "source": "./",
+      "description": "Platform-agnostic ecommerce domain knowledge for AI coding agents, packaged as Agent Skills.",
+      "version": "0.1.3",
+      "author": {
+        "name": "Oscar Arocha",
+        "email": "oa2psolutions@gmail.com"
+      },
+      "homepage": "https://github.com/oa2p-solutions/ecommerce-foundations",
+      "license": "MIT",
+      "keywords": [
+        "ecommerce",
+        "commerce",
+        "agent-skills",
+        "domain-knowledge",
+        "ddd"
+      ]
+    }
+  ]
+}

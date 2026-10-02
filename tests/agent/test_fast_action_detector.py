@@ -1365,3 +1365,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_window_move_to_screen_beats_mouse_movement():
+    from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
+
+    window = detect_fast_action("move Terminal to screen 2")
+    assert window.action_type == ActionType.WINDOW_MOVE_TO_SCREEN
+    assert window.tool_name == "window_management"
+    assert window.tool_args.get("action") == "move_to_screen"
+
+    mouse = detect_fast_action("move mouse to screen 2")
+    assert mouse.action_type == ActionType.MOUSE_MOVEMENT
+    assert mouse.tool_name == "mouse_movement"

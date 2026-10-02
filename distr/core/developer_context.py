@@ -145,6 +145,7 @@ class DeveloperWorkContext:
     active_project: DeveloperProjectContext | None = None
     active_board: DeveloperBoardContext | None = None
     active_thread: dict[str, Any] = field(default_factory=dict)
+    ide_thread_locks: dict[str, Any] = field(default_factory=dict)
     active_plan: DeveloperPlanContext | None = None
     active_tickets: list[DeveloperTicketContext] = field(default_factory=list)
     active_workflows: list[DeveloperWorkflowContext] = field(default_factory=list)
@@ -186,7 +187,14 @@ class DeveloperWorkContext:
                 thread_bits.append(f"ticket={thread['ticket_id']}")
             if thread.get("source_type"):
                 thread_bits.append(f"source={thread['source_type']}")
-            lines.append("- active_thread: " + ", ".join(thread_bits))
+            lines.append("- development_harness_thread: " + ", ".join(thread_bits))
+            lines.append(
+                "  Decisions Development section only. Separate from locked Cursor/Codex threads."
+            )
+        if self.ide_thread_locks:
+            from distr.core.ide_threads.lock import format_locks_for_prompt
+
+            lines.extend(format_locks_for_prompt(self.ide_thread_locks))
 
         if self.active_plan:
             plan = self.active_plan
@@ -362,6 +370,9 @@ class DeveloperContextAssembler:
         active_thread = _safe_call(
             "active thread scope", warnings, self._fetch_active_thread_scope, current_chat_id
         ) or {}
+        ide_thread_locks = _safe_call(
+            "ide thread locks", warnings, self._fetch_ide_thread_locks, current_chat_id
+        ) or {}
         scoped_project = _safe_call(
             "scoped project", warnings, self._fetch_project_for_scope, active_thread
         )
@@ -417,6 +428,7 @@ class DeveloperContextAssembler:
             active_project=active_project,
             active_board=active_board,
             active_thread=active_thread,
+            ide_thread_locks=ide_thread_locks,
             active_plan=active_plan,
             active_tickets=active_tickets,
             active_workflows=active_workflows,
@@ -429,6 +441,12 @@ class DeveloperContextAssembler:
             ecosystem=ecosystem,
             warnings=warnings,
         )
+
+    def _fetch_ide_thread_locks(self, chat_id: int | None) -> dict[str, Any]:
+        """Cursor/Codex locks for follow-ups. Never the Development harness thread."""
+        from distr.core.ide_threads.lock import load_state
+
+        return load_state(chat_id=chat_id)
 
     def _fetch_active_thread_scope(self, chat_id: int | None) -> dict[str, Any]:
         """Return durable scope for the conversation currently controlling the agent."""
@@ -1090,6 +1108,8 @@ def format_developer_context_dict_for_prompt(
     user_memory_context = context.get("user_memory_context") or ""
     board_notes = context.get("board_notes") or []
     skills = context.get("recommended_skills") or []
+    active_thread = context.get("active_thread") or {}
+    ide_thread_locks = context.get("ide_thread_locks") or {}
 
     lines: list[str] = ["Developer workflow context:"]
     if runtime.get("cwd"):
@@ -1102,6 +1122,13 @@ def format_developer_context_dict_for_prompt(
     if project:
         folder = f" ({project.get('folder_location')})" if project.get("folder_location") else ""
         lines.append(f"- active_project: #{project.get('id')} {project.get('name', '')}{folder}")
+
+    if isinstance(active_thread, dict) and active_thread.get("chat_id"):
+        lines.append(f"- development_harness_thread: chat={active_thread.get('chat_id')}")
+    if isinstance(ide_thread_locks, dict) and ide_thread_locks.get("by_surface"):
+        from distr.core.ide_threads.lock import format_locks_for_prompt
+
+        lines.extend(format_locks_for_prompt(ide_thread_locks))
 
     if board:
         lines.append(f"- active_board: #{board.get('id')} {board.get('name', '')} [{board.get('source') or 'database'}]")

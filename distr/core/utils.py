@@ -28,6 +28,7 @@ SECRET_SETTINGS_FIELDS = {
     "anthropic_key",
     "cursor_key",
     "rube_token",
+    "jev_key",
     "aws_polly_key",
     "elevenlabs_key",
     "openrouter_key",

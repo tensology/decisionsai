@@ -2,16 +2,22 @@
 export function createReports({ api, root, escapeHtml }) {
     let runRows = [],
         timeRows = [],
+        costRows = [],
+        costRollups = null,
+        costDisplay = 'blended',
         request = null,
         generation = 0,
         visible = false,
         tab = 'runs';
     let loading = false,
-        failure = '';
+        failure = '',
+        timeFailure = '',
+        costFailure = '';
     const result = root.querySelector('#reports-results');
     const heading = root.querySelector('#reports-heading');
     const description = root.querySelector('#reports-description');
     const runFilters = root.querySelector('#reports-run-filters');
+    const costFilters = root.querySelector('#reports-cost-filters');
 
     function formatDuration(seconds) {
         if (seconds == null) return 'Unavailable';
@@ -28,24 +34,41 @@ export function createReports({ api, root, escapeHtml }) {
 
     function formatWhen(value) {
         if (!value) return 'Unknown';
+        // Epoch seconds from ledger, or ISO strings from run/time APIs.
+        if (typeof value === 'number' || (/^\d+(\.\d+)?$/.test(String(value)) && Number(value) > 1e9)) {
+            return new Date(Number(value) * 1000).toLocaleString();
+        }
         const stamp = String(value);
         return new Date(`${stamp}${/[Z+-]\d{2}:?\d{2}$|Z$/.test(stamp) ? '' : 'Z'}`).toLocaleString();
     }
 
+    function formatUsd(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return '$0.00';
+        if (Math.abs(n) < 0.0001 && n !== 0) return `$${n.toFixed(6)}`;
+        return `$${n.toFixed(4)}`;
+    }
+
     function setTab(next) {
-        tab = next === 'time' ? 'time' : 'runs';
+        tab = next === 'time' ? 'time' : next === 'costs' ? 'costs' : 'runs';
         root.querySelectorAll('[data-reports-tab]').forEach((button) => {
             const active = button.dataset.reportsTab === tab;
             button.classList.toggle('is-active', active);
             button.setAttribute('aria-selected', active ? 'true' : 'false');
         });
         if (runFilters) runFilters.hidden = tab !== 'runs';
-        if (heading) heading.textContent = tab === 'time' ? 'Time log' : 'Run history';
+        if (costFilters) costFilters.hidden = tab !== 'costs';
+        if (heading) {
+            heading.textContent =
+                tab === 'time' ? 'Time log' : tab === 'costs' ? 'Costs' : 'Run history';
+        }
         if (description) {
             description.textContent =
                 tab === 'time'
                     ? 'Closed Development thread time intervals. The live counter appears here after pause.'
-                    : 'Recent workflow, automation and standalone execution records. Linked records may describe stages of the same work.';
+                    : tab === 'costs'
+                      ? 'Durable per-step cost estimates (provider tokens + local resource). Blended shows one figure; explicit splits token/provider/resource lines. Dates labeled in Africa/Johannesburg (SAST).'
+                      : 'Recent workflow, automation and standalone execution records. Linked records may describe stages of the same work.';
         }
         render();
     }
@@ -72,6 +95,10 @@ export function createReports({ api, root, escapeHtml }) {
     }
 
     function renderTime() {
+        if (timeFailure) {
+            result.textContent = timeFailure;
+            return;
+        }
         if (!timeRows.length) {
             result.innerHTML = '<p>No closed time intervals yet. Play and pause the thread timer to log entries.</p>';
             return;
@@ -89,12 +116,53 @@ export function createReports({ api, root, escapeHtml }) {
             .join('')}</tbody></table></div>`;
     }
 
+    function renderCosts() {
+        if (costFailure) {
+            result.textContent = costFailure;
+            return;
+        }
+        const sourceFilter = root.querySelector('#reports-cost-source')?.value || 'all';
+        const selected = costRows.filter((row) => sourceFilter === 'all' || row.source === sourceFilter);
+        const total = costRollups?.total_cost_usd;
+        const dayCount = costRollups?.by_day?.length || 0;
+        const summary = `<div class="reports-cost-summary"><span>Display: <strong>${escapeHtml(costDisplay)}</strong></span><span>Entries: <strong>${selected.length}</strong></span><span>Total (all): <strong>${escapeHtml(formatUsd(total))}</strong></span><span>SAST days: <strong>${dayCount}</strong></span></div>`;
+        if (!selected.length) {
+            result.innerHTML = `${summary}<p>No cost ledger entries yet. Workflow steps record usage when cost_ledger_enabled is on.</p>`;
+            return;
+        }
+        const explicit = costDisplay === 'explicit';
+        const head = explicit
+            ? '<tr><th>When (SAST day)</th><th>Run</th><th>Provider / model</th><th>Tokens</th><th>Provider USD</th><th>Resource USD</th><th>Total</th><th>Source</th></tr>'
+            : '<tr><th>When (SAST day)</th><th>Run</th><th>Provider / model</th><th>Cost</th><th>Source</th></tr>';
+        const body = selected
+            .map((row) => {
+                const provider = escapeHtml(`${row.provider || '—'} / ${row.model || '—'}`);
+                const runLabel = row.run_id != null ? `run ${row.run_id}` : '—';
+                if (explicit) {
+                    const tokens = [
+                        row.tokens_in != null ? `in ${row.tokens_in}` : null,
+                        row.tokens_out != null ? `out ${row.tokens_out}` : null,
+                        row.tokens_total != null ? `total ${row.tokens_total}` : null
+                    ]
+                        .filter(Boolean)
+                        .join(', ');
+                    return `<tr><td>${escapeHtml(row.day_sast || '')}<small>${escapeHtml(formatWhen(row.recorded_at))}</small></td><td>${escapeHtml(runLabel)}<small>${escapeHtml(row.client_key || '')}</small></td><td>${provider}</td><td>${escapeHtml(tokens || '—')}</td><td>${escapeHtml(formatUsd(row.provider_cost_usd))}</td><td>${escapeHtml(formatUsd(row.resource_cost_usd))}<small>${escapeHtml(row.resource_notes || '')}</small></td><td>${escapeHtml(formatUsd(row.cost_usd))}</td><td>${escapeHtml(row.source || '')}</td></tr>`;
+                }
+                return `<tr><td>${escapeHtml(row.day_sast || '')}<small>${escapeHtml(formatWhen(row.recorded_at))}</small></td><td>${escapeHtml(runLabel)}<small>${escapeHtml(row.client_key || '')}</small></td><td>${provider}</td><td>${escapeHtml(formatUsd(row.cost_usd))}</td><td>${escapeHtml(row.source || '')}</td></tr>`;
+            })
+            .join('');
+        result.innerHTML = `${summary}<div class="reports-table-scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+    }
+
     function render() {
         if (loading || failure) {
-            result.textContent = loading ? (tab === 'time' ? 'Loading time log...' : 'Loading run history...') : failure;
+            const loadingLabel =
+                tab === 'time' ? 'Loading time log...' : tab === 'costs' ? 'Loading costs...' : 'Loading run history...';
+            result.textContent = loading ? loadingLabel : failure;
             return;
         }
         if (tab === 'time') renderTime();
+        else if (tab === 'costs') renderCosts();
         else renderRuns();
     }
 
@@ -104,16 +172,42 @@ export function createReports({ api, root, escapeHtml }) {
         const current = ++generation;
         loading = true;
         failure = '';
+        timeFailure = '';
+        costFailure = '';
         render();
+        const display = root.querySelector('#reports-cost-display')?.value || 'blended';
         try {
-            const [runs, times] = await Promise.all([
+            const [runs, times, costs] = await Promise.all([
                 api('/workflows/studio/reports?limit=100', { signal: request.signal }),
-                api('/workflows/studio/reports/time?limit=100', { signal: request.signal }).catch(() => ({ items: [] }))
+                api('/workflows/studio/reports/time?limit=100', { signal: request.signal })
+                    .then((data) => ({ ok: true, data }))
+                    .catch((error) => ({ ok: false, error })),
+                api(`/workflows/studio/reports/costs?limit=100&rollups=true&display=${encodeURIComponent(display)}`, {
+                    signal: request.signal
+                })
+                    .then((data) => ({ ok: true, data }))
+                    .catch((error) => ({ ok: false, error }))
             ]);
             if (!visible || current !== generation) return;
             loading = false;
             runRows = runs.items || [];
-            timeRows = times.items || [];
+            if (times.ok) {
+                timeRows = times.data.items || [];
+                timeFailure = '';
+            } else {
+                timeRows = [];
+                timeFailure = `Could not load the time log. ${times.error?.message || 'Use Refresh to retry.'}`;
+            }
+            if (costs.ok) {
+                costRows = costs.data.items || [];
+                costRollups = costs.data.rollups || null;
+                costDisplay = costs.data.display || display;
+                costFailure = '';
+            } else {
+                costRows = [];
+                costRollups = null;
+                costFailure = `Could not load costs. ${costs.error?.message || 'Use Refresh to retry.'}`;
+            }
             render();
         } catch (error) {
             if (!visible || current !== generation || error.name === 'AbortError') return;
@@ -127,6 +221,10 @@ export function createReports({ api, root, escapeHtml }) {
     for (const select of root.querySelectorAll('#reports-run-filters select')) {
         select.addEventListener('change', render);
     }
+    root.querySelector('#reports-cost-display')?.addEventListener('change', () => {
+        if (tab === 'costs') load();
+    });
+    root.querySelector('#reports-cost-source')?.addEventListener('change', render);
     root.querySelectorAll('[data-reports-tab]').forEach((button) => {
         button.addEventListener('click', () => setTab(button.dataset.reportsTab));
     });

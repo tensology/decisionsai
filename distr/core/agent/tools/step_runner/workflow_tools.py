@@ -1121,7 +1121,7 @@ class SpawnTicketWorkflowTool(BaseTool):
                 int(ticket_id),
                 preset_slug=preset_slug,
                 start_run=bool(start_run),
-                skip_human_checkpoints=True,
+                skip_human_checkpoints=False,
                 force=bool(force),
                 dispatch_async=True,
             )

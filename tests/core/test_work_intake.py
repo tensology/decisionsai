@@ -297,6 +297,7 @@ def test_atomic_project_change_creates_ticket_then_starts_lightweight_execution(
 
     service._create_ticket = Mock(side_effect=create)
     service._start_lightweight_execution = Mock()
+    service._start_workflow = Mock()
     decision = service.ingest(WorkIntake(
         source="web",
         user_text="Make the green button black",
@@ -304,7 +305,33 @@ def test_atomic_project_change_creates_ticket_then_starts_lightweight_execution(
     ))
 
     assert decision.action == WorkIntakeAction.CREATE_TICKET
+    # No linked workflow_id on the mocked ticket → direct lightweight CLI.
     service._start_lightweight_execution.assert_called_once()
+    service._start_workflow.assert_not_called()
+
+
+def test_atomic_project_change_with_workflow_uses_approval_via_workflow(service):
+    def create(_intake, decision):
+        decision.ticket_id = 169
+        decision.project_id = 4
+        decision.board_id = 10
+        decision.workflow_id = 55
+        decision.handled = True
+        decision.status = "ticket_created"
+
+    service._create_ticket = Mock(side_effect=create)
+    service._start_lightweight_execution = Mock()
+    service._start_workflow = Mock()
+    decision = service.ingest(WorkIntake(
+        source="web",
+        user_text="Make the green button black",
+        project_hint="Player One Sport",
+    ))
+
+    assert decision.action == WorkIntakeAction.CREATE_TICKET
+    assert decision.diagnostics.get("approval_via_workflow") is True
+    service._start_workflow.assert_called_once()
+    service._start_lightweight_execution.assert_not_called()
 
 
 def test_empty_request_asks_for_information(service):
@@ -446,7 +473,9 @@ def test_active_project_single_line_request_creates_ticket_and_starts_lightweigh
     session_provider = lambda: _session_ctx(factory)
     service = OrchestratorIntakeService()
     start_lightweight = Mock()
+    start_workflow = Mock()
     service._start_lightweight_execution = start_lightweight
+    service._start_workflow = start_workflow
     intake = WorkIntake(
         source="telegram",
         user_text="Make the green button black",
@@ -458,11 +487,13 @@ def test_active_project_single_line_request_creates_ticket_and_starts_lightweigh
          patch("distr.core.orchestrator.emit_channel_intake_event"):
         decision = service.ingest(intake)
 
-    assert decision.status == "ticket_created"
+    # Board has a default workflow → small ad-hoc uses approval_via_workflow path.
     assert decision.project_id == ids["pizza_project"]
     assert decision.board_id == ids["pizza_board"]
-    assert decision.workflow_run_id is None
-    start_lightweight.assert_called_once()
+    assert decision.workflow_id == ids["workflow"]
+    assert decision.diagnostics.get("approval_via_workflow") is True
+    start_workflow.assert_called_once()
+    start_lightweight.assert_not_called()
 
 
 def test_final_chat_response_is_correlated_to_pending_direct_intake(intake_db):
@@ -795,9 +826,11 @@ def test_numbered_batch_does_not_treat_ticket_sentences_as_group_controls():
 
 
 @pytest.mark.parametrize("source", ["whatsapp", "gmail"])
-def test_shared_channel_request_creates_one_project_ticket_with_source_trace(intake_db, source):
+def test_shared_channel_request_creates_one_project_ticket_with_source_trace(intake_db, source, monkeypatch):
     from distr.core.db.kanban import KanbanTicket
 
+    # Immediate-create path under test; pre-ticket TG gate is covered separately.
+    monkeypatch.setenv("DECISIONSAI_WHATSAPP_INTAKE_APPROVAL", "0")
     factory, ids = intake_db
     session_provider = lambda: _session_ctx(factory)
     external_id = f"{source}-pizza-1"
@@ -871,3 +904,65 @@ def test_linked_remote_surface_can_supply_development_chat_id_in_metadata(servic
         "development_chat_id": 17,
         "message": "Use the blue focus state in the final pass",
     }
+
+
+def test_work_intent_without_project_routes_to_durable_work(service):
+    decision = service.classify(WorkIntake(
+        source="web",
+        user_text="Fix the checkout button validation",
+    ))
+    assert decision.action == WorkIntakeAction.RUN_WORKFLOW
+    assert decision.diagnostics.get("work_intent") is True
+    assert decision.diagnostics.get("project_scoped") is False
+
+
+def test_casual_chat_still_answers_directly_without_project(service):
+    for text in (
+        "What is the current status?",
+        "Hello there",
+        "Thanks for the update",
+        "Tell me about the architecture",
+    ):
+        decision = service.classify(WorkIntake(source="web", user_text=text))
+        assert decision.action == WorkIntakeAction.ANSWER_DIRECTLY, text
+
+
+def test_whatsapp_intake_records_work_lifecycle(intake_db, monkeypatch):
+    """WA WorkIntake must call record_ticket_created so completion reply can fire."""
+    from distr.core.db.kanban import KanbanTicket
+
+    # Lifecycle row is written on create; exercise confirmed/bypass path here.
+    monkeypatch.setenv("DECISIONSAI_WHATSAPP_INTAKE_APPROVAL", "0")
+    factory, ids = intake_db
+    session_provider = lambda: _session_ctx(factory)
+    recorded = {}
+
+    def fake_record(**kwargs):
+        recorded.update(kwargs)
+        return {"status": "ticket_created", "ticket_id": kwargs["ticket_id"]}
+
+    monkeypatch.setattr(
+        "distr.core.kanban.whatsapp_work_lifecycle.record_ticket_created",
+        fake_record,
+    )
+    intake = WorkIntake(
+        source="whatsapp",
+        user_text="Create a ticket: prepare the Ember & Crust Pizza House launch checklist",
+        project_hint="Ember & Crust Pizza House",
+        source_message_id="wa-msg-99",
+        source_thread_id="120363@g.us",
+        source_user_id="Maya",
+        metadata={"jid": "120363@g.us", "jid_phone": "120363", "message_ids": [10, 11]},
+    )
+
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider), \
+         patch("distr.core.orchestrator.emit_channel_intake_event"), \
+         patch.object(OrchestratorIntakeService, "_start_workflow", Mock()), \
+         patch.object(OrchestratorIntakeService, "_start_lightweight_execution", Mock()):
+        decision = OrchestratorIntakeService().ingest(intake)
+
+    assert decision.ticket_id
+    assert recorded["ticket_id"] == decision.ticket_id
+    assert recorded["source_jid"] == "120363@g.us"
+    assert recorded["source_phone"] == "120363"
+    assert recorded["message_ids"] == [10, 11]

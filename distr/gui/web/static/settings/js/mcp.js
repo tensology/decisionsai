@@ -161,6 +161,7 @@
                 env: row.env && typeof row.env === 'object' ? row.env : {},
                 url: transport === 'sse' ? url : '',
                 headers: row.headers && typeof row.headers === 'object' ? row.headers : {},
+                bearer_token_env_var: row.bearer_token_env_var || '',
             };
             var name = uniqueServerName(deriveServerName(nextRow, c), seen);
             if (transport === 'stdio' && !command.length) continue;
@@ -173,6 +174,7 @@
                 env: transport === 'sse' ? {} : nextRow.env,
                 url: transport === 'sse' ? url : '',
                 headers: transport === 'sse' ? nextRow.headers : {},
+                bearer_token_env_var: transport === 'sse' ? nextRow.bearer_token_env_var : '',
             });
         }
         return { servers: servers };
@@ -191,6 +193,7 @@
             env: s.env && typeof s.env === 'object' ? s.env : {},
             url: s.url || '',
             headers: s.headers && typeof s.headers === 'object' ? s.headers : {},
+            bearer_token_env_var: s.bearer_token_env_var || '',
         };
     }
 

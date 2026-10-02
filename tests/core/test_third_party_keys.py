@@ -41,3 +41,19 @@ def test_redact_never_returns_tensology_key():
     assert out["tensology_key"] == ""
     assert out["tensology_key_set"] is True
     assert "do-not-return" not in str(out)
+
+
+def test_redact_never_returns_jev_key():
+    from distr.gui.web.security import redact_thirdparty_settings
+
+    out = redact_thirdparty_settings({"jev_enabled": True, "jev_key": "jev-secret"})
+    assert out["jev_enabled"] is True
+    assert out["jev_key"] == ""
+    assert out["jev_key_set"] is True
+
+
+def test_jev_api_key_prefers_env(monkeypatch):
+    from distr.core.third_party_keys import jev_api_key
+
+    monkeypatch.setenv("JEV_API_KEY", "jev-env-key")
+    assert jev_api_key() == "jev-env-key"

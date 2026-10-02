@@ -30,6 +30,7 @@ class MCPServerConfig:
     env: frozenset[tuple[str, str]] = frozenset()
     url: str = ""
     headers: frozenset[tuple[str, str]] = frozenset()
+    bearer_token_env_var: str = ""
 
     def fingerprint(self) -> tuple[Any, ...]:
         """Stable tuple for hot-reload: reconnect when this changes for a given name."""
@@ -40,6 +41,7 @@ class MCPServerConfig:
             self.env,
             self.url.strip(),
             self.headers,
+            self.bearer_token_env_var.strip(),
         )
 
 
@@ -90,6 +92,9 @@ def _parse_server(obj: Any) -> MCPServerConfig | None:
     url = ""
     if isinstance(obj.get("url"), str):
         url = obj["url"]
+    bearer_token_env_var = ""
+    if isinstance(obj.get("bearer_token_env_var"), str):
+        bearer_token_env_var = obj["bearer_token_env_var"].strip()
     if transport == "stdio" and len(command) == 0:
         logger.warning("MCP server %r: stdio requires non-empty command", name)
         return None
@@ -104,6 +109,7 @@ def _parse_server(obj: Any) -> MCPServerConfig | None:
         env=_normalize_env(obj.get("env")),
         url=url.strip(),
         headers=_normalize_headers(obj.get("headers")),
+        bearer_token_env_var=bearer_token_env_var,
     )
 
 
@@ -163,6 +169,8 @@ def document_to_dict(doc: MCPConfigDocument) -> dict[str, Any]:
             entry["url"] = s.url
             if s.headers:
                 entry["headers"] = dict(sorted(s.headers))
+            if s.bearer_token_env_var:
+                entry["bearer_token_env_var"] = s.bearer_token_env_var
         servers.append(entry)
     return {"servers": servers}
 

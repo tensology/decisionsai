@@ -1,0 +1,7 @@
+bot-api
+control-plane
+dashboard
+decisions-telegram-adapter
+mt4-bridge
+telegram-listener
+tradingview-publisher

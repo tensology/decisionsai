@@ -45,6 +45,15 @@ _PROJECT_WORK_RE = re.compile(
     r"investigate|redesign|copy|migrate|integrate)\b",
     re.I,
 )
+# Casual chat / status questions must stay with the conversational agent even when
+# a work-looking verb appears later in the sentence.
+_CASUAL_CHAT_RE = re.compile(
+    r"^(?:hi|hello|hey|thanks|thank\s+you|good\s+(?:morning|afternoon|evening)|"
+    r"what(?:'s|\s+is|\s+are|\s+was|\s+were)?\b|why\b|how\s+(?:do|does|did|can|should|would|is|are)\b|"
+    r"who\b|when\b|where\b|tell\s+me\b|explain\b|describe\b|"
+    r"(?:can|could|would)\s+you\s+(?:tell|explain|describe|remind|summarize|help\s+me\s+understand)\b)",
+    re.I,
+)
 _BATCH_TICKETS_RE = re.compile(
     r"\b(?:create|make|open|add)?\s*(?:separate|individual|multiple)\s+"
     r"(?:tickets|tasks|work items)\s+(?:for|:)\s+(?P<items>.+?)"
@@ -262,6 +271,34 @@ class OrchestratorIntakeService:
                 "Project-scoped work request; create a trackable ticket and execute it through the linked workflow",
                 diagnostics={"routing_shape": "project_work", "project_scoped": True},
             )
+        # Chat / oracle / voice front door: actionable work intent without an
+        # explicit "create ticket" phrase still becomes durable work via intake.
+        # Keep casual chat and questions with the conversational agent.
+        if (
+            not _CASUAL_CHAT_RE.search(value)
+            and _PROJECT_WORK_RE.search(value)
+            and not _has_unresolved_reference(intake)
+        ):
+            if _is_lightweight_project_change(value):
+                return WorkIntakeDecision(
+                    WorkIntakeAction.CREATE_TICKET,
+                    "Work-intent request; create a trackable ticket and execute it with the lightweight project worker",
+                    diagnostics={
+                        "routing_shape": "work_intent_lightweight",
+                        "project_scoped": False,
+                        "execute_lightweight": True,
+                        "work_intent": True,
+                    },
+                )
+            return WorkIntakeDecision(
+                WorkIntakeAction.RUN_WORKFLOW,
+                "Work-intent request; create a trackable ticket and execute it through the linked workflow",
+                diagnostics={
+                    "routing_shape": "work_intent",
+                    "project_scoped": False,
+                    "work_intent": True,
+                },
+            )
         return WorkIntakeDecision(WorkIntakeAction.ANSWER_DIRECTLY, "Conversational or non-explicit request; preserve normal agent behaviour")
 
     def ingest(self, intake: WorkIntake, *, execute: bool = True) -> WorkIntakeDecision:
@@ -278,13 +315,29 @@ class OrchestratorIntakeService:
             )
             if batch_items:
                 self._ingest_ticket_batch(intake, decision, batch_items)
+            elif decision.action in {
+                WorkIntakeAction.CREATE_TICKET,
+                WorkIntakeAction.RUN_WORKFLOW,
+            } and self._should_stage_whatsapp_intake_approval(intake, decision):
+                self._stage_whatsapp_intake_approval(intake, decision)
             elif decision.action == WorkIntakeAction.CREATE_TICKET:
                 self._create_ticket(intake, decision)
                 if (
                     decision.status != "duplicate"
                     and decision.diagnostics.get("execute_lightweight")
                 ):
-                    self._start_lightweight_execution(intake, decision)
+                    # Small ad-hoc still uses the board/Development workflow when
+                    # one is linked so human_checkpoints (Telegram pre-work
+                    # approve) fires. Fall back to direct CLI only when no
+                    # workflow is available or checkpoints are explicitly skipped.
+                    skip_checkpoints = bool(
+                        (intake.metadata or {}).get("skip_human_checkpoints")
+                    )
+                    if decision.workflow_id and not skip_checkpoints:
+                        decision.diagnostics["approval_via_workflow"] = True
+                        self._start_workflow(intake, decision)
+                    else:
+                        self._start_lightweight_execution(intake, decision)
             elif decision.action == WorkIntakeAction.RUN_WORKFLOW:
                 self._create_ticket(intake, decision)
                 if decision.status != "duplicate":
@@ -720,9 +773,105 @@ class OrchestratorIntakeService:
             )
         except Exception:
             logger.debug("Could not record channel intake event", exc_info=True)
+        if str(getattr(intake.source, "value", intake.source) or "").lower() == "whatsapp":
+            try:
+                self._record_whatsapp_lifecycle(intake, decision)
+            except Exception:
+                logger.debug("Could not persist WhatsApp work lifecycle from intake", exc_info=True)
         decision.handled = True
         decision.status = "ticket_created"
         decision.response_text = f"Created ticket #{decision.ticket_id}: {_clean_title(value)}"
+
+    @staticmethod
+    def _should_stage_whatsapp_intake_approval(
+        intake: WorkIntake,
+        decision: WorkIntakeDecision,
+    ) -> bool:
+        """True when WA create/run must wait for Telegram yes/no/add → readiness."""
+        if str(getattr(intake.source, "value", intake.source) or "").lower() != "whatsapp":
+            return False
+        meta = dict(intake.metadata or {})
+        if meta.get("intake_approval_confirmed"):
+            return False
+        if decision.status == "duplicate":
+            return False
+        try:
+            from distr.core.kanban.whatsapp_intake_approval import whatsapp_intake_approval_enabled
+
+            return bool(whatsapp_intake_approval_enabled())
+        except Exception:
+            return False
+
+    def _stage_whatsapp_intake_approval(
+        self,
+        intake: WorkIntake,
+        decision: WorkIntakeDecision,
+    ) -> None:
+        """Stage classified WA work for Telegram Yes/No/Add before creating a ticket."""
+        from distr.core.kanban.whatsapp_intake_approval import (
+            notify_telegram_approval,
+            stage_whatsapp_intake,
+        )
+
+        pending = stage_whatsapp_intake(
+            intake_payload=intake.to_dict(),
+            classified_action=decision.action.value,
+            classified_reason=decision.reason,
+            draft_text=intake.text,
+        )
+        notified = False
+        try:
+            notified = bool(notify_telegram_approval(pending))
+        except Exception:
+            logger.debug("WhatsApp intake Telegram notify failed", exc_info=True)
+        prior_action = decision.action.value
+        decision.action = WorkIntakeAction.REQUEST_APPROVAL
+        decision.handled = True
+        decision.status = "pending_approval"
+        decision.response_text = (
+            "WhatsApp work is waiting on Telegram: Yes / No / Add. "
+            "Say ready, build it, or create ticket when the draft looks right."
+        )
+        decision.diagnostics.update({
+            "whatsapp_intake_token": pending.get("token"),
+            "telegram_notified": notified,
+            "readiness_phrases": ["ready", "build it", "create ticket", "yes", "go ahead"],
+            "prior_action": prior_action,
+        })
+
+    @staticmethod
+    def _record_whatsapp_lifecycle(intake: WorkIntake, decision: WorkIntakeDecision) -> None:
+        """Link WA-sourced WorkIntake tickets into the reply-review lifecycle."""
+        if not decision.ticket_id:
+            return
+        from distr.core.kanban.whatsapp_work_lifecycle import record_ticket_created
+
+        meta = dict(intake.metadata or {})
+        source_jid = str(meta.get("jid") or intake.source_thread_id or "").strip()
+        source_phone = str(
+            meta.get("jid_phone")
+            or meta.get("phone")
+            or intake.source_user_id
+            or ""
+        ).strip()
+        if not source_phone and source_jid:
+            source_phone = source_jid.split("@", 1)[0]
+        message_ids: list[int] = []
+        for key in ("message_ids", "whatsapp_message_ids", "source_message_ids"):
+            raw = meta.get(key)
+            if isinstance(raw, (list, tuple)):
+                message_ids.extend(int(v) for v in raw if str(v).isdigit())
+        if not message_ids and str(intake.source_message_id or "").isdigit():
+            message_ids.append(int(intake.source_message_id))
+        record_ticket_created(
+            ticket_id=int(decision.ticket_id),
+            board_id=int(decision.board_id) if decision.board_id is not None else None,
+            project_id=int(decision.project_id) if decision.project_id is not None else None,
+            source_jid=source_jid,
+            source_phone=source_phone,
+            source_contact=str(intake.source_user_id or meta.get("contact_name") or "").strip(),
+            message_ids=message_ids,
+        )
 
     def _start_workflow(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:
         if not decision.ticket_id or not decision.workflow_id:

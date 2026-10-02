@@ -509,6 +509,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         QTimer.singleShot(800, self._check_and_connect_whatsapp_websocket)
         QTimer.singleShot(1100, self._maybe_start_discord_bot_background)
         QTimer.singleShot(1300, self._maybe_start_slack_outbound_worker)
+        # MemPalace seed corpus: first-run mine into ~/.decisions/mempalace (non-blocking)
+        QTimer.singleShot(2500, self._maybe_ensure_mempalace_seed)
         
         # Initialize action playback service (independent of UI)
         from distr.core.actions.playback_service import ActionPlaybackService
@@ -1113,6 +1115,23 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             # Start initialization sequence: device selection first, then everything else
             self._start_post_eula_initialization()
     
+    def _maybe_ensure_mempalace_seed(self):
+        """First-run: mine bundled seed pack into Decisions MemPalace (background).
+
+        Soft-fails if chromadb/mempalace missing. Does not block UI.
+        LOCAL only — palace at ~/.decisions/mempalace/palace, wing seed_corpus_pack.
+        """
+        try:
+            from distr.core.mempalace.flags import is_mempalace_memory_backend_enabled
+            if not is_mempalace_memory_backend_enabled():
+                return
+            from distr.core.mempalace.seed import ensure_seed_wing
+            status = ensure_seed_wing(background=True)
+            logger.info("MemPalace seed ensure: %s", status.get("state") or status)
+        except Exception as exc:
+            logger.warning("MemPalace seed ensure skipped: %s", exc)
+
+
     def _configure_startup(self):
         """
         Configure startup behavior and timing based on EULA acceptance

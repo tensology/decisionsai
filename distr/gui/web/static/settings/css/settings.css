@@ -126,6 +126,42 @@ html {
     margin: 0.625rem 0.75rem;
 }
 
+@media (max-width: 640px) {
+    .settings-shell {
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    #settings-sidebar,
+    .settings-sidebar {
+        width: 100%;
+        min-width: 0;
+    }
+
+    #settings-nav {
+        position: static;
+        display: flex;
+        gap: 0.375rem;
+        overflow-x: auto;
+        padding-bottom: 0.25rem;
+    }
+
+    #settings-nav .tab-button {
+        width: auto;
+        flex: 0 0 auto;
+        padding: 0.625rem 0.75rem;
+    }
+
+    #settings-nav .settings-nav-divider {
+        display: none;
+    }
+
+    .settings-content {
+        width: 100%;
+        padding: 1rem;
+    }
+}
+
 /* Tab buttons (also used as links for #hash URLs) */
 .tab-button {
     background-color: transparent;

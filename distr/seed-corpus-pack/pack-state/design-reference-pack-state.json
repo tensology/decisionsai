@@ -1,0 +1,43 @@
+{
+  "state_version": 1,
+  "status": "configured",
+  "detected": {
+    "codex": true,
+    "claude": true,
+    "cursor": true,
+    "pi": true,
+    "cline": false
+  },
+  "written": [
+    "/Users/paul/plugins/decisions-codex/skills/decisions-ui-ideation",
+    "/Users/paul/.codex/skills/decisions-ui-ideation",
+    "/Users/paul/.claude/skills/decisions-ui-ideation",
+    "/Users/paul/.pi/skills/decisions-ui-ideation",
+    "/Users/paul/.cursor/skills/decisions-ui-ideation",
+    "/Users/paul/.cursor/commands/decisions-ui-ideation.md",
+    "/Users/paul/.codex/commands/decisions-ui-ideation.md",
+    "/Users/paul/.claude/commands/decisions-ui-ideation.md",
+    "/Users/paul/.pi/commands/decisions-ui-ideation.md",
+    "/Users/paul/plugins/decisions-codex/skills/decisions-design-references",
+    "/Users/paul/.codex/skills/decisions-design-references",
+    "/Users/paul/.claude/skills/decisions-design-references",
+    "/Users/paul/.pi/skills/decisions-design-references",
+    "/Users/paul/.cursor/skills/decisions-design-references",
+    "/Users/paul/.cursor/commands/decisions-design-references.md",
+    "/Users/paul/.codex/commands/decisions-design-references.md",
+    "/Users/paul/.claude/commands/decisions-design-references.md",
+    "/Users/paul/.pi/commands/decisions-design-references.md",
+    "/Users/paul/plugins/decisions-codex/skills/frontend-design-direction",
+    "/Users/paul/.codex/skills/frontend-design-direction",
+    "/Users/paul/.claude/skills/frontend-design-direction",
+    "/Users/paul/.pi/skills/frontend-design-direction",
+    "/Users/paul/.cursor/skills/frontend-design-direction",
+    "/Users/paul/.cursor/commands/frontend-design-direction.md",
+    "/Users/paul/.codex/commands/frontend-design-direction.md",
+    "/Users/paul/.claude/commands/frontend-design-direction.md",
+    "/Users/paul/.pi/commands/frontend-design-direction.md",
+    "/Users/paul/plugins/decisions-codex/skills/decisions-design-reference-harness/SKILL.md"
+  ],
+  "mcp_setup_script": "/Users/paul/.decisions/harness/mcp-setup-design.sh",
+  "refero_skill_install": "npx skills add https://github.com/referodesign/refero_skill"
+}

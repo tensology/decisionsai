@@ -1,0 +1,129 @@
+# File structure
+
+Observed from `/Users/paul/development/WORK/CRYSTALLOGIC/www.merrypak.co.za`.
+
+- • `AGENTS.md`
+- ▸ `artifacts`
+- ▸ `backend`
+- ▸ `bin`
+- • `CLAUDE.md`
+- ▸ `conf`
+- ▸ `db`
+- ▸ `docs`
+- ▸ `frontend`
+- ▸ `images`
+- • `journal`
+- • `journal_dev_celery`
+- • `load_latest_db.sh`
+- ▸ `logs`
+- ▸ `merge`
+- ▸ `output`
+- ▸ `pubsub`
+- • `restart`
+- • `restart_dev`
+- ▸ `setup`
+- • `start`
+- • `stop`
+- ▸ `tmp`
+- • `update`
+  - ▸ `artifacts/editor-qa`
+  - ▸ `backend/webapp`
+  - • `bin/activate`
+  - • `bin/detect-environment.sh`
+  - • `bin/gunicorn`
+  - • `bin/post-deploy-hook.sh`
+  - • `bin/restart_dev_celery.sh`
+  - • `bin/start`
+  - • `bin/start_celery`
+  - • `bin/start_celery_dynamic.sh`
+  - • `bin/start_celery_production`
+  - • `bin/start_dev`
+  - • `bin/stop_celery_production`
+  - • `conf/cron_rebuild_index.md`
+  - • `conf/deploy_celery.sh`
+  - • `conf/EMERGENCY_DB_CLEANUP.md`
+  - • `conf/kill_idle_db_connections.sh`
+  - • `conf/manage_celery_stale_tasks_cron.sh`
+  - • `conf/manage_collection_cron.sh`
+  - • `conf/manage_db_connections_cron.sh`
+  - • `conf/merrypak-dev.service`
+  - • `conf/merrypak.nginx`
+  - • `conf/merrypak.service`
+  - • `conf/merrypak_celery.service`
+  - • `conf/merrypak_celery_dev.service`
+  - • `conf/merrypak_celery_dynamic.service`
+  - • `conf/merrypak_celery_stale_tasks_cron`
+  - • `conf/merrypak_collection_cron`
+  - • `conf/merrypak_db_connections_cron`
+  - • `conf/merrypak_dev.nginx`
+  - • `conf/merrypak_node.service`
+  - • `conf/monitor_all_databases.sh`
+  - • `conf/README_CELERY_DEPLOYMENT.md`
+  - • `conf/README_COLLECTION_PROCESSING.md`
+  - • `conf/README_DB_CONNECTION_MONITORING.md`
+  - • `conf/README_XAPIAN_FIXES.md`
+  - • `conf/restart_dev_nginx.sh`
+  - • `conf/setup_rabbitmq_vhost_isolation.sh`
+  - • `conf/uninstall_service.sh`
+  - • `db/merrypak-user-woocommerce.sql`
+  - ▸ `db/SouthAfrica`
+  - ▸ `docs/compliance`
+  - ▸ `docs/d3-api`
+  - • `docs/d3-order-document-reference.html`
+  - ▸ `docs/investigations`
+  - • `docs/merrypak-customer-data-protection-2026-08-26.html`
+  - • `docs/merrypak-customer-data-protection-2026-08-26.md`
+  - • `docs/merrypak-customer-data-protection-2026-08-26.pdf`
+  - • `docs/merrypak-website-security-controls-2026-08-26.html`
+  - • `docs/merrypak-website-security-controls-2026-08-26.md`
+  - • `docs/merrypak-website-security-controls-2026-08-26.pdf`
+  - • `docs/needs-assessment.md`
+  - ▸ `docs/reference`
+  - ▸ `docs/superpowers`
+  - • `frontend/eslint.config.js`
+  - • `frontend/flush_cache.js`
+  - • `frontend/index.html`
+  - • `frontend/package-lock.json`
+  - • `frontend/package.json`
+  - • `frontend/playwright.config.js`
+  - • `frontend/postcss.config.js`
+  - ▸ `frontend/public`
+  - ▸ `frontend/sample_code`
+  - ▸ `frontend/scripts`
+  - ▸ `frontend/src`
+  - • `frontend/tailwind.config.js`
+  - ▸ `frontend/test-results`
+  - ▸ `frontend/tests`
+  - • `frontend/vite.config.js`
+  - • `frontend/yarn.lock`
+  - ▸ `images/products`
+  - • `logs/django.log`
+  - • `logs/qoh_sync.log`
+  - ▸ `merge/new_data`
+  - ▸ `output/pdf`
+  - ▸ `output/web_accounts`
+  - • `pubsub/package-lock.json`
+  - • `pubsub/package.json`
+  - • `pubsub/pubsub.js`
+  - • `setup/cleanup_xapian_index.sh`
+  - • `setup/install.sh`
+  - • `setup/install_dev_celery.sh`
+  - • `setup/install_dev_nginx.sh`
+  - • `setup/install_dev_service.sh`
+  - • `setup/install_service.sh`
+  - • `setup/install_xapian_macos.sh`
+  - • `setup/install_xapian_ubuntu.sh`
+  - • `setup/manage_nginx_auth.sh`
+  - • `setup/migrate_to_xapian.py`
+  - • `setup/README.md`
+  - • `setup/setup_packing.sh`
+  - • `setup/test_xapian.py`
+  - ▸ `tmp/pdf-preview`
+  - ▸ `tmp/pdfs`
+    - • `artifacts/editor-qa/email-admin-after-save.png`
+    - • `artifacts/editor-qa/page-frontend-after-save.png`
+
+## Reading guide
+
+- Directories are shown before deeper paths.
+- Hidden, generated, dependency, and plan-sync folders are omitted.

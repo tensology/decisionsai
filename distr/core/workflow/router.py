@@ -1922,6 +1922,8 @@ class StepRouter:
             "step_review",
             "worker_needs_input",
             "restart_recovery",
+            "verification_review",
+            "deploy_assist",
         }
         if waiting_kind not in interactive_kinds:
             self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)

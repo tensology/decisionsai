@@ -15,6 +15,7 @@ from distr.core.agent.libs import (
     pwc, WHISPER_AVAILABLE
 )
 from distr.core.agent.services.stt.base import BaseSTTService
+from distr.core.paths import WHISPER_MODEL_SIZE
 
 try:
     from queue import Full
@@ -49,7 +50,7 @@ def suppress_stderr():
 class WhisperSTTService(BaseSTTService):
     """Whisper-based STT service using Pipecat"""
 
-    def __init__(self, model_path: str = "base.en", event_queue=None, is_hands_free=False, **kwargs):
+    def __init__(self, model_path: str = WHISPER_MODEL_SIZE, event_queue=None, is_hands_free=False, **kwargs):
         if not PIPECAT_AVAILABLE:
             raise ImportError("Pipecat is required for WhisperSTTService")
         if not WHISPER_AVAILABLE:
@@ -364,8 +365,7 @@ class WhisperSTTService(BaseSTTService):
                 await self._check_continuous_speech_interruption(frame.audio, direction)
             elif self._is_hands_free or self._is_dictating:
                 self._pre_buffer.append(frame.audio)
-                # Check if a SpeakingStartedFrame was suppressed by the echo gate.
-                # The user might actually be speaking — keep checking energy per-frame.
+                # Deferred barge-in path (rarely set after energy-gate removal).
                 await self._check_pending_bargein(frame.audio, direction)
             return
 

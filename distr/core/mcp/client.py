@@ -74,7 +74,15 @@ class MCPServerSession:
                 "MCP streamable/SSE URL transport requires the `mcp` Python package "
                 "(supported Python versions per upstream)."
             )
-        self._streamable = StreamableSdkSession(cfg.url, dict(cfg.headers))
+        headers = dict(cfg.headers)
+        if cfg.bearer_token_env_var:
+            token = (os.environ.get(cfg.bearer_token_env_var) or "").strip()
+            if not token:
+                raise MCPTransportError(
+                    f"MCP bearer token environment variable {cfg.bearer_token_env_var!r} is not set"
+                )
+            headers["Authorization"] = f"Bearer {token}"
+        self._streamable = StreamableSdkSession(cfg.url, headers)
         self._streamable.start()
         self.reset_backoff()
         self._publish_connected()

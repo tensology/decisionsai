@@ -1,0 +1,34 @@
+{
+  "id": "trading-robot",
+  "title": "Trading robot / FX system (~70%)",
+  "goal": "Scaffold research+apps+UI structure from currency-trader; never change prod execution without explicit ask.",
+  "load_order": [
+    "LOADING.md",
+    "07-agent-behavior/DECISION-HEURISTICS.md",
+    "07-agent-behavior/VAGUENESS-DIAL.md",
+    "07-agent-behavior/GET-SHIT-DONE.md",
+    "08-premium-quality-gate/QUALITY-GATE.md",
+    "09-page-stencils/dashboard/STENCIL.md",
+    "09-page-stencils/crud-list-detail/STENCIL.md",
+    "domains/trading-robot/currency-trader/CLAUDE.md",
+    "domains/trading-robot/currency-trader/AGENTS.md",
+    "domains/trading-robot/currency-trader/docs-curated/UI_STANDARDS.md",
+    "domains/trading-robot/currency-trader/docs-curated/FRONTEND_ARCHITECTURE.md",
+    "03-done-states-frac/FRAC-TEMPLATE.md",
+    "04-verify-feedback-loops/VERIFY-LOOP.md",
+    "06-harness-ops/ENGINEERING-SKILLS-INDEX.md",
+    "copied-skills/ecc/PLAN-PRD-PATTERN.md",
+    "copied-skills/decisionsai/verification-before-completion/SKILL.md"
+  ],
+  "scaffold_hints": {
+    "primary_structure": "domains/trading-robot/currency-trader",
+    "live_ref": "/Users/paul/development/TRADING/currency-trader",
+    "safety": "Do not disable execution, change promoted symbols, or active strategy unless Paul explicitly requests that exact change."
+  },
+  "harness": [
+    "ecc",
+    "superpowers"
+  ],
+  "coverage_target": 0.7,
+  "entity_domain": "partial \u2014 use project docs; ecommerce entity-graph does NOT apply"
+}

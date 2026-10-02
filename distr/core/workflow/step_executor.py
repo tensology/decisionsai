@@ -643,7 +643,49 @@ class StepExecutorMixin:
                     run_data["interrupt_context"] = interrupt
                     run_data["human_intervention_state"] = "needs_human_input"
                 run.run_data = json.dumps(run_data, default=str)
+                ledger_ticket_id = int(run.ticket_id) if getattr(run, "ticket_id", None) is not None else None
                 db.commit()
+            try:
+                from distr.core.cost_ledger import record_usage
+
+                tokens_in = (result or {}).get("tokens_in")
+                tokens_out = (result or {}).get("tokens_out")
+                model_name = str(
+                    (result or {}).get("model")
+                    or (result or {}).get("model_name")
+                    or ((run_data.get("execution_route") or {}) if isinstance(run_data.get("execution_route"), dict) else {}).get("model")
+                    or ""
+                )
+                worker_id = str(
+                    (result or {}).get("worker_id")
+                    or ((run_data.get("execution_route") or {}) if isinstance(run_data.get("execution_route"), dict) else {}).get("worker_id")
+                    or ""
+                )
+                project_id = None
+                for key in ("project_id", "linked_project_id"):
+                    raw = run_data.get(key)
+                    if raw is not None:
+                        try:
+                            project_id = int(raw)
+                            break
+                        except (TypeError, ValueError):
+                            pass
+                record_usage(
+                    run_id=int(run_id),
+                    ticket_id=ledger_ticket_id,
+                    project_id=project_id,
+                    worker_id=worker_id or None,
+                    provider=model_provider or None,
+                    model=model_name or None,
+                    tokens_in=int(tokens_in) if tokens_in is not None else None,
+                    tokens_out=int(tokens_out) if tokens_out is not None else None,
+                    tokens_total=int(tokens) if tokens else None,
+                    source="workflow",
+                    step_id=int(step_data.get("id") or 0) or None,
+                    metadata={"power_budget_charge": True},
+                )
+            except Exception:
+                logger.debug("cost_ledger.record_usage failed", exc_info=True)
             try:
                 from distr.core.orchestration_events import emit_orchestration_event
 

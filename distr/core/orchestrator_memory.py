@@ -240,6 +240,16 @@ def record_user_memory(
         source_chat_id=source_chat_id,
         project_id=project_id,
     )
+    try:
+        from distr.core.mempalace.wiring import dual_write_orchestrator_memory
+
+        dual_write_orchestrator_memory(
+            content=clean,
+            category=category_clean,
+            memory_uid=memory_uid or "",
+        )
+    except Exception:
+        pass
     return memory_uid
 
 
@@ -773,7 +783,16 @@ def build_memory_context(
     lines = ["- orchestrator_user_memory:"]
     for memory in filtered[: max(1, min(int(limit or 30), 100))]:
         lines.append(f"  - {memory['category']}: {memory['content']}")
-    return "\n".join(lines)
+    legacy = "\n".join(lines)
+    try:
+        from distr.core.mempalace.wiring import prefer_read_orchestrator_context
+
+        mp = prefer_read_orchestrator_context("user preferences guardrails durable memory")
+        if mp:
+            return legacy + "\n- mempalace_orchestrator_recall:\n" + mp
+    except Exception:
+        pass
+    return legacy
 
 
 def project_name_from_path(path: str) -> str:

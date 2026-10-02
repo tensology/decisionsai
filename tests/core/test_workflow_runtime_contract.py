@@ -39,7 +39,7 @@ def _session_ctx(factory):
         session.close()
 
 
-def test_wait_for_continue_is_autonomous_unless_human_checkpoints_enabled(monkeypatch):
+def test_wait_for_continue_honors_human_checkpoints_default_on(monkeypatch):
     from distr.core.workflow.runtime_contract import should_pause_after_step
 
     factory = _factory()
@@ -54,13 +54,26 @@ def test_wait_for_continue_is_autonomous_unless_human_checkpoints_enabled(monkey
             workflow_id=wf.id,
             run_data=json.dumps({"run_settings": {"human_checkpoints": True}}),
         )
-        session.add_all([default_run, checkpoint_run])
+        disabled_run = AutoWorkflowRun(
+            workflow_id=wf.id,
+            run_data=json.dumps({"run_settings": {"human_checkpoints": False}}),
+        )
+        skipped_run = AutoWorkflowRun(
+            workflow_id=wf.id,
+            run_data=json.dumps({"skip_human_checkpoints": True}),
+        )
+        session.add_all([default_run, checkpoint_run, disabled_run, skipped_run])
         session.flush()
         default_id = default_run.id
         checkpoint_id = checkpoint_run.id
+        disabled_id = disabled_run.id
+        skipped_id = skipped_run.id
 
-    assert not should_pause_after_step(run_id=default_id, step_wait_for_continue=True)
+    # Default ON: empty run_data still pauses wait_for_continue steps.
+    assert should_pause_after_step(run_id=default_id, step_wait_for_continue=True)
     assert should_pause_after_step(run_id=checkpoint_id, step_wait_for_continue=True)
+    assert not should_pause_after_step(run_id=disabled_id, step_wait_for_continue=True)
+    assert not should_pause_after_step(run_id=skipped_id, step_wait_for_continue=True)
     assert not should_pause_after_step(run_id=checkpoint_id, step_wait_for_continue=True, skip_wait=True)
 
 

@@ -7,6 +7,8 @@ description: Use when Codex is running work that originated from DecisionsAI tic
 
 Treat the supplied Decisions project, ticket, workflow, callback, and prior-step packet as authoritative. Work in the named project and do not create another ticket, plan, workflow, or branch unless explicitly requested. Prefer the Codex IDE/chat surface as the primary execution context. The CLI is fallback transport for automation or setup checks.
 
+This chat is the Codex IDE thread for the open project. It is independent of the Decisions Development section and whichever harness that section is using. A follow-up from the user stays in this chat. The reporter prints `thread_id=` and locks that Codex thread for the project. Pass `--thread-id` with that value on later reports in this chat. Pass `--new-thread` only when the user asked to start a new Codex thread.
+
 ## Lean execution
 
 - Inspect only the files and lines needed for the request. Prefer focused search and bounded reads.

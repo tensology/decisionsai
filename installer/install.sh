@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Atomic single-user install, update, verification, and rollback for DecisionsAI.app.
+# Note: MemPalace seed pack ships inside the app via distr/seed-corpus-pack (build_app rsync).
+# First-run mines into ~/.decisions/mempalace/palace when mempalace_memory_backend is ON (default).
+# LOCAL setup helper: python -m distr.core.mempalace — does not run during this .app install.
 
 set -euo pipefail
 

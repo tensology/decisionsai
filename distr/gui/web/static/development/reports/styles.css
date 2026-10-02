@@ -1,7 +1,7 @@
 .reports-workspace { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 24px; overflow: auto; }
 .reports-workspace header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .reports-workspace p { margin: 0; color: var(--studio-muted); font-size: 12px; }
-.reports-tabs { display: flex; gap: 8px; }
+.reports-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .reports-tab { border: 1px solid var(--studio-line); background: transparent; color: var(--studio-muted); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
 .reports-tab.is-active { color: var(--studio-text); border-color: var(--studio-accent, var(--studio-line)); background: var(--studio-panel); }
 .reports-filters { display: flex; flex-wrap: wrap; gap: 16px; }
@@ -12,4 +12,6 @@
 .reports-workspace th, .reports-workspace td { text-align: left; padding: 12px 8px; border-bottom: 1px solid var(--studio-line-soft); vertical-align: top; }
 .reports-workspace td small { display: block; margin-top: 4px; color: var(--studio-muted); }
 .reports-workspace td a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.reports-cost-summary { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; font-size: 12px; }
+.reports-cost-summary span { border: 1px solid var(--studio-line-soft); border-radius: 6px; padding: 6px 10px; background: var(--studio-panel); }
 @media (max-width:680px) { .reports-workspace table { min-width: 600px; } }

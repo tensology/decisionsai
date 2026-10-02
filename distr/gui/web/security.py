@@ -146,6 +146,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "fishaudio_key",
         "masko_key",
         "rube_token",
+        "jev_key",
         "tensology_key",
     ]
     response: Dict[str, Any] = {
@@ -164,6 +165,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "fishaudio_enabled": settings.get("fishaudio_enabled", False),
         "masko_enabled": settings.get("masko_enabled", False),
         "composio_enabled": settings.get("rube_enabled", False),
+        "jev_enabled": settings.get("jev_enabled", False),
         "tensology_enabled": settings.get("tensology_enabled", False),
     }
     for field in secret_fields:

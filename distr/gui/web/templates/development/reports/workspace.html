@@ -7,10 +7,15 @@
     <div class="reports-tabs" role="tablist" aria-label="Report views">
         <button type="button" class="reports-tab is-active" role="tab" id="reports-tab-runs" data-reports-tab="runs" aria-selected="true">Run history</button>
         <button type="button" class="reports-tab" role="tab" id="reports-tab-time" data-reports-tab="time" aria-selected="false">Time log</button>
+        <button type="button" class="reports-tab" role="tab" id="reports-tab-costs" data-reports-tab="costs" aria-selected="false">Costs</button>
     </div>
     <div class="reports-filters" id="reports-run-filters">
         <label>Source<select id="reports-source"><option value="all">All sources</option><option value="workflow">Workflows</option><option value="automation">Automations</option><option value="execution">Standalone executions</option></select></label>
         <label>Status<select id="reports-status"><option value="all">All statuses</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="running">Running</option><option value="cancelled">Cancelled</option></select></label>
+    </div>
+    <div class="reports-filters" id="reports-cost-filters" hidden>
+        <label>Display<select id="reports-cost-display"><option value="blended">Blended (default)</option><option value="explicit">Explicit</option></select></label>
+        <label>Source<select id="reports-cost-source"><option value="all">All sources</option><option value="workflow">Workflow</option><option value="harness">Harness</option><option value="chat">Chat</option><option value="execution">Execution</option></select></label>
     </div>
     <div id="reports-results" aria-live="polite"></div>
 </section>

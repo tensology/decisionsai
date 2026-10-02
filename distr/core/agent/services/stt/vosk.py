@@ -491,6 +491,49 @@ class VoskSTTService(BaseSTTService):
             logger.error("VoskSTTService: Error transcribing file: %s", e, exc_info=True)
             return None
 
+
+    async def _on_speaking_started(self, frame, direction):
+        """Reset continuous recognizer and seed accumulated bytes from pre-buffer."""
+        self._continuous_recognizer = None
+        self._accumulated_audio_bytes = b"".join(self._audio_buffer)
+
+    async def _on_speaking_stopped(self, frame, direction):
+        """Emit final Vosk result for the continuous utterance."""
+        if self._continuous_recognizer is None:
+            self._accumulated_audio_bytes = b""
+            self._audio_buffer = []
+            return
+        try:
+            final_result = json.loads(self._continuous_recognizer.FinalResult())
+            if "text" in final_result and final_result["text"]:
+                text = final_result["text"].strip()
+                if text:
+                    text_lower = text.lower()
+                    is_change_mode_command = any(
+                        pattern in text_lower
+                        for pattern in [
+                            "change mode",
+                            "switch mode",
+                            "toggle mode",
+                            "ptt mode",
+                            "continuous mode",
+                            "hands free mode",
+                        ]
+                    )
+                    if is_change_mode_command or self._is_meaningful_text(text):
+                        logger.debug("[STT] PICKED UP: %s", text)
+                        transcription_frame = TranscriptionFrame(
+                            text=text, user_id="", timestamp=time.time()
+                        )
+                        await self.push_frame(transcription_frame, direction)
+        except Exception as e:
+            logger.debug(f"Error getting final result: {e}")
+
+        self._continuous_recognizer = None
+        self._accumulated_audio_bytes = b""
+        self._audio_buffer = []
+        logger.debug("STT: Reset continuous recognizer on UserStoppedSpeakingFrame")
+
     async def process_frame(self, frame, direction):
         """Process frames from the transport - same logic as WhisperSTTService"""
         # Store direction and event loop for PTT interruption
@@ -507,85 +550,21 @@ class VoskSTTService(BaseSTTService):
             await self._send_interruption(direction)
             self._pending_interruption = False
         
-        # Filter VAD-generated InterruptionFrames based on hands-free mode
-        if isinstance(frame, InterruptionFrame):
-            if not self._is_hands_free:
-                logger.debug("STT: Filtering InterruptionFrame (PTT mode - interruptions disabled)")
-                return
-            else:
-                logger.debug("STT: Passing InterruptionFrame through (hands-free mode)")
+        # Filter VAD-generated InterruptionFrames based on hands-free / PTT mode
+        if self._should_filter_interruption(frame):
+            return
         
         # Handle pending PTT buffer processing (backup if immediate flush could not run)
         if self._pending_ptt_process and not getattr(self, "_ptt_flush_scheduled", False):
             self._pending_ptt_process = False
             await self._process_ptt_buffer_immediate(direction)
         
-        # Handle UserStartedSpeakingFrame - initialize continuous recognizer
-        if isinstance(frame, SpeakingStartedFrames):
-            if self._is_hands_free or self._is_dictating:
-                # --- Echo gate: suppress false VAD triggers during TTS playback ---
-                if self._is_tts_playing() and not self._check_bargein_energy():
-                    logger.debug("STT: Suppressing VAD speaking-started (TTS playing, low mic energy — echo)")
-                    return
-
-                # Reset recognizer for new utterance, seeding with pre-buffered audio
-                mode_name = "dictation mode" if self._is_dictating else "hands-free mode"
-                pre_buf_ms = len(self._pre_buffer) * 20
-                self._continuous_recognizer = None
-                self._audio_buffer = list(self._pre_buffer)
-                self._accumulated_audio_bytes = b''.join(self._pre_buffer)
-                self._pre_buffer.clear()
-                self._user_speaking = True
-                logger.debug(f"STT: User started speaking ({mode_name}), seeded {pre_buf_ms}ms pre-buffer")
-
-                # CRITICAL: Send InterruptionFrame to stop current TTS/LLM response
-                # Without this, new speech just queues up as additional prompts
-                logger.debug("STT: Sending InterruptionFrame (hands-free voice interruption)")
-                await self._send_interruption(direction)
-        
-        # Handle UserStoppedSpeakingFrame - reset continuous recognizer
-        if isinstance(frame, SpeakingStoppedFrames):
-            self._user_speaking = False
-            if self._continuous_recognizer is not None:
-                # Get final result before resetting
-                try:
-                    final_result = json.loads(self._continuous_recognizer.FinalResult())
-                    if 'text' in final_result and final_result['text']:
-                        text = final_result['text'].strip()
-                        if text:
-                            # CRITICAL: Always send transcriptions that contain "change mode" commands
-                            text_lower = text.lower()
-                            is_change_mode_command = any(
-                                pattern in text_lower 
-                                for pattern in ["change mode", "switch mode", "toggle mode", "ptt mode", "continuous mode", "hands free mode"]
-                            )
-                            
-                            if is_change_mode_command or self._is_meaningful_text(text):
-                                logger.debug("[STT] PICKED UP: %s", text)
-                                if is_change_mode_command:
-                                    logger.debug(f"STT: Allowing 'change mode' command through (final): '{text}'")
-                                else:
-                                    logger.debug(f"🔊 Final transcription on stop: '{text}'")
-                                transcription_frame = TranscriptionFrame(text=text, user_id="", timestamp=time.time())
-                                await self.push_frame(transcription_frame, direction)
-                except Exception as e:
-                    logger.debug(f"Error getting final result: {e}")
-                
-                # Reset recognizer for next utterance
-                self._continuous_recognizer = None
-                self._accumulated_audio_bytes = b''
-                self._audio_buffer = []
-                logger.debug("STT: Reset continuous recognizer on UserStoppedSpeakingFrame")
-            
-            # Pass through the frame
-            await super().process_frame(frame, direction)
+        # Handle VAD speaking frames (shared upstream barge-in / glow / interrupt)
+        if await self._handle_speaking_started(frame, direction):
             return
-        
-        # Handle UserStartedSpeakingFrame - pass through after handling
-        if isinstance(frame, SpeakingStartedFrames):
-            await super().process_frame(frame, direction)
+        if await self._handle_speaking_stopped(frame, direction):
             return
-        
+
         # Handle audio frames (transport emits InputAudioRawFrame; both needed for PTT)
         if isinstance(frame, (AudioRawFrame, InputAudioRawFrame)):
             if self._ptt_active:
@@ -600,6 +579,7 @@ class VoskSTTService(BaseSTTService):
                 # Hands-free mode or dictation mode: accumulate audio for continuous recognition (only when user is speaking)
                 self._audio_buffer.append(frame.audio)
                 self._accumulated_audio_bytes += frame.audio
+                await self._check_continuous_speech_interruption(frame.audio, direction)
                 
                 # Initialize continuous recognizer if needed
                 if self._continuous_recognizer is None:
@@ -626,6 +606,7 @@ class VoskSTTService(BaseSTTService):
             elif (self._is_hands_free or self._is_dictating):
                 # Not yet speaking: maintain rolling pre-buffer for speech onset capture
                 self._pre_buffer.append(frame.audio)
+                await self._check_pending_bargein(frame.audio, direction)
 
             # Don't pass AudioRawFrame downstream - it's consumed here
             return

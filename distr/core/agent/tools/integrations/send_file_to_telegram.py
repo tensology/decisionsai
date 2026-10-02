@@ -240,49 +240,73 @@ class SendFileToTelegramTool(BaseTool):
         try:
             if not text and kwargs.get("last_user_message"):
                 text = str(kwargs.get("last_user_message") or "")
-            # If file_path is provided directly (e.g., from execute_code or screenshot_analyzer result), 
-            # it means the user explicitly requested it via a tool chain - skip connection check and try to send
-            # (the actual send will handle real connection failures gracefully)
-            file_path_provided = file_path and os.path.exists(file_path)
-            
-            # Only check connection if file_path is NOT provided (user is searching for a file by name)
+            # file_path from a prior tool result does NOT by itself mean the user asked for Telegram.
+            # Always require Telegram-sourced turn OR an explicit Telegram ask before uploading.
+            file_path_provided = bool(file_path and os.path.exists(file_path))
+
+            import threading
+
+            intent_text = text or str(kwargs.get("last_user_message") or "")
+            telegram_keywords = [
+                'telegram', 'tell the gram', 'send to telegram',
+                'send by telegram', 'send via telegram', 'send through telegram',
+                'send it to telegram', 'send that to telegram', 'send to my telegram',
+                'send telegram',
+            ]
+            text_lower = intent_text.lower()
+            user_wants_telegram = bool(intent_text) and any(
+                keyword in text_lower for keyword in telegram_keywords
+            )
+
+            is_telegram_request = bool(kwargs.get("is_telegram_request")) or (
+                hasattr(threading.current_thread(), 'telegram_request')
+                and threading.current_thread().telegram_request
+            )
+            if not is_telegram_request:
+                for thread in threading.enumerate():
+                    if hasattr(thread, 'telegram_request') and thread.telegram_request:
+                        is_telegram_request = True
+                        break
+
+            auto_chained = bool(kwargs.get("auto_chained"))
+            # Telegram-sourced OR explicit ask may send. Stamp artifact intent only then
+            # (never on a blind desktop auto-chain that somehow reached this tool).
+            allowed_to_send = bool(is_telegram_request or user_wants_telegram)
+            explicit_artifact_intent = allowed_to_send
+
+            if not allowed_to_send:
+                logger.info(
+                    "SendFileToTelegramTool: refusing send — not Telegram-sourced and no explicit ask "
+                    "(file_path_provided=%s, auto_chained=%s)",
+                    file_path_provided,
+                    auto_chained,
+                )
+                return (
+                    "Skipped: not sending to Telegram because this turn is not Telegram-sourced "
+                    "and the user did not explicitly ask to send/upload to Telegram."
+                )
+
+            # Connection check: skip only when we already know we are allowed to send and
+            # have a concrete path (tool-chain); otherwise verify connection on name search.
             if not file_path_provided:
-                # Check if Telegram is connected
                 telegram_connected = False
                 if self._chat_manager and hasattr(self._chat_manager, 'telegram_manager'):
                     telegram_connected = self._chat_manager.telegram_manager.is_connected()
-                
-                # Check if user explicitly requested Telegram (even from desktop)
-                user_wants_telegram = False
-                if text:
-                    telegram_keywords = ['telegram', 'tell the gram', 'send to telegram', 'send by telegram', 'send via telegram']
-                    text_lower = text.lower()
-                    user_wants_telegram = any(keyword in text_lower for keyword in telegram_keywords)
-                
-                # Also check if this request came from Telegram
-                import threading
-                is_telegram_request = bool(kwargs.get("is_telegram_request")) or (
-                    hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
-                )
-                
-                if not is_telegram_request:
-                    # Check all threads
-                    import threading as threading_module
-                    for thread in threading_module.enumerate():
-                        if hasattr(thread, 'telegram_request') and thread.telegram_request:
-                            is_telegram_request = True
-                            break
-                
+
                 if not telegram_connected:
-                    if not is_telegram_request and not user_wants_telegram:
-                        # Desktop request, no Telegram mention, and not connected - return error
-                        return "Error: Telegram is not connected. Please connect Telegram in settings before sending files. If you want to send a file, make sure Telegram is connected first."
-                    else:
-                        # User explicitly wants Telegram OR request came from Telegram - try anyway (might reconnect or connection status might be stale)
-                        logger.warning(f"SendFileToTelegramTool: Telegram connection check returned False, but user wants Telegram (is_telegram_request={is_telegram_request}, user_wants_telegram={user_wants_telegram}) - attempting anyway")
+                    # Allowed intent but disconnected — try anyway (status may be stale).
+                    logger.warning(
+                        f"SendFileToTelegramTool: Telegram connection check returned False, but user wants Telegram "
+                        f"(is_telegram_request={is_telegram_request}, user_wants_telegram={user_wants_telegram}) - attempting anyway"
+                    )
             else:
-                # file_path provided from tool chain - skip connection check, just try to send
-                logger.info(f"SendFileToTelegramTool: file_path provided from tool chain - skipping connection check, attempting to send")
+                logger.info(
+                    "SendFileToTelegramTool: file_path provided from tool chain — "
+                    "allowed (is_telegram_request=%s, user_wants_telegram=%s, auto_chained=%s)",
+                    is_telegram_request,
+                    user_wants_telegram,
+                    auto_chained,
+                )
             
             # If file_path is provided directly (e.g., from execute_code result), use it
             if file_path_provided:
@@ -435,38 +459,13 @@ class SendFileToTelegramTool(BaseTool):
             
             # Send via event queue
             if self._event_queue:
-                if file_type == 'image':
-                    # Send as image file (use send_file_to_telegram event to bypass cursor drawing)
-                    self._event_queue.put(('send_file_to_telegram', {
-                        'file_path': file_path,
-                        'file_name': os.path.basename(file_path),
-                        'file_type': 'image',
-                        'explicit_artifact_intent': True,
-                    }))
-                elif file_type == 'audio':
-                    # Send as audio file
-                    self._event_queue.put(('send_file_to_telegram', {
-                        'file_path': file_path,
-                        'file_name': os.path.basename(file_path),
-                        'file_type': 'audio',
-                        'explicit_artifact_intent': True,
-                    }))
-                elif file_type == 'video':
-                    # Send as video file
-                    self._event_queue.put(('send_file_to_telegram', {
-                        'file_path': file_path,
-                        'file_name': os.path.basename(file_path),
-                        'file_type': 'video',
-                        'explicit_artifact_intent': True,
-                    }))
-                else:
-                    # Send as document (PDF, Excel, Word, etc.)
-                    self._event_queue.put(('send_file_to_telegram', {
-                        'file_path': file_path,
-                        'file_name': os.path.basename(file_path),
-                        'file_type': 'document',
-                        'explicit_artifact_intent': True,
-                    }))
+                self._event_queue.put(('send_file_to_telegram', {
+                    'file_path': file_path,
+                    'file_name': os.path.basename(file_path),
+                    'file_type': file_type,
+                    # Only true for Telegram-sourced / explicit ask — never for blind auto-chain.
+                    'explicit_artifact_intent': bool(explicit_artifact_intent),
+                }))
                 
                 return f"Found and sending {file_type}: {os.path.basename(file_path)} ({file_size_mb:.2f} MB)"
             else:

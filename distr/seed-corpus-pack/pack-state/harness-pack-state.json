@@ -1,0 +1,25 @@
+{
+  "state_version": 1,
+  "status": "configured",
+  "vendor_ready": true,
+  "vendor": {
+    "name": "ecc",
+    "source": "https://github.com/affaan-m/ecc",
+    "commit": "bc8e12bb80c904a5a9864797ef1fd1212aa82f3d",
+    "vendored_by": "DecisionsAI",
+    "license": "MIT"
+  },
+  "detected": {
+    "codex": true,
+    "claude": true,
+    "cursor": true,
+    "pi": true,
+    "cline": false
+  },
+  "fingerprint": "d74c7b05ee8a5213926232c8615fde00188dcddee16fff3e263ad8f120f9c917",
+  "registry_path": "/Users/paul/.decisions/harness/ecc-skills-registry.json",
+  "manifest_path": "/Users/paul/.decisions/harness/ecc-surface-manifest.json",
+  "written": [
+    "/Users/paul/plugins/decisions-codex/skills/ecc-harness-pack/SKILL.md"
+  ]
+}

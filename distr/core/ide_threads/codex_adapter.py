@@ -132,7 +132,7 @@ def prompt_thread(
     if not executable:
         return {"success": False, "error": "codex CLI not found on PATH", "surface": "codex"}
 
-    cmd: list[str] = [executable, "exec"]
+    cmd: list[str] = [executable, "exec", "--json"]
     if sandbox:
         cmd += ["--sandbox", sandbox]
     if model and model not in ("auto", "default"):
@@ -156,13 +156,16 @@ def prompt_thread(
             env={**os.environ, "TERM": "dumb"},
         )
         output = ((result.stdout or "") + ("\n" + result.stderr if result.stderr else "")).strip()
+        from distr.core.ide_threads.lock import summarize_cli_output
+
+        captured_id, preview = summarize_cli_output(output)
         return {
             "success": result.returncode == 0,
             "surface": "codex",
-            "thread_id": tid or None,
+            "thread_id": captured_id or tid or None,
             "command": cmd[:-1] + ["<instruction>"] if cmd else [],
-            "output_preview": output[:4000],
-            "error": "" if result.returncode == 0 else (output[:2000] or f"codex exited {result.returncode}"),
+            "output_preview": preview or output[:4000],
+            "error": "" if result.returncode == 0 else (preview[:2000] or output[:2000] or f"codex exited {result.returncode}"),
         }
     except subprocess.TimeoutExpired:
         return {"success": False, "surface": "codex", "error": "codex exec timed out after 600s"}

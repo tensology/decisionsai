@@ -72,6 +72,12 @@ def _project_reference_skills(base_home: Path) -> list[str]:
         "codebase-design",
         "domain-modeling",
         "architecture-deepening-review",
+        "jev",
+        "jev-task-router",
+        "jev-model-router",
+        "jev-tool-guard",
+        "jev-research-guard",
+        "jev-completion-review",
     )
     reference_sources = {
         skill_id: PROJECT_ROOT / "skills" / skill_id

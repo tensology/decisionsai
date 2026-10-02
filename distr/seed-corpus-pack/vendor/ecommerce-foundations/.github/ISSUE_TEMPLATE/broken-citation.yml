@@ -1,0 +1,48 @@
+name: Broken or wrong citation
+description: A source link is dead, redirects somewhere unrelated, or doesn't support the claim.
+title: "[citation] "
+labels: ["citation"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Where is the citation?
+      description: File path and line, or section heading.
+      placeholder: skills/payment-flows/SKILL.md, "Sources" section, line 215
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: Cited URL
+      description: The link that is broken or misattributed.
+      placeholder: https://docs.stripe.com/...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue
+    attributes:
+      label: What is wrong with it?
+      options:
+        - 404 / dead link
+        - Redirects to a different page than expected
+        - Does not support the claim it is cited for
+        - Out of date — superseded by a newer page
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: replacement
+    attributes:
+      label: Suggested replacement
+      description: A working URL that supports the same claim, ideally from the same source.
+      placeholder: https://docs.stripe.com/<new-path>
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else useful (when the page last worked, related citations affected by the same change, etc.).

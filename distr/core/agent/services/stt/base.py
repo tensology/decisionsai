@@ -105,10 +105,9 @@ class BaseSTTService(STTService):
         # finish after the physical key is released.
         self._continuous_capture_epoch: int = 0
 
-        # AEC reference buffer — used to gate VAD interruptions during TTS playback.
-        # When TTS is playing (ref_buf.is_active), VAD may fire on residual echo
-        # that the NLMS filter couldn't fully cancel. We suppress those false
-        # interruptions unless the mic energy is high enough to indicate real speech.
+        # AEC reference buffer — marks when TTS is playing (ref_buf.is_active).
+        # WebRTC AEC cleans residual echo before VAD; barge-in no longer uses
+        # an STT-side energy deaf-gate.
         self._aec_ref_buf = aec_ref_buf
         self._aec_filter = None
         self._audio_timing = None
@@ -130,20 +129,13 @@ class BaseSTTService(STTService):
         self._echo_floor_min: float = 0.04  # absolute minimum threshold (echo residual is rarely below this)
         self._echo_floor_samples: int = 0  # how many samples contributed
 
-        # Consecutive-chunk debounce for barge-in detection.
-        # Require N consecutive high-energy chunks before triggering barge-in.
-        # At 20ms/chunk, 10 chunks = 200ms of sustained energy — echo residual
-        # fluctuates and rarely sustains for that long, but real speech does.
+        # Legacy consecutive-chunk counters retained for set_vad_threshold()
+        # compatibility / metrics; the energy deaf-gate no longer uses them.
         self._bargein_consecutive_required: int = 10
         self._bargein_consecutive_count: int = 0
 
-        # When the echo gate suppresses a SpeakingStartedFrame, the user might
-        # actually be speaking (energy just hadn't built up yet, or AEC hadn't
-        # converged). We set this flag and keep checking energy on subsequent
-        # audio frames. If energy rises above threshold, we trigger barge-in
-        # retroactively. Without this, a single suppressed SpeakingStartedFrame
-        # means no barge-in for the entire TTS session (VAD won't fire again
-        # because the user never stopped speaking).
+        # Deferred barge-in flag (kept for compatibility; rarely set now that
+        # SpeakingStartedFrames are not energy-suppressed).
         self._pending_bargein_check: bool = False
 
         # Callback to cancel the welcome message task on barge-in.
@@ -483,7 +475,7 @@ class BaseSTTService(STTService):
             logger.error(f"Error sending InterruptionFrame: {e}", exc_info=True)
 
     async def _push_marked_interruption(self, direction):
-        """Push a real barge-in while bypassing the output transport's stale-frame guard."""
+        """Push an InterruptionFrame downstream (legacy marked path)."""
         output = getattr(self, "_audio_output_transport", None)
         tts = getattr(self, "_tts_service", None)
         if output is not None:
@@ -550,8 +542,9 @@ class BaseSTTService(STTService):
 
     def _should_filter_interruption(self, frame) -> bool:
         """Return True if an incoming InterruptionFrame should be swallowed.
-        In PTT mode, VAD-generated InterruptionFrames are not expected (we
-        suppress _allow_interruptions during TTS), but filter as safety net."""
+        In PTT mode (hands-free off), VAD-generated InterruptionFrames are
+        unexpected — filter them as a safety net. Hands-free / dictation
+        let Pipecat native interruptions through."""
         if not isinstance(frame, InterruptionFrame):
             return False
         if self._is_hands_free or self._is_dictating:
@@ -749,160 +742,52 @@ class BaseSTTService(STTService):
         }
 
     def _check_bargein_energy(self) -> bool:
-        """Check if the pre-buffer audio has enough energy to be real speech.
+        """Legacy hook — always allows barge-in.
 
-        Uses an adaptive threshold based on the measured echo floor:
-        1. Grace period (~500ms) after TTS starts — AEC weights are zero and
-           the first echo spike can exceed the threshold before convergence.
-        2. Consecutive-chunk check — require N consecutive chunks above the
-           adaptive threshold. Real speech sustains energy; echo doesn't.
-
-        Returns True if energy is high enough to allow barge-in.
+        The previous 800ms grace period and N-consecutive-chunk energy gate
+        made hands-free feel deaf. WebRTC AEC + Pipecat VAD are now the
+        authority for turn-taking; this method remains only so older call
+        sites / tests keep a stable name.
         """
-        # Grace period: suppress all barge-in for the first 800ms after TTS
-        # starts, regardless of energy. AEC weights are zero at the start of
-        # each TTS session and need time to converge. 500ms was too short —
-        # echo residual spikes during convergence were passing the threshold.
-        if self._aec_ref_buf is not None:
-            elapsed = self._aec_ref_buf.seconds_since_activation()
-            if elapsed < 0.8:
-                logger.debug(f"STT: Barge-in suppressed (grace period, {elapsed:.3f}s since TTS start)")
-                return False
-
-        if not self._pre_buffer:
-            return False
-
-        threshold = self._get_adaptive_threshold()
-
-        if self._is_reference_dominated():
-            m = self._turn_taking_metrics()
-            logger.info(
-                "STT: Barge-in suppressed as echo: mic=%.4f residual=%.4f tts_ref=%.4f "
-                "corr=%.3f threshold=%.4f",
-                m["input_rms"], m["residual_rms"], m["reference_rms"],
-                m["reference_correlation"], m["threshold"],
-            )
-            return False
-
-        try:
-            # Scan the pre-buffer from newest to oldest, counting consecutive
-            # chunks above threshold. If we find N consecutive, it's real speech.
-            consecutive = 0
-            rms_values = []
-            for chunk_bytes in reversed(self._pre_buffer):
-                chunk_f32 = np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                chunk_rms = float(np.sqrt(np.mean(chunk_f32 ** 2)))
-                rms_values.append(chunk_rms)
-                if chunk_rms >= threshold:
-                    consecutive += 1
-                    if consecutive >= self._bargein_consecutive_required:
-                        logger.debug(f"STT: Barge-in allowed ({consecutive} consecutive chunks above {threshold:.4f} [echo_floor={self._echo_floor_rms:.4f}], rms={chunk_rms:.4f})")
-                        return True
-                else:
-                    break  # streak broken — not sustained speech
-
-            # Log RMS values so we can diagnose threshold issues
-            rms_str = ", ".join(f"{r:.4f}" for r in rms_values[:6])
-            logger.debug(f"STT: Barge-in suppressed ({consecutive}/{self._bargein_consecutive_required} consecutive, threshold={threshold:.4f} [echo_floor={self._echo_floor_rms:.4f}], recent_rms=[{rms_str}])")
-            return False
-        except Exception as e:
-            logger.debug(f"STT: Barge-in energy check failed: {e}, allowing through")
-            return True  # fail-open: allow interruption if check fails
-
-    # ------------------------------------------------------------------
-    # Deferred barge-in check (runs per audio frame after suppression)
-    # ------------------------------------------------------------------
+        return True
 
     async def _check_pending_bargein(self, audio_bytes, direction):
-        """Called on every audio frame when a SpeakingStartedFrame was suppressed.
+        """Complete a deferred barge-in if a SpeakingStartedFrame was held.
 
-        The echo gate may suppress a SpeakingStartedFrame because energy was
-        too low at that instant (AEC convergence, mic ramp-up). But the user
-        might actually be speaking. We keep checking each audio frame's energy
-        using the same consecutive-chunk debounce. If energy builds up, we
-        trigger the barge-in retroactively.
-
-        Also feeds the adaptive echo floor tracker on every frame during TTS
-        playback so the threshold stays calibrated.
+        With the energy deaf-gate removed this flag is rarely set. When it is,
+        confirm immediately (no grace / consecutive-chunk debounce).
         """
-        # Always update echo floor during TTS playback (even if no pending check)
-        if self._is_tts_playing() and self._aec_ref_buf is not None:
-            elapsed = self._aec_ref_buf.seconds_since_activation()
-            if elapsed >= 0.8:  # only after grace period
-                try:
-                    ef32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                    erms = float(np.sqrt(np.mean(ef32 ** 2)))
-                    self._update_echo_floor(erms)
-                except Exception:
-                    pass
+        if audio_bytes:
+            try:
+                chunk_f32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                erms = float(np.sqrt(np.mean(chunk_f32 ** 2)))
+                self._update_echo_floor(erms)
+            except Exception:
+                pass
 
         if not self._pending_bargein_check:
             return
 
-        if not self._is_tts_playing():
-            # TTS stopped — no need to barge in anymore
+        if not self._is_tts_playing() or self._ptt_active:
             self._pending_bargein_check = False
             self._bargein_consecutive_count = 0
             return
 
-        if self._ptt_active:
-            return
-
         if not (self._is_hands_free or self._is_dictating):
+            self._pending_bargein_check = False
             return
 
-        # Grace period
-        if self._aec_ref_buf is not None:
-            elapsed = self._aec_ref_buf.seconds_since_activation()
-            if elapsed < 0.8:
-                self._bargein_consecutive_count = 0
-                logger.debug(f"STT: Deferred barge-in suppressed (grace period, {elapsed:.3f}s)")
-                return
-
-        threshold = self._get_adaptive_threshold()
-
-        # Check this chunk's energy
-        try:
-            chunk_f32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            chunk_rms = float(np.sqrt(np.mean(chunk_f32 ** 2)))
-
-            if self._is_reference_dominated():
-                self._bargein_consecutive_count = 0
-                return
-
-            if chunk_rms >= threshold:
-                self._bargein_consecutive_count += 1
-            else:
-                self._bargein_consecutive_count = 0
-
-            if self._bargein_consecutive_count < self._bargein_consecutive_required:
-                return
-        except Exception:
-            return
-
-        # Energy confirmed — trigger barge-in retroactively
-        confirmed_count = self._bargein_consecutive_count
         self._pending_bargein_check = False
         self._bargein_consecutive_count = 0
-
         mode = "dictation" if self._is_dictating else "hands-free"
-        logger.info(f"STT: Deferred barge-in confirmed ({mode}) — {confirmed_count}/{self._bargein_consecutive_required} consecutive chunks above {threshold:.4f} [echo_floor={self._echo_floor_rms:.4f}], last rms={chunk_rms:.4f}")
+        logger.info("STT: Deferred barge-in confirmed (%s) — immediate (no energy gate)", mode)
 
         self._user_speaking = True
-        # Do NOT seed from _pre_buffer — that audio was captured during TTS
-        # playback and is echo-contaminated (AEC weights still converging).
-        # Start with a fresh buffer. Post-interrupt audio will be clean because
-        # the transport sets ref_buf.set_active(False) on InterruptionFrame,
-        # and the AEC filter passes audio through unprocessed when inactive.
         self._audio_buffer = []
         self._pre_buffer.clear()
 
-        # Call the subclass hook so service-specific setup runs (e.g. streaming
-        # API reset). Create a synthetic frame since we don't have the original.
         synthetic_frame = UserStartedSpeakingFrame()
         await self._on_speaking_started(synthetic_frame, direction)
-
-        logger.debug("STT: Deferred barge-in — triggering pipeline interruption")
         await self._push_bargein_interruption()
 
         if self._cancel_welcome_callback:
@@ -914,8 +799,6 @@ class BaseSTTService(STTService):
             except Exception:
                 pass
 
-        # Push the speaking-started frame downstream so the rest of the
-        # pipeline knows the user is speaking (matches _handle_speaking_started).
         await self.push_frame(synthetic_frame, direction)
 
     # ------------------------------------------------------------------
@@ -945,78 +828,24 @@ class BaseSTTService(STTService):
 
         After a barge-in, the user's speech is transcribed and a new LLM response
         begins. If the user keeps talking without pausing, VAD never fires a new
-        SpeakingStartedFrame (the user never stopped). The new TTS plays
-        uninterrupted because there's no second barge-in trigger.
-
-        This method is called on every audio frame from the subclass. It checks:
-        1. Is the user currently speaking? (_user_speaking == True)
-        2. Is TTS playing? (_is_tts_playing() == True)
-        3. Have we already interrupted this TTS session? (_tts_interrupted)
-        4. Does the audio have enough consecutive energy? (debounce)
-
-        Uses the same consecutive-chunk debounce as _check_bargein_energy and
-        test_aec_live.py: require N consecutive high-energy chunks before firing.
+        SpeakingStartedFrame. Interrupt immediately (no energy deaf-gate).
         """
         if not self._user_speaking:
             self._tts_interrupted = False
-            self._bargein_consecutive_count = 0
             return
 
         if not self._is_tts_playing():
             self._tts_interrupted = False
-            self._bargein_consecutive_count = 0
             return
 
-        if self._tts_interrupted:
-            return
-
-        if self._ptt_active:
+        if self._tts_interrupted or self._ptt_active:
             return
 
         if not (self._is_hands_free or self._is_dictating):
             return
 
-        # Grace period for new TTS session
-        if self._aec_ref_buf is not None:
-            elapsed = self._aec_ref_buf.seconds_since_activation()
-            if elapsed < 0.8:
-                self._bargein_consecutive_count = 0
-                return
-
-        # Check this audio frame's energy using consecutive-chunk debounce
-        threshold = self._get_adaptive_threshold()
-        try:
-            chunk_f32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-            chunk_rms = float(np.sqrt(np.mean(chunk_f32 ** 2)))
-
-            # A new TTS response can arrive while the user-speaking flag from
-            # the previous turn is still true. Do not mistake that response's
-            # own audio for continued user speech.
-            if self._is_reference_dominated():
-                m = self._turn_taking_metrics()
-                logger.info(
-                    "STT: Continuous gate suppressed TTS echo: mic=%.4f residual=%.4f "
-                    "tts_ref=%.4f corr=%.3f threshold=%.4f",
-                    m["input_rms"], m["residual_rms"], m["reference_rms"],
-                    m["reference_correlation"], m["threshold"],
-                )
-                self._bargein_consecutive_count = 0
-                return
-
-            if chunk_rms >= threshold:
-                self._bargein_consecutive_count += 1
-            else:
-                self._bargein_consecutive_count = 0
-
-            if self._bargein_consecutive_count < self._bargein_consecutive_required:
-                return
-        except Exception:
-            return
-
-        # User is still speaking with sustained energy while new TTS is playing.
         logger.info("STT: User still speaking during new TTS — re-interrupting pipeline")
         self._tts_interrupted = True
-        self._bargein_consecutive_count = 0
         self._notify_tts_interrupted()
         await self._push_bargein_interruption()
 
@@ -1040,21 +869,8 @@ class BaseSTTService(STTService):
         if not (self._is_hands_free or self._is_dictating):
             return True  # neither mode active — swallow
 
-        # --- Echo gate: suppress false VAD triggers during TTS playback ---
-        # During TTS playback, _allow_interruptions is False on the input transport,
-        # so Pipecat won't auto-fire InterruptionFrame from VAD. The VAD still pushes
-        # SpeakingStartedFrame which reaches us here. We decide:
-        #   - Low mic energy (echo) → swallow the frame, no interruption
-        #   - High mic energy (real speech) → re-enable interruptions and trigger one
-        if self._is_tts_playing() and not self._check_bargein_energy():
-            logger.debug("STT: Suppressing VAD speaking-started (TTS playing, low mic energy — echo)")
-            # Don't fully discard — the user might actually be speaking but
-            # energy hasn't built up yet (AEC convergence, mic ramp-up).
-            # Set a flag so we keep checking energy on subsequent audio frames.
-            self._pending_bargein_check = True
-            self._bargein_consecutive_count = 0
-            return True  # swallow the frame for now
-
+        # Turn-taking: WebRTC AEC cleans the mic path; Pipecat VAD + native
+        # interruptions are the authority. No energy deaf-gate here.
         mode = "dictation" if self._is_dictating else "hands-free"
         if self._audio_timing is not None:
             self._audio_timing.mark("vad_started")

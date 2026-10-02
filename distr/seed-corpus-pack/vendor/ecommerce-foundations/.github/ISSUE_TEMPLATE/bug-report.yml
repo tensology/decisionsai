@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in the skill content or repo infrastructure is wrong.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Where is the bug?
+      options:
+        - Skill content (vocabulary, model, framework, anti-pattern)
+        - Plugin manifest or marketplace manifest
+        - CI workflow
+        - Documentation (README, CONTRIBUTING, CLAUDE.md, SOURCES.md)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: skill
+    attributes:
+      label: Skill (if applicable)
+      description: Which skill is affected? Use the kebab-case name.
+      placeholder: order-lifecycle
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What is wrong?
+      description: Describe the issue. Link the specific paragraph or line if possible.
+      placeholder: |
+        In `inventory-management/SKILL.md` the canonical model says X, but Shopify defines Y…
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should it say instead?
+      description: Propose an alternative wording or behavior. Link a source if you have one.
+      placeholder: |
+        Suggested change:
+        > New wording here.
+
+        Source: https://...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have read [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) and [CLAUDE.md](../blob/main/CLAUDE.md).
+          required: true

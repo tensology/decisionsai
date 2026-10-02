@@ -490,6 +490,31 @@ class OpenAIWhisperSTTService(BaseSTTService):
     # Frame Processing
     # =========================================================================
     
+
+    async def _on_speaking_started(self, frame, direction):
+        """Stream pre-buffered audio into the Realtime API when connected."""
+        if self._realtime_connected:
+            for chunk in list(self._audio_buffer):
+                await self._send_audio_realtime(chunk)
+
+    async def _on_speaking_stopped(self, frame, direction):
+        """Commit Realtime audio or fall back to batch transcription."""
+        if not self._audio_buffer:
+            return
+        if self._is_hands_free and self._realtime_connected:
+            await self._commit_audio_realtime()
+            self._audio_buffer = []
+            logger.debug("STT: Committed Realtime audio - awaiting transcription")
+            return
+        audio_bytes = b"".join(self._audio_buffer)
+        self._audio_buffer = []
+        duration_ms = (len(audio_bytes) / (16000 * 2)) * 1000
+        logger.debug(f"STT: Processing hands-free audio with batch API: {duration_ms:.0f}ms")
+        async for result_frame in self.run_stt(audio_bytes):
+            if self._stt_cancelled:
+                break
+            await self.push_frame(result_frame, direction)
+
     async def process_frame(self, frame, direction):
         """Process frames from the transport"""
         # Store direction and event loop
@@ -557,86 +582,12 @@ class OpenAIWhisperSTTService(BaseSTTService):
             await super().process_frame(frame, direction)
             return
         
-        # Handle VAD speaking frames
-        if isinstance(frame, SpeakingStartedFrames):
-            if self._ptt_active:
-                return
-            
-            if self._is_hands_free or self._is_dictating:
-                # --- Echo gate: suppress false VAD triggers during TTS playback ---
-                if self._is_tts_playing() and not self._check_bargein_energy():
-                    logger.debug("STT: Suppressing VAD speaking-started (TTS playing, low mic energy — echo)")
-                    self._pending_bargein_check = True
-                    self._bargein_consecutive_count = 0
-                    return
-
-                self._user_speaking = True
-                self._audio_buffer = list(self._pre_buffer)
-                # Send pre-buffered audio to Realtime API if connected
-                if self._realtime_connected:
-                    for chunk in self._pre_buffer:
-                        await self._send_audio_realtime(chunk)
-                pre_buf_ms = len(self._pre_buffer) * 20
-                self._pre_buffer.clear()
-                logger.debug(f"STT: User started speaking, seeded {pre_buf_ms}ms pre-buffer")
-
-                # Trigger a proper Pipecat interruption via PipelineTask.
-                # push_interruption_task_frame_and_wait() sends InterruptionTaskFrame
-                # upstream to PipelineTask, which broadcasts InterruptionFrame downstream
-                # through the ENTIRE pipeline. This is the correct mechanism — it works
-                # regardless of _allow_interruptions on the input transport.
-                logger.info("STT: Barge-in confirmed — triggering pipeline interruption")
-                await self.push_interruption_task_frame_and_wait()
-
-                # Cancel the welcome message task if still running
-                if self._cancel_welcome_callback:
-                    self._cancel_welcome_callback()
-                    logger.info("STT: Cancelled welcome task via callback (barge-in)")
-
-                if self._is_hands_free and self.event_queue:
-                    try:
-                        self.event_queue.put(('stt_hands_free_glow_on', {}), block=False)
-                    except Exception:
-                        pass
-
-                await self.push_frame(frame, direction)
+        # Handle VAD speaking frames (shared upstream barge-in / glow / interrupt)
+        if await self._handle_speaking_started(frame, direction):
             return
-        
-        if isinstance(frame, SpeakingStoppedFrames):
-            if (self._is_hands_free or self._is_dictating) and self._user_speaking and not self._ptt_active:
-                self._user_speaking = False
-
-                # Only emit glow off signal if in hands-free mode (not dictation, not PTT)
-                if self._is_hands_free and not self._ptt_active and self.event_queue:
-                    try:
-                        self.event_queue.put(('stt_hands_free_glow_off', {}), block=False)
-                    except Exception:
-                        pass
-                
-                # For hands-free: If using Realtime API, transcripts come via WebSocket
-                # If not connected, fall back to batch processing
-                if self._audio_buffer:
-                    if self._is_hands_free and self._realtime_connected:
-                        # Audio was already streamed. Commit at the boundary
-                        # reported by DecisionsAI's local VAD.
-                        await self._commit_audio_realtime()
-                        self._audio_buffer = []
-                        logger.debug("STT: Committed Realtime audio - awaiting transcription")
-                    else:
-                        # Fall back to batch API
-                        audio_bytes = b"".join(self._audio_buffer)
-                        self._audio_buffer = []
-                        duration_ms = (len(audio_bytes) / (16000 * 2)) * 1000
-                        logger.debug(f"STT: Processing hands-free audio with batch API: {duration_ms:.0f}ms")
-                        
-                        async for result_frame in self.run_stt(audio_bytes):
-                            if self._stt_cancelled:
-                                break
-                            await self.push_frame(result_frame, direction)
-            
-            await self.push_frame(frame, direction)
+        if await self._handle_speaking_stopped(frame, direction):
             return
-        
+
         # Handle audio frames (transport emits InputAudioRawFrame; both needed for PTT)
         if isinstance(frame, (AudioRawFrame, InputAudioRawFrame)):
             self._record_echo_frame_metrics()

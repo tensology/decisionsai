@@ -185,19 +185,31 @@ def update_development_model_route(
 ) -> dict[str, Any]:
     """Persist one thread's model route without mutating its reusable workflow."""
     from distr.core.project_cli_backends import normalize_backend_id
+    from distr.core.workflow.development_harness import (
+        local_ollama_worker_id,
+        parse_local_ollama_worker,
+    )
 
     session_provider = _session_provider or get_session
     mode = _clean(route_mode).lower() or "auto"
     if mode not in {"auto", "manual"}:
         raise ValueError("route_mode must be auto or manual")
-    clean_backend = normalize_backend_id(backend) if _clean(backend) else ""
-    if mode == "manual" and clean_backend not in {"pi", "cursor", "codex", "claude_code"}:
-        # Empty or unknown pin defaults to Pi (same product default as Auto fallback).
-        clean_backend = "pi"
+    raw_backend = _clean(backend)
+    local_tag = parse_local_ollama_worker(raw_backend)
+    if local_tag:
+        # Preserve dynamic/local Ollama worker ids (do not normalize away to pi).
+        clean_backend = local_ollama_worker_id(local_tag)
+        clean_provider = "ollama"
+        clean_model = local_tag
+    else:
+        clean_backend = normalize_backend_id(backend) if raw_backend else ""
+        if mode == "manual" and clean_backend not in {"pi", "cursor", "codex", "claude_code"}:
+            # Empty or unknown pin defaults to Pi (same product default as Auto fallback).
+            clean_backend = "pi"
+        clean_provider = _clean(provider).lower()
+        clean_model = _clean(model_name) or ("auto" if mode == "manual" and clean_backend != "pi" else "")
     if mode == "auto":
         clean_backend = ""
-    clean_provider = _clean(provider).lower()
-    clean_model = _clean(model_name) or ("auto" if mode == "manual" and clean_backend != "pi" else "")
     if mode == "manual" and clean_backend == "pi" and (not clean_provider or not clean_model):
         raise ValueError("Pi needs a provider and model.")
     if mode == "manual" and clean_backend in {"codex", "claude_code"} and not clean_provider:

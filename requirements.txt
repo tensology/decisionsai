@@ -1,6 +1,8 @@
 # Default offline STT: Whisper.cpp (pywhispercpp). If import/build fails on your platform,
 # the agent falls back to Vosk when configured — see distr/core/agent/libs.py (WHISPER_AVAILABLE).
-pywhispercpp @ git+https://github.com/absadiki/pywhispercpp
+# Rebuilt against whisper.cpp master by scripts/install_pywhispercpp.sh.
+# This pin is the binding (2026-08-22). Its submodule is still whisper.cpp f24588a.
+pywhispercpp @ git+https://github.com/absadiki/pywhispercpp@f7bf62118c0a33a43cf8aabb58eef16cea5d16c4
 PyQt6
 PyQt6-WebEngine
 vosk
@@ -123,6 +125,8 @@ ddgs>=1.0.0
 # FastAPI and uvicorn for Flow Logic web server
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
+# WebRTC AEC3 (hands-free echo cancellation)
+pywebrtc-audio>=0.2.0
 # WebRTC desktop streaming
 aiortc>=1.9.0
 # pathspec for .gitignore parsing in project indexing

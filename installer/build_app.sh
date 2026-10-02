@@ -99,6 +99,8 @@ rsync -a \
     --exclude 'db/' \
     --exclude 'recordings/' \
     "$PROJECT_ROOT/distr/" "$DATA_DIR/distr/"
+# Includes distr/seed-corpus-pack (MemPalace wing seed_corpus_pack; first-run mine).
+# Do not rsync chroma DBs — mine on first run into ~/.decisions/mempalace/palace.
 
 cd "$PROJECT_ROOT"
 "$PYTHON_BIN" -m PyInstaller \

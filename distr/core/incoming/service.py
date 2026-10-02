@@ -12,7 +12,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any
 
-from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink, get_session
+from distr.core.db import TelegramGroupMessage, WhatsAppMessage, WhatsAppPhoneLink, get_session
 from distr.core.db.kanban import KanbanBoard
 
 
@@ -99,6 +99,41 @@ def _load_gmail_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dict[s
         return [row for row in (rows or []) if isinstance(row, dict)], {"connected": True, "error": ""}
     except Exception:
         return [], {"connected": False, "error": "Gmail is temporarily unavailable."}
+
+
+def ingest_gmail_as_work(
+    *,
+    subject: str,
+    body: str,
+    message_id: str = "",
+    thread_id: str = "",
+    sender: str = "",
+    board_hint: str = "",
+    project_hint: str = "",
+    force_ticket: bool = False,
+) -> dict[str, Any]:
+    """Create a WorkIntake(source=gmail) decision, mirroring Telegram channel intake."""
+    from distr.core.work_intake import WorkIntake, get_work_intake_service
+
+    text_body = str(body or "").strip() or str(subject or "").strip() or "Incoming Gmail message"
+    subject_clean = str(subject or "").strip()
+    if force_ticket and not text_body.lower().startswith(("create a ticket", "create ticket")):
+        user_text = f"Create a ticket: {subject_clean + ' — ' if subject_clean else ''}{text_body}"
+    else:
+        user_text = text_body if not subject_clean else f"{subject_clean}\n\n{text_body}"
+    decision = get_work_intake_service().ingest(
+        WorkIntake(
+            source="gmail",
+            user_text=user_text,
+            source_user_id=str(sender or ""),
+            source_thread_id=str(thread_id or message_id or ""),
+            source_message_id=str(message_id or ""),
+            board_hint=str(board_hint or ""),
+            project_hint=str(project_hint or ""),
+            metadata={"subject": subject_clean, "channel": "gmail"},
+        )
+    )
+    return decision.to_dict()
 
 
 def _load_mailshot_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -308,6 +343,79 @@ def list_development_incoming(*, limit: int = 100) -> dict[str, Any]:
     except Exception:
         pass
 
+    # Telegram group/channel messages stored for later action (Incoming folders).
+    telegram_status: dict[str, Any] = {"connected": False, "error": ""}
+    try:
+        with get_session() as session:
+            telegram_rows = (
+                session.query(TelegramGroupMessage)
+                .order_by(TelegramGroupMessage.created_date.desc(), TelegramGroupMessage.id.desc())
+                .limit(requested)
+                .all()
+            )
+            for row in telegram_rows:
+                sender = ""
+                try:
+                    payload = json.loads(row.sender_data or "{}")
+                    if isinstance(payload, dict):
+                        sender = (
+                            str(payload.get("username") or "").strip()
+                            or " ".join(
+                                part for part in (
+                                    str(payload.get("first_name") or "").strip(),
+                                    str(payload.get("last_name") or "").strip(),
+                                ) if part
+                            ).strip()
+                            or str(payload.get("id") or "")
+                        )
+                except Exception:
+                    sender = ""
+                body = str(row.text or row.caption or "").strip()
+                if not body and row.media_type:
+                    body = f"[{row.media_type} message]"
+                items.append({
+                    "key": f"telegram:{row.id}",
+                    "source": "telegram",
+                    "source_label": "Telegram",
+                    "source_message_id": str(row.telegram_message_id or row.id),
+                    "source_thread_id": str(row.chat_id or ""),
+                    "conversation_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
+                    "thread_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
+                    "chat_type": str(row.chat_type or "group"),
+                    "sender": sender or "Unknown sender",
+                    "text": body,
+                    "snippet": body[:240],
+                    "created_at": (
+                        row.created_date.isoformat()
+                        if getattr(row, "created_date", None) is not None
+                        else _iso_from_epoch(row.telegram_date)
+                    ),
+                    "processed": bool(getattr(row, "processed", False)),
+                    "unread": not bool(getattr(row, "processed", False)),
+                    "board_id": None,
+                    "board_name": "",
+                    "can_snapshot": False,
+                    "database_id": int(row.id),
+                })
+            telegram_status = {"connected": True, "error": "", "count": len(telegram_rows)}
+    except Exception as exc:
+        telegram_status = {"connected": False, "error": str(exc) or "Telegram inbox unavailable."}
+
+    try:
+        from distr.core.kanban.jira_work_lifecycle import jira_status_surface_for_ticket
+
+        for row in items:
+            ticket_id = row.get("ticket_id")
+            if not ticket_id:
+                continue
+            if str(row.get("source") or "").lower() not in {"jira", "gmail", "whatsapp", "telegram", "mailshot"}:
+                continue
+            surface = jira_status_surface_for_ticket(int(ticket_id))
+            if surface:
+                row.update(surface)
+    except Exception:
+        pass
+
     items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
     counts: dict[str, int] = {}
     for row in items:
@@ -317,5 +425,9 @@ def list_development_incoming(*, limit: int = 100) -> dict[str, Any]:
         "items": items,
         "links": links,
         "counts": counts,
-        "channels": {"gmail": gmail_status, "mailshot": mailshot_status},
+        "channels": {
+            "gmail": gmail_status,
+            "mailshot": mailshot_status,
+            "telegram": telegram_status,
+        },
     }

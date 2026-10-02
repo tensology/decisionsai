@@ -18,6 +18,7 @@ _LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
     "context7": ("context7-mcp",),
     "exa": ("exa_search", "exa-web-search"),
     "composio": ("composio-connect",),
+    "jev": ("jev-mcp",),
 }
 
 # Deprecated MCP servers — pruned from Cursor mcp.json on recalibrate.
@@ -171,6 +172,44 @@ def _base_capabilities_mcps() -> dict[str, Any]:
             "setup": "Bundled by DecisionsAI as headroom-ai[mcp] and registered with DecisionsAI, Cursor, and Codex during harness bootstrap.",
             "note": "The standalone MCP stores originals locally. Automatic provider traffic proxying remains off, so callbacks and instructions are never compressed implicitly.",
         },
+        "jev": {
+            "description": "JevAI decision routing, model/task selection, tool guards, research checks, and completion review",
+            "docs": "https://www.jevai.org/mcp",
+            "auto_merge": True,
+            "merge_targets": ["decisions", "cursor", "codex"],
+            "requires_env": ["JEV_API_KEY"],
+            "api_key_env": ["JEV_API_KEY"],
+            "api_key_settings_field": "jev_key",
+            "settings_enabled_field": "jev_enabled",
+            "api_key_header": "Authorization",
+            "api_key_prefix": "Bearer ",
+            "cursor_name": "jev",
+            "preserve_env_headers": True,
+            "skill": "jev",
+            "mcp": {"url": "https://www.jevai.org/api/mcp"},
+            "cursor_mcp": {
+                "url": "https://www.jevai.org/api/mcp",
+                "headers": {"Authorization": "Bearer ${env:JEV_API_KEY}"},
+            },
+            "decisions_mcp": {
+                "url": "https://www.jevai.org/api/mcp",
+                "bearer_token_env_var": "JEV_API_KEY",
+            },
+            "codex_mcp": {
+                "url": "https://www.jevai.org/api/mcp",
+                "bearer_token_env_var": "JEV_API_KEY",
+                "tool_timeout_sec": 30,
+            },
+            "setup": "Settings -> API Keys -> JevAI; create a personal key at https://www.jevai.org/agent/keys",
+            "expected_tools": [
+                "jev_route_model",
+                "jev_guard_tool_call",
+                "jev_route_task",
+                "jev_check_research",
+                "jev_review_completion",
+                "jev_decide",
+            ],
+        },
     }
 
 
@@ -283,9 +322,17 @@ def _cursor_server_block(entry: dict[str, Any], catalog_key: str) -> tuple[str, 
     if "url" in mcp:
         cfg: dict[str, Any] = {"url": mcp["url"]}
         if mcp.get("headers"):
-            cfg["headers"] = _substitute_env_mapping(mcp["headers"])
+            cfg["headers"] = (
+                dict(mcp["headers"])
+                if entry.get("preserve_env_headers")
+                else _substitute_env_mapping(mcp["headers"])
+            )
         if mcp.get("transport"):
             cfg["transport"] = mcp["transport"]
+        if mcp.get("bearer_token_env_var"):
+            cfg["bearer_token_env_var"] = mcp["bearer_token_env_var"]
+        if mcp.get("tool_timeout_sec") is not None:
+            cfg["tool_timeout_sec"] = mcp["tool_timeout_sec"]
         return name, cfg
 
     if "command" in mcp:
@@ -354,26 +401,41 @@ def _apply_pixazo_api_key(cfg: dict[str, Any], entry: dict[str, Any]) -> dict[st
 
 
 def _apply_settings_api_key(cfg: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    if entry.get("preserve_env_headers"):
+        return cfg
     field = entry.get("api_key_settings_field")
     if field == "pixazo_key":
         return _apply_pixazo_api_key(cfg, entry)
     if entry.get("api_key_env") or field:
-        return _apply_composio_api_key(cfg, entry)
+        from distr.core.third_party_keys import settings_secret
+
+        env_names = tuple(entry.get("requires_env") or entry.get("api_key_env") or ())
+        settings_fields = (str(field),) if field else ()
+        key = settings_secret(*env_names, settings_fields=settings_fields)
+        if key and "url" in cfg:
+            out = dict(cfg)
+            headers = dict(out.get("headers") or {})
+            header = str(entry.get("api_key_header") or "x-api-key")
+            prefix = str(entry.get("api_key_prefix") or "")
+            headers[header] = f"{prefix}{key}"
+            out["headers"] = headers
+            return out
     return cfg
 
 
 def _agent_mcp_block(entry: dict[str, Any], catalog_key: str, *, agent: str) -> tuple[str, dict[str, Any]] | None:
     """Resolve MCP block for cursor vs codex (composio entries may differ by agent URL)."""
     effective = _effective_entry(entry)
-    if agent == "codex":
-        codex_mcp = effective.get("codex_mcp")
-        if isinstance(codex_mcp, dict):
-            effective = {**effective, "mcp": codex_mcp}
+    agent_mcp = effective.get(f"{agent}_mcp")
+    if isinstance(agent_mcp, dict):
+        effective = {**effective, "mcp": agent_mcp}
     block = _cursor_server_block(effective, catalog_key)
     if not block:
         return None
     name, cfg = block
-    if entry.get("api_key_env") or entry.get("api_key_settings_field"):
+    if (entry.get("api_key_env") or entry.get("api_key_settings_field")) and not cfg.get(
+        "bearer_token_env_var"
+    ):
         cfg = _apply_settings_api_key(cfg, entry)
     return name, cfg
 
@@ -411,6 +473,10 @@ def _codex_toml_block(name: str, cfg: dict[str, Any]) -> str:
     lines = [f"[mcp_servers.{name}]"]
     if "url" in cfg:
         lines.append(f'url = "{cfg["url"]}"')
+        if cfg.get("bearer_token_env_var"):
+            lines.append(f'bearer_token_env_var = "{cfg["bearer_token_env_var"]}"')
+        if cfg.get("tool_timeout_sec") is not None:
+            lines.append(f'tool_timeout_sec = {int(cfg["tool_timeout_sec"])}')
         headers = cfg.get("headers") or {}
         if headers:
             lines.append(f"[mcp_servers.{name}.http_headers]")
@@ -433,6 +499,15 @@ def _codex_toml_block(name: str, cfg: dict[str, Any]) -> str:
 
 
 def _entry_ready_to_merge(entry: dict[str, Any]) -> bool:
+    enabled_field = str(entry.get("settings_enabled_field") or "").strip()
+    if enabled_field:
+        try:
+            from distr.core.settings import load_settings_from_db
+
+            if not (load_settings_from_db() or {}).get(enabled_field):
+                return False
+        except Exception:
+            return False
     required = entry.get("requires_env") or []
     if required:
         settings_field = entry.get("api_key_settings_field")
@@ -477,27 +552,22 @@ def _prune_deprecated_cursor_servers(servers: dict[str, Any]) -> list[str]:
 
 
 def _patch_composio_cursor_servers(servers: dict[str, Any], catalog: dict[str, Any]) -> list[str]:
-    """Inject Composio and Pixazo API keys into active MCP server blocks."""
+    """Inject settings-backed API keys into active MCP server blocks."""
     patches: list[str] = []
-    key = _composio_api_key()
-    composio_entries = {
+    authenticated_entries = {
         str(entry.get("cursor_name") or catalog_key): entry
         for catalog_key, entry in catalog.items()
         if entry.get("api_key_env") and entry.get("api_key_settings_field") != "pixazo_key"
     }
 
-    for name, entry in composio_entries.items():
+    for name, entry in authenticated_entries.items():
         cfg = servers.get(name)
         if not isinstance(cfg, dict) or "url" not in cfg:
             continue
-
-        if key:
-            header_name = str(entry.get("api_key_header") or "x-api-key")
-            headers = dict(cfg.get("headers") or {})
-            if not headers.get(header_name):
-                headers[header_name] = key
-                cfg["headers"] = headers
-                patches.append(f"{name}:headers")
+        updated = _apply_settings_api_key(cfg, entry)
+        if updated != cfg:
+            servers[name] = updated
+            patches.append(f"{name}:headers")
 
     pixazo_key = _pixazo_api_key()
     pixazo_cfg = servers.get("pixazo")
@@ -581,7 +651,7 @@ def _merge_codex_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
 
 
 def _merge_decisions_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
-    """Add default stdio MCP servers to DecisionsAI's native tool runtime."""
+    """Add Decisions-targeted default MCP servers to the native tool runtime."""
     from distr.core.mcp.config import (
         MCPConfigDocument,
         MCPServerConfig,
@@ -595,17 +665,30 @@ def _merge_decisions_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
     existing = {server.name for server in servers}
     merged: list[str] = []
     for key, entry in _iter_auto_merge_entries(catalog, agent="decisions"):
-        if key != "headroom" or key in existing:
+        targets = entry.get("merge_targets") or []
+        if "decisions" not in targets or key in existing:
             continue
         block = _agent_mcp_block(entry, key, agent="decisions")
         if not block:
             continue
         name, config = block
-        command = str(config.get("command") or "").strip()
-        if not command:
-            continue
-        servers.append(
-            MCPServerConfig(
+        if config.get("url"):
+            servers.append(MCPServerConfig(
+                name=name,
+                enabled=True,
+                transport="sse",
+                url=str(config["url"]),
+                headers=frozenset(
+                    (str(header), str(value))
+                    for header, value in (config.get("headers") or {}).items()
+                ),
+                bearer_token_env_var=str(config.get("bearer_token_env_var") or ""),
+            ))
+        else:
+            command = str(config.get("command") or "").strip()
+            if not command:
+                continue
+            servers.append(MCPServerConfig(
                 name=name,
                 enabled=True,
                 transport="stdio",
@@ -614,8 +697,7 @@ def _merge_decisions_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
                     (str(env_name), str(env_value))
                     for env_name, env_value in (config.get("env") or {}).items()
                 ),
-            )
-        )
+            ))
         existing.add(name)
         merged.append(name)
     if merged:

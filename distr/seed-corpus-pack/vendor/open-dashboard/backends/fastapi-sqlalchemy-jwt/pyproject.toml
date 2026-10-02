@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fastapi-sqlalchemy-jwt"
+version = "0.1.0"
+description = "Standalone FastAPI + SQLAlchemy + JWT backend preset for the open-dashboard frontend (json-server data dialect + custom-JWT auth)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "sqlalchemy>=2.0.36,<3",
+    "alembic>=1.14,<2",
+    "pydantic[email]>=2.10.4,<3",
+    "pydantic-settings>=2.7.0,<3",
+    "pyjwt==2.10.1",
+    # Argon2 password hashing via the maintained `pwdlib` (replaces the
+    # unmaintained passlib + bcrypt 4.x combo, which logged a spurious traceback).
+    "pwdlib[argon2]>=0.2.1,<1",
+    "python-multipart==0.0.20",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2.3"]
+dev = [
+    "pytest==8.3.4",
+    "httpx==0.28.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

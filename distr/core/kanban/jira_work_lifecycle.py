@@ -541,3 +541,109 @@ def handle_telegram_jira_reply(
         "reply_markup": review_markup(row["token"]),
         "token": row["token"],
     }
+
+
+def maybe_auto_transition_jira_on_complete(
+    *,
+    ticket_id: int,
+    run_id: int,
+    target_status: str = "Done",
+) -> dict[str, Any]:
+    """Optionally transition the linked Jira issue after successful CLI/workflow completion.
+
+    Gated by settings key ``jira_auto_transition_on_cli_complete`` (default off).
+    Records the last transition on the lifecycle row for live UI surfaces.
+    """
+    ensure_tables()
+    wanted = str(target_status or "Done").strip() or "Done"
+    from distr.core.db.kanban import KanbanTicket
+
+    with get_session() as db:
+        ticket = db.get(KanbanTicket, int(ticket_id))
+        if ticket is None:
+            return {"success": False, "error": "ticket not found"}
+        issue_key = str(ticket.external_id or "").strip()
+        if not issue_key or str(ticket.external_source or "").lower() != "jira":
+            return {"success": False, "error": "ticket is not jira-linked"}
+
+    try:
+        from distr.core.agent.tools.integrations.kanban_ticket import KanbanTicketTool
+
+        tool = KanbanTicketTool()
+        result = tool._run(
+            action="move_external_ticket",
+            external_issue_key=issue_key,
+            lane_name=wanted,
+            text=f"move {issue_key} to {wanted}",
+        )
+        lowered = str(result or "").lower()
+        ok = "error" not in lowered and "fail" not in lowered and "could not" not in lowered
+    except Exception as exc:
+        ok = False
+        result = str(exc)
+
+    now = time.time()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE jira_work_lifecycles
+            SET updated_at=:now,
+                error=CASE WHEN :ok = 1 THEN NULL ELSE :error END,
+                status=CASE WHEN :ok = 1 THEN 'jira_auto_transitioned' ELSE status END
+            WHERE ticket_id=:ticket_id
+        """), {
+            "now": now,
+            "ok": 1 if ok else 0,
+            "error": ("" if ok else str(result)[:500]),
+            "ticket_id": int(ticket_id),
+        })
+        # Persist last transition metadata in a side table-ish JSON via error/status fields
+        # plus a dedicated audit entry for UI.
+    _audit(
+        int(ticket_id),
+        int(run_id),
+        "jira_auto_transition" if ok else "jira_auto_transition_failed",
+        f"Auto transition to {wanted}: {result}",
+    )
+    return {"success": bool(ok), "target_status": wanted, "result": result}
+
+
+def jira_status_surface_for_ticket(ticket_id: int) -> dict[str, Any]:
+    """Minimal live surface: current lifecycle status + last transition audit."""
+    ensure_tables()
+    with engine.connect() as conn:
+        lifecycle = conn.execute(text(
+            "SELECT status, issue_key, updated_at, run_id, error FROM jira_work_lifecycles WHERE ticket_id=:ticket_id"
+        ), {"ticket_id": int(ticket_id)}).mappings().first()
+    if not lifecycle:
+        return {}
+    last_transition = ""
+    last_transition_at = ""
+    try:
+        from distr.core.db.kanban import KanbanTicketAuditEntry
+
+        with get_session() as db:
+            entries = (
+                db.query(KanbanTicketAuditEntry)
+                .filter(KanbanTicketAuditEntry.ticket_id == int(ticket_id))
+                .order_by(KanbanTicketAuditEntry.id.desc())
+                .limit(20)
+                .all()
+            )
+        for entry in entries:
+            status = str(getattr(entry, "status", "") or "")
+            if "transition" in status.lower() or status in {"jira_auto_transition", "client_draft_ready"}:
+                last_transition = str(getattr(entry, "summary", "") or status)
+                created = getattr(entry, "created_at", None) or getattr(entry, "created_date", None)
+                last_transition_at = created.isoformat() if hasattr(created, "isoformat") else str(created or "")
+                break
+    except Exception:
+        logger.debug("Could not load jira transition audit", exc_info=True)
+    return {
+        "jira_status": str(lifecycle.get("status") or ""),
+        "jira_issue_key": str(lifecycle.get("issue_key") or ""),
+        "jira_updated_at": lifecycle.get("updated_at"),
+        "jira_last_transition": last_transition,
+        "jira_last_transition_at": last_transition_at,
+        "jira_run_id": lifecycle.get("run_id"),
+        "jira_error": str(lifecycle.get("error") or ""),
+    }

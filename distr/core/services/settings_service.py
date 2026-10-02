@@ -723,6 +723,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("pixazo_enabled", "pixazo_key"),
         ("fishaudio_enabled", "fishaudio_key"),
         ("masko_enabled", "masko_key"),
+        ("jev_enabled", "jev_key"),
         ("tensology_enabled", "tensology_key"),
     ]:
         enabled_field, key_field = field_pair

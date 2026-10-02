@@ -6,8 +6,8 @@ Architecture mirrors the Telegram integration:
 
 Production note (TASK 18): this desktop codebase does **not** implement Meta Cloud API webhooks; traffic is
 relay WebSocket + authenticated REST (``RELAY_INTERNAL_TOKEN`` when set, otherwise device Ed25519 challenge).
-Mirroring inbound text into :class:`~distr.core.integrations.bus.IntegrationMessageBus` is **opt-in** via
-``DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT``.
+Mirroring inbound text into :class:`~distr.core.integrations.bus.IntegrationMessageBus` is **on by default**;
+opt out with ``DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT=0``.
 
 This class handles:
   - WebSocket connection to the relay server
@@ -46,15 +46,18 @@ from distr.core.integrations.telegram.utils import relay_internal_token
 
 
 def _whatsapp_agent_bridge_enabled() -> bool:
-    return os.environ.get("DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    """Default ON: inbound WhatsApp is picked up by the agent/WorkIntake path.
+
+    Opt out with DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT=0|false|no|off.
+    """
+    raw = os.environ.get("DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT", "1").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
 
 
 def _route_whatsapp_text_to_message_bus(data: dict, full_text: str, jid: str) -> None:
-    """Opt-in: mirror inbound WhatsApp text into ``IntegrationMessageBus`` (TASK 18)."""
+    """Mirror inbound WhatsApp text into WorkIntake / ``IntegrationMessageBus`` (default on)."""
     from distr.core.integrations.bus import IncomingMessage, get_integration_message_bus
 
     tid = (jid or data.get("jid_phone") or "").strip()
@@ -66,18 +69,52 @@ def _route_whatsapp_text_to_message_bus(data: dict, full_text: str, jid: str) ->
         from distr.core.work_intake import WorkIntake, get_work_intake_service
 
         intake_text = str(data.get("text") or data.get("caption") or full_text)
+        board_hint = ""
+        auto_snapshot = False
+        try:
+            from distr.core.db import WhatsAppPhoneLink, get_session
+
+            with get_session() as session:
+                link = (
+                    session.query(WhatsAppPhoneLink)
+                    .filter(
+                        (WhatsAppPhoneLink.phone_jid == tid)
+                        | (WhatsAppPhoneLink.phone_number == tid)
+                        | (WhatsAppPhoneLink.phone_jid == jid)
+                    )
+                    .order_by(WhatsAppPhoneLink.auto_snapshot.desc(), WhatsAppPhoneLink.id.asc())
+                    .first()
+                )
+                if link is not None:
+                    auto_snapshot = bool(link.auto_snapshot)
+                    board_hint = str(int(link.board_id)) if link.board_id else ""
+        except Exception:
+            logger.debug("WhatsApp auto_snapshot link lookup failed", exc_info=True)
+
+        # auto_snapshot links always become durable tickets/threads on inbound.
+        user_text = (
+            f"Create a ticket: {intake_text}"
+            if auto_snapshot and not intake_text.lower().startswith(("create a ticket", "create ticket"))
+            else intake_text
+        )
         decision = get_work_intake_service().ingest(WorkIntake(
             source="whatsapp",
-            user_text=intake_text,
+            user_text=user_text,
             source_user_id=str(sender_phone or ""),
             source_thread_id=tid,
             source_message_id=str(data.get("message_id") or data.get("id") or ""),
-            metadata={"jid": jid, "raw_type": data.get("type")},
+            board_hint=board_hint,
+            metadata={
+                "jid": jid,
+                "jid_phone": str(data.get("jid_phone") or tid or ""),
+                "raw_type": data.get("type"),
+                "auto_snapshot": auto_snapshot,
+            },
         ))
         if decision.handled:
             logger.info(
-                "WhatsApp request routed action=%s ticket=%s run=%s",
-                decision.action.value, decision.ticket_id, decision.workflow_run_id,
+                "WhatsApp request routed action=%s ticket=%s run=%s auto_snapshot=%s",
+                decision.action.value, decision.ticket_id, decision.workflow_run_id, auto_snapshot,
             )
             return
     except Exception:
@@ -281,10 +318,17 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             headers = self._relay_auth_headers(payload_str)
             if headers:
                 r = requests.post(f"{self.api_base}/ws-auth", json=payload, headers=headers, timeout=10)
-                obj = r.json()
+                try:
+                    obj = r.json()
+                except ValueError:
+                    obj = {}
                 if r.status_code == 200 and obj.get("success") and obj.get("ws_token"):
                     self._ws_auth_bundle = obj
                     return obj
+                logger.warning(
+                    "WhatsApp: internal ws-auth unavailable (status=%s); trying device authentication",
+                    r.status_code,
+                )
 
             # No local secret path: prove possession of local device keypair.
             ident = self._load_or_create_device_identity()
@@ -343,10 +387,12 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         """Resolve auth bundle off the UI thread, then request socket open on UI thread."""
         try:
             bundle = self._request_ws_auth_bundle()
+            if not bundle or not bundle.get("ws_token"):
+                self._open_socket_requested.emit("")
+                return
             ws_url = self.server_url
-            if bundle and bundle.get("ws_token"):
-                sep = "&" if "?" in ws_url else "?"
-                ws_url = f"{ws_url}{sep}ws_token={bundle.get('ws_token')}"
+            sep = "&" if "?" in ws_url else "?"
+            ws_url = f"{ws_url}{sep}ws_token={bundle.get('ws_token')}"
             self._open_socket_requested.emit(ws_url)
         finally:
             with self._connect_lock:
@@ -359,6 +405,11 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             return
         if self._active_disconnect:
             logger.debug("WhatsApp: skipping socket open while active disconnect is set")
+            return
+        if not ws_url:
+            logger.warning("WhatsApp: authentication unavailable, scheduling reconnect")
+            self.connection_status_changed.emit(False, "Reconnecting...")
+            self._schedule_reconnect("WhatsApp")
             return
         if self.socket.isValid():
             logger.info("WhatsApp: Closing existing connection before reconnecting")
@@ -435,9 +486,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         logger.error(f"WhatsApp: WebSocket Error: {err_str} (code: {error_code})")
 
         if not self._active_disconnect:
-            self._reconnect_delay_current_ms = self._reconnect_delay_ms
-            if not self._reconnect_timer.isActive():
-                self._reconnect_timer.start(min(self._reconnect_delay_ms, 1000))
+            self._schedule_reconnect("WhatsApp")
 
     def _on_ssl_errors(self, errors):
         """Handle Qt SSL verification errors during WhatsApp WebSocket handshake."""
@@ -651,7 +700,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         if message_id and not media:
             self._mark_relay_processed_by_message_id(message_id)
 
-        # Default: store + SSE only. Opt-in agent routing via DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT.
+        # Default: agent/WorkIntake pickup ON (opt out via DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT=0).
         if (
             not from_me
             and _whatsapp_agent_bridge_enabled()

@@ -227,6 +227,12 @@ def append_markdown_section(
     new_text = f"{cur.rstrip()}{sep}{block}\n"
     new_text = enforce_cap(new_text, cap, mode)
     atomic_write_text(path, new_text)
+    try:
+        from distr.core.mempalace.wiring import dual_write_markdown_section
+
+        dual_write_markdown_section(file_key=key, section_text=block)
+    except Exception:
+        logger.debug("mempalace dual-write markdown skipped", exc_info=True)
 
 
 def append_events_text(chunk: str, *, root: Path | None = None) -> None:
@@ -240,6 +246,12 @@ def append_events_text(chunk: str, *, root: Path | None = None) -> None:
     new_text = cur.rstrip() + ("\n\n" if cur.strip() else "") + addition + "\n"
     new_text = enforce_cap(new_text, CAP_EVENTS_BYTES, "lines")
     atomic_write_text(paths["events"], new_text)
+    try:
+        from distr.core.mempalace.wiring import dual_write_markdown_section
+
+        dual_write_markdown_section(file_key="events", section_text=addition)
+    except Exception:
+        logger.debug("mempalace dual-write events skipped", exc_info=True)
 
 
 def _tail_lines(text: str, max_lines: int) -> str:
@@ -280,7 +292,18 @@ def load_context_snippets_for_llm(*, root: Path | None = None) -> dict[str, str]
     mem = _last_sections(mem_raw, CTX_MEMORY_MAX_SECTIONS)
     mem = prune_suffix_bytes(mem, CTX_MEMORY_MAX_BYTES)
 
-    return {"agent": agent.strip(), "user": user.strip(), "memory": mem.strip()}
+    out = {"agent": agent.strip(), "user": user.strip(), "memory": mem.strip()}
+    # When mempalace_memory_backend is ON, prepend semantic recall (legacy files stay).
+    try:
+        from distr.core.mempalace.wiring import prefer_read_markdown_context
+
+        mp = prefer_read_markdown_context("agent user preferences long-term memory")
+        if mp:
+            merged = (out["memory"] + "\n\n" + mp).strip() if out["memory"] else mp
+            out["memory"] = prune_suffix_bytes(merged, CTX_MEMORY_MAX_BYTES)
+    except Exception:
+        logger.debug("mempalace prefer-read markdown skipped", exc_info=True)
+    return out
 
 
 def try_load_system_prompt_template() -> str | None:

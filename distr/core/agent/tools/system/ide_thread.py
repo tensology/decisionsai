@@ -62,9 +62,11 @@ class IdeThreadInput(BaseModel):
 class IdeThreadTool(BaseTool):
     name: str = "ide_thread"
     description: str = (
-        "List, read, check status, prompt, or amend Codex and Cursor IDE threads. "
-        "Use for questions like what Codex/Cursor is doing, read the latest IDE response, "
-        "send work to an existing thread, or continue with a follow-up. "
+        "List, read, check status, prompt, or amend Codex and Cursor IDE threads for a project. "
+        "Use when the user wants a Cursor or Codex thread created, continued, or checked. "
+        "Omit thread_id to continue the locked thread for that IDE and project. "
+        "Set new_thread=true only when they want a fresh thread. "
+        "This lock is separate from the Development section harness. "
         "Codex reads local rollout transcripts; Cursor reads local agent-transcripts JSONL plus Decisions IDE bridge sessions and CLI output."
     )
     args_schema: type[BaseModel] = IdeThreadInput

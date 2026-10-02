@@ -23,6 +23,26 @@ from distr.core.integrations.telegram.utils import relay_internal_token
 
 logger = logging.getLogger(__name__)
 
+
+def whatsapp_send_dry_run_enabled() -> bool:
+    """Return True when outbound WhatsApp sends must not hit the live relay.
+
+    Prefer env ``DECISIONSAI_WHATSAPP_DRY_RUN=1``. Settings key
+    ``whatsapp_send_dry_run`` is the durable fallback.
+    """
+    raw = str(os.environ.get("DECISIONSAI_WHATSAPP_DRY_RUN") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        return bool(load_settings_from_db().get("whatsapp_send_dry_run"))
+    except Exception:
+        return False
+
+
 _DEVICE_IDENTITY_PATH = Path.home() / ".decisions" / "device_identity.json"
 _cached_relay_headers: dict[str, str] | None = None
 _cached_relay_headers_at: float = 0.0
@@ -275,6 +295,14 @@ def sync_messages_from_relay(*, mark_processed: bool = True) -> dict[str, Any]:
 
 
 def send_message_via_relay(*, jid: str, text: str, caption: str = "") -> dict[str, Any]:
+    if whatsapp_send_dry_run_enabled():
+        logger.info(
+            "WhatsApp dry-run send jid=%s text_len=%s caption_len=%s",
+            jid,
+            len(text or ""),
+            len(caption or ""),
+        )
+        return {"success": True, "jid": jid, "dry_run": True}
     payload = {"jid": jid, "text": text, "caption": caption or "", "audio": None}
     headers = relay_request_headers()
     try:

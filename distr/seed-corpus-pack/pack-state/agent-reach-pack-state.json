@@ -1,0 +1,49 @@
+{
+  "state_version": 1,
+  "status": "configured",
+  "vendor_ready": true,
+  "vendor": {
+    "vendor": "agent-reach",
+    "source_repo": "https://github.com/Panniantong/Agent-Reach",
+    "reference_path": "/Users/paul/development/TENSOLOGY/DECISIONS/reference/agent-reach",
+    "synced_at": "2026-06-30T09:02:50.689048+00:00",
+    "commit": "e87bcdb17713c24513f6151d508f701b87dfd797",
+    "skill_id": "agent-reach"
+  },
+  "detected": {
+    "codex": true,
+    "claude": true,
+    "cursor": true,
+    "pi": true,
+    "cline": false
+  },
+  "fingerprint": "6ab8bd07f8ab5a053deeb942434d34c86f9b20a009dcc8b9e0261fe9502aa27a",
+  "registry_path": "/Users/paul/.decisions/harness/agent-reach-skills-registry.json",
+  "written": [
+    "/Users/paul/plugins/decisions-codex/skills/agent-reach",
+    "/Users/paul/.codex/skills/agent-reach",
+    "/Users/paul/.claude/skills/agent-reach",
+    "/Users/paul/.pi/skills/agent-reach",
+    "/Users/paul/.cursor/skills/agent-reach",
+    "/Users/paul/.cursor/commands/agent-reach.md",
+    "/Users/paul/.codex/commands/agent-reach.md",
+    "/Users/paul/.claude/commands/agent-reach.md",
+    "/Users/paul/.pi/commands/agent-reach.md",
+    "/Users/paul/plugins/decisions-codex/skills/decisions-agent-reach",
+    "/Users/paul/.codex/skills/decisions-agent-reach",
+    "/Users/paul/.claude/skills/decisions-agent-reach",
+    "/Users/paul/.pi/skills/decisions-agent-reach",
+    "/Users/paul/.cursor/skills/decisions-agent-reach",
+    "/Users/paul/.cursor/commands/decisions-agent-reach.md",
+    "/Users/paul/.codex/commands/decisions-agent-reach.md",
+    "/Users/paul/.claude/commands/decisions-agent-reach.md",
+    "/Users/paul/.pi/commands/decisions-agent-reach.md",
+    "/Users/paul/plugins/decisions-codex/skills/decisions-agent-reach-harness/SKILL.md"
+  ],
+  "cli": {
+    "installed": false,
+    "reason": "skipped"
+  },
+  "doctor": {},
+  "reference_path": "/Users/paul/development/TENSOLOGY/DECISIONS/reference/agent-reach"
+}

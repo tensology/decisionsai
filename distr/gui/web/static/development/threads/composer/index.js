@@ -1,37 +1,163 @@
 import { providerLabel as lookupProviderLabel, catalogModels as lookupCatalogModels } from '../../shared/models.js';
 // Owns threads composer rendering, interactions, and private view state.
 export function createThreadsComposer({ context, actions, el, token }) {
+    // Base CLI harnesses always listed. Local Ollama workers come from live
+    // ollama list /api/tags via /workflows/studio/local-harness-presets (no hard-coded Qwen/Glimmer list).
     const HARNESS_OPTIONS = [
         { id: 'pi', label: 'Pi' },
         { id: 'cursor', label: 'Cursor' },
         { id: 'codex', label: 'Codex' },
         { id: 'claude_code', label: 'Claude Code' }
     ];
-    const KNOWN_HARNESS_IDS = new Set(HARNESS_OPTIONS.map((item) => item.id));
+    const LOCAL_OLLAMA_WORKER_PREFIX = 'local_ollama:';
+    // Demoted hints/aliases only — not the picker source of truth.
+    const LOCAL_OLLAMA_LABEL_HINTS = {
+        'qwen3.8:27b': 'Qwen 3.8 27B',
+        'muse-glimmer:30b-mlx': 'Glimmer'
+    };
+    const LEGACY_LOCAL_WORKER_ALIASES = {
+        qwen38_27b: 'qwen3.8:27b',
+        glimmer: 'muse-glimmer:30b-mlx'
+    };
+    const BASE_HARNESS_IDS = new Set(HARNESS_OPTIONS.map((item) => item.id));
+    let localOllamaWorkers = new Map();
+    let localHarnessWorkersPromise = null;
     let routePreviewTimer = null;
 
+    function parseLocalOllamaWorker(backend) {
+        const raw = String(backend || '').trim();
+        if (!raw) return '';
+        const lower = raw.toLowerCase();
+        if (lower.startsWith(LOCAL_OLLAMA_WORKER_PREFIX)) {
+            return raw.slice(LOCAL_OLLAMA_WORKER_PREFIX.length).trim();
+        }
+        if (Object.prototype.hasOwnProperty.call(LEGACY_LOCAL_WORKER_ALIASES, lower)) {
+            return LEGACY_LOCAL_WORKER_ALIASES[lower];
+        }
+        return '';
+    }
+
+    function isLocalOllamaWorker(backend) {
+        return Boolean(parseLocalOllamaWorker(backend));
+    }
+
+    function harnessOptions() {
+        const localRows = [...localOllamaWorkers.values()].map((row) => ({
+            id: row.id,
+            label: row.label || row.model || row.id
+        }));
+        return [...HARNESS_OPTIONS, ...localRows];
+    }
+
     function knownHarnessId(id) {
-        const wanted = String(id || '').toLowerCase();
-        return KNOWN_HARNESS_IDS.has(wanted) ? wanted : '';
+        const wanted = String(id || '').trim();
+        const lower = wanted.toLowerCase();
+        if (BASE_HARNESS_IDS.has(lower)) return lower;
+        if (localOllamaWorkers.has(wanted)) return wanted;
+        for (const key of localOllamaWorkers.keys()) {
+            if (key.toLowerCase() === lower) return key;
+        }
+        if (parseLocalOllamaWorker(wanted)) return wanted;
+        return '';
+    }
+
+    function selectableHarnessId(id) {
+        const wanted = knownHarnessId(id);
+        if (!wanted) return '';
+        if (BASE_HARNESS_IDS.has(wanted)) return wanted;
+        if (localOllamaWorkers.has(wanted)) return wanted;
+        for (const key of localOllamaWorkers.keys()) {
+            if (key.toLowerCase() === wanted.toLowerCase()) return key;
+        }
+        return '';
     }
 
     function harnessLabel(id) {
         const wanted = knownHarnessId(id);
-        return HARNESS_OPTIONS.find((item) => item.id === wanted)?.label || (wanted ? wanted.replace(/_/g, ' ') : 'Auto');
+        const match = harnessOptions().find((item) => item.id === wanted || item.id.toLowerCase() === String(wanted || '').toLowerCase());
+        if (match?.label) return match.label;
+        const tag = parseLocalOllamaWorker(wanted || id);
+        if (tag) return LOCAL_OLLAMA_LABEL_HINTS[tag] || tag;
+        return wanted ? wanted.replace(/_/g, ' ') : 'Auto';
     }
 
     function ensureManualBackend() {
-        if (context.draft.route_mode === 'manual' && !knownHarnessId(context.draft.backend)) {
-            context.draft.backend = 'pi';
+        if (context.draft.route_mode !== 'manual') return;
+        const current = String(context.draft.backend || '').trim();
+        if (selectableHarnessId(current)) return;
+        if (isLocalOllamaWorker(current)) {
+            context.draft.provider = '';
+            context.draft.model_name = '';
         }
+        context.draft.backend = 'pi';
+    }
+
+    async function ensureLocalHarnessPresets({ force = false } = {}) {
+        if (!force && localHarnessWorkersPromise) return localHarnessWorkersPromise;
+        const pending = (async () => {
+            try {
+                const data = await actions.api('/workflows/studio/local-harness-presets');
+                const rows = Array.isArray(data?.workers)
+                    ? data.workers
+                    : (Array.isArray(data?.presets) ? data.presets : []);
+                const next = new Map();
+                for (const row of rows) {
+                    const model = String(row?.model || '').trim();
+                    if (!model) continue;
+                    const id = String(row?.id || `${LOCAL_OLLAMA_WORKER_PREFIX}${model}`).trim();
+                    next.set(id, {
+                        id,
+                        label: String(row?.label || LOCAL_OLLAMA_LABEL_HINTS[model] || model),
+                        backend: 'pi',
+                        model,
+                        provider: 'ollama'
+                    });
+                }
+                localOllamaWorkers = next;
+            } catch (error) {
+                localOllamaWorkers = new Map();
+            }
+            return localOllamaWorkers;
+        })();
+        localHarnessWorkersPromise = pending;
+        return pending;
     }
 
     function harnessDefaultProvider(backend) {
+        if (isLocalOllamaWorker(backend)) return 'ollama';
         if (backend === 'codex') return 'openai';
         if (backend === 'claude_code') return 'anthropic';
         if (backend === 'cursor') return 'cursor';
         if (backend === 'pi') return String(context.draft.provider || 'ollama').toLowerCase();
         return String(backend || '').toLowerCase();
+    }
+
+    function applyLocalHarnessPreset(backend) {
+        const key = String(backend || '').trim();
+        let worker = localOllamaWorkers.get(key);
+        if (!worker) {
+            for (const [id, row] of localOllamaWorkers.entries()) {
+                if (id.toLowerCase() === key.toLowerCase() || row.model === parseLocalOllamaWorker(key)) {
+                    worker = row;
+                    break;
+                }
+            }
+        }
+        if (!worker) {
+            const tag = parseLocalOllamaWorker(key);
+            if (!tag) return false;
+            worker = {
+                id: `${LOCAL_OLLAMA_WORKER_PREFIX}${tag}`,
+                label: LOCAL_OLLAMA_LABEL_HINTS[tag] || tag,
+                backend: 'pi',
+                model: tag,
+                provider: 'ollama'
+            };
+        }
+        context.draft.backend = worker.id;
+        context.draft.provider = worker.provider || 'ollama';
+        context.draft.model_name = worker.model;
+        return true;
     }
 
     function cliModels(backend) {
@@ -42,7 +168,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
 
     async function ensureCliModels(backend) {
         const id = knownHarnessId(backend);
-        if (!id || id === 'pi') return [];
+        if (!id || id === 'pi' || isLocalOllamaWorker(id)) return [];
         const cached = cliModels(id);
         if (cached) return cached;
         if (!context.cliModelCatalogs) context.cliModelCatalogs = {};
@@ -598,12 +724,15 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 'Route by prompt complexity'
             );
         } else if (pane === 'harness') {
-            list.innerHTML = HARNESS_OPTIONS.map((item) =>
+            const selectedBackend = String(context.draft.backend || '');
+            list.innerHTML = harnessOptions().map((item) =>
                 modelChoiceHtml(
                     item.label,
                     item.id,
-                    context.draft.route_mode === 'manual' && item.id === String(context.draft.backend || '').toLowerCase(),
-                    item.id === 'pi' ? 'Local / any provider' : 'CLI harness'
+                    context.draft.route_mode === 'manual' && item.id.toLowerCase() === selectedBackend.toLowerCase(),
+                    item.id === 'pi'
+                        ? 'Local / any provider'
+                        : (isLocalOllamaWorker(item.id) ? `Ollama · ${parseLocalOllamaWorker(item.id)}` : 'CLI harness')
                 )
             ).join('');
         } else if (pane === 'provider') {
@@ -651,6 +780,11 @@ export function createThreadsComposer({ context, actions, el, token }) {
         if (pane === 'provider' && (context.draft.route_mode !== 'manual' || context.draft.backend !== 'pi')) {
             pane = 'harness';
         }
+        if (pane === 'harness' || pane === 'auto') {
+            await ensureLocalHarnessPresets();
+            ensureManualBackend();
+            syncModelMenu();
+        }
         context.modelMenuPane = pane;
         const search = el('model-submenu-search');
         const titles = { auto: 'Auto', harness: 'Harness', provider: 'Provider', model: 'Model', effort: 'Effort', speed: 'Speed' };
@@ -692,10 +826,27 @@ export function createThreadsComposer({ context, actions, el, token }) {
         }
         if (pane === 'harness') {
             context.draft.route_mode = 'manual';
+            context.routingAssessment = null;
+            if (isLocalOllamaWorker(value) || [...localOllamaWorkers.keys()].some((id) => id.toLowerCase() === String(value || '').toLowerCase())) {
+                await ensureLocalHarnessPresets({ force: true });
+                const key = String(value || '').trim();
+                const stillThere = [...localOllamaWorkers.values()].some(
+                    (row) => row.id.toLowerCase() === key.toLowerCase() || row.model === parseLocalOllamaWorker(key)
+                );
+                if (!stillThere) {
+                    actions.toast?.('That local model is not installed or Ollama is unreachable.', 'error');
+                    renderModelPaneChoices('harness');
+                    return;
+                }
+                if (applyLocalHarnessPreset(value)) {
+                    closeModelPane();
+                    await persistModelRoute();
+                    return;
+                }
+            }
             context.draft.backend = value;
             context.draft.provider = value === 'pi' ? '' : harnessDefaultProvider(value);
             context.draft.model_name = value === 'pi' ? '' : 'auto';
-            context.routingAssessment = null;
             if (value === 'pi') {
                 await openModelPane('provider');
                 return;

@@ -146,6 +146,17 @@ const PROVIDERS = [
         iconPath: '/assets/img/providers/composio.png'
     },
     {
+        id: 'jev',
+        name: 'JevAI',
+        keyField: 'key',
+        blurb: 'Decision routing, tool-call guards, research checks, and completion review through the Jev MCP.',
+        docsLabel: 'JevAI agent keys',
+        docsUrl: 'https://www.jevai.org/agent/keys',
+        helper: 'Create a personal key, validate it here, and save it to connect the Jev MCP to new chats.',
+        infoHtml: 'Create a personal key at <a href="https://www.jevai.org/agent/keys" target="_blank" rel="noopener">jevai.org/agent/keys</a>. Decisions stores it encrypted, registers <code>https://www.jevai.org/api/mcp</code>, and exposes the six <code>jev_*</code> routing and review tools to new chats.',
+        color: 'from-violet-400/25 to-cyan-500/10'
+    },
+    {
         id: 'pixazo',
         name: 'Pixazo',
         keyField: 'key',

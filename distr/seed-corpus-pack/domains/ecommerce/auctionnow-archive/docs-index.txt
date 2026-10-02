@@ -1,0 +1,8 @@
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/account-auction-message-ui-audit.md
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/UI-AUDIT-CHECKLIST.md
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/STITCH-SKILLS-NOTES.md
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/PRD-stitch-payments-integration.md
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/DESIGN.md
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/screenshot-defect-ledger.md
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/JITSI_LOCAL_SETUP.md
+/Users/paul/development/TENSOLOGY/ARCHIVE/www.auctionnow.co.za/docs/SCOPE-thirdweb-auction-audit-trail.md

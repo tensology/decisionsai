@@ -152,6 +152,97 @@ def test_studio_auto_routing_assessment_keeps_small_copy_edit_low():
     assert payload["execution_mode"] == "direct"
 
 
+def test_studio_auto_routing_uses_confident_laya_assessment(monkeypatch):
+    monkeypatch.setattr("distr.core.laya_runtime.get_mode", lambda: "auto")
+    monkeypatch.setattr(
+        "distr.core.laya_runtime.assess_request",
+        lambda _request: {
+            "complexity": "high",
+            "confidence": 0.91,
+            "is_sensitive": True,
+        },
+    )
+
+    response = _client().post(
+        "/api/workflows/studio/routing-assessment",
+        json={"instruction": "Fix a typo in the button text."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["complexity"] == "high"
+    assert payload["decision_engine"] == "laya"
+    assert payload["laya"]["used"] is True
+    assert "risk" in payload["signals"]
+
+
+def test_studio_auto_routing_rejects_low_confidence_laya_assessment(monkeypatch):
+    monkeypatch.setattr("distr.core.laya_runtime.get_mode", lambda: "auto")
+    monkeypatch.setattr(
+        "distr.core.laya_runtime.assess_request",
+        lambda _request: {
+            "complexity": "high",
+            "confidence": 0.42,
+            "is_sensitive": False,
+        },
+    )
+
+    response = _client().post(
+        "/api/workflows/studio/routing-assessment",
+        json={"instruction": "Fix a typo in the button text."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["complexity"] == "low"
+    assert payload["decision_engine"] == "heuristic"
+    assert payload["laya"]["used"] is False
+
+
+def test_studio_prefer_laya_uses_low_confidence_assessment(monkeypatch):
+    monkeypatch.setattr("distr.core.laya_runtime.get_mode", lambda: "prefer")
+    monkeypatch.setattr(
+        "distr.core.laya_runtime.assess_request",
+        lambda _request: {
+            "complexity": "high",
+            "confidence": 0.42,
+            "is_sensitive": False,
+        },
+    )
+
+    response = _client().post(
+        "/api/workflows/studio/routing-assessment",
+        json={"instruction": "Fix a typo in the button text."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["complexity"] == "high"
+    assert payload["decision_engine"] == "laya"
+    assert payload["laya"]["used"] is True
+
+
+def test_studio_laya_failure_falls_back_to_existing_router(monkeypatch):
+    monkeypatch.setattr("distr.core.laya_runtime.get_mode", lambda: "auto")
+
+    def _fail(_request):
+        raise RuntimeError("local classifier unavailable")
+
+    monkeypatch.setattr("distr.core.laya_runtime.assess_request", _fail)
+
+    response = _client().post(
+        "/api/workflows/studio/routing-assessment",
+        json={"instruction": "Fix a typo in the button text."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["complexity"] == "low"
+    assert payload["decision_engine"] == "heuristic"
+    assert payload["laya"]["used"] is False
+    assert payload["laya"]["fallback_reason"] == "local classifier unavailable"
+
+
 def test_studio_direct_execution_state_and_stop_are_thread_scoped(monkeypatch):
     calls: list[int] = []
     monkeypatch.setattr(

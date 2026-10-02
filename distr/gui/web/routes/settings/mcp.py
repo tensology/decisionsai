@@ -27,6 +27,7 @@ class MCPServerRow(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     url: str = ""
     headers: dict[str, str] = Field(default_factory=dict)
+    bearer_token_env_var: str = ""
 
 
 class MCPConfigPayload(BaseModel):
@@ -65,6 +66,9 @@ def _payload_to_raw(payload: MCPConfigPayload) -> dict[str, Any]:
             hdr = d.get("headers") or {}
             if isinstance(hdr, dict) and hdr:
                 entry["headers"] = {str(k): str(v) for k, v in hdr.items()}
+            bearer_env = str(d.get("bearer_token_env_var") or "").strip()
+            if bearer_env:
+                entry["bearer_token_env_var"] = bearer_env
         servers.append(entry)
     return {"servers": servers}
 
@@ -109,6 +113,9 @@ def _normalize_external_server(raw: dict[str, Any], fallback_name: str) -> dict[
             "transport": "sse",
             "url": url,
             "headers": _string_map(raw.get("headers") or raw.get("httpHeaders")),
+            "bearer_token_env_var": str(
+                raw.get("bearer_token_env_var") or raw.get("bearerTokenEnvVar") or ""
+            ).strip(),
         }
 
     command_parts: list[str] = []

@@ -232,14 +232,65 @@ class TelegramMixin:
             self._tts_service._telegram_file_sent = True
         logger.info("Marked telegram_file_sent=True")
 
+    def _last_user_message_text(self) -> str:
+        """Return the most recent user message text from the in-flight history."""
+        for msg in reversed(getattr(self, "_messages", []) or []):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content", "")
+            return content if isinstance(content, str) else str(content or "")
+        return ""
+
+    def _user_explicitly_asked_telegram(self, text: str = "") -> bool:
+        """True when the user explicitly asked to send/upload something to Telegram."""
+        text_lower = (text or self._last_user_message_text() or "").lower()
+        if not text_lower:
+            return False
+        patterns = (
+            "telegram",
+            "tell the gram",
+            "send to telegram",
+            "send by telegram",
+            "send via telegram",
+            "send through telegram",
+            "send it to telegram",
+            "send that to telegram",
+            "send to my telegram",
+            "send telegram",
+        )
+        return any(p in text_lower for p in patterns)
+
+    def _should_auto_send_file_to_telegram(self) -> bool:
+        """Match BackgroundChain intent: Telegram-sourced OR explicit user ask only."""
+        import threading
+
+        if getattr(self, "_is_telegram_request", False):
+            return True
+        if getattr(threading.current_thread(), "telegram_request", False):
+            return True
+        for t in threading.enumerate():
+            if getattr(t, "telegram_request", False):
+                return True
+        return self._user_explicitly_asked_telegram()
+
     async def _auto_send_file_to_telegram(self):
         """If ACTION REQUIRED flag is set, extract file path and auto-call send_file_to_telegram.
+
+        Refuses unless the turn is Telegram-sourced or the user explicitly asked to
+        send/upload to Telegram (same gate as BackgroundChain's wrapper).
 
         Returns True if file was sent (caller should skip follow-up API call).
         """
         import threading
 
         if not getattr(threading.current_thread(), 'suppress_tts_for_tool_chain', False):
+            return False
+
+        if not self._should_auto_send_file_to_telegram():
+            logger.info(
+                "Skipping auto-send to Telegram: not Telegram-sourced and no explicit ask"
+            )
+            threading.current_thread().suppress_tts_for_tool_chain = False
             return False
 
         file_path = self._extract_action_required_path()
@@ -254,11 +305,23 @@ class TelegramMixin:
             return False
 
         tool = self._tools_dict["send_file_to_telegram"]
+        last_user = self._last_user_message_text()
+        is_telegram = bool(getattr(self, "_is_telegram_request", False))
+        if not is_telegram:
+            is_telegram = bool(getattr(threading.current_thread(), "telegram_request", False))
         try:
             logger.info(f"Auto-calling send_file_to_telegram: {file_path}")
             loop = asyncio.get_running_loop()
+            call_kwargs = {
+                "file_path": file_path,
+                "is_telegram_request": is_telegram,
+                "auto_chained": True,
+            }
+            if last_user:
+                call_kwargs["last_user_message"] = last_user
+                call_kwargs["text"] = last_user
             result = await loop.run_in_executor(
-                None, lambda t=tool, fp=file_path: t._run(file_path=fp)
+                None, lambda t=tool, kw=call_kwargs: t._run(**kw)
             )
 
             self._messages.append({

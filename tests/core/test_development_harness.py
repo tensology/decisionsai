@@ -354,6 +354,78 @@ def test_turn_change_manifest_reviews_and_safely_undoes_isolated_files(tmp_path,
     assert not (root / "new.css").exists()
 
 
+def test_turn_change_manifest_counts_edits_to_previously_untracked_files(tmp_path):
+    root = tmp_path / "project"
+    subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+    tracked = root / "readme.md"
+    tracked.write_text("tracked\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "readme.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-m", "initial"], check=True, capture_output=True)
+
+    scratch = root / "scratch.notes"
+    scratch.write_text("alpha\n", encoding="utf-8")
+    before = harness._git_status_snapshot(str(root))
+    before_untracked = harness._git_untracked_fingerprints(str(root), before)
+    assert before.get("scratch.notes") == "??"
+    assert "scratch.notes" in before_untracked
+
+    # Status stays ?? — this is the live harness bug: content-only untracked edits
+    # were invisible to the change counter and Studio reported noop.
+    scratch.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    unchanged = harness._turn_change_manifest(str(root), before)
+    assert unchanged["files"] == []
+    assert unchanged["additions"] == 0
+
+    changes = harness._turn_change_manifest(
+        str(root),
+        before,
+        before_untracked=before_untracked,
+    )
+    assert [item["path"] for item in changes["files"]] == ["scratch.notes"]
+    assert changes["files"][0]["status"] == "??"
+    assert changes["additions"] >= 3
+    assert changes["additions"] > 0
+    assert changes["reversible"] is False
+    outcome = harness._turn_outcome(
+        backend_id="cli",
+        runtime_id="cli_harness",
+        success=True,
+        result=SimpleNamespace(evidence={}),
+        changes=changes,
+        summary="edited scratch",
+        noop=False,
+    )
+    assert outcome["git_change_count"] == 1
+    assert "noop" not in outcome
+
+
+def test_turn_change_manifest_still_counts_brand_new_untracked_files(tmp_path):
+    root = tmp_path / "project"
+    subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+    tracked = root / "readme.md"
+    tracked.write_text("tracked\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "readme.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-m", "initial"], check=True, capture_output=True)
+
+    before = harness._git_status_snapshot(str(root))
+    before_untracked = harness._git_untracked_fingerprints(str(root), before)
+    assert before == {}
+
+    (root / "fresh.txt").write_text("one\ntwo\n", encoding="utf-8")
+    changes = harness._turn_change_manifest(
+        str(root),
+        before,
+        before_untracked=before_untracked,
+    )
+    assert [item["path"] for item in changes["files"]] == ["fresh.txt"]
+    assert changes["additions"] == 2
+    assert changes["reversible"] is True
+
+
 def test_completed_turn_can_start_a_later_turn_in_the_same_thread(tmp_path, monkeypatch):
     get_session, chat_id, _ = _database(tmp_path, monkeypatch)
     dispatches = []

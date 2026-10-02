@@ -1,0 +1,50 @@
+{
+  "id": "ecommerce",
+  "title": "E-commerce website (FE+BE scaffold ~90%)",
+  "goal": "When user asks to build an e-commerce site, load this profile and scaffold shop + admin + domain from pack.",
+  "load_order": [
+    "LOADING.md",
+    "07-agent-behavior/DECISION-HEURISTICS.md",
+    "07-agent-behavior/VAGUENESS-DIAL.md",
+    "07-agent-behavior/GET-SHIT-DONE.md",
+    "01-entity-domain/MODEL-INFERENCE.md",
+    "08-premium-quality-gate/QUALITY-GATE.md",
+    "09-page-stencils/README.md",
+    "09-page-stencils/customer-portal/STENCIL.md",
+    "09-page-stencils/crud-list-detail/STENCIL.md",
+    "09-page-stencils/admin-screen/STENCIL.md",
+    "09-page-stencils/dashboard/STENCIL.md",
+    "09-page-stencils/funnel/STENCIL.md",
+    "01-entity-domain/CONTEXT.md",
+    "01-entity-domain/entity-graph.yaml",
+    "vendor/ecommerce-foundations/skills/domain-vocabulary/SKILL.md",
+    "vendor/ecommerce-foundations/skills/order-lifecycle/SKILL.md",
+    "vendor/ecommerce-foundations/skills/cart-lifecycle/SKILL.md",
+    "vendor/ecommerce-foundations/skills/payment-flows/SKILL.md",
+    "vendor/ecommerce-foundations/skills/inventory-management/SKILL.md",
+    "domains/ecommerce/merrypak/ARCHITECTURE.md",
+    "domains/ecommerce/merrypak/ARCHITECTURE.json",
+    "02-ui-conventions/SCREEN-CONVENTIONS.md",
+    "vendor/open-dashboard/PATTERNS.md",
+    "03-done-states-frac/FRAC-TEMPLATE.md",
+    "03-done-states-frac/DONE-STATES.md",
+    "04-verify-feedback-loops/VERIFY-LOOP.md",
+    "05-pdf-backend-frontend/CONVENTIONS.md",
+    "06-harness-ops/ENGINEERING-SKILLS-INDEX.md",
+    "copied-skills/ecc/PLAN-PRD-PATTERN.md",
+    "copied-skills/decisionsai/verification-before-completion/SKILL.md",
+    "copied-skills/decisionsai/frontend-design/SKILL.md"
+  ],
+  "scaffold_hints": {
+    "primary_structure": "domains/ecommerce/merrypak",
+    "admin_ui": "vendor/open-dashboard",
+    "domain_knowledge": "vendor/ecommerce-foundations",
+    "vision_eval": "external/Vision2Web"
+  },
+  "harness": [
+    "ecc",
+    "superpowers",
+    "fallow"
+  ],
+  "coverage_target": 0.9
+}

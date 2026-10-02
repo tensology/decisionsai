@@ -1,0 +1,1 @@
+LIVE_REF=/Users/paul/development/TRADING/currency-trader

@@ -159,6 +159,49 @@ def test_ide_bridge_rejects_session_id_from_other_project_or_source(tmp_path):
     assert "does not match" in wrong_source.json()["error"]
 
 
+def test_plugin_thread_id_stays_on_the_same_session_after_completion(tmp_path):
+    import distr.core.db.projects  # noqa: F401
+    from distr.core.db.projects import Project
+    from distr.core.db import get_session
+    from distr.core.ide_bridge import record_ide_event
+
+    project_dir = tmp_path / "tensorg"
+    project_dir.mkdir()
+    with get_session() as session:
+        project = Project(name="TensorG", folder_location=str(project_dir), coding_backend="cursor")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    first = record_ide_event(
+        source="cursor",
+        cwd=str(project_dir),
+        project_id=project_id,
+        event_type="cursor_completed",
+        output_text="Hello World",
+        payload={"thread_id": "cursor-chat-a", "external_thread_id": "cursor-chat-a"},
+    )
+    second = record_ide_event(
+        source="cursor",
+        cwd=str(project_dir),
+        project_id=project_id,
+        event_type="cursor_prompt_submitted",
+        input_text="Also add a test",
+        payload={"thread_id": "cursor-chat-a", "external_thread_id": "cursor-chat-a"},
+    )
+    other = record_ide_event(
+        source="cursor",
+        cwd=str(project_dir),
+        project_id=project_id,
+        event_type="cursor_prompt_submitted",
+        input_text="Different chat",
+        payload={"thread_id": "cursor-chat-b", "external_thread_id": "cursor-chat-b"},
+    )
+
+    assert first["session"]["id"] == second["session"]["id"]
+    assert other["session"]["id"] != first["session"]["id"]
+
+
 def test_conversation_origin_ide_event_reuses_current_chat_without_creating_one(tmp_path):
     import distr.core.db.projects  # noqa: F401
     from distr.core.chat import ChatService
