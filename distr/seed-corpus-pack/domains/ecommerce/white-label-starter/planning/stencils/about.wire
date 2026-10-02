@@ -1,0 +1,9 @@
+screen About device=desktop route=/about
+  header
+    nav
+      link Home route=/
+      link Catalogue route=/shop
+  main
+    heading About
+    text "Forkable ecommerce starter for Decisions white-label builds."
+    text "Swap brand tokens when your BrandPack arrives."

@@ -1,0 +1,10 @@
+screen Profile device=desktop route=/profile
+  main
+    heading "Your profile"
+    form Profile
+      input Name
+      input Phone
+      button Save primary
+    row
+      link "Change email" route=/change-email
+      link "Change password" route=/change-password

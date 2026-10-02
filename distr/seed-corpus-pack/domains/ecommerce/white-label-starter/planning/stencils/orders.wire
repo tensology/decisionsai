@@ -1,0 +1,6 @@
+screen Orders device=desktop route=/orders
+  main
+    heading "Your orders"
+    list
+      item "ORD-ABC123 — paid — R299.00"
+      item "ORD-DEF456 — pending — R449.00"

@@ -1,0 +1,7 @@
+screen "Order detail" device=desktop route=/orders/ORD-ABC123
+  main
+    heading ORD-ABC123
+    text "payment: paid · fulfillment: unfulfilled · lifecycle: in_progress"
+    list
+      item "Classic Tee x1 — R299.00"
+    text "Ship to 1 Main St, Cape Town"

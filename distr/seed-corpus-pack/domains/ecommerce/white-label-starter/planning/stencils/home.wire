@@ -1,0 +1,24 @@
+screen Homepage device=desktop route=/
+  header
+    row
+      text "WL Logo"
+      nav
+        link Catalogue route=/shop
+        link About route=/about
+        link Contact route=/contact
+        link Cart route=/cart
+  main
+    section
+      heading "White-Label Shop"
+      text "Quality goods, branded for you."
+      row
+        button "Shop catalogue" primary route=/shop
+        button "Learn more" route=/about
+    section
+      grid columns=3
+        card "Tokenized brand"
+          text "CSS vars + Unfold COLORS"
+        card "Commerce core"
+          text "Cart, checkout, orders"
+        card "Admin included"
+          text "django-unfold domain models"

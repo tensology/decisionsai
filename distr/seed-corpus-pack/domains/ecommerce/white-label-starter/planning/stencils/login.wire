@@ -1,0 +1,9 @@
+screen Login device=desktop route=/login
+  main
+    heading "Sign in"
+    form Login
+      input Email type=email required
+      input Password type=password required
+      button "Sign in" primary
+      link "Create account" route=/register
+      link "Forgot password?" route=/forgot-password

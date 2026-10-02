@@ -1,0 +1,5 @@
+screen Privacy device=desktop route=/privacy
+  main
+    heading "Privacy Policy"
+    text "We store account email, order history, and shipping addresses."
+    text "Demo data stays on local SQLite."

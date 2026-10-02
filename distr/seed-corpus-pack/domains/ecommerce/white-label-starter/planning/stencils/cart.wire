@@ -1,0 +1,8 @@
+screen Cart device=desktop route=/cart
+  main
+    heading "Your cart"
+    list
+      item "Classic Tee x1 — R299.00"
+      item "Canvas Tote x1 — R449.00"
+    text "Total R748.00"
+    button Checkout primary route=/checkout

@@ -1,0 +1,12 @@
+screen Contact device=desktop route=/contact
+  header
+    nav
+      link Home route=/
+  main
+    heading Contact
+    text "Email hello@example.com"
+    form "Send a message"
+      input "Your name" required
+      input Email type=email required
+      textarea Message rows=4
+      button Send primary

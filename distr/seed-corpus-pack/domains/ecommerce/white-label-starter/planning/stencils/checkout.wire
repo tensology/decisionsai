@@ -1,0 +1,15 @@
+screen Checkout device=desktop route=/checkout
+  main
+    heading Checkout
+    text "Steps: address, payment, confirm"
+    form Address
+      input Name required
+      input "Address line 1" required
+      input City required
+      input "Postal code" required
+      button Continue primary
+    section
+      heading Payment
+      text "FakeGateway — no real charges"
+      button "Pay successfully" primary
+      button "Simulate failure"

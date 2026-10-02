@@ -1,0 +1,6 @@
+screen Terms device=desktop route=/terms
+  main
+    heading "Terms of Service"
+    text "Placeholder terms for local demos."
+    text "Orders are binding once placed."
+    text "No real payment credentials in this starter."

@@ -1,0 +1,18 @@
+screen Catalogue device=desktop route=/shop
+  header
+    nav
+      link Home route=/
+      link Cart route=/cart
+  main
+    heading Catalogue
+    text "Curated essentials for your white-label demo."
+    grid columns=3
+      card "Classic Tee"
+        text "From R299.00"
+        button "View" route=/shop/classic-tee
+      card "Canvas Tote"
+        text "From R449.00"
+        button "View" route=/shop/canvas-tote
+      card "Water Bottle"
+        text "From R359.00"
+        button "View" route=/shop/water-bottle

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+for f in .backend.pid .frontend.pid; do
+  if [[ -f "$ROOT/bin/$f" ]]; then
+    kill "$(cat "$ROOT/bin/$f")" 2>/dev/null || true
+    rm -f "$ROOT/bin/$f"
+  fi
+done
+pkill -f "manage.py runserver 8000" 2>/dev/null || true
+pkill -f "vite.*5173" 2>/dev/null || true
+echo "Stopped."

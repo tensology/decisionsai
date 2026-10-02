@@ -1,0 +1,10 @@
+screen "Product detail" device=desktop route=/shop/classic-tee
+  main
+    row
+      card "Image"
+        text "Product visual"
+      stack
+        heading "Classic Tee"
+        text "Soft cotton tee."
+        text "R299.00"
+        button "Add to cart" primary

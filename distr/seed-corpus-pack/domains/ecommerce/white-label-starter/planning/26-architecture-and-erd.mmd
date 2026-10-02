@@ -1,0 +1,42 @@
+erDiagram
+  User ||--o| Customer : has
+  Customer ||--o{ Address : has
+  Customer ||--o{ Cart : owns
+  Customer ||--o{ Order : places
+  Customer ||--o{ PaymentMethod : stores
+  Category ||--o{ Product : contains
+  Product ||--|{ Variant : has
+  Cart ||--o{ LineItem : contains
+  Variant ||--o{ LineItem : referenced
+  Order ||--|{ OrderItem : freezes
+  Variant ||--o{ OrderItem : referenced
+  Order ||--o{ PaymentIntent : pays
+  Order ||--o{ Fulfillment : ships
+  Fulfillment ||--o{ Shipment : tracks
+  LegalPage
+  EmailLog
+
+  User {
+    string email UK
+    bool email_verified
+  }
+  Order {
+    string number UK
+    string payment_state
+    string fulfillment_state
+    string lifecycle_state
+    int total_minor
+    string currency
+    string idempotency_key UK
+  }
+  Variant {
+    string sku UK
+    int list_price_minor
+    int sale_price_minor
+    string currency
+  }
+  PaymentIntent {
+    string gateway_ref
+    string status
+    int amount_minor
+  }

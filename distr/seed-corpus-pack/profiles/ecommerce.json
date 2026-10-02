@@ -36,10 +36,11 @@
     "copied-skills/decisionsai/frontend-design/SKILL.md"
   ],
   "scaffold_hints": {
-    "primary_structure": "domains/ecommerce/merrypak",
+    "primary_structure": "domains/ecommerce/white-label-starter",
     "admin_ui": "vendor/open-dashboard",
     "domain_knowledge": "vendor/ecommerce-foundations",
-    "vision_eval": "external/Vision2Web"
+    "vision_eval": "external/Vision2Web",
+    "reference_structure": "domains/ecommerce/merrypak"
   },
   "harness": [
     "ecc",

@@ -1,0 +1,8 @@
+screen Register device=desktop route=/register
+  main
+    heading "Create account"
+    form Register
+      input Name required
+      input Email type=email required
+      input Password type=password required
+      button Register primary
