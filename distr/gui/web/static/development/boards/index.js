@@ -606,6 +606,7 @@ export function createBoards({ context, actions, el }) {
         const ticket = ticketKey ? kanbanTicketByKey(ticketKey) : null;
         const creating = !ticket;
         const externalExisting = board.provider !== 'decisions' && !creating;
+        const externalEditable = externalExisting && (board.provider === 'jira' || board.provider === 'trello');
         const lanes = kanbanLanes();
         const form = el('kanban-ticket-form');
         form.dataset.ticketKey = ticket?.key || '';
@@ -626,12 +627,13 @@ export function createBoards({ context, actions, el }) {
         el('kanban-ticket-lane').value = String(
             ticket?.lane_id || laneId || kanbanIntakeLane(lanes)?.id || lanes[0]?.id || lanes[0]?.key || lanes[0]?.name || ''
         );
-        ['kanban-ticket-title', 'kanban-ticket-description', 'kanban-ticket-priority', 'kanban-ticket-lane'].forEach((id) => {
-            el(id).disabled = externalExisting;
+        ['kanban-ticket-title', 'kanban-ticket-description', 'kanban-ticket-priority'].forEach((id) => {
+            el(id).disabled = externalExisting && !externalEditable;
         });
+        el('kanban-ticket-lane').disabled = externalExisting;
         el('kanban-ticket-complexity').disabled = externalExisting;
         el('kanban-ticket-complexity-field').classList.toggle('hidden', board.provider !== 'decisions');
-        el('kanban-ticket-save').classList.toggle('hidden', externalExisting);
+        el('kanban-ticket-save').classList.toggle('hidden', externalExisting && !externalEditable);
         el('kanban-ticket-delete').classList.toggle('hidden', creating || board.provider !== 'decisions');
         const createThreadButton = el('kanban-ticket-create-thread');
         createThreadButton.classList.toggle('hidden', creating);
@@ -654,7 +656,7 @@ export function createBoards({ context, actions, el }) {
         const detail = context.boardDetails[board.key] || {};
         el('kanban-ticket-run-agent').classList.toggle('hidden', !localExisting || !(raw.linked_project_id || detail.default_project_id || board.project_id));
         el('kanban-ticket-dialog').showModal();
-        if (!externalExisting) window.setTimeout(() => el('kanban-ticket-title').focus(), 0);
+        if (!externalExisting || externalEditable) window.setTimeout(() => el('kanban-ticket-title').focus(), 0);
     }
 
     async function saveKanbanTicket(event) {
@@ -679,10 +681,21 @@ export function createBoards({ context, actions, el }) {
             if (board.provider === 'decisions') {
                 const ticketId = Number(el('kanban-ticket-id').value || 0);
                 await actions.api(creating ? '/tickets/tickets' : `/tickets/tickets/${ticketId}`, { method: creating ? 'POST' : 'PUT', body });
-            } else {
+            } else if (creating) {
                 await actions.api(
                     `/tickets/external-boards/${encodeURIComponent(board.provider)}/${encodeURIComponent(board.external_id || board.id)}/create-ticket`,
                     { method: 'POST', body }
+                );
+            } else {
+                await actions.api(
+                    `/tickets/external-boards/${encodeURIComponent(board.provider)}/${encodeURIComponent(board.external_id || board.id)}/update-ticket`,
+                    {
+                        method: 'PUT',
+                        body: {
+                            ...body,
+                            ticket_id: String(el('kanban-ticket-id').value || '')
+                        }
+                    }
                 );
             }
             el('kanban-ticket-dialog').close();

@@ -1486,7 +1486,33 @@ def _trello_with_time_block(description: str, time_estimate: Optional[str], time
     return f"{base}\n\n{block}" if base else block
 
 
-def _sync_local_ticket_to_external(source: Optional[str], external_id: Optional[str], title: str, description: str, time_estimate: Optional[str], time_spent: Optional[str]) -> None:
+def _jira_priority_name(priority: Optional[str]) -> Optional[str]:
+    """Map Decisions priority values to Jira priority names."""
+    if priority is None:
+        return None
+    raw = str(priority or "").strip()
+    if not raw:
+        return None
+    pri_map = {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "critical": "Highest",
+        "highest": "Highest",
+        "lowest": "Lowest",
+    }
+    return pri_map.get(raw.lower(), raw)
+
+
+def _sync_local_ticket_to_external(
+    source: Optional[str],
+    external_id: Optional[str],
+    title: str,
+    description: str,
+    time_estimate: Optional[str],
+    time_spent: Optional[str],
+    priority: Optional[str] = None,
+) -> None:
     """Push local ticket updates to external providers when the ticket is linked."""
     src = (source or "").lower().strip()
     ext_id = (external_id or "").strip()
@@ -1539,6 +1565,9 @@ def _sync_local_ticket_to_external(source: Optional[str], external_id: Optional[
                 "summary": title or "",
                 "description": description or "",
             }
+            jira_priority = _jira_priority_name(priority)
+            if jira_priority:
+                fields["priority"] = {"name": jira_priority}
             timetracking = {}
             if (time_estimate or "").strip():
                 timetracking["originalEstimate"] = (time_estimate or "").strip()
@@ -1884,6 +1913,15 @@ class ExternalTicketCreate(BaseModel):
     description: Optional[str] = ""
     lane_id: Optional[str] = None
     priority: Optional[str] = "medium"
+
+
+class ExternalTicketUpdate(BaseModel):
+    """Update fields on an existing Trello card or Jira issue."""
+
+    ticket_id: str = Field(..., description="Trello card id or Jira issue key")
+    title: str
+    description: Optional[str] = ""
+    priority: Optional[str] = None
 
 
 class ExternalBoardMoveTicket(BaseModel):
@@ -5070,6 +5108,42 @@ def create_routes():
             raise HTTPException(404, "No valid Jira account found")
 
         raise HTTPException(400, "Unsupported provider")
+
+    @router.put("/tickets/external-boards/{provider}/{board_id}/update-ticket")
+    async def update_external_ticket(provider: str, board_id: str, payload: ExternalTicketUpdate):
+        """Update title/description/priority on an existing Trello card or Jira issue."""
+        if provider not in ("trello", "jira"):
+            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+        ticket_id = (payload.ticket_id or "").strip()
+        title = (payload.title or "").strip()
+        if not ticket_id:
+            raise HTTPException(400, "ticket_id is required")
+        if not title:
+            raise HTTPException(400, "title is required")
+        try:
+            _sync_local_ticket_to_external(
+                provider,
+                ticket_id,
+                title,
+                payload.description or "",
+                None,
+                None,
+                priority=payload.priority,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(502, f"{provider.title()} update failed: {exc}") from exc
+        _invalidate_external_board_detail_cache(provider, board_id)
+        return JSONResponse({
+            "success": True,
+            "ticket": {
+                "id": ticket_id,
+                "title": title,
+                "description": payload.description or "",
+                "priority": payload.priority,
+            },
+        })
 
     @router.put("/tickets/external-boards/{provider}/{board_id}/move-ticket")
     async def move_external_board_ticket(provider: str, board_id: str, payload: ExternalBoardMoveTicket):
