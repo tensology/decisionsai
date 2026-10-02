@@ -26,31 +26,31 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ### Fish Audio is in the voice stack
 
-Fish Audio is a first-class TTS provider next to ElevenLabs: API key under Third Party Vendors, library picker in Voice Setup, default `s2.1-pro-free`, and speech streamed over Fish's live WebSocket as PCM so the agent can start talking before the full clip exists. Speech-to-speech stays on OpenAI Realtime. Custom clones still go through the studio upload path when you actually need a new voice.
+Fish Audio sits next to ElevenLabs as a real spoken-reply provider. Paste an API key under Third Party Vendors, pick Fish Audio in Voice Setup, and the voice list loads from the library for that key. The agent can start talking sooner instead of waiting for a full clip to finish downloading. Live back-and-forth speech still uses OpenAI Realtime. Custom voice clones stay on the studio upload path when you actually need a new voice.
 
 ### Conversational turn-taking cleaned up
 
-Continuous conversation echo handling moved off the homemade NLMS filter onto WebRTC AEC3 (`pywebrtc-audio`) with a calibrated speaker→mic reference delay. STT provider adapters and the local audio transport were thinned so turn-taking, interruption cleanup, and playback stay on one clearer path. Push-to-talk remains independent.
+Long voice chats interrupt and take turns more cleanly. Echo from the speaker into the mic is handled with a proper acoustic echo canceller instead of the homemade filter, and the speech pieces share one clearer path so start, stop, and playback feel like one conversation. Push-to-talk is unchanged.
 
-### MemPalace memory is default-on, with a shipped seed corpus
+### Memory that ships with Decisions
 
-The consolidated memory backend flag `mempalace_memory_backend` defaults **on**. When it is on, Decisions dual-writes useful memory into a Decisions-owned palace at `~/.decisions/mempalace/palace` and prefers MemPalace on read, with legacy stores kept as fallback. A curated pack lives at `distr/seed-corpus-pack` (planning conventions, page stencils, entity/domain notes, harness ops, agent heuristics). The macOS app build already rsyncs all of `distr/`, so the pack ships in the install. On first run, when `chromadb` / `mempalace` are available, Decisions mines the pack in the background into wing `seed_corpus_pack`. Soft-fails with a setup message if those optional deps are missing—the GUI still starts. Disable with Settings or `DECISIONS_MEMPALACE_MEMORY_BACKEND=0`.
+A fresh install now comes with a built-in product memory pack — planning habits, page layouts, domain notes, and how the agent should ask questions versus just go. Memory is on by default. The first time you open Decisions, it quietly loads that pack into local memory in the background so Development can use it when you ask for something like an e-commerce site. If the optional memory pieces are not installed yet, Decisions still starts and tells you what to set up. You can turn this off in Settings if you want.
 
 ### Development planning and harness honesty
 
-Planning, incoming, boards, terminals, workflows, reports, and threads keep sharing one project home. The CLI harness change counter now fingerprints untracked files by content, so mid-run edits to files that were already `??` when the turn started still show up instead of looking like a noop. IDE thread locking, development harness projection, MCP harness wiring, and related studio/runtime contracts received fixes so active execution looks like what actually happened.
+Planning, incoming work, boards, terminals, workflows, reports, and threads keep sharing one project home. When the coding harness edits files mid-run, those changes show up honestly even if the files were brand new when the turn started — so a run no longer looks idle when it actually wrote something. A handful of studio and runtime fixes keep the on-screen story lined up with what really ran.
 
 ### WhatsApp intake and Telegram judgment stay gated
 
-WhatsApp-sourced work can stage behind a Telegram yes / no / add approval before a ticket is created (`whatsapp_intake_approval`). QA → reply drafting still waits for you; the agent does not send merely because a worker finished. Per-skill judgment memory records looks-good / redo / terrible events and may draft a **propose-only** skill change for you to approve—never auto-rewrites a shipped skill.
+WhatsApp-sourced work can wait behind a Telegram yes / no / add step before a ticket is created. Drafting a reply after QA still waits for you; the agent does not send just because a worker finished. When you mark work as looks good, redo, or terrible, Decisions can remember that per skill and may draft a skill change for you to approve — it never rewrites a shipped skill on its own.
 
 ### Desktop does not auto-upload to Telegram
 
-Sending a file to Telegram from a desktop turn now requires a Telegram-sourced request or an explicit ask. A prior tool result that happens to include a file path is no longer enough to trigger an upload.
+Sending a file to Telegram from the desktop now needs a Telegram-related request or an explicit ask. A leftover file path from an earlier step is not enough to trigger an upload.
 
 ### Back-end cleanups across the board
 
-Work intake, WhatsApp lifecycle and reconnect backoff, Telegram message/mixin paths, workflow briefing and spawn/dispatch, steppers, learnings keeper, MCP client/config, third-party keys (including optional Jev), cost-ledger recording hooks, security on settings routes, and a long list of matching tests were cleaned up or fixed so the same Development story holds from voice, Chat, Telegram, and WhatsApp.
+Intake, WhatsApp and Telegram reliability, workflow briefing and dispatch, learnings, settings security, and a long list of matching tests were cleaned up or fixed so the same Development story holds from voice, Chat, Telegram, and WhatsApp.
 
 ---
 
