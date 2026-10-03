@@ -32,6 +32,10 @@ Fish Audio sits next to ElevenLabs as a real spoken-reply provider. Paste an API
 
 Long voice chats interrupt and take turns more cleanly. Echo from the speaker into the mic is handled with a proper acoustic echo canceller instead of the homemade filter, and the speech pieces share one clearer path so start, stop, and playback feel like one conversation. Push-to-talk is unchanged.
 
+### Hayley now reacts to what the agent is doing
+
+Hayley has a complete animated behavior set for idle, listening, dictation, recording, running actions, thinking, attention, file drops, copied snippets, and spoken replies. State changes reset cleanly, talking follows audible TTS without reopening a hidden avatar, and shortcut-triggered animations are preloaded to respond faster. The Skins editor now previews chroma-keyed video with transparent backgrounds and lists the real WebM behavior animations instead of obsolete still-image choices.
+
 ### Memory that ships with Decisions
 
 A fresh install now comes with a built-in product memory pack — planning habits, page layouts, domain notes, and how the agent should ask questions versus just go. Memory is on by default. The first time you open Decisions, it quietly loads that pack into local memory in the background so Development can use it when you ask for something like an e-commerce site. If the optional memory pieces are not installed yet, Decisions still starts and tells you what to set up. You can turn this off in Settings if you want.

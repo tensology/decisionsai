@@ -4,7 +4,7 @@ import { createThreadSession } from './threads/session.js';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20260917-plan-scaffold';
+import { createPlanning } from './planning/index.js?v=20261003-page-stencils-3';
 
 import { createSidebar } from './sidebar/index.js?v=20260916-delete-project';
 

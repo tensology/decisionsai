@@ -360,6 +360,24 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
     }
 
 
+
+def _workspace_sitemap(db, row) -> dict[str, Any] | None:
+    """Attach the HTML sitemap cache. Does not rewrite plan items or wireframes."""
+    if not getattr(row, "project_id", None):
+        return None
+    project = db.get(Project, int(row.project_id))
+    if project is None or not project.folder_location:
+        return None
+    root = Path(project.folder_location).expanduser()
+    if not root.is_dir():
+        return None
+    try:
+        from distr.core.planning.project_scan import ensure_sitemap_cache
+        return ensure_sitemap_cache(root)
+    except OSError:
+        return None
+
+
 def get_workspace(workspace_id: int) -> dict[str, Any] | None:
     with get_session() as db:
         row = db.get(PlanWorkspace, int(workspace_id))
@@ -374,6 +392,7 @@ def get_workspace(workspace_id: int) -> dict[str, Any] | None:
             if original and original.source == "scaffold" and item["revision_count"] == 1:
                 item["is_starter"] = True
         payload["summary"] = _workspace_summary(items)
+        payload["sitemap"] = _workspace_sitemap(db, row)
     return payload
 
 

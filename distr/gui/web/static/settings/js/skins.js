@@ -12,7 +12,7 @@ var _skinsBusyDepth = 0;
 
 var EVENT_HOOKS = [
     "idle", "hands_free_listening", "ptt_active", "dictation",
-    "recording_action", "file_drop_success", "tts_response",
+    "ticket_dictation", "recording_action", "file_drop_success", "tts_response", "talking",
     "running_action", "running_step_runner", "snippet_copied",
     "thinking", "needs_attention"
 ];
@@ -164,6 +164,108 @@ function _applyPingPongToVideo(vid, isPingPong) {
     // preview we always use smooth forward looping.
     vid.loop = true;
     vid.playbackRate = 1;
+}
+
+function _disposeSkinVideoPreview(element) {
+    if (!element) return;
+    var video = element._skinPreviewVideo;
+    if (!video) return;
+    if (video._skinFrameId && video.cancelVideoFrameCallback) {
+        video.cancelVideoFrameCallback(video._skinFrameId);
+    }
+    if (video._skinRafId) cancelAnimationFrame(video._skinRafId);
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+}
+
+function _createSkinVideoPreview(url, chromaKey, chromaThreshold, cssText) {
+    var video = document.createElement('video');
+    video.src = url;
+    video.autoplay = true;
+    video.muted = true;
+    video.loop = true;
+    video.setAttribute('playsinline', '');
+
+    if (!Array.isArray(chromaKey) || chromaKey.length !== 3) {
+        video.style.cssText = cssText;
+        return video;
+    }
+
+    var wrapper = document.createElement('div');
+    wrapper.dataset.skinVideoPreview = 'true';
+    wrapper.style.cssText = cssText + '; position:relative; overflow:hidden;';
+
+    var canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    canvas.style.cssText = 'display:block; width:100%; height:100%;';
+    wrapper.appendChild(canvas);
+
+    // Keep the source video in the document so Safari continues decoding it,
+    // but never expose its green source frame to the user.
+    video.style.cssText = 'position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;';
+    wrapper.appendChild(video);
+    wrapper._skinPreviewVideo = video;
+
+    var context = canvas.getContext('2d', { willReadFrequently: true });
+    var threshold = Math.max(0, Number(chromaThreshold) || 30);
+    var softEdge = Math.max(1, threshold * 0.6);
+    var thresholdSquared = threshold * threshold;
+    var softLimit = threshold + softEdge;
+    var softLimitSquared = softLimit * softLimit;
+    var keyR = Number(chromaKey[0]) || 0;
+    var keyG = Number(chromaKey[1]) || 0;
+    var keyB = Number(chromaKey[2]) || 0;
+    var sampledDecodedKey = false;
+
+    function drawFrame() {
+        if (!wrapper.isConnected) return;
+        if (video.readyState >= 2) {
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            var sourceWidth = video.videoWidth || canvas.width;
+            var sourceHeight = video.videoHeight || canvas.height;
+            var scale = Math.min(canvas.width / sourceWidth, canvas.height / sourceHeight);
+            var drawWidth = sourceWidth * scale;
+            var drawHeight = sourceHeight * scale;
+            var drawX = (canvas.width - drawWidth) / 2;
+            var drawY = (canvas.height - drawHeight) / 2;
+            context.drawImage(video, drawX, drawY, drawWidth, drawHeight);
+            var frame = context.getImageData(0, 0, canvas.width, canvas.height);
+            var pixels = frame.data;
+            if (!sampledDecodedKey) {
+                var lastPixel = (canvas.width * canvas.height - 1) * 4;
+                var bottomLeft = canvas.width * (canvas.height - 1) * 4;
+                var topRight = (canvas.width - 1) * 4;
+                keyR = Math.round((pixels[0] + pixels[topRight] + pixels[bottomLeft] + pixels[lastPixel]) / 4);
+                keyG = Math.round((pixels[1] + pixels[topRight + 1] + pixels[bottomLeft + 1] + pixels[lastPixel + 1]) / 4);
+                keyB = Math.round((pixels[2] + pixels[topRight + 2] + pixels[bottomLeft + 2] + pixels[lastPixel + 2]) / 4);
+                sampledDecodedKey = true;
+            }
+            for (var i = 0; i < pixels.length; i += 4) {
+                var dr = pixels[i] - keyR;
+                var dg = pixels[i + 1] - keyG;
+                var db = pixels[i + 2] - keyB;
+                var distanceSquared = dr * dr + dg * dg + db * db;
+                if (distanceSquared <= thresholdSquared) {
+                    pixels[i + 3] = 0;
+                } else if (distanceSquared <= softLimitSquared) {
+                    var distance = Math.sqrt(distanceSquared);
+                    pixels[i + 3] = Math.round(255 * (distance - threshold) / softEdge);
+                }
+            }
+            context.putImageData(frame, 0, 0);
+        }
+        if (video.requestVideoFrameCallback) {
+            video._skinFrameId = video.requestVideoFrameCallback(drawFrame);
+        } else {
+            video._skinRafId = requestAnimationFrame(drawFrame);
+        }
+    }
+
+    video.addEventListener('loadeddata', drawFrame, { once: true });
+    video.play().catch(function() {});
+    return wrapper;
 }
 
 async function loadSkinsSettings() {
@@ -341,6 +443,7 @@ async function _loadSkinByName(folderName, skinScale, showToast) {
 function renderSkinsGrid() {
     var grid = document.getElementById('skins_grid');
     if (!grid) return;
+    Array.prototype.forEach.call(grid.querySelectorAll('[data-skin-video-preview]'), _disposeSkinVideoPreview);
     grid.innerHTML = '';
     _skinsList.forEach(function(skin) {
         var sel = skin.folder_name === _selectedSkin;
@@ -360,24 +463,22 @@ function renderSkinsGrid() {
         if (skin.type === 'oracle') {
             // Oracle: round preview with cover
             if (isVideo) {
-                previewEl = document.createElement('video');
-                previewEl.src = previewUrl;
-                previewEl.autoplay = true; previewEl.muted = true;
-                previewEl.setAttribute('playsinline', '');
-                previewEl.loop = true; // Always loop in grid cards
-                _applyPingPongToVideo(previewEl, skin.idle_playback === 'pingpong');
+                previewEl = _createSkinVideoPreview(
+                    previewUrl, skin.chroma_key, skin.chroma_threshold,
+                    'width:155%; height:155%; object-fit:cover; border-radius:50%'
+                );
+                _applyPingPongToVideo(previewEl._skinPreviewVideo || previewEl, skin.idle_playback === 'pingpong');
             } else {
                 previewEl = document.createElement('img');
                 previewEl.src = previewUrl;
                 previewEl.onerror = function() { this.style.display = 'none'; };
             }
-            previewEl.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
+            if (!isVideo) previewEl.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
         } else if (isVideo) {
-            previewEl = document.createElement('video');
-            previewEl.src = previewUrl;
-            previewEl.autoplay = true; previewEl.muted = true; previewEl.loop = true;
-            previewEl.setAttribute('playsinline', '');
-            previewEl.style.cssText = 'width:100%; aspect-ratio:1; object-fit:contain;';
+            previewEl = _createSkinVideoPreview(
+                previewUrl, skin.chroma_key, skin.chroma_threshold,
+                'width:100%; height:100%; aspect-ratio:1; object-fit:contain'
+            );
         } else {
             // Static image (png, jpg, webp)
             previewEl = document.createElement('img');
@@ -648,7 +749,13 @@ function previewOracleGif(filename) {
     // Remove any existing preview element and enforce black background.
     var oldImg = container.querySelector('img');
     var oldVid = container.querySelector('video');
+    var oldKeyedPreview = container.querySelector('[data-skin-video-preview]');
     if (oldImg) oldImg.remove();
+    if (oldKeyedPreview) {
+        _disposeSkinVideoPreview(oldKeyedPreview);
+        oldKeyedPreview.remove();
+        oldVid = null;
+    }
     if (oldVid) {
         if (oldVid._ppCleanup) oldVid._ppCleanup();
         if (oldVid._ppEndHandler) oldVid.removeEventListener('ended', oldVid._ppEndHandler);
@@ -671,15 +778,13 @@ function previewOracleGif(filename) {
     var isPingPong = (_getOraclePlaybackMode() === 'pingpong');
 
     if (ext === 'webm') {
-        var vid = document.createElement('video');
-        vid.src = url;
-        vid.autoplay = true; vid.muted = true;
-        vid.setAttribute('playsinline', '');
-        vid.loop = true; // Always loop in preview
-        vid.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%; background:#000000; background-color:#000000;';
-        _applyPingPongToVideo(vid, isPingPong);
-        container.appendChild(vid);
-        vid.play().catch(function(){});
+        var rendering = (_editingSkinConfig && _editingSkinConfig.rendering) || {};
+        var keyedPreview = _createSkinVideoPreview(
+            url, rendering.chroma_key, rendering.chroma_threshold,
+            'width:155%; height:155%; object-fit:cover; border-radius:50%'
+        );
+        _applyPingPongToVideo(keyedPreview._skinPreviewVideo || keyedPreview, isPingPong);
+        container.appendChild(keyedPreview);
     } else {
         var img = document.createElement('img');
         img.src = url;
@@ -753,6 +858,9 @@ function renderAvatarHooksTable() {
     if (!tbody || !_editingSkinConfig) return;
     tbody.innerHTML = '';
     var events = _editingSkinConfig.events || {};
+    var webmFiles = _skinFiles.filter(function(filename) {
+        return /\.webm$/i.test(filename);
+    });
     EVENT_HOOKS.forEach(function(hook) {
         var resp = events[hook] || {};
         var tr = document.createElement('tr');
@@ -770,7 +878,13 @@ function renderAvatarHooksTable() {
         var td2 = document.createElement('td'); td2.className = 'py-2 px-2';
         var as = document.createElement('select'); as.className = 'w-full bg-[#0d1117] border border-[#565869] rounded px-2 py-1 text-white text-xs';
         as.dataset.hook = hook; as.dataset.field = 'animation';
-        _skinFiles.forEach(function(f) {
+        var animationFiles = webmFiles.length ? webmFiles.slice() : _skinFiles.slice();
+        if (resp.animation && animationFiles.indexOf(resp.animation) < 0) {
+            // Preserve a legacy skin's current static mapping without offering
+            // every obsolete still as a choice once animated WebMs exist.
+            animationFiles.unshift(resp.animation);
+        }
+        animationFiles.forEach(function(f) {
             var o = document.createElement('option'); o.value = f;
             o.textContent = f.replace(/\.[^.]+$/, '');
             if (f === resp.animation) o.selected = true; as.appendChild(o);
@@ -806,13 +920,29 @@ function previewAnimation(filename) {
     var container = document.getElementById('skin_preview_container');
     var oldImg = container ? container.querySelector('img') : null;
     if (oldImg) oldImg.remove();
+    var oldKeyedPreview = container ? container.querySelector('[data-skin-video-preview]') : null;
+    if (oldKeyedPreview) {
+        _disposeSkinVideoPreview(oldKeyedPreview);
+        oldKeyedPreview.remove();
+    }
     var url = '/api/skins/' + encodeURIComponent(_editingSkin) + '/preview/' + encodeURIComponent(filename);
     var ext = filename.split('.').pop().toLowerCase();
     var videoExts = ['webm'];
     var imageExts = ['gif', 'webp', 'png', 'jpg', 'jpeg'];
     if (videoExts.indexOf(ext) >= 0) {
-        video.src = url; video.style.display = 'block'; ph.style.display = 'none';
-        video.play().catch(function() {});
+        var rendering = (_editingSkinConfig && _editingSkinConfig.rendering) || {};
+        if (Array.isArray(rendering.chroma_key) && rendering.chroma_key.length === 3) {
+            video.pause(); video.removeAttribute('src'); video.style.display = 'none';
+            var keyedPreview = _createSkinVideoPreview(
+                url, rendering.chroma_key, rendering.chroma_threshold,
+                'width:100%; height:100%; object-fit:contain'
+            );
+            container.appendChild(keyedPreview);
+        } else {
+            video.src = url; video.style.display = 'block';
+            video.play().catch(function() {});
+        }
+        ph.style.display = 'none';
     } else if (imageExts.indexOf(ext) >= 0) {
         video.style.display = 'none'; ph.style.display = 'none';
         var img = document.createElement('img'); img.src = url; img.className = 'w-full h-full object-contain';
@@ -829,7 +959,14 @@ function clearPreview() {
     if (p) p.style.display = 'block';
     if (f) f.textContent = '';
     var c = document.getElementById('skin_preview_container');
-    if (c) { var i = c.querySelector('img'); if (i) i.remove(); }
+    if (c) {
+        var i = c.querySelector('img'); if (i) i.remove();
+        var keyedPreview = c.querySelector('[data-skin-video-preview]');
+        if (keyedPreview) {
+            _disposeSkinVideoPreview(keyedPreview);
+            keyedPreview.remove();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -945,8 +1082,8 @@ var _csCreditsBalance = null;
 var CS_STEP_NAMES = ['', 'name', 'description', 'style', 'mode', 'confirm', 'progress'];
 var EVENT_HOOKS_DISPLAY = {
     idle: 'Idle', hands_free_listening: 'Listening', ptt_active: 'PTT Active',
-    dictation: 'Dictation', recording_action: 'Recording', file_drop_success: 'File Drop',
-    tts_response: 'TTS Response', running_action: 'Running Action', running_step_runner: 'Workflow',
+    dictation: 'Dictation', ticket_dictation: 'Ticket Dictation', recording_action: 'Recording', file_drop_success: 'File Drop',
+    tts_response: 'TTS Response', talking: 'Talking', running_action: 'Running Action', running_step_runner: 'Workflow',
     snippet_copied: 'Snippet Copied', thinking: 'Thinking', needs_attention: 'Needs Attention'
 };
 

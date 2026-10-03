@@ -170,7 +170,7 @@ def create_app() -> FastAPI:
                 "/board/", "/settings/static/", "/chat/static/", "/docs/static/",
                 "/tickets/static/", "/kanban/static/", "/automations/static/", "/actions/static/", "/workflows/static/",
                 "/skills/static/", "/projects/static/", "/oauth/static/",
-                "/static/shared/",
+                "/static/shared/", "/static/development/",
             ]):
                 response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
                 response.headers["Pragma"] = "no-cache"

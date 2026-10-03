@@ -7,3 +7,4 @@ Decision rules that sit **above** code generation: when to ask, when to ship, wh
 | `VAGUENESS-DIAL.md` | Question budget from request sharpness |
 | `GET-SHIT-DONE.md` | Infer vs escalate heuristics |
 | `DECISION-HEURISTICS.md` | Combined quick-reference card |
+| `PAUL-PLANNING-WORKFLOW.md` | Paul's Plan-mode dictation order & hub layers |

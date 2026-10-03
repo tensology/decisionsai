@@ -9,14 +9,18 @@
     "image_scale": 1,
     "image_offset_x": 0,
     "image_offset_y": 0,
-    "chroma_key": null,
+    "chroma_key": [
+      0,
+      255,
+      0
+    ],
     "chroma_threshold": 35,
     "unfocused_opacity_enabled": false,
     "unfocused_opacity": 0.5
   },
   "events": {
     "idle": {
-      "animation": "done.webp",
+      "animation": "idle.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -31,7 +35,7 @@
       "playback": "loop"
     },
     "hands_free_listening": {
-      "animation": "thinking.webp",
+      "animation": "headphones-listening.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -46,7 +50,7 @@
       "playback": "loop"
     },
     "ptt_active": {
-      "animation": "processing.webp",
+      "animation": "ptt-active.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -61,7 +65,22 @@
       "playback": "loop"
     },
     "dictation": {
-      "animation": "music.webp",
+      "animation": "dictation.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "ticket_dictation": {
+      "animation": "ticket-dictation.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -76,7 +95,7 @@
       "playback": "loop"
     },
     "recording_action": {
-      "animation": "music.webp",
+      "animation": "recording-action.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -91,7 +110,22 @@
       "playback": "loop"
     },
     "file_drop_success": {
-      "animation": "baloon.webp",
+      "animation": "file-drop-success.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "talking": {
+      "animation": "talking.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -106,9 +140,9 @@
       "playback": "loop"
     },
     "tts_response": {
-      "animation": "thinking.webp",
+      "animation": "tts-response.webm",
       "show_player": false,
-      "show_chat_bubble": true,
+      "show_chat_bubble": false,
       "glow": false,
       "glow_color": [
         0,
@@ -121,7 +155,7 @@
       "playback": "loop"
     },
     "running_action": {
-      "animation": "baloon.webp",
+      "animation": "running-action.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -136,7 +170,7 @@
       "playback": "loop"
     },
     "running_step_runner": {
-      "animation": "baloon.webp",
+      "animation": "running-step-runner.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -151,7 +185,7 @@
       "playback": "loop"
     },
     "snippet_copied": {
-      "animation": "idle.webp",
+      "animation": "snippet-copied.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -166,7 +200,7 @@
       "playback": "loop"
     },
     "thinking": {
-      "animation": "thinking.webp",
+      "animation": "thinking.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -181,7 +215,7 @@
       "playback": "loop"
     },
     "needs_attention": {
-      "animation": "idle.webp",
+      "animation": "needs-attention.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,

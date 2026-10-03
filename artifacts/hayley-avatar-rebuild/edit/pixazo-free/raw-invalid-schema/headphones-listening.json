@@ -1,0 +1,10 @@
+{
+  "request_id": "ltx-video_01a100d9-2ea7-7d8e-4206-f58c843c58c53",
+  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/headphones-listening.png",
+  "prompt": "Fixed camera. Preserve the exact illustrated Hayley character, joyful eyes, long platinum hair, dark over-ear headphones, hand gripping the ear cup, dark jacket, colors, linework, proportions, framing, and silhouette. Only gentle breathing, one happy blink, and an extremely small rhythmic listening movement. Keep the face, hand, fingers, ear cup, headphones, hair, clothing, and anatomy structurally stable. No zoom, pan, crop, shake, background, text, watermark, new object, new limb, facial drift, clothing drift, or prop drift. Return cleanly toward the starting pose.",
+  "model": "ltx-video",
+  "endpoint": "/ltx-video/v1/image-to-video",
+  "free_tier": true,
+  "status": "COMPLETED",
+  "media_bytes": 578555
+}

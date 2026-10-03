@@ -173,3 +173,23 @@ def test_avatar_tts_show_player_false(skin_name: str) -> None:
     """All avatar skins must have tts_response.show_player == False."""
     config = _load_skin(skin_name)
     assert config.events["tts_response"].show_player is False
+
+
+def test_hayley_runtime_states_use_their_matching_animations() -> None:
+    hayley = _load_skin("hayley")
+    expected = {
+        "idle": "idle.webm",
+        "hands_free_listening": "headphones-listening.webm",
+        "ptt_active": "ptt-active.webm",
+        "dictation": "dictation.webm",
+        "ticket_dictation": "ticket-dictation.webm",
+        "recording_action": "recording-action.webm",
+        "file_drop_success": "file-drop-success.webm",
+        "thinking": "thinking.webm",
+        "talking": "talking.webm",
+    }
+
+    assert {
+        hook: hayley.events[hook].animation
+        for hook in expected
+    } == expected

@@ -26,7 +26,10 @@ from distr.gui.web.routes.settings.skins import register_routes
 MINIMAL_SKIN_JSON = json.dumps({
     "type": "oracle",
     "name": "TestOracle",
-    "rendering": {"shape": "round", "border": True, "shadow": True, "glow_on_hold": True},
+    "rendering": {
+        "shape": "round", "border": True, "shadow": True, "glow_on_hold": True,
+        "chroma_key": [0, 255, 0], "chroma_threshold": 35,
+    },
     "events": {
         "idle": {
             "animation": "idle.webm",
@@ -93,6 +96,8 @@ class TestListSkins:
         assert data["skins"][0]["folder_name"] == "test-skin"
         assert data["skins"][0]["name"] == "TestOracle"
         assert data["skins"][0]["type"] == "oracle"
+        assert data["skins"][0]["chroma_key"] == [0, 255, 0]
+        assert data["skins"][0]["chroma_threshold"] == 35
 
     def test_empty_when_no_valid_skins(self, tmp_path):
         app = FastAPI()

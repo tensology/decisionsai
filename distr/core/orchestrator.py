@@ -1995,6 +1995,9 @@ def normalize_board_orchestrator_policy(raw: str | dict | None) -> dict[str, Any
     routing_mode = str(parsed.get("routing_mode") or "hybrid").strip().lower()
     if routing_mode not in {"hybrid", "policy", "llm"}:
         routing_mode = "hybrid"
+    whatsapp_intake = parsed.get("whatsapp_intake") or {}
+    if not isinstance(whatsapp_intake, dict):
+        whatsapp_intake = {}
     return {
         "complexity_routing": parsed.get("complexity_routing") or {},
         "routing_mode": routing_mode,
@@ -2002,6 +2005,9 @@ def normalize_board_orchestrator_policy(raw: str | dict | None) -> dict[str, Any
         "prefer_ide_above_complexity": str(parsed.get("prefer_ide_above_complexity") or "").strip().lower(),
         "harness_preferences": parsed.get("harness_preferences") or {},
         "promoted_hints": parsed.get("promoted_hints") or {},
+        # Paul intake surface: board_linked_quiet → announce+TG only when chat is
+        # linked to this board; see distr.core.kanban.whatsapp_intake_rules.
+        "whatsapp_intake": whatsapp_intake,
     }
 
 

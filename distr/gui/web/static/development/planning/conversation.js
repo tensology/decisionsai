@@ -1,16 +1,31 @@
-import { parseWireframe, renderWireframe } from './wireframe.js';
+import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js';
 import { createThreadsTranscript } from '../threads/transcript/index.js';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
-import { wireframeSitemap } from './sitemap.js';
+import { layoutConnectedSitemap } from './sitemap.js?v=20261003-page-stencils-3';
 import { planningProviderLabel } from './routes.js';
 
 const BASE = '/workflows/studio/plan-workspaces';
 const TABS = {
-    wireframes: { label: 'Wireframes', types: ['wireframe', 'flows'] },
-    erd: { label: 'ERD', types: ['erd', 'architecture', 'diagram'] },
-    requirements: { label: 'Requirements', types: ['brief', 'prd', 'frac', 'skills', 'file_structure', 'handover', 'decision', 'project_overview', 'discovery_proposal'] }
+    wireframes: { label: 'Pages', help: 'Page outlines, sitemap, and how screens fit together', types: ['wireframe', 'flows'] },
+    erd: { label: 'Data', help: 'Entities and relationships (ERD / architecture)', types: ['erd', 'architecture', 'diagram'] },
+    requirements: { label: 'Requirements', help: 'FRAC, brief, and acceptance criteria', types: ['brief', 'prd', 'frac', 'skills', 'file_structure', 'handover', 'decision', 'project_overview', 'discovery_proposal'] }
 };
+
+
+function wireScreenGroup(screen) {
+    const texts = [];
+    (function walk(node) {
+        if (!node) return;
+        if (node.type === 'text' && node.label) texts.push(String(node.label));
+        (node.children || []).forEach(walk);
+    })(screen);
+    for (const value of texts) {
+        const match = value.match(/(?:^|·)\s*group\s+([A-Za-z][\w '&/-]{0,40})\s*$/);
+        if (match) return match[1].trim();
+    }
+    return '';
+}
 
 export function createPlanConversation(host, root) {
     const sessions = new Map();
@@ -99,8 +114,7 @@ export function createPlanConversation(host, root) {
             <header class="plan-detail-header">
                 <button type="button" id="plan-back" aria-label="Back to plans"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
                 <strong class="plan-project" title="${esc(session.workspace.board_name)}">${esc(session.workspace.board_name)}</strong>
-                <nav class="plan-tabs" aria-label="Plan artifacts">${Object.entries(TABS).map(([tab, info]) => `<button type="button" data-plan-tab="${tab}" aria-pressed="${session.tab === tab}">${info.label}</button>`).join('')}</nav>
-                <button type="button" id="plan-scan">Scan project</button>
+                <nav class="plan-tabs" aria-label="Plan sections">${Object.entries(TABS).map(([tab, info]) => `<button type="button" data-plan-tab="${tab}" title="${esc(info.help || info.label)}" aria-pressed="${session.tab === tab}">${info.label}</button>`).join('')}</nav>
                 <button type="button" id="plan-build">Build tasks</button>
             </header>
             <div class="plan-detail-body">
@@ -111,7 +125,7 @@ export function createPlanConversation(host, root) {
                         <div id="plan-operation-status" role="status" aria-live="polite"></div>
                         <form class="studio-composer plan-language" id="plan-language">
                             <div id="plan-draft-assets" class="composer-context"></div>
-                            <textarea id="plan-language-input" rows="2" placeholder="Describe what you want to build or change" aria-label="Message"></textarea>
+                            <textarea id="plan-language-input" rows="2" placeholder="Talk through the flow: screens first, then FRAC / data, then what to build…" aria-label="Message"></textarea>
                             <div class="composer-toolbar">
                                 <button type="button" class="add-button" id="plan-attach" aria-label="Attach files"><span aria-hidden="true">+</span></button>
                                 <input type="file" id="plan-attachment" hidden multiple>
@@ -137,7 +151,6 @@ export function createPlanConversation(host, root) {
         });
         root.querySelector('#plan-language').addEventListener('submit', (event) => { event.preventDefault(); send(session); });
         root.querySelector('#plan-back').onclick = () => host.openHome();
-        root.querySelector('#plan-scan').onclick = () => scan(session);
         root.querySelector('#plan-build').onclick = () => build(session);
         root.querySelector('#plan-provider').onchange = async (event) => {
             session.provider = event.target.value;
@@ -176,7 +189,6 @@ export function createPlanConversation(host, root) {
         if (!current(session)) return;
         const busy = blocked(session);
         root.querySelector('#plan-send').disabled = busy || !modelAvailable(session) || !session.draft.trim();
-        root.querySelector('#plan-scan').disabled = busy;
         root.querySelector('#plan-build').disabled = busy || !modelAvailable(session);
         root.querySelector('#plan-model').disabled = busy;
         root.querySelector('#plan-provider').disabled = busy;
@@ -214,9 +226,9 @@ export function createPlanConversation(host, root) {
             const item = (session.workspace.items || []).find((item) => String(item.id) === String(id));
             return item ? `<button type="button" data-message-artifact="${esc(item.id)}">${esc(item.title)}</button>` : '';
         }).join('')}${message.role === 'assistant' ? buildResultsHtml(message.build_result, esc) : ''}</article>`).join('') || (session.loaded
-            ? `<p class="plan-conversation-empty">${allStarters(session)
-                ? 'Plan sections are scaffolded in the project planning/ folder. Ask Plan to scan the project and fill brief, requirements, architecture, and flows.'
-                : 'No messages yet.'}</p>`
+            ? `<div class="plan-conversation-empty">${allStarters(session)
+                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Open a content page from the desktop sitemap</li><li>Tighten requirements, then ask for build tasks</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
+                : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Dictate the journey. Plan expects: screens &amp; sitemap → FRAC/requirements → data (ERD) → front-end &amp; back-end notes → build.</p>`}</div>`
             : '');
         log.querySelectorAll('[data-message-artifact]').forEach((button) => {
             button.onclick = () => {
@@ -267,6 +279,163 @@ export function createPlanConversation(host, root) {
         }
     }
 
+
+    function desktopPagesOverview() {
+        const detail = root.querySelector('.plan-detail');
+        const width = detail?.clientWidth || 0;
+        return (width || window.innerWidth) > 720;
+    }
+
+    function openConnectedPage(session, item, screen, preview) {
+        if (!screen) return;
+        session.sitemapPositions ||= {};
+        session.sitemapPositions[item.id] = { left: preview?.scrollLeft || 0, top: preview?.scrollTop || 0 };
+        session.sitemap = false;
+        session.pages[item.id] = screen.id;
+        session.pageLayers ||= {};
+        session.pageLayers[item.id] = 'preview';
+        renderArtifacts(session);
+    }
+
+    function appendPageStencil(target, screen) {
+        const stencil = document.createElement('span');
+        stencil.className = 'plan-sitemap-stencil';
+        stencil.setAttribute('aria-hidden', 'true');
+        const flatten = [];
+        const walk = (node, depth = 0) => {
+            for (const child of node?.children || []) {
+                if (flatten.length >= 12) return;
+                flatten.push({ type: child.type || 'text', depth });
+                if (depth < 1) walk(child, depth + 1);
+            }
+        };
+        walk(screen);
+        if (!flatten.length) flatten.push({ type: 'text', depth: 0 }, { type: 'text', depth: 0 }, { type: 'button', depth: 0 });
+        for (const block of flatten) {
+            const mark = document.createElement('i');
+            mark.dataset.type = block.type;
+            mark.dataset.depth = String(block.depth);
+            stencil.append(mark);
+        }
+        target.append(stencil);
+    }
+
+    function renderProjectSitemap(preview, session, screens, item) {
+        const model = session.workspace?.sitemap || {
+            coverage: 'missing',
+            note: 'Sitemap cache is not available in this session yet. It is built from HTML templates, views, and URL maps, not from React routes.',
+            nodes: [],
+            edges: [],
+            scaffolding: [],
+        };
+        const layout = layoutConnectedSitemap(model, screens);
+        const wrap = document.createElement('div');
+        wrap.className = 'plan-sitemap-wrap';
+        if (layout.scaffolding.length) {
+            const layer = document.createElement('div');
+            layer.className = 'plan-sitemap-scaffolding';
+            const title = document.createElement('span');
+            title.textContent = 'Scaffolding';
+            layer.append(title);
+            for (const entry of layout.scaffolding) {
+                const chip = document.createElement('span');
+                chip.className = 'plan-sitemap-scaffold';
+                chip.textContent = entry.label;
+                layer.append(chip);
+            }
+            wrap.append(layer);
+        }
+        if (!layout.nodes.length) {
+            const empty = document.createElement('div');
+            empty.className = 'plan-canvas-empty';
+            const strong = document.createElement('p');
+            const bold = document.createElement('strong');
+            bold.textContent = 'No HTML pages in the sitemap';
+            strong.append(bold);
+            const hint = document.createElement('p');
+            hint.className = 'plan-empty-hint';
+            hint.textContent = layout.note || 'No HTML templates, views, or URL maps were found. React routes are not used.';
+            empty.append(strong, hint);
+            wrap.append(empty);
+            preview.append(wrap);
+            return;
+        }
+        const canvas = document.createElement('div');
+        canvas.className = 'plan-sitemap';
+        canvas.setAttribute('role', 'group');
+        canvas.setAttribute('aria-label', 'Sitemap');
+        canvas.style.width = `${layout.width}px`;
+        canvas.style.height = `${layout.height}px`;
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', String(layout.width));
+        svg.setAttribute('height', String(layout.height));
+        svg.setAttribute('aria-hidden', 'true');
+        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+        marker.setAttribute('id', `plan-sitemap-arrow-${item.id}`);
+        marker.setAttribute('markerWidth', '8');
+        marker.setAttribute('markerHeight', '8');
+        marker.setAttribute('refX', '7');
+        marker.setAttribute('refY', '4');
+        marker.setAttribute('orient', 'auto');
+        const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        arrow.setAttribute('d', 'M0,0 L8,4 L0,8 z');
+        arrow.setAttribute('class', 'plan-sitemap-arrow');
+        marker.append(arrow);
+        defs.append(marker);
+        svg.append(defs);
+        for (const edge of layout.edges) {
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', String(edge.x1));
+            line.setAttribute('y1', String(edge.y1));
+            line.setAttribute('x2', String(edge.x2));
+            line.setAttribute('y2', String(edge.y2));
+            line.setAttribute('data-kind', edge.kind);
+            line.setAttribute('class', `plan-sitemap-edge plan-sitemap-edge-${edge.kind}`);
+            line.setAttribute('marker-end', `url(#plan-sitemap-arrow-${item.id})`);
+            svg.append(line);
+        }
+        canvas.append(svg);
+        const byId = new Map(screens.map(screen => [String(screen.id), screen]));
+        for (const node of layout.nodes) {
+            const el = node.clickable ? document.createElement('button') : document.createElement('div');
+            if (node.clickable) el.type = 'button';
+            el.className = 'plan-sitemap-node';
+            el.dataset.kind = node.kind;
+            el.dataset.status = node.status;
+            el.style.left = `${node.x}px`;
+            el.style.top = `${node.y}px`;
+            const name = document.createElement('strong');
+            name.textContent = node.label;
+            appendPageStencil(el, byId.get(node.screenId));
+            const meta = document.createElement('small');
+            meta.textContent = node.route;
+            el.append(name, meta);
+            if (node.clickable) el.onclick = () => openConnectedPage(session, item, byId.get(node.screenId), preview);
+            canvas.append(el);
+        }
+        wrap.append(canvas);
+        const legend = document.createElement('div');
+        legend.className = 'plan-sitemap-legend';
+        for (const kind of ['parent', 'navigation', 'journey', 'auth', 'redirect', 'success', 'failure']) {
+            if (!layout.edges.some(edge => edge.kind === kind)) continue;
+            const chip = document.createElement('span');
+            chip.dataset.kind = kind;
+            chip.textContent = kind;
+            legend.append(chip);
+        }
+        if (legend.childNodes.length) wrap.append(legend);
+        if (layout.unmappedCount) {
+            const note = document.createElement('p');
+            note.className = 'plan-sitemap-coverage';
+            note.textContent = `${layout.nodes.length} pages have stencils. ${layout.unmappedCount} discovered routes are hidden until a stencil is linked.`;
+            wrap.append(note);
+        }
+        preview.append(wrap);
+        const saved = session.sitemapPositions?.[item.id];
+        if (saved) requestAnimationFrame(() => { preview.scrollLeft = saved.left; preview.scrollTop = saved.top; });
+    }
+
     function renderArtifacts(session) {
         if (!current(session)) return;
         const panel = root.querySelector('#plan-artifacts');
@@ -282,19 +451,10 @@ export function createPlanConversation(host, root) {
             .map(asset => ({...asset, url: new URL(asset.url, window.location.origin).href}));
         panel.innerHTML = `${choices.length > 1 ? `<label class="plan-artifact-picker"><select id="plan-artifact-select" aria-label="Select artifact">${choices.map((choice) => `<option value="${esc(choice.id)}"${String(choice.id) === String(item?.id) ? ' selected' : ''}>${esc(choice.title)}${choice.is_starter ? ' · needs content' : ''}</option>`).join('')}</select></label>` : ''}
             ${item?.is_starter && !session.viewedAsset ? `<div class="plan-artifact-revision">Starter section · ask Plan to fill this from the project</div>` : ''}
-            ${item?.revision_count && !session.viewedAsset && !item?.is_starter ? `<div class="plan-artifact-revision">Revision ${esc(item.revision_count)}</div>` : ''}
             ${item?.file_sync_error ? `<div class="plan-file-status" role="alert">${esc(item.file_sync_error)}<button type="button" id="plan-review-file">Review file changes</button></div>` : ''}
             <div class="plan-preview" id="plan-preview"></div>
             ${assets.length ? `<div class="plan-assets" aria-label="Assets">${assetsHtml(assets)}</div>` : ''}`;
         panel.querySelector('#plan-artifact-select')?.addEventListener('change', (event) => { session.viewedAsset = null; session.selection[session.tab] = event.target.value; renderArtifacts(session); });
-        const close = document.createElement('button');
-        close.type = 'button';
-        close.className = 'plan-close-canvas';
-        close.setAttribute('aria-label', 'Close artifact pane');
-        close.title = 'Close artifact pane';
-        close.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
-        close.onclick = () => { session.canvasClosed = true; renderArtifacts(session); root.querySelector('#plan-language-input').focus(); };
-        panel.prepend(close);
         panel.querySelectorAll('[data-view-asset]').forEach(button => {
             button.onclick = () => { session.viewedAsset = button.dataset.viewAsset; renderArtifacts(session); };
         });
@@ -303,65 +463,221 @@ export function createPlanConversation(host, root) {
         const preview = panel.querySelector('#plan-preview');
         const sourceAsset = assets.find(asset => String(asset.id) === String(session.viewedAsset));
         if (sourceAsset) { renderSourceAsset(session, sourceAsset, preview); return; }
-        if (!item) { preview.innerHTML = `<div class="plan-canvas-empty">No ${TABS[session.tab].label.toLowerCase()} yet.</div>`; return; }
+        if (!item) {
+            const tips = {
+                wireframes: 'HTML templates, views, and URL maps fill the sitemap. Ask Plan to draft a page outline for anything still missing.',
+                erd: 'Ask Plan for an ERD once the main entities are clear.',
+                requirements: 'Capture FRAC / acceptance criteria after the screens make sense.',
+            };
+            preview.innerHTML = `<div class="plan-canvas-empty"><p><strong>No ${esc(TABS[session.tab].label.toLowerCase())} yet</strong></p><p class="plan-empty-hint">${esc(tips[session.tab] || 'Ask Plan to fill this section.')}</p></div>`;
+            return;
+        }
         if (item.content_format === 'wire') {
             try {
-                const screens = parseWireframe(item.content).screens || [];
+                const parsed = parseWireframe(item.content);
+                const screens = parsed.screens || [];
                 session.pages ||= {};
                 session.previewModes ||= {};
-                // Page inspection uses readable, responsive controls. SVG remains
-                // useful for thumbnails and an explicitly selected schematic view.
+                session.pageLayers ||= {};
                 session.previewModes[item.id] ||= 'html';
+                session.pageLayers[item.id] ||= 'preview';
                 const page = screens.find(screen => screen.id === session.pages[item.id]) || (screens.length === 1 ? screens[0] : null);
-                session.pages[item.id] = session.sitemap ? undefined : page?.id;
+                session.pages[item.id] = page?.id;
+                const layer = session.pageLayers[item.id];
                 const toolbar = document.createElement('div');
                 toolbar.className = 'plan-preview-toolbar';
-                toolbar.innerHTML = `<select aria-label="Wireframe page">${screens.length > 1 ? `<option value=""${!page && !session.sitemap ? ' selected' : ''}>All pages</option>` : ''}<option value="sitemap"${session.sitemap ? ' selected' : ''}>Sitemap</option>${screens.map(screen => `<option value="page:${esc(screen.id)}"${screen.id === page?.id && !session.sitemap ? ' selected' : ''}>${esc(screen.label || screen.id)}</option>`).join('')}</select>${page && !session.sitemap ? `<button type="button" aria-pressed="${session.previewModes[item.id] === 'html'}">HTML preview</button>` : ''}`;
+                const pageOptions = screens.length > 1
+                    ? `<option value=""${!page ? ' selected' : ''}>All pages</option>`
+                    : '';
+                const layerButtons = page
+                    ? `<div class="plan-page-layers" role="tablist" aria-label="Page perspective">
+                        <button type="button" data-layer="preview" aria-pressed="${layer === 'preview'}">Preview</button>
+                        <button type="button" data-layer="planning" aria-pressed="${layer === 'planning'}">Planning</button>
+                        <button type="button" data-layer="development" aria-pressed="${layer === 'development'}">Development</button>
+                       </div>`
+                    : '';
+                toolbar.innerHTML = `${page && screens.length > 1 ? '<button type="button" class="plan-back-sitemap">&larr; Back to sitemap</button>' : ''}<select aria-label="Browse pages">${pageOptions}${screens.map(screen => `<option value="page:${esc(screen.id)}"${screen.id === page?.id ? ' selected' : ''}>${esc(screen.label || 'Untitled page')}</option>`).join('')}</select>${page && layer === 'preview' ? `<button type="button" aria-pressed="${session.previewModes[item.id] === 'html'}">${session.previewModes[item.id] === 'html' ? 'Interactive' : 'Stencil'}</button>` : ''}${layerButtons}`;
                 panel.insertBefore(toolbar, preview);
+                toolbar.querySelector('.plan-back-sitemap')?.addEventListener('click', () => {
+                    session.pages[item.id] = undefined;
+                    session.sitemap = true;
+                    renderArtifacts(session);
+                });
                 toolbar.querySelector('select').addEventListener('change', event => {
-                    session.sitemap = event.target.value === 'sitemap';
+                    session.sitemap = false;
                     session.pages[item.id] = event.target.value.startsWith('page:') ? event.target.value.slice(5) : undefined;
                     renderArtifacts(session);
                 });
-                const htmlToggle = toolbar.querySelector('button');
+                toolbar.querySelectorAll('[data-layer]').forEach(button => {
+                    button.onclick = () => { session.pageLayers[item.id] = button.dataset.layer; renderArtifacts(session); };
+                });
+                const htmlToggle = toolbar.querySelector('button[aria-pressed]:not([data-layer])');
                 if (htmlToggle) htmlToggle.onclick = () => { session.previewModes[item.id] = session.previewModes[item.id] === 'html' ? 'svg' : 'html'; renderArtifacts(session); };
-                if (session.sitemap) {
-                    const map = wireframeSitemap(items(session).filter(entry => entry.content_format === 'wire').map(entry => ({
-                        id: entry.id, screens: parseWireframe(entry.content).screens || [],
-                    })));
-                    const diagram = document.createElement('div');
-                    diagram.className = 'plan-mermaid';
-                    preview.append(diagram);
-                    renderDiagram(diagram, map.source);
-                    if (map.diagnostics.length) preview.insertAdjacentHTML('beforeend', `<ul class="plan-wireframe-diagnostics">${map.diagnostics.map(message => `<li>${esc(message)}</li>`).join('')}</ul>`);
-                    return;
-                }
+
+                const diagnosticsHtml = (diagnostics) => {
+                    const explained = explainWireframeDiagnostics(diagnostics || []);
+                    if (!explained.lines.length) return '';
+                    const next = explained.steps[0] ? `<p class="plan-diag-next">${esc(explained.steps[0])}</p>` : '';
+                    const items = explained.lines.map(line => `<li>${esc(line)}</li>`).join('');
+                    return `<div class="plan-wireframe-diagnostics" role="status"><strong>${esc(explained.headline || 'Preview notes')}</strong>${next}<ul>${items}</ul></div>`;
+                };
+
+                const collectAnnotations = (node, bag = { binds: [], requirements: [], routes: [] }) => {
+                    if (!node) return bag;
+                    if (node.attrs?.bind || node.attrs?.binding) bag.binds.push(node.attrs.bind || node.attrs.binding);
+                    if (node.attrs?.requirement) bag.requirements.push(node.attrs.requirement);
+                    if (node.attrs?.route || node.attrs?.href) {
+                        const value = node.attrs.route || node.attrs.href;
+                        if (typeof value === 'string' && value.startsWith('/')) bag.routes.push(value);
+                    }
+                    (node.children || []).forEach(child => collectAnnotations(child, bag));
+                    return bag;
+                };
+
                 if (!page && screens.length > 1) {
+                    if (desktopPagesOverview()) {
+                        renderProjectSitemap(preview, session, screens, item);
+                        const docErrors = (parsed.diagnostics || []).filter(d => d.severity === 'error');
+                        if (docErrors.length) preview.insertAdjacentHTML('beforeend', diagnosticsHtml(parsed.diagnostics));
+                        return;
+                    }
                     const overview = document.createElement('div');
                     overview.className = 'plan-page-overview';
+                    overview.setAttribute('role', 'tree');
+                    overview.setAttribute('aria-label', 'All pages');
+                    const rootScreen = screens.find(screen => /^overview\b/i.test(screen.label || ''));
+                    const branches = new Map();
                     for (const screen of screens) {
-                        const thumbnail = document.createElement('button');
-                        thumbnail.type = 'button';
-                        thumbnail.className = 'plan-page-thumbnail';
-                        const result = renderWireframe(item.content, item.title, screen.id, previewAssets);
-                        thumbnail.innerHTML = `<span class="plan-page-image" aria-hidden="true">${result.svg}</span><span class="plan-page-name">${esc(screen.label || screen.id)}</span>${screen.attrs.route ? `<span class="plan-page-route">${esc(screen.attrs.route)}</span>` : ''}`;
-                        thumbnail.onclick = () => { session.pages[item.id] = screen.id; renderArtifacts(session); panel.querySelector('[aria-label="Wireframe page"]')?.focus(); };
-                        overview.append(thumbnail);
+                        if (rootScreen && screen.id === rootScreen.id) continue;
+                        const group = wireScreenGroup(screen) || 'Other';
+                        if (!branches.has(group)) branches.set(group, []);
+                        branches.get(group).push(screen);
+                    }
+                    session.mindClosed ||= {};
+                    const closed = session.mindClosed[item.id] ||= {};
+                    const openPage = (screen) => {
+                        session.sitemap = false;
+                        session.pages[item.id] = screen.id;
+                        session.pageLayers[item.id] = 'preview';
+                        renderArtifacts(session);
+                    };
+                    if (rootScreen) {
+                        const rootButton = document.createElement('button');
+                        rootButton.type = 'button';
+                        rootButton.className = 'plan-mind-root';
+                        rootButton.setAttribute('role', 'treeitem');
+                        rootButton.textContent = rootScreen.label || 'Overview';
+                        rootButton.onclick = () => openPage(rootScreen);
+                        overview.append(rootButton);
+                    }
+                    for (const [group, groupScreens] of branches) {
+                        const branch = document.createElement('div');
+                        branch.className = 'plan-mind-branch';
+                        const toggle = document.createElement('button');
+                        toggle.type = 'button';
+                        toggle.className = 'plan-mind-group';
+                        const isClosed = Boolean(closed[group]);
+                        toggle.setAttribute('aria-expanded', String(!isClosed));
+                        toggle.textContent = `${isClosed ? '▸' : '▾'} ${group}`;
+                        toggle.onclick = () => { closed[group] = !isClosed; renderArtifacts(session); };
+                        branch.append(toggle);
+                        if (!isClosed) {
+                            const list = document.createElement('div');
+                            list.className = 'plan-mind-children';
+                            list.setAttribute('role', 'group');
+                            for (const screen of groupScreens) {
+                                const route = document.createElement('button');
+                                route.type = 'button';
+                                route.className = 'plan-mind-route';
+                                route.setAttribute('role', 'treeitem');
+                                const name = document.createElement('span');
+                                name.textContent = screen.label || 'Untitled page';
+                                route.append(name);
+                                if (screen.attrs?.route) {
+                                    const small = document.createElement('small');
+                                    small.textContent = screen.attrs.route;
+                                    route.append(small);
+                                }
+                                route.onclick = () => openPage(screen);
+                                list.append(route);
+                            }
+                            branch.append(list);
+                        }
+                        overview.append(branch);
                     }
                     preview.append(overview);
+                    const docErrors = (parsed.diagnostics || []).filter(d => d.severity === 'error');
+                    if (docErrors.length) preview.insertAdjacentHTML('beforeend', diagnosticsHtml(parsed.diagnostics));
                     return;
                 }
+
+                if (page && layer === 'planning') {
+                    const ann = collectAnnotations(page);
+                    const kids = (page.children || []).length;
+                    const uses = page.attrs.uses ? `<li>Layout template: <strong>${esc(page.attrs.uses)}</strong></li>` : '';
+                    preview.innerHTML = `<div class="plan-page-hub">
+                        <header><h3>${esc(page.label || 'Untitled page')}</h3>
+                        ${page.attrs.route ? `<p class="plan-page-route">${esc(page.attrs.route)}</p>` : '<p class="plan-empty-hint">No route set yet</p>'}
+                        </header>
+                        <section><h4>Stencil summary</h4>
+                          <ul><li>${kids} top-level block${kids === 1 ? '' : 's'} on this page</li>${uses}
+                          <li>Device: ${esc(page.attrs.device || 'desktop')}</li></ul>
+                          <p class="plan-empty-hint">This is the planning view of the page outline — not production UI yet.</p>
+                        </section>
+                        <section><h4>Linked plan notes</h4>
+                          <ul>
+                            <li>Requirements mentions: ${ann.requirements.length ? esc([...new Set(ann.requirements)].join(', ')) : 'none on this page yet'}</li>
+                            <li>Data binds: ${ann.binds.length ? esc([...new Set(ann.binds)].join(', ')) : 'none on this page yet'}</li>
+                          </ul>
+                          <div class="plan-hub-actions">
+                            <button type="button" data-hub-tab="requirements">Open Requirements</button>
+                            <button type="button" data-hub-tab="erd">Open Data</button>
+                          </div>
+                        </section>
+                    </div>`;
+                    preview.querySelectorAll('[data-hub-tab]').forEach(btn => {
+                        btn.onclick = () => root.querySelector(`[data-plan-tab="${btn.dataset.hubTab}"]`)?.click();
+                    });
+                    return;
+                }
+
+                if (page && layer === 'development') {
+                    const ann = collectAnnotations(page);
+                    const binds = [...new Set(ann.binds)];
+                    const reqs = [...new Set(ann.requirements)];
+                    const routes = [...new Set([page.attrs.route, ...ann.routes].filter(Boolean))];
+                    preview.innerHTML = `<div class="plan-page-hub">
+                        <header><h3>${esc(page.label || 'Untitled page')} · development</h3>
+                        <p class="plan-empty-hint">How this page likely maps to view, model, and business logic. Full wiring lands later — these are planning links.</p></header>
+                        <section><h4>View</h4>
+                          <ul><li>Route${routes.length === 1 ? '' : 's'}: ${routes.length ? routes.map(r => `<code>${esc(r)}</code>`).join(', ') : '<em>not set</em>'}</li>
+                          <li>Screen id: <code>${esc(page.attrs.id || page.id)}</code></li></ul></section>
+                        <section><h4>Model</h4>
+                          <ul>${binds.length ? binds.map(b => `<li><code>${esc(b)}</code></li>`).join('') : '<li>No bind= annotations on this page yet. Add bind=Entity.field in the outline.</li>'}</ul>
+                          <button type="button" data-hub-tab="erd">Jump to Data (ERD)</button></section>
+                        <section><h4>Business logic / acceptance</h4>
+                          <ul>${reqs.length ? reqs.map(r => `<li><code>${esc(r)}</code></li>`).join('') : '<li>No requirement= tags yet. Link FR-### once FRAC exists.</li>'}</ul>
+                          <button type="button" data-hub-tab="requirements">Jump to Requirements</button></section>
+                    </div>`;
+                    preview.querySelectorAll('[data-hub-tab]').forEach(btn => {
+                        btn.onclick = () => root.querySelector(`[data-plan-tab="${btn.dataset.hubTab}"]`)?.click();
+                    });
+                    return;
+                }
+
                 const result = renderWireframe(item.content, item.title, page?.id, previewAssets);
-                preview.innerHTML = `<div class="plan-wireframe-preview">${result.svg}</div>${result.diagnostics?.length ? `<ul class="plan-wireframe-diagnostics">${result.diagnostics.map((entry) => `<li>Line ${esc(entry.line)}: ${esc(entry.message)}</li>`).join('')}</ul>` : ''}`;
+                preview.innerHTML = `<div class="plan-wireframe-preview">${result.svg}</div>${diagnosticsHtml(result.diagnostics)}`;
                 if (session.previewModes[item.id] === 'html') {
                     const frame = document.createElement('iframe');
-                    frame.title = page?.label || item.title;
+                    frame.title = page?.label || item.title || 'Page preview';
                     frame.setAttribute('sandbox', '');
                     frame.referrerPolicy = 'no-referrer';
                     frame.srcdoc = result.html;
                     preview.querySelector('.plan-wireframe-preview').replaceWith(frame);
                 }
-            } catch (error) { preview.textContent = error.message || 'Could not render wireframe.'; }
+            } catch (error) {
+                preview.innerHTML = `<div class="plan-canvas-empty"><p><strong>Could not show this page outline</strong></p><p class="plan-empty-hint">${esc(error.message || 'Try Sitemap or ask Plan to regenerate the wireframes.')}</p></div>`;
+            }
         } else if (item.content_format === 'html') {
             const frame = document.createElement('iframe');
             frame.title = item.title || 'Wireframe';
@@ -373,11 +689,67 @@ export function createPlanConversation(host, root) {
             preview.classList.add('plan-mermaid');
             renderDiagram(preview, item.content);
         } else {
-            const document = window.document.createElement('div');
-            document.className = 'plan-document message-markdown';
-            document.innerHTML = assistantMarkdown(item.content || '');
-            preview.append(document);
+            if (item.item_type === 'brief') {
+                const bar = document.createElement('div');
+                bar.className = 'plan-brief-bar';
+                const edit = document.createElement('button');
+                edit.type = 'button';
+                edit.textContent = 'Edit brief';
+                edit.disabled = blocked(session);
+                edit.onclick = () => editBrief(session, item);
+                bar.append(edit);
+                preview.append(bar);
+            }
+            const documentEl = window.document.createElement('div');
+            documentEl.className = 'plan-document message-markdown';
+            documentEl.innerHTML = assistantMarkdown(item.content || '');
+            preview.append(documentEl);
         }
+    }
+
+
+    function editBrief(session, item) {
+        const preview = root.querySelector('#plan-preview');
+        if (!preview || blocked(session)) return;
+        preview.innerHTML = '';
+        const area = document.createElement('textarea');
+        area.className = 'plan-brief-input';
+        area.setAttribute('aria-label', 'Outcome brief');
+        area.value = item.content || '';
+        const actions = document.createElement('div');
+        actions.className = 'plan-brief-actions';
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = 'Save brief';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = 'Cancel';
+        const status = document.createElement('p');
+        status.className = 'plan-empty-hint';
+        status.setAttribute('role', 'status');
+        cancel.onclick = () => renderArtifacts(session);
+        save.onclick = async () => {
+            save.disabled = true;
+            cancel.disabled = true;
+            status.textContent = '';
+            try {
+                const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, {
+                    method: 'PATCH',
+                    body: { content: area.value, expected_revision: Number(item.revision_count || 0) },
+                });
+                const rows = session.workspace.items || [];
+                const index = rows.findIndex(row => String(row.id) === String(item.id));
+                if (index >= 0) rows[index] = { ...rows[index], ...updated };
+                renderArtifacts(session);
+            } catch (error) {
+                status.textContent = error.message || 'Could not save the brief.';
+                save.disabled = false;
+                cancel.disabled = false;
+            }
+        };
+        actions.append(save, cancel);
+        preview.append(area, actions, status);
+        area.focus();
     }
 
     async function renderSourceAsset(session, asset, preview) {
@@ -503,28 +875,6 @@ export function createPlanConversation(host, root) {
             }
         } catch (error) { session.error = error.message || 'Attachment upload failed. Successfully uploaded files are retained.'; }
         finally { session.pending = ''; refresh(session); }
-    }
-
-    async function scan(session) {
-        if (blocked(session)) return;
-        session.pending = 'Scanning project...';
-        session.error = '';
-        session.outcome = '';
-        controls(session);
-        followSubmittedTurn(session);
-        try {
-            const result = await api(path(session, '/scan'), { method: 'POST', body: {} });
-            session.outcome = result.message || `Updated ${(result.updated || []).length} plan sections from the project.`;
-            if (result.workspace) session.workspace = result.workspace;
-            else await reload(session);
-            try { session.conversation = await api(path(session, '/conversation')); }
-            catch (error) { session.error = session.error || `Could not refresh conversation: ${error.message}`; }
-        } catch (error) { session.error = error.message || 'Could not scan project.'; }
-        finally {
-            session.pending = '';
-            refresh(session);
-            monitor(session);
-        }
     }
 
     async function build(session) {

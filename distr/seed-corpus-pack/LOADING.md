@@ -9,7 +9,7 @@
 
 Always includes early:
 
-1. Vagueness dial + get-shit-done (`07-agent-behavior/`)
+1. Vagueness dial + get-shit-done + Paul planning workflow (`07-agent-behavior/`)
 2. For ecommerce: `MODEL-INFERENCE.md` then entity graph
 3. Premium quality gate (`08-`) — **hard fail if UI skips it**
 4. Relevant `09-page-stencils/*`
@@ -19,6 +19,7 @@ Always includes early:
 
 ```
 score vagueness → ask within budget → expand entities →
+screens/sitemap → FRAC deltas → ERD binds → page V/M/logic links →
 pick page stencil(s) → scaffold → premium gate → verify → done
 ```
 

@@ -8,6 +8,9 @@ Requirements: 3.5, 4.3, 5.2
 
 from __future__ import annotations
 
+import os
+from collections import OrderedDict
+
 import time
 
 from PyQt6.QtCore import QObject, QSize, QTimer, Qt, pyqtSignal
@@ -147,6 +150,41 @@ class AnimationPlayer(QObject):
         self._width: int = 0
         self._height: int = 0
         self._device_pixel_ratio: float = 1.0
+        # Keep a small LRU of decoded WebM players. Avatar state changes used
+        # to decode every frame again on the GUI thread, adding about one
+        # second between a shortcut press and its visual response.
+        self._webm_cache = OrderedDict()
+        self._webm_cache_limit = 8
+
+    def _webm_cache_key(
+        self,
+        file_path: str,
+        playback: str,
+        chroma_key: tuple | None,
+        chroma_threshold: int,
+    ) -> tuple:
+        try:
+            modified_ns = os.stat(file_path).st_mtime_ns
+        except OSError:
+            modified_ns = 0
+        return (
+            os.path.abspath(file_path),
+            modified_ns,
+            playback,
+            tuple(chroma_key) if chroma_key is not None else None,
+            int(chroma_threshold),
+            self._width,
+            self._height,
+            round(self._device_pixel_ratio, 3),
+        )
+
+    def _trim_webm_cache(self) -> None:
+        while len(self._webm_cache) > self._webm_cache_limit:
+            _, player = self._webm_cache.popitem(last=False)
+            if player is self._webm_player:
+                continue
+            player.stop()
+            player.deleteLater()
 
     def load(self, file_path: str, playback: str = "loop",
              chroma_key: tuple | None = None, chroma_threshold: int = 35) -> None:
@@ -163,13 +201,22 @@ class AnimationPlayer(QObject):
             self._webm_player = None
         elif file_path.lower().endswith(".webm"):
             from distr.gui.oracle.webm_player import WebMPlayer
-            player = WebMPlayer(self)
-            player.frame_ready.connect(self.frame_ready)
-            player.set_device_pixel_ratio(self._device_pixel_ratio)
-            player.load(file_path, playback=playback,
-                        chroma_key=chroma_key, chroma_threshold=chroma_threshold)
-            if self._width and self._height:
-                player.set_size(self._width, self._height)
+            cache_key = self._webm_cache_key(
+                file_path, playback, chroma_key, chroma_threshold
+            )
+            player = self._webm_cache.pop(cache_key, None)
+            if player is None:
+                player = WebMPlayer(self)
+                player.frame_ready.connect(self.frame_ready)
+                player.set_device_pixel_ratio(self._device_pixel_ratio)
+                # Size before load so the first frame build never creates a
+                # second full-resolution QPixmap set only to shrink it again.
+                if self._width and self._height:
+                    player.set_size(self._width, self._height)
+                player.load(file_path, playback=playback,
+                            chroma_key=chroma_key, chroma_threshold=chroma_threshold)
+            self._webm_cache[cache_key] = player
+            self._trim_webm_cache()
             self._webm_player = player
             self._player = None
         elif file_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
@@ -179,6 +226,35 @@ class AnimationPlayer(QObject):
                 self.frame_ready.emit(pixmap)
             self._player = None
             self._webm_player = None
+
+    def preload(self, file_path: str, playback: str = "loop",
+                chroma_key: tuple | None = None,
+                chroma_threshold: int = 35) -> None:
+        """Decode a WebM into the LRU without changing the active animation."""
+        if not file_path.lower().endswith(".webm"):
+            return
+        cache_key = self._webm_cache_key(
+            file_path, playback, chroma_key, chroma_threshold
+        )
+        if cache_key in self._webm_cache:
+            self._webm_cache.move_to_end(cache_key)
+            return
+
+        from distr.gui.oracle.webm_player import WebMPlayer
+
+        player = WebMPlayer(self)
+        player.frame_ready.connect(self.frame_ready)
+        player.set_device_pixel_ratio(self._device_pixel_ratio)
+        if self._width and self._height:
+            player.set_size(self._width, self._height)
+        player.load(
+            file_path,
+            playback=playback,
+            chroma_key=chroma_key,
+            chroma_threshold=chroma_threshold,
+        )
+        self._webm_cache[cache_key] = player
+        self._trim_webm_cache()
 
     def play(self) -> None:
         """Start playback on the active player."""
@@ -198,6 +274,8 @@ class AnimationPlayer(QObject):
 
     def set_size(self, width: int, height: int) -> None:
         """Set the display size for the active player."""
+        if (width, height) == (self._width, self._height):
+            return
         self._width = width
         self._height = height
         if self._player is not None:
@@ -207,6 +285,9 @@ class AnimationPlayer(QObject):
 
     def set_device_pixel_ratio(self, dpr: float) -> None:
         """Set device pixel ratio used by WebM playback frames."""
-        self._device_pixel_ratio = max(1.0, float(dpr or 1.0))
+        safe_dpr = max(1.0, float(dpr or 1.0))
+        if abs(safe_dpr - self._device_pixel_ratio) < 0.001:
+            return
+        self._device_pixel_ratio = safe_dpr
         if self._webm_player is not None:
             self._webm_player.set_device_pixel_ratio(self._device_pixel_ratio)

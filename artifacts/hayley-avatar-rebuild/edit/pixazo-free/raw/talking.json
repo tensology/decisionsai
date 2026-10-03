@@ -1,0 +1,19 @@
+{
+  "request_id": "ltx-video_01a10170-486f-7d96-fc76-db0244b2db6a2",
+  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/idle.png",
+  "prompt": "Fixed camera. Preserve the exact illustrated Hayley character, face, eyes, long platinum hair, hands, props, dark clothing, colors, linework, proportions, framing, and silhouette. Animate only continuous rapid speech articulation for the entire shot. Cycle the lips and jaw repeatedly through many small, distinct talking shapes at a lively conversational pace, including quick closed, narrow, rounded, and open phoneme positions. Never hold the mouth open and never settle back into a silent smile before the final frame. Keep the torso, head, shoulders, forearms, wrists, fingers, and heart-hands idle pose stationary throughout. The hands must not open, separate, gesture, or move toward the viewer. Allow only one soft blink. Keep all anatomy and props structurally stable. No zoom, pan, crop, shake, background, text, watermark, new object, new limb, facial drift, hand drift, clothing drift, or prop drift. Return cleanly toward the starting pose.",
+  "model": "ltx-video",
+  "endpoint": "/ltx-video/v1/image-to-video",
+  "free_tier": true,
+  "schema_version": 2,
+  "parameters": {
+    "aspect": "1:1",
+    "num_frames": 73,
+    "frame_rate": 24,
+    "steps": 8,
+    "cfg": 3.0,
+    "strength": 1
+  },
+  "status": "COMPLETED",
+  "media_bytes": 560725
+}

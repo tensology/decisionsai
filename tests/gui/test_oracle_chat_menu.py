@@ -146,6 +146,7 @@ def test_system_tray_runtime_hierarchy_matches_finished_menu(monkeypatch) -> Non
     ]
     assert development_items == [
         "Manage Development",
+        "Planning",
         "Incoming",
         "Automations",
         "Workflows",
@@ -154,6 +155,7 @@ def test_system_tray_runtime_hierarchy_matches_finished_menu(monkeypatch) -> Non
         "Pinned Threads",
         "New Thread",
     ]
+    assert tray.planning_menu_action.menu() is tray.planning_submenu
     assert tray.pinned_development_menu_action.isVisible() is False
 
     monkeypatch.setattr(
@@ -176,6 +178,23 @@ def test_system_tray_runtime_hierarchy_matches_finished_menu(monkeypatch) -> Non
     board_actions[0].trigger()
     board_actions[1].trigger()
     assert opened == ["/development/", "/development/boards/decisions/7/kanban/"]
+
+    monkeypatch.setattr(
+        menu_module,
+        "get_planning_projects_for_menu",
+        lambda: [(3, "Delivery", "decisions:7")],
+    )
+    tray._rebuild_planning_menu_items()
+    planning_actions = [action for action in tray.planning_submenu.actions() if not action.isSeparator()]
+    assert [action.text() for action in planning_actions] == ["Delivery"]
+    assert planning_actions[0].menu() is None
+    planning_actions[0].trigger()
+    assert opened[-1] == "/development/boards/decisions/7/plan/"
+    monkeypatch.setattr(menu_module, "get_planning_projects_for_menu", lambda: [])
+    tray._rebuild_planning_menu_items()
+    empty_planning = [action for action in tray.planning_submenu.actions() if not action.isSeparator()]
+    assert [action.text() for action in empty_planning] == ["No projects"]
+    assert empty_planning[0].isEnabled() is False
 
     tray._rebuild_terminal_menu_items()
     terminal_actions = [action for action in tray.terminals_submenu.actions() if not action.isSeparator()]

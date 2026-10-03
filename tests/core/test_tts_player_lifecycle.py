@@ -66,6 +66,70 @@ def test_delayed_player_callbacks_are_dropped_after_playback_finished(monkeypatc
     signals.player_play.emit.assert_not_called()
 
 
+def test_hidden_oracle_suppresses_delayed_tts_player_callbacks(monkeypatch):
+    from distr.app import events
+
+    app = _App()
+    app._tts_active_sessions = 1
+    app._tts_player_generation = 7
+    app.oracle_window = MagicMock(oracle_visible=False)
+
+    signals = _SignalManager()
+    monkeypatch.setattr(events, "signal_manager", signals)
+
+    app._emit_player_signal_if_tts_active(7, "show")
+    app._emit_player_signal_if_tts_active(7, "play")
+
+    signals.show_player_window.emit.assert_not_called()
+    signals.player_play.emit.assert_not_called()
+
+
+def test_talking_state_follows_tts_and_clears_stale_bubble():
+    app = _App()
+    dispatcher = MagicMock()
+    bubble = MagicMock()
+    app.oracle_window = MagicMock(
+        oracle_visible=True,
+        _event_dispatcher=dispatcher,
+        _chat_bubble=bubble,
+    )
+
+    app._set_oracle_talking(True, "tts_started")
+    dispatcher.fire_hook.assert_called_once_with(
+        "talking", trigger="events:tts_started"
+    )
+
+    app._set_oracle_talking(False, "playback_finished")
+    dispatcher.revert_hook.assert_called_once_with(
+        "talking", trigger="events:playback_finished"
+    )
+    bubble.hide_bubble.assert_called_once()
+
+
+def test_player_close_forces_idle_after_talking_reveals_stale_thinking():
+    app = _App()
+    dispatcher = MagicMock()
+    dispatcher.get_current_hook.return_value = "thinking"
+    bubble = MagicMock()
+    app.oracle_window = MagicMock(
+        oracle_visible=True,
+        _event_dispatcher=dispatcher,
+        _chat_bubble=bubble,
+    )
+    app._tts_active_sessions = 0
+    app.player_window = _Player()
+    app._force_oracle_idle_if_ptt_stale = MagicMock()
+
+    app._close_player_if_tts_complete("playback_finished")
+
+    dispatcher.revert_hook.assert_called_once_with(
+        "talking", trigger="events:playback_finished"
+    )
+    dispatcher.force_idle.assert_called_once_with(
+        "events:player_close_thinking_guard"
+    )
+
+
 def test_stale_correlated_playback_finished_cannot_close_new_player(monkeypatch):
     from distr.app import events
 

@@ -9,6 +9,11 @@ relay WebSocket + authenticated REST (``RELAY_INTERNAL_TOKEN`` when set, otherwi
 Mirroring inbound text into :class:`~distr.core.integrations.bus.IntegrationMessageBus` is **on by default**;
 opt out with ``DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT=0``.
 
+Board-linked quiet surface (AuctionNow / Tensology no-face-to-face): set
+``DECISIONSAI_WA_INTAKE_SURFACE=board_linked`` so only board-linked chats announce
++ Telegram-push; unlinked chats stay silent; normal bodies are not agent-injected
+unless Paul explicitly asks to hear new messages.
+
 This class handles:
   - WebSocket connection to the relay server
   - Reconnection with exponential backoff
@@ -57,68 +62,122 @@ def _whatsapp_agent_bridge_enabled() -> bool:
 
 
 def _route_whatsapp_text_to_message_bus(data: dict, full_text: str, jid: str) -> None:
-    """Mirror inbound WhatsApp text into WorkIntake / ``IntegrationMessageBus`` (default on)."""
+    """Mirror inbound WhatsApp text into WorkIntake / ``IntegrationMessageBus``.
+
+    When ``DECISIONSAI_WA_INTAKE_SURFACE=board_linked`` (or a board opts in via
+    ``orchestrator_policy.whatsapp_intake.mode``), Paul's intake rules apply:
+
+    - unlinked chats → store only (no announce / TG / agent inject)
+    - board-linked → announce + Telegram push (tracked) + WorkIntake when relevant
+    - MessageBus agent inject stays off for normal bodies (quiet unless asked)
+    """
     from distr.core.integrations.bus import IncomingMessage, get_integration_message_bus
+    from distr.core.kanban.whatsapp_intake_rules import (
+        apply_board_linked_surface_actions,
+        decide_intake_surface,
+        resolve_whatsapp_link,
+    )
 
     tid = (jid or data.get("jid_phone") or "").strip()
     if not tid:
         return
     sender = data.get("sender") or {}
     sender_phone = sender.get("phone") or ""
-    try:
-        from distr.core.work_intake import WorkIntake, get_work_intake_service
+    from_me = bool(data.get("from_me", False))
+    intake_text = str(data.get("text") or data.get("caption") or full_text)
+    source_message_id = str(data.get("message_id") or data.get("id") or "")
 
-        intake_text = str(data.get("text") or data.get("caption") or full_text)
-        board_hint = ""
-        auto_snapshot = False
-        try:
-            from distr.core.db import WhatsAppPhoneLink, get_session
+    link = resolve_whatsapp_link(jid, jid_phone=str(data.get("jid_phone") or tid or ""))
+    surface = decide_intake_surface(
+        jid=jid,
+        jid_phone=str(data.get("jid_phone") or tid or ""),
+        from_me=from_me,
+        link=link,
+    )
+    logger.info(
+        "WhatsApp intake surface mode=%s linked=%s reason=%s board=%s announce=%s tg=%s work=%s bus=%s",
+        surface.surface_mode,
+        surface.linked,
+        surface.reason,
+        surface.board_id,
+        surface.should_announce,
+        surface.should_telegram_push,
+        surface.should_route_work_intake,
+        surface.should_inject_message_bus,
+    )
 
-            with get_session() as session:
-                link = (
-                    session.query(WhatsAppPhoneLink)
-                    .filter(
-                        (WhatsAppPhoneLink.phone_jid == tid)
-                        | (WhatsAppPhoneLink.phone_number == tid)
-                        | (WhatsAppPhoneLink.phone_jid == jid)
-                    )
-                    .order_by(WhatsAppPhoneLink.auto_snapshot.desc(), WhatsAppPhoneLink.id.asc())
-                    .first()
-                )
-                if link is not None:
-                    auto_snapshot = bool(link.auto_snapshot)
-                    board_hint = str(int(link.board_id)) if link.board_id else ""
-        except Exception:
-            logger.debug("WhatsApp auto_snapshot link lookup failed", exc_info=True)
-
-        # auto_snapshot links always become durable tickets/threads on inbound.
-        user_text = (
-            f"Create a ticket: {intake_text}"
-            if auto_snapshot and not intake_text.lower().startswith(("create a ticket", "create ticket"))
-            else intake_text
+    if surface.should_announce or surface.should_telegram_push:
+        tracking = apply_board_linked_surface_actions(
+            surface,
+            preview=intake_text,
+            sender_phone=str(sender_phone or ""),
+            source_message_id=source_message_id,
+            jid=jid,
         )
-        decision = get_work_intake_service().ingest(WorkIntake(
-            source="whatsapp",
-            user_text=user_text,
-            source_user_id=str(sender_phone or ""),
-            source_thread_id=tid,
-            source_message_id=str(data.get("message_id") or data.get("id") or ""),
-            board_hint=board_hint,
-            metadata={
-                "jid": jid,
-                "jid_phone": str(data.get("jid_phone") or tid or ""),
-                "raw_type": data.get("type"),
-                "auto_snapshot": auto_snapshot,
-            },
-        ))
-        if decision.handled:
-            logger.info(
-                "WhatsApp request routed action=%s ticket=%s run=%s auto_snapshot=%s",
-                decision.action.value, decision.ticket_id, decision.workflow_run_id, auto_snapshot,
+        if tracking.get("telegram_attempted") and not tracking.get("telegram_ok"):
+            logger.warning(
+                "WhatsApp board-linked Telegram push did not succeed: %s (push_id=%s) — tell Paul",
+                tracking.get("telegram_error") or "unknown",
+                tracking.get("telegram_push_id"),
             )
-            return
-    except Exception:
-        logger.exception("WhatsApp request routing failed; falling back to MessageBus")
+
+    if not surface.should_route_work_intake and not surface.should_inject_message_bus:
+        logger.debug(
+            "WhatsApp: inbound stored only (surface=%s reason=%s)",
+            surface.surface_mode,
+            surface.reason,
+        )
+        return
+
+    if surface.should_route_work_intake:
+        try:
+            from distr.core.work_intake import WorkIntake, get_work_intake_service
+
+            board_hint = str(int(link.board_id)) if link.board_id else ""
+            auto_snapshot = bool(link.auto_snapshot)
+
+            # auto_snapshot links always become durable tickets/threads on inbound.
+            user_text = (
+                f"Create a ticket: {intake_text}"
+                if auto_snapshot and not intake_text.lower().startswith(("create a ticket", "create ticket"))
+                else intake_text
+            )
+            decision = get_work_intake_service().ingest(WorkIntake(
+                source="whatsapp",
+                user_text=user_text,
+                source_user_id=str(sender_phone or ""),
+                source_thread_id=tid,
+                source_message_id=source_message_id,
+                board_hint=board_hint,
+                metadata={
+                    "jid": jid,
+                    "jid_phone": str(data.get("jid_phone") or tid or ""),
+                    "raw_type": data.get("type"),
+                    "auto_snapshot": auto_snapshot,
+                    "intake_surface_mode": surface.surface_mode,
+                    "intake_surface_reason": surface.reason,
+                    "board_linked": surface.linked,
+                },
+            ))
+            if decision.handled:
+                logger.info(
+                    "WhatsApp request routed action=%s ticket=%s run=%s auto_snapshot=%s surface=%s",
+                    decision.action.value,
+                    decision.ticket_id,
+                    decision.workflow_run_id,
+                    auto_snapshot,
+                    surface.reason,
+                )
+                return
+        except Exception:
+            logger.exception("WhatsApp request routing failed; falling back to MessageBus")
+
+    if not surface.should_inject_message_bus:
+        logger.debug(
+            "WhatsApp: skipping MessageBus inject (quiet unless asked; reason=%s)",
+            surface.reason,
+        )
+        return
 
     msg = IncomingMessage(
         platform="whatsapp",

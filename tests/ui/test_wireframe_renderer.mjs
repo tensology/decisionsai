@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 // Import as ESM without imposing package.json changes on the browser asset tree.
 const source = await readFile(new URL('../../distr/gui/web/static/development/planning/wireframe.js', import.meta.url), 'utf8');
-const { parseWireframe, renderWireframe } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { parseWireframe, renderWireframe, explainWireframeDiagnostics } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const errors = result => result.diagnostics.filter(d => d.severity === 'error');
 const boxes = svg => [...svg.matchAll(/<g id="([^"]+)" data-type="([^"]+)" data-line="(\d+)" data-x="([\d.]+)" data-y="([\d.]+)" data-width="([\d.]+)" data-height="([\d.]+)"/g)].map(m => ({ id: m[1], type: m[2], line: +m[3], x: +m[4], y: +m[5], w: +m[6], h: +m[7] }));
 const separated = (a, b) => a.x + a.w <= b.x + .001 || b.x + b.w <= a.x + .001 || a.y + a.h <= b.y + .001 || b.y + b.h <= a.y + .001;
@@ -211,7 +211,7 @@ test('diagnostic protocol and fail-closed invalid source', () => {
         assert.equal(typeof d.line, 'number');
         assert.equal(typeof d.column, 'number');
         assert.equal(typeof d.evidence, 'string');
-        assert.match(result.html, /Invalid wireframe/);
+        assert.match(result.html, /role="alert"|could not be drawn|Invalid wireframe|Unsupported attribute|Next:/i);
         assert.equal(boxes(result.svg).length, 0);
     }
 });
@@ -281,7 +281,7 @@ test('familiar controls use distinct SVG shapes and native HTML semantics', () =
 });
 
 test('broad component vocabulary, deterministic output and source updates', () => {
-    const components = 'nav sidebar header section stack row grid card form main list item menu tabs tab modal dialog alert toast draglist field input textarea select dropdown checkbox radio toggle slider date calendar button link badge avatar image divider spacer chart progress text heading'.split(' ');
+    const components = 'nav sidebar header hero footer section stack row grid card form main list item menu tabs tab modal dialog alert toast draglist field input textarea select dropdown checkbox radio toggle slider date calendar button link badge avatar image divider spacer chart progress text heading'.split(' ');
     assert.ok(components.length >= 40);
     for (const type of components) {
         const dsl = `screen X\n  ${type} "Example"`;
@@ -332,4 +332,66 @@ test('selected display matches native select and unsupported behavior is explici
     for (const code of ['STATIC_DRAGLIST', 'STATIC_CHART', 'STATIC_SOURCE', 'STATIC_ACTION', 'STATIC_INTERACTION']) assert.ok(result.diagnostics.some(d => d.code === code && d.severity === 'warning'));
     assert.ok(errors(renderWireframe('screen X\n  calendar X width=100')).some(d => d.code === 'LAYOUT_LIMIT'));
     assert.ok(errors(parseWireframe('screen X\n  select X value=bad options="a|b"')).some(d => d.code === 'OPTION_SELECTION'));
+});
+
+
+test('navigational button href/route is valid and Merrypak-ish multi-page outlines render', () => {
+    const dsl = `screen "Overview · Merrypak" device=desktop route=/
+  stack
+    heading "Merrypak journey map"
+    text "Routes from the project route table."
+    heading shop
+    button "Products" href=/products
+    link "Cart" route=/cart
+screen "Products" id=products device=desktop route=/products
+  stack
+    heading Products
+    text "Route /products"
+    button "Overview" route=/
+    form "Add to cart"
+      input "Qty" type=number min=1 max=99 value=1
+      button "Add" variant=primary requirement=FR-001 bind=Cart.qty`;
+    const ast = parseWireframe(dsl);
+    assert.deepEqual(errors(ast), []);
+    assert.equal(ast.screens.length, 2);
+    const overview = renderWireframe(dsl, 'Merrypak', ast.screens[0].id);
+    const products = renderWireframe(dsl, 'Merrypak', 'products');
+    assert.deepEqual(errors(overview), []);
+    assert.deepEqual(errors(products), []);
+    assert.doesNotMatch(overview.html + products.html, /Invalid wireframe|could not be drawn/i);
+    assert.match(overview.html, /Products/);
+    assert.match(products.html, /requirement|FR-001|data-wf-requirement="FR-001"/);
+    assert.ok(boxes(overview.svg).some(b => b.type === 'button'));
+    const explained = explainWireframeDiagnostics(renderWireframe('screen X\n  input Y onclick=no').diagnostics);
+    assert.ok(explained.errorCount >= 1);
+    assert.match(explained.steps[0] || '', /Unsupported attribute|Remove the unsupported|onclick/i);
+    assert.match(renderWireframe('screen X\n  input Y onclick=no').html, /Next:/);
+});
+
+
+test('screen regions draw header hero section footer and labeled buttons', () => {
+    const result = renderWireframe(`screen "Login" device=desktop route=/login
+  stack
+    header "Account"
+    hero "Welcome back"
+    heading "Login"
+    section "Search by categories"
+    form "Login"
+      input "Email" type=email
+      input "Password" type=password
+      button "Login" variant=primary
+    footer "Need help"`);
+    assert.deepEqual(errors(result), []);
+    for (const type of ['header', 'hero', 'section', 'footer', 'button']) {
+        assert.match(result.html, new RegExp(`data-type="${type}"`));
+        assert.match(result.svg, new RegExp(`data-type="${type}"`));
+    }
+    assert.match(result.html, />Login</);
+    assert.match(result.svg, />Login</);
+    assert.match(result.html, /Welcome back/);
+    assert.match(result.html, /Need help/);
+    assert.doesNotMatch(result.html, /<button[^>]*>\s*<\/button>/);
+    const button = boxes(result.svg).find(box => box.type === 'button');
+    assert.ok(button.w >= 96 && button.h >= 42);
+    assert.ok(button.w < 900);
 });

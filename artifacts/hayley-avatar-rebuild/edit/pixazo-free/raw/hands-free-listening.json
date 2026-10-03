@@ -1,0 +1,19 @@
+{
+  "request_id": "ltx-video_01a100ec-8217-72b2-8138-a4f06428bb46b",
+  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/hands-free-listening.png",
+  "prompt": "Fixed camera. Preserve the exact illustrated Hayley character, face, eyes, long platinum hair, hands, props, dark clothing, colors, linework, proportions, framing, and silhouette. Animate only gentle breathing, one blink, and a tiny attentive head adjustment while the raised hand stays fixed. Keep all anatomy and props structurally stable. No zoom, pan, crop, shake, background, text, watermark, new object, new limb, facial drift, hand drift, clothing drift, or prop drift. Return cleanly toward the starting pose.",
+  "model": "ltx-video",
+  "endpoint": "/ltx-video/v1/image-to-video",
+  "free_tier": true,
+  "schema_version": 2,
+  "parameters": {
+    "aspect": "1:1",
+    "num_frames": 73,
+    "frame_rate": 24,
+    "steps": 8,
+    "cfg": 3.0,
+    "strength": 1
+  },
+  "status": "COMPLETED",
+  "media_bytes": 585709
+}

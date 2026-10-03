@@ -8,18 +8,18 @@
  * overriding content replaces a slot's default children, including in inheritance.
  */
 const LIMIT = { source: 100000, nodes: 1000, depth: 32, expanded: 2000, label: 2048, height: 200000 };
-const containers = new Set('screen template slot content main nav sidebar header section stack row grid card form list item table menu tabs tab modal dialog alert toast draglist'.split(' '));
+const containers = new Set('screen template slot content main nav sidebar header hero footer section stack row grid card form list item table menu tabs tab modal dialog alert toast draglist'.split(' '));
 const leaves = 'field input textarea select dropdown option checkbox radio toggle slider date calendar button link column badge avatar image divider spacer chart progress text heading'.split(' ');
 const types = new Set([...containers, ...leaves]);
 const common = 'id label width height gap padding bind binding requirement disabled'.split(' ');
 const attributes = {
     screen: 'device uses route', template: 'uses', slot: 'name', content: 'name',
-    grid: 'columns', row: '', sidebar: '', input: 'type name value placeholder required min max step',
+    grid: 'columns', row: '', sidebar: '', header: '', hero: '', footer: '', section: '', input: 'type name value placeholder required min max step',
     field: 'type name value placeholder required min max step', textarea: 'name value placeholder required rows',
     select: 'name value placeholder required options', dropdown: 'name value placeholder required options',
     option: 'value selected', checkbox: 'name checked value required', radio: 'name checked value required',
     toggle: 'name checked', slider: 'name value min max step', date: 'name value required min max',
-    calendar: 'value', button: 'variant primary action', link: 'href route active',
+    calendar: 'value', button: 'variant primary action href route', link: 'href route active',
     nav: 'active', tab: 'active', tabs: 'active', table: 'source', column: 'field',
     image: 'alt src asset', avatar: 'initials', progress: 'value max', chart: 'kind source',
     draglist: 'source', list: 'source', dialog: 'open', modal: 'open', alert: 'variant', toast: 'variant'
@@ -259,14 +259,14 @@ function wrap(value, width, size = 13) {
     if (line) lines.push(line);
     return lines;
 }
-const transparent = new Set(['screen', 'stack', 'row', 'grid', 'main', 'slot', 'content', 'section', 'header', 'nav', 'list', 'item', 'menu']);
+const transparent = new Set(['screen', 'stack', 'row', 'grid', 'main', 'slot', 'content', 'section', 'nav', 'list', 'item', 'menu']);
 const fields = new Set(['input', 'field', 'textarea', 'select', 'dropdown', 'date']);
 
 function measure(node, available, diagnostics) {
     const compact = ['button', 'badge', 'avatar'].includes(node.type);
     const defaultWidth = compact ? Math.max(96, shown(node).length * 9 + 32) : node.type === 'form' ? Math.min(640, available) : available;
     const width = Math.min(available, numeric(node, 'width', defaultWidth));
-    const defaultPadding = ['card', 'dialog', 'modal', 'sidebar', 'alert', 'toast', 'form'].includes(node.type) ? 24 : compact || ['column', 'tab'].includes(node.type) ? 12 : 0;
+    const defaultPadding = ['card', 'dialog', 'modal', 'sidebar', 'alert', 'toast', 'form'].includes(node.type) ? 24 : ['header', 'hero', 'footer'].includes(node.type) ? 16 : compact || ['column', 'tab'].includes(node.type) ? 12 : 0;
     const padding = Math.min(numeric(node, 'padding', defaultPadding), Math.max(0, (width - 80) / 2));
     const inner = Math.max(1, width - padding * 2), gap = numeric(node, 'gap', 20);
     if (node.type === 'calendar' && inner < 224) throw new Error(`Calendar needs at least 224px of inner width at source line ${node.line}.`);
@@ -394,7 +394,13 @@ function renderHTML(box, assetURLs = {}) {
     } else if (['checkbox', 'radio', 'toggle'].includes(t)) body = `<label class="choice"><input${accessible} type="${t === 'radio' ? 'radio' : 'checkbox'}"${t === 'toggle' ? ' role="switch"' : ''}${attrs(['name', 'value'])}${enabled(node, 'checked') ? ' checked' : ''}><span>${label}</span></label>`;
     else if (t === 'slider') body += `<input${accessible} type="range"${attrs(['name', 'min', 'max', 'step', 'value'])}>`;
     else if (t === 'progress') body += `<progress${accessible} max="${esc(a.max || '100')}" value="${esc(a.value || '0')}"></progress>`;
-    else if (t === 'button') body = `<button${accessible} type="button">${label || 'Button'}</button>`;
+    else if (t === 'button') {
+        const nav = a.href || a.route;
+        if (nav) {
+            const url = String(nav).startsWith('/') ? `#${nav}` : nav;
+            body = `<a href="${esc(url)}" class="button-link"${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Button'}</a>`;
+        } else body = `<button${accessible} type="button">${label || 'Button'}</button>`;
+    }
     else if (t === 'link') {
         const url = a.href || a.route || '#';
         body = `<a href="${esc(url.startsWith('/') ? `#${url}` : url)}"${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Link'}</a>`;
@@ -409,7 +415,7 @@ function renderHTML(box, assetURLs = {}) {
     else if (t === 'chart') body += '<div class="placeholder" role="img" aria-label="Empty chart">No data connected</div>';
     else if (t === 'avatar') body += `<span class="avatar">${esc((a.initials || shown(node) || '?').slice(0, 2))}</span>`;
     if (t === 'draglist') body += '<span class="handle" aria-label="Drag handle (static)">⠿</span>';
-    const tag = t === 'form' ? 'fieldset' : t === 'nav' ? 'nav' : t === 'main' ? 'main' : t === 'sidebar' ? 'aside' : t === 'header' ? 'header' : 'div';
+    const tag = { form: 'fieldset', nav: 'nav', main: 'main', sidebar: 'aside', header: 'header', footer: 'footer' }[t] || 'div';
     const role = { dialog: 'dialog', modal: 'dialog', table: 'table', column: 'columnheader', alert: 'alert', toast: 'status', list: 'list', draglist: 'list', item: 'listitem', menu: 'navigation' }[t];
     const plain = transparent.has(t) || (!containers.has(t) && !['badge', 'tab', 'column'].includes(t));
     return `<${tag} id="${esc(node.id)}" class="node ${plain ? 'plain' : ''} ${t}" data-type="${t}" data-line="${node.line}"${metadata} style="${style}"${t === 'form' && enabled(node, 'disabled') ? ' disabled' : ''}${role ? ` role="${role}" aria-label="${esc(shown(node) || t)}"` : ''}>${body}${children}</${tag}>`;
@@ -451,7 +457,13 @@ const flowCSS = `
 .form{background:#fff;border:1px solid #e1e6ed;border-radius:12px;box-shadow:0 4px 12px rgba(24,34,48,.05)}
 .node>.node{margin-top:var(--gap)}.node>.node:first-child{margin-top:0}.node>.label+.node{margin-top:var(--gap)}
 .heading{margin:0}.heading+.form,.heading+.section{margin-top:28px}
-.button,.badge,.avatar{width:fit-content!important;max-width:100%}.button button{min-width:96px}
+.header,.footer{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.hero{background:#e8eef6!important;border-radius:12px}
+.hero>.label,.header>.label{font-size:22px;line-height:28px;font-weight:650}
+.footer>.label{color:${palette.muted}}
+.section{outline:1px dashed ${palette.line};border-radius:8px}
+.button button,.button .button-link{max-width:100%;height:auto;overflow-wrap:anywhere}
+.button,.badge,.avatar{width:fit-content!important;max-width:100%}.button button,.button .button-link{min-width:96px}.button .button-link{display:inline-flex;align-items:center;justify-content:center;height:100%;min-height:42px;padding:10px 16px;border:1px solid ${palette.line};border-radius:6px;background:white;text-decoration:none;color:inherit;font-weight:500}
 .spacer{min-height:max(24px,var(--min-height))}.image,.chart{min-height:max(140px,var(--min-height))}.divider{min-height:1px}
 .image[data-wf-asset]{min-height:var(--min-height)}
 .row,.grid{display:grid;gap:var(--gap)}.row{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}.grid{grid-template-columns:repeat(var(--columns),minmax(0,1fr))}
@@ -471,6 +483,48 @@ const flowCSS = `
 .calendar-month{font-weight:600;margin-top:8px}.calendar-days button[aria-pressed=true]{background:${palette.accent};color:white}
 @media(max-width:520px){.grid{grid-template-columns:1fr}.sheet{padding:16px!important}.canvas{border-radius:10px}input,textarea,select{font-size:16px}}
 `;
+
+
+const NEXT_STEPS = {
+    UNKNOWN_ATTRIBUTE: 'Remove the unsupported attribute, or use link for navigation (href/route).',
+    UNKNOWN_COMPONENT: 'Use a supported component name from the wireframe vocabulary.',
+    INDENTATION: 'Indent with exactly two spaces per nesting level; do not skip levels.',
+    SYNTAX: 'Quote labels that contain spaces; close all quotes.',
+    STRUCTURE: 'Put screens/templates at the root; nest controls inside containers.',
+    UNKNOWN_TEMPLATE: 'Declare the template before screens that use it, or fix uses=.',
+    UNKNOWN_PAGE: 'Pick a page from the page list, or open All pages / Sitemap.',
+    LAYOUT_LIMIT: 'Simplify the page layout or reduce nested height.',
+    SOURCE_LIMIT: 'Split the wireframe into fewer screens or shorter labels.',
+};
+
+export function explainWireframeDiagnostics(diagnostics = []) {
+    const errors = diagnostics.filter(d => d.severity === 'error');
+    const warnings = diagnostics.filter(d => d.severity === 'warning');
+    if (!errors.length && !warnings.length) return { headline: '', steps: [], lines: [] };
+    const primary = errors[0] || warnings[0];
+    const headline = errors.length
+        ? (primary?.message || 'This page outline could not be drawn.')
+        : 'Preview notes';
+    const steps = [];
+    for (const entry of errors.slice(0, 3)) {
+        const tip = NEXT_STEPS[entry.code] || 'Fix the noted line, then reopen the page preview.';
+        const where = entry.line ? `Line ${entry.line}: ` : '';
+        steps.push(`${where}${entry.message} — ${tip}`);
+    }
+    if (!steps.length && warnings.length) steps.push(warnings[0].message);
+    const lines = diagnostics.slice(0, 12).map(entry => {
+        const where = entry.line ? `Line ${entry.line}: ` : '';
+        return `${where}${entry.message}`;
+    });
+    return { headline, steps, lines, errorCount: errors.length, warningCount: warnings.length };
+}
+
+function invalidPreviewCopy(diagnostics) {
+    const explained = explainWireframeDiagnostics(diagnostics);
+    const title = explained.headline || 'This page outline could not be drawn.';
+    const tip = explained.steps[0] || 'Open diagnostics below, fix the first error, then refresh the preview.';
+    return { title, tip, explained };
+}
 
 export function renderWireframe(source, title = 'Wireframe', pageId, assets = []) {
     // Only the host supplies this manifest. DSL source can name an ID, never a URL.
@@ -497,8 +551,10 @@ export function renderWireframe(source, title = 'Wireframe', pageId, assets = []
     const width = (box?.width || 600) + 48;
     const offset = 24;
     const height = offset + (box?.height || 64) + 24;
-    const content = box ? renderSVG(box, 24, offset, assetURLs) : svgLines(['Invalid wireframe. See diagnostics.'], 24, offset + 20);
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="${esc(safeTitle)}"><title>${esc(safeTitle)}</title><rect width="100%" height="100%" fill="${palette.background}"/><g fill="${palette.ink}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">${content}</g></svg>`;
+    const invalid = box ? null : invalidPreviewCopy(diagnostics);
+    const content = box ? renderSVG(box, 24, offset, assetURLs) : svgLines([invalid.title, ...wrap(invalid.tip, Math.max(280, width - 48), 13).slice(0, 4)], 24, offset + 20);
+    const svgHeight = box ? height : Math.max(height, offset + 24 + 20 + (1 + Math.min(4, wrap(invalid.tip, Math.max(280, width - 48), 13).length)) * 20 + 24);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${svgHeight}" width="${width}" height="${svgHeight}" role="img" aria-label="${esc(safeTitle)}"><title>${esc(safeTitle)}</title><rect width="100%" height="100%" fill="${palette.background}"/><g fill="${palette.ink}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">${content}</g></svg>`;
     // Defense in depth, including if opened outside the caller's sandboxed iframe.
     // No scripts, external resources, form submission, raw HTML or executable URLs.
     // srcdoc otherwise inherits its embedder's URL: fragment links could reload
@@ -506,6 +562,7 @@ export function renderWireframe(source, title = 'Wireframe', pageId, assets = []
     // At narrow preview widths use native document flow instead of clipping the
     // desktop coordinate canvas. The AST, labels and control bindings stay intact.
     const imagePolicy = Object.values(assetURLs).map(esc).join(' ') || "'none'";
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri about:"><base href="about:srcdoc"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${box ? renderHTML(box, assetURLs) : '<p role="alert">Invalid wireframe. See diagnostics.</p>'}</div></div></body></html>`;
-    return { svg, html, diagnostics };
+    const htmlBody = box ? renderHTML(box, assetURLs) : `<div class="wf-invalid" role="alert"><strong>${esc(invalid.title)}</strong><p>${esc(invalid.tip)}</p><p class="wf-next">Next: fix the first error in the outline, or open Sitemap / All pages to browse the rest.</p></div>`;
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri about:"><base href="about:srcdoc"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}.wf-invalid{padding:20px;max-width:36rem;color:${palette.ink}}.wf-invalid strong{display:block;font-size:16px;margin-bottom:8px}.wf-invalid p{margin:0 0 8px;color:${palette.muted}}.wf-next{font-weight:500;color:${palette.accent}!important}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${htmlBody}</div></div></body></html>`;
+    return { svg, html, diagnostics, explanation: explainWireframeDiagnostics(diagnostics) };
 }

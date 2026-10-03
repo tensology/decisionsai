@@ -6,6 +6,8 @@
 - Property 15: TTS response reverts to previous state
 """
 
+from itertools import permutations
+
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -189,7 +191,7 @@ def test_transition_lookup(config: SkinConfig, from_hook: str, to_hook: str) -> 
 @given(
     config=skin_config_strategy(),
     initial_hook=st.sampled_from([h for h in EVENT_HOOKS
-                                  if h != "tts_response"
+                                  if h not in ("tts_response", "talking")
                                   and h not in ("ptt_active", "hands_free_listening", "dictation", "ticket_dictation")]),
 )
 def test_tts_response_reverts_to_previous_state(
@@ -237,3 +239,110 @@ def test_repeated_hook_preserves_state_needed_for_revert() -> None:
         ("hands_free_listening", "hands_free_listening"),
         ("idle", "hands_free_listening"),
     ]
+
+
+def test_talking_temporarily_overrides_hands_free_then_reverts() -> None:
+    dispatcher = EventHookDispatcher()
+
+    dispatcher.fire_hook("hands_free_listening", trigger="enable")
+    dispatcher.fire_hook("talking", trigger="tts_started")
+    assert dispatcher.get_current_hook() == "talking"
+
+    dispatcher.revert_hook("talking", trigger="playback_finished")
+    assert dispatcher.get_current_hook() == "hands_free_listening"
+
+
+def test_hidden_recording_stop_is_not_resurrected_after_talking() -> None:
+    dispatcher = EventHookDispatcher()
+
+    dispatcher.fire_hook("recording_action", trigger="recording_started")
+    dispatcher.fire_hook("talking", trigger="tts_started")
+    assert dispatcher.get_current_hook() == "talking"
+
+    dispatcher.revert_hook("recording_action", trigger="recording_stopped")
+    assert dispatcher.get_current_hook() == "talking"
+
+    dispatcher.revert_hook("talking", trigger="playback_finished")
+    assert dispatcher.get_current_hook() == "idle"
+
+
+def test_hidden_dictation_release_is_not_resurrected_after_talking() -> None:
+    dispatcher = EventHookDispatcher()
+
+    dispatcher.fire_hook("dictation", trigger="dictation_pressed")
+    dispatcher.fire_hook("talking", trigger="tts_started")
+    assert dispatcher.get_current_hook() == "dictation"
+
+    dispatcher.revert_hook("dictation", trigger="dictation_released")
+    assert dispatcher.get_current_hook() == "talking"
+
+    dispatcher.revert_hook("talking", trigger="playback_finished")
+    assert dispatcher.get_current_hook() == "idle"
+
+
+def test_recording_started_during_dictation_appears_after_release() -> None:
+    dispatcher = EventHookDispatcher()
+
+    dispatcher.fire_hook("dictation", trigger="dictation_pressed")
+    dispatcher.fire_hook("recording_action", trigger="recording_started")
+    assert dispatcher.get_current_hook() == "dictation"
+
+    dispatcher.revert_hook("dictation", trigger="dictation_released")
+    assert dispatcher.get_current_hook() == "recording_action"
+
+
+def test_hidden_thinking_finish_is_not_resurrected_after_recording() -> None:
+    dispatcher = EventHookDispatcher()
+
+    dispatcher.fire_hook("thinking", trigger="stream_started")
+    dispatcher.fire_hook("recording_action", trigger="recording_started")
+    assert dispatcher.get_current_hook() == "recording_action"
+
+    dispatcher.revert_hook("thinking", trigger="stream_finished")
+    dispatcher.revert_hook("recording_action", trigger="recording_stopped")
+    assert dispatcher.get_current_hook() == "idle"
+
+
+def test_recording_cancel_signal_clears_recording_state() -> None:
+    from distr.core.signals import SignalManager
+
+    signals = SignalManager()
+    dispatcher = EventHookDispatcher(signals)
+    dispatcher.connect_signals()
+
+    signals.action_recording_started.emit(42)
+    assert dispatcher.get_current_hook() == "recording_action"
+
+    signals.action_recording_cancelled.emit(42)
+    assert dispatcher.get_current_hook() == "idle"
+
+
+def test_overlapping_agent_states_never_resurrect_after_completion() -> None:
+    hooks = ("thinking", "recording_action", "talking", "dictation")
+    priority = {
+        "thinking": 20,
+        "recording_action": 30,
+        "talking": 50,
+        "dictation": 60,
+    }
+
+    for start_order in permutations(hooks):
+        for finish_order in permutations(hooks):
+            dispatcher = EventHookDispatcher()
+            active = set()
+            activation_order = {}
+
+            for sequence, hook in enumerate(start_order):
+                dispatcher.fire_hook(hook, trigger=f"start:{hook}")
+                active.add(hook)
+                activation_order[hook] = sequence
+
+            for hook in finish_order:
+                dispatcher.revert_hook(hook, trigger=f"finish:{hook}")
+                active.remove(hook)
+                expected = (
+                    max(active, key=lambda item: (priority[item], activation_order[item]))
+                    if active
+                    else "idle"
+                )
+                assert dispatcher.get_current_hook() == expected

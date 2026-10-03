@@ -442,7 +442,54 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if idle_resp:
             self._play_animation(idle_resp)
 
+        self._schedule_hot_animation_preload()
+
         logger.info("Loaded skin config: %s (type=%s)", self._skin_config.name, self._skin_config.type)
+
+    def _schedule_hot_animation_preload(self):
+        """Warm shortcut and TTS animations after startup without changing state."""
+        if self._skin_config is None or self._skin_config.type != "avatar":
+            return
+        skin_folder = self._skin_folder
+        hot_hooks = (
+            "ptt_active",
+            "dictation",
+            "ticket_dictation",
+            "hands_free_listening",
+            "talking",
+            "thinking",
+            "recording_action",
+        )
+        for index, hook in enumerate(hot_hooks):
+            response = self._skin_config.events.get(hook)
+            if response is None:
+                continue
+
+            def _preload(resp=response, expected_folder=skin_folder, hook_name=hook):
+                if self._skin_folder != expected_folder or self._skin_config is None:
+                    return
+                rendering = self._skin_config.rendering
+                extract_size = int(self.content_size * max(rendering.image_scale, 1.0))
+                self._animation_player.set_size(extract_size, extract_size)
+                self._animation_player.set_device_pixel_ratio(self.devicePixelRatioF())
+                path = os.path.join(AVATARS_DIR, expected_folder, resp.animation)
+                if not os.path.exists(path):
+                    return
+                started = time.perf_counter()
+                self._animation_player.preload(
+                    path,
+                    playback=resp.playback,
+                    chroma_key=rendering.chroma_key,
+                    chroma_threshold=rendering.chroma_threshold,
+                )
+                logger.info(
+                    "[ORACLE] preloaded hook=%s animation=%s in %.1fms",
+                    hook_name,
+                    resp.animation,
+                    (time.perf_counter() - started) * 1000,
+                )
+
+            QTimer.singleShot(2200 + index * 500, _preload)
 
     def _on_direct_oracle_change(self, skin_name: str):
         """Handle skin change from settings — reload config and recreate components."""
@@ -515,6 +562,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         idle_resp = self._skin_config.events.get("idle")
         if idle_resp:
             self._play_animation(idle_resp)
+        self._schedule_hot_animation_preload()
 
         # No idle ring — GlowEngine + hooks own visible glow; non-zero alpha here caused a gray rim.
         self._shadow_color = QtGui.QColor(0, 0, 0, 0)
@@ -1101,10 +1149,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def _reconcile_interaction_visual_state(self, reason: str) -> None:
         """Repair stale capture visuals from the authoritative runtime flags.
 
-        Hook history is useful for normal transitions, but it can retain an
-        interaction state after an out-of-order release/stop signal. Only
-        interaction hooks are force-reset here so unrelated agent visuals such
-        as thinking or TTS are never cleared by capture cleanup.
+        Interaction events can finish while a higher-priority state is visible.
+        Clear every inactive interaction hook from the dispatcher while
+        preserving independently active agent states such as thinking, TTS,
+        and recording.
         """
         dispatcher = self._event_dispatcher
         current = dispatcher.get_current_hook()
@@ -1128,6 +1176,19 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         else:
             expected = "idle"
 
+        stale_hooks = interaction_hooks if expected == "idle" else interaction_hooks - {expected}
+        clear_hooks = getattr(dispatcher, "clear_hooks", None)
+        if callable(clear_hooks):
+            clear_hooks(
+                stale_hooks,
+                trigger=f"oracle:interaction_reconcile:{reason}:clear_stale",
+            )
+        elif current in stale_hooks:
+            # Compatibility for lightweight dispatchers used by embedders and
+            # tests. The production dispatcher always supports clear_hooks.
+            dispatcher.force_idle(f"interaction_reconcile:{reason}")
+        current = dispatcher.get_current_hook()
+
         if current == expected:
             logging.debug(
                 "[ORACLE] interaction visual reconciled (%s): hook=%s",
@@ -1137,19 +1198,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
 
         if expected == "idle":
-            if current in interaction_hooks:
-                logging.warning(
-                    "[ORACLE] interaction visual mismatch (%s): current=%s expected=idle; forcing idle",
-                    reason,
-                    current,
-                )
-                dispatcher.force_idle(f"interaction_reconcile:{reason}")
-            else:
-                logging.debug(
-                    "[ORACLE] interaction visual check (%s): preserving non-interaction hook=%s",
-                    reason,
-                    current,
-                )
+            logging.debug(
+                "[ORACLE] interaction visual check (%s): preserving non-interaction hook=%s",
+                reason,
+                current,
+            )
             return
 
         logging.warning(
@@ -1158,8 +1211,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             current,
             expected,
         )
-        if current in interaction_hooks:
-            dispatcher.force_idle(f"interaction_reconcile:{reason}")
         dispatcher.fire_hook(expected, trigger=f"oracle:interaction_reconcile:{reason}")
 
     def _cleanup_ptt(self):
@@ -1503,8 +1554,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             
             # Safety: if hook is still ptt_active after cleanup, force idle
             if self._event_dispatcher.get_current_hook() == "ptt_active":
-                logging.warning("[ORACLE] mouseReleaseEvent: hook still ptt_active after cleanup — forcing idle")
-                self._event_dispatcher.force_idle("ptt_mouse_release_safety")
+                logging.warning("[ORACLE] mouseReleaseEvent: hook still ptt_active after cleanup — deactivating")
+                self._event_dispatcher.revert_hook("ptt_active", trigger="oracle:ptt_mouse_release_safety")
             
             self.dragging = False
             if hasattr(self, '_drag_notified'):
@@ -1596,8 +1647,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # between delay timer and key release), force it back to idle so the
         # animation never gets stuck glowing.
         if self._event_dispatcher.get_current_hook() == "ptt_active":
-            logging.warning("[ORACLE] _on_global_ptt_released: hook still ptt_active — forcing idle")
-            self._event_dispatcher.force_idle("global_ptt_hotkey_release_safety")
+            logging.warning("[ORACLE] _on_global_ptt_released: hook still ptt_active — deactivating")
+            self._event_dispatcher.revert_hook("ptt_active", trigger="oracle:global_ptt_hotkey_release_safety")
         self.update()
 
     def _get_oracle_size_down_hotkey_combo(self):
@@ -2335,6 +2386,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def hide_oracle(self):
         self.oracle_visible = False
         logger.debug(f"Oracle hidden. self.isVisible(): {self.isVisible()}, oracle_visible: {self.oracle_visible}")
+        if hasattr(self, '_chat_bubble'):
+            self._chat_bubble.hide_bubble()
+        if hasattr(self, 'player_window') and self.player_window:
+            if hasattr(self.player_window, 'hide_window_immediate'):
+                self.player_window.hide_window_immediate()
+            else:
+                self.player_window.hide()
         QTimer.singleShot(0, self.hide)
         QTimer.singleShot(10, self.update_menu)
 
@@ -2746,8 +2804,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Skin system reverts to previous state
         self._event_dispatcher.revert_hook("dictation", trigger="oracle:dictation_stopped")
         if self._event_dispatcher.get_current_hook() == "ptt_active":
-            logging.warning("[ORACLE] stale ptt_active after dictation stopped — forcing idle")
-            self._event_dispatcher.force_idle("dictation_stopped_stale_ptt")
+            logging.warning("[ORACLE] stale ptt_active after dictation stopped — deactivating")
+            self._event_dispatcher.revert_hook("ptt_active", trigger="oracle:dictation_stopped_stale_ptt")
 
         # Restore hands-free mode if it was enabled before dictation
         if self._hands_free_before_dictation and self.is_listening:

@@ -1,0 +1,10 @@
+{
+  "request_id": "ltx-video_01a100e5-b282-7e4e-ef6d-2029f4ea78f2a",
+  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/dictation.png",
+  "prompt": "Fixed camera. Preserve the exact illustrated Hayley character, face, eyes, long platinum hair, hands, props, dark clothing, colors, linework, proportions, framing, and silhouette. Animate only subtle speech and listening movement with restrained mouth motion. Keep all anatomy and props structurally stable. No zoom, pan, crop, shake, background, text, watermark, new object, new limb, facial drift, hand drift, clothing drift, or prop drift. Return cleanly toward the starting pose.",
+  "model": "ltx-video",
+  "endpoint": "/ltx-video/v1/image-to-video",
+  "free_tier": true,
+  "status": "COMPLETED",
+  "media_bytes": 513032
+}

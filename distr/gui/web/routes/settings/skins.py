@@ -42,6 +42,8 @@ def register_routes(router, templates):
                 "type": config.type,
                 "idle_animation": idle_anim.animation if idle_anim else None,
                 "idle_playback": idle_anim.playback if idle_anim else "loop",
+                "chroma_key": list(config.rendering.chroma_key) if config.rendering.chroma_key else None,
+                "chroma_threshold": config.rendering.chroma_threshold,
             })
 
         settings = load_settings_from_db()

@@ -113,6 +113,46 @@ def _apply_chroma_key_to_image(qimg: QImage, key_rgb: tuple, threshold: int = 35
         fade = ((dist[soft_mask] - threshold) / soft).clip(0, 1)
         pixels[:, :, 3][soft_mask] = (255 * fade).astype(np.uint8)
 
+    # Chroma-key compression blends the key color into antialiased subject
+    # edges.  Removing alpha alone leaves a bright halo, especially around
+    # pale hair.  Despill only a narrow band beside transparent pixels so
+    # legitimate interior colors, such as green eyes or status icons, remain
+    # unchanged.
+    key_values = np.array((kr, kg, kb), dtype=np.int16)
+    dominant_channel = int(np.argmax(key_values))
+    other_channels = [index for index in range(3) if index != dominant_channel]
+    if key_values[dominant_channel] - max(key_values[other_channels]) >= 40:
+        transparent_nearby = pixels[:, :, 3] == 0
+        radius = max(2, min(16, round(min(w, h) * 0.022)))
+        for _ in range(radius):
+            padded = np.pad(transparent_nearby, 1, constant_values=False)
+            transparent_nearby = (
+                transparent_nearby
+                | padded[:-2, 1:-1]
+                | padded[2:, 1:-1]
+                | padded[1:-1, :-2]
+                | padded[1:-1, 2:]
+                | padded[:-2, :-2]
+                | padded[:-2, 2:]
+                | padded[2:, :-2]
+                | padded[2:, 2:]
+            )
+
+        # Pixel storage is BGRA, while key_rgb is RGB.
+        storage_channel = {0: 2, 1: 1, 2: 0}[dominant_channel]
+        storage_others = [index for index in (0, 1, 2) if index != storage_channel]
+        dominant_values = pixels[:, :, storage_channel]
+        other_max = np.maximum(
+            pixels[:, :, storage_others[0]],
+            pixels[:, :, storage_others[1]],
+        )
+        spill = (
+            (pixels[:, :, 3] > 0)
+            & transparent_nearby
+            & (dominant_values.astype(np.int16) - other_max.astype(np.int16) > 4)
+        )
+        dominant_values[spill] = other_max[spill]
+
     return QImage(pixels.data, w, h, w * 4, QImage.Format.Format_ARGB32).copy()
 
 

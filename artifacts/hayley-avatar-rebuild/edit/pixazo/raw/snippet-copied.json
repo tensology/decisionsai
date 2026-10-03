@@ -1,0 +1,7 @@
+{
+  "request_id": "seedance-2-5_01a100b5-3690-701c-f2ae-90b874645affd",
+  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/snippet-copied.png",
+  "prompt": "Fixed camera. Preserve the exact illustrated character, face, long platinum hair, jacket, line art, colors, proportions, pose, props, and solid pure green background. Subtle breathing, one gentle blink, tiny thumbs-up emphasis, clipboard and copy icon remain stable and unchanged. No camera movement, no zoom, no morphing, no new objects. The motion returns exactly to the starting pose for a seamless loop.",
+  "duration": 5,
+  "model": "seedance-2.5-first-last-frame"
+}

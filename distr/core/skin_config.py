@@ -26,6 +26,7 @@ EVENT_HOOKS: List[str] = [
     "recording_action",
     "file_drop_success",
     "tts_response",
+    "talking",
     "running_action",
     "running_step_runner",
     "snippet_copied",

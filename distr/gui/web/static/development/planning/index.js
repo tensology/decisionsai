@@ -1,4 +1,4 @@
-import { createPlanConversation } from './conversation.js?v=20260917-plan-scaffold';
+import { createPlanConversation } from './conversation.js?v=20261003-page-stencils-3';
 
 export function createPlanning(host, root = document.getElementById('plan-root')) {
     const state = { boards: [], projects: [], workspaces: [], workspace: null, item: null, search: '', showUnlinked: false, navigation: 0, view: 'home' };

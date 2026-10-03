@@ -366,6 +366,7 @@ class EventHandlerMixin:
                 self._tts_active_sessions,
                 player_visible,
             )
+            self._set_oracle_talking(True, "tts_started")
             if not hasattr(self, '_player_safety_timer'):
                 self._player_safety_timer = QTimer(self)
                 self._player_safety_timer.setSingleShot(True)
@@ -512,6 +513,7 @@ class EventHandlerMixin:
                 )
 
         elif event == 'tts_error':
+            self._set_oracle_talking(False, "tts_error")
             provider = data.get('provider', 'TTS')
             error_type = data.get('error_type', 'unknown')
             message = data.get('message', 'An error occurred with the TTS service')
@@ -586,10 +588,42 @@ class EventHandlerMixin:
                 getattr(self, '_tts_active_sessions', 0),
             )
             return
+        oracle = getattr(self, 'oracle_window', None)
+        oracle_visible = getattr(oracle, 'oracle_visible', None) if oracle is not None else None
+        if oracle is not None and oracle_visible is None:
+            oracle_visible = oracle.isVisible()
+        if oracle is not None and not bool(oracle_visible):
+            logger.info(
+                "[EVENT QUEUE] Suppressed player_%s because the Oracle/avatar is hidden",
+                action,
+            )
+            return
         if action == "show":
             signal_manager.show_player_window.emit()
         elif action == "play":
             signal_manager.player_play.emit()
+
+    def _set_oracle_talking(self, active: bool, reason: str) -> None:
+        """Keep the avatar talking state aligned with audible TTS playback."""
+        oracle = getattr(self, 'oracle_window', None)
+        if oracle is None:
+            return
+        dispatcher = getattr(oracle, '_event_dispatcher', None)
+        if dispatcher is None:
+            return
+        if active:
+            oracle_visible = getattr(oracle, 'oracle_visible', None)
+            if oracle_visible is None:
+                oracle_visible = oracle.isVisible()
+            if not bool(oracle_visible):
+                logger.info("[EVENT QUEUE] Suppressed talking state because the Oracle/avatar is hidden")
+                return
+            dispatcher.fire_hook("talking", trigger=f"events:{reason}")
+            return
+        dispatcher.revert_hook("talking", trigger=f"events:{reason}")
+        bubble = getattr(oracle, '_chat_bubble', None)
+        if bubble is not None:
+            bubble.hide_bubble()
 
     def _player_is_on_screen(self) -> bool:
         """True when the desktop player is visible or stuck in a fade-out."""
@@ -628,13 +662,15 @@ class EventHandlerMixin:
         else:
             logger.info("[EVENT QUEUE] Player not on screen (%s)", reason)
 
+        self._set_oracle_talking(False, reason)
+
         # Defensive: if oracle is still in 'thinking' after playback is done,
         # force it back to idle so skin state cannot stick.
         try:
             if hasattr(self, 'oracle_window') and self.oracle_window and hasattr(self.oracle_window, '_event_dispatcher'):
                 dispatcher = self.oracle_window._event_dispatcher
                 if dispatcher and dispatcher.get_current_hook() == "thinking":
-                    dispatcher.revert_hook("thinking", trigger="events:player_close_thinking_guard")
+                    dispatcher.force_idle("events:player_close_thinking_guard")
                 self._force_oracle_idle_if_ptt_stale(f"player_close:{reason}")
         except Exception:
             logger.debug("[EVENT QUEUE] Failed to apply idle-reset guard after %s", reason, exc_info=True)

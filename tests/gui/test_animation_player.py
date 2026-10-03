@@ -141,6 +141,44 @@ class TestAnimationPlayerFormatDetection:
 
         assert player._player is None
 
+    @patch("distr.gui.oracle.webm_player.WebMPlayer")
+    def test_webm_reuses_decoded_player_for_same_animation(self, MockWebMPlayer):
+        """Returning to an avatar state must not decode its WebM again."""
+        from distr.gui.oracle.animation_player import AnimationPlayer
+
+        mock_instance = MagicMock()
+        mock_instance.frame_ready = MagicMock()
+        mock_instance.frame_ready.connect = MagicMock()
+        MockWebMPlayer.return_value = mock_instance
+
+        player = AnimationPlayer()
+        player.set_size(200, 200)
+        player.load("cached.webm", chroma_key=(0, 255, 0))
+        player.load("cached.webm", chroma_key=(0, 255, 0))
+
+        MockWebMPlayer.assert_called_once_with(player)
+        mock_instance.load.assert_called_once()
+        mock_instance.set_size.assert_called_once_with(200, 200)
+        assert player._webm_player is mock_instance
+
+    @patch("distr.gui.oracle.webm_player.WebMPlayer")
+    def test_preloaded_webm_is_used_on_first_visible_load(self, MockWebMPlayer):
+        from distr.gui.oracle.animation_player import AnimationPlayer
+
+        mock_instance = MagicMock()
+        mock_instance.frame_ready = MagicMock()
+        mock_instance.frame_ready.connect = MagicMock()
+        MockWebMPlayer.return_value = mock_instance
+
+        player = AnimationPlayer()
+        player.set_size(200, 200)
+        player.preload("shortcut.webm", chroma_key=(0, 255, 0))
+        player.load("shortcut.webm", chroma_key=(0, 255, 0))
+
+        MockWebMPlayer.assert_called_once_with(player)
+        mock_instance.load.assert_called_once()
+        assert player._webm_player is mock_instance
+
     @patch("distr.gui.oracle.animation_player.GifPlayer")
     def test_gif_case_insensitive(self, MockGifPlayer):
         """Format detection should be case-insensitive."""
@@ -204,3 +242,34 @@ class TestWebMPlayerResourceLimits:
 
         assert len(player._frames) == 1
         assert player._source_images == []
+
+
+def test_chroma_key_despills_only_subject_edges():
+    import numpy as np
+    from PyQt6.QtGui import QImage
+
+    from distr.gui.oracle.webm_player import _apply_chroma_key_to_image
+
+    pixels = np.zeros((40, 40, 4), dtype=np.uint8)
+    pixels[:, :, 1] = 255  # BGRA storage: solid green background.
+    pixels[:, :, 3] = 255
+    pixels[8:32, 8:32, :3] = (90, 90, 90)
+    pixels[8:32, 8:32, 3] = 255
+    pixels[8:32, 8, :3] = (80, 220, 80)  # Green spill on subject edge.
+    pixels[19:22, 19:22, :3] = (40, 180, 40)  # Legitimate interior green.
+    image = QImage(
+        pixels.data,
+        40,
+        40,
+        40 * 4,
+        QImage.Format.Format_ARGB32,
+    ).copy()
+
+    cleaned = _apply_chroma_key_to_image(image, (0, 255, 0), threshold=35)
+    ptr = cleaned.bits()
+    ptr.setsize(40 * 40 * 4)
+    result = np.frombuffer(memoryview(ptr), dtype=np.uint8).reshape((40, 40, 4))
+
+    assert result[0, 0, 3] == 0
+    assert result[12, 8, 1] == max(result[12, 8, 0], result[12, 8, 2])
+    assert tuple(result[20, 20, :3]) == (40, 180, 40)

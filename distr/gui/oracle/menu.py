@@ -271,6 +271,56 @@ def get_development_boards_for_menu(
         return rows
 
 
+
+def get_planning_projects_for_menu() -> list[tuple[int, str, str]]:
+    """Return projects the Planning hub can open, in hub order.
+
+    The hub shows a card for each non-archived board whose
+    ``default_project_id`` points at an existing project. This menu lists
+    each of those projects once. The row is
+    ``(project_id, project_name, board_key)``, and ``board_key`` is the
+    first linked board in hub order, which is the plan view the hub opens.
+    """
+    with get_session() as session:
+        boards = (
+            session.query(KanbanBoard)
+            .filter((KanbanBoard.archived == False) | (KanbanBoard.archived.is_(None)))
+            .order_by(KanbanBoard.position.asc(), KanbanBoard.name.asc(), KanbanBoard.id.asc())
+            .all()
+        )
+        project_ids = {int(board.default_project_id) for board in boards if board.default_project_id}
+        projects = {
+            int(project.id): project
+            for project in session.query(Project).filter(Project.id.in_(project_ids)).all()
+        } if project_ids else {}
+        rows: list[tuple[int, str, str]] = []
+        seen: set[int] = set()
+        for board in boards:
+            if not board.default_project_id:
+                continue
+            project_id = int(board.default_project_id)
+            project = projects.get(project_id)
+            if project is None or project_id in seen:
+                continue
+            source = (board.source or "database").strip().lower()
+            if source in {"jira", "trello"}:
+                identity = (board.external_board_id or "").strip()
+                if not identity:
+                    continue
+            else:
+                source = "database"
+                identity = str(int(board.id))
+            seen.add(project_id)
+            rows.append(
+                (
+                    project_id,
+                    truncate_menu_title(project.name or "Untitled", max_len=40),
+                    development_board_key(source, identity),
+                )
+            )
+        return rows
+
+
 def get_recent_actions_for_menu(limit: int = 10) -> list[tuple[int, str, bool]]:
     """Return recent actions ordered by last run, then modified date."""
     with get_session() as session:
@@ -606,6 +656,13 @@ class MenuTrayMixin:
             self.projects_menu_action, self.incoming_submenu
         )
 
+        self.planning_submenu = QtWidgets.QMenu("Planning", self.development_submenu)
+        self._planning_menu_actions: list[QAction] = []
+        self.planning_submenu.aboutToShow.connect(self._rebuild_planning_menu_items)
+        self.planning_menu_action = self.development_submenu.insertMenu(
+            self.incoming_menu_action, self.planning_submenu
+        )
+
         self.actions_submenu = QtWidgets.QMenu("Actions", self.menu)
         self.actions_menu_action = self.menu.addMenu(self.actions_submenu)
 
@@ -931,6 +988,7 @@ class MenuTrayMixin:
             self.kanban_manage_messages_action,
             self.kanban_sync_messages_action,
             self.step_runner_action,
+            self.planning_menu_action,
             self.projects_menu_action,
             self.manage_projects_action,
             self.terminals_menu_action,
@@ -1145,6 +1203,42 @@ class MenuTrayMixin:
             )
             self.projects_submenu.addAction(board_action)
             self._project_menu_actions.append(board_action)
+
+
+    def _rebuild_planning_menu_items(self) -> None:
+        """List the projects the Planning hub can open."""
+        if not getattr(self, "planning_submenu", None):
+            return
+
+        for action in self._planning_menu_actions:
+            self.planning_submenu.removeAction(action)
+            action.deleteLater()
+        self._planning_menu_actions.clear()
+
+        try:
+            projects = get_planning_projects_for_menu()
+        except Exception as e:
+            logger.error("Failed to load Planning projects for menu: %s", e)
+            projects = []
+
+        eula_accepted = bool((getattr(self, "settings", None) or {}).get("accepted_eula", False))
+        if not projects:
+            empty = QAction("No projects", self.planning_submenu)
+            empty.setEnabled(False)
+            self.planning_submenu.addAction(empty)
+            self._planning_menu_actions.append(empty)
+            return
+
+        for _project_id, title, board_key in projects:
+            project_action = QAction(title, self.planning_submenu)
+            project_action.setEnabled(eula_accepted)
+            project_action.triggered.connect(
+                lambda checked=False, key=board_key: self._open_development_board_from_menu(
+                    key, view="plan"
+                )
+            )
+            self.planning_submenu.addAction(project_action)
+            self._planning_menu_actions.append(project_action)
 
     def _rebuild_terminal_menu_items(self) -> None:
         """Build checkable project terminal toggles from current process state."""
