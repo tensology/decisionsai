@@ -274,9 +274,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
         text.textContent = parts.join(' · ') + (assessment.reason ? ` — ${assessment.reason}` : '');
     }
 
-    async function refreshRoutingAssessment(instruction) {
+    async function refreshRoutingAssessment(instruction, options) {
         const prompt = String(instruction || el('task-prompt')?.value || '').trim();
-        if (context.draft.route_mode !== 'auto') return null;
+        if (context.draft.route_mode !== 'auto' && !options?.force) return null;
         if (!prompt) {
             context.routingAssessment = null;
             updateModelLabel();
@@ -395,6 +395,17 @@ export function createThreadsComposer({ context, actions, el, token }) {
         actions.toast(result.message || 'Task created.');
     }
 
+    async function shouldConfirmWorkflowPush() {
+        if (context.editingCommandId) return false;
+        if ((context.controlState.interactions || [])[0]?.allowed_actions?.includes('feedback')) return false;
+        if (actions.isActiveAgentRun(context.currentRun)) return false;
+        const autonomy = String(context.currentChat?.autonomy_level || context.draft.autonomy_level || 'full').toLowerCase();
+        if (autonomy === 'plan' || autonomy === 'approval') return false;
+        if (context.draft.workflow_id || context.currentWorkflow) return false;
+        if (Number(context.currentChat?.development_workflow_id || 0)) return false;
+        return String(context.routingAssessment?.execution_mode || '') === 'workflow';
+    }
+
     async function sendPrompt(event) {
         event.preventDefault();
         if (context.busy || !context.ready || context.routeLoading) return;
@@ -410,12 +421,21 @@ export function createThreadsComposer({ context, actions, el, token }) {
             actions.toast('This pinned model is not image-capable. Choose Auto or an image-capable model before sending.', 'error');
             return;
         }
-        if (context.draft.route_mode === 'auto' && !context.editingCommandId) {
+        if (!context.editingCommandId) {
             try {
-                await refreshRoutingAssessment(prompt);
+                await refreshRoutingAssessment(prompt, { force: true });
             } catch (_) {
                 context.routingAssessment = null;
             }
+        }
+        if (await shouldConfirmWorkflowPush()) {
+            const accepted = await actions.confirmAction({
+                title: 'Workflow',
+                message: 'Are you sure? Do you want to push this into a workflow?',
+                confirmLabel: 'Yes',
+                cancelLabel: 'No'
+            });
+            if (!accepted) return;
         }
         const fullPrompt = promptWithContext(prompt);
         context.busy = true;

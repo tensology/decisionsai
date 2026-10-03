@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture()
@@ -32,70 +33,94 @@ def test_unlinked_message_is_silent_when_board_linked_mode(monkeypatch, rules_db
     assert decision.should_telegram_push is False
     assert decision.should_route_work_intake is False
     assert decision.should_inject_message_bus is False
-    assert decision.reason == "unlinked_silent"
+    assert decision.reason == "project_unlinked_silent"
 
 
-def test_linked_message_announces_and_attempts_telegram_push(monkeypatch, rules_db):
+def test_resolve_whatsapp_link_requires_existing_board_project(monkeypatch, tmp_path):
+    import distr.core.db as db_module
+    import distr.core.kanban.whatsapp_intake_rules as rules
+    from distr.core.db import WhatsAppPhoneLink
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.projects import Project
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'wa_project_link.db'}")
+    Project.__table__.create(engine)
+    KanbanBoard.__table__.create(engine)
+    WhatsAppPhoneLink.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(db_module, "get_session", session_factory)
+
+    with session_factory() as session:
+        session.add(Project(id=13, name="AuctionNow", folder_location="/tmp/auction"))
+        session.add(KanbanBoard(id=3, name="AuctionNow", default_project_id=13))
+        session.add(KanbanBoard(id=8, name="Orphaned", default_project_id=99))
+        session.add(WhatsAppPhoneLink(
+            id=1,
+            board_id=3,
+            phone_jid="27630000001@s.whatsapp.net",
+            phone_number="27630000001",
+            contact_name="Linked",
+            auto_snapshot=False,
+        ))
+        session.add(WhatsAppPhoneLink(
+            id=2,
+            board_id=8,
+            phone_jid="27630000002@s.whatsapp.net",
+            phone_number="27630000002",
+            contact_name="Orphaned",
+            auto_snapshot=False,
+        ))
+        session.commit()
+
+    linked = rules.resolve_whatsapp_link("27630000001@s.whatsapp.net")
+    orphaned = rules.resolve_whatsapp_link("27630000002@s.whatsapp.net")
+
+    assert (linked.board_id, linked.project_id) == (3, 13)
+    assert (orphaned.board_id, orphaned.project_id) == (8, None)
+
+
+@pytest.mark.parametrize("surface_mode", ["legacy", "board_linked"])
+def test_board_link_without_project_is_silent(monkeypatch, rules_db, surface_mode):
+    rules = rules_db
+    monkeypatch.setenv("DECISIONSAI_WA_INTAKE_SURFACE", surface_mode)
+    link = rules.WhatsAppLinkInfo(
+        board_id=8,
+        project_id=None,
+        board_name="Unlinked board",
+        contact_name="Contact",
+        phone_jid="27630000001@s.whatsapp.net",
+    )
+
+    decision = rules.decide_intake_surface(jid=link.phone_jid, link=link)
+
+    assert decision.linked is False
+    assert decision.board_id == 8
+    assert decision.should_announce is False
+    assert decision.should_telegram_push is False
+    assert decision.should_route_work_intake is False
+    assert decision.should_inject_message_bus is False
+    assert decision.reason == "project_unlinked_silent"
+
+
+def test_project_linked_message_waits_for_grouped_work_scan(monkeypatch, rules_db):
     rules = rules_db
     monkeypatch.setenv("DECISIONSAI_WA_INTAKE_SURFACE", "board_linked")
-    monkeypatch.delenv("DECISIONSAI_WHATSAPP_DRY_RUN", raising=False)
     link = rules.WhatsAppLinkInfo(
         board_id=7,
+        project_id=17,
         board_name="AuctionNow",
         contact_name="Client",
         phone_jid="27631111111@s.whatsapp.net",
         auto_snapshot=False,
         link_id=1,
     )
-    monkeypatch.setattr(rules, "resolve_whatsapp_link", lambda *a, **k: link)
-
-    spoken = []
-    monkeypatch.setattr(
-        rules,
-        "announce_board_linked_message",
-        lambda decision, preview="": spoken.append(preview) or True,
-    )
-
-    class FakeManager:
-        def __init__(self):
-            self.sent = []
-
-        def send_to_telegram(self, message, reply_markup=None):
-            self.sent.append(message)
-            return True
-
-    manager = FakeManager()
-    monkeypatch.setattr(
-        "distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app",
-        lambda: manager,
-    )
-
     decision = rules.decide_intake_surface(jid=link.phone_jid, link=link)
-    assert decision.should_announce is True
-    assert decision.should_telegram_push is True
+    assert decision.linked is True
+    assert decision.should_announce is False
+    assert decision.should_telegram_push is False
     assert decision.should_inject_message_bus is False
-    assert decision.should_route_work_intake is True
-
-    tracking = rules.apply_board_linked_surface_actions(
-        decision,
-        preview="Need a payout fix",
-        sender_phone="27631111111",
-        source_message_id="wa-1",
-        jid=link.phone_jid,
-    )
-    assert spoken == ["Need a payout fix"]
-    assert tracking["telegram_attempted"] is True
-    assert tracking["telegram_ok"] is True
-    assert tracking["telegram_push_id"]
-    assert manager.sent and "AuctionNow" in manager.sent[0]
-    assert "Need a payout fix" in manager.sent[0]
-
-    with rules.engine.connect() as conn:
-        row = conn.execute(text(
-            "SELECT status, board_id FROM whatsapp_intake_telegram_pushes WHERE id=:id"
-        ), {"id": tracking["telegram_push_id"]}).mappings().first()
-    assert row["status"] == "sent"
-    assert int(row["board_id"]) == 7
+    assert decision.should_route_work_intake is False
+    assert decision.reason == "project_linked_queued_for_batch_scan"
 
 
 def test_linked_telegram_push_failure_is_recorded(monkeypatch, rules_db):
@@ -104,6 +129,7 @@ def test_linked_telegram_push_failure_is_recorded(monkeypatch, rules_db):
     monkeypatch.delenv("DECISIONSAI_WHATSAPP_DRY_RUN", raising=False)
     link = rules.WhatsAppLinkInfo(
         board_id=9,
+        project_id=19,
         board_name="Tensology",
         contact_name="Ops",
         phone_jid="27632222222@s.whatsapp.net",
@@ -214,7 +240,7 @@ def test_route_unlinked_skips_announce_and_bus(monkeypatch, rules_db):
     assert work_calls == []
 
 
-def test_route_linked_announces_pushes_tg_skips_bus(monkeypatch, rules_db):
+def test_route_project_linked_queues_for_batch_without_immediate_actions(monkeypatch, rules_db):
     rules = rules_db
     monkeypatch.setenv("DECISIONSAI_WA_INTAKE_SURFACE", "board_linked")
     monkeypatch.setenv("DECISIONSAI_WHATSAPP_DRY_RUN", "1")
@@ -223,6 +249,7 @@ def test_route_linked_announces_pushes_tg_skips_bus(monkeypatch, rules_db):
 
     link = rules.WhatsAppLinkInfo(
         board_id=3,
+        project_id=13,
         board_name="AuctionNow",
         contact_name="Bidder",
         phone_jid="27634444444@s.whatsapp.net",
@@ -299,15 +326,12 @@ def test_route_linked_announces_pushes_tg_skips_bus(monkeypatch, rules_db):
         link.phone_jid,
     )
 
-    assert len(tracking_calls) == 1
-    assert tracking_calls[0]["decision"].should_announce is True
-    assert tracking_calls[0]["decision"].should_telegram_push is True
+    assert tracking_calls == []
     assert bus_calls == []
-    assert len(ingest_calls) == 1
-    assert ingest_calls[0].board_hint == "3"
+    assert ingest_calls == []
 
 
-def test_legacy_mode_still_injects_message_bus(monkeypatch, rules_db):
+def test_legacy_mode_keeps_project_unlinked_message_silent(monkeypatch, rules_db):
     rules = rules_db
     monkeypatch.setenv("DECISIONSAI_WA_INTAKE_SURFACE", "legacy")
 
@@ -354,14 +378,70 @@ def test_legacy_mode_still_injects_message_bus(monkeypatch, rules_db):
         "[WhatsApp: 27635555555] hey",
         "27635555555@s.whatsapp.net",
     )
-    assert len(bus_calls) == 1
+    assert bus_calls == []
 
 
-def test_board_policy_opts_into_board_linked_quiet(monkeypatch, rules_db):
+def test_legacy_mode_queues_project_linked_message_for_batch(monkeypatch, rules_db):
+    rules = rules_db
+    monkeypatch.setenv("DECISIONSAI_WA_INTAKE_SURFACE", "legacy")
+
+    import distr.core.integrations.whatsapp.manager as wa_manager
+    import distr.core.work_intake as work_intake_pkg
+
+    monkeypatch.setattr(
+        "distr.core.kanban.whatsapp_intake_rules.resolve_whatsapp_link",
+        lambda *a, **k: rules.WhatsAppLinkInfo(
+            board_id=3,
+            project_id=13,
+            board_name="AuctionNow",
+            phone_jid="x",
+        ),
+    )
+
+    bus_calls = []
+
+    class FakeBus:
+        def ingest_incoming(self, msg):
+            bus_calls.append(msg)
+            return True
+
+    class FakeDecision:
+        handled = False
+        action = SimpleNamespace(value="answer_directly")
+        ticket_id = None
+        workflow_run_id = None
+
+    class FakeService:
+        def ingest(self, intake):
+            return FakeDecision()
+
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: FakeBus(),
+    )
+    monkeypatch.setattr(work_intake_pkg, "get_work_intake_service", lambda: FakeService())
+
+    wa_manager._route_whatsapp_text_to_message_bus(
+        {
+            "jid": "27635555555@s.whatsapp.net",
+            "jid_phone": "27635555555",
+            "text": "create a project ticket",
+            "message_id": "wa-legacy-linked-1",
+            "sender": {"phone": "27635555555"},
+            "from_me": False,
+        },
+        "[WhatsApp: 27635555555] create a project ticket",
+        "27635555555@s.whatsapp.net",
+    )
+    assert bus_calls == []
+
+
+def test_board_policy_keeps_project_linked_message_in_batch_queue(monkeypatch, rules_db):
     rules = rules_db
     monkeypatch.delenv("DECISIONSAI_WA_INTAKE_SURFACE", raising=False)
     link = rules.WhatsAppLinkInfo(
         board_id=11,
+        project_id=21,
         board_name="Tensology",
         contact_name="Mailshot",
         phone_jid="27636666666@s.whatsapp.net",
@@ -375,6 +455,8 @@ def test_board_policy_opts_into_board_linked_quiet(monkeypatch, rules_db):
         jid=link.phone_jid, link=link, board=board
     )
     assert decision.surface_mode == rules.SURFACE_BOARD_LINKED
-    assert decision.should_announce is True
-    assert decision.should_telegram_push is True
+    assert decision.should_announce is False
+    assert decision.should_telegram_push is False
     assert decision.should_inject_message_bus is False
+    assert decision.should_route_work_intake is False
+    assert decision.reason == "project_linked_queued_for_batch_scan"

@@ -209,6 +209,46 @@ def test_routine_workflow_progress_is_feed_only():
     decide.assert_not_called()
 
 
+def test_linked_intake_milestone_is_telegram_text_not_voice():
+    decision = SimpleNamespace(
+        should_send=False,
+        suppress_reason="test",
+        format="text",
+        channel="telegram",
+        final_text=None,
+        final_voice_text=None,
+    )
+    with (
+        patch(
+            "distr.core.kanban.ticket_workflow_engagement._run_context",
+            return_value={
+                "workflow_id": 3,
+                "ticket_id": 4,
+                "board_id": 5,
+                "run_data": {
+                    "source_type": "whatsapp",
+                    "intake_execution_approved": True,
+                },
+            },
+        ),
+        patch(
+            "distr.core.human_engagement.HumanEngagementService.decide",
+            return_value=decision,
+        ) as decide,
+    ):
+        notify_ticket_workflow_progress(
+            run_id=8,
+            step_id=40,
+            body="I started implementing the linked ticket.",
+            state_fingerprint="step:40",
+            audible=True,
+        )
+
+    intent = decide.call_args.args[0]
+    assert intent.surface == "telegram"
+    assert intent.allow_voice is False
+
+
 def test_response_required_workflow_prompt_is_pinned_to_telegram():
     decision = SimpleNamespace(
         should_send=False,

@@ -2,7 +2,7 @@ import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './
 import { createThreadsTranscript } from '../threads/transcript/index.js';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
-import { layoutConnectedSitemap } from './sitemap.js?v=20261003-page-stencils-3';
+import { layoutConnectedSitemap } from './sitemap.js?v=20261003-rebuild-sitemap';
 import { planningProviderLabel } from './routes.js';
 
 const BASE = '/workflows/studio/plan-workspaces';
@@ -12,20 +12,6 @@ const TABS = {
     requirements: { label: 'Requirements', help: 'FRAC, brief, and acceptance criteria', types: ['brief', 'prd', 'frac', 'skills', 'file_structure', 'handover', 'decision', 'project_overview', 'discovery_proposal'] }
 };
 
-
-function wireScreenGroup(screen) {
-    const texts = [];
-    (function walk(node) {
-        if (!node) return;
-        if (node.type === 'text' && node.label) texts.push(String(node.label));
-        (node.children || []).forEach(walk);
-    })(screen);
-    for (const value of texts) {
-        const match = value.match(/(?:^|·)\s*group\s+([A-Za-z][\w '&/-]{0,40})\s*$/);
-        if (match) return match[1].trim();
-    }
-    return '';
-}
 
 export function createPlanConversation(host, root) {
     const sessions = new Map();
@@ -115,6 +101,7 @@ export function createPlanConversation(host, root) {
                 <button type="button" id="plan-back" aria-label="Back to plans"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
                 <strong class="plan-project" title="${esc(session.workspace.board_name)}">${esc(session.workspace.board_name)}</strong>
                 <nav class="plan-tabs" aria-label="Plan sections">${Object.entries(TABS).map(([tab, info]) => `<button type="button" data-plan-tab="${tab}" title="${esc(info.help || info.label)}" aria-pressed="${session.tab === tab}">${info.label}</button>`).join('')}</nav>
+                <button type="button" id="plan-rebuild-sitemap">Rebuild sitemap</button>
                 <button type="button" id="plan-build">Build tasks</button>
             </header>
             <div class="plan-detail-body">
@@ -151,6 +138,7 @@ export function createPlanConversation(host, root) {
         });
         root.querySelector('#plan-language').addEventListener('submit', (event) => { event.preventDefault(); send(session); });
         root.querySelector('#plan-back').onclick = () => host.openHome();
+        root.querySelector('#plan-rebuild-sitemap').onclick = () => rebuildSitemap(session);
         root.querySelector('#plan-build').onclick = () => build(session);
         root.querySelector('#plan-provider').onchange = async (event) => {
             session.provider = event.target.value;
@@ -189,6 +177,7 @@ export function createPlanConversation(host, root) {
         if (!current(session)) return;
         const busy = blocked(session);
         root.querySelector('#plan-send').disabled = busy || !modelAvailable(session) || !session.draft.trim();
+        root.querySelector('#plan-rebuild-sitemap').disabled = busy;
         root.querySelector('#plan-build').disabled = busy || !modelAvailable(session);
         root.querySelector('#plan-model').disabled = busy;
         root.querySelector('#plan-provider').disabled = busy;
@@ -279,12 +268,6 @@ export function createPlanConversation(host, root) {
         }
     }
 
-
-    function desktopPagesOverview() {
-        const detail = root.querySelector('.plan-detail');
-        const width = detail?.clientWidth || 0;
-        return (width || window.innerWidth) > 720;
-    }
 
     function openConnectedPage(session, item, screen, preview) {
         if (!screen) return;
@@ -428,7 +411,7 @@ export function createPlanConversation(host, root) {
         if (layout.unmappedCount) {
             const note = document.createElement('p');
             note.className = 'plan-sitemap-coverage';
-            note.textContent = `${layout.nodes.length} pages have stencils. ${layout.unmappedCount} discovered routes are hidden until a stencil is linked.`;
+            note.textContent = `${layout.nodes.length} pages. ${layout.unmappedCount} discovered routes are on the sitemap with no page stencil yet.`;
             wrap.append(note);
         }
         preview.append(wrap);
@@ -535,77 +518,7 @@ export function createPlanConversation(host, root) {
                 };
 
                 if (!page && screens.length > 1) {
-                    if (desktopPagesOverview()) {
-                        renderProjectSitemap(preview, session, screens, item);
-                        const docErrors = (parsed.diagnostics || []).filter(d => d.severity === 'error');
-                        if (docErrors.length) preview.insertAdjacentHTML('beforeend', diagnosticsHtml(parsed.diagnostics));
-                        return;
-                    }
-                    const overview = document.createElement('div');
-                    overview.className = 'plan-page-overview';
-                    overview.setAttribute('role', 'tree');
-                    overview.setAttribute('aria-label', 'All pages');
-                    const rootScreen = screens.find(screen => /^overview\b/i.test(screen.label || ''));
-                    const branches = new Map();
-                    for (const screen of screens) {
-                        if (rootScreen && screen.id === rootScreen.id) continue;
-                        const group = wireScreenGroup(screen) || 'Other';
-                        if (!branches.has(group)) branches.set(group, []);
-                        branches.get(group).push(screen);
-                    }
-                    session.mindClosed ||= {};
-                    const closed = session.mindClosed[item.id] ||= {};
-                    const openPage = (screen) => {
-                        session.sitemap = false;
-                        session.pages[item.id] = screen.id;
-                        session.pageLayers[item.id] = 'preview';
-                        renderArtifacts(session);
-                    };
-                    if (rootScreen) {
-                        const rootButton = document.createElement('button');
-                        rootButton.type = 'button';
-                        rootButton.className = 'plan-mind-root';
-                        rootButton.setAttribute('role', 'treeitem');
-                        rootButton.textContent = rootScreen.label || 'Overview';
-                        rootButton.onclick = () => openPage(rootScreen);
-                        overview.append(rootButton);
-                    }
-                    for (const [group, groupScreens] of branches) {
-                        const branch = document.createElement('div');
-                        branch.className = 'plan-mind-branch';
-                        const toggle = document.createElement('button');
-                        toggle.type = 'button';
-                        toggle.className = 'plan-mind-group';
-                        const isClosed = Boolean(closed[group]);
-                        toggle.setAttribute('aria-expanded', String(!isClosed));
-                        toggle.textContent = `${isClosed ? '▸' : '▾'} ${group}`;
-                        toggle.onclick = () => { closed[group] = !isClosed; renderArtifacts(session); };
-                        branch.append(toggle);
-                        if (!isClosed) {
-                            const list = document.createElement('div');
-                            list.className = 'plan-mind-children';
-                            list.setAttribute('role', 'group');
-                            for (const screen of groupScreens) {
-                                const route = document.createElement('button');
-                                route.type = 'button';
-                                route.className = 'plan-mind-route';
-                                route.setAttribute('role', 'treeitem');
-                                const name = document.createElement('span');
-                                name.textContent = screen.label || 'Untitled page';
-                                route.append(name);
-                                if (screen.attrs?.route) {
-                                    const small = document.createElement('small');
-                                    small.textContent = screen.attrs.route;
-                                    route.append(small);
-                                }
-                                route.onclick = () => openPage(screen);
-                                list.append(route);
-                            }
-                            branch.append(list);
-                        }
-                        overview.append(branch);
-                    }
-                    preview.append(overview);
+                    renderProjectSitemap(preview, session, screens, item);
                     const docErrors = (parsed.diagnostics || []).filter(d => d.severity === 'error');
                     if (docErrors.length) preview.insertAdjacentHTML('beforeend', diagnosticsHtml(parsed.diagnostics));
                     return;
@@ -875,6 +788,27 @@ export function createPlanConversation(host, root) {
             }
         } catch (error) { session.error = error.message || 'Attachment upload failed. Successfully uploaded files are retained.'; }
         finally { session.pending = ''; refresh(session); }
+    }
+
+    async function rebuildSitemap(session) {
+        if (blocked(session)) return;
+        session.pending = 'Rebuilding sitemap and page scan...';
+        session.error = '';
+        session.outcome = '';
+        controls(session);
+        try {
+            const result = await api(path(session, '/scan'), { method: 'POST', body: {} });
+            if (result.workspace) session.workspace = result.workspace;
+            else await reload(session);
+            session.pages = {};
+            session.sitemap = true;
+            session.outcome = result.message || 'Rebuilt the sitemap and page scan.';
+        } catch (error) {
+            session.error = error.message || 'Could not rebuild the sitemap.';
+        } finally {
+            session.pending = '';
+            refresh(session);
+        }
     }
 
     async function build(session) {

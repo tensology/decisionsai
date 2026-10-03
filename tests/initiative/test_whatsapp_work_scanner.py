@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
-from distr.core.initiative.work_scanner import _scan_whatsapp
+from distr.core.initiative.work_scanner import _WHATSAPP_BATCH_QUIET_SECONDS, _scan_whatsapp
 
 
 class _FakeQuery:
@@ -25,10 +25,11 @@ class _FakeQuery:
 
 
 class _FakeSession:
-    def __init__(self, *, messages, links, boards, ticketed_message_ids=None):
+    def __init__(self, *, messages, links, boards, projects=None, ticketed_message_ids=None):
         self.messages = messages
         self.links = links
         self.boards = boards
+        self.projects = projects or []
         self.ticketed_message_ids = ticketed_message_ids or []
 
     def __enter__(self):
@@ -45,6 +46,8 @@ class _FakeSession:
             return _FakeQuery(self.links)
         if name == "KanbanBoard":
             return _FakeQuery(self.boards)
+        if name == "Project":
+            return _FakeQuery(self.projects)
         if name == "KanbanTicket":
             return _FakeQuery([(mid,) for mid in self.ticketed_message_ids])
         return _FakeQuery([])
@@ -62,14 +65,15 @@ def test_whatsapp_scan_proposes_linked_board_snapshot(monkeypatch):
         text="Please fix the checkout bug and create a ticket.",
         caption="",
         media_type="",
-        created_date=now - timedelta(seconds=20),
+        created_date=now - timedelta(seconds=_WHATSAPP_BATCH_QUIET_SECONDS + 15),
     )
     link = SimpleNamespace(board_id=7, phone_number="27820001111", auto_snapshot=False)
-    board = SimpleNamespace(id=7, name="Client Board")
+    board = SimpleNamespace(id=7, name="Client Board", default_project_id=17)
+    project = SimpleNamespace(id=17, name="Client Project")
 
     monkeypatch.setattr(
         "distr.core.db.get_session",
-        lambda: _FakeSession(messages=[msg], links=[link], boards=[board]),
+        lambda: _FakeSession(messages=[msg], links=[link], boards=[board], projects=[project]),
     )
 
     scan = {"messages": {"whatsapp": [], "telegram": [], "email": []}, "proposals": []}
@@ -79,11 +83,18 @@ def test_whatsapp_scan_proposes_linked_board_snapshot(monkeypatch):
     proposal = scan["proposals"][0]
     assert proposal["action_type"] == "message_triage"
     assert proposal["payload"]["linked_board_id"] == 7
+    assert proposal["payload"]["linked_project_id"] == 17
     assert proposal["payload"]["message_ids"] == [42]
-    assert "snapshot" in proposal["draft"].lower()
+    assert proposal["payload"]["notification_format"] == "text"
+    assert proposal["payload"]["batch_quiet_seconds"] == 300
+    assert _WHATSAPP_BATCH_QUIET_SECONDS == 300  # 5 minutes
+    assert proposal["payload"]["approval_flow"] == "linked_intake_create_execute"
+    assert proposal["payload"]["jid"] == "27820001111@s.whatsapp.net"
+    assert "compact" in proposal["draft"].lower()
+    assert "execute it end to end" in proposal["telegram_message"].lower()
 
 
-def test_whatsapp_scan_notifies_fresh_non_work_message(monkeypatch):
+def test_whatsapp_scan_ignores_fresh_unlinked_non_work_message(monkeypatch):
     msg = SimpleNamespace(
         id=9,
         jid="27820002222@s.whatsapp.net",
@@ -105,10 +116,57 @@ def test_whatsapp_scan_notifies_fresh_non_work_message(monkeypatch):
     scan = {"messages": {"whatsapp": [], "telegram": [], "email": []}, "proposals": []}
     _scan_whatsapp(scan)
 
+    assert scan["messages"]["whatsapp"] == []
+    assert scan["proposals"] == []
+
+
+def test_whatsapp_scan_groups_linked_project_messages_into_one_work_notice(monkeypatch):
+    now = datetime.utcnow()
+    messages = [
+        SimpleNamespace(
+            id=message_id,
+            jid="27820005555@s.whatsapp.net",
+            jid_phone="27820005555",
+            sender_push_name="Client",
+            sender_phone="27820005555",
+            sender_jid="27820005555@s.whatsapp.net",
+            text=text,
+            caption="",
+            media_type="",
+            created_date=now - timedelta(seconds=_WHATSAPP_BATCH_QUIET_SECONDS + 15 + offset),
+            processed=False,
+            snapshot_group=None,
+        )
+        for message_id, text, offset in (
+            (61, "Morning", 30),
+            (62, "The checkout is broken", 20),
+            (63, "Customers cannot pay", 10),
+            (64, "Please fix this bug urgently", 0),
+        )
+    ]
+    link = SimpleNamespace(board_id=10, phone_number="27820005555", auto_snapshot=False)
+    board = SimpleNamespace(id=10, name="Payments", default_project_id=20)
+    project = SimpleNamespace(id=20, name="Payments App")
+    monkeypatch.setattr(
+        "distr.core.db.get_session",
+        lambda: _FakeSession(
+            messages=messages,
+            links=[link],
+            boards=[board],
+            projects=[project],
+        ),
+    )
+
+    scan = {"messages": {"whatsapp": [], "telegram": [], "email": []}, "proposals": []}
+    _scan_whatsapp(scan)
+
+    assert len(scan["proposals"]) == 1
     proposal = scan["proposals"][0]
-    assert proposal["payload"]["source"] == "whatsapp"
-    assert proposal["payload"]["latest_sender"] == "Maya"
-    assert "just got a WhatsApp message" in proposal["description"]
+    assert proposal["payload"]["message_count"] == 4
+    assert proposal["payload"]["message_ids"] == [61, 62, 63, 64]
+    assert proposal["payload"]["notification_format"] == "text"
+    assert proposal["payload"]["batch_quiet_seconds"] == 300
+    assert "one batch" in proposal["description"]
 
 
 def test_whatsapp_scan_ignores_stale_linked_board_message(monkeypatch):
@@ -127,10 +185,11 @@ def test_whatsapp_scan_ignores_stale_linked_board_message(monkeypatch):
         snapshot_group=None,
     )
     link = SimpleNamespace(board_id=8, phone_number="27820003333", auto_snapshot=False)
-    board = SimpleNamespace(id=8, name="Old Board")
+    board = SimpleNamespace(id=8, name="Old Board", default_project_id=18)
+    project = SimpleNamespace(id=18, name="Old Project")
     monkeypatch.setattr(
         "distr.core.db.get_session",
-        lambda: _FakeSession(messages=[msg], links=[link], boards=[board]),
+        lambda: _FakeSession(messages=[msg], links=[link], boards=[board], projects=[project]),
     )
 
     scan = {"messages": {"whatsapp": [], "telegram": [], "email": []}, "proposals": []}
@@ -171,13 +230,15 @@ def test_whatsapp_scan_ignores_already_ticketed_or_snapshot_messages(monkeypatch
         snapshot_group=None,
     )
     link = SimpleNamespace(board_id=9, phone_number="27820004444", auto_snapshot=False)
-    board = SimpleNamespace(id=9, name="Ticketed Board")
+    board = SimpleNamespace(id=9, name="Ticketed Board", default_project_id=19)
+    project = SimpleNamespace(id=19, name="Ticketed Project")
     monkeypatch.setattr(
         "distr.core.db.get_session",
         lambda: _FakeSession(
             messages=[snapshot_msg, ticketed_msg],
             links=[link],
             boards=[board],
+            projects=[project],
             ticketed_message_ids=[57],
         ),
     )

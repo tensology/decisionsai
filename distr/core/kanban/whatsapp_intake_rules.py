@@ -1,22 +1,16 @@
-"""WhatsApp intake surface rules (board-linked announce + Telegram push).
+"""WhatsApp intake surface rules for project-linked, grouped work review.
 
 Paul's rules for no-face-to-face company boards (AuctionNow, Tensology.com):
 
-1. Only announce when the chat is linked to a board. Unlinked messages stay quiet
-   (stored, but no voice/Oracle/chat "a message came in" nudge).
-2. Board-linked messages also push a short notice to Telegram. Track whether that
-   push actually happened so Jupiter can tell Paul when it fails.
-3. Normal WhatsApp bodies stay quiet unless Paul explicitly asks to hear new
-   messages (e.g. "any new messages come in, please read them to me").
+1. A chat must resolve through its board to an existing Decisions project.
+2. Every inbound message is stored, but no individual message is announced,
+   agent-injected, or forwarded to Telegram.
+3. The Initiative work scanner groups project-linked messages after a 5 minute
+   quiet window and proposes one text-only notice when the batch looks work-related.
+4. Paul can still explicitly ask to read WhatsApp messages on demand.
 
-Enable globally with::
-
-    DECISIONSAI_WA_INTAKE_SURFACE=board_linked
-
-Or per board via ``orchestrator_policy.whatsapp_intake.mode = "board_linked_quiet"``.
-
-When disabled (``legacy`` / unset), inbound routing keeps the previous
-WorkIntake + MessageBus behaviour.
+The legacy mode value remains readable for compatibility, but it no longer
+bypasses the project-link and batching safety rules.
 """
 
 from __future__ import annotations
@@ -38,7 +32,7 @@ logger = logging.getLogger(__name__)
 SURFACE_LEGACY = "legacy"
 SURFACE_BOARD_LINKED = "board_linked"
 
-# Explicit readout asks (rule 3). Keep conservative — only clear "read my WA" intent.
+# Explicit readout asks (rule 4). Keep conservative: only clear "read my WA" intent.
 _EXPLICIT_READ_RE = re.compile(
     r"(?is)\b("
     r"any\s+new\s+messages?\s*(come\s+in|came\s+in|arrived)?"
@@ -59,6 +53,7 @@ _EXPLICIT_READ_RE = re.compile(
 @dataclass
 class WhatsAppLinkInfo:
     board_id: int | None = None
+    project_id: int | None = None
     board_name: str = ""
     contact_name: str = ""
     phone_jid: str = ""
@@ -177,6 +172,7 @@ def resolve_whatsapp_link(jid: str, *, jid_phone: str = "") -> WhatsAppLinkInfo:
     try:
         from distr.core.db import WhatsAppPhoneLink, get_session
         from distr.core.db.kanban import KanbanBoard
+        from distr.core.db.projects import Project
 
         with get_session() as session:
             link = (
@@ -193,8 +189,14 @@ def resolve_whatsapp_link(jid: str, *, jid_phone: str = "") -> WhatsAppLinkInfo:
             if link is None:
                 return info
             board = session.query(KanbanBoard).filter(KanbanBoard.id == int(link.board_id)).first()
+            if board is None or bool(getattr(board, "archived", False)):
+                return info
             info.board_id = int(link.board_id) if link.board_id else None
             info.board_name = str(getattr(board, "name", "") or "") if board else ""
+            default_project_id = getattr(board, "default_project_id", None) if board else None
+            if default_project_id:
+                project = session.query(Project).filter(Project.id == int(default_project_id)).first()
+                info.project_id = int(project.id) if project is not None else None
             info.contact_name = str(link.contact_name or "")
             info.phone_jid = str(link.phone_jid or jid or "")
             info.phone_number = str(link.phone_number or jid_phone or "")
@@ -227,7 +229,10 @@ def decide_intake_surface(
 ) -> IntakeSurfaceDecision:
     """Decide announce / TG / WorkIntake / MessageBus for one inbound message."""
     link = link or resolve_whatsapp_link(jid, jid_phone=jid_phone)
-    linked = bool(link.board_id)
+    # A WhatsApp phone/group link is eligible for intake only when its board
+    # resolves to an existing Decisions project. A bare or orphaned board link
+    # is still stored, but must remain silent just like a completely unlinked chat.
+    linked = bool(link.project_id)
     global_mode = wa_intake_surface_mode()
     board_mode = board_requests_board_linked_quiet(board) if board is not None else False
     # When we have a link, also check that board's policy from DB if board obj not passed.
@@ -261,60 +266,35 @@ def decide_intake_surface(
             link=link,
         )
 
-    if not active:
+    if not linked:
         return IntakeSurfaceDecision(
-            surface_mode=SURFACE_LEGACY,
-            linked=linked,
+            surface_mode=global_mode,
+            linked=False,
             board_id=link.board_id,
             board_name=link.board_name,
             contact_name=link.contact_name,
-            should_announce=False,
-            should_telegram_push=False,
-            should_route_work_intake=True,
-            should_inject_message_bus=True,
-            reason="legacy_surface",
-            link=link,
-        )
-
-    if not linked:
-        return IntakeSurfaceDecision(
-            surface_mode=SURFACE_BOARD_LINKED,
-            linked=False,
             should_announce=False,
             should_telegram_push=False,
             should_route_work_intake=False,
             should_inject_message_bus=False,
-            reason="unlinked_silent",
+            reason="project_unlinked_silent",
             link=link,
         )
 
-    if not _board_in_scope(link, board):
-        # Linked but outside allowlist → treat as silent store (still no surprise announce).
-        return IntakeSurfaceDecision(
-            surface_mode=SURFACE_BOARD_LINKED,
-            linked=True,
-            board_id=link.board_id,
-            board_name=link.board_name,
-            contact_name=link.contact_name,
-            should_announce=False,
-            should_telegram_push=False,
-            should_route_work_intake=True,
-            should_inject_message_bus=False,
-            reason="linked_out_of_scope_quiet",
-            link=link,
-        )
-
+    # Project-linked messages are deliberately stored first and handled by the
+    # grouped work scanner. Routing each message here would create one alert and
+    # one agent turn per chat bubble, before the surrounding messages arrive.
     return IntakeSurfaceDecision(
         surface_mode=SURFACE_BOARD_LINKED,
         linked=True,
         board_id=link.board_id,
         board_name=link.board_name,
         contact_name=link.contact_name,
-        should_announce=True,
-        should_telegram_push=True,
-        should_route_work_intake=True,
-        should_inject_message_bus=False,  # quiet bodies; announce + TG only
-        reason="board_linked_announce_and_telegram",
+        should_announce=False,
+        should_telegram_push=False,
+        should_route_work_intake=False,
+        should_inject_message_bus=False,
+        reason="project_linked_queued_for_batch_scan",
         link=link,
     )
 

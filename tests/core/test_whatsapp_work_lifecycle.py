@@ -152,12 +152,12 @@ def test_telegram_review_revise_then_leave_draft(monkeypatch, tmp_path):
         "distr.core.kanban.whatsapp_compose_drafts.save_compose_draft",
         lambda **kwargs: saved.update(kwargs) or kwargs,
     )
-    prompt = lifecycle.handle_telegram_reply("wa:tok:revise", chat_id=99)
-    assert "revised wording" in prompt["text"]
+    prompt = lifecycle.handle_telegram_reply("wa:tok:add", chat_id=99)
+    assert "what you want to add" in prompt["text"]
     revised = lifecycle.handle_telegram_reply("Hi Maya, this is ready now.", chat_id=99)
     assert revised["reply_markup"] == lifecycle.review_markup("tok")
     assert saved["text"] == "Hi Maya, this is ready now."
-    left = lifecycle.handle_telegram_reply("wa:tok:leave", chat_id=99)
+    left = lifecycle.handle_telegram_reply("wa:tok:no", chat_id=99)
     assert "left the reply" in left["text"]
     with engine.connect() as conn:
         status = conn.execute(text("SELECT status FROM whatsapp_work_lifecycles WHERE ticket_id=43")).scalar_one()
@@ -166,7 +166,8 @@ def test_telegram_review_revise_then_leave_draft(monkeypatch, tmp_path):
 
 def test_reply_controls_never_offer_complete():
     labels = [button["text"] for button in lifecycle.review_markup("abc")["inline_keyboard"][0]]
-    assert labels == ["Send", "Revise", "Leave draft"]
+    assert labels == ["Yes", "No", "Add"]
+    assert [b["callback_data"] for b in lifecycle.review_markup("abc")["inline_keyboard"][0]] == ["wa:abc:yes", "wa:abc:no", "wa:abc:add"]
     assert "Complete" not in labels
 
 
@@ -191,7 +192,7 @@ def test_send_review_is_claimed_once_and_failed_send_returns_to_pending(monkeypa
         "distr.core.integrations.whatsapp.relay_client.send_message_via_relay",
         lambda **kwargs: calls.append(kwargs) or {"success": False, "error": "offline"},
     )
-    failed = lifecycle.handle_telegram_reply("wa:sendtok:send", chat_id=99)
+    failed = lifecycle.handle_telegram_reply("wa:sendtok:yes", chat_id=99)
     assert "draft is still saved" in failed["text"]
     with engine.connect() as conn:
         assert conn.execute(text("SELECT status FROM whatsapp_reply_reviews WHERE token='sendtok'")).scalar_one() == "pending"
@@ -199,7 +200,7 @@ def test_send_review_is_claimed_once_and_failed_send_returns_to_pending(monkeypa
 
     with engine.begin() as conn:
         conn.execute(text("UPDATE whatsapp_reply_reviews SET status='resolving' WHERE token='sendtok'"))
-    duplicate = lifecycle.handle_telegram_reply("wa:sendtok:send", chat_id=99)
+    duplicate = lifecycle.handle_telegram_reply("wa:sendtok:yes", chat_id=99)
     assert "already being applied" in duplicate["text"]
     assert len(calls) == 1
 
@@ -245,7 +246,7 @@ def test_send_review_dry_run_skips_live_relay(monkeypatch, tmp_path):
         lambda *_a, **_k: None,
     )
 
-    result = lifecycle.handle_telegram_reply("wa:drytok:send", chat_id=99)
+    result = lifecycle.handle_telegram_reply("wa:drytok:yes", chat_id=99)
     assert result["handled"] is True
     assert "sent" in result["text"].lower()
     assert posts == []
@@ -273,7 +274,9 @@ def test_notify_phrase_asks_send_to_customer(monkeypatch):
         lambda: FakeManager(),
     )
     assert lifecycle.notify_telegram_review(review) is True
-    assert "send to customer" in captured["text"].lower()
+    assert "reply **yes** to send this whatsapp reply" in captured["text"].lower()
+    assert "reply **no** to not send it" in captured["text"].lower()
+    assert "reply **add** to add something before sending" in captured["text"].lower()
     assert captured["reply_markup"] == lifecycle.review_markup("abc")
 
 

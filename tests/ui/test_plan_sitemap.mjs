@@ -40,7 +40,7 @@ test('empty projects and bounded page counts', () => {
 });
 
 
-test('connected sitemap shows only pages linked to stencils and keeps technical scaffolding out of the canvas', () => {
+test('connected sitemap keeps pages that have no stencil and leaves technical scaffolding off the canvas', () => {
     const graph = connectedSitemap({
         scaffolding: [{id: 'base', kind: 'base_template', label: 'base.html', path: 'templates/base.html', template: 'base.html'}],
         nodes: [
@@ -68,9 +68,20 @@ test('connected sitemap shows only pages linked to stencils and keeps technical 
     assert.equal(graph.nodes.find(node => node.id === 'home').clickable, true);
     assert.equal(graph.nodes.find(node => node.id === 'home').screenId, 'wf-home');
     assert.equal(graph.nodes.find(node => node.id === 'catalog'), undefined);
-    assert.equal(graph.nodes.find(node => node.id === 'list'), undefined);
+    const list = graph.nodes.find(node => node.id === 'list');
+    assert.equal(list.clickable, false);
+    assert.equal(list.screenId, '');
+    assert.equal(graph.nodes.find(node => node.id === 'gone').status, 'missing');
+    assert.equal(graph.nodes.find(node => node.id === 'partial').status, 'incomplete');
     assert.equal(graph.unmappedCount, 3);
-    assert.deepEqual(graph.edges, []);
+    assert.deepEqual(graph.edges.map(edge => [edge.from, edge.to, edge.kind]), [
+        ['home', 'list', 'navigation'],
+        ['home', 'list', 'journey'],
+        ['home', 'list', 'auth'],
+        ['home', 'gone', 'redirect'],
+        ['list', 'home', 'success'],
+        ['list', 'gone', 'failure'],
+    ]);
 });
 
 test('layout places linked pages in route order and points edges from page to page', () => {

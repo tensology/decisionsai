@@ -1364,6 +1364,13 @@ class InitiativeService:
             if tier_override is not None
             else effective_permission_tier(action.action_type, boundaries, settings)
         )
+        if (
+            isinstance(action.payload, dict)
+            and action.payload.get("approval_flow") == "linked_intake_create_execute"
+        ):
+            # This path creates its own durable Yes/No/Add Telegram gate. Do not
+            # wrap it in Initiative's generic draft approval and ask twice.
+            tier = PermissionTier.NOTIFY
 
         if decision == PolicyDecision.SKIP:
             logger.info("InitiativeService: action skipped (policy=SKIP) action_type=%s",
@@ -1490,11 +1497,38 @@ class InitiativeService:
                 action.description,
             )
             return
+        payload = action.payload if isinstance(action.payload, dict) else {}
+        if (
+            action.action_type == "message_triage"
+            and str(payload.get("source") or "").lower() in {"whatsapp", "email"}
+            and payload.get("approval_flow") == "linked_intake_create_execute"
+        ):
+            try:
+                from distr.core.kanban.whatsapp_intake_approval import (
+                    notify_telegram_approval,
+                    stage_linked_email_batch,
+                    stage_linked_whatsapp_batch,
+                )
+
+                pending = (
+                    stage_linked_email_batch(payload)
+                    if str(payload.get("source") or "").lower() == "email"
+                    else stage_linked_whatsapp_batch(payload)
+                )
+                if not pending.get("deduplicated"):
+                    notify_telegram_approval(pending)
+                    self._log_to_chat(
+                        action.telegram_message or action.description,
+                        settings,
+                    )
+            except Exception:
+                logger.exception("Linked WhatsApp batch approval could not be staged")
+            return
         msg = format_initiative_notice(
             description=action.description,
             draft=action.draft,
             telegram_message=action.telegram_message,
-            payload=action.payload if isinstance(action.payload, dict) else {},
+            payload=payload,
         )
         if not msg:
             return
@@ -1512,6 +1546,7 @@ class InitiativeService:
                 action.description,
             )
             return
+        text_only = str(payload.get("notification_format") or "").lower() == "text"
         # Only speak when the text already sounds like initiative, not a task dump.
         self._send_telegram_if_allowed(
             msg,
@@ -1519,8 +1554,8 @@ class InitiativeService:
             kind="initiative_suggestion",
             state_fingerprint=str((action.payload or {}).get("state_fingerprint") or "") or None,
             requires_response=True,
-            allow_voice=looks_like_notice(msg),
-            voice_body=msg if looks_like_notice(msg) else None,
+            allow_voice=False if text_only else looks_like_notice(msg),
+            voice_body=None if text_only else (msg if looks_like_notice(msg) else None),
         )
 
     def _dispatch_kanban(

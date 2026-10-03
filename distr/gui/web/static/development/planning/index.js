@@ -1,87 +1,68 @@
-import { createPlanConversation } from './conversation.js?v=20261003-page-stencils-3';
+import { createPlanConversation } from './conversation.js?v=20261003-rebuild-sitemap';
 
 export function createPlanning(host, root = document.getElementById('plan-root')) {
-    const state = { boards: [], projects: [], workspaces: [], workspace: null, item: null, search: '', showUnlinked: false, navigation: 0, view: 'home' };
+    const state = { boards: [], projects: [], workspaces: [], workspace: null, item: null, navigation: 0, view: 'home' };
     const conversation = createPlanConversation(host, root);
     const escapeHtml = host.escapeHtml;
     const projectFor = (board) => state.projects.find((project) => Number(project.id) === Number(board?.project_id || board?.default_project_id)) || null;
     const workspaceFor = (board) => state.workspaces.find((workspace) => workspace.board_key === board.key) || null;
-    const providerName = (board) => board?.provider === 'jira' ? 'Jira' : board?.provider === 'trello' ? 'Trello' : 'Local';
     const api = (path, options) => host.api(path, options);
     async function loadWorkspaces() {
         state.workspaces = (await api('/workflows/studio/plan-workspaces')).items || [];
     }
 
     function homeResultsHtml() {
-        const query = state.search.trim().toLowerCase();
-        const boards = state.boards.filter(
-            (board) =>
-                !query ||
-                String(board.name || '')
-                    .toLowerCase()
-                    .includes(query)
-        );
-        const workingBoards = boards.filter((board) => Boolean(projectFor(board)));
-        const unlinkedBoards = boards.filter((board) => !projectFor(board));
-        const emptyMessage = query ? 'No linked boards match this search.' : 'No linked boards are ready for planning.';
+        // Development sidebar (sidebar/index.js renderSidebar) lists every catalog board.
+        // This page keeps that set and drops boards with no valid project.
+        const boards = state.boards.filter((board) => {
+            if (!projectFor(board)) return false;
+            return true;
+        });
         return `<div class="plan-board-grid">${
-            workingBoards
+            boards
                 .map((board) => {
                     const workspace = workspaceFor(board);
                     const project = projectFor(board);
                     const count = Number(workspace?.item_count || 0);
-                    const stateLabel = count
-                        ? `${count} section${count === 1 ? '' : 's'}`
-                        : 'No plan yet';
-                    return `<article class="plan-board-card" data-plan-board="${escapeHtml(board.key)}">
-                    <button type="button" class="plan-board-open" data-plan-board-open="${escapeHtml(board.key)}">
-                        <span class="plan-board-copy"><strong>${escapeHtml(board.name || 'Untitled board')}</strong><small>${escapeHtml(project?.folder_location || 'No project folder')}</small></span>
-                        <span class="plan-board-state">${stateLabel}<i aria-hidden="true">›</i></span>
-                    </button>
+                    const actionLabel = count ? 'Edit' : 'Build plan';
+                    const folder = project?.folder_location || 'No project folder';
+                    const boardName = board.name || 'Ticket board';
+                    const key = escapeHtml(board.key);
+                    return `<article class="plan-board-card" data-plan-board="${key}">
+                    <div class="plan-board-open">
+                        <span class="plan-board-copy"><strong>${escapeHtml(boardName)}</strong><small>${escapeHtml(folder)}</small></span>
+                        <span class="plan-board-state"><button type="button" class="plan-board-action" data-plan-board-open="${key}">${actionLabel}</button></span>
+                    </div>
                 </article>`;
                 })
-                .join('') || `<div class="plan-empty plan-home-empty">${emptyMessage}</div>`
-        }</div>
-            ${
-                unlinkedBoards.length
-                    ? `<details class="plan-unlinked"${state.showUnlinked || query ? ' open' : ''}>
-                <summary><span>Unlinked boards</span><small>${unlinkedBoards.length}</small></summary>
-                <div class="plan-unlinked-list">
-                    <p>Link a project to make planning available.</p>
-                    ${unlinkedBoards.map((board) => `<div class="plan-unlinked-row" data-plan-unlinked="${escapeHtml(board.key)}"><strong>${escapeHtml(board.name || 'Untitled board')}</strong><small>${providerName(board)}</small></div>`).join('')}
-                </div>
-            </details>`
-                    : ''
-            }`;
+                .join('') || '<div class="plan-empty plan-home-empty">No boards are ready for planning.</div>'
+        }</div>`;
     }
 
     function homeHtml() {
         return `<div class="plan-home">
-            <header class="plan-home-header"><div><h1>Plans</h1><p>Open a linked board to load or build its plan under the project <code>planning/</code> folder.</p></div></header>
-            <label class="plan-search"><span aria-hidden="true">⌕</span><input id="plan-search" type="search" value="${escapeHtml(state.search)}" placeholder="Search boards" aria-label="Search plan boards"></label>
             <div id="plan-home-results">${homeResultsHtml()}</div>
         </div>`;
     }
 
+    function openListedBoard(key) {
+        const board = state.boards.find((row) => row.key === key);
+        if (board) host.openBoardPlan(board.key);
+    }
+
     function bindHomeResults() {
-        root.querySelector('.plan-unlinked')?.addEventListener('toggle', (event) => {
-            state.showUnlinked = event.target.open;
-        });
+        root.querySelectorAll('[data-plan-board]').forEach((card) =>
+            card.addEventListener('click', () => openListedBoard(card.dataset.planBoard))
+        );
         root.querySelectorAll('[data-plan-board-open]').forEach((button) =>
-            button.addEventListener('click', () => {
-                const board = state.boards.find((row) => row.key === button.dataset.planBoardOpen);
-                if (board) host.openBoardPlan(board.key);
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                openListedBoard(button.dataset.planBoardOpen);
             })
         );
     }
 
     function bindHome() {
-        root.querySelector('#plan-search')?.addEventListener('input', (event) => {
-            state.search = event.target.value;
-            if (state.search.trim()) state.showUnlinked = true;
-            root.querySelector('#plan-home-results').innerHTML = homeResultsHtml();
-            bindHomeResults();
-        });
         bindHomeResults();
     }
 

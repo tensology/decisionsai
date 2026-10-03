@@ -131,18 +131,31 @@ def test_project_discovery_is_concise_repeatable_and_frack_alias_is_understood(p
     assert frac["item_type"] == "frac"
 
 
-def test_plan_home_only_opens_boards_with_a_real_project():
+def test_plan_home_lists_sidebar_boards_that_have_a_project():
     plan_js = (ROOT / "distr/gui/web/static/development/planning/index.js").read_text(encoding="utf-8")
     studio_js = (ROOT / "distr/gui/web/static/development/app.js").read_text(encoding="utf-8")
+    plan_css = (ROOT / "distr/gui/web/static/development/planning/styles.css").read_text(encoding="utf-8")
 
-    assert "const workingBoards = boards.filter((board) => Boolean(projectFor(board)))" in plan_js
-    assert "const unlinkedBoards = boards.filter((board) => !projectFor(board))" in plan_js
-    assert "data-plan-unlinked" in plan_js
-    assert "Link a project to make planning available." in plan_js
+    assert "<h1>Plans</h1>" in plan_js
+    assert "Every named board shows its plan" not in plan_js
+    assert "Boards with no project are marked" not in plan_js
+    assert "Archived boards stay hidden" not in plan_js
+    assert "plan-unlinked-badge" not in plan_js
+    assert ">Unlinked</span>" not in plan_js
+    assert "No plan yet" not in plan_js
+    assert "section${count === 1 ? '' : 's'}" not in plan_js
+    assert "const actionLabel = count ? 'Edit' : 'Build plan';" in plan_js
+    assert "plan-board-action" in plan_js
+    assert "if (!projectFor(board)) return false;" in plan_js
+    assert "data-plan-board-open" in plan_js
+    assert "Link a project to make planning available." not in plan_js
     assert "if (!projectFor(board))" in plan_js
     assert "if (!board.project_id || !projectById(board.project_id))" in studio_js
+    assert "Archived or unnamed boards are not shown as plans." not in studio_js
     assert 'id="plan-language-mic"' not in plan_js
     assert 'id="plan-voice-status"' not in plan_js
+    assert ".plan-home { width: min(1040px, calc(100% - 48px)); margin: 0 auto; padding: 16px 0 32px; height: 100%; overflow: auto; }" in plan_css
+    assert ".plan-workspace { padding: 0; overflow: hidden; background: var(--studio-bg); }" in plan_css
 
 
 def test_stale_plan_revision_is_rejected_without_changing_content(plan_workspace_db):

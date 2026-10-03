@@ -3,9 +3,9 @@
 @import './threads/styles.css';
 @import './sidebar/styles.css';
 @import './boards/styles.css';
-@import './planning/styles.css?v=20260916-plan-composer';
+@import './planning/styles.css?v=20261003-rebuild-sitemap';
 @import './incoming/styles.css';
 @import './automations/styles.css';
-@import './workflows/styles.css';
+@import './workflows/styles.css?v=20261003-workflow-scroll';
 @import './terminals/styles.css';
 @import './reports/styles.css';

@@ -573,11 +573,30 @@ def deploy_markup(token: str, *, suggestion: str = "development") -> dict[str, A
     ]]}
 
 
+_REPLY_ACTION = {
+    "yes": "send",
+    "send": "send",
+    "no": "leave",
+    "leave": "leave",
+    "add": "revise",
+    "revise": "revise",
+}
+
+
+def reply_card_instructions() -> str:
+    """User-facing Yes / No / Add copy. Mechanics stay send / leave / revise."""
+    return (
+        "Reply **Yes** to send this WhatsApp reply.\n"
+        "Reply **No** to not send it.\n"
+        "Reply **Add** to add something before sending."
+    )
+
+
 def review_markup(token: str) -> dict[str, Any]:
     return {"inline_keyboard": [[
-        {"text": "Send", "callback_data": f"wa:{token}:send"},
-        {"text": "Revise", "callback_data": f"wa:{token}:revise"},
-        {"text": "Leave draft", "callback_data": f"wa:{token}:leave"},
+        {"text": "Yes", "callback_data": f"wa:{token}:yes"},
+        {"text": "No", "callback_data": f"wa:{token}:no"},
+        {"text": "Add", "callback_data": f"wa:{token}:add"},
     ]]}
 
 
@@ -847,7 +866,7 @@ def prepare_completed_reply(
 ) -> dict[str, Any] | None:
     """Create a WhatsApp draft and Telegram review token after deploy gate is settled.
 
-    Client Send/Revise/Leave is intentionally gated: call
+    Client Yes/No/Add (send/leave/revise) is intentionally gated: call
     ``begin_post_completion_gates`` first, then settle deploy. Direct callers
     that already settled deploy may pass status=completed.
     """
@@ -937,8 +956,7 @@ def notify_telegram_review(review: dict[str, Any]) -> bool:
             deploy_bit = f" (deploy assist: {review['deploy_target']})"
         return bool(manager.send_to_telegram(
             f"The work is in QA{deploy_bit}. I prepared this WhatsApp reply for {review['contact']}:\n\n"
-            f"{review['draft']}\n\n"
-            "Send to customer? You can send it, revise it, or leave it as a draft.",
+            f"{review['draft']}\n\n{reply_card_instructions()}",
             reply_markup=review_markup(review["token"]),
         ))
     except Exception:
@@ -1178,8 +1196,7 @@ def _settle_deploy(token: str, *, target: str, chat_id: int | str | None) -> dic
         "text": (
             f"Deploy assist settled as **{normalized}** (nothing was deployed).\n\n"
             f"The work is in QA. I prepared this WhatsApp reply for {review['contact']}:\n\n"
-            f"{review['draft']}\n\n"
-            "Send to customer? You can send it, revise it, or leave it as a draft."
+            f"{review['draft']}\n\n{reply_card_instructions()}"
         ),
         "reply_markup": review_markup(review["token"]),
         "token": review["token"],
@@ -1209,9 +1226,9 @@ def handle_telegram_reply(value: str, *, chat_id: int | str | None = None) -> di
         target = "production" if action in {"prod", "production"} else "development"
         return _settle_deploy(token, target=target, chat_id=chat_id)
 
-    callback = re.fullmatch(r"wa:([A-Za-z0-9_-]+):(send|revise|leave)", clean)
+    callback = re.fullmatch(r"wa:([A-Za-z0-9_-]+):(yes|no|add|send|revise|leave)", clean, re.I)
     if callback:
-        token, action = callback.groups()
+        token, action = callback.group(1), _REPLY_ACTION[callback.group(2).lower()]
         row = _review_row(token)
         if not row:
             return {"handled": True, "text": "That WhatsApp draft review no longer exists."}
@@ -1238,7 +1255,7 @@ def handle_telegram_reply(value: str, *, chat_id: int | str | None = None) -> di
                 return {"handled": True, "text": "That WhatsApp draft is no longer waiting for revision."}
             return {
                 "handled": True,
-                "text": "Send me the revised wording in your next Telegram message. I will show it again before sending.",
+                "text": "Send me what you want to add in your next Telegram message. I will show the card again before sending.",
             }
         with engine.begin() as conn:
             claimed = conn.execute(text(
@@ -1353,6 +1370,20 @@ def handle_telegram_reply(value: str, *, chat_id: int | str | None = None) -> di
         if low in {"development", "dev", "go development", "keep on development"}:
             return _settle_deploy(pending_deploy[0]["token"], target="development", chat_id=chat_id)
 
+    # Yes / No / Add words on a pending send-back card. wi: intake is a different handler.
+    if not _pending_gate_for_chat(chat_id, "verification") and not _pending_gate_for_chat(chat_id, "deploy"):
+        word = re.sub(r"\s+", " ", clean.lower()).strip(" .!?")
+        mapped = {"yes": "yes", "no": "no", "add": "add"}.get(word)
+        if mapped:
+            with engine.connect() as conn:
+                pending_send = conn.execute(text("""
+                    SELECT token FROM whatsapp_reply_reviews
+                    WHERE status='pending' AND (:chat IS NULL OR telegram_chat_id IS NULL OR telegram_chat_id=:chat)
+                    ORDER BY updated_at DESC LIMIT 2
+                """), {"chat": str(chat_id) if chat_id is not None else None}).mappings().all()
+            if len(pending_send) == 1:
+                return handle_telegram_reply(f"wa:{pending_send[0]['token']}:{mapped}", chat_id=chat_id)
+
     with engine.connect() as conn:
         pending = conn.execute(text("""
             SELECT token FROM whatsapp_reply_reviews
@@ -1382,8 +1413,7 @@ def handle_telegram_reply(value: str, *, chat_id: int | str | None = None) -> di
     return {
         "handled": True,
         "text": (
-            f"Updated WhatsApp draft:\n\n{clean}\n\n"
-            "Send to customer? You can send it, revise it, or leave it as a draft."
+            f"Updated WhatsApp draft:\n\n{clean}\n\n{reply_card_instructions()}"
         ),
         "reply_markup": review_markup(row["token"]),
         "token": row["token"],

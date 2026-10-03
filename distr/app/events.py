@@ -1062,12 +1062,16 @@ class EventHandlerMixin:
             data.get("explicit_notification_intent") and str(text or "").strip()
         )
         origin_surface = str(data.get("origin_surface") or "").strip().lower()
+        telegram_delivery_allowed = (
+            force_telegram or origin_surface in {"", "telegram"}
+        )
         telegram_chat_voice_reply = (
             str(data.get("input_type") or "").strip().lower() == "voice"
             and origin_surface != "remote"
         )
         if (
             remote_ctx
+            and origin_surface in {"", "remote"}
             and is_voice_delivery_provider(provider)
             and has_telegram_manager
             and telegram_connected
@@ -1084,7 +1088,7 @@ class EventHandlerMixin:
 
             threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteApp").start()
         elif (
-            origin_surface != "remote"
+            telegram_delivery_allowed
             and (
                 is_voice_delivery_provider(provider)
                 or data.get('input_type') == 'text'

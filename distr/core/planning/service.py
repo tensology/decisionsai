@@ -263,7 +263,7 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
     By default only replaces starter / empty scaffold content. ``force=True``
     (Scan project) refreshes the derived sections even if previously filled.
     """
-    from distr.core.planning.project_scan import scan_project
+    from distr.core.planning.project_scan import rebuild_sitemap_cache, scan_project
 
     detail = get_workspace(int(workspace_id))
     if detail is None:
@@ -344,6 +344,9 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
         )
         if refreshed:
             updated.append(refreshed)
+
+    if force:
+        rebuild_sitemap_cache(project_root)
 
     workspace = get_workspace(int(workspace_id))
     return {

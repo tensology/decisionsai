@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 from sqlalchemy import create_engine, text
@@ -24,6 +25,19 @@ def test_readiness_phrases_and_markup():
     assert "ready" in wi.READINESS_PHRASES
     assert "build it" in wi.READINESS_PHRASES
     assert "create ticket" in wi.READINESS_PHRASES
+
+
+def test_approval_prompt_asks_to_snapshot_and_run_as_a_thread():
+    prompt = wi.format_approval_prompt(
+        draft_text="Checkout fails on mobile",
+        classified_action="create_ticket",
+        classified_reason="work",
+    )
+    assert "snapshot the incoming WhatsApp messages into a ticket" in prompt
+    assert "run that ticket as a thread" in prompt
+    assert "execute it end to end" not in prompt.lower()
+    assert "compact this batch into one ticket" not in prompt.lower()
+    assert "**Yes**" in prompt and "**No**" in prompt and "**Add**" in prompt
 
 
 def test_wa_classify_stages_tg_yes_no_add_then_ready_creates_ticket(monkeypatch, tmp_path):
@@ -99,6 +113,7 @@ def test_wa_classify_stages_tg_yes_no_add_then_ready_creates_ticket(monkeypatch,
         metadata={"jid": "120363@g.us", "jid_phone": "120363", "message_ids": [1]},
     )
     with patch.object(OrchestratorIntakeService, "classify", autospec=True, side_effect=_classify):
+        monkeypatch.setattr(wi, "_linked_scope_error", lambda payload: "")
         decision = OrchestratorIntakeService().ingest(intake)
 
         assert decision.action == WorkIntakeAction.REQUEST_APPROVAL
@@ -215,9 +230,77 @@ def test_add_context_prefix_and_voice_style_ready(monkeypatch, tmp_path):
         )
 
     with patch.object(OrchestratorIntakeService, "classify", autospec=True, side_effect=_classify):
+        monkeypatch.setattr(wi, "_linked_scope_error", lambda payload: "")
         # Simulated voice transcript saying readiness phrase
         ready = wi.handle_telegram_reply("ready", chat_id=7)
     assert ready["action"] == "ready"
     assert ready["ticket_id"] == 77
     assert "vegetarian" in created["text"].lower()
 
+
+def test_unverified_whatsapp_approval_is_rejected_before_ticket_creation(monkeypatch, tmp_path):
+    engine = _iso(monkeypatch, tmp_path)
+    pending = wi.stage_whatsapp_intake(
+        intake_payload={"source": "whatsapp", "user_text": "fix this"},
+        classified_action="run_workflow",
+        draft_text="fix this",
+    )
+
+    result = wi.handle_telegram_reply(f"wi:{pending['token']}:yes", chat_id=7)
+
+    assert result["action"] == "scope_rejected"
+    assert "did not create or execute anything" in result["text"]
+    with engine.connect() as conn:
+        status = conn.execute(
+            text("SELECT status FROM whatsapp_intake_approvals WHERE token=:token"),
+            {"token": pending["token"]},
+        ).scalar_one()
+    assert status == "rejected_scope"
+
+
+def test_linked_email_batch_is_deduplicated_and_revalidated(monkeypatch, tmp_path):
+    _iso(monkeypatch, tmp_path)
+    link = SimpleNamespace(
+        board_id=7,
+        project_id=9,
+        board_name="Client Delivery",
+        project_name="Client Site",
+    )
+    monkeypatch.setattr(
+        "distr.core.kanban.email_intake_rules.resolve_email_link",
+        lambda sender: link,
+    )
+    payload = {
+        "source": "email",
+        "message_ids": ["m-1", "m-2"],
+        "thread_ids": ["thread-1"],
+        "messages": [
+            {
+                "id": "m-1",
+                "thread_id": "thread-1",
+                "from": "Client <client@example.com>",
+                "subject": "Bug",
+                "body": "Checkout fails",
+                "source": "gmail",
+            },
+            {
+                "id": "m-2",
+                "thread_id": "thread-1",
+                "from": "client@example.com",
+                "subject": "More detail",
+                "body": "It fails on mobile",
+                "source": "gmail",
+            },
+        ],
+        "sender_email": "client@example.com",
+        "linked_board_id": 7,
+        "linked_project_id": 9,
+    }
+
+    first = wi.stage_linked_email_batch(payload)
+    second = wi.stage_linked_email_batch(payload)
+
+    assert first["deduplicated"] is False
+    assert second["deduplicated"] is True
+    assert second["token"] == first["token"]
+    assert wi._linked_scope_error(json.loads(wi._row(first["token"])["intake_json"])) == ""

@@ -107,8 +107,9 @@ export function connectedSitemap(model, screens = []) {
             screenId: screen?.id ? String(screen.id) : '',
         };
     });
-    const visible = prepared.filter(node => node.clickable);
-    const ids = new Set(visible.map(node => node.id));
+    // Pages without a stencil stay on the canvas. They are not clickable.
+    const pages = prepared;
+    const ids = new Set(pages.map(node => node.id));
     const edges = (Array.isArray(safe.edges) ? safe.edges : []).filter(edge => (
         edge && ids.has(String(edge.from)) && ids.has(String(edge.to)) && SITEMAP_EDGE_KINDS.includes(edge.kind)
     )).map(edge => ({
@@ -118,14 +119,14 @@ export function connectedSitemap(model, screens = []) {
         label: String(edge.label || ''),
     }));
     const incoming = new Set(edges.map(edge => edge.to));
-    const byVisibleRoute = new Map(visible.map(node => [node.route, node]));
-    for (const node of visible) {
+    const byPageRoute = new Map(pages.map(node => [node.route, node]));
+    for (const node of pages) {
         if (node.route === '/' || incoming.has(node.id)) continue;
         const parts = node.route.split('/').filter(Boolean);
         let parent = null;
         while (parts.length && !parent) {
             parts.pop();
-            parent = byVisibleRoute.get(parts.length ? `/${parts.join('/')}` : '/') || null;
+            parent = byPageRoute.get(parts.length ? `/${parts.join('/')}` : '/') || null;
         }
         if (!parent || parent.id === node.id) continue;
         edges.push({ from: parent.id, to: node.id, kind: 'parent', label: 'URL hierarchy' });
@@ -135,10 +136,10 @@ export function connectedSitemap(model, screens = []) {
         note: String(safe.note || ''),
         coverage: String(safe.coverage || ''),
         scaffolding,
-        nodes: visible,
+        nodes: pages,
         edges,
         discoveredCount: prepared.length,
-        unmappedCount: prepared.length - visible.length,
+        unmappedCount: pages.filter(node => !node.clickable).length,
     };
 }
 

@@ -389,6 +389,30 @@ def _send_client_message(row: dict[str, Any], *, comment_fn: Callable[..., dict[
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
+    if channel == "mailshot_email":
+        try:
+            from distr.core.tensology_client import configured_tensology_client
+
+            to_addr = str(row.get("client_contact") or "").strip()
+            if not to_addr or "@" not in to_addr:
+                return {"success": False, "error": "No client email address on the ticket"}
+            client = configured_tensology_client(source="decisionsai")
+            result = client.post(
+                "mail/send",
+                {
+                    "to": to_addr,
+                    "subject": "Update",
+                    "body": draft,
+                    "reply_to_message_id": target,
+                },
+                idempotency_key=f"ticket-{row.get('ticket_id')}-client-reply",
+                approved=True,
+            )
+            ok = not (isinstance(result, dict) and result.get("success") is False)
+            return {"success": ok, "error": None if ok else str(result), "channel": "mailshot_email"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
     # Default: Jira comment (visible on the issue; still gated by Telegram approve)
     issue_key = target or str(row.get("issue_key") or "").strip().upper()
     if comment_fn is not None:

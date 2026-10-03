@@ -1,4 +1,4 @@
-"""WhatsApp WorkIntake → Telegram yes/no/add → readiness → create ticket.
+"""Project-linked WhatsApp batch → one Telegram approval → execute ticket.
 
 Pre-ticket gate for WhatsApp-sourced work. Classified CREATE_TICKET /
 RUN_WORKFLOW requests are staged until Paul confirms on Telegram.
@@ -83,6 +83,18 @@ def ensure_tables() -> None:
             "CREATE INDEX IF NOT EXISTS ix_whatsapp_intake_approvals_pending "
             "ON whatsapp_intake_approvals(status, created_at)"
         ))
+        columns = {
+            str(row[1])
+            for row in conn.execute(text("PRAGMA table_info(whatsapp_intake_approvals)"))
+        }
+        if "source_fingerprint" not in columns:
+            conn.execute(text(
+                "ALTER TABLE whatsapp_intake_approvals ADD COLUMN source_fingerprint VARCHAR"
+            ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_whatsapp_intake_approvals_source "
+            "ON whatsapp_intake_approvals(source_fingerprint, status)"
+        ))
 
 
 def intake_markup(token: str) -> dict[str, Any]:
@@ -102,7 +114,7 @@ def format_approval_prompt(
     added_instructions: list[str] | None = None,
 ) -> str:
     lines = [
-        "**WhatsApp work ready for your call**",
+        "**Linked inbound work ready for your call**",
         "",
         f"Classified as `{classified_action}`"
         + (f" — {classified_reason}" if classified_reason else "")
@@ -119,8 +131,8 @@ def format_approval_prompt(
             lines.append(f"- {item}")
     lines.extend([
         "",
-        "Reply **Yes** / **ready** / **build it** / **create ticket** to create the ticket, "
-        "Development thread, and start time tracking.",
+        "Reply **Yes** / **ready** / **build it** to snapshot the incoming WhatsApp messages "
+        "into a ticket and run that ticket as a thread. This is the only pre-work approval.",
         "Reply **No** to discard.",
         "Reply **Add** then an instruction, or `add <instruction>`, to fold into the ticket.",
     ])
@@ -133,20 +145,48 @@ def stage_whatsapp_intake(
     classified_action: str,
     classified_reason: str = "",
     draft_text: str = "",
+    source_fingerprint: str = "",
 ) -> dict[str, Any]:
     """Persist a pending WA intake approval and return token + prompt fields."""
     ensure_tables()
     token = secrets.token_urlsafe(12)
     now = time.time()
     draft = (draft_text or str(intake_payload.get("user_text") or intake_payload.get("transcript") or "")).strip()
+    fingerprint = str(source_fingerprint or "").strip()
     with engine.begin() as conn:
+        if fingerprint:
+            existing = conn.execute(text("""
+                SELECT * FROM whatsapp_intake_approvals
+                WHERE source_fingerprint=:fingerprint
+                  AND status IN ('pending', 'awaiting_add', 'creating', 'created')
+                ORDER BY id DESC LIMIT 1
+            """), {"fingerprint": fingerprint}).mappings().first()
+            if existing:
+                row = dict(existing)
+                extras = _parse_added(row)
+                return {
+                    "token": row["token"],
+                    "status": row["status"],
+                    "draft_text": row.get("draft_text") or draft,
+                    "classified_action": row.get("classified_action") or classified_action,
+                    "classified_reason": row.get("classified_reason") or classified_reason,
+                    "added_instructions": extras,
+                    "reply_markup": intake_markup(str(row["token"])),
+                    "text": format_approval_prompt(
+                        draft_text=str(row.get("draft_text") or draft),
+                        classified_action=str(row.get("classified_action") or classified_action),
+                        classified_reason=str(row.get("classified_reason") or classified_reason),
+                        added_instructions=extras,
+                    ),
+                    "deduplicated": True,
+                }
         conn.execute(text("""
             INSERT INTO whatsapp_intake_approvals (
                 token, status, intake_json, classified_action, classified_reason,
-                draft_text, added_instructions, created_at, updated_at
+                draft_text, added_instructions, created_at, updated_at, source_fingerprint
             ) VALUES (
                 :token, 'pending', :intake_json, :action, :reason,
-                :draft, '[]', :now, :now
+                :draft, '[]', :now, :now, :fingerprint
             )
         """), {
             "token": token,
@@ -155,6 +195,7 @@ def stage_whatsapp_intake(
             "reason": str(classified_reason or "")[:500],
             "draft": draft,
             "now": now,
+            "fingerprint": fingerprint or None,
         })
     return {
         "token": token,
@@ -169,7 +210,170 @@ def stage_whatsapp_intake(
             classified_action=str(classified_action or "create_ticket"),
             classified_reason=str(classified_reason or ""),
         ),
+        "deduplicated": False,
     }
+
+
+def stage_linked_whatsapp_batch(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a scanner batch and stage exactly one create-and-execute approval."""
+    from distr.core.db import WhatsAppMessage, get_session
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.projects import Project
+    from distr.core.kanban.whatsapp_intake_rules import resolve_whatsapp_link
+
+    message_ids = sorted({int(value) for value in payload.get("message_ids") or [] if str(value).isdigit()})
+    board_id = int(payload.get("linked_board_id") or 0)
+    project_id = int(payload.get("linked_project_id") or 0)
+    jid_phone = str(payload.get("jid_phone") or "").strip()
+    jid = str(payload.get("jid") or "").strip()
+    if not message_ids or not board_id or not project_id or not (jid_phone or jid):
+        raise ValueError("WhatsApp batch is missing its message, board, project, or group identity")
+
+    link = resolve_whatsapp_link(jid, jid_phone=jid_phone)
+    if link.board_id != board_id or link.project_id != project_id:
+        raise ValueError("WhatsApp group is no longer linked to the approved board and project")
+
+    with get_session() as session:
+        board = session.query(KanbanBoard).filter(KanbanBoard.id == board_id).first()
+        project = session.query(Project).filter(Project.id == project_id).first()
+        if (
+            not board
+            or bool(getattr(board, "archived", False))
+            or not project
+            or int(board.default_project_id or 0) != project_id
+        ):
+            raise ValueError("WhatsApp board does not resolve to a valid project")
+        messages = (
+            session.query(WhatsAppMessage)
+            .filter(WhatsAppMessage.id.in_(message_ids))
+            .order_by(WhatsAppMessage.whatsapp_timestamp.asc(), WhatsAppMessage.id.asc())
+            .all()
+        )
+        if len(messages) != len(message_ids):
+            raise ValueError("One or more WhatsApp batch messages no longer exist")
+        if any(
+            bool(getattr(message, "processed", False))
+            or bool(getattr(message, "snapshot_group", None))
+            for message in messages
+        ):
+            raise ValueError("One or more WhatsApp batch messages were already consumed")
+        expected_phone = jid_phone or jid.split("@", 1)[0]
+        if any(
+            bool(getattr(message, "from_me", False))
+            or (str(getattr(message, "jid_phone", "") or "") != expected_phone
+                and str(getattr(message, "jid", "") or "") != jid)
+            for message in messages
+        ):
+            raise ValueError("WhatsApp batch contains a message outside the linked group")
+        contact = str(
+            payload.get("latest_sender")
+            or getattr(messages[-1], "sender_push_name", "")
+            or expected_phone
+        ).strip()
+        transcript = []
+        for message in messages:
+            body = str(
+                getattr(message, "text", None)
+                or getattr(message, "caption", None)
+                or f"[{getattr(message, 'media_type', None) or 'message'}]"
+            ).strip()
+            transcript.append(f"{contact}: {body}")
+        board_name = str(getattr(board, "name", "") or f"Board {board_id}")
+        project_name = str(getattr(project, "name", "") or f"Project {project_id}")
+
+    fingerprint = "whatsapp:" + ",".join(str(value) for value in message_ids)
+    draft = "\n".join(transcript)
+    intake_payload = {
+        "source": "whatsapp",
+        "user_text": draft,
+        "source_user_id": contact,
+        "source_thread_id": jid or expected_phone,
+        "source_message_id": fingerprint,
+        "project_hint": str(project_id),
+        "board_hint": str(board_id),
+        "requested_outcome": "Compact the linked WhatsApp batch into one ticket and execute it end to end.",
+        "intake_uid": fingerprint,
+        "metadata": {
+            "linked_intake_authorized": True,
+            "linked_board_id": board_id,
+            "linked_project_id": project_id,
+            "linked_board_name": board_name,
+            "linked_project_name": project_name,
+            "jid": jid,
+            "jid_phone": expected_phone,
+            "message_ids": message_ids,
+            "contact_name": contact,
+            "skip_human_checkpoints": True,
+        },
+    }
+    return stage_whatsapp_intake(
+        intake_payload=intake_payload,
+        classified_action="run_workflow",
+        classified_reason=f"Project-linked WhatsApp batch for {project_name} on {board_name}",
+        draft_text=draft,
+        source_fingerprint=fingerprint,
+    )
+
+
+def stage_linked_email_batch(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate an email sender mapping and stage one create-and-execute approval."""
+    from distr.core.kanban.email_intake_rules import normalize_email, resolve_email_link
+
+    messages = [row for row in payload.get("messages") or [] if isinstance(row, dict)]
+    message_ids = [str(value).strip() for value in payload.get("message_ids") or [] if str(value).strip()]
+    sender = normalize_email(str(payload.get("sender_email") or ""))
+    board_id = int(payload.get("linked_board_id") or 0)
+    project_id = int(payload.get("linked_project_id") or 0)
+    if not messages or not message_ids or not sender or not board_id or not project_id:
+        raise ValueError("Email batch is missing its message, sender, board, or project identity")
+    link = resolve_email_link(sender)
+    if link.board_id != board_id or link.project_id != project_id:
+        raise ValueError("Email sender is no longer linked to the approved board and project")
+    if any(normalize_email(str(row.get("from") or "")) != sender for row in messages):
+        raise ValueError("Email batch contains a message outside the linked sender")
+
+    transcript = []
+    for row in messages:
+        subject = str(row.get("subject") or "(no subject)").strip()
+        body = str(row.get("body") or row.get("snippet") or "").strip()
+        transcript.append(f"From: {sender}\nSubject: {subject}\n{body}")
+    provider = str(messages[-1].get("source") or "gmail").strip().lower()
+    source = "gmail"
+    thread_id = str(messages[-1].get("thread_id") or "").strip()
+    latest_message_id = str(messages[-1].get("id") or message_ids[-1]).strip()
+    fingerprint = f"email:{provider}:" + ",".join(sorted(message_ids))
+    draft = "\n\n---\n\n".join(transcript)
+    intake_payload = {
+        "source": source,
+        "user_text": draft,
+        "source_user_id": sender,
+        "source_thread_id": thread_id,
+        "source_message_id": latest_message_id,
+        "project_hint": str(project_id),
+        "board_hint": str(board_id),
+        "requested_outcome": "Compact the linked email batch into one ticket and execute it end to end.",
+        "intake_uid": fingerprint,
+        "metadata": {
+            "linked_intake_authorized": True,
+            "linked_intake_source": "email",
+            "linked_board_id": board_id,
+            "linked_project_id": project_id,
+            "linked_board_name": link.board_name,
+            "linked_project_name": link.project_name,
+            "email_sender": sender,
+            "email_provider": provider,
+            "message_ids": message_ids,
+            "thread_ids": [str(value) for value in payload.get("thread_ids") or []],
+            "skip_human_checkpoints": True,
+        },
+    }
+    return stage_whatsapp_intake(
+        intake_payload=intake_payload,
+        classified_action="run_workflow",
+        classified_reason=f"Project-linked email batch for {link.project_name} on {link.board_name}",
+        draft_text=draft,
+        source_fingerprint=fingerprint,
+    )
 
 
 def _row(token: str) -> dict[str, Any] | None:
@@ -333,6 +537,25 @@ def _execute_ready(token: str, *, chat_id: int | str | None) -> dict[str, Any]:
             }
         return {"handled": True, "text": "That WhatsApp intake was already handled."}
 
+    try:
+        payload = json.loads(row.get("intake_json") or "{}") or {}
+        validation_error = _linked_scope_error(payload)
+    except Exception as exc:
+        validation_error = str(exc)
+    if validation_error:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE whatsapp_intake_approvals
+                SET status='rejected_scope', error=:error, updated_at=:now
+                WHERE token=:token AND status IN ('pending', 'awaiting_add')
+            """), {"error": validation_error[:1000], "now": time.time(), "token": token})
+        return {
+            "handled": True,
+            "text": f"I did not create or execute anything: {validation_error}.",
+            "token": token,
+            "action": "scope_rejected",
+        }
+
     now = time.time()
     with engine.begin() as conn:
         claimed = conn.execute(text("""
@@ -362,12 +585,18 @@ def _execute_ready(token: str, *, chat_id: int | str | None) -> dict[str, Any]:
         meta["intake_approval_confirmed"] = True
         meta["intake_approval_token"] = token
         meta["intake_added_instructions"] = extras
+        if meta.get("linked_intake_authorized"):
+            meta["skip_human_checkpoints"] = True
         payload["user_text"] = draft
         payload["metadata"] = meta
         # Prefer durable create+workflow path after human readiness.
-        if not str(payload.get("user_text") or "").lower().startswith(("create a ticket", "create ticket")):
-            if str(row.get("classified_action") or "") in {"create_ticket", "run_workflow"}:
-                payload["user_text"] = f"Create a ticket: {draft}"
+        if str(row.get("classified_action") or "") == "run_workflow":
+            payload["user_text"] = (
+                "Execute this work by creating one ticket and running its linked workflow:\n\n"
+                f"{draft}"
+            )
+        elif not str(payload.get("user_text") or "").lower().startswith(("create a ticket", "create ticket")):
+            payload["user_text"] = f"Create a ticket: {draft}"
 
         intake = WorkIntake.from_payload(payload)
         decision = get_work_intake_service().ingest(intake, execute=True)
@@ -376,6 +605,8 @@ def _execute_ready(token: str, *, chat_id: int | str | None) -> dict[str, Any]:
         dev_chat = None
         if isinstance(decision.diagnostics, dict):
             dev_chat = decision.diagnostics.get("development_chat_id")
+        if ticket_id:
+            _mark_batch_snapshot(payload, int(ticket_id))
         if run_id and not dev_chat:
             try:
                 from distr.core.db import get_session
@@ -434,6 +665,46 @@ def _execute_ready(token: str, *, chat_id: int | str | None) -> dict[str, Any]:
             "action": "ready_failed",
             "error": str(exc),
         }
+
+
+def _linked_scope_error(payload: dict[str, Any]) -> str:
+    """Return a reason when a pending intake no longer has the exact live link."""
+    meta = dict(payload.get("metadata") or {})
+    if not meta.get("linked_intake_authorized"):
+        return "the WhatsApp intake has no verified linked-group authorization"
+    board_id = int(meta.get("linked_board_id") or 0)
+    project_id = int(meta.get("linked_project_id") or 0)
+    if meta.get("linked_intake_source") == "email":
+        from distr.core.kanban.email_intake_rules import resolve_email_link
+
+        link = resolve_email_link(str(meta.get("email_sender") or payload.get("source_user_id") or ""))
+        if not board_id or not project_id or link.board_id != board_id or link.project_id != project_id:
+            return "the originating email sender is not linked to the same valid board and project"
+        return ""
+    from distr.core.kanban.whatsapp_intake_rules import resolve_whatsapp_link
+
+    jid = str(meta.get("jid") or payload.get("source_thread_id") or "").strip()
+    phone = str(meta.get("jid_phone") or "").strip()
+    link = resolve_whatsapp_link(jid, jid_phone=phone)
+    if not board_id or not project_id or link.board_id != board_id or link.project_id != project_id:
+        return "the originating WhatsApp group is not linked to the same valid board and project"
+    return ""
+
+
+def _mark_batch_snapshot(payload: dict[str, Any], ticket_id: int) -> None:
+    if str(payload.get("source") or "").lower() != "whatsapp":
+        return
+    from distr.core.db import WhatsAppMessage, get_session
+
+    meta = dict(payload.get("metadata") or {})
+    ids = [int(value) for value in meta.get("message_ids") or [] if str(value).isdigit()]
+    if not ids:
+        return
+    with get_session() as session:
+        rows = session.query(WhatsAppMessage).filter(WhatsAppMessage.id.in_(ids)).all()
+        for row in rows:
+            row.processed = True
+            row.snapshot_group = f"ticket:{ticket_id}"
 
 
 def handle_telegram_reply(

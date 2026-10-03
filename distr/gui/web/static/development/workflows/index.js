@@ -2,16 +2,14 @@
 export function createWorkflows({ context, actions, el }) {
     const state = {
         selectedWorkflowId: '',
-        workflowSearch: '',
-        workflowViewMode: window.localStorage.getItem('decisions.workflowViewMode') === 'list' ? 'list' : 'loop',
+        workflowViewMode: window.localStorage.getItem('decisions.workflowViewMode') === 'loop' ? 'loop' : 'list',
         workflowRuns: {},
         workflowBusy: {},
         workflowDetailsLoading: new Set(),
         workflowMemory: {}
     };
     function filteredWorkflows() {
-        const query = state.workflowSearch.trim().toLowerCase();
-        return context.workflows.filter((workflow) => !query || `${workflow.name || ''} ${workflow.description || ''}`.toLowerCase().includes(query));
+        return context.workflows.slice();
     }
 
     function workflowStepList(workflow) {
@@ -141,10 +139,10 @@ export function createWorkflows({ context, actions, el }) {
             groupKind === 'project'
                 ? `${workflows.length} workflow${workflows.length === 1 ? '' : 's'} linked to ${project?.name || 'this project'} and available to its ticket threads`
                 : groupKind === 'imported'
-                  ? `${workflows.length} one-off workflow${workflows.length === 1 ? '' : 's'} created from messages or imported requests`
+                  ? `${workflows.length} workflow${workflows.length === 1 ? '' : 's'} from messages`
                   : groupKind === 'test'
-                    ? `${workflows.length} development smoke test${workflows.length === 1 ? '' : 's'}, kept separate from production workflows`
-                    : `${workflows.length} workflow${workflows.length === 1 ? '' : 's'} available to any project or thread`;
+                    ? `${workflows.length} test workflow${workflows.length === 1 ? '' : 's'}`
+                    : `${workflows.length} workflow${workflows.length === 1 ? '' : 's'} you can run again`;
         return `<section class="workflow-project-group workflow-group-${actions.escapeHtml(groupKind)}" data-workflow-project="${Number(project?.id || 0)}"><header><div><span class="workflow-project-mark" aria-hidden="true">${project ? '◆' : groupKind === 'test' ? 'T' : groupKind === 'imported' ? 'I' : '◇'}</span><div><h2>${actions.escapeHtml(name)}</h2><p>${actions.escapeHtml(help)}</p></div></div></header><div class="workflow-card-grid">${sortedWorkflowLibraryRows(
             workflows
         )
@@ -165,7 +163,7 @@ export function createWorkflows({ context, actions, el }) {
                     run.cancellation_target?.url || (run.workflow_id && run.id ? `/api/workflows/${Number(run.workflow_id)}/cancel-run/${Number(run.id)}` : '');
                 return `<article class="workflow-active-execution" data-active-execution="${actions.escapeHtml(run.id)}">
                 <div><i class="workflow-state ${status === 'waiting' || status === 'paused' ? 'waiting' : 'running'}"></i><span><strong>${actions.escapeHtml(run.ticket_title || kind)}</strong><small>${actions.escapeHtml(kind)} · ${actions.escapeHtml(actions.statusLabel(status))}${run.project_name ? ` · ${actions.escapeHtml(run.project_name)}` : ''}</small></span></div>
-                <details class="workflow-run-menu"><summary aria-label="Execution actions">•••</summary><div>
+                <details class="workflow-run-menu"><summary aria-label="What you can do with this run">•••</summary><div>
                     ${run.open_url ? `<a href="${actions.escapeHtml(run.open_url)}">Open</a>` : ''}
                     ${run.related_ticket_url ? `<a href="${actions.escapeHtml(run.related_ticket_url)}">Related ticket</a>` : ''}
                     ${status === 'waiting' && run.open_url ? `<a class="waiting" href="${actions.escapeHtml(run.open_url)}">Continue / Respond</a>` : ''}
@@ -174,7 +172,7 @@ export function createWorkflows({ context, actions, el }) {
             </article>`;
             })
             .join('');
-        return `<section class="workflow-project-group workflow-active-executions"><header><div><span class="workflow-project-mark" aria-hidden="true">●</span><div><h2>Active executions</h2><p>${runs.length} currently active</p></div></div></header><div class="workflow-active-execution-list">${rows}</div></section>`;
+        return `<section class="workflow-project-group workflow-active-executions"><header><div><span class="workflow-project-mark" aria-hidden="true">●</span><div><h2>Running now</h2><p>${runs.length} running</p></div></div></header><div class="workflow-active-execution-list">${rows}</div></section>`;
     }
 
     function hydrateWorkflowCards(workflows) {
@@ -214,35 +212,17 @@ export function createWorkflows({ context, actions, el }) {
             return;
         }
         const workflows = filteredWorkflows();
-        const productionWorkflows = workflows.filter((workflow) => workflowLibraryCategory(workflow) === 'reusable');
-        const projectGroups = context.projects
-            .map((project) => ({
-                project,
-                workflows: productionWorkflows.filter((workflow) => workflowProjectId(workflow) === Number(project.id)),
-                kind: 'project'
-            }))
-            .filter((group) => group.workflows.length)
-            .sort((left, right) => String(left.project?.name || '').localeCompare(String(right.project?.name || ''), undefined, { sensitivity: 'base' }));
-        const shared = productionWorkflows.filter((workflow) => !workflowProjectId(workflow));
-        if (shared.length)
-            projectGroups.push({
-                project: null,
-                workflows: shared,
-                kind: 'reusable'
-            });
+        const projectGroups = [];
+        const reusable = workflows.filter((workflow) => workflowLibraryCategory(workflow) === 'reusable');
+        if (reusable.length) projectGroups.push({ project: null, workflows: reusable, kind: 'reusable' });
         const imported = workflows.filter((workflow) => workflowLibraryCategory(workflow) === 'imported');
-        if (imported.length)
-            projectGroups.push({
-                project: null,
-                workflows: imported,
-                kind: 'imported'
-            });
+        if (imported.length) projectGroups.push({ project: null, workflows: imported, kind: 'imported' });
         const tests = workflows.filter((workflow) => workflowLibraryCategory(workflow) === 'test');
         if (tests.length) projectGroups.push({ project: null, workflows: tests, kind: 'test' });
         const activeExecutions = activeExecutionRowsHtml();
         const groupsHtml = projectGroups.length
             ? projectGroups.map((group) => workflowGroupHtml(group.project, group.workflows, group.kind)).join('')
-            : '<div class="development-empty">No workflows match this view.</div>';
+            : '<div class="development-empty">No workflows yet.</div>';
         list.innerHTML = activeExecutions + groupsHtml;
         list.querySelectorAll('[data-workflow-select]').forEach((button) =>
             button.addEventListener('click', () => selectWorkflow(Number(button.dataset.workflowSelect)))
@@ -377,7 +357,7 @@ export function createWorkflows({ context, actions, el }) {
                     .join(' · ');
                 const outcome = workflowStepOutcome(step);
                 const skills = workflowStepSkills(step);
-                return `<article class="workflow-editor-step" data-workflow-step="${Number(step.id)}" draggable="true"><span class="workflow-step-handle" title="Drag to reorder" aria-hidden="true"></span><span class="workflow-step-number">${String(index + 1).padStart(2, '0')}</span><div class="workflow-step-copy"><strong>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</strong><p>${actions.escapeHtml(step.instruction || step.action_type || '')}</p><div class="workflow-step-support">${outcome ? `<span><b>Outcome</b>${actions.escapeHtml(outcome)}</span>` : ''}${skills.length ? `<span><b>Skills</b>${actions.escapeHtml(skills.join(', '))}</span>` : ''}</div>${routing ? `<small>${actions.escapeHtml(routing)}</small>` : ''}</div><em class="workflow-step-status ${actions.escapeHtml(stepStatus)}">${actions.escapeHtml(actions.statusLabel(stepStatus))}</em><div class="workflow-step-tools">${activeStep ? `<button type="button" class="workflow-icon-action stop" data-workflow-step-stop="${Number(step.id)}" aria-label="Stop step" title="Stop step">${workflowActionIcon('stop')}</button>` : `<button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="up" aria-label="Move step up" title="Move step up"${index === 0 ? ' disabled' : ''}>${workflowEditorIcon('up')}</button><button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="down" aria-label="Move step down" title="Move step down"${index === steps.length - 1 ? ' disabled' : ''}>${workflowEditorIcon('down')}</button><button type="button" class="workflow-icon-action" data-workflow-step-edit="${Number(step.id)}" aria-label="Edit step" title="Edit step">${workflowEditorIcon('edit')}</button><button type="button" class="workflow-icon-action" data-workflow-step-duplicate="${Number(step.id)}" aria-label="Duplicate step" title="Duplicate step">${workflowEditorIcon('duplicate')}</button><button type="button" class="workflow-icon-action start" data-workflow-step-run="${Number(step.id)}" aria-label="Run step" title="Run step">${workflowActionIcon('start')}</button><button type="button" class="workflow-icon-action" data-workflow-step-continue="${Number(step.id)}" aria-label="Run workflow from this step" title="Run from here">${workflowEditorIcon('continue')}</button><button type="button" class="workflow-icon-action danger" data-workflow-step-delete="${Number(step.id)}" aria-label="Delete step" title="Delete step">${workflowEditorIcon('delete')}</button>`}</div></article>`;
+                return `<article class="workflow-editor-step" data-workflow-step="${Number(step.id)}" draggable="true"><span class="workflow-step-handle" title="Drag to reorder" aria-hidden="true"></span><span class="workflow-step-number">${String(index + 1).padStart(2, '0')}</span><div class="workflow-step-copy"><strong>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</strong><p>${actions.escapeHtml(step.instruction || step.action_type || '')}</p><div class="workflow-step-support">${outcome ? `<span><b>Outcome</b>${actions.escapeHtml(outcome)}</span>` : ''}${skills.length ? `<span><b>Skills</b>${actions.escapeHtml(skills.join(', '))}</span>` : ''}</div>${routing ? `<small>${actions.escapeHtml(routing)}</small>` : ''}</div><em class="workflow-step-status ${actions.escapeHtml(stepStatus)}">${actions.escapeHtml(actions.statusLabel(stepStatus))}</em><div class="workflow-step-tools">${activeStep ? `<button type="button" class="workflow-icon-action stop" data-workflow-step-stop="${Number(step.id)}" aria-label="Stop step" title="Stop step">${workflowActionIcon('stop')}</button>` : `<button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="up" aria-label="Move step up" title="Move step up"${index === 0 ? ' disabled' : ''}>${workflowEditorIcon('up')}</button><button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="down" aria-label="Move step down" title="Move step down"${index === steps.length - 1 ? ' disabled' : ''}>${workflowEditorIcon('down')}</button><button type="button" data-workflow-step-edit="${Number(step.id)}">Edit step</button><button type="button" class="workflow-icon-action" data-workflow-step-edit="${Number(step.id)}" aria-label="Edit step" title="Edit step">${workflowEditorIcon('edit')}</button><button type="button" class="workflow-icon-action" data-workflow-step-duplicate="${Number(step.id)}" aria-label="Duplicate step" title="Duplicate step">${workflowEditorIcon('duplicate')}</button><button type="button" class="workflow-icon-action start" data-workflow-step-run="${Number(step.id)}" aria-label="Run step" title="Run step">${workflowActionIcon('start')}</button><button type="button" class="workflow-icon-action" data-workflow-step-continue="${Number(step.id)}" aria-label="Run workflow from this step" title="Run from here">${workflowEditorIcon('continue')}</button><button type="button" class="workflow-icon-action danger" data-workflow-step-delete="${Number(step.id)}" aria-label="Delete step" title="Delete step">${workflowEditorIcon('delete')}</button>`}</div></article>`;
             })
             .join('');
     }
@@ -1015,12 +995,7 @@ export function createWorkflows({ context, actions, el }) {
     }
 
     function bindEvents() {
-        el('workflow-create-focus').addEventListener('click', () => el('workflow-prompt-input').focus());
         el('workflow-prompt-form').addEventListener('submit', createWorkflowFromPrompt);
-        el('workflow-search-input').addEventListener('input', (event) => {
-            state.workflowSearch = event.target.value;
-            renderWorkflowWorkspace();
-        });
         el('workflow-step-form').addEventListener('submit', saveWorkflowStep);
         el('workflow-step-provider').addEventListener('change', () => syncWorkflowStepModels(''));
     }

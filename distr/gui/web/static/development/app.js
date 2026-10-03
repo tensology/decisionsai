@@ -4,15 +4,15 @@ import { createThreadSession } from './threads/session.js';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261003-page-stencils-3';
+import { createPlanning } from './planning/index.js?v=20261003-rebuild-sitemap';
 
-import { createSidebar } from './sidebar/index.js?v=20260916-delete-project';
+import { createSidebar } from './sidebar/index.js?v=20261003-sidebar-cleanup';
 
 import { createAutomations } from './automations/index.js?v=20260916-menus-icons';
 
 import { createIncoming } from './incoming/index.js';
 
-import { createWorkflows } from './workflows/index.js';
+import { createWorkflows } from './workflows/index.js?v=20261003-workflows';
 
 import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
@@ -20,7 +20,7 @@ import { createTerminals } from './terminals/index.js';
 
 import { createThreadsTranscript } from './threads/transcript/index.js?v=20260906-1';
 
-import { createThreadsComposer } from './threads/composer/index.js?v=20260917-model-steps';
+import { createThreadsComposer } from './threads/composer/index.js?v=20261003-workflow-confirm';
 
 import { createThreadsInspector } from './threads/inspector/index.js?v=20260906-1';
 
@@ -887,10 +887,10 @@ function setWorkspaceMode(mode, options) {
                   : planMode
                     ? 'plan'
                     : terminalsHomeMode
-                      ? 'terminals_home'
-                      : reportsMode
-                        ? 'reports'
-                        : 'chat';
+                        ? 'terminals_home'
+                        : reportsMode
+                          ? 'reports'
+                          : 'chat';
     el('development-task-header').classList.toggle('hidden', alternateMode);
     el('conversation').classList.toggle('hidden', alternateMode);
     el('development-composer-layer').classList.toggle('hidden', alternateMode);
@@ -1008,9 +1008,7 @@ async function openBoardPlan(boardKey, options) {
     if (!board) return;
     if (!board.project_id || !projectById(board.project_id)) {
         sidebar.closeBoardContextMenu();
-        setWorkspaceMode('plan', { focus: false, updateUrl: false });
         toast('Link this board to a project before opening Plan.', 'error');
-        setDevelopmentLocation(developmentModePaths.plan, { replace: true });
         return;
     }
     state.selectedBoardKey = board.key;

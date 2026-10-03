@@ -1,8 +1,8 @@
 [
   {
-    "stem": "talking",
-    "output": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-animations/talking.webm",
-    "review": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/edit/pixazo-free/verify/talking/full-loop-contact-sheet.png",
-    "frames": 49
+    "stem": "idle-extension",
+    "output": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-animations/idle-extension.webm",
+    "review": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/edit/pixazo-free/verify/idle-extension/full-loop-contact-sheet.png",
+    "frames": 121
   }
 ]

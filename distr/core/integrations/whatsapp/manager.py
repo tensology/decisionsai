@@ -6,13 +6,11 @@ Architecture mirrors the Telegram integration:
 
 Production note (TASK 18): this desktop codebase does **not** implement Meta Cloud API webhooks; traffic is
 relay WebSocket + authenticated REST (``RELAY_INTERNAL_TOKEN`` when set, otherwise device Ed25519 challenge).
-Mirroring inbound text into :class:`~distr.core.integrations.bus.IntegrationMessageBus` is **on by default**;
-opt out with ``DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT=0``.
+Inbound text is stored first. Only work-related batches from chats linked through
+a Ticket Board to an existing project are eligible for later Initiative review.
 
-Board-linked quiet surface (AuctionNow / Tensology no-face-to-face): set
-``DECISIONSAI_WA_INTAKE_SURFACE=board_linked`` so only board-linked chats announce
-+ Telegram-push; unlinked chats stay silent; normal bodies are not agent-injected
-unless Paul explicitly asks to hear new messages.
+Unlinked chats and boards without a valid project stay silent. Linked messages
+are not announced or agent-injected one at a time.
 
 This class handles:
   - WebSocket connection to the relay server
@@ -62,18 +60,14 @@ def _whatsapp_agent_bridge_enabled() -> bool:
 
 
 def _route_whatsapp_text_to_message_bus(data: dict, full_text: str, jid: str) -> None:
-    """Mirror inbound WhatsApp text into WorkIntake / ``IntegrationMessageBus``.
+    """Apply the strict project-link gate after the message has been stored.
 
-    When ``DECISIONSAI_WA_INTAKE_SURFACE=board_linked`` (or a board opts in via
-    ``orchestrator_policy.whatsapp_intake.mode``), Paul's intake rules apply:
-
-    - unlinked chats → store only (no announce / TG / agent inject)
-    - board-linked → announce + Telegram push (tracked) + WorkIntake when relevant
-    - MessageBus agent inject stays off for normal bodies (quiet unless asked)
+    Unlinked chats and board links without a valid project return immediately.
+    Project-linked messages also return immediately so the Initiative scanner can
+    classify and group the complete conversation burst before any notification.
     """
     from distr.core.integrations.bus import IncomingMessage, get_integration_message_bus
     from distr.core.kanban.whatsapp_intake_rules import (
-        apply_board_linked_surface_actions,
         decide_intake_surface,
         resolve_whatsapp_link,
     )
@@ -105,21 +99,6 @@ def _route_whatsapp_text_to_message_bus(data: dict, full_text: str, jid: str) ->
         surface.should_route_work_intake,
         surface.should_inject_message_bus,
     )
-
-    if surface.should_announce or surface.should_telegram_push:
-        tracking = apply_board_linked_surface_actions(
-            surface,
-            preview=intake_text,
-            sender_phone=str(sender_phone or ""),
-            source_message_id=source_message_id,
-            jid=jid,
-        )
-        if tracking.get("telegram_attempted") and not tracking.get("telegram_ok"):
-            logger.warning(
-                "WhatsApp board-linked Telegram push did not succeed: %s (push_id=%s) — tell Paul",
-                tracking.get("telegram_error") or "unknown",
-                tracking.get("telegram_push_id"),
-            )
 
     if not surface.should_route_work_intake and not surface.should_inject_message_bus:
         logger.debug(
@@ -759,7 +738,8 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         if message_id and not media:
             self._mark_relay_processed_by_message_id(message_id)
 
-        # Default: agent/WorkIntake pickup ON (opt out via DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT=0).
+        # Evaluate the post-storage project gate. Eligible messages remain queued
+        # for grouped scanning rather than being injected into an agent turn here.
         if (
             not from_me
             and _whatsapp_agent_bridge_enabled()

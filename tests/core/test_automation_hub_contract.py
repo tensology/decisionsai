@@ -787,3 +787,25 @@ def test_automation_dispatch_does_not_use_current_chat(monkeypatch):
 
     with get_session() as session:
         assert session.query(Chat).filter(Chat.parent_id == chat_id).count() == 0
+
+def test_removed_cv_parser_nav_and_workflow_home_copy():
+    studio = development_template()
+    javascript = development_assets(".js")
+
+    assert 'id="sidebar-cv-parser-toggle"' not in studio
+    assert ">CV Parser</span>" not in studio
+    assert 'id="cv-parser-workspace"' not in studio
+    assert "https://cvparser.tensology.com" not in studio
+    assert "cv_parser" not in javascript
+    assert "/development/cv-parser/" not in javascript
+    assert 'id="workflow-prompt-submit">Build workflow</button>' in studio
+    assert 'id="workflow-search-input"' not in studio
+    assert 'id="workflow-create-focus"' not in studio
+    assert "one-off workflow" not in javascript
+    assert "currently active" not in javascript
+    assert "<h2>Running now</h2>" in javascript
+    assert "${runs.length} running" in javascript
+    assert "kind: 'reusable'" in javascript
+    assert javascript.index("kind: 'reusable'") < javascript.index("kind: 'imported'") < javascript.index("kind: 'test'")
+    assert "Are you sure? Do you want to push this into a workflow?" in javascript
+    assert ">Edit step</button>" in javascript

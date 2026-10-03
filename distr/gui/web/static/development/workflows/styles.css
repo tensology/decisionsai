@@ -15,11 +15,11 @@
 .workflow-step-actions button { min-height: 27px; padding: 0 8px; border: 1px solid var(--studio-line); border-radius: 6px; background: rgba(255,255,255,.035); color: var(--studio-text); font-size: 8px; }
 .workflow-step-actions button:hover { border-color: var(--studio-accent); background: var(--studio-accent-soft); }
 .workflow-workspace { overflow: hidden; }
-.workflow-home { width: min(1320px, calc(100% - 48px)); height: 100%; margin: 0 auto; overflow-x: hidden; overflow-y: auto; padding: 34px 10px 64px 0; scrollbar-color: rgba(145,160,186,.42) transparent; scrollbar-width: thin; }
-.workflow-home::-webkit-scrollbar { width: 8px; }
+.workflow-home { width: 100%; height: 100%; margin: 0; overflow-x: hidden; overflow-y: auto; padding: 34px 0 64px 0; scrollbar-color: rgba(145,160,186,.9) transparent; scrollbar-width: auto; }
+.workflow-home::-webkit-scrollbar { width: 12px; }
 .workflow-home::-webkit-scrollbar-track { background: transparent; }
-.workflow-home::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: rgba(145,160,186,.42); background-clip: padding-box; }
-.workflow-home::-webkit-scrollbar-thumb:hover { background: rgba(145,160,186,.68); background-clip: padding-box; }
+.workflow-home::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(145,160,186,.9); }
+.workflow-home::-webkit-scrollbar-thumb:hover { background: #91a0ba; }
 .workflow-create-prompt { max-width: 920px; margin: 0 auto; }
 .workflow-toolbar { max-width: 920px; margin-right: auto; margin-left: auto; }
 .workflow-project-groups { display: grid; gap: 28px; margin-top: 28px; }
@@ -223,7 +223,7 @@
     .workflow-change-panel { grid-template-columns: 1fr; align-items: start; gap: 18px; }
 }
 @media (max-width: 680px) {
-    .workflow-home { width: calc(100% - 24px); padding-top: 18px; }
+    .workflow-home { width: 100%; margin: 0; padding-top: 18px; padding-right: 0; }
     .workflow-card-grid { grid-template-columns: 1fr; }
     .workflow-editor-header { padding: 0 12px; }
     .workflow-editor-back span, .workflow-editor-status { display: none; }

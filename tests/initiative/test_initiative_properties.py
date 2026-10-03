@@ -384,6 +384,66 @@ def test_telegram_gate(action, level, boundaries):
     mock_telegram.send_to_telegram.assert_not_called()
 
 
+def test_whatsapp_batch_suggestion_forces_text_only_delivery():
+    pytest.importorskip("PyQt6.QtCore")
+    from distr.core.initiative.proposed_action import ProposedAction
+    from distr.core.initiative.service import InitiativeService
+
+    service = InitiativeService.__new__(InitiativeService)
+    service._cycle_situational = {}
+    service._log_to_chat = MagicMock()
+    service._send_telegram_if_allowed = MagicMock()
+    action = ProposedAction(
+        action_type="message_triage",
+        description="Four linked WhatsApp messages look work-related.",
+        payload={
+            "source": "whatsapp",
+            "notification_format": "text",
+            "message_ids": [1, 2, 3, 4],
+        },
+        draft="Review the messages as one batch.",
+        telegram_message="Four linked WhatsApp messages need review.",
+    )
+
+    service._deliver_suggestion(
+        action,
+        {
+            "initiative_telegram_notify_suggestions": True,
+            "initiative_allow_telegram": True,
+        },
+    )
+
+    service._send_telegram_if_allowed.assert_called_once()
+    kwargs = service._send_telegram_if_allowed.call_args.kwargs
+    assert kwargs["allow_voice"] is False
+    assert kwargs["voice_body"] is None
+
+
+def test_linked_intake_uses_its_single_durable_approval_gate():
+    pytest.importorskip("PyQt6.QtCore")
+    from distr.core.initiative.policy import PolicyDecision
+    from distr.core.initiative.proposed_action import ProposedAction
+    from distr.core.initiative.service import InitiativeService
+
+    service = InitiativeService.__new__(InitiativeService)
+    service._execute_action = MagicMock()
+    service._draft_and_ask = MagicMock()
+    action = ProposedAction(
+        action_type="message_triage",
+        description="Linked messages are ready.",
+        payload={"approval_flow": "linked_intake_create_execute", "source": "whatsapp"},
+    )
+
+    service._dispatch_action(
+        action,
+        {"initiative_default_tier": 3},
+        PolicyDecision.EXECUTE,
+        {},
+    )
+
+    service._execute_action.assert_called_once()
+    service._draft_and_ask.assert_not_called()
+
 # ---------------------------------------------------------------------------
 # Property 9: Draft queue persistence round-trip (Task 10.10)
 # ---------------------------------------------------------------------------

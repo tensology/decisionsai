@@ -778,6 +778,23 @@ class OrchestratorIntakeService:
                 self._record_whatsapp_lifecycle(intake, decision)
             except Exception:
                 logger.debug("Could not persist WhatsApp work lifecycle from intake", exc_info=True)
+        elif str(getattr(intake.source, "value", intake.source) or "").lower() == "gmail":
+            try:
+                from distr.core.kanban.jira_work_lifecycle import record_ticket_created
+
+                meta = dict(intake.metadata or {})
+                email_provider = str(meta.get("email_provider") or "gmail").strip().lower()
+                record_ticket_created(
+                    ticket_id=int(decision.ticket_id),
+                    board_id=int(decision.board_id) if decision.board_id is not None else None,
+                    project_id=int(decision.project_id) if decision.project_id is not None else None,
+                    issue_key="",
+                    outbound_channel=("mailshot_email" if email_provider == "mailshot" else "email"),
+                    outbound_target=str(intake.source_message_id or ""),
+                    client_contact=str(meta.get("email_sender") or intake.source_user_id or ""),
+                )
+            except Exception:
+                logger.debug("Could not persist email work lifecycle from intake", exc_info=True)
         decision.handled = True
         decision.status = "ticket_created"
         decision.response_text = f"Created ticket #{decision.ticket_id}: {_clean_title(value)}"
@@ -961,6 +978,9 @@ class OrchestratorIntakeService:
                 )
         if requested_execution_policy:
             metadata["requested_execution_policy"] = requested_execution_policy
+        if (intake.metadata or {}).get("skip_human_checkpoints"):
+            metadata["skip_human_checkpoints"] = True
+            metadata["intake_execution_approved"] = True
         return metadata
 
     def _update_ticket(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:

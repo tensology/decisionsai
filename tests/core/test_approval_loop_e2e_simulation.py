@@ -71,7 +71,7 @@ def test_a_to_e_whatsapp_approval_loop_simulated(monkeypatch, tmp_path):
     deploy = lifecycle.handle_telegram_reply(f"wv:{gate['token']}:ok", chat_id=42)
     assert deploy["waiting_kind"] == lifecycle.WAITING_KIND_DEPLOY
 
-    # D3) Settle deploy → client "send to customer?" review
+    # D3) Settle deploy → client Yes / No / Add review
     captured = {}
 
     class FakeManager:
@@ -87,8 +87,10 @@ def test_a_to_e_whatsapp_approval_loop_simulated(monkeypatch, tmp_path):
     settled = lifecycle.handle_telegram_reply(f"wd:{deploy['token']}:prod", chat_id=42)
     assert settled["action"] == "deploy_settled"
     assert settled["deploy_target"] == "production"
-    assert "send to customer" in settled["text"].lower()
-    assert captured.get("text") and "send to customer" in captured["text"].lower()
+    assert "reply **yes** to send this whatsapp reply" in settled["text"].lower()
+    assert captured.get("text") and "reply **yes** to send this whatsapp reply" in captured["text"].lower()
+    assert "reply **no** to not send it" in settled["text"].lower()
+    assert "reply **add** to add something before sending" in settled["text"].lower()
 
     # E) Yes → WA send (DRY-RUN)
     monkeypatch.setenv("DECISIONSAI_WHATSAPP_DRY_RUN", "1")

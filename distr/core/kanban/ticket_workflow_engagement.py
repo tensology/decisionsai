@@ -570,8 +570,16 @@ def notify_ticket_workflow_progress(
     spoken = prepare_workflow_voice_text(voice_body or text)
 
     ctx = _run_context(run_id)
-    audible = bool((audible or requires_response) and allow_voice)
-    if not audible and not requires_response:
+    run_data = ctx.get("run_data") if isinstance(ctx.get("run_data"), dict) else {}
+    linked_intake_text = bool(
+        run_data.get("intake_execution_approved")
+        and str(run_data.get("source_type") or "").lower() in {"whatsapp", "gmail", "email"}
+    )
+    requested_delivery = bool(audible or requires_response)
+    if linked_intake_text:
+        allow_voice = False
+    audible = bool(requested_delivery and allow_voice)
+    if not audible and not requires_response and not (linked_intake_text and requested_delivery):
         # Routine model choices, step transitions, retries, and automatic
         # failovers belong in Mission Control/chat, not in the voice queue.
         try:
@@ -640,7 +648,7 @@ def notify_ticket_workflow_progress(
             # A response-required checkpoint carries Telegram controls. Recent
             # desktop/remote activity must not reroute it to a surface that
             # cannot render that keyboard and strand the durable interaction.
-            surface="telegram" if requires_response else "proactive",
+            surface="telegram" if (requires_response or linked_intake_text) else "proactive",
             kind="workflow_progress",
             priority=priority,  # type: ignore[arg-type]
             subject_type="ticket_workflow_run",

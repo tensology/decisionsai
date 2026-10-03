@@ -47,9 +47,12 @@ export function createSidebar({ context, actions, el }) {
         const newThreadActive = context.workspaceMode === 'chat' && !context.currentChat && !context.selectedBoardKey;
         el('new-thread-button').classList.toggle('active', newThreadActive);
         el('new-thread-button').setAttribute('aria-current', newThreadActive ? 'page' : 'false');
-        ['plan', 'terminals_home', 'reports'].forEach((mode) => {
-            const button = el(`sidebar-${mode === 'terminals_home' ? 'terminals' : mode}-toggle`);
-            const active = mode === 'terminals_home' ? ['terminals_home', 'terminals'].includes(context.workspaceMode) : context.workspaceMode === mode;
+        [
+            ['sidebar-plan-toggle', context.workspaceMode === 'plan'],
+            ['sidebar-terminals-toggle', ['terminals_home', 'terminals'].includes(context.workspaceMode)],
+            ['sidebar-reports-toggle', context.workspaceMode === 'reports']
+        ].forEach(([id, active]) => {
+            const button = el(id);
             button.classList.toggle('active', active);
             button.setAttribute('aria-current', active ? 'page' : 'false');
         });

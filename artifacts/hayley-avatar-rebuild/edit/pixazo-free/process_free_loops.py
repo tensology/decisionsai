@@ -21,6 +21,7 @@ PROFILES: dict[str, tuple[int, int]] = {
     "dictation": (19, 2),
     "file-drop-success": (13, 2),
     "hands-free-listening": (19, 2),
+    "idle-extension": (61, 1),
     "ptt-active": (19, 2),
     "running-action": (31, 1),
     "running-step-runner": (25, 1),
@@ -39,6 +40,7 @@ PRESERVE_SOURCE_CORE: dict[str, bool] = {
     "talking": True,
 }
 SOURCE_STEMS = {
+    "idle-extension": "idle",
     "talking": "idle",
 }
 

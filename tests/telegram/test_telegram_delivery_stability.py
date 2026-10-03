@@ -114,6 +114,64 @@ def test_send_to_telegram_event_reaches_worker_when_socket_disconnected(monkeypa
     }]
 
 
+def test_whatsapp_origin_response_does_not_reach_telegram_worker(monkeypatch):
+    app = DummyApp(DummyTelegramManager(connected=True))
+    monkeypatch.setattr("distr.app.events.threading.Thread", ImmediateThread)
+
+    app._evt_send_to_telegram({
+        "text": "Model request failed while trying to generate a response.",
+        "provider": "fishaudio",
+        "is_done": False,
+        "origin_surface": "whatsapp",
+    })
+
+    assert app.worker_calls == []
+
+
+def test_whatsapp_origin_response_does_not_use_pending_remote_context(monkeypatch):
+    app = DummyApp(DummyTelegramManager(connected=True))
+    remote_calls = []
+    monkeypatch.setattr("distr.app.events.threading.Thread", ImmediateThread)
+    monkeypatch.setattr(
+        "distr.core.integrations.telegram.remote_tts_delivery.resolve_remote_delivery_context",
+        lambda manager, data, consume_pending=False: {
+            "request_id": "remote-test",
+            "source_command": "notification",
+            "mode": "proactive",
+        },
+    )
+    monkeypatch.setattr(
+        app,
+        "_send_to_remote_worker",
+        lambda data, remote_ctx: remote_calls.append((data, remote_ctx)),
+    )
+
+    app._evt_send_to_telegram({
+        "text": "Unrelated WhatsApp response.",
+        "provider": "fishaudio",
+        "origin_surface": "whatsapp",
+    })
+
+    assert remote_calls == []
+    assert app.worker_calls == []
+
+
+def test_explicit_whatsapp_notification_can_force_telegram_delivery(monkeypatch):
+    app = DummyApp(DummyTelegramManager(connected=True))
+    monkeypatch.setattr("distr.app.events.threading.Thread", ImmediateThread)
+
+    event = {
+        "text": "Project-linked WhatsApp intake received.",
+        "provider": "",
+        "origin_surface": "whatsapp",
+        "explicit_notification_intent": True,
+        "force_telegram_delivery": True,
+    }
+    app._evt_send_to_telegram(event)
+
+    assert app.worker_calls == [event]
+
+
 def test_explicit_workflow_progress_reaches_telegram_without_voice_provider(monkeypatch):
     app = DummyApp(DummyTelegramManager(connected=True))
     monkeypatch.setattr("distr.app.events.threading.Thread", ImmediateThread)

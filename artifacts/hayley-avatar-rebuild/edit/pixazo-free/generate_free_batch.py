@@ -23,6 +23,10 @@ MOTIONS = {
     "file-drop-success": "a subtle celebratory movement while the check-mark page stays perfectly readable and fixed",
     "hands-free-listening": "gentle breathing, one blink, and a tiny attentive head adjustment while the raised hand stays fixed",
     "idle": "gentle breathing and one soft blink while the heart-hands shape stays locked",
+    "idle-extension": (
+        "gentle continuous breathing and two soft blinks separated in time while the heart-hands shape stays locked. "
+        "Keep the movement subtle and continuous for the entire shot"
+    ),
     "ptt-active": "subtle breathing and a small alert expression change while the speaking gesture stays fixed",
     "recording-action": "a tiny recording emphasis movement without altering the pose or adding symbols",
     "running-action": "subtle typing movement only while the laptop stays rigid and undistorted",
@@ -43,7 +47,12 @@ MOTIONS = {
 }
 
 SOURCE_STEMS = {
+    "idle-extension": "idle",
     "talking": "idle",
+}
+
+NUM_FRAMES = {
+    "idle-extension": 121,
 }
 
 
@@ -66,6 +75,7 @@ def submit(key: str, stem: str, source: Path) -> tuple[str, str]:
         "clothing drift, or prop drift. Return cleanly toward the starting pose."
     )
     data_url = "data:image/png;base64," + base64.b64encode(source.read_bytes()).decode("ascii")
+    num_frames = NUM_FRAMES.get(stem, 73)
     body = {
         "prompt": prompt,
         "image_url": data_url,
@@ -75,7 +85,7 @@ def submit(key: str, stem: str, source: Path) -> tuple[str, str]:
             "deformed hands, morphing, face drift, hair drift, clothing drift, prop drift"
         ),
         "aspect": "1:1",
-        "num_frames": 73,
+        "num_frames": num_frames,
         "frame_rate": 24,
         "steps": 8,
         "cfg": 3.0,
@@ -151,7 +161,7 @@ def main() -> None:
                     "schema_version": 2,
                     "parameters": {
                         "aspect": "1:1",
-                        "num_frames": 73,
+                        "num_frames": NUM_FRAMES.get(stem, 73),
                         "frame_rate": 24,
                         "steps": 8,
                         "cfg": 3.0,

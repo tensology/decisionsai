@@ -46,6 +46,7 @@ WORK_KEYWORDS = {
 _EMAIL_SCAN_CACHE_TTL_S = 300.0
 _email_scan_cache: dict[str, Any] | None = None
 _email_scan_lock = threading.Lock()
+_WHATSAPP_BATCH_QUIET_SECONDS = 300  # 5 minutes
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
@@ -435,6 +436,7 @@ def _add_board_proposals(scan: dict[str, Any], board: dict[str, Any]) -> None:
 def _scan_whatsapp(scan: dict[str, Any]) -> None:
     from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink, get_session
     from distr.core.db.kanban import KanbanBoard, KanbanTicket
+    from distr.core.db.projects import Project
 
     now = datetime.utcnow()
     cutoff = now - timedelta(days=7)
@@ -461,9 +463,13 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             if not link.board_id or link.board_id in board_meta:
                 continue
             board = session.query(KanbanBoard).filter(KanbanBoard.id == link.board_id).first()
-            if board:
+            project_id = int(board.default_project_id) if board and board.default_project_id else None
+            project = session.query(Project).filter(Project.id == project_id).first() if project_id else None
+            if board and not bool(getattr(board, "archived", False)) and project:
                 board_meta[link.board_id] = {
                     "name": board.name or f"Board {board.id}",
+                    "project_id": int(project.id),
+                    "project_name": project.name or f"Project {project.id}",
                 }
         ticketed_message_ids = set()
         for row in session.query(KanbanTicket).filter(KanbanTicket.whatsapp_message_id.isnot(None)).all():
@@ -483,6 +489,8 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             link = link_by_phone.get(phone)
             linked_board = board_meta.get(link.board_id) if link else None
             linked_whatsapp_enabled = bool(linked_board)
+            if not linked_whatsapp_enabled:
+                continue
             if not _is_current_unhandled_whatsapp_message(
                 row,
                 now=now,
@@ -502,10 +510,12 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
                 "work_related": is_work_related,
                 "linked_board_id": link.board_id if link else None,
                 "linked_board_name": linked_board.get("name") if linked_board else "",
+                "linked_project_id": linked_board.get("project_id") if linked_board else None,
+                "linked_project_name": linked_board.get("project_name") if linked_board else "",
                 "linked_board_whatsapp_linked": linked_whatsapp_enabled,
                 "auto_snapshot": bool(link.auto_snapshot) if link else False,
             }
-            if is_work_related or linked_whatsapp_enabled:
+            if is_work_related:
                 work_like.append(item)
 
             group = grouped.setdefault(
@@ -517,9 +527,12 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
                     "latest_sender": item["sender"],
                     "latest_preview": text[:240],
                     "latest_created_date": item["created_date"],
+                    "latest_created_at": row.created_date,
                     "work_related_count": 0,
                     "linked_board_id": item["linked_board_id"],
                     "linked_board_name": item["linked_board_name"],
+                    "linked_project_id": item["linked_project_id"],
+                    "linked_project_name": item["linked_project_name"],
                     "linked_board_whatsapp_linked": linked_whatsapp_enabled,
                     "auto_snapshot": item["auto_snapshot"],
                     "fresh": bool(row.created_date and row.created_date >= fresh_cutoff),
@@ -532,7 +545,9 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
 
         grouped_candidates = [
             g for g in grouped.values()
-            if g["fresh"] or g["work_related_count"] > 0 or g.get("linked_board_whatsapp_linked")
+            if g["work_related_count"] > 0
+            and g.get("latest_created_at")
+            and g["latest_created_at"] <= now - timedelta(seconds=_WHATSAPP_BATCH_QUIET_SECONDS)
         ]
         grouped_candidates.sort(
             key=lambda g: (
@@ -546,25 +561,20 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             chosen = grouped_candidates[0]
             count = len(chosen["message_ids"])
             board_name = chosen.get("linked_board_name") or ""
-            if board_name:
-                description = (
-                    f"{_count_phrase(count, 'WhatsApp message')} arrived from {chosen['latest_sender'] or chosen['jid_phone']} "
-                    f"and the chat is linked to board '{board_name}'. Ask whether to snapshot them into tickets."
-                )
-            elif chosen["work_related_count"] > 0:
-                description = (
-                    f"{_count_phrase(count, 'recent WhatsApp message')} from {chosen['latest_sender'] or chosen['jid_phone']} "
-                    "look work-related and may need ticketing or follow-up."
-                )
-            else:
-                description = (
-                    f"You just got a WhatsApp message from {chosen['latest_sender'] or chosen['jid_phone']}."
-                )
+            project_name = chosen.get("linked_project_name") or ""
+            work_count = int(chosen.get("work_related_count") or 0)
+            description = (
+                f"{_count_phrase(count, 'WhatsApp message')} arrived from {chosen['latest_sender'] or chosen['jid_phone']} "
+                f"for project '{project_name}' on board '{board_name}'; "
+                f"{_count_phrase(work_count, 'message')} look work-related. Review them as one batch."
+            )
             scan["proposals"].append({
                 "action_type": "message_triage",
                 "description": description,
                 "payload": {
                     "source": "whatsapp",
+                    "approval_flow": "linked_intake_create_execute",
+                    "jid": chosen["jid"],
                     "jid_phone": chosen["jid_phone"],
                     "message_ids": chosen["message_ids"][:8],
                     "message_count": count,
@@ -572,17 +582,24 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
                     "latest_preview": chosen["latest_preview"],
                     "linked_board_id": chosen.get("linked_board_id"),
                     "linked_board_name": board_name,
+                    "linked_project_id": chosen.get("linked_project_id"),
+                    "linked_project_name": project_name,
                     "linked_board_whatsapp_linked": bool(chosen.get("linked_board_whatsapp_linked")),
+                    "notification_format": "text",
+                    "batch_quiet_seconds": _WHATSAPP_BATCH_QUIET_SECONDS,
                     "auto_snapshot": bool(chosen.get("auto_snapshot")),
                     "confidence": 0.68,
                     "risk_level": "medium",
                 },
                 "draft": (
                     f"{description}\n\nLatest: {chosen['latest_preview']}\n\n"
-                    "Suggested next step: ask whether to create a ticket snapshot, then use "
-                    "create_ticket action='whatsapp_snapshot_to_ticket' with the message_ids."
+                    "Suggested next step: compact this batch into one ticket and execute its "
+                    "linked workflow after one Telegram approval."
                 ),
-                "telegram_message": description,
+                "telegram_message": (
+                    f"{description}\n\nDo you want me to compact these messages into one ticket "
+                    "and execute it end to end?"
+                ),
             })
 
 
@@ -671,6 +688,7 @@ def _scan_email(scan: dict[str, Any]) -> None:
 
 
 def _scan_email_uncached(scan: dict[str, Any]) -> None:
+    from distr.core.kanban.email_intake_rules import resolve_email_link
     from distr.core.kanban.jira_intake import (
         fetch_gmail_intake_messages,
         fetch_mailshot_intake_messages,
@@ -703,6 +721,7 @@ def _scan_email_uncached(scan: dict[str, Any]) -> None:
         return
 
     work_like = []
+    email_candidates = []
     seen_ids: set[str] = set()
     for msg in messages:
         mid = str(msg.get("id") or "").strip()
@@ -725,27 +744,58 @@ def _scan_email_uncached(scan: dict[str, Any]) -> None:
             "body": str(msg.get("body") or "")[:2000],
             "source": msg.get("source") or ("mailshot" if "mailshot" in sources_tried else "gmail"),
         }
+        link = resolve_email_link(item["from"])
         if item["work_related"] or is_jira_notification_email(
             from_addr=item["from"], subject=item["subject"]
         ):
+            email_candidates.append(dict(item))
+        if item["work_related"] and link.board_id and link.project_id:
+            item.update({
+                "linked_board_id": link.board_id,
+                "linked_project_id": link.project_id,
+                "linked_board_name": link.board_name,
+                "linked_project_name": link.project_name,
+                "sender_email": link.sender_email,
+            })
             work_like.append(item)
 
-    scan["messages"]["email"] = work_like
+    scan["messages"]["email"] = email_candidates
     if work_like:
         chosen = work_like[0]
+        related = [
+            row for row in work_like
+            if row.get("linked_board_id") == chosen.get("linked_board_id")
+            and (
+                (chosen.get("thread_id") and row.get("thread_id") == chosen.get("thread_id"))
+                or row.get("sender_email") == chosen.get("sender_email")
+            )
+        ][:8]
         scan["proposals"].append({
             "action_type": "message_triage",
             "description": (
-                f"{len(work_like)} recent email(s) look work-related. "
-                f"Top email: {chosen['subject'] or chosen['snippet']}"
+                f"{len(related)} linked email message(s) from {chosen['sender_email']} look work-related "
+                f"for project '{chosen['linked_project_name']}' on board '{chosen['linked_board_name']}'."
             ),
             "payload": {
                 "source": "email",
-                "message_ids": [m["id"] for m in work_like[:5] if m.get("id")],
-                "thread_ids": [m["thread_id"] for m in work_like[:5] if m.get("thread_id")],
+                "approval_flow": "linked_intake_create_execute",
+                "message_ids": [m["id"] for m in related if m.get("id")],
+                "thread_ids": [m["thread_id"] for m in related if m.get("thread_id")],
+                "messages": related,
+                "sender_email": chosen["sender_email"],
+                "linked_board_id": chosen["linked_board_id"],
+                "linked_project_id": chosen["linked_project_id"],
+                "linked_board_name": chosen["linked_board_name"],
+                "linked_project_name": chosen["linked_project_name"],
+                "notification_format": "text",
                 "confidence": 0.66,
                 "risk_level": "medium",
             },
+            "telegram_message": (
+                f"Linked email work arrived from {chosen['sender_email']} for "
+                f"{chosen['linked_project_name']}. Do you want me to compact it into one ticket "
+                "and execute it end to end?"
+            ),
         })
 
 
