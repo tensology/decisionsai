@@ -215,7 +215,7 @@ class AgentSession:
             tts_cfg = self.config.get('tts') or {}
             engine = (tts_cfg.get('engine') or '').strip().lower()
             # Resolve voice_model for custom voice personality loading
-            vm = tts_cfg.get('voice_name') or tts_cfg.get('voice_id') or ''
+            vm = tts_cfg.get('voice_id') or tts_cfg.get('voice_name') or ''
             if vm:
                 self._load_custom_voice_personality(engine or 'kokoro', vm)
             self.agent_name = service_factory.resolve_agent_name_from_tts_config(tts_cfg, self.settings)
@@ -820,9 +820,9 @@ class AgentSession:
         if tts_config['engine'] == 'elevenlabs' and hasattr(self.tts_service, '_resolved_voice_name'):
             self._apply_agent_name(self.tts_service._resolved_voice_name)
 
-        # For custom voices, ensure personality is in agent role before LLM/TTS wiring.
-        _voice_key = tts_config.get('voice_name') or tts_config.get('voice_id') or ''
-        if _voice_key.startswith('custom_'):
+        # Ensure any locally named voice, including a Fish provider id, supplies its persona.
+        _voice_key = tts_config.get('voice_id') or tts_config.get('voice_name') or ''
+        if _voice_key:
             from . import service_factory
             self._load_custom_voice_personality(tts_config.get('engine') or 'kokoro', _voice_key)
             self.role = self._load_agent_role()
@@ -1357,10 +1357,6 @@ class AgentSession:
                 unload_model()
             except Exception:
                 pass
-
-        # Clear custom voice personality only when leaving a custom_* voice.
-        if not (voice_model or '').startswith('custom_'):
-            self._custom_voice_personality = ''
 
         # --- In-place swap path ---
         if hot_swap_cfg.get('in_place') and old_service is not None:

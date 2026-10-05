@@ -83,7 +83,7 @@ class FishAudioDescriptor(TTSProviderDescriptor):
         service = FishAudioTTSService(
             api_key=api_key,
             voice_id=voice_id,
-            voice_name=voice_id,
+            voice_name=self.resolve_display_name(voice_id, settings or {}),
             stt_service=stt_service,
             playback_speed=playback_speed,
             event_queue=(settings or {}).get("_event_queue"),
@@ -127,7 +127,28 @@ class FishAudioDescriptor(TTSProviderDescriptor):
     def resolve_display_name(self, voice_id: str, settings: dict, voice_name: str | None = None) -> str:
         if voice_name and voice_name.strip() and voice_name.strip() != voice_id:
             return voice_name.strip()
-        return (voice_id or "").strip() or DEFAULT_FISHAUDIO_AGENT
+        raw = (voice_id or "").strip()
+        if raw:
+            try:
+                from distr.core.db import CustomVoice, get_session
+
+                session = get_session()
+                try:
+                    query = session.query(CustomVoice).filter(CustomVoice.status == "ready")
+                    if raw.startswith("custom_"):
+                        voice = query.filter(CustomVoice.id == int(raw.split("_", 1)[1])).first()
+                    else:
+                        voice = query.filter(
+                            CustomVoice.provider == "fishaudio",
+                            CustomVoice.provider_voice_id == raw,
+                        ).first()
+                    if voice and (voice.name or "").strip():
+                        return voice.name.strip()
+                finally:
+                    session.close()
+            except Exception:
+                logger.debug("Could not resolve Fish Audio display name", exc_info=True)
+        return raw or DEFAULT_FISHAUDIO_AGENT
 
     def normalize_voice(self, raw_voice: str, settings: dict) -> str:
         return self.resolve_reference_id(raw_voice, settings or {})
@@ -147,9 +168,11 @@ class FishAudioDescriptor(TTSProviderDescriptor):
             return [{"id": DEFAULT_FISHAUDIO_VOICE, "name": DEFAULT_FISHAUDIO_AGENT}]
 
     def get_hot_swap_config(self, voice_model: str, settings: dict) -> dict:
+        voice_id = self.resolve_reference_id(voice_model, settings or {})
         return {
             "engine": "fishaudio",
-            "voice_id": self.resolve_reference_id(voice_model, settings or {}),
+            "voice_id": voice_id,
+            "voice_name": self.resolve_display_name(voice_id, settings or {}),
             "model": resolve_fishaudio_tts_model((settings or {}).get("fishaudio_tts_model")),
             "api_key": ((settings or {}).get("fishaudio_key") or "").strip(),
             "in_place": False,

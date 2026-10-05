@@ -214,6 +214,29 @@ def test_hot_swap_and_voice_settings_entry():
     assert default == DEFAULT_FISHAUDIO_VOICE
 
 
+def test_fishaudio_display_name_uses_local_custom_voice(monkeypatch):
+    from types import SimpleNamespace
+
+    from distr.core.agent.services.tts.fishaudio_descriptor import FishAudioDescriptor
+
+    class Query:
+        def filter(self, *args):
+            return self
+
+        def first(self):
+            return SimpleNamespace(name="Hayley Williams")
+
+    class Session:
+        def query(self, model):
+            return Query()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("distr.core.db.get_session", lambda: Session())
+    assert FishAudioDescriptor().resolve_display_name("fish-id", {}) == "Hayley Williams"
+
+
 def test_online_provider_gate_and_tts_providers_api(monkeypatch):
     from pathlib import Path
 
@@ -482,3 +505,27 @@ def test_fishaudio_run_tts_yields_transport_audio_frames(monkeypatch):
     assert audio_frames
     assert sum(len(f.audio) for f in audio_frames) > 100
 
+
+def test_fishaudio_stream_failure_falls_back_to_buffered_audio(monkeypatch):
+    import asyncio
+    import numpy as np
+
+    from distr.core.agent.libs import AudioRawFrame, ErrorFrame, OutputAudioRawFrame
+    from distr.core.agent.services.tts.fishaudio import FishAudioTTSService
+
+    async def broken_stream(*args, **kwargs):
+        raise RuntimeError("stream unavailable")
+        yield b""
+
+    monkeypatch.setattr(
+        "distr.core.agent.services.tts.fishaudio_client.iter_pcm_audio", broken_stream
+    )
+    service = FishAudioTTSService(api_key="sk-test", voice_id="voice-1", voice_name="Demo")
+    monkeypatch.setattr(service, "_generate_audio", lambda text: (np.ones(4410, dtype=np.float32) * 0.1, 44100))
+
+    async def collect():
+        return [frame async for frame in service.run_tts("Fallback please")]
+
+    frames = asyncio.run(collect())
+    assert any(isinstance(frame, (OutputAudioRawFrame, AudioRawFrame)) for frame in frames)
+    assert not any(isinstance(frame, ErrorFrame) for frame in frames)

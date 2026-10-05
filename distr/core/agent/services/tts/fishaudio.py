@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 
@@ -176,8 +177,29 @@ class FishAudioTTSService(OpenAITTSService):
                     yield self._pcm_frame(aligned)
             audio_duration_seconds = yielded_audio_bytes / 2 / _FISH_PCM_RATE
         except Exception as e:
-            logger.error("Fish Audio streaming failed: %s", e, exc_info=True)
-            yield ErrorFrame(error=str(e))
-            audio_duration_seconds = 0
+            if yielded_audio_bytes == 0 and not self._cancelled:
+                try:
+                    logger.warning("Fish Audio streaming failed; using buffered synthesis: %s", e)
+                    audio_data, sample_rate = await asyncio.to_thread(self._generate_audio, text)
+                    if sample_rate != _FISH_PCM_RATE:
+                        from distr.core.audio.tts_handler import _resample_audio
+
+                        audio_data, sample_rate = _resample_audio(audio_data, sample_rate, _FISH_PCM_RATE)
+                    pcm = (np.clip(audio_data, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+                    for offset in range(0, len(pcm), _FISH_PCM_FRAME_BYTES):
+                        if self._cancelled:
+                            break
+                        frame_bytes = pcm[offset:offset + _FISH_PCM_FRAME_BYTES]
+                        if frame_bytes:
+                            self._emit_tts_started_event()
+                            yielded_audio_bytes += len(frame_bytes)
+                            yield self._pcm_frame(frame_bytes)
+                    audio_duration_seconds = yielded_audio_bytes / 2 / _FISH_PCM_RATE
+                except Exception as fallback_error:
+                    logger.error("Fish Audio synthesis failed: %s", fallback_error, exc_info=True)
+                    yield ErrorFrame(error=str(fallback_error))
+            else:
+                logger.error("Fish Audio streaming failed after audio began: %s", e, exc_info=True)
+                yield ErrorFrame(error=str(e))
         yield TTSStoppedFrame()
         self._total_audio_duration += audio_duration_seconds
