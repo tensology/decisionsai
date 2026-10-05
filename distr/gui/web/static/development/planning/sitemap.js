@@ -103,6 +103,7 @@ export function connectedSitemap(model, screens = []) {
             view: String(node.view || ''),
             urlName: String(node.url_name || ''),
             status: SITEMAP_STATUSES.includes(node.status) ? node.status : 'incomplete',
+            auth: node.auth === true,
             clickable: Boolean(screen),
             screenId: screen?.id ? String(screen.id) : '',
         };
@@ -177,4 +178,41 @@ export function layoutConnectedSitemap(model, screens = []) {
         };
     });
     return { ...graph, nodes: placed, edges, width, height };
+}
+
+
+const ACCOUNT_ROUTES = new Set([
+    '/register', '/activate', '/resend-activation',
+    '/forgot-password', '/reset-password',
+    '/change-password', '/change-email', '/confirm-email',
+    '/confirm-reset-password', '/validate-reset-link', '/validate-password',
+    '/valuecard/register', '/valuecard/submit-temporary',
+    '/perk-card/lookup', '/perk-card/receiver',
+]);
+
+export const SITEMAP_ACCESS_GROUPS = [
+    { id: 'public', label: 'Public' },
+    { id: 'account', label: 'Account' },
+    { id: 'signed-in', label: 'Signed in' },
+];
+
+// Public, account, or signed-in. Login redirects and auth flags win over the route name.
+export function pageAccessGroup(node, capture) {
+    const route = String(node?.route || '');
+    const reason = String(capture?.reason || '');
+    const template = String(node?.template || '');
+    const id = String(node?.id || '');
+    const view = String(node?.view || '');
+    if (/redirected to login/i.test(reason)) return 'signed-in';
+    if (node?.auth === true) return 'signed-in';
+    if (ACCOUNT_ROUTES.has(route)) return 'account';
+    if (route === '/' || route === '/catalogue' || route === '/robots.txt' || route === '/sitemap.xml') return 'public';
+    const admin = route.startsWith('/admin')
+        || template.startsWith('admin/')
+        || /(^|-)admin($|-)/.test(id)
+        || view === 'login_required'
+        || route === '/profile' || route.startsWith('/profile/')
+        || route === '/logout' || route === '/session'
+        || /emailtemplate|\/mails\/|authorise|upload_files|delete_files|analyze_files/.test(route);
+    return admin ? 'signed-in' : 'public';
 }

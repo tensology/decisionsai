@@ -1,4 +1,4 @@
-import { createPlanConversation } from './conversation.js?v=20261003-rebuild-sitemap';
+import { createPlanConversation } from './conversation.js?v=20261003-sitemap-groups';
 
 export function createPlanning(host, root = document.getElementById('plan-root')) {
     const state = { boards: [], projects: [], workspaces: [], workspace: null, item: null, navigation: 0, view: 'home' };

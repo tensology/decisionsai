@@ -2,7 +2,8 @@ import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './
 import { createThreadsTranscript } from '../threads/transcript/index.js';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
-import { layoutConnectedSitemap } from './sitemap.js?v=20261003-rebuild-sitemap';
+import { layoutConnectedSitemap, pageAccessGroup, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261003-sitemap-groups';
+import { pageCaptureFor } from './page-captures.js?v=20261003-sitemap-groups';
 import { planningProviderLabel } from './routes.js';
 
 const BASE = '/workflows/studio/plan-workspaces';
@@ -216,7 +217,7 @@ export function createPlanConversation(host, root) {
             return item ? `<button type="button" data-message-artifact="${esc(item.id)}">${esc(item.title)}</button>` : '';
         }).join('')}${message.role === 'assistant' ? buildResultsHtml(message.build_result, esc) : ''}</article>`).join('') || (session.loaded
             ? `<div class="plan-conversation-empty">${allStarters(session)
-                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Open a content page from the desktop sitemap</li><li>Tighten requirements, then ask for build tasks</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
+                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Read the sitemap in Public, Account, and Signed in</li><li>Tighten requirements, then ask for build tasks</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
                 : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Dictate the journey. Plan expects: screens &amp; sitemap → FRAC/requirements → data (ERD) → front-end &amp; back-end notes → build.</p>`}</div>`
             : '');
         log.querySelectorAll('[data-message-artifact]').forEach((button) => {
@@ -280,6 +281,23 @@ export function createPlanConversation(host, root) {
         renderArtifacts(session);
     }
 
+    function appendPageCapture(target, shot) {
+        if (shot?.image) {
+            const img = document.createElement('img');
+            img.className = 'plan-sitemap-shot';
+            img.alt = '';
+            img.decoding = 'async';
+            img.src = shot.image;
+            target.append(img);
+            return;
+        }
+        const blank = document.createElement('span');
+        blank.className = 'plan-sitemap-shot plan-sitemap-shot-missing';
+        blank.setAttribute('aria-hidden', 'true');
+        if (shot?.reason) blank.title = shot.reason;
+        target.append(blank);
+    }
+
     function appendPageStencil(target, screen) {
         const stencil = document.createElement('span');
         stencil.className = 'plan-sitemap-stencil';
@@ -303,6 +321,77 @@ export function createPlanConversation(host, root) {
         target.append(stencil);
     }
 
+    const OPEN_MARK = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+    const LOCK_MARK = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.25" y="7" width="9.5" height="6.25" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5.1a2.5 2.5 0 0 1 5 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+
+    function appendAccessMark(target, access) {
+        const mark = document.createElement('span');
+        mark.className = 'plan-sitemap-access';
+        const open = access === 'public';
+        mark.dataset.open = open ? 'true' : 'false';
+        mark.title = open ? 'Open' : 'Needs a login';
+        mark.innerHTML = open ? OPEN_MARK : LOCK_MARK;
+        target.append(mark);
+    }
+
+    function appendSitemapCard(parent, node, shot, access, quiet) {
+        const el = document.createElement('div');
+        el.className = quiet ? 'plan-sitemap-node plan-sitemap-node-quiet' : 'plan-sitemap-node';
+        el.dataset.kind = node.kind || 'page';
+        el.dataset.status = node.status || '';
+        el.dataset.access = access;
+        appendAccessMark(el, access);
+        if (!quiet) {
+            if (shot) appendPageCapture(el, shot);
+            else appendPageStencil(el, null);
+        }
+        const name = document.createElement('strong');
+        name.textContent = node.label;
+        const meta = document.createElement('small');
+        meta.textContent = node.route;
+        el.append(name, meta);
+        parent.append(el);
+    }
+
+    function renderAccessGroups(preview, layout, captures) {
+        const wrap = document.createElement('div');
+        wrap.className = 'plan-sitemap-wrap plan-sitemap-groups';
+        const buckets = new Map(SITEMAP_ACCESS_GROUPS.map(group => [group.id, []]));
+        for (const node of layout.nodes) {
+            const shot = captures.pages[node.id] || null;
+            const access = pageAccessGroup(node, shot);
+            (buckets.get(access) || buckets.get('public')).push({ node, shot, access });
+        }
+        for (const group of SITEMAP_ACCESS_GROUPS) {
+            const rows = buckets.get(group.id) || [];
+            const section = document.createElement('section');
+            section.className = 'plan-sitemap-group';
+            section.dataset.access = group.id;
+            const heading = document.createElement('h3');
+            heading.textContent = group.label;
+            section.append(heading);
+            const cards = document.createElement('div');
+            cards.className = 'plan-sitemap-cards';
+            const quiet = document.createElement('div');
+            quiet.className = 'plan-sitemap-quiet';
+            const keepLarge = new Set(['/', '/catalogue', '/register', '/activate', '/forgot-password', '/reset-password', '/change-password', '/change-email']);
+            const ordered = rows.slice().sort((a, b) => a.node.label.localeCompare(b.node.label) || a.node.route.localeCompare(b.node.route));
+            for (const row of ordered) {
+                const hidden = Boolean(row.shot?.notFound) && !keepLarge.has(row.node.route);
+                appendSitemapCard(hidden ? quiet : cards, row.node, row.shot, row.access, hidden);
+            }
+            if (cards.childNodes.length) section.append(cards);
+            if (quiet.childNodes.length) {
+                const note = document.createElement('p');
+                note.className = 'plan-sitemap-quiet-label';
+                note.textContent = 'These routes open the site\u2019s not-found page.';
+                section.append(note, quiet);
+            }
+            wrap.append(section);
+        }
+        preview.append(wrap);
+    }
+
     function renderProjectSitemap(preview, session, screens, item) {
         const model = session.workspace?.sitemap || {
             coverage: 'missing',
@@ -312,6 +401,11 @@ export function createPlanConversation(host, root) {
             scaffolding: [],
         };
         const layout = layoutConnectedSitemap(model, screens);
+        const captures = pageCaptureFor(session.workspace);
+        if (captures) {
+            renderAccessGroups(preview, layout, captures);
+            return;
+        }
         const wrap = document.createElement('div');
         wrap.className = 'plan-sitemap-wrap';
         if (layout.scaffolding.length) {
@@ -381,8 +475,7 @@ export function createPlanConversation(host, root) {
         canvas.append(svg);
         const byId = new Map(screens.map(screen => [String(screen.id), screen]));
         for (const node of layout.nodes) {
-            const el = node.clickable ? document.createElement('button') : document.createElement('div');
-            if (node.clickable) el.type = 'button';
+            const el = document.createElement('div');
             el.className = 'plan-sitemap-node';
             el.dataset.kind = node.kind;
             el.dataset.status = node.status;
@@ -394,7 +487,6 @@ export function createPlanConversation(host, root) {
             const meta = document.createElement('small');
             meta.textContent = node.route;
             el.append(name, meta);
-            if (node.clickable) el.onclick = () => openConnectedPage(session, item, byId.get(node.screenId), preview);
             canvas.append(el);
         }
         wrap.append(canvas);
@@ -464,38 +556,25 @@ export function createPlanConversation(host, root) {
                 session.pageLayers ||= {};
                 session.previewModes[item.id] ||= 'html';
                 session.pageLayers[item.id] ||= 'preview';
-                const page = screens.find(screen => screen.id === session.pages[item.id]) || (screens.length === 1 ? screens[0] : null);
+                const page = screens.length === 1 ? screens[0] : null;
                 session.pages[item.id] = page?.id;
                 const layer = session.pageLayers[item.id];
-                const toolbar = document.createElement('div');
-                toolbar.className = 'plan-preview-toolbar';
-                const pageOptions = screens.length > 1
-                    ? `<option value=""${!page ? ' selected' : ''}>All pages</option>`
-                    : '';
-                const layerButtons = page
-                    ? `<div class="plan-page-layers" role="tablist" aria-label="Page perspective">
+                if (page) {
+                    const toolbar = document.createElement('div');
+                    toolbar.className = 'plan-preview-toolbar';
+                    const layerButtons = `<div class="plan-page-layers" role="tablist" aria-label="Page perspective">
                         <button type="button" data-layer="preview" aria-pressed="${layer === 'preview'}">Preview</button>
                         <button type="button" data-layer="planning" aria-pressed="${layer === 'planning'}">Planning</button>
                         <button type="button" data-layer="development" aria-pressed="${layer === 'development'}">Development</button>
-                       </div>`
-                    : '';
-                toolbar.innerHTML = `${page && screens.length > 1 ? '<button type="button" class="plan-back-sitemap">&larr; Back to sitemap</button>' : ''}<select aria-label="Browse pages">${pageOptions}${screens.map(screen => `<option value="page:${esc(screen.id)}"${screen.id === page?.id ? ' selected' : ''}>${esc(screen.label || 'Untitled page')}</option>`).join('')}</select>${page && layer === 'preview' ? `<button type="button" aria-pressed="${session.previewModes[item.id] === 'html'}">${session.previewModes[item.id] === 'html' ? 'Interactive' : 'Stencil'}</button>` : ''}${layerButtons}`;
-                panel.insertBefore(toolbar, preview);
-                toolbar.querySelector('.plan-back-sitemap')?.addEventListener('click', () => {
-                    session.pages[item.id] = undefined;
-                    session.sitemap = true;
-                    renderArtifacts(session);
-                });
-                toolbar.querySelector('select').addEventListener('change', event => {
-                    session.sitemap = false;
-                    session.pages[item.id] = event.target.value.startsWith('page:') ? event.target.value.slice(5) : undefined;
-                    renderArtifacts(session);
-                });
-                toolbar.querySelectorAll('[data-layer]').forEach(button => {
-                    button.onclick = () => { session.pageLayers[item.id] = button.dataset.layer; renderArtifacts(session); };
-                });
-                const htmlToggle = toolbar.querySelector('button[aria-pressed]:not([data-layer])');
-                if (htmlToggle) htmlToggle.onclick = () => { session.previewModes[item.id] = session.previewModes[item.id] === 'html' ? 'svg' : 'html'; renderArtifacts(session); };
+                       </div>`;
+                    toolbar.innerHTML = `${layer === 'preview' ? `<button type="button" aria-pressed="${session.previewModes[item.id] === 'html'}">${session.previewModes[item.id] === 'html' ? 'Interactive' : 'Stencil'}</button>` : ''}${layerButtons}`;
+                    panel.insertBefore(toolbar, preview);
+                    toolbar.querySelectorAll('[data-layer]').forEach(button => {
+                        button.onclick = () => { session.pageLayers[item.id] = button.dataset.layer; renderArtifacts(session); };
+                    });
+                    const htmlToggle = toolbar.querySelector('button[aria-pressed]:not([data-layer])');
+                    if (htmlToggle) htmlToggle.onclick = () => { session.previewModes[item.id] = session.previewModes[item.id] === 'html' ? 'svg' : 'html'; renderArtifacts(session); };
+                }
 
                 const diagnosticsHtml = (diagnostics) => {
                     const explained = explainWireframeDiagnostics(diagnostics || []);

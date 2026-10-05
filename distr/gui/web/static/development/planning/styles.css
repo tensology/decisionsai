@@ -106,6 +106,17 @@
 .plan-wireframe-preview svg { display: block; max-width: 100%; height: auto; }
 
 .plan-sitemap-wrap { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.plan-sitemap-groups { gap: 28px; }
+.plan-sitemap-group h3 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: 0; }
+.plan-sitemap-cards, .plan-sitemap-quiet { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.plan-sitemap-groups .plan-sitemap-node { position: static; width: auto; height: 220px; }
+.plan-sitemap-quiet { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
+.plan-sitemap-groups .plan-sitemap-node-quiet { height: auto; min-height: 0; gap: 2px; padding: 8px 10px; }
+.plan-sitemap-quiet-label { margin: 4px 0 0; color: var(--studio-dim); font-size: 11px; }
+.plan-sitemap-access { display: flex; justify-content: flex-end; flex: 0 0 auto; height: 14px; color: var(--studio-muted); }
+.plan-sitemap-access svg { width: 14px; height: 14px; display: block; }
+.plan-sitemap-access[data-open="true"] { color: var(--studio-dim); }
 .plan-sitemap-scaffolding { display: none; }
 .plan-sitemap { position: relative; min-height: 120px; }
 .plan-sitemap svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
@@ -124,7 +135,8 @@
     border: 1px solid var(--studio-line); border-radius: 8px; background: var(--studio-raised);
     color: var(--studio-text); text-align: left; font-size: 12px; overflow: hidden;
 }
-div.plan-sitemap-node { border-style: dashed; }
+div.plan-sitemap-node { border-style: solid; }
+div.plan-sitemap-node[data-status="missing"] { border-style: dashed; }
 button.plan-sitemap-node { cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
 button.plan-sitemap-node:hover { border-color: var(--studio-accent); transform: translateY(-2px); }
 .plan-sitemap-node strong { font-size: 12px; font-weight: 650; }
@@ -135,6 +147,8 @@ button.plan-sitemap-node:hover { border-color: var(--studio-accent); transform: 
 .plan-sitemap-stencil i[data-type="hero"], .plan-sitemap-stencil i[data-type="image"], .plan-sitemap-stencil i[data-type="chart"] { min-height: 22px; }
 .plan-sitemap-stencil i[data-type="card"], .plan-sitemap-stencil i[data-type="button"], .plan-sitemap-stencil i[data-type="badge"], .plan-sitemap-stencil i[data-depth="1"] { grid-column: span 2; }
 .plan-sitemap-stencil i[data-type="field"], .plan-sitemap-stencil i[data-type="input"], .plan-sitemap-stencil i[data-type="textarea"], .plan-sitemap-stencil i[data-type="select"] { border: 1px solid color-mix(in srgb, var(--studio-muted) 35%, transparent); background: transparent; }
+.plan-sitemap-shot { display: block; flex: 1 1 auto; width: 100%; min-height: 0; object-fit: cover; object-position: top center; border: 1px solid var(--studio-line-soft); border-radius: 4px; background: #fff; }
+span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; }
 .plan-sitemap-coverage { margin: 0; color: var(--studio-dim); font-size: 10px; }
 .plan-sitemap-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--studio-muted); font-size: 10px; }
 .plan-sitemap-legend span::before { content: ''; display: inline-block; width: 18px; height: 0; margin-right: 6px; border-top: 2px solid var(--studio-muted); vertical-align: middle; }

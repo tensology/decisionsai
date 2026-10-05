@@ -3,7 +3,7 @@
 @import './threads/styles.css';
 @import './sidebar/styles.css';
 @import './boards/styles.css';
-@import './planning/styles.css?v=20261003-rebuild-sitemap';
+@import './planning/styles.css?v=20261003-sitemap-groups';
 @import './incoming/styles.css';
 @import './automations/styles.css';
 @import './workflows/styles.css?v=20261003-workflow-scroll';

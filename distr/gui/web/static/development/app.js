@@ -4,7 +4,7 @@ import { createThreadSession } from './threads/session.js';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261003-rebuild-sitemap';
+import { createPlanning } from './planning/index.js?v=20261003-sitemap-groups';
 
 import { createSidebar } from './sidebar/index.js?v=20261003-sidebar-cleanup';
 

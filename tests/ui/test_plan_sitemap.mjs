@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 const load = async name => import(`data:text/javascript;base64,${Buffer.from(await readFile(new URL(`../../distr/gui/web/static/development/planning/${name}.js`, import.meta.url), 'utf8')).toString('base64')}`);
-const { wireframeSitemap, connectedSitemap, layoutConnectedSitemap } = await load('sitemap');
+const { wireframeSitemap, connectedSitemap, layoutConnectedSitemap, pageAccessGroup, SITEMAP_ACCESS_GROUPS } = await load('sitemap');
 const { parseWireframe } = await load('wireframe');
 const document = (id, source) => ({id, screens: parseWireframe(source).screens});
 
@@ -132,4 +132,33 @@ test('duplicate routes prefer the stencil whose label matches the page', () => {
         {id: 'wf-home', label: 'Home', attrs: {route: '/'}},
     ]);
     assert.equal(graph.nodes[0].screenId, 'wf-home');
+});
+
+
+test('access groups are only public, account, and signed-in', () => {
+    assert.deepEqual(SITEMAP_ACCESS_GROUPS.map(group => group.label), ['Public', 'Account', 'Signed in']);
+    const capture = reason => ({ reason });
+    assert.equal(pageAccessGroup({ route: '/', label: 'Home' }, null), 'public');
+    assert.equal(pageAccessGroup({ route: '/catalogue', label: 'Catalogue upload', template: 'admin/commands/catalogue_upload.html' }, { notFound: true }), 'public');
+    assert.equal(pageAccessGroup({ route: '/robots.txt' }, null), 'public');
+    assert.equal(pageAccessGroup({ route: '/register', label: 'Register' }, null), 'account');
+    assert.equal(pageAccessGroup({ route: '/activate' }, capture('left the page URL')), 'account');
+    assert.equal(pageAccessGroup({ route: '/forgot-password' }, null), 'account');
+    assert.equal(pageAccessGroup({ route: '/reset-password' }, null), 'account');
+    assert.equal(pageAccessGroup({ route: '/change-password' }, { notFound: true }), 'account');
+    assert.equal(pageAccessGroup({ route: '/change-email' }, { notFound: true }), 'account');
+    assert.equal(pageAccessGroup({ route: '/logout' }, capture('redirected to login (https://www.merrypak.co.za/login)')), 'signed-in');
+    assert.equal(pageAccessGroup({ route: '/admin/commands' }, capture('redirected to login (https://www.merrypak.co.za/admin/login/?next=/admin/commands)')), 'signed-in');
+    assert.equal(pageAccessGroup({ route: '/profile', auth: false }, { notFound: true }), 'signed-in');
+    assert.equal(pageAccessGroup({ route: '/catalogue/preflight', auth: true }, null), 'signed-in');
+    assert.equal(pageAccessGroup({ route: '/upload_files', auth: true }, null), 'signed-in');
+});
+
+test('the pages dropdown is gone and cards carry an access mark', async () => {
+    const source = await readFile(new URL('../../distr/gui/web/static/development/planning/conversation.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /Browse pages|Wireframe page|plan-back-sitemap|>All pages</);
+    assert.match(source, /plan-sitemap-access/);
+    assert.match(source, /SITEMAP_ACCESS_GROUPS/);
+    assert.match(source, /renderAccessGroups/);
+    assert.doesNotMatch(source, /appendPageStencil\(el, byId\.get\(node\.screenId\)\)[\s\S]{0,80}openConnectedPage/);
 });
