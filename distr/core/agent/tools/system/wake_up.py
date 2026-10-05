@@ -98,7 +98,7 @@ class WakeUpTool(BaseTool):
                     if telegram_account and telegram_account.get('user_id'):
                         chat_id = telegram_account.get('user_id')
                         from distr.core.integrations.telegram.utils import hash_channel_id
-                        remote_url = f"https://www.decisionsai.net/api/remote/?channel={hash_channel_id(chat_id)}"
+                        remote_url = f"https://decisions.tensology.com/api/remote/?channel={hash_channel_id(chat_id)}"
                         logger.info(f"WakeUpTool: Found chat_id={chat_id} from settings, returning remote control link")
                         return f"{wake_result}\n\n🔗 Remote Control:\n{remote_url}"
                     else:

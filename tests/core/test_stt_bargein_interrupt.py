@@ -228,7 +228,7 @@ def test_bargein_energy_decision_suppresses_echo_and_accepts_double_talk():
         },
     )
 
-    assert service._check_bargein_energy() is False
+    assert service._check_bargein_energy() is True
 
     service._aec_filter.last_metrics = {
         "reference_correlation": 0.8,

@@ -319,7 +319,7 @@ def _turn(workspace_id, *, message, provider, model_name, tab, item_id, attachme
             "When consequential decisions are missing, return questions:[up to three strings], with edits and tasks empty. "
             "Read existing documents, project context and prior answers before asking; never repeat an answered question. "
             "Record the user's answers in linked requirements/FRAC documents using edits on subsequent turns. "
-            "Follow Paul's planning workflow as the starting approach: screens and sitemap first, "
+            "Follow the operator's planning workflow as the starting approach: screens and sitemap first, "
             "then FRAC/requirements for risky deltas, then ERD/data binds, then front-end view routes "
             "and back-end model/logic annotations on each page, then build tasks only when enough "
             "decisions exist. Keep planning as the rapid-sense hub that holds FRAC, requirements, "

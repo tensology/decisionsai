@@ -5,6 +5,8 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_JS = ROOT / "distr/gui/web/static/workflows/js/workflows.js"
 WORKFLOWS_HTML = ROOT / "distr/gui/web/templates/workflows/workflows.html"
 WORKFLOWS_PY = ROOT / "distr/gui/web/routes/settings/workflows.py"
+DEVELOPMENT_WORKFLOWS_PY = ROOT / "distr/gui/web/routes/development/workflows.py"
+WORKFLOW_EXECUTION_PY = ROOT / "distr/gui/web/routes/development/workflow_execution.py"
 CHAT_PY = ROOT / "distr/gui/web/routes/chat.py"
 KANBAN_TICKET_JS = ROOT / "distr/gui/web/static/kanban/js/kanban_ticket.js"
 
@@ -54,7 +56,7 @@ def test_workflows_board_drag_uses_direct_grip_mouse_handlers():
 
 
 def test_workflows_websocket_handler_is_typed_once():
-    workflows_py = WORKFLOWS_PY.read_text(encoding="utf-8")
+    workflows_py = DEVELOPMENT_WORKFLOWS_PY.read_text(encoding="utf-8")
     chat_py = CHAT_PY.read_text(encoding="utf-8")
 
     assert '@router.websocket("/workflows/ws")' in workflows_py
@@ -172,7 +174,7 @@ def test_workflow_loop_ui_has_ring_and_list_views():
 def test_complexity_model_dropdowns_are_the_pin_source_of_truth_with_auto_toggle():
     js = WORKFLOWS_JS.read_text(encoding="utf-8")
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
-    routes = WORKFLOWS_PY.read_text(encoding="utf-8")
+    routes = WORKFLOW_EXECUTION_PY.read_text(encoding="utf-8")
 
     assert 'class="wf-exec-model' in js
     assert 'class="wf-exec-auto ' in js

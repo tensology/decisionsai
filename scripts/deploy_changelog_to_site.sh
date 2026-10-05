@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish CHANGELOG.md to https://www.decisionsai.net/changelog
+# Publish CHANGELOG.md to https://decisions.tensology.com/changelog
 #
 # Usage:
 #   ./scripts/deploy_changelog_to_site.sh           # deploy origin/main (must be pushed)
@@ -7,7 +7,7 @@
 #
 # Environment overrides:
 #   DECISIONS_SITE_SSH   default root@tensology.com
-#   DECISIONS_SITE_ROOT  default /var/www/decisionsai.net
+#   DECISIONS_SITE_ROOT  default /var/www/decisions.tensology.com
 
 set -euo pipefail
 
@@ -15,7 +15,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 SSH_HOST="${DECISIONS_SITE_SSH:-root@tensology.com}"
-SITE_ROOT="${DECISIONS_SITE_ROOT:-/var/www/decisionsai.net}"
+SITE_ROOT="${DECISIONS_SITE_ROOT:-/var/www/decisions.tensology.com}"
 REF="${1:-}"
 
 if [[ -z "$REF" ]]; then
@@ -40,4 +40,4 @@ fi
 
 echo "Deploying CHANGELOG ref ${REF} to ${SSH_HOST}:${SITE_ROOT} ..."
 ssh "$SSH_HOST" "${SITE_ROOT}/scripts/deploy_changelog.sh" "$REF"
-echo "Live: https://www.decisionsai.net/changelog"
+echo "Live: https://decisions.tensology.com/changelog"

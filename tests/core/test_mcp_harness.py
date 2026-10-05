@@ -36,8 +36,17 @@ def test_mcp_harness_writes_catalog(tmp_path):
     assert "composio_rube" not in data
 
 
-def test_merge_cursor_keeps_optional_mcps_in_catalog_only(tmp_path):
+def test_merge_cursor_keeps_optional_mcps_in_catalog_only(tmp_path, monkeypatch):
     from distr.core.mcp_harness import recalibrate_mcp_harness
+
+    monkeypatch.setattr(
+        "distr.core.third_party_keys.sync_third_party_env_keys", lambda: None
+    )
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db", lambda: {}
+    )
+    for name in ("COMPOSIO_API_KEY", "COMPOSIO_KEY", "PIXAZO_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
     cursor_dir = tmp_path / ".cursor"
     cursor_dir.mkdir(parents=True)
@@ -91,8 +100,17 @@ def test_fal_stays_opt_in_even_with_env(tmp_path, monkeypatch):
     assert "fal-ai" not in servers
 
 
-def test_merge_codex_does_not_append_optional_sections(tmp_path):
+def test_merge_codex_does_not_append_optional_sections(tmp_path, monkeypatch):
     from distr.core.mcp_harness import recalibrate_mcp_harness
+
+    monkeypatch.setattr(
+        "distr.core.third_party_keys.sync_third_party_env_keys", lambda: None
+    )
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db", lambda: {}
+    )
+    for name in ("COMPOSIO_API_KEY", "COMPOSIO_KEY", "PIXAZO_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir(parents=True)

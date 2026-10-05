@@ -1,9 +1,9 @@
 """Per-user, per-skill judgment events and propose-only skill change drafts.
 
 Judgments from WhatsApp / Telegram verification are scoped to the skill or
-harness context that was active when Paul judged the work. A single judgment
+harness context that was active when the operator judged the work. A single judgment
 never rewrites a shipped skill definition — events accumulate per board
-(user/tenant) + skill, and at most a pending proposal is drafted for Paul to
+(user/tenant) + skill, and at most a pending proposal is drafted for the operator to
 approve or reject.
 """
 
@@ -21,7 +21,7 @@ from distr.core.db import engine, get_session
 logger = logging.getLogger(__name__)
 
 # Draft a pending proposal as soon as a negative judgment lands for a skill.
-# Never auto-applies; Paul must approve before anything is modified.
+# Never auto-applies; the operator must approve before anything is modified.
 NEGATIVE_PROPOSAL_THRESHOLD = 1
 POSITIVE_LABEL = "looks good"
 REDO_LABEL = "redo"
@@ -344,7 +344,7 @@ def _build_proposal_text(
         f"(based on {evidence_count} judgment"
         f"{'s' if evidence_count != 1 else ''}).\n\n"
         f"Observed feedback: {why or '(no detail)'}\n\n"
-        "This is a draft only. Do not rewrite the shipped skill pack until Paul "
+        "This is a draft only. Do not rewrite the shipped skill pack until the operator "
         "approves. Keep the change scoped to this user/board — never global across "
         "all downloaders of the tool."
     )

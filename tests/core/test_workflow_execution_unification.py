@@ -2638,6 +2638,7 @@ def test_integration_smoke_two_step_workflow_completes():
     wf = MagicMock()
     wf.id = WORKFLOW_ID
     wf.steps = [step1, step2]
+    wf.start_step_position = None
     # No chat: skips post_execution._append_workflow_step_audit → append_audit_step,
     # which uses distr.core.db.get_session (not patched here) and would hit SQLite
     # with MagicMock chat_id.

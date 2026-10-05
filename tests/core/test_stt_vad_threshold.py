@@ -49,7 +49,7 @@ def test_set_vad_threshold_scales_hands_free_bargein_strictness():
     assert stt._bargein_consecutive_required > low_chunks
 
 
-def test_vad_threshold_changes_continuous_mode_bargein_gate():
+def test_vad_threshold_does_not_reenable_retired_energy_gate():
     ref_buf = _FakeReferenceBuffer()
     ref_buf.set_active(True)
     ref_buf._activated_at = time.time() - 2.0
@@ -67,4 +67,4 @@ def test_vad_threshold_changes_continuous_mode_bargein_gate():
     stt.set_vad_threshold(100)
     stt._pre_buffer.clear()
     stt._pre_buffer.extend([medium_energy] * 15)
-    assert stt._check_bargein_energy() is False
+    assert stt._check_bargein_energy() is True

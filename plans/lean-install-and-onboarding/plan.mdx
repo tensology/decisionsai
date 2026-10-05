@@ -38,7 +38,7 @@ The local machine also shows why eager setup is painful even after Git finishes.
 
 The source and setup costs are coupled:
 
-1. `www.decisionsai.net/frontend/public/install.sh` clones the entire repository.
+1. `decisions.tensology.com/frontend/public/install.sh` clones the entire repository.
 2. `bin/decisions.sh` installs the monolithic `requirements.txt`.
 3. The launcher builds Whisper support and eagerly prefetches Vosk, Whisper, and Supertonic.
 4. `bin/setup.py` downloads Kokoro assets, Kanade, WavLM, speech caches, and Playwright Chromium.
@@ -311,7 +311,7 @@ Approval of these decisions should unlock a smaller implementation specification
 
 Repository evidence reviewed for this plan includes:
 
-- `www.decisionsai.net/frontend/public/install.sh` for the public full-clone installer.
+- `decisions.tensology.com/frontend/public/install.sh` for the public full-clone installer.
 - `bin/decisions.sh`, `bin/setup.py`, `requirements.txt`, and `scripts/prefetch_local_models.py` for eager setup behavior.
 - `distr/core/agent/services/stt`, `distr/core/agent/services/tts/registry.py`, `distr/core/agent/config_loader.py`, and `distr/core/agent/session.py` for speech capability seams.
 - `distr/core/agent/services/llm/providers/nvidia.py` and `distr/core/turn_runtime/openai_compatible.py` for existing provider adapters.

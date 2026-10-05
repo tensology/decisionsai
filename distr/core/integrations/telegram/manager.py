@@ -210,7 +210,7 @@ class TelegramWebSocketManager(
     )  # Signal to request screen info update on main thread
     _ws_token_ready_signal = pyqtSignal(int, object)
 
-    def __init__(self, server_url: str = "wss://www.decisionsai.net/ws/telegram"):
+    def __init__(self, server_url: str = "wss://decisions.tensology.com/ws/telegram"):
         super().__init__()
         use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
             "1",
@@ -1009,8 +1009,8 @@ class TelegramWebSocketManager(
         try:
             lowered = (err_str or "").lower()
             host_resolution_err = ("host not found" in lowered) or ("can't assign requested address" in lowered)
-            if host_resolution_err and "www.decisionsai.net" in self.server_url:
-                fallback = self.server_url.replace("www.decisionsai.net", "decisionsai.net")
+            if host_resolution_err and "decisions.tensology.com" in self.server_url:
+                fallback = self.server_url.replace("decisions.tensology.com", "decisions.tensology.com")
                 if fallback != self.server_url:
                     if not self._dns_fallback_applied:
                         logger.info(

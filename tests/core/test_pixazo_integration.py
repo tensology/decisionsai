@@ -87,7 +87,7 @@ def test_relay_media_multipart_and_refresh(tmp_path, monkeypatch):
         def read(self):
             return json.dumps(
                 {
-                    "download_url": "https://www.decisionsai.net/api/telegram/media/download/abc/",
+                    "download_url": "https://decisions.tensology.com/api/telegram/media/download/abc/",
                     "expires_at": "2099-01-01T00:00:00+00:00",
                 }
             ).encode()
@@ -131,7 +131,7 @@ def test_ensure_pixazo_reference_url_force_refreshes_cached_reference(tmp_path, 
     relay_media.write_relay_reference_meta(
         str(audio_dir),
         {
-            "download_url": "https://www.decisionsai.net/api/telegram/media/download/old/",
+            "download_url": "https://decisions.tensology.com/api/telegram/media/download/old/",
             "expires_at": "2099-01-01T00:00:00+00:00",
         },
     )
@@ -141,7 +141,7 @@ def test_ensure_pixazo_reference_url_force_refreshes_cached_reference(tmp_path, 
     def _fake_upload(local_path, *, label):
         uploads.append((local_path, label))
         return {
-            "download_url": "https://www.decisionsai.net/api/telegram/media/download/new/",
+            "download_url": "https://decisions.tensology.com/api/telegram/media/download/new/",
             "expires_at": "2099-01-01T00:00:00+00:00",
         }
 
@@ -154,7 +154,7 @@ def test_ensure_pixazo_reference_url_force_refreshes_cached_reference(tmp_path, 
         force_refresh=True,
     )
 
-    assert url == "https://www.decisionsai.net/api/telegram/media/download/new/"
+    assert url == "https://decisions.tensology.com/api/telegram/media/download/new/"
     assert uploads == [(str(wav), "custom_1")]
 
 

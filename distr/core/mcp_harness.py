@@ -101,7 +101,8 @@ def _base_capabilities_mcps() -> dict[str, Any]:
         },
         "pixazo_media": {
             "description": "Image, video, TTS, and music via Pixazo (80+ models, one API key)",
-            "auto_merge": False,
+            "auto_merge": True,
+            "merge_targets": ["cursor", "codex"],
             "requires_env": ["PIXAZO_API_KEY"],
             "api_key_settings_field": "pixazo_key",
             "api_key_header": "Ocp-Apim-Subscription-Key",

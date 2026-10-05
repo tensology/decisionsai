@@ -1,7 +1,7 @@
 """Project-linked WhatsApp batch → one Telegram approval → execute ticket.
 
 Pre-ticket gate for WhatsApp-sourced work. Classified CREATE_TICKET /
-RUN_WORKFLOW requests are staged until Paul confirms on Telegram.
+RUN_WORKFLOW requests are staged until the operator confirms on Telegram.
 
 Buttons: Yes / No / Add  (callback wi:<token>:yes|no|add)
 Plain replies (exactly one pending):
@@ -30,7 +30,7 @@ from distr.core.db import engine
 
 logger = logging.getLogger(__name__)
 
-# Exact readiness phrases Paul (or voice) can say to create the ticket.
+# Exact readiness phrases the operator (or voice) can say to create the ticket.
 READINESS_PHRASES = frozenset({
     "ready",
     "build it",
@@ -408,7 +408,7 @@ def _parse_added(row: dict[str, Any]) -> list[str]:
 
 
 def notify_telegram_approval(pending: dict[str, Any]) -> bool:
-    """Send the yes/no/add card to Paul's Telegram DM."""
+    """Send the yes/no/add card to the operator's Telegram DM."""
     try:
         from distr.core.kanban.ticket_workflow_engagement import _telegram_manager_from_app
 

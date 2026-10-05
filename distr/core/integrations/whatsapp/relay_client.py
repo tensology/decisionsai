@@ -61,7 +61,7 @@ def relay_api_base() -> str:
     )
     if use_local:
         return "http://localhost:8090/api/whatsapp"
-    return "https://www.decisionsai.net/api/whatsapp"
+    return "https://decisions.tensology.com/api/whatsapp"
 
 
 def load_or_create_device_identity() -> dict[str, Any]:

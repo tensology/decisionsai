@@ -1,1 +1,0 @@
-{"name":"northstar-ui-benchmark","private":true,"scripts":{"test":"python -m unittest discover -s tests -v"}}

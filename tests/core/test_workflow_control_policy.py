@@ -109,8 +109,8 @@ def test_code_implementation_without_configuration_gets_role_default_budget():
         ticket_context="Implement the device diagnostics command and focused tests.",
     )
 
-    assert budget["max_tool_calls"] == 16
-    assert budget["hard_max_tool_calls"] == 24
+    assert budget["max_tool_calls"] == 99
+    assert budget["hard_max_tool_calls"] == 149
     assert budget["enforcement"] == "soft"
     assert budget["defaulted_for_step_role"] == "implementation"
 
@@ -123,8 +123,8 @@ def test_review_soft_budget_warns_at_target_but_allows_bounded_evidence_finish()
         ticket_context="Review the UI change and capture browser evidence.",
     )
 
-    assert budget["max_tool_calls"] == 12
-    assert budget["hard_max_tool_calls"] == 21
+    assert budget["max_tool_calls"] == 48
+    assert budget["hard_max_tool_calls"] == 84
     assert budget["enforcement"] == "soft"
 
 

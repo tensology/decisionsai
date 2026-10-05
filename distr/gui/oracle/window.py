@@ -990,9 +990,15 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             if getattr(self, '_hands_free_before_dictation', False):
                 logging.info("[ORACLE] Clearing pending hands-free restore after explicit manual disable")
             self._hands_free_before_dictation = False
-        if notify_agent:
-            signal_manager.hands_free_command_requested.emit(False, clear_pending_restore)
-        signal_manager.hands_free_mode_changed.emit(False)
+        try:
+            if notify_agent:
+                signal_manager.hands_free_command_requested.emit(False, clear_pending_restore)
+            signal_manager.hands_free_mode_changed.emit(False)
+        except RuntimeError:
+            # Qt may already have destroyed the shared signal object while the
+            # window is completing shutdown. The local mode and glow state are
+            # already safe, so do not turn teardown into an application error.
+            logging.debug("[ORACLE] signal manager unavailable during hands-free shutdown")
         if persist:
             self.save_hands_free_state()
 

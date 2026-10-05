@@ -136,7 +136,7 @@ def test_plan_home_lists_sidebar_boards_that_have_a_project():
     studio_js = (ROOT / "distr/gui/web/static/development/app.js").read_text(encoding="utf-8")
     plan_css = (ROOT / "distr/gui/web/static/development/planning/styles.css").read_text(encoding="utf-8")
 
-    assert "<h1>Plans</h1>" in plan_js
+    assert '<div class="plan-home">' in plan_js
     assert "Every named board shows its plan" not in plan_js
     assert "Boards with no project are marked" not in plan_js
     assert "Archived boards stay hidden" not in plan_js

@@ -256,7 +256,7 @@ def download_url_to_bytes(url: str, timeout: int = 120) -> bytes:
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (compatible; DecisionsAI/1.0; "
-                "+https://www.decisionsai.net)"
+                "+https://decisions.tensology.com)"
             ),
         },
     )

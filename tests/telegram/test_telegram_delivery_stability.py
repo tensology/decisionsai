@@ -858,7 +858,7 @@ def test_remote_command_uses_telegram_user_id_when_chat_id_not_ready():
 
     assert manager.marked_read == [105]
     assert len(manager.sent) == 1
-    assert "https://www.decisionsai.net/api/remote/?channel=" in manager.sent[0]
+    assert "https://decisions.tensology.com/api/remote/?channel=" in manager.sent[0]
     assert manager.enqueued == []
 
 

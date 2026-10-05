@@ -50,7 +50,7 @@ def _google_return_with_status(return_to: Any, status: str) -> str:
 
 
 def _relay_headers() -> dict:
-    """Return headers for authenticating with the www.decisionsai.net relay server."""
+    """Return headers for authenticating with the decisions.tensology.com relay server."""
     token = relay_internal_token()
     if token:
         return {"X-Relay-Internal-Token": token}
@@ -75,7 +75,7 @@ def _whatsapp_relay_base_url() -> str:
     )
     if use_local_relay:
         return "http://localhost:8090/api/whatsapp"
-    return "https://www.decisionsai.net/api/whatsapp"
+    return "https://decisions.tensology.com/api/whatsapp"
 
 
 def _telegram_relay_base_url() -> str:
@@ -97,13 +97,13 @@ def _telegram_relay_base_url() -> str:
     )
     if use_local_relay:
         return "http://localhost:8090"
-    return "https://www.decisionsai.net"
+    return "https://decisions.tensology.com"
 
 
 def _telegram_relay_candidates() -> list[str]:
     primary = _telegram_relay_base_url().rstrip("/")
     candidates = [primary]
-    hosted = "https://www.decisionsai.net"
+    hosted = "https://decisions.tensology.com"
     if primary != hosted:
         candidates.append(hosted)
     return candidates
@@ -1091,7 +1091,7 @@ def register_routes(router, templates):
 
     @router.post("/advanced/telegram/request")
     async def telegram_link_request():
-        """Proxy to decisionsai.net to get Telegram QR link (same as native _fetch_qr_code)."""
+        """Proxy to decisions.tensology.com to get Telegram QR link (same as native _fetch_qr_code)."""
         try:
             import requests as req
 
@@ -1125,7 +1125,7 @@ def register_routes(router, templates):
 
     @router.post("/advanced/telegram/status")
     async def telegram_link_status(body: dict):
-        """Check Telegram link status (proxy to decisionsai.net)."""
+        """Check Telegram link status (proxy to decisions.tensology.com)."""
         try:
             import requests as req
 
@@ -1222,7 +1222,7 @@ def register_routes(router, templates):
 
     @router.post("/advanced/mobile/request")
     async def mobile_link_request():
-        """Create a Mobile App pairing QR (proxy to decisionsai.net)."""
+        """Create a Mobile App pairing QR (proxy to decisions.tensology.com)."""
         try:
             import requests as req
             from distr.core.settings import load_settings_from_db, save_settings_to_db

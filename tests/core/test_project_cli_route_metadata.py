@@ -204,7 +204,7 @@ def test_terminal_buffer_endpoint_reports_live_one_shot_cli_state(monkeypatch):
         supports_rpc = False
 
     monkeypatch.setattr("distr.core.db.get_session", lambda: _FakeDbSession())
-    monkeypatch.setattr("distr.gui.web.routes.settings.projects._backend_id_for_project", lambda project: "codex")
+    monkeypatch.setattr("distr.gui.web.routes.development.terminals._backend_id_for_project", lambda project: "codex")
     monkeypatch.setattr("distr.core.project_cli_backends.get_backend", lambda backend_id: _FakeBackend())
 
     clear_live_session_buffer(7, "codex")

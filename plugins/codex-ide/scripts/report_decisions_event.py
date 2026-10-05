@@ -479,7 +479,7 @@ def main() -> int:
         if outputs and (not harness_endpoint or _debug_enabled()):
             sys.stdout.write(outputs[-1])
             sys.stdout.write("\n")
-        if args.thread_id and not harness_endpoint:
+        if any(outputs) and args.thread_id and not harness_endpoint:
             sys.stdout.write(f"thread_id={args.thread_id}\n")
         return 0
 
@@ -500,7 +500,7 @@ def main() -> int:
     if text and (not harness_endpoint or _debug_enabled()):
         sys.stdout.write(text)
         sys.stdout.write("\n")
-    if args.thread_id and not harness_endpoint:
+    if text and args.thread_id and not harness_endpoint:
         sys.stdout.write(f"thread_id={args.thread_id}\n")
     return code
 

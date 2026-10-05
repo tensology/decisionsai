@@ -20,13 +20,13 @@ def test_websocket_connect_keeps_tls_verification_and_does_not_log_jwt() -> None
 
     manager = manager_mod.TelegramWebSocketManager.__new__(manager_mod.TelegramWebSocketManager)
     manager.socket = Socket()
-    manager.server_url = "wss://www.decisionsai.net/ws/telegram"
+    manager.server_url = "wss://decisions.tensology.com/ws/telegram"
     manager.app_user_id = "local-ui"
     manager.telegram_user_id = 12345
     manager.short_code = None
     manager._active_disconnect = False
     manager._connect_failure_reason = None
-    manager._relay_endpoint_label = lambda: "www.decisionsai.net"
+    manager._relay_endpoint_label = lambda: "decisions.tensology.com"
     detailed: list[str] = []
     manager._log_detailed = detailed.append
 
@@ -36,7 +36,7 @@ def test_websocket_connect_keeps_tls_verification_and_does_not_log_jwt() -> None
     )
 
     assert "secret-relay-jwt" in manager.socket.opened_url
-    assert detailed == ["CONNECTING: www.decisionsai.net"]
+    assert detailed == ["CONNECTING: decisions.tensology.com"]
     assert all("secret-relay-jwt" not in row for row in detailed)
 
 
@@ -62,7 +62,7 @@ def test_runtime_connect_fetches_relay_token_off_qt_thread(monkeypatch) -> None:
     monkeypatch.setattr(manager_mod.threading, "Thread", DeferredThread)
     manager = manager_mod.TelegramWebSocketManager.__new__(manager_mod.TelegramWebSocketManager)
     manager.socket = Socket()
-    manager.server_url = "wss://www.decisionsai.net/ws/telegram"
+    manager.server_url = "wss://decisions.tensology.com/ws/telegram"
     manager.app_user_id = "local-ui"
     manager.telegram_user_id = 12345
     manager.short_code = None
@@ -124,11 +124,11 @@ def test_ws_token_request_uses_env_file_relay_token_when_process_env_is_missing(
     monkeypatch.setattr(manager_mod.requests, "post", fake_post)
 
     manager = manager_mod.TelegramWebSocketManager.__new__(manager_mod.TelegramWebSocketManager)
-    manager.server_url = "wss://www.decisionsai.net/ws/telegram"
+    manager.server_url = "wss://decisions.tensology.com/ws/telegram"
     manager.app_user_id = "local-ui"
     manager.telegram_user_id = 12345
     manager._connect_failure_reason = None
-    manager._relay_endpoint_label = lambda: "www.decisionsai.net"
+    manager._relay_endpoint_label = lambda: "decisions.tensology.com"
     manager._log_detailed = lambda message: None
 
     assert manager_mod.TelegramWebSocketManager._fetch_ws_token(manager) == "relay-jwt"

@@ -1838,6 +1838,7 @@ def dispatch_development_prompt(
             pinned_backend = "pi"
         run_metadata = {
             "routing_assessment": assessment,
+            "execution_mode_decision": execution_mode,
             "skill_ids": list(skill_ids or []),
             "use_playwright": bool(use_playwright),
             "model_route": model_route,

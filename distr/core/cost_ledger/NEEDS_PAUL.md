@@ -1,4 +1,4 @@
-# Cost ledger — decisions needing Paul
+# Cost ledger: decisions needing operator review
 
 Local implementation shipped with the defaults below. Call these out before treating
 the ledger as invoice-ready.

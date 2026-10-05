@@ -8,7 +8,7 @@ Python tools talk to the Go sidecar on ``127.0.0.1:DECISIONSAI_SIDECAR_HTTP_PORT
 """
 
 # Must stay aligned with ``sidecarWireVersion`` in ``DecisionsAI/sidecar/main.go`` and the relay
-# ``SIDECAR_WIRE_VERSION_MAX_SUPPORTED`` in ``www.decisionsai.net/backend/app/main.py``.
+# ``SIDECAR_WIRE_VERSION_MAX_SUPPORTED`` in ``decisions.tensology.com/backend/app/main.py``.
 SIDECAR_WIRE_VERSION = 1
 
 import logging

@@ -619,7 +619,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         built_by_layout.setSpacing(4)
         built_by_layout.addStretch()  # Push content to the right
         
-        built_by_label = QtWidgets.QLabel("Built by tensology.com · decisionsai.net")
+        built_by_label = QtWidgets.QLabel("Built by tensology.com · decisions.tensology.com")
         built_by_label.setStyleSheet("font-size: 12px; color: #cccccc; line-height: 1.2;")
         built_by_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         built_by_layout.addWidget(built_by_label)

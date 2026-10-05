@@ -28,7 +28,7 @@ def test_token_flow():
     print("Testing Telegram Token Flow")
     print("=" * 70)
     
-    server_base_url = "https://www.decisionsai.net"
+    server_base_url = "https://decisions.tensology.com"
     
     # Step 1: Request connection link
     print("\n" + "=" * 70)
@@ -177,5 +177,4 @@ def test_token_flow():
 
 if __name__ == "__main__":
     test_token_flow()
-
 

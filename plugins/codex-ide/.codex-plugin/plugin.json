@@ -5,9 +5,9 @@
   "author": {
     "name": "Tensology",
     "email": "support@decisions.ai",
-    "url": "https://www.decisionsai.net"
+    "url": "https://decisions.tensology.com"
   },
-  "homepage": "https://www.decisionsai.net",
+  "homepage": "https://decisions.tensology.com",
   "repository": "https://github.com/tensology/decisionsai",
   "license": "Proprietary",
   "keywords": [
@@ -31,9 +31,9 @@
       "Write",
       "Automation"
     ],
-    "websiteURL": "https://www.decisionsai.net",
-    "privacyPolicyURL": "https://www.decisionsai.net/privacy",
-    "termsOfServiceURL": "https://www.decisionsai.net/terms",
+    "websiteURL": "https://decisions.tensology.com",
+    "privacyPolicyURL": "https://decisions.tensology.com/privacy",
+    "termsOfServiceURL": "https://decisions.tensology.com/terms",
     "defaultPrompt": [
       "Start a DecisionsAI-linked Codex project chat.",
       "Run this DecisionsAI ticket and report evidence.",

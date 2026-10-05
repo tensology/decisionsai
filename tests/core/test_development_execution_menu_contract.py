@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_workflows_execution_menu_exposes_open_ticket_respond_and_kind_routed_cancel():
     source = development_assets(".js")
 
-    assert 'aria-label="Execution actions"' in source
+    assert 'aria-label="What you can do with this run"' in source
     assert '>Open</a>' in source
     assert '>Related ticket</a>' in source
     assert '>Continue / Respond</a>' in source

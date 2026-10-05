@@ -206,9 +206,9 @@ def test_remote_control_link_is_preserved_and_sent_as_text():
 
     reset_notification_activity()
     reset_engagement_ledger()
-    text = "Remote Control:\nhttps://www.decisionsai.net/api/remote/?channel=abc123\nDo not share this link."
+    text = "Remote Control:\nhttps://decisions.tensology.com/api/remote/?channel=abc123\nDo not share this link."
 
-    assert "https://www.decisionsai.net/api/remote/" in sanitize_engagement_text(text, preserve_links=True)
+    assert "https://decisions.tensology.com/api/remote/" in sanitize_engagement_text(text, preserve_links=True)
 
     decision = HumanEngagementService(telegram_manager=DummyTelegram(), now=lambda: 120).decide(EngagementIntent(
         source="telegram",
@@ -225,7 +225,7 @@ def test_remote_control_link_is_preserved_and_sent_as_text():
 
     assert decision.should_send is True
     assert decision.format == "text"
-    assert decision.final_text and "https://www.decisionsai.net/api/remote/" in decision.final_text
+    assert decision.final_text and "https://decisions.tensology.com/api/remote/" in decision.final_text
 
 
 def test_placeholder_project_labels_use_workspace_or_neutral_label():

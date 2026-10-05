@@ -1,5 +1,6 @@
 """Integration-style workflow progression test with visible step trace output."""
 
+import json
 import threading
 
 from distr.core.db import Base
@@ -35,9 +36,11 @@ def test_development_workflow_step_progression_trace(capfd):
 
     with patch("distr.core.workflow.dispatcher.get_session", _get_session), patch(
         "distr.core.workflow.router.get_session", _get_session
-    ), patch("distr.core.workflow.service.get_session", _get_session), patch(
-        "distr.core.workflow.step_executor.get_session", _get_session
-    ), patch("distr.core.workflow.post_execution.get_session", _get_session):
+        ), patch("distr.core.workflow.service.get_session", _get_session), patch(
+            "distr.core.workflow.step_executor.get_session", _get_session
+        ), patch("distr.core.workflow.post_execution.get_session", _get_session), patch(
+            "distr.core.workflow.run_briefing.get_session", _get_session
+        ):
         with _get_session() as db:
             wf = AutoWorkflow(
                 name="Development",
@@ -84,7 +87,12 @@ def test_development_workflow_step_progression_trace(capfd):
             steps[2].on_fail_goto = -1
             first_step_id = steps[0].id
 
-            run = AutoWorkflowRun(workflow_id=wf.id, status="running", current_step_id=steps[0].id)
+            run = AutoWorkflowRun(
+                workflow_id=wf.id,
+                status="running",
+                current_step_id=steps[0].id,
+                run_data=json.dumps({"skip_human_checkpoints": True}),
+            )
             db.add(run)
             db.flush()
             run_id = run.id
@@ -175,4 +183,3 @@ def test_development_workflow_step_progression_trace(capfd):
         assert "[TRACE] STEP 2: Execution" in out
         assert "[TRACE] STEP 3: Validation" in out
         assert "[TRACE] FINAL RUN STATUS: completed" in out
-

@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/cba7775e-f61e-4625-aefd-76417e72ca33
 </p>
 
 <p align="center">
-  <a href="https://www.decisionsai.net/"><strong>Website</strong></a> ·
+  <a href="https://decisions.tensology.com/"><strong>Website</strong></a> ·
   <a href="#start-simple"><strong>Start here</strong></a> ·
   <a href="#installation"><strong>Install</strong></a> ·
   <a href="#use-your-voice-in-three-different-ways"><strong>Voice &amp; dictation</strong></a> ·
@@ -262,7 +262,7 @@ No large model downloads. Only Whisper.cpp and Kokoro install locally. Use local
 ### One-liner
 
 ```bash
-curl -fsSL https://decisionsai.net/install.sh | bash
+curl -fsSL https://decisions.tensology.com/install.sh | bash
 ```
 
 ### Quick start
@@ -504,8 +504,8 @@ tests/               # Property-based and unit tests
 
 | Document | URL | Policy check date |
 |---|---|---|
-| Privacy Policy | <https://www.decisionsai.net/privacy> | 2026-05-22 |
-| Terms and Conditions | <https://www.decisionsai.net/terms> | 2026-05-22 |
+| Privacy Policy | <https://decisions.tensology.com/privacy> | 2026-05-22 |
+| Terms and Conditions | <https://decisions.tensology.com/terms> | 2026-05-22 |
 
 Connected services can include WhatsApp, Telegram, Gmail, Jira, Trello, shared chat rooms, uploaded files, voice notes, images, project folders, CLI/IDE logs, model-provider requests, and workflow audit trails. Review the public policies before connecting external accounts or data sources.
 

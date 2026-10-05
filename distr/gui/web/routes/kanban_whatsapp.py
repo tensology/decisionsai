@@ -89,7 +89,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         )
         if use_local_relay:
             return "http://localhost:8090/api/whatsapp"
-        return "https://www.decisionsai.net/api/whatsapp"
+        return "https://decisions.tensology.com/api/whatsapp"
 
     def _is_voice_type(media_type: str, media_mime_type: str) -> bool:
         t = str(media_type or "").lower()

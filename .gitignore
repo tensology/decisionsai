@@ -29,6 +29,10 @@
 *.swo
 *~
 *.kate-swp
+*.bak
+*.tmp
+*.orig
+*.rej
 
 # --- OS junk ---
 .DS_Store
@@ -103,6 +107,18 @@ scripts/*
 !scripts/setup_workflow_loop_smoke.py
 !scripts/verify_agent_harness_setup.py
 !scripts/verify_runtime.py
+!scripts/database_maintenance.py
+!scripts/run_isolated_workflow_e2e.py
+!scripts/soak_web_ui.py
+!scripts/spotify_ui_proof.py
+!scripts/summarize_pytest_junit.py
+
+# --- Generated QA and benchmark evidence ---
+# Keep generated evidence out of source control. The one retained screenshot is
+# referenced by README.md and remains part of the canonical documentation.
+/artifacts/**
+!/artifacts/development-refactor-2026-09-05/
+!/artifacts/development-refactor-2026-09-05/threads-1440.png
 
 # --- Databases ---
 db/*
@@ -118,11 +134,17 @@ docs/*
 !docs/releases/
 docs/releases/*
 !docs/releases/2.8.0-rc1.md
+!docs/releases/2.9.0-rc1.md
+!docs/releases/2.9.0-warning-ledger.md
 !docs/release-evidence/
 docs/release-evidence/*
 !docs/release-evidence/2026-07-16-operator-evidence.json
+!docs/release-evidence/2026-07-17-production-candidate.json
 !docs/superpowers/
 docs/superpowers/*
+!docs/superpowers/specs/
+docs/superpowers/specs/*
+!docs/superpowers/specs/2026-06-21-workflow-cli-session-lifecycle-design.md
 !docs/superpowers/plans/
 docs/superpowers/plans/*
 !docs/superpowers/plans/2026-07-04-local-harness-preflight.md
@@ -156,6 +178,7 @@ recordings/
 # --- Environment / secrets ---
 .env
 .env.*
+!**/.env.example
 .secret_keys
 *.secret_keys
 secrets/

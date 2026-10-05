@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -192,7 +193,18 @@ def _seed_codex_game_ticket(factory, project_dir: Path) -> dict[str, int]:
 
 def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_path):
     from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep, AutoWorkflowStepResult
-    from distr.core.workflow.dispatcher import StepDispatcher
+    from distr.core.workflow.dispatcher import (
+        StepDispatcher,
+        _active_runs,
+        _initializing_runs,
+        _runs_lock,
+    )
+
+    # This test owns an isolated in-memory database whose IDs can overlap with
+    # run contexts left by earlier modules in the same pytest process.
+    with _runs_lock:
+        _active_runs.clear()
+        _initializing_runs.clear()
 
     factory = _make_factory()
     ids = _seed_codex_game_ticket(factory, tmp_path)
@@ -253,6 +265,7 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
         patch("distr.core.workflow.step_executor.get_session", get_session),
         patch("distr.core.workflow.post_execution.get_session", get_session),
         patch("distr.core.workflow.router.get_session", get_session),
+        patch("distr.core.workflow.run_briefing.get_session", get_session),
         patch("distr.core.workflow.dispatcher.increment_workflow_updated", no_op),
         patch("distr.core.workflow.dispatcher.increment_kanban_updated", no_op),
         patch("distr.core.workflow.post_execution.increment_workflow_updated", no_op),
@@ -283,6 +296,16 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
     assert "RESULT PACKET CONTEXT" in captured["instruction"]
     assert "Memory Sprint" in captured["instruction"]
 
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        with get_session() as session:
+            current = session.query(AutoWorkflowRun).filter(
+                AutoWorkflowRun.id == ids["run_id"]
+            ).first()
+            if current and current.status == "completed":
+                break
+        time.sleep(0.02)
+
     with get_session() as session:
         run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).first()
         steps = (
@@ -298,7 +321,19 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
             .all()
         )
 
-        assert run.status == "completed"
+        diagnostic = {
+            "run_status": run.status,
+            "step_statuses": [step.status for step in steps],
+            "results": [
+                {
+                    "step_id": item.step_id,
+                    "status": item.status,
+                    "response": item.agent_response,
+                }
+                for item in results
+            ],
+        }
+        assert run.status == "completed", diagnostic
         assert [step.status for step in steps] == ["passed", "passed"]
         assert len(results) == 2
         assert "Project CLI backend: codex" in results[0].agent_response

@@ -1,13 +1,13 @@
 """WhatsApp intake surface rules for project-linked, grouped work review.
 
-Paul's rules for no-face-to-face company boards (AuctionNow, Tensology.com):
+Operator rules for no-face-to-face company boards:
 
 1. A chat must resolve through its board to an existing Decisions project.
 2. Every inbound message is stored, but no individual message is announced,
    agent-injected, or forwarded to Telegram.
 3. The Initiative work scanner groups project-linked messages after a 5 minute
    quiet window and proposes one text-only notice when the batch looks work-related.
-4. Paul can still explicitly ask to read WhatsApp messages on demand.
+4. The operator can still explicitly ask to read WhatsApp messages on demand.
 
 The legacy mode value remains readable for compatibility, but it no longer
 bypasses the project-link and batching safety rules.
@@ -120,7 +120,7 @@ def board_linked_surface_enabled() -> bool:
 
 
 def is_explicit_whatsapp_read_request(text: str) -> bool:
-    """True when Paul is asking to hear/read new WhatsApp messages."""
+    """True when the operator is asking to hear/read new WhatsApp messages."""
     return bool(_EXPLICIT_READ_RE.search(str(text or "")))
 
 
@@ -361,7 +361,7 @@ def record_telegram_push(
     error: str = "",
     dry_run: bool = False,
 ) -> int:
-    """Persist TG push attempt so failures surface for Jupiter → Paul."""
+    """Persist TG push attempt so failures surface to the operator."""
     ensure_telegram_push_table()
     now = time.time()
     with engine.begin() as conn:
@@ -466,7 +466,7 @@ def push_board_linked_to_telegram(
             )
             logger.warning(
                 "WhatsApp board-linked TG push FAILED (no telegram manager) "
-                "board=%s contact=%s mid=%s push_id=%s — tell Paul",
+                "board=%s contact=%s mid=%s push_id=%s: tell the operator",
                 decision.board_id,
                 decision.contact_name or sender_phone,
                 source_message_id,
@@ -489,7 +489,7 @@ def push_board_linked_to_telegram(
         if not ok:
             logger.warning(
                 "WhatsApp board-linked TG push FAILED board=%s contact=%s mid=%s "
-                "push_id=%s — tell Paul",
+                "push_id=%s: tell the operator",
                 decision.board_id,
                 decision.contact_name or sender_phone,
                 source_message_id,
@@ -513,7 +513,7 @@ def push_board_linked_to_telegram(
             error=str(exc)[:1000],
         )
         logger.exception(
-            "WhatsApp board-linked TG push EXCEPTION board=%s mid=%s push_id=%s — tell Paul",
+            "WhatsApp board-linked TG push EXCEPTION board=%s mid=%s push_id=%s: tell the operator",
             decision.board_id,
             source_message_id,
             push_id,

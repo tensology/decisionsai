@@ -1,4 +1,4 @@
-"""Shared auth for www.decisionsai.net relay REST calls."""
+"""Shared auth for decisions.tensology.com relay REST calls."""
 
 from __future__ import annotations
 
@@ -72,4 +72,4 @@ def relay_public_base() -> str:
     explicit = (os.environ.get("DECISIONSAI_RELAY_API_BASE") or "").strip()
     if explicit:
         return explicit.rstrip("/")
-    return "https://www.decisionsai.net"
+    return "https://decisions.tensology.com"

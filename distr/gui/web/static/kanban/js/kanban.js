@@ -3704,11 +3704,11 @@
             if (waWS && (waWS.readyState === WebSocket.OPEN || waWS.readyState === WebSocket.CONNECTING)) return;
             fetchWaWsAuthBundle().then(function(bundle) {
                 var wsBase = "";
-                if (window.location.host.indexOf("decisionsai.net") !== -1) {
+                if (window.location.host.indexOf("decisions.tensology.com") !== -1) {
                     var sameScheme = (window.location.protocol === "https:") ? "wss://" : "ws://";
                     wsBase = sameScheme + window.location.host + "/ws/whatsapp";
                 } else {
-                    wsBase = "wss://www.decisionsai.net/ws/whatsapp";
+                    wsBase = "wss://decisions.tensology.com/ws/whatsapp";
                 }
                 var wsUrl = wsBase + "?ws_token=" + encodeURIComponent(bundle.ws_token);
                 try {

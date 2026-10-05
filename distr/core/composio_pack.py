@@ -41,6 +41,7 @@ def composio_mcp_recommendations() -> dict[str, Any]:
             ),
             "docs": "https://docs.composio.dev/docs/composio-connect",
             "auto_merge": True,
+            "requires_env": ["COMPOSIO_API_KEY", "COMPOSIO_KEY"],
             "cursor_name": "composio",
             "skill": "decisions-composio",
             "mcp": {"url": COMPOSIO_CONNECT_URL},

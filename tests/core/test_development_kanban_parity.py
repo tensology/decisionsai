@@ -9,7 +9,7 @@ from distr.gui.web.server import create_app
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_development_kanban_exposes_legacy_board_and_ticket_controls():
+def test_development_kanban_exposes_current_board_and_ticket_controls():
     html = development_template()
     js = development_assets(".js")
 
@@ -21,7 +21,6 @@ def test_development_kanban_exposes_legacy_board_and_ticket_controls():
         'id="board-context-delete"',
         'id="board-context-open-folder"',
         'data-ticket-menu-action="copy"',
-        'data-ticket-menu-action="workflow"',
         'data-ticket-menu-action="agent"',
         'id="kanban-ticket-notes-tab"',
         'id="kanban-ticket-attachments-tab"',
@@ -35,7 +34,6 @@ def test_development_kanban_exposes_legacy_board_and_ticket_controls():
         "forceRefreshKanbanBoard",
         "copyKanbanTicketDetails",
         "/active-run",
-        "/send-to-workflow",
         "/send-to-cli",
         "/send-to-project",
         "closeBoardContextMenu();",

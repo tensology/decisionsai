@@ -13,8 +13,10 @@ def test_composio_catalog_in_mcp_harness(tmp_path):
     assert catalog["composio_connect"]["auto_merge"] is True
 
 
-def test_merge_adds_composio_connect(tmp_path):
+def test_merge_adds_composio_connect_when_credentials_are_available(tmp_path, monkeypatch):
     from distr.core.mcp_harness import recalibrate_mcp_harness
+
+    monkeypatch.setenv("COMPOSIO_API_KEY", "test-composio-key")
 
     cursor_dir = tmp_path / ".cursor"
     cursor_dir.mkdir(parents=True)

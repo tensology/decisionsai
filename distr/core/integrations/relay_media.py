@@ -1,4 +1,4 @@
-"""Stage short-lived public files on www.decisionsai.net for third-party APIs (e.g. Pixazo VoxCPM)."""
+"""Stage short-lived public files on decisions.tensology.com for third-party APIs (e.g. Pixazo VoxCPM)."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def upload_pixazo_voice_reference(
     if not auth:
         raise RuntimeError(
             "Decisions relay auth is not available. "
-            "RELAY_INTERNAL_TOKEN in the project .env should match www.decisionsai.net "
+            "RELAY_INTERNAL_TOKEN in the project .env should match decisions.tensology.com "
             "(or device identity at ~/.decisions/device_identity.json must be registered)."
         )
     headers.update(auth)

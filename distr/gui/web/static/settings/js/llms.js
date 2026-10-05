@@ -1348,7 +1348,21 @@ async function loadLayaStatus() {
 }
 
 async function runLayaAction(action, button) {
-    if (action === 'remove' && !window.confirm('Remove the dedicated Laya environment and disable Laya routing?')) return;
+    if (action === 'remove') {
+        if (!window.DecisionsAPI || typeof window.DecisionsAPI.confirm !== 'function') {
+            if (typeof window.showNotification === 'function') {
+                window.showNotification('The confirmation dialog is unavailable. Reload the page and try again.', 'error');
+            }
+            return;
+        }
+        const confirmed = await window.DecisionsAPI.confirm({
+            title: 'Remove Laya',
+            message: 'Remove the dedicated Laya environment and disable Laya routing?',
+            confirmLabel: 'Remove',
+            danger: true,
+        });
+        if (!confirmed) return;
+    }
     const resultEl = document.getElementById('laya_test_result');
     const original = button.textContent;
     button.disabled = true;

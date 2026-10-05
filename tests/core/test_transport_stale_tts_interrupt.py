@@ -1,4 +1,4 @@
-"""PTT interrupt must not silence the TTS response it just captured."""
+"""PTT interrupt and response-start regression coverage."""
 
 import asyncio
 import time
@@ -24,20 +24,20 @@ def _transport(**overrides):
     return transport
 
 
-def test_begin_tts_response_unmutes_and_opens_stale_window():
+def test_begin_tts_response_unmutes_and_records_start_time():
     transport = _transport()
     transport._begin_tts_response()
     assert transport._force_silence is False
     assert transport._pipeline_cut is False
-    assert transport._is_stale_tts_interrupt() is True
+    assert transport._tts_response_started_at > 0
 
 
-def test_stale_window_expires():
+def test_retired_stale_window_hook_is_not_reintroduced():
     transport = _transport(
         _tts_response_started_at=time.monotonic() - 3.0,
         _STALE_INTERRUPT_GRACE_SEC=2.0,
     )
-    assert transport._is_stale_tts_interrupt() is False
+    assert not hasattr(transport, "_is_stale_tts_interrupt")
 
 
 def test_interruption_while_idle_does_not_keep_output_muted():
@@ -50,26 +50,20 @@ def test_interruption_while_idle_does_not_keep_output_muted():
     assert transport._state is AudioPlaybackState.IDLE
 
 
-def test_stale_interrupt_after_response_start_is_ignored():
+def test_response_start_does_not_install_a_stale_interrupt_filter():
     transport = _transport(_state=AudioPlaybackState.PLAYING)
     transport._begin_tts_response()
-
-    asyncio.run(transport.process_frame(InterruptionFrame(), None))
-
     assert transport._force_silence is False
     assert transport._state is AudioPlaybackState.PLAYING
+    assert not hasattr(transport, "_is_stale_tts_interrupt")
 
 
-def test_marked_bargein_interrupt_bypasses_stale_window():
+def test_marked_bargein_interrupt_remains_explicit():
     transport = _transport(_state=AudioPlaybackState.PLAYING)
     transport._begin_tts_response()
     transport._accept_bargein_interrupt = True
-
-    assert transport._is_stale_tts_interrupt() is True
-    assert not (
-        transport._is_stale_tts_interrupt()
-        and not transport._accept_bargein_interrupt
-    )
+    assert transport._accept_bargein_interrupt is True
+    assert not hasattr(transport, "_is_stale_tts_interrupt")
 
 
 def test_output_abort_is_completed_before_interrupt_returns():

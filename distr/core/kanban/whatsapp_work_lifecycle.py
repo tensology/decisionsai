@@ -2,7 +2,7 @@
 
 Post-completion sequence (local assist only):
   verify → (learn if negative feedback) → deploy suggest/confirm → client draft
-  → Paul confirm → WhatsApp send (respects DECISIONSAI_WHATSAPP_DRY_RUN).
+  → operator confirm → WhatsApp send (respects DECISIONSAI_WHATSAPP_DRY_RUN).
 
 Deploy assist never deploys — it only records production vs development.
 """
@@ -351,7 +351,7 @@ def record_verification_lesson(
     """Persist a durable verification lesson scoped to skill/harness + user board.
 
     Never rewrites a shipped skill definition. Negative judgments accumulate
-    per board+skill and may draft a pending proposal for Paul to approve.
+    per board+skill and may draft a pending proposal for the operator to approve.
     """
     from distr.core.workflow.skill_judgment_memory import (
         normalize_judgment_label,
@@ -763,7 +763,7 @@ def begin_post_completion_gates(
         ticket_id=ticket_id,
         run_id=run_id,
         status="awaiting_verification",
-        summary="Verified completion is waiting on Paul verification review before deploy assist.",
+        summary="Verified completion is waiting on operator verification review before deploy assist.",
         details=f"contact={contact or 'unknown'}",
     )
     return {
@@ -884,7 +884,7 @@ def prepare_completed_reply(
         return None
 
     if str(lifecycle.get("deploy_status") or "") != "settled":
-        # Draft must not be offered until Paul confirms prod vs dev.
+        # Draft must not be offered until the operator confirms prod vs dev.
         return None
 
     from distr.core.db.kanban import KanbanTicket
@@ -1122,7 +1122,7 @@ def _reject_verification(
         ticket_id=int(row["ticket_id"]),
         run_id=row.get("run_id"),
         status="verification_rejected",
-        summary="Paul rejected verification; durable lesson recorded for similar future work.",
+        summary="The operator rejected verification; durable lesson recorded for similar future work.",
         details=(lesson.get("lesson") or "")[:500],
     )
     return {

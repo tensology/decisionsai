@@ -30,7 +30,7 @@ def test_qr_code_fetch():
     print("=" * 60)
     
     # Server URL
-    server_base_url = "https://www.decisionsai.net"
+    server_base_url = "https://decisions.tensology.com"
     api_url = f"{server_base_url.rstrip('/')}/api/telegram/link/request/"
     
     print(f"\n1. Making request to: {api_url}")
@@ -181,4 +181,3 @@ def test_qr_code_fetch():
 
 if __name__ == "__main__":
     test_qr_code_fetch()
-

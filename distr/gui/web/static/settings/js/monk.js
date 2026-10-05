@@ -190,8 +190,8 @@
                 danger: true,
                 onConfirm: perform
             });
-        } else if (window.confirm('Remove ' + site.hostname + ' from Monk Mode?')) {
-            perform();
+        } else {
+            notify('The confirmation dialog is unavailable. Reload the page and try again.', 'error');
         }
     }
 

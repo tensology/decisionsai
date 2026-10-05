@@ -38,7 +38,7 @@ class TestAssemblyAIConfig(unittest.TestCase):
     def test_init_default_model(self):
         service = AssemblyAISTTService(api_key="test_key")
         self.assertEqual(service.api_key, "test_key")
-        self.assertEqual(service.speech_model, "universal")
+        self.assertEqual(service.speech_model, "universal-3-5-pro")
 
     def test_init_specific_model(self):
         service = AssemblyAISTTService(api_key="test_key", model="slam-1")

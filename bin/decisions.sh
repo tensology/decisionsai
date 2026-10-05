@@ -37,13 +37,13 @@ if [ -z "${DEBUG:-}" ]; then
     export DEBUG="FALSE"
 fi
 if [ -z "${DECISIONSAI_WA_API_BASE:-}" ]; then
-    export DECISIONSAI_WA_API_BASE="https://www.decisionsai.net/api/whatsapp"
+    export DECISIONSAI_WA_API_BASE="https://decisions.tensology.com/api/whatsapp"
 fi
 if [ -z "${DECISIONSAI_WA_WS_URL:-}" ]; then
-    export DECISIONSAI_WA_WS_URL="wss://www.decisionsai.net/ws/whatsapp"
+    export DECISIONSAI_WA_WS_URL="wss://decisions.tensology.com/ws/whatsapp"
 fi
 if [ -z "${DECISIONSAI_WS_URL:-}" ]; then
-    export DECISIONSAI_WS_URL="wss://www.decisionsai.net/ws/telegram"
+    export DECISIONSAI_WS_URL="wss://decisions.tensology.com/ws/telegram"
 fi
 
 echo -e "${GREEN}DecisionsAI Setup & Run${NC}"

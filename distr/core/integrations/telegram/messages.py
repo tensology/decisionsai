@@ -432,7 +432,7 @@ class TelegramMessagesMixin:
                 if chat_id:
                     hashed = hash_channel_id(chat_id)
                     remote_url = (
-                        f"https://www.decisionsai.net/api/remote/?channel={hashed}"
+                        f"https://decisions.tensology.com/api/remote/?channel={hashed}"
                     )
                     response_text = (
                         f"🔗 Remote Control:\n{remote_url}\n\n"

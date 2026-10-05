@@ -173,7 +173,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
     """
     Manages WebSocket connection to the DecisionsAI WhatsApp relay server.
 
-    Connects to wss://www.decisionsai.net/ws/whatsapp, receives inbound
+    Connects to wss://decisions.tensology.com/ws/whatsapp, receives inbound
     WhatsApp messages from the Baileys service, and routes them to the agent.
     """
 
@@ -208,7 +208,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         return (jid or "").split("@")[0] or "Group Chat"
 
 
-    def __init__(self, server_url: str = "wss://www.decisionsai.net/ws/whatsapp"):
+    def __init__(self, server_url: str = "wss://decisions.tensology.com/ws/whatsapp"):
         super().__init__()
         use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
             "1",
@@ -229,7 +229,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         # REST API base URL (for QR code, status, etc.)
         self.api_base = os.environ.get(
             "DECISIONSAI_WA_API_BASE",
-            "https://www.decisionsai.net/api/whatsapp"
+            "https://decisions.tensology.com/api/whatsapp"
             if not use_local_relay
             else "http://localhost:8090/api/whatsapp",
         )

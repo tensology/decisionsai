@@ -133,8 +133,8 @@ The plugin points back to the DecisionsAI public policy documents:
 
 | Document | URL | Policy check date |
 |---|---|---|
-| Privacy Policy | <https://www.decisionsai.net/privacy> | 2026-05-22 |
-| Terms and Conditions | <https://www.decisionsai.net/terms> | 2026-05-22 |
+| Privacy Policy | <https://decisions.tensology.com/privacy> | 2026-05-22 |
+| Terms and Conditions | <https://decisions.tensology.com/terms> | 2026-05-22 |
 
 Website check note: on 2026-05-22, both public routes returned HTTP 200, but no
 visible "last updated" date was exposed in the fetched page content. Keep the

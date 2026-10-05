@@ -132,13 +132,13 @@ You shall not:
 
 (a) AI Provider APIs: Your prompts and messages are sent directly to the configured provider. Responses are received directly from the provider. Tensology does not proxy, store, or have access to this traffic.
 
-(b) Telegram Remote Control: Commands and screenshots are relayed through the Tensology server (www.decisionsai.net) to enable phone-to-desktop communication. Media files are stored temporarily and expire automatically. Tensology does not retain or analyse the content of Your commands or screenshots.
+(b) Telegram Remote Control: Commands and screenshots are relayed through the Tensology server (decisions.tensology.com) to enable phone-to-desktop communication. Media files are stored temporarily and expire automatically. Tensology does not retain or analyse the content of Your commands or screenshots.
 
 (c) OAuth Integrations (Trello, Jira, Google): OAuth tokens are stored locally in Your settings database on Your device. Tensology does not have access to these tokens.
 
 7.4. Data Storage. All application data (settings, chat history, indexed files, credentials) is stored in a local SQLite database on Your device. You may delete this data at any time by removing the application data directory.
 
-7.5. For complete details on data handling, please refer to Our Privacy Policy at: https://www.decisionsai.net/privacy
+7.5. For complete details on data handling, please refer to Our Privacy Policy at: https://decisions.tensology.com/privacy
 
 ---
 
@@ -146,7 +146,7 @@ You shall not:
 
 8.1. This Agreement and the Software's data handling practices comply with the Protection of Personal Information Act, 2013 (POPIA) of the Republic of South Africa, as well as applicable international data protection regulations including the General Data Protection Regulation (GDPR) where applicable.
 
-8.2. Tensology acts as a responsible party under POPIA with respect to any personal information processed through the DecisionsAI website (www.decisionsai.net) and the Telegram relay service.
+8.2. Tensology acts as a responsible party under POPIA with respect to any personal information processed through the DecisionsAI website (decisions.tensology.com) and the Telegram relay service.
 
 8.3. For Local Processing, You are the responsible party for any personal information processed by the Software on Your device. Tensology has no access to or control over locally processed data.
 
@@ -237,7 +237,7 @@ You shall not:
 
 13.1. Tensology may release updates, patches, or new versions of the Software from time to time. Updates may be distributed via GitHub or other channels. You are not obligated to install updates, but continued use of outdated versions is at Your own risk.
 
-13.2. Tensology reserves the right to modify this Agreement at any time. Updated terms will be included in the Software and posted at: https://www.decisionsai.net/terms
+13.2. Tensology reserves the right to modify this Agreement at any time. Updated terms will be included in the Software and posted at: https://decisions.tensology.com/terms
 
 13.3. Continued use of the Software after modifications to this Agreement constitutes acceptance of the revised terms. If You do not agree to the revised terms, You must stop using the Software.
 
@@ -271,7 +271,7 @@ You shall not:
 
 ## 16. GENERAL PROVISIONS
 
-16.1. Entire Agreement. This Agreement, together with the Privacy Policy (https://www.decisionsai.net/privacy) and Terms & Conditions (https://www.decisionsai.net/terms), constitutes the entire agreement between You and Tensology regarding the Software and supersedes all prior agreements and understandings.
+16.1. Entire Agreement. This Agreement, together with the Privacy Policy (https://decisions.tensology.com/privacy) and Terms & Conditions (https://decisions.tensology.com/terms), constitutes the entire agreement between You and Tensology regarding the Software and supersedes all prior agreements and understandings.
 
 16.2. Severability. If any provision of this Agreement is held to be invalid or unenforceable, the remaining provisions shall continue in full force and effect.
 
@@ -297,9 +297,9 @@ Phone: +27 63 410 3646
 Address: Unit D9 Westlake Square, Cape Town, South Africa, 7945
 
 Website: https://www.tensology.com
-Application: https://www.decisionsai.net
-Terms & Conditions: https://www.decisionsai.net/terms
-Privacy Policy: https://www.decisionsai.net/privacy
+Application: https://decisions.tensology.com
+Terms & Conditions: https://decisions.tensology.com/terms
+Privacy Policy: https://decisions.tensology.com/privacy
 Source Code: https://github.com/tensology/decisionsai
 
 © 2026 Tensology (Pty) Ltd. All rights reserved.

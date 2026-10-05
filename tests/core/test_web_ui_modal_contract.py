@@ -163,10 +163,10 @@ def test_development_model_menu_is_harness_first():
     assert 'data-model-pane="harness"' in dialog
     assert 'data-model-pane="auto"' in dialog
     assert 'id="model-route-preview"' in dialog
-    assert "data-model-pane=\"provider\"" not in dialog
+    assert 'data-model-pane="provider"' in dialog
     assert "HARNESS_OPTIONS" in composer
     assert "scheduleRoutePreview" in composer
     assert 'backend: clean_backend if mode == "manual" else ""' in threads or '"backend": clean_backend' in threads
-    assert 'pinned_backend in {"pi", "cursor", "codex", "claude_code"}' in harness
+    assert 'pinned_backend not in {"pi", "cursor", "codex", "claude_code"}' in harness
     assert "resolve_ticket_cli_route" in assessment
     assert "plan_workflow" in harness

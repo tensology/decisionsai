@@ -922,7 +922,7 @@ Say "what can you do?" in chat for a live list. Settings is where models, voice,
 
 ---
 
-*For more information, visit [tensology.com](https://www.tensology.com) or [decisionsai.net](https://www.decisionsai.net)*
+*For more information, visit [tensology.com](https://www.tensology.com) or [decisions.tensology.com](https://decisions.tensology.com)*
 
 ---
 

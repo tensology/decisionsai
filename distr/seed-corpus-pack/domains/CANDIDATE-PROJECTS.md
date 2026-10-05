@@ -11,7 +11,7 @@ Search roots: `/Users/paul/development`, TENSOLOGY, TRADING, WORK, PERSONAL, DON
 | auctionnow | `TENSOLOGY/ARCHIVE/www.auctionnow.co.za` | ecommerce/auction | Secondary | Same FE/BE habit; AGENTS pointer only |
 | planmycharter.com | `TENSOLOGY/planmycharter.com` | charter booking | Maybe later | Has FE+BE; different domain |
 | www.atollaband.com | `PERSONAL/www.atollaband.com` | band/marketing | Low | FE+BE but not commerce |
-| www.decisionsai.net | `DECISIONS/www.decisionsai.net` | product site | Low for seed | Product-specific |
+| decisions.tensology.com | `DECISIONS/decisions.tensology.com` | product site | Low for seed | Product-specific |
 | Multisnack / DPP | `WORK/CRYSTALLOGIC/Multisnack` | packaging/DPP | Adjacent to Merrypak | Client ops, not scaffold |
 | Instagram (TRADING) | `TRADING/Instagram` | social | No | Not a scaffold pattern |
 

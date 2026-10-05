@@ -148,15 +148,30 @@ def test_recovery_preserves_external_edits_made_after_commit(plan_workspace_db, 
     assert Path(item["file_path"]).read_text() == "External authored edit"
 
 
-def test_discovery_does_not_replace_a_curated_overview(plan_workspace_db):
+def test_soft_scan_preserves_curated_sections_and_explicit_discovery_refreshes_them(plan_workspace_db):
     workspace, _ = make_item(plan_workspace_db)
-    first = planning.discover_project(workspace["id"], instruction="Scan project")["item"]
-    planning.update_item(first["id"], content="Curated overview", expected_revision=1)
-    result = planning.discover_project(workspace["id"], instruction="Scan again")
-    assert result["action"] == "proposed"
-    assert result["item"]["id"] != first["id"]
+    first_scan = planning.discover_project(workspace["id"], instruction="Scan project")
+    assert first_scan["action"] == "scanned"
+    first = next(
+        row
+        for row in planning.get_workspace(workspace["id"])["items"]
+        if row["item_type"] == "brief"
+    )
+    planning.update_item(
+        first["id"],
+        content="Curated overview",
+        expected_revision=first["revision_count"],
+    )
+    soft_result = planning.materialize_project_scan(workspace["id"], force=False)
+    assert "brief" in soft_result["skipped"]
     items = planning.get_workspace(workspace["id"])["items"]
     assert next(row for row in items if row["id"] == first["id"])["content"] == "Curated overview"
+
+    forced_result = planning.discover_project(workspace["id"], instruction="Scan again")
+    assert forced_result["action"] == "scanned"
+    assert "brief" in forced_result["updated"]
+    items = planning.get_workspace(workspace["id"])["items"]
+    assert next(row for row in items if row["id"] == first["id"])["content"] != "Curated overview"
 
 
 def test_external_file_import_requires_the_reviewed_hash_and_revision(plan_workspace_db):

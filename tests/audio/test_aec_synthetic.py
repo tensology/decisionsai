@@ -216,11 +216,11 @@ def test_tts_sentence_activation_does_not_restart_grace_window():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Echo gate — _check_bargein_energy
+# Test 3: Legacy barge-in hook
 # ---------------------------------------------------------------------------
 
-def test_echo_gate_logic():
-    """Echo gate should suppress low-energy (echo) and pass high-energy (speech)."""
+def test_bargein_hook_defers_to_aec_and_vad():
+    """The retired energy gate must not make hands-free capture feel deaf."""
     ref_buf = ReferenceBuffer(max_duration_secs=2.0, sample_rate=SR)
     stt = _make_stt_stub(ref_buf)
 
@@ -232,7 +232,7 @@ def test_echo_gate_logic():
     low_energy = make_tone(440.0, 0.02, SR, amplitude=0.01)
     stt._pre_buffer = list(stt._pre_buffer)  # convert deque for list assignment
     stt._pre_buffer.extend([f32_to_int16_bytes(low_energy)] * 15)
-    assert not stt._check_bargein_energy(), "Low energy should be suppressed"
+    assert stt._check_bargein_energy(), "AEC and VAD now own echo suppression"
 
     # High energy pre-buffer (speech ~0.25 RMS — well above threshold)
     high_energy = make_tone(440.0, 0.02, SR, amplitude=0.25)
@@ -250,7 +250,7 @@ def test_echo_gate_logic():
         }
 
     stt._aec_filter = _AecMetrics()
-    assert not stt._check_bargein_energy(), "Reference-dominated audio should be suppressed"
+    assert stt._check_bargein_energy(), "AEC and VAD now own reference suppression"
     stt._aec_filter.last_metrics = {
         "reference_correlation": 0.2,
         "reference_rms": 0.10,
@@ -260,7 +260,7 @@ def test_echo_gate_logic():
     assert stt._check_bargein_energy(), "Uncorrelated speech should remain interruptible"
 
     ref_buf.set_active(False)
-    print("  Echo gate logic: OK")
+    print("  Legacy barge-in hook: OK")
 
 
 # ---------------------------------------------------------------------------
@@ -339,11 +339,11 @@ def test_silence_passthrough():
 
 
 # ---------------------------------------------------------------------------
-# Test 6: Grace period suppresses barge-in right after TTS starts
+# Test 6: Legacy grace period remains disabled
 # ---------------------------------------------------------------------------
 
-def test_grace_period():
-    """Barge-in should be suppressed during the first 500ms after TTS activation."""
+def test_legacy_grace_period_does_not_block_bargein():
+    """A just-started response must not create a deaf hands-free window."""
     ref_buf = ReferenceBuffer(max_duration_secs=2.0, sample_rate=SR)
     stt = _make_stt_stub(ref_buf)
 
@@ -351,11 +351,11 @@ def test_grace_period():
     ref_buf.set_active(True)
     # _activated_at is set by set_active(True) to time.time()
 
-    # Even with high energy, should be suppressed during grace period
+    # WebRTC AEC and Pipecat VAD remain authoritative immediately.
     high_energy = make_tone(440.0, 0.02, SR, amplitude=0.25)
     stt._pre_buffer = list(stt._pre_buffer)
     stt._pre_buffer = [f32_to_int16_bytes(high_energy)] * 15
-    assert not stt._check_bargein_energy(), "Should suppress during grace period"
+    assert stt._check_bargein_energy(), "Legacy grace period should stay disabled"
 
     # Now simulate time passing beyond grace period
     ref_buf._activated_at = time.time() - 1.5  # 1.5s ago, well past 0.8s grace

@@ -68,11 +68,23 @@ SHORTCUT_SETTING_KEYS = (
 
 def _safe_emit(signal, *args, label: str = "signal"):
     """Emit a signal, swallowing errors so callers don't crash."""
+    if signal is None:
+        logger.warning("Skipped %s because the Qt signal manager is unavailable", label)
+        return
     try:
         signal.emit(*args)
         logger.info("Emitted %s", label)
     except Exception as e:
         logger.warning("Failed to emit %s: %s", label, e)
+
+
+def _signal(name: str):
+    """Return a live Qt signal, or ``None`` after application teardown."""
+    try:
+        return getattr(signal_manager, name)
+    except (AttributeError, RuntimeError) as exc:
+        logger.warning("Qt signal %s is unavailable: %s", name, exc)
+        return None
 
 
 _qt_main_invoker: Any = None
@@ -145,7 +157,7 @@ def notify_stt_model_saved_for_running_agent(full_transcription_model: str) -> N
 
     def _do():
         _safe_emit(
-            signal_manager.stt_model_changed,
+            _signal("stt_model_changed"),
             full,
             label="stt_model_changed (llms web save)",
         )
@@ -162,7 +174,7 @@ def notify_voice_hot_reload_for_running_agent(voice_provider: str, voice_model: 
 
     def _do():
         _safe_emit(
-            signal_manager.voice_hot_reload,
+            _signal("voice_hot_reload"),
             vp,
             vm,
             label="voice_hot_reload (voice save)",
@@ -191,7 +203,7 @@ def notify_conversational_llm_saved_for_running_agent(
 
     def _do():
         _safe_emit(
-            signal_manager.model_hot_reload,
+            _signal("model_hot_reload"),
             p,
             m,
             ci,
@@ -227,11 +239,11 @@ def save_general_settings(data) -> None:
     save_settings_to_db(settings)
 
     # --- Emit signals ---
-    _safe_emit(signal_manager.playback_speed_changed, data.playback_speed,
+    _safe_emit(_signal("playback_speed_changed"), data.playback_speed,
                label="playback_speed_changed")
-    _safe_emit(signal_manager.speech_volume_changed, data.speech_volume,
+    _safe_emit(_signal("speech_volume_changed"), data.speech_volume,
                label="speech_volume_changed")
-    _safe_emit(signal_manager.vad_threshold_changed, data.vad_threshold,
+    _safe_emit(_signal("vad_threshold_changed"), data.vad_threshold,
                label="vad_threshold_changed")
 
     if data.voice_provider == "elevenlabs":
@@ -240,7 +252,7 @@ def save_general_settings(data) -> None:
             clear_elevenlabs_voice_cache()
         except Exception as e:
             logger.warning("Failed to clear ElevenLabs voice cache: %s", e)
-        _safe_emit(signal_manager.elevenlabs_voice_settings_changed,
+        _safe_emit(_signal("elevenlabs_voice_settings_changed"),
                     data.elevenlabs_stability, data.elevenlabs_similarity_boost,
                     data.elevenlabs_style, data.elevenlabs_use_speaker_boost,
                     label="elevenlabs_voice_settings_changed")
@@ -280,7 +292,7 @@ def save_general_settings(data) -> None:
         notify_voice_hot_reload_for_running_agent(vp, vm)
     # Oracle skin/size signals removed — those now go through Skins routes
     # (Requirements: 8.8)
-    _safe_emit(signal_manager.oracle_position_changed, data.oracle_position,
+    _safe_emit(_signal("oracle_position_changed"), data.oracle_position,
                label="oracle_position_changed")
 
     # --- Autostart (load on startup) ---
@@ -485,7 +497,7 @@ def save_shortcut_settings(data) -> Dict[str, Any]:
 
     def _do():
         _safe_emit(
-            signal_manager.shortcut_settings_changed,
+            _signal("shortcut_settings_changed"),
             label="shortcut_settings_changed",
         )
 
@@ -583,7 +595,7 @@ def update_playback_speed(speed: float) -> float:
     """Clamp, persist, and emit playback speed."""
     speed = max(0.5, min(2.0, float(speed)))
     update_setting("playback_speed", speed,
-                   signal=signal_manager.playback_speed_changed,
+                   signal=_signal("playback_speed_changed"),
                    signal_args=(speed,),
                    signal_label="playback_speed_changed")
     return speed
@@ -593,7 +605,7 @@ def update_speech_volume(volume: int) -> int:
     """Clamp, persist, and emit speech volume."""
     volume = max(0, min(100, int(volume)))
     update_setting("speech_volume", volume,
-                   signal=signal_manager.speech_volume_changed,
+                   signal=_signal("speech_volume_changed"),
                    signal_args=(volume,),
                    signal_label="speech_volume_changed")
     return volume
@@ -603,7 +615,7 @@ def update_vad_threshold(threshold: int) -> int:
     """Clamp, persist, and emit VAD threshold."""
     threshold = max(0, min(100, int(threshold)))
     update_setting("vad_threshold", threshold,
-                   signal=signal_manager.vad_threshold_changed,
+                   signal=_signal("vad_threshold_changed"),
                    signal_args=(threshold,),
                    signal_label="vad_threshold_changed")
     return threshold
@@ -630,7 +642,7 @@ def update_elevenlabs_settings(
     settings["elevenlabs_use_speaker_boost"] = use_speaker_boost
     save_settings_to_db(settings)
 
-    _safe_emit(signal_manager.elevenlabs_voice_settings_changed,
+    _safe_emit(_signal("elevenlabs_voice_settings_changed"),
                stability, similarity_boost, style, use_speaker_boost,
                label="elevenlabs_voice_settings_changed")
     return stability, similarity_boost, style, use_speaker_boost
@@ -645,7 +657,7 @@ def update_oracle_skin(skin: str) -> None:
 
     migrated = migrate_selected_oracle(skin)
     update_setting("selected_oracle", migrated,
-                   signal=signal_manager.direct_oracle_change,
+                   signal=_signal("direct_oracle_change"),
                    signal_args=(migrated,),
                    signal_label="direct_oracle_change")
 
@@ -666,7 +678,7 @@ def update_oracle_position(position: str) -> str:
     pos = (position or "custom").strip().lower()
     display = POSITION_DISPLAY.get(pos, "Custom")
     update_setting("oracle_position", pos,
-                   signal=signal_manager.oracle_position_changed,
+                   signal=_signal("oracle_position_changed"),
                    signal_args=(display,),
                    signal_label="oracle_position_changed")
     return pos
@@ -682,7 +694,7 @@ def update_oracle_size(sphere_size: int) -> int:
     """
     actual_size = sphere_size * 20
     update_setting("sphere_size", actual_size,
-                   signal=signal_manager.oracle_size_changed,
+                   signal=_signal("oracle_size_changed"),
                    signal_args=(actual_size,),
                    signal_label="oracle_size_changed")
     return actual_size
@@ -751,7 +763,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         )
 
     save_settings_to_db(settings)
-    _safe_emit(signal_manager.reload_agent, label="reload_agent (third-party save)")
+    _safe_emit(_signal("reload_agent"), label="reload_agent (third-party save)")
     try:
         from distr.core.third_party_keys import sync_third_party_env_keys
         from distr.core.mcp_harness import recalibrate_mcp_harness_quiet
@@ -779,6 +791,6 @@ def save_audio_settings(data) -> None:
             settings["locked_input"] = data.locked_input
     save_settings_to_db(settings)
 
-    _safe_emit(signal_manager.audio_devices_changed,
+    _safe_emit(_signal("audio_devices_changed"),
                data.input_device, data.output_device,
                label="audio_devices_changed")

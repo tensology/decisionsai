@@ -2005,7 +2005,7 @@ def normalize_board_orchestrator_policy(raw: str | dict | None) -> dict[str, Any
         "prefer_ide_above_complexity": str(parsed.get("prefer_ide_above_complexity") or "").strip().lower(),
         "harness_preferences": parsed.get("harness_preferences") or {},
         "promoted_hints": parsed.get("promoted_hints") or {},
-        # Paul intake surface: board_linked_quiet → announce+TG only when chat is
+        # Operator intake surface: board_linked_quiet announces only when chat is
         # linked to this board; see distr.core.kanban.whatsapp_intake_rules.
         "whatsapp_intake": whatsapp_intake,
     }

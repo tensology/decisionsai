@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Server-side: sync CHANGELOG.md from github.com/tensology/decisionsai and rebuild the site.
-# Installed on tensology.com at /var/www/decisionsai.net/scripts/deploy_changelog.sh
+# Installed on tensology.com at /var/www/decisions.tensology.com/scripts/deploy_changelog.sh
 #
 # Usage (on server):
 #   ./scripts/deploy_changelog.sh [git-ref]
@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-SITE_ROOT="/var/www/decisionsai.net"
+SITE_ROOT="/var/www/decisions.tensology.com"
 REF="${1:-main}"
 DEST="${SITE_ROOT}/frontend/public/CHANGELOG.md"
 RAW_URL="https://raw.githubusercontent.com/tensology/decisionsai/${REF}/CHANGELOG.md"
@@ -38,4 +38,4 @@ else
   echo "No CHANGELOG content change; skipped website git commit."
 fi
 
-echo "Done. https://www.decisionsai.net/changelog"
+echo "Done. https://decisions.tensology.com/changelog"

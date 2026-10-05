@@ -16,7 +16,7 @@ from distr.core.integrations.telegram.manager import (
 
 
 def test_relay_endpoint_label_strips_scheme():
-    assert relay_endpoint_label("wss://www.decisionsai.net/ws/telegram") == "www.decisionsai.net"
+    assert relay_endpoint_label("wss://decisions.tensology.com/ws/telegram") == "decisions.tensology.com"
 
 
 def test_redact_telegram_log_secrets_removes_query_token_and_bare_jwt():
@@ -31,7 +31,7 @@ def test_redact_telegram_log_secrets_removes_query_token_and_bare_jwt():
 @pytest.mark.parametrize(
     "message,expected_fragment",
     [
-        ("Failed to resolve 'decisionsai.net'", "check internet or DNS"),
+        ("Failed to resolve 'decisions.tensology.com'", "check internet or DNS"),
         ("[Errno 8] nodename nor servname provided, or not known", "check internet or DNS"),
         ("Can't assign requested address", "network unavailable"),
         ("Connection reset by peer", "closed the connection"),
@@ -41,7 +41,7 @@ def test_redact_telegram_log_secrets_removes_query_token_and_bare_jwt():
 def test_friendly_telegram_connect_error(message, expected_fragment):
     reason = friendly_telegram_connect_error(
         ConnectionError(message),
-        endpoint="decisionsai.net",
+        endpoint="decisions.tensology.com",
     )
     assert expected_fragment in reason
 
@@ -58,12 +58,12 @@ def test_friendly_telegram_connect_error(message, expected_fragment):
 def test_friendly_telegram_socket_error(err_str, expected_fragment):
     reason = friendly_telegram_socket_error(
         err_str,
-        endpoint="www.decisionsai.net",
+        endpoint="decisions.tensology.com",
     )
     assert expected_fragment in reason
 
 
 def test_friendly_telegram_immediate_close_reason():
-    reason = friendly_telegram_immediate_close_reason(endpoint="www.decisionsai.net")
+    reason = friendly_telegram_immediate_close_reason(endpoint="decisions.tensology.com")
     assert "accepted the session token" in reason
     assert "stale" in reason or "unhealthy" in reason

@@ -32,7 +32,7 @@ def test_inject_speech_emits_direct_tts(monkeypatch):
     response = client.post("/api/speech/inject", json={"text": "A message from Grok."})
 
     assert response.status_code == 202
-    assert response.json() == {"accepted": True, "text_length": 21}
+    assert response.json() == {"accepted": True, "text_length": 20}
     assert signal.calls == [("A message from Grok.",)]
 
 

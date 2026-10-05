@@ -397,7 +397,7 @@ def test_whatsapp_snapshot_group_uses_ticket_id_and_cleanup_filter_matches_curre
         session.close()
 
 
-def test_whatsapp_snapshot_writes_transcript_and_copies_media_into_project_intake(tmp_path):
+def test_whatsapp_snapshot_writes_transcript_and_copies_media_into_decisions_workspace(tmp_path, monkeypatch):
     repository = tmp_path / "voice-project"
     repository.mkdir()
     voice_note = tmp_path / "voice-note.ogg"
@@ -417,9 +417,19 @@ def test_whatsapp_snapshot_writes_transcript_and_copies_media_into_project_intak
         media_local_path=str(voice_note),
     )
 
+    target = tmp_path / "decisions-workspace" / "ticket-123"
+
+    def snapshot_directory(_board, _project, _ticket_id):
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    monkeypatch.setattr(
+        "distr.gui.web.routes.kanban._whatsapp_snapshot_directory",
+        snapshot_directory,
+    )
+
     files = _write_whatsapp_snapshot_files(board, project, ticket, [message])
 
-    target = repository / ".decisions" / "intake" / "ticket-123"
     assert (target / "voice-note.ogg").read_bytes() == b"audio-fixture"
     assert (target / "voice-note.ogg").stat().st_ino == voice_note.stat().st_ino
     transcript = (target / "transcript.md").read_text(encoding="utf-8")
