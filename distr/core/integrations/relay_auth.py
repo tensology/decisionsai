@@ -5,10 +5,20 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
 _env_loaded = False
+
+
+def canonical_relay_url(url: str) -> str:
+    """Avoid legacy-host redirects that turn authenticated POSTs into GETs."""
+    parts = urlsplit(str(url or "").strip())
+    if (parts.hostname or "").lower() not in {"decisionsai.net", "www.decisionsai.net"}:
+        return str(url or "").strip()
+    port = f":{parts.port}" if parts.port else ""
+    return urlunsplit((parts.scheme, f"decisions.tensology.com{port}", parts.path, parts.query, parts.fragment))
 
 
 def _project_env_path() -> Path:
@@ -71,5 +81,5 @@ def relay_auth_headers(*, force_refresh: bool = False) -> dict[str, str]:
 def relay_public_base() -> str:
     explicit = (os.environ.get("DECISIONSAI_RELAY_API_BASE") or "").strip()
     if explicit:
-        return explicit.rstrip("/")
+        return canonical_relay_url(explicit).rstrip("/")
     return "https://decisions.tensology.com"

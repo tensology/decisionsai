@@ -50,9 +50,11 @@ _RELAY_HEADERS_TTL_SECONDS = 300.0
 
 
 def relay_api_base() -> str:
+    from distr.core.integrations.relay_auth import canonical_relay_url
+
     explicit = str(os.environ.get("DECISIONSAI_WA_API_BASE") or "").strip()
     if explicit:
-        return explicit.rstrip("/")
+        return canonical_relay_url(explicit).rstrip("/")
     use_local = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
         "1",
         "true",

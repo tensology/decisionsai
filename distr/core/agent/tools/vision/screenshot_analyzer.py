@@ -329,6 +329,20 @@ class ScreenshotAnalyzerTool(BaseTool):
     """
 
     name: str = "screenshot_analyzer"
+
+    def normalize_tool_args(self, args: dict) -> dict:
+        """Accept common model aliases and make a missing prompt useful."""
+        normalized = dict(args or {})
+        if not str(normalized.get("prompt") or "").strip():
+            for alias in ("instruction", "query", "task", "request", "description", "target"):
+                value = normalized.pop(alias, None)
+                if str(value or "").strip():
+                    normalized["prompt"] = str(value).strip()
+                    break
+            else:
+                normalized["prompt"] = "Describe the current screen."
+        return normalized
+
     description: str = (
         "🎯 PRIMARY TOOL for ALL screen interaction — both seeing AND clicking. "
         "Always use this tool when the user wants to click, open, or interact with ANY element on screen. "

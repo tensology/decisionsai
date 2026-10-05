@@ -212,6 +212,8 @@ class TelegramWebSocketManager(
 
     def __init__(self, server_url: str = "wss://decisions.tensology.com/ws/telegram"):
         super().__init__()
+        from distr.core.integrations.relay_auth import canonical_relay_url
+
         use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
             "1",
             "true",
@@ -222,11 +224,11 @@ class TelegramWebSocketManager(
         # Local relay mode is controlled independently from DEBUG.
         env_url = os.environ.get("DECISIONSAI_WS_URL")
         if env_url:
-            self.server_url = env_url
+            self.server_url = canonical_relay_url(env_url)
         elif use_local_relay:
             self.server_url = "ws://localhost:8090/ws/telegram"
         else:
-            self.server_url = server_url
+            self.server_url = canonical_relay_url(server_url)
 
         # QWebSocket Setup
         self.socket = QWebSocket()

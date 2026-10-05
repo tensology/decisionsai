@@ -210,6 +210,8 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
 
     def __init__(self, server_url: str = "wss://decisions.tensology.com/ws/whatsapp"):
         super().__init__()
+        from distr.core.integrations.relay_auth import canonical_relay_url
+
         use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
             "1",
             "true",
@@ -220,19 +222,19 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         # Allow env override
         env_url = os.environ.get("DECISIONSAI_WA_WS_URL")
         if env_url:
-            self.server_url = env_url
+            self.server_url = canonical_relay_url(env_url)
         elif use_local_relay:
             self.server_url = "ws://localhost:8090/ws/whatsapp"
         else:
-            self.server_url = server_url
+            self.server_url = canonical_relay_url(server_url)
 
         # REST API base URL (for QR code, status, etc.)
-        self.api_base = os.environ.get(
+        self.api_base = canonical_relay_url(os.environ.get(
             "DECISIONSAI_WA_API_BASE",
             "https://decisions.tensology.com/api/whatsapp"
             if not use_local_relay
             else "http://localhost:8090/api/whatsapp",
-        )
+        ))
 
         # QWebSocket
         if QWebSocket:

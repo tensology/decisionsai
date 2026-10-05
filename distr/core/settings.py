@@ -35,7 +35,7 @@ DEFAULT_SETTINGS = {
     "mempalace_memory_backend": True,
 
     # Durable cost ledger (default ON for local recording). Env: DECISIONS_COST_LEDGER_ENABLED.
-    # Recording is a no-op when False. Not yet a Settings ORM column — DEFAULT + env only.
+    # Recording is a no-op when False.
     "cost_ledger_enabled": True,
     # Invoice display: blended (one figure) | explicit (tokens + provider + resource).
     # Env: DECISIONS_COST_INVOICE_DISPLAY. UI query param display= overrides for view only.

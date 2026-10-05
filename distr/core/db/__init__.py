@@ -33,6 +33,12 @@ class Settings(Base):
     always_confirm_file_operations = Column(Boolean, default=True)  # Always show confirmation dialog for file operations
     startup_listening_state = Column(String, default='remember')  # values: 'remember', 'stop', 'start'
     default_project_editor = Column(String, default='codex')
+    jira_auto_transition_on_cli_complete = Column(Boolean, default=False)
+    jira_auto_transition_target_status = Column(String, default='Done')
+    whatsapp_send_dry_run = Column(Boolean, default=False)
+    mempalace_memory_backend = Column(Boolean, default=True)
+    cost_ledger_enabled = Column(Boolean, default=True)
+    cost_invoice_display = Column(String, default='blended')
 
     restore_position = Column(Boolean, default=True)
     oracle_position = Column(String, default='Middle Right')
@@ -683,6 +689,12 @@ try:
                 # Load on startup
                 ("load_on_startup", "BOOLEAN DEFAULT 1"),
                 ("default_project_editor", "VARCHAR DEFAULT 'codex'"),
+                ("jira_auto_transition_on_cli_complete", "BOOLEAN DEFAULT 0"),
+                ("jira_auto_transition_target_status", "VARCHAR DEFAULT 'Done'"),
+                ("whatsapp_send_dry_run", "BOOLEAN DEFAULT 0"),
+                ("mempalace_memory_backend", "BOOLEAN DEFAULT 1"),
+                ("cost_ledger_enabled", "BOOLEAN DEFAULT 1"),
+                ("cost_invoice_display", "VARCHAR DEFAULT 'blended'"),
                 # Masko (AI skin generation)
                 ("masko_enabled", "BOOLEAN DEFAULT 0"),
                 ("masko_key", "VARCHAR DEFAULT ''"),
