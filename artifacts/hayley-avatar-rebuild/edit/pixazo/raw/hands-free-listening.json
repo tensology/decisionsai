@@ -1,7 +1,0 @@
-{
-  "request_id": "seedance-2-5_01a100ae-15ed-71b0-d4ae-002a34bd39b50",
-  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/hands-free-listening.png",
-  "prompt": "Fixed camera. Preserve the exact illustrated character, face, long platinum hair, jacket, line art, colors, proportions, pose, props, and solid pure green background. Subtle breathing, one gentle blink, tiny attentive head adjustment, listening hand stays beside ear. No camera movement, no zoom, no morphing, no new objects. The motion returns exactly to the starting pose for a seamless loop.",
-  "duration": 5,
-  "model": "seedance-2.5-first-last-frame"
-}

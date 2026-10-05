@@ -1,7 +1,0 @@
-{
-  "request_id": "seedance-2-5_01a100a8-3adb-7378-3097-7a61c4a1389b7",
-  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/idle.png",
-  "prompt": "Fixed camera. Preserve the exact illustrated character, face, platinum hair, heart-hand pose, jacket, line art, colors, proportions, and solid pure green background. Add only a subtle natural breathing motion, one gentle blink, and extremely slight hair settling. Hands remain in the heart shape. No camera movement, no zoom, no morphing, no new objects. The motion returns exactly to the starting pose for a seamless loop.",
-  "duration": 5,
-  "model": "seedance-2.5-first-last-frame"
-}

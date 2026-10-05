@@ -1,7 +1,0 @@
-{
-  "request_id": "seedance-2-5_01a100b6-b38f-7b08-52e3-db50d46a5a505",
-  "source": "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/artifacts/hayley-avatar-rebuild/final-images-v2/tts-response.png",
-  "prompt": "Fixed camera. Preserve the exact illustrated character, face, long platinum hair, jacket, line art, colors, proportions, pose, props, and solid pure green background. Subtle breathing, natural restrained speaking mouth movement, tiny palm-up conversational motion, return precisely. No camera movement, no zoom, no morphing, no new objects. The motion returns exactly to the starting pose for a seamless loop.",
-  "duration": 5,
-  "model": "seedance-2.5-first-last-frame"
-}

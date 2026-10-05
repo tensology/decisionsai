@@ -1,7 +1,0 @@
-{
-  "model": "stable-diffusion-v1-5-inpainting",
-  "endpoint": "/inpainting/v1/getImage",
-  "free_tier": true,
-  "seed": 42,
-  "bytes": 2361813
-}
