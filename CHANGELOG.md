@@ -22,6 +22,16 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ---
 
+## Domain migration - 2026-10-05
+
+### Decisions now lives at decisions.tensology.com
+
+The canonical Decisions website, installer links, legal pages, remote sessions, Telegram links, WhatsApp links, WebSocket connections, and mobile app endpoints now use `https://decisions.tensology.com`. Requests to the legacy domains remain supported through permanent redirects so existing bookmarks and shared links continue to work.
+
+### Production and repository references cleaned up
+
+The production folder, web server configuration, service definitions, deployment scripts, website metadata, documentation, and Tensology website links now point to the Tensology subdomain. The old domain remains only where it is required to accept and redirect legacy traffic.
+
 ## [2.9.2] - 2026-10-02
 
 ### Fish Audio is in the voice stack
