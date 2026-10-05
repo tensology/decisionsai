@@ -149,3 +149,38 @@ def test_process_follow_up_suppresses_done_after_speak_on_desktop():
     assert content == ""
     assert tool_calls == []
     assert service.event_queue.items == []
+
+
+def test_stream_retries_transient_overload_before_first_chunk(monkeypatch):
+    calls = 0
+
+    async def call_stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            async def failed():
+                raise RuntimeError("Service temporarily overloaded")
+                yield None
+            return failed()
+
+        async def healthy():
+            yield _Chunk("ready")
+        return healthy()
+
+    async def no_wait(delay):
+        return None
+
+    service = _FakeService()
+    service._call_stream = call_stream
+    service._is_transient_provider_error = OpenAICompatibleLLMService._is_transient_provider_error
+    monkeypatch.setattr(openai_compat_module.asyncio, "sleep", no_wait)
+
+    async def collect():
+        stream = OpenAICompatibleLLMService._iter_stream_with_retry(
+            service, [], max_retries=2
+        )
+        return [chunk async for chunk in stream]
+
+    chunks = asyncio.run(collect())
+    assert calls == 2
+    assert chunks[0].choices[0].delta.content == "ready"

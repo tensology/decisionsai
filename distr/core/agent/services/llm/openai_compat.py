@@ -285,7 +285,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         len(tools_list) if tools_list else 0)
 
             _t2 = _time.time()
-            stream = await self._call_stream(validated_messages, tools_list)
+            stream = self._iter_stream_with_retry(validated_messages, tools_list)
             logger.info("%s: [3] call_stream returned: %.3fs", self.SERVICE_NAME, _time.time() - _t2)
 
             _t3 = _time.time()
@@ -575,7 +575,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     logger.warning("%s: Model rejects system instruction, retrying without it", self.SERVICE_NAME)
                     continue
 
-                if any(k in err for k in ('429', 'rate limit', 'rate-limited', 'connection', 'timeout', 'network')):
+                if self._is_transient_provider_error(err):
                     if attempt < max_retries - 1:
                         logger.warning("%s: attempt %d/%d failed: %s. Retrying in %.1fs…",
                                        self.SERVICE_NAME, attempt + 1, max_retries, e, retry_delay)
@@ -586,6 +586,36 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 raise
 
         raise last_error or Exception(f"Failed to create {self.SERVICE_NAME} stream")
+
+    @staticmethod
+    def _is_transient_provider_error(error: object) -> bool:
+        text = str(error).lower()
+        return any(token in text for token in (
+            "429", "502", "503", "504", "520", "rate limit", "rate-limited",
+            "connection", "timeout", "network", "overload", "temporarily unavailable",
+            "service unavailable",
+        ))
+
+    async def _iter_stream_with_retry(self, messages, tools_list=None, max_retries=3):
+        """Retry provider failures that happen before a stream emits any chunks."""
+        delay = 1.0
+        for attempt in range(max_retries):
+            emitted = False
+            try:
+                stream = await self._call_stream(messages, tools_list, max_retries=max_retries)
+                async for chunk in stream:
+                    emitted = True
+                    yield chunk
+                return
+            except Exception as exc:
+                if emitted or attempt == max_retries - 1 or not self._is_transient_provider_error(exc):
+                    raise
+                logger.warning(
+                    "%s: stream failed before first chunk: %s. Retrying in %.1fs",
+                    self.SERVICE_NAME, exc, delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
 
     async def _consume_stream(self, stream):
         """Consume a streaming response. Returns (full_content, tool_calls)."""
@@ -601,17 +631,20 @@ class OpenAICompatibleLLMService(BaseLLMService):
         wd_content_chunks = [0]
 
         generation_start = time.time()
+        last_progress = [generation_start]
         self._last_tool_call_time = None
         self._prompt_leak_blocked = False
 
         async def watchdog():
             try:
-                await asyncio.sleep(self._MAX_GENERATION_TIME_WITHOUT_TOOL)
-                if not self._cancelled and self._last_tool_call_time is None:
-                    elapsed = time.time() - generation_start
-                    if wd_content_chunks[0] > 0 and (wd_chunk_count[0] > 50 or wd_content_len[0] > 500):
-                        logger.error("WATCHDOG: Forcing stop — %d chunks, %d chars in %.1fs without tool calls",
-                                     wd_chunk_count[0], wd_content_len[0], elapsed)
+                while not self._cancelled and self._last_tool_call_time is None:
+                    await asyncio.sleep(self._MAX_GENERATION_TIME_WITHOUT_TOOL)
+                    idle = time.time() - last_progress[0]
+                    if wd_content_chunks[0] > 0 and idle >= self._MAX_GENERATION_TIME_WITHOUT_TOOL:
+                        logger.error(
+                            "WATCHDOG: Forcing stop after %.1fs without stream progress (%d chunks, %d chars)",
+                            idle, wd_chunk_count[0], wd_content_len[0],
+                        )
                         self._cancelled = True
             except asyncio.CancelledError:
                 pass
@@ -630,6 +663,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 delta = chunk.choices[0].delta
 
                 if delta.content:
+                    last_progress[0] = time.time()
                     full_content += delta.content
                     content_chunks += 1
                     wd_content_len[0] = len(full_content)
@@ -896,7 +930,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """
 
         messages = self._prepare_api_messages()
-        stream = await self._call_stream(messages, tools_list=tools_list, max_retries=3)
+        stream = OpenAICompatibleLLMService._iter_stream_with_retry(
+            self, messages, tools_list=tools_list, max_retries=3
+        )
         suppress_direct_speech_completion = (
             OpenAICompatibleLLMService._last_tool_result_is_direct_speech_ack(self)
         )
