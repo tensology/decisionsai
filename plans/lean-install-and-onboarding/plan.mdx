@@ -1,0 +1,320 @@
+---
+title: Lean installation and first-run onboarding
+kind: plan
+status: draft
+localOnly: true
+---
+
+# Lean installation and first-run onboarding
+
+## Outcome
+
+Make Decisions AI fast to acquire and useful within minutes, while keeping local-first operation available as an explicit, well-explained upgrade path. The consumer installer should download a small, versioned core instead of cloning the repository and eagerly installing every dependency, browser, speech engine, voice, and model.
+
+> **Recommended direction:** Ship the lean release path before rewriting Git history. A bootstrap installer and versioned release artifact eliminate the clone penalty for new users without invalidating commit SHAs or disrupting existing clones. Clean the current tree in parallel, then treat history rewriting as a separately approved maintenance event.
+
+This document is a plan, not authorization to remove files, rewrite history, change the installer, or enable a cloud service. Every destructive or externally visible step has its own approval gate.
+
+## What the audit found
+
+The current public installer performs a full `git clone` and then runs `./decisions`. That makes obsolete history part of every installation even when the user only needs the current runtime.
+
+| Measurement | Observed size | Meaning |
+| --- | ---: | --- |
+| Full `origin/main` Git bundle | 416 MB | Approximate full history transfer before checkout |
+| Fresh full main pack | 413.20 MiB | 21,597 packed Git objects |
+| Shallow depth-1 Git directory | 189 MB | Still large because the current tree is heavy |
+| Current HEAD archive | 186.6 MiB compressed | Current source payload before dependencies |
+| Current tracked tree | 246.4 MiB raw | Checkout content only |
+| Ignored local working directory | About 9.0 GB | Runtime state and models, not clone payload |
+
+The largest tracked areas in the current tree are `assets` at 116.6 MB, `plugins` at 60.1 MB, `distr` at 37.3 MB, `artifacts` at 21.3 MB, and `skills` at 11.8 MB. Avatar packs alone account for about 113 MB. The ECC and community plugin packs account for about 58 MB. Most committed `artifacts` content is generated benchmark or audit evidence rather than runtime source.
+
+The local machine also shows why eager setup is painful even after Git finishes. The current model directory contains roughly 2.7 GB of Vosk data, 2.3 GB of Qwen TTS data, 310 MB of Kokoro model data, and 27 MB of Kokoro voices. The shared project virtual environment is about 3.8 GB. Playwright, Hugging Face, Whisper, and voice caches add several more gigabytes, although these caches are not transferred by Git.
+
+> **History risk:** Deleting current files alone will not make a normal full clone lean. The removed Hayley avatar rebuild history by itself represents about 244.7 MB of raw unique historical blobs. A future history rewrite can reclaim obsolete objects, but it changes commit SHAs, requires force-pushing coordinated refs, and forces existing contributors and deployments to re-clone or carefully reset.
+
+## Why setup is slow today
+
+The source and setup costs are coupled:
+
+1. `www.decisionsai.net/frontend/public/install.sh` clones the entire repository.
+2. `bin/decisions.sh` installs the monolithic `requirements.txt`.
+3. The launcher builds Whisper support and eagerly prefetches Vosk, Whisper, and Supertonic.
+4. `bin/setup.py` downloads Kokoro assets, Kanade, WavLM, speech caches, and Playwright Chromium.
+5. Only after those costs can the user discover which capabilities they actually want.
+
+The README currently says there are no large model downloads and mentions only Whisper.cpp and Kokoro. That no longer matches installer behavior and should be corrected in the first documentation phase.
+
+## Target architecture
+
+```text
+TODAY                                      TARGET
+Full Git clone                             Tiny bootstrap
+  -> current and obsolete history            -> signed core release manifest
+  -> monolithic Python install                -> first useful text screen
+  -> eager browsers and models                -> choose operating mode
+  -> first useful screen arrives last            -> Quick Start
+                                                    Local and Private
+                                                    Bring Your Own Keys
+                                                    Custom
+                                                 -> capability packs on demand
+```
+
+### Delivery layers
+
+| Layer | Contains | When installed |
+| --- | --- | --- |
+| Bootstrap | Version selection, platform detection, manifest verification, resume and rollback | Immediately |
+| Core runtime | Desktop shell, text interaction, settings, updater, component manager | Immediately |
+| Capability dependencies | Speech, voice, browser/computer-use, development harness extras | Only when selected |
+| Model and data packs | Whisper, Vosk, Kokoro, Supertonic, Ollama models, animated avatars | Only after size and privacy consent |
+| Developer tooling | Tests, release tools, benchmarks, audit fixtures | Developer setup only |
+
+Keep one project, one repository, one database, and one project virtual environment. Optional packs should be versioned release assets produced from the same repository, not separate source repositories or extra virtual environments. Dependencies can be installed as extras into the same environment when a capability is enabled.
+
+### Component manifest
+
+Introduce a checked-in component catalog that the release pipeline resolves into a signed, versioned manifest. Each component needs:
+
+- `id`, `version`, `capability`, supported platforms, and compatibility range.
+- Download size and estimated installed size shown before consent.
+- Dependency extras, artifact URLs, SHA-256 checksums, and licenses.
+- Privacy classification and whether activation sends data off-device.
+- Health check, resumable install behavior, restart requirement, and uninstall action.
+- A deterministic status: unavailable, available, downloading, installed, unhealthy, or update available.
+
+The runtime should ask a component service for a capability instead of assuming a model exists at a hard-coded path. Existing download progress, cancellation, and history primitives in `distr/core/download_jobs.py` can inform the design, but the generic component installer should not be coupled to yt-dlp jobs.
+
+## First-run onboarding
+
+The first launch should answer one question first: how does this user want Decisions AI to operate? Do not ask them to understand model names before they understand the tradeoff.
+
+### Mode 1: Quick Start
+
+- Starts with no local model download.
+- Uses a provider-agnostic Tensology gateway backed by a configured upstream, potentially NVIDIA NIM or another OpenAI-compatible provider.
+- Requires explicit consent before audio, prompts, or documents leave the machine.
+- Shows the trial allowance, privacy boundary, retention policy, rate limits, and what happens when the allowance ends.
+- Uses a narrowly scoped, revocable installation token. Never embed upstream provider secrets in the client.
+- Supports switching to local or user-owned keys at any time.
+
+NVIDIA is already represented in the codebase and its NIM APIs expose OpenAI-compatible interfaces. It should remain a replaceable upstream adapter, not become the onboarding data model or a hard-coded product dependency. Pricing, free endpoint availability, and quotas are mutable configuration, not installer assumptions.
+
+### Mode 2: Local and Private
+
+- Runs a short hardware and disk assessment.
+- Recommends the smallest acceptable stack for the machine.
+- Shows exact network and installed sizes before downloading.
+- Makes Whisper.cpp small or base the initial local transcription recommendation.
+- Offers Vosk as an alternative, but does not make the observed multi-gigabyte Vosk pack the default.
+- Offers local TTS and an Ollama model separately, so local transcription does not imply downloading every local capability.
+- Supports pause, resume, retry, verification, and removal.
+
+This plan interprets the spoken reference to "VASC" as Vosk.
+
+### Mode 3: Bring Your Own Keys
+
+- Lets users configure LLM, speech-to-text, and text-to-speech independently.
+- Reuses the existing provider adapters and qualification contracts.
+- Validates credentials with a minimal request, identifies permission or quota failures, and never logs the key.
+- Stores secrets in the existing secure configuration path, not in the repository or component manifest.
+
+### Mode 4: Custom
+
+- Allows mixed routing, for example local speech-to-text, cloud LLM, and local TTS.
+- Explains privacy per capability rather than assigning one misleading global label.
+- Offers text-only operation and `Skip for now` without making an undisclosed cloud call.
+
+### Resumable onboarding state
+
+Persist the selected mode, completed checks, declined downloads, component states, provider validation results, and last recoverable error. Onboarding must resume after restart and remain available from Settings as a `Setup and capabilities` screen.
+
+## Proposed modules and ownership
+
+| Proposed path | Change | Responsibility |
+| --- | --- | --- |
+| `install/bootstrap.sh` | Add | Small platform-aware installer that fetches and verifies a release manifest |
+| `distr/core/components/catalog.py` | Add | Typed capability and component definitions |
+| `distr/core/components/installer.py` | Add | Download, checksum, resume, install, health, and uninstall orchestration |
+| `distr/core/components/state.py` | Add | Persistent component and migration state |
+| `distr/core/providers/readiness.py` | Add | Credential checks, certification, quota classification, and capability readiness |
+| `distr/core/onboarding/state.py` | Add | Resumable first-run choices and consent records |
+| `distr/gui/web/routes/onboarding.py` | Add | Onboarding API and progress events |
+| `distr/gui/web/routes/settings/llms.py` | Modify | Consume provider and component readiness services |
+| `distr/core/agent/session.py` | Modify | Resolve selected capabilities through readiness, not assumed files |
+| `requirements.txt` | Modify | Reduce to core or generate from explicit extras |
+| `requirements-speech-local.txt` | Add | Optional local speech dependencies in the same project environment |
+| `requirements-browser.txt` | Add | Optional browser and computer-use dependencies |
+| `.github/workflows/release.yml` | Modify | Build release archive, component packs, checksums, manifest, and size report |
+
+Names above are proposed boundaries, not a mandate to duplicate existing abstractions. During implementation, preserve the current service registries where they already provide the right seam, particularly `distr/core/agent/services/tts/registry.py`, STT resolution in `distr/core/agent/config_loader.py`, and provider qualification in `distr/core/qualification`.
+
+## Repository cleanup plan
+
+### Safe current-tree cleanup
+
+1. Classify every tracked file as core source, optional runtime pack, documentation evidence, generated artifact, test fixture, or obsolete content.
+2. Remove generated benchmark and audit output from `artifacts` unless a specific document references it and the evidence still has durable value.
+3. Move regenerated evidence to CI artifacts or external release evidence with retention limits.
+4. Stop committing benchmark copies of `.pi` assets and other generated projections.
+5. Deduplicate the Hayley voice WAV files into one canonical source or one optional pack.
+6. Package the ECC and community skill/plugin packs as optional release assets while continuing to build them from this repository.
+7. Make animated avatar packs optional. Keep only a lightweight base avatar or fallback in core.
+8. Add ignore rules and ownership notes for runtime models, databases, caches, screenshots, downloads, and local build output.
+9. Add a size report and budget check to CI so the repository cannot silently grow back.
+
+Do not remove Merrypak captures solely because they look duplicated. They currently support the planning UI and need a consumer audit or UI migration before deletion.
+
+### Git history cleanup, later and separately approved
+
+1. Ship and verify the no-Git consumer installer first.
+2. Freeze writes for a short maintenance window and enumerate every branch, tag, remote, deployment checkout, and bare receive repository that must move together.
+3. Define exact removal paths and size thresholds, then simulate `git filter-repo` in a disposable clone.
+4. Compare pre-rewrite and post-rewrite pack sizes, object counts, current-tree content, tags, and release build output.
+5. Obtain explicit approval for old commit SHA invalidation and the required re-clone process.
+6. Force-push coordinated rewritten refs. Do not keep a tag pointing at the old blob-heavy graph, because it retains the history cost.
+7. Re-clone production and developer checkouts, update the website installer, and verify the release path before reopening writes.
+8. Allow GitHub object garbage collection to complete before publishing final clone-size evidence.
+
+No history rewrite should begin until the required `git-filter-repo` tooling is available inside the Decisions project environment and its version is pinned. The audit did not install it because the current environment does not contain that module.
+
+## Delivery phases
+
+### Phase 0: baseline and guardrails
+
+- Check in the inventory script and reproducible size report.
+- Correct README and installer claims.
+- Add budgets for current checkout, release archive, largest blob, and committed generated artifacts.
+- Record a supported-platform matrix and minimum disk assumptions.
+
+Exit condition: CI produces the same size categories measured in this audit and fails on unexplained regression.
+
+### Phase 1: release delivery without Git
+
+- Build a deterministic core release archive from `main`.
+- Publish checksums and a signed/versioned manifest.
+- Replace public installer cloning with release resolution, resumable download, verification, install, rollback, and update-channel selection.
+- Keep the old installer available only as an explicitly labeled developer path during migration.
+
+Exit condition: a clean machine installs and reaches a text-capable screen without Git or model downloads.
+
+### Phase 2: current-tree cleanup
+
+- Remove or relocate approved generated artifacts and duplicate binaries.
+- Split optional avatar and plugin packs from the core release payload.
+- Prove that every removed core candidate is either unused, generated, or supplied by a tested optional pack.
+
+Exit condition: the compressed core release is within the agreed budget and all existing core tests pass.
+
+### Phase 3: component and dependency split
+
+- Implement the component manifest, installer, state machine, integrity checks, and progress API.
+- Split core, local speech, local voice, browser, harness, test, and release dependency sets.
+- Migrate direct model-path assumptions to capability readiness checks.
+
+Exit condition: every optional component can be installed, interrupted, resumed, verified, updated, and removed without corrupting the base installation.
+
+### Phase 4: onboarding and settings
+
+- Implement Quick Start, Local and Private, Bring Your Own Keys, Custom, and Skip for now.
+- Make consent, privacy, download size, installed size, and recurring provider cost visible before commitment.
+- Add recovery screens for offline, checksum, quota, authentication, insufficient disk, unsupported hardware, and partial installation failures.
+
+Exit condition: first-run and settings flows pass fresh install, restart, downgrade, offline, and mode-switching tests.
+
+### Phase 5: Quick Start gateway
+
+- Define a provider-agnostic capability API and route configured upstream providers through it.
+- Issue narrowly scoped trial credentials from a server-side exchange.
+- Add usage caps, abuse protection, cost alerts, privacy controls, regional policy, retention rules, and a clear exhaustion path.
+- Reuse the existing cost ledger and provider qualification concepts where appropriate.
+
+Exit condition: no upstream secret exists in the client, limits fail safely, and users can export settings or move to BYOK/local without losing their work.
+
+### Phase 6: optional history rewrite
+
+- Run the approved simulation and maintenance procedure.
+- Verify clone size, releases, tags, website installer, production checkout, and recovery instructions.
+
+Exit condition: a brand-new full clone meets the agreed history budget and all authoritative refs point only to the rewritten graph.
+
+### Phase 7: staged rollout
+
+- Roll out by channel with install telemetry that contains no prompt, audio, secret, or document content.
+- Track download failures, time to first useful screen, onboarding completion, selected modes, component failure rates, and support requests.
+- Preserve an immediate rollback to the last verified release manifest.
+
+Exit condition: the new path is stable across supported platforms and the old clone installer is retired.
+
+## Success budgets
+
+These are proposed acceptance targets and should be ratified after a release prototype:
+
+| Measure | Proposed target |
+| --- | --- |
+| Bootstrap script | Under 100 KB |
+| Compressed core release | 40 to 60 MB, subject to proof from the first extraction pass |
+| Time to first text-capable screen | Under 2 minutes on a typical broadband connection |
+| Automatic optional downloads | Zero before explicit consent |
+| Download disclosure | Network size and installed size for every optional component |
+| Fresh core install | Aim below 1.5 GB including the GUI environment |
+| Largest unexplained tracked blob | Zero; every large blob must have an owner and rationale |
+
+The 40 to 60 MB release target is deliberately ambitious. The first packaging spike should determine whether the GUI shell can meet it or whether a platform-specific bundled runtime needs a separate, clearly measured budget.
+
+## Verification matrix
+
+- [ ] Clean install on each supported platform reaches text mode without Git, browser, or model downloads.
+- [ ] Tampered archive and model checksums fail closed with a recoverable message.
+- [ ] Interrupted core and multi-gigabyte component downloads resume safely.
+- [ ] Insufficient disk is detected before download and before extraction.
+- [ ] Offline first launch offers local package guidance or text-only recovery without a crash.
+- [ ] No cloud request occurs until capability-specific consent is recorded.
+- [ ] Invalid, rate-limited, exhausted, and permission-limited provider keys produce distinct remediation.
+- [ ] Users can switch each LLM, STT, and TTS capability independently.
+- [ ] Optional components can be removed and disk is reclaimed without deleting user data.
+- [ ] Upgrade and rollback preserve database, settings, credentials, and onboarding state.
+- [ ] CI reports core archive, checkout, full clone, largest blobs, and optional pack sizes.
+- [ ] Public installer, README, privacy text, and troubleshooting match actual behavior.
+
+## Risks and controls
+
+| Risk | Control |
+| --- | --- |
+| Cloud quick start silently weakens local-first expectations | Explicit capability consent, text-only skip, clear data boundary, and easy local/BYOK migration |
+| Trial infrastructure creates unbounded cost or abuse | Scoped tokens, hard caps, server-side secrets, rate limits, fraud controls, and cost alerts |
+| Optional packs drift from core compatibility | Signed manifest, compatibility ranges, release integration tests, and atomic activation |
+| Dependency split creates partial environments | Transactional component state, health checks, retry, rollback, and one supported environment owner |
+| Repository content returns after cleanup | CI budgets, generated-artifact policy, code ownership, and scheduled size reports |
+| History rewrite strands users or production | Separate approval, maintenance inventory, simulated clone, coordinated refs, and verified re-clone procedure |
+| Provider recommendation becomes vendor lock-in | Capability-based contract and replaceable OpenAI-compatible adapters |
+
+## Recommended decisions
+
+1. Use GitHub Releases as the first authoritative artifact source, with a Tensology CDN as an optional mirror after integrity and rollback behavior are proven.
+2. Offer a capped Quick Start trial, but only after explicit consent and only through a provider-agnostic Tensology gateway.
+3. Make Whisper.cpp small or base the recommended local transcription starter. Keep Vosk optional.
+4. Keep one lightweight static or compact fallback avatar in core. Download full animated avatar packs on demand.
+5. Ship the release installer and current-tree cleanup before deciding whether the remaining full-clone cost justifies a coordinated history rewrite.
+
+### Open questions
+
+1. **Where should the first production release artifacts be served?** Recommended: GitHub Releases for the lowest-complexity first step with checksums and versioned assets. Alternative: a Tensology CDN with additional signing, operations, and rollback responsibilities.
+2. **Should Quick Start include a capped Tensology trial?** Recommended: yes, with explicit consent, hard limits, and a migration path. Alternative: BYOK only, which lowers infrastructure exposure but delays first value.
+3. **What should ship as the core visual identity?** Recommended: one lightweight fallback, with full animated packs downloaded later. Alternative: ship the Oracle pack and accept a materially larger core.
+4. **When should obsolete Git history be rewritten?** Recommended: after the release installer is proven. Alternatives: include it in the same delivery project, with higher coordination risk, or defer indefinitely while accepting large developer clones.
+
+Approval of these decisions should unlock a smaller implementation specification for Phase 0 and Phase 1 only. Later phases should remain gated on measured results, especially the achievable core archive size and the operating cost of Quick Start.
+
+## Evidence references
+
+Repository evidence reviewed for this plan includes:
+
+- `www.decisionsai.net/frontend/public/install.sh` for the public full-clone installer.
+- `bin/decisions.sh`, `bin/setup.py`, `requirements.txt`, and `scripts/prefetch_local_models.py` for eager setup behavior.
+- `distr/core/agent/services/stt`, `distr/core/agent/services/tts/registry.py`, `distr/core/agent/config_loader.py`, and `distr/core/agent/session.py` for speech capability seams.
+- `distr/core/agent/services/llm/providers/nvidia.py` and `distr/core/turn_runtime/openai_compatible.py` for existing provider adapters.
+- `distr/core/qualification`, `distr/core/download_jobs.py`, and `distr/core/cost_ledger` for readiness, progress, and usage primitives.
+
+Current NVIDIA capability claims were checked against the official [NIM LLM API reference](https://docs.nvidia.com/nim/large-language-models/latest/api-reference.html) and [NVIDIA API documentation](https://docs.api.nvidia.com/nim/reference/llm-apis). Provider pricing, quotas, and hosted endpoint availability must still be treated as mutable configuration.
