@@ -1996,6 +1996,19 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                             logger.error("%s cannot process chat with provider '%s'. Rejecting.",
                                          self._get_provider_name(), chat.provider)
                             session.close()
+                            if is_telegram:
+                                self._telegram_fallback_text = (
+                                    f"I could not process that request because this chat uses "
+                                    f"{chat.provider} while the active agent uses {provider_name}. "
+                                    "Please retry."
+                                )
+                                self._emit_telegram_response("", "")
+                                if self.event_queue:
+                                    self.event_queue.put(
+                                        ('typing_indicator_changed', {'show': False}),
+                                        block=False,
+                                    )
+                                self._cleanup_telegram_flags()
                             return
                     session.close()
                 except Exception as e:

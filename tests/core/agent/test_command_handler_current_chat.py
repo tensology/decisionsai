@@ -213,8 +213,10 @@ def test_explicit_hands_free_disable_clears_worker_dictation_restore():
     session.tts_service.set_hands_free.assert_called_once_with(False)
 
 
-def test_process_text_input_honors_requested_chat_before_appending(monkeypatch):
+def test_process_text_input_hot_swaps_requested_chat_before_appending(monkeypatch):
     monkeypatch.setattr(command_handler, "_chat_id_exists_for_input", lambda chat_id: True)
+    hot_swap = MagicMock()
+    monkeypatch.setattr(command_handler, "_cmd_current_chat_changed", hot_swap)
     chat_manager = MagicMock()
     llm_service = MagicMock()
     llm_service._speaker_enabled = True
@@ -235,8 +237,7 @@ def test_process_text_input_honors_requested_chat_before_appending(monkeypatch):
     })
 
     assert session._agent_current_chat_id_from_signal == 77
-    chat_manager.set_current_chat.assert_called_once_with(77)
-    llm_service.on_chat_changed.assert_called_once_with(77)
+    hot_swap.assert_called_once_with(session, {"chat_id": 77})
     assert session._pending_text_inputs[0] == {
         "text": "[Workflow Report]\nDone",
         "chat_id": 77,
@@ -272,6 +273,8 @@ def test_process_text_input_ignores_stale_requested_chat(monkeypatch):
 
 def test_process_text_input_preserves_full_request_until_loop_is_ready(monkeypatch):
     monkeypatch.setattr(command_handler, "_chat_id_exists_for_input", lambda _chat_id: True)
+    hot_swap = MagicMock()
+    monkeypatch.setattr(command_handler, "_cmd_current_chat_changed", hot_swap)
     chat_manager = MagicMock()
     llm_service = MagicMock()
     llm_service._speaker_enabled = True
@@ -294,4 +297,5 @@ def test_process_text_input_preserves_full_request_until_loop_is_ready(monkeypat
 
     command_handler._cmd_process_text_input(session, params)
 
+    hot_swap.assert_called_once_with(session, {"chat_id": 77})
     assert session._pending_text_inputs == [params]

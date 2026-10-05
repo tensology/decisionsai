@@ -678,33 +678,7 @@ def _apply_requested_chat_for_input(session, params):
         return None
 
     session._agent_current_chat_id_from_signal = chat_id
-    current_chat_id = None
-    if getattr(session, 'chat_manager', None) is not None:
-        try:
-            current_chat_id = session.chat_manager.get_current_chat()
-        except Exception:
-            current_chat_id = None
-        if current_chat_id != chat_id:
-            try:
-                session.chat_manager.set_current_chat(chat_id)
-            except Exception as exc:
-                session.logger.warning(
-                    "process_text_input: failed to set current chat %s: %s",
-                    chat_id,
-                    exc,
-                )
-
-    if current_chat_id != chat_id and getattr(session, 'llm_service', None) is not None:
-        if hasattr(session.llm_service, 'on_chat_changed'):
-            try:
-                session.llm_service.on_chat_changed(chat_id)
-            except Exception as exc:
-                session.logger.warning(
-                    "process_text_input: failed to load chat %s before input: %s",
-                    chat_id,
-                    exc,
-                )
-
+    _cmd_current_chat_changed(session, {"chat_id": chat_id})
     return chat_id
 
 def _cmd_process_text_input(session, params):
