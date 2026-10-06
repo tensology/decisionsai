@@ -42,6 +42,7 @@ class Settings(Base):
 
     restore_position = Column(Boolean, default=True)
     oracle_position = Column(String, default='Middle Right')
+    oracle_visible = Column(Boolean, default=True)
 
     selected_oracle = Column(String, default='0.gif')
 
@@ -688,6 +689,7 @@ try:
                 ("telegram_auto_match_mode", "BOOLEAN DEFAULT 0"),
                 # Load on startup
                 ("load_on_startup", "BOOLEAN DEFAULT 1"),
+                ("oracle_visible", "BOOLEAN DEFAULT 1"),
                 ("default_project_editor", "VARCHAR DEFAULT 'codex'"),
                 ("jira_auto_transition_on_cli_complete", "BOOLEAN DEFAULT 0"),
                 ("jira_auto_transition_target_status", "VARCHAR DEFAULT 'Done'"),

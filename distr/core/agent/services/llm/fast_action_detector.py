@@ -107,7 +107,7 @@ class FastActionDetector:
         # Spoken "bring up" is an open verb, not a generic app-focus.
         # Ticket board / product page / project beat "bring up <remainder>".
         _polite = r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
-        _open = r'(?:open|show|launch|go\s+to|bring\s+up)'
+        _open = r'(?:open(?:\s+up)?|show(?:\s+me)?|pull\s+up|launch|go\s+to|bring\s+up)'
 
         # Action patterns - ordered by specificity (most specific first)
         self.action_patterns = [
@@ -129,7 +129,7 @@ class FastActionDetector:
             (re.compile(
                 _polite + _open + r'\s+(?:the\s+)?(?:decisions\s*ai\s+)?'
                 r'(chat|development|incoming|automations?|terminals?|reports?|'
-                r'web\s*ui|web\s*interface|webui)'
+                r'web\s*ui|web\s*interface|webui|preferences?|settings)'
                 r'(?:\s+(?:web\s*ui|window|page|section|interface))?'
                 r'(?:\s+in\s+(?:brave|chrome|safari|firefox|the\s+browser))?',
                 re.IGNORECASE),
@@ -1315,15 +1315,21 @@ class FastActionDetector:
                                 name = match.group(1)
                         final_args[key] = (name or "").strip().rstrip("?.!,;:").strip()
                     elif value == "__INTERNAL_PAGE_MATCH__":
-                        page = (match.group(1) or "").strip().lower()
-                        final_args[key] = {
-                            "automation": "automations",
-                            "terminal": "terminals",
-                            "report": "reports",
-                            "web ui": "development",
-                            "web interface": "development",
-                            "webui": "development",
-                        }.get(page, page)
+                        from distr.core.agent.tools.chat.open_page import resolve_open_page_key
+
+                        resolved = resolve_open_page_key(text)
+                        if resolved:
+                            final_args[key] = resolved
+                        else:
+                            page = (match.group(1) or "").strip().lower()
+                            final_args[key] = {
+                                "automation": "automations",
+                                "terminal": "terminals",
+                                "report": "reports",
+                                "web ui": "development",
+                                "web interface": "development",
+                                "webui": "development",
+                            }.get(page, page)
                 
                 logger.info(f"FastActionDetector: MATCHED '{text}' -> {action_type.value} (tool: {tool_name}, copy_first: {needs_copy})")
                 

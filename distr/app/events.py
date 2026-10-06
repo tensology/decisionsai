@@ -163,7 +163,7 @@ class EventHandlerMixin:
         elif event in ('chat_stream_started', 'chat_stream_token',
                         'chat_stream_finished', 'chat_stream_error',
                         'typing_indicator_changed', 'chat_message_added',
-                        'transcription_progress'):
+                        'transcription_progress', 'tool_executed'):
             self._evt_chat_stream(event, data)
 
         # --- Actions ---
@@ -608,6 +608,9 @@ class EventHandlerMixin:
         oracle = getattr(self, 'oracle_window', None)
         if oracle is None:
             return
+        set_hidden_tts_active = getattr(oracle, 'set_hidden_tts_active', None)
+        if callable(set_hidden_tts_active):
+            set_hidden_tts_active(active)
         dispatcher = getattr(oracle, '_event_dispatcher', None)
         if dispatcher is None:
             return
@@ -807,6 +810,11 @@ class EventHandlerMixin:
                     self.telegram_manager._stop_typing_loop()
                 except Exception:
                     pass
+        elif event == 'tool_executed':
+            try:
+                signal_manager.tool_executed.emit(data)
+            except Exception:
+                logger.debug("tool_executed relay failed", exc_info=True)
         elif event == 'chat_message_added':
             signal_manager.chat_message_added.emit(
                 data.get('chat_id'),
@@ -1746,7 +1754,7 @@ class EventHandlerMixin:
                     if platform.system() == "Darwin":
                         screen_geo = screen.geometry()
                         result = subprocess.run(
-                            ['screencapture', '-R',
+                            ['screencapture', '-x', '-R',
                              f"{screen_geo.left()},{screen_geo.top()},{screen_geo.width()},{screen_geo.height()}",
                              str(screenshot_file)],
                             capture_output=True, timeout=10,

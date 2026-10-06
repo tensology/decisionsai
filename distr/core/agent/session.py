@@ -1014,7 +1014,7 @@ class AgentSession:
     def _on_dictation_hotkey_pressed(self):
         try:
             if self.llm_service and hasattr(self.llm_service, '_start_dictation'):
-                self.llm_service._start_dictation(one_shot=False)
+                self.llm_service._start_dictation(one_shot=False, output_mode="context")
         except Exception as e:
             self.logger.debug("Dictation hotkey press failed: %s", e)
 

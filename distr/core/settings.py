@@ -49,6 +49,7 @@ DEFAULT_SETTINGS = {
     'default_project_editor': 'codex',
     'always_confirm_file_operations': True,
     'restore_position': True,
+    'oracle_visible': True,
     'selected_oracle': 'oracle',
     'sphere_size': 180,
     'playback_speed': 1.0,

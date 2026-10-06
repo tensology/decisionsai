@@ -106,6 +106,20 @@ def test_talking_state_follows_tts_and_clears_stale_bubble():
     bubble.hide_bubble.assert_called_once()
 
 
+def test_hidden_oracle_receives_pointer_speaking_state_without_avatar_animation():
+    app = _App()
+    dispatcher = MagicMock()
+    app.oracle_window = MagicMock(
+        oracle_visible=False,
+        _event_dispatcher=dispatcher,
+    )
+
+    app._set_oracle_talking(True, "tts_started")
+
+    app.oracle_window.set_hidden_tts_active.assert_called_once_with(True)
+    dispatcher.fire_hook.assert_not_called()
+
+
 def test_player_close_forces_idle_after_talking_reveals_stale_thinking():
     app = _App()
     dispatcher = MagicMock()

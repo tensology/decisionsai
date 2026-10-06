@@ -12,6 +12,9 @@ from pynput.keyboard import Key
 
 logger = logging.getLogger(__name__)
 
+# ponytail: one size cutoff. Newlines count as large because a bare Enter submits the field.
+_PASTE_CHAR_THRESHOLD = 180
+
 # Global keyboard controller (lazy initialization)
 _keyboard_controller = None
 
@@ -173,6 +176,88 @@ def _type_text_with_shift_enter(text: str) -> bool:
         return False
 
 
+def should_paste_text(text: str) -> bool:
+    """Large or multi-line blobs are pasted. Keystrokes would hit Enter and submit early."""
+    if not text:
+        return False
+    if "\n" in text or "\r" in text:
+        return True
+    return len(text) >= _PASTE_CHAR_THRESHOLD
+
+
+def _set_clipboard(text: str) -> bool:
+    system = platform.system()
+    payload = text if text is not None else ""
+    try:
+        if system == "Darwin":
+            result = subprocess.run(["pbcopy"], input=payload, text=True, timeout=5)
+            return result.returncode == 0
+        if system == "Windows":
+            result = subprocess.run(
+                ["powershell", "-command", "Set-Clipboard"],
+                input=payload,
+                text=True,
+                timeout=5,
+            )
+            return result.returncode == 0
+        for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+            try:
+                result = subprocess.run(cmd, input=payload, text=True, timeout=5)
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception as e:
+        logger.error("Dictation: Could not set clipboard for paste: %s", e)
+        return False
+
+
+def _send_paste_shortcut() -> bool:
+    system = platform.system()
+    if system == "Darwin":
+        script = (
+            'tell application "System Events"\n'
+            '  keystroke "v" using command down\n'
+            'end tell\n'
+        )
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            logger.warning("Dictation: Paste shortcut failed: %s", (result.stderr or "").strip())
+            return False
+        return True
+    controller = _get_keyboard_controller()
+    if not controller:
+        return False
+    modifier = Key.ctrl
+    try:
+        with controller.pressed(modifier):
+            controller.press("v")
+            controller.release("v")
+        return True
+    except Exception as e:
+        logger.error("Dictation: Paste shortcut failed: %s", e)
+        return False
+
+
+def paste_text_blob(text: str) -> bool:
+    """Put the whole blob on the clipboard and paste it. Never presses Enter."""
+    if text is None:
+        return False
+    if not _set_clipboard(text):
+        return False
+    time.sleep(0.05)
+    if not _send_paste_shortcut():
+        return False
+    logger.info("Dictation: Pasted text blob (%d characters), no enter", len(text))
+    return True
+
+
 def insert_text(
     text: str,
     *,
@@ -188,6 +273,14 @@ def insert_text(
     """
     if not text:
         return True
+    if should_paste_text(text):
+        if paste_text_blob(text):
+            return True
+        logger.warning("Dictation: Paste failed; inserting with Shift+Enter and no bare Enter")
+        if platform.system() == "Darwin":
+            if _instant_type_text_macos_shift_enter(text):
+                return True
+        return _type_text_with_shift_enter(text)
     if newline_mode == "shift_enter":
         if platform.system() == "Darwin":
             success = _instant_type_text_macos_shift_enter(text)

@@ -1016,7 +1016,7 @@ def _cmd_push_to_talk_stop(session, params):
 
 
 def _cmd_dictation_hotkey_pressed(session, params):
-    """Hold-to-dictate: capture audio like PTT, route transcript to typing (not chat).
+    """Hold-to-dictate: put the transcript in chat as context. Do not call the LLM.
 
     GUI emits Qt signals; agent runs in a subprocess so we bridge via command_queue only.
     """
@@ -1032,7 +1032,7 @@ def _cmd_dictation_hotkey_pressed(session, params):
     # Enable STT dictation flag before capture so short utterances stay in typing mode.
     _cmd_set_dictating(session, {"enabled": True})
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
-        session.llm_service._start_dictation(one_shot=False)
+        session.llm_service._start_dictation(one_shot=False, output_mode="context")
     _cmd_push_to_talk_start(session, dictation_params)
 
 

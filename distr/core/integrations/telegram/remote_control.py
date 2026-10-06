@@ -1766,7 +1766,7 @@ class TelegramRemoteControlMixin:
                     )
                     if result.returncode != 0 or not os.path.exists(png_tmp_path):
                         result = subprocess.run(
-                            ["screencapture", "-R", f"{x},{y},{width},{height}", png_tmp_path],
+                            ["screencapture", "-x", "-R", f"{x},{y},{width},{height}", png_tmp_path],
                             capture_output=True, timeout=10,
                         )
                     if os.path.exists(png_tmp_path) and os.path.getsize(png_tmp_path) > 0:

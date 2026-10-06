@@ -1177,11 +1177,46 @@
     border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.activity-step-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+}
+
+.activity-step-copy {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: rgba(226, 232, 240, 0.55);
+    cursor: pointer;
+}
+
+.activity-step-copy:hover,
+.activity-step-copy.is-copied {
+    color: rgba(255, 255, 255, 0.92);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.activity-step-copy-source {
+    display: none;
+}
+
 .activity-step-toggle {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
+    width: auto;
     min-height: 24px;
     padding: 0;
     margin: 0;

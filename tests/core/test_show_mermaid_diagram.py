@@ -102,7 +102,45 @@ def test_open_chat_window_is_deterministically_routed_to_internal_page_tool():
         "open the chat window",
         "Open Chat in Brave",
         "please launch the DecisionsAI chat web UI in Brave",
+        "open the chat web ui",
+        "open up the chat web ui",
+        "show me the chat web ui",
+        "open the web ui chat",
     ):
         action = detect_fast_action(command)
-        assert action.tool_name == "open_page"
-        assert action.tool_args == {"page": "chat"}
+        assert action.tool_name == "open_page", command
+        assert action.tool_args == {"page": "chat"}, command
+
+
+def test_open_chat_web_ui_does_not_fall_through_to_preferences(monkeypatch):
+    from distr.core.agent.services.llm.fast_action_detector import detect_fast_action
+    from distr.core.agent.tools.chat.open_page import OpenPageTool
+
+    bare_web_ui = detect_fast_action("open the web ui")
+    assert bare_web_ui.tool_name == "open_page"
+    assert bare_web_ui.tool_args == {"page": "web ui"}
+
+    preferences = detect_fast_action("open the preferences")
+    assert preferences.tool_name == "open_page"
+    assert preferences.tool_args == {"page": "preferences"}
+
+    opened = []
+    monkeypatch.setattr(
+        "distr.core.agent.tools.chat.open_page.OpenPageTool._resolve_web_base_url",
+        lambda self: "http://127.0.0.1:8765",
+    )
+    monkeypatch.setattr(
+        "distr.core.agent.tools.chat.open_page.webbrowser.open",
+        lambda url: opened.append(url) or True,
+    )
+    tool = OpenPageTool()
+    tool._run(page="open the chat web ui")
+    tool._run(page="chat web ui")
+    tool._run(page="web ui")
+    assert opened == [
+        "http://127.0.0.1:8765/chat/",
+        "http://127.0.0.1:8765/chat/",
+        "http://127.0.0.1:8765/development/",
+    ]
+    missed = tool._run(page="not a real page")
+    assert missed.startswith("Unknown page")

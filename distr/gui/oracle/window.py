@@ -17,6 +17,7 @@ from distr.gui.oracle.event_dispatcher import EventHookDispatcher
 from distr.gui.oracle.file_drop import FileDropMixin
 from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
 from distr.gui.oracle.glow_engine import GlowEngine
+from distr.gui.oracle.hidden_voice_indicator import HiddenVoiceIndicator
 from distr.gui.oracle.menu import MenuTrayMixin
 from distr.gui.oracle.lifecycle import LifecycleMixin
 from distr.gui.oracle.render_strategy import create_renderer
@@ -264,7 +265,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if current_chat_id:
             QTimer.singleShot(0, lambda: self.update_chat_id_menu(current_chat_id))
 
-        self.oracle_visible = True
+        self.oracle_visible = self.settings.get('oracle_visible', True)
+        self._hidden_tts_active = False
+        self._hidden_voice_indicator = HiddenVoiceIndicator()
         
         # ── SKIN-DRIVEN COMPONENTS ──────────────────────────────────────
         # Active skin config (loaded from skin.json)
@@ -324,9 +327,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         signal_manager.oracle_position_changed.connect(self.handle_position_change)
         # signal_manager.sphere_size_changed.connect(self.update_sphere_size)
 
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        if self.oracle_visible:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        else:
+            self._hidden_voice_indicator.set_oracle_hidden(True)
+            self._sync_hidden_voice_indicator()
         
         # On macOS, ensure the window stays on top using NSWindow level
         # Qt's WindowStaysOnTopHint can lose effect when other apps go fullscreen
@@ -597,6 +604,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         fires a hook, we look up the Event_Response and apply all its fields:
         animation, glow, show_player, show_chat_bubble.
         """
+        self._sync_hidden_voice_indicator(new_hook)
         if self._skin_config is None:
             return
 
@@ -2336,6 +2344,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def show_oracle(self):
         self.oracle_visible = True
+        self.settings['oracle_visible'] = True
+        save_settings_to_db({'oracle_visible': True})
+        self._hidden_voice_indicator.set_oracle_hidden(False)
         logger.debug(f"Oracle shown. self.isVisible(): {self.isVisible()}, oracle_visible: {self.oracle_visible}")
         QTimer.singleShot(0, self.show)
         QTimer.singleShot(0, self.gif_label.show)
@@ -2344,6 +2355,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             QTimer.singleShot(100, self._ensure_macos_on_top)
         # Position player window after oracle is shown and settled
         QTimer.singleShot(500, self._position_player_after_show)
+
+    def showEvent(self, event):
+        """Keep cursor feedback mutually exclusive with the visible Oracle."""
+        super().showEvent(event)
+        self._suppress_hidden_voice_indicator()
+
+    def _suppress_hidden_voice_indicator(self) -> None:
+        """Hide cursor feedback whenever the Oracle is actually visible."""
+        self._hidden_voice_indicator.set_oracle_hidden(False)
+        self._hidden_voice_indicator.set_state(None)
 
     def _ensure_macos_on_top(self):
         """Use NSWindow API to force floating window level on macOS."""
@@ -2391,6 +2412,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def hide_oracle(self):
         self.oracle_visible = False
+        self.settings['oracle_visible'] = False
+        save_settings_to_db({'oracle_visible': False})
+        self._hidden_voice_indicator.set_oracle_hidden(True)
+        self._sync_hidden_voice_indicator()
         logger.debug(f"Oracle hidden. self.isVisible(): {self.isVisible()}, oracle_visible: {self.oracle_visible}")
         if hasattr(self, '_chat_bubble'):
             self._chat_bubble.hide_bubble()
@@ -2401,6 +2426,28 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 self.player_window.hide()
         QTimer.singleShot(0, self.hide)
         QTimer.singleShot(10, self.update_menu)
+
+    def set_hidden_tts_active(self, active: bool) -> None:
+        """Track audible speech without reopening a hidden Oracle."""
+        self._hidden_tts_active = active
+        self._sync_hidden_voice_indicator()
+
+    def _sync_hidden_voice_indicator(self, hook: str | None = None) -> None:
+        """Show voice feedback beside the pointer only while the Oracle is hidden."""
+        if self.oracle_visible or self.isVisible():
+            self._suppress_hidden_voice_indicator()
+            return
+
+        current_hook = hook or self._event_dispatcher.get_current_hook()
+        if current_hook == "ptt_active":
+            state = "listening"
+        elif self._hidden_tts_active:
+            state = "speaking"
+        elif current_hook == "thinking":
+            state = "thinking"
+        else:
+            state = "idle"
+        self._hidden_voice_indicator.set_state(state)
 
     # Standard window size for settings/about dialogs
     STANDARD_WINDOW_WIDTH = 1000

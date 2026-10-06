@@ -1179,11 +1179,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     
     def _continue_startup_after_eula(self):
         """Continue with normal startup flow after EULA and device selection."""
-        # Show oracle window now that EULA is accepted and devices are selected
-        logger.info("Showing oracle window after EULA acceptance and device selection")
+        # Restore the user's Oracle visibility after EULA and device selection.
         # Update menu before showing to ensure all items are enabled
         self.oracle_window.update_menu()
-        self.oracle_window.show()
+        if self.oracle_window.oracle_visible:
+            logger.info("Showing oracle window after EULA acceptance and device selection")
+            self.oracle_window.show()
+        else:
+            logger.info("Keeping oracle window hidden from saved visibility setting")
 
         if is_dock_app():
             self._show_startup_splash_if_needed()

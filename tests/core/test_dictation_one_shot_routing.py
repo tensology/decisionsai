@@ -70,7 +70,7 @@ def test_dictation_hotkey_starts_hold_mode_before_capture():
         "def _cmd_ticket_dictation_hotkey_pressed", 1
     )[0]
     assert '_cmd_set_dictating(session, {"enabled": True})' in block
-    assert "_start_dictation(one_shot=False)" in block
+    assert '_start_dictation(one_shot=False, output_mode="context")' in block
     assert "_one_shot_dictation_armed = True" not in block
     assert "_start_dictation(one_shot=True)" not in block
     assert "for_dictation" in block

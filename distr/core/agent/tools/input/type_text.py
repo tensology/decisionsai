@@ -20,11 +20,17 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 try:
-    from distr.core.audio.dictation import type_text
+    from distr.core.audio.dictation import insert_text, should_paste_text, type_text
 except Exception:
     def type_text(text: str, delay: float = 0.01):
         logger.error("TypeText: pynput/dictation backend is not available")
         return False
+
+    def should_paste_text(text: str) -> bool:
+        return False
+
+    def insert_text(text: str, **kwargs) -> bool:
+        return type_text(text)
 
 
 def get_clipboard_content() -> Optional[str]:
@@ -290,12 +296,17 @@ class TypeTextTool(BaseTool):
             if not text_to_type or not text_to_type.strip():
                 return "Error: No text to type. Please provide text in quotes, brackets, or use 'type from clipboard'."
             
-            # Type the text using dictation utils
-            logger.info(f"TypeText: Typing {len(text_to_type)} characters as keyboard input")
-            success = type_text(text_to_type)
+            # Large or multi-line text is pasted. Typing would send Enter and submit early.
+            logger.info(f"TypeText: Delivering {len(text_to_type)} characters")
+            if should_paste_text(text_to_type):
+                success = insert_text(text_to_type, press_enter=False)
+                verb = "Pasted"
+            else:
+                success = type_text(text_to_type)
+                verb = "Typed"
             
             if success:
-                return f"Typed {len(text_to_type)} characters as keyboard input."
+                return f"{verb} {len(text_to_type)} characters as keyboard input."
             else:
                 return f"Error: Failed to type text. Please check logs for details."
             

@@ -142,6 +142,67 @@ def test_empty_completed_ptt_reports_no_speech_and_clears_authorization(monkeypa
     }) in harness.event_queue.items
 
 
+def test_context_dictation_feeds_chat_and_still_types(monkeypatch):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+
+    harness = _Harness()
+    harness._dictation_output_mode = "context"
+    recorded = []
+
+    def _record(chat_id, note):
+        recorded.append((chat_id, note))
+        return {"id": "tool-1", "tool_name": "context_note", "chat_id": chat_id, "title": "Context"}
+
+    monkeypatch.setattr(
+        "distr.core.agent.tool_audit.record_context_note",
+        _record,
+    )
+
+    asyncio.run(harness.process_frame(
+        _FakeTranscriptionFrame("looking at the invoice, the tax is doubled"),
+        None,
+    ))
+
+    assert harness.typed == ["looking at the invoice, the tax is doubled"]
+    assert harness.pushed == []
+    assert recorded == [(123, "looking at the invoice, the tax is doubled")]
+    assert harness._injected_context_notes == ["looking at the invoice, the tax is doubled"]
+    assert harness._messages == []
+    assert harness._is_dictating is True
+    assert harness.event_queue.items[-1][0] == "tool_executed"
+    assert harness.event_queue.items[-1][1]["tool_name"] == "context_note"
+
+
+def test_context_dictation_question_is_not_answered(monkeypatch):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+
+    harness = _Harness()
+    harness._dictation_output_mode = "context"
+    recorded = []
+    monkeypatch.setattr(
+        "distr.core.agent.tool_audit.record_context_note",
+        lambda chat_id, note: recorded.append(note) or {"id": "tool-2", "chat_id": chat_id},
+    )
+
+    async def _generate():
+        harness.generated = True
+
+    harness._generate_response = _generate
+    harness.generated = False
+
+    asyncio.run(harness.process_frame(_FakeTranscriptionFrame("what is the tax?"), None))
+
+    assert harness.typed == ["what is the tax?"]
+    assert harness.pushed == []
+    assert harness.generated is False
+    assert harness._is_dictating is True
+    assert recorded == ["what is the tax?"]
+
+
 def test_stt_error_completed_ptt_reports_failure_and_clears_authorization(monkeypatch):
     import distr.core.agent.libs as libs
 

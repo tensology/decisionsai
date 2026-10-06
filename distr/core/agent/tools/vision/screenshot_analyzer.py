@@ -646,7 +646,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                     import subprocess, time
                     geo = target.geometry()
                     result = subprocess.run(
-                        ['screencapture', '-R',
+                        ['screencapture', '-x', '-R',
                          f"{geo.left()},{geo.top()},{geo.width()},{geo.height()}", path],
                         capture_output=True, timeout=10,
                     )
@@ -736,7 +736,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                             import subprocess, time
                             coord = f"{geo.left()},{geo.top()},{geo.width()},{geo.height()}"
                             r = subprocess.run(
-                                ['screencapture', '-R', coord, path],
+                                ['screencapture', '-x', '-R', coord, path],
                                 capture_output=True, timeout=10,
                             )
                             time.sleep(0.2)
@@ -773,7 +773,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                         if platform.system() == "Darwin":
                             import subprocess
                             r = subprocess.run(
-                                ['screencapture', '-R',
+                                ['screencapture', '-x', '-R',
                                  f"{geo.left()},{geo.top()},{geo.width()},{geo.height()}", path],
                                 capture_output=True, timeout=10,
                             )

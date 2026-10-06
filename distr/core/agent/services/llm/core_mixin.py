@@ -1704,6 +1704,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if reflection:
                 content = f"{content}\n\n{reflection}"
 
+        injected = self._injected_context_prompt(chat_id)
+        if injected:
+            content = f"{content}\n\n{injected}"
+
         if chat_id:
             try:
                 from distr.core.chat import get_compact_checkpoint_prompt
@@ -1719,6 +1723,29 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 )
 
         return {"role": "system", "content": content}
+
+    def _injected_context_prompt(self, chat_id=None) -> str:
+        """Background notes from context dictation. Not a turn to answer."""
+        notes = getattr(self, "_injected_context_notes", None)
+        if notes is None and chat_id:
+            try:
+                from distr.core.agent.tool_audit import load_context_notes
+
+                notes = load_context_notes(int(chat_id))
+                self._injected_context_notes = notes
+            except Exception:
+                logger.debug("Could not load injected context notes", exc_info=True)
+                notes = []
+        cleaned = [str(note).strip() for note in (notes or []) if str(note).strip()]
+        if not cleaned:
+            return ""
+        lines = "\n".join(f"- {note}" for note in cleaned[-40:])
+        return (
+            "Background context the user injected while working. "
+            "Do not reply to it and do not mention that it was injected. "
+            "Use it only when they later ask you something.\n"
+            + lines
+        )
 
     @staticmethod
     def _condense_for_local(text: str) -> str:
@@ -1868,6 +1895,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             self._background_chain = None
 
         self._cancelled = False
+        self._injected_context_notes = None
 
         try:
             system_prompt = self._build_system_message(chat_id=chat_id)
@@ -2202,11 +2230,17 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     self._notify_transcription_progress(
                         int(cid), "", False, False, discard_live_preview=True
                     )
-                if not getattr(self, '_dictation_one_shot', False) and self._check_dictation_commands(text_lower, text):
+                if (
+                    getattr(self, "_dictation_output_mode", "") != "context"
+                    and not getattr(self, '_dictation_one_shot', False)
+                    and self._check_dictation_commands(text_lower, text)
+                ):
                     return
                 self._last_dictation_transcription_mono = time.monotonic()
                 text_to_type = self._process_dictation_text(text)
                 if text_to_type:
+                    if getattr(self, "_dictation_output_mode", "") == "context":
+                        self._feed_dictation_context(text_to_type)
                     await self._type_dictation_text(text_to_type)
                 self._one_shot_dictation_armed = False
                 release_pending = getattr(self, '_dictation_release_pending', False)

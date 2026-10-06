@@ -236,6 +236,9 @@ def capture_all_screens(output_dir: str) -> list:
                     else:
                         logger.warning("QApplication.screens() not available")
 
+                    if screenshot_paths:
+                        return screenshot_paths
+
                     try:
                         result = subprocess.run(
                             ['system_profiler', 'SPDisplaysDataType'],
@@ -246,7 +249,7 @@ def capture_all_screens(output_dir: str) -> list:
 
                         screenshot_path = os.path.join(output_dir, "screen_1.png")
                         result = subprocess.run(
-                            ['screencapture', screenshot_path],
+                            ['screencapture', '-x', screenshot_path],
                             capture_output=True, timeout=10,
                         )
                         if result.returncode == 0 and os.path.exists(screenshot_path):
@@ -256,7 +259,7 @@ def capture_all_screens(output_dir: str) -> list:
                         logger.warning(f"Error detecting displays: {e}")
                         screenshot_path = os.path.join(output_dir, "screen_1.png")
                         result = subprocess.run(
-                            ['screencapture', screenshot_path],
+                            ['screencapture', '-x', screenshot_path],
                             capture_output=True, timeout=10,
                         )
                         if result.returncode == 0 and os.path.exists(screenshot_path):
@@ -265,7 +268,7 @@ def capture_all_screens(output_dir: str) -> list:
                 logger.warning("PyQt6 not available, using fallback method")
                 screenshot_path = os.path.join(output_dir, "screen_1.png")
                 result = subprocess.run(
-                    ['screencapture', screenshot_path],
+                    ['screencapture', '-x', screenshot_path],
                     capture_output=True, timeout=10,
                 )
                 if result.returncode == 0 and os.path.exists(screenshot_path):
@@ -379,17 +382,17 @@ def capture_screenshot(output_path: str, region: str = "full") -> bool:
 
             if region == "window":
                 result = subprocess.run(
-                    ['screencapture', '-w', output_path],
+                    ['screencapture', '-x', '-w', output_path],
                     capture_output=True, timeout=10,
                 )
             elif region == "selection":
                 result = subprocess.run(
-                    ['screencapture', '-i', output_path],
+                    ['screencapture', '-x', '-i', output_path],
                     capture_output=True, timeout=30,
                 )
             else:
                 result = subprocess.run(
-                    ['screencapture', output_path],
+                    ['screencapture', '-x', output_path],
                     capture_output=True, timeout=10,
                 )
 

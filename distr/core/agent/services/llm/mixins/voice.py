@@ -223,6 +223,49 @@ class VoiceDictationMixin:
         except Exception as e:
             logger.error("Dictation: Error typing text: %s", e, exc_info=True)
 
+    def _normalize_dictation_output_mode(self, output_mode: str) -> str:
+        if output_mode in ("ticket", "context"):
+            return output_mode
+        return "plain"
+
+    def _feed_dictation_context(self, text: str) -> None:
+        """Store dictated situation as a collapsed chat action. No reply and no TTS.
+
+        ponytail: one collapsed Context action per settled utterance. Fold them
+        into a single rolling note if the list gets noisy.
+        """
+        note = (text or "").strip()
+        if not note:
+            return
+        notes = getattr(self, "_injected_context_notes", None)
+        if notes is None:
+            self._injected_context_notes = []
+            notes = self._injected_context_notes
+        if notes and notes[-1] == note:
+            return
+        notes.append(note)
+        chat_id = None
+        chat_manager = getattr(self, "chat_manager", None)
+        if chat_manager:
+            try:
+                chat_id = chat_manager.get_current_chat()
+            except Exception:
+                chat_id = None
+        event = None
+        if chat_id:
+            try:
+                from distr.core.agent.tool_audit import record_context_note
+
+                event = record_context_note(int(chat_id), note)
+            except Exception:
+                logger.debug("Dictation: context note persist failed", exc_info=True)
+        if event and getattr(self, "event_queue", None):
+            try:
+                self.event_queue.put(("tool_executed", event), block=False)
+            except Exception:
+                logger.debug("Dictation: context note event emit failed", exc_info=True)
+        logger.info("Dictation: injected context (%d characters), no reply", len(note))
+
     def _start_dictation(self, one_shot: bool = False, output_mode: str = "plain"):
         """Start dictation mode.
 
@@ -234,7 +277,7 @@ class VoiceDictationMixin:
             if one_shot:
                 self._dictation_one_shot = True
                 self._one_shot_dictation_armed = True
-            self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
+            self._dictation_output_mode = self._normalize_dictation_output_mode(output_mode)
             self._dictation_ticket_rewrite = output_mode == "ticket"
             return
 
@@ -255,7 +298,7 @@ class VoiceDictationMixin:
         self._dictation_ui_stop_sent = False
         if one_shot:
             self._one_shot_dictation_armed = True
-        self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
+        self._dictation_output_mode = self._normalize_dictation_output_mode(output_mode)
         self._dictation_ticket_rewrite = output_mode == "ticket"
         logger.info(
             "Dictation: Dictation mode started (one_shot=%s, output_mode=%s)",

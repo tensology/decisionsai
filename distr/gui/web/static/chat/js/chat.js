@@ -1877,7 +1877,7 @@ function toolEventName(message) {
 
 function isStandaloneSystemActivity(message) {
     const name = toolEventName(message);
-    return name === 'read_aloud';
+    return name === 'read_aloud' || name === 'context_note';
 }
 
 function shouldEmbedToolInAssistantTurn(toolMessage) {
@@ -3905,6 +3905,24 @@ function bindActivityToggleHandlers() {
     if (!chatMessages || chatMessages.dataset.activityToggleBound === '1') return;
     chatMessages.dataset.activityToggleBound = '1';
     chatMessages.addEventListener('click', (e) => {
+        const copyBtn = e.target.closest('.activity-step-copy');
+        if (copyBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const step = copyBtn.closest('.activity-step');
+            const source = step && step.querySelector('.activity-step-copy-source');
+            const text = source ? source.value : '';
+            if (!text || !navigator.clipboard) return;
+            navigator.clipboard.writeText(text).then(() => {
+                copyBtn.classList.add('is-copied');
+                copyBtn.setAttribute('aria-label', 'Copied');
+                setTimeout(() => {
+                    copyBtn.classList.remove('is-copied');
+                    copyBtn.setAttribute('aria-label', 'Copy transcription');
+                }, 1500);
+            }).catch(() => {});
+            return;
+        }
         const toggle = e.target.closest('.activity-step-toggle');
         if (!toggle) return;
         e.preventDefault();
@@ -4088,20 +4106,32 @@ function activityStepLabel(title, event) {
     if (toolName === 'read_aloud') {
         return String((event && event.title) || title || 'Read aloud').trim();
     }
+    if (toolName === 'context_note') {
+        return 'Context';
+    }
     const short = activityCollapsedActionLabel(title, event);
     return String(short || '').replace(/^system activity:\s*/i, '').trim() || 'Activity';
 }
 
-function buildActivityCollapsibleStep({ timestamp, label, bodyHtml, safeStatus = 'completed', extraClass = '', toolEventId = '' }) {
+function buildActivityCollapsibleStep({ timestamp, label, bodyHtml, safeStatus = 'completed', extraClass = '', toolEventId = '', copyText = '' }) {
     const ts = _formatTimestamp(timestamp || Date.now());
     const eventIdAttr = toolEventId ? ` data-tool-event-id="${escapeHtml(toolEventId)}"` : '';
+    const copyHtml = copyText
+        ? `<button type="button" class="activity-step-copy" aria-label="Copy transcription" title="Copy">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+           </button>
+           <textarea class="activity-step-copy-source" hidden readonly>${escapeHtml(copyText)}</textarea>`
+        : '';
     return `
         <div class="activity-step activity-step--collapsed activity-step--${safeStatus}${extraClass ? ` ${extraClass}` : ''}"${eventIdAttr}>
-            <button type="button" class="activity-step-toggle" aria-expanded="false">
-                <span class="activity-step-time">${ts}</span>
-                <span class="activity-step-label">${escapeHtml(label)}</span>
-                <svg class="activity-step-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-            </button>
+            <div class="activity-step-bar">
+                ${copyHtml}
+                <button type="button" class="activity-step-toggle" aria-expanded="false">
+                    <span class="activity-step-time">${ts}</span>
+                    <span class="activity-step-label">${escapeHtml(label)}</span>
+                    <svg class="activity-step-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+            </div>
             <div class="activity-step-body" hidden>${bodyHtml}</div>
         </div>
     `;
@@ -4214,7 +4244,8 @@ function toolExecutionItemHtml(message) {
         bodyHtml,
         safeStatus,
         extraClass: `${compact ? 'activity-step--compact ' : ''}activity-step--${activityStyle}`.trim(),
-        toolEventId: message.tool_event_id || event.event_id || ''
+        toolEventId: message.tool_event_id || event.event_id || '',
+        copyText: event.tool_name === 'context_note' ? detail : ''
     });
 }
 

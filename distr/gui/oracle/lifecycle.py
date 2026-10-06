@@ -143,6 +143,11 @@ class LifecycleMixin:
         except Exception:
             pass
         try:
+            if hasattr(self, "_hidden_voice_indicator"):
+                self._hidden_voice_indicator.hide()
+        except Exception:
+            pass
+        try:
             if hasattr(self, "player_window") and self.player_window:
                 self.player_window.hide()
         except Exception:

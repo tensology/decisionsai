@@ -405,6 +405,60 @@ def record_chat_settings_change(
     return event
 
 
+def record_context_note(chat_id: Optional[int], note: str) -> Optional[Dict[str, Any]]:
+    """Persist dictated background context as a visible chat action. No speech."""
+    text = (note or "").strip()
+    if not chat_id or not text:
+        return None
+    event = _build_chat_tool_event(
+        int(chat_id),
+        "context_note",
+        text,
+        "completed",
+        "Context",
+        None,
+        None,
+        turn_chat_id=None,
+    )
+    event["chat_visible"] = True
+    event["chat_compact"] = False
+    event["activity_style"] = "passive"
+    if not _persist_chat_tool_event(event):
+        return None
+    try:
+        from distr.core.signals import signal_manager
+
+        signal_manager.tool_executed.emit(event)
+    except Exception as e:
+        logger.debug("context note signal emit failed: %s", e)
+    return event
+
+
+def load_context_notes(chat_id: int) -> list[str]:
+    """Return dictated context notes stored on this chat, oldest first."""
+    try:
+        from distr.core.db import Chat, get_session
+
+        with get_session() as session:
+            chat = session.get(Chat, int(chat_id))
+            if not chat:
+                return []
+            events = _load_params(chat.params).get("tool_events")
+    except Exception:
+        logger.debug("load context notes failed", exc_info=True)
+        return []
+    if not isinstance(events, list):
+        return []
+    notes: list[str] = []
+    for event in events:
+        if not isinstance(event, dict) or event.get("tool_name") != "context_note":
+            continue
+        text = (event.get("result_detail") or event.get("result_summary") or "").strip()
+        if text:
+            notes.append(text)
+    return notes
+
+
 def record_tool_execution(
     chat_id: Optional[int],
     tool_name: str,

@@ -7,6 +7,7 @@ tray context-menu items do.
 """
 
 import logging
+import re
 import urllib.request
 import webbrowser
 from typing import Any, Optional
@@ -115,6 +116,45 @@ _KNOWN_PAGES = ", ".join(sorted({
 }))
 
 
+def resolve_open_page_key(raw: str) -> Optional[str]:
+    """Pick one known page from a name or a full spoken request.
+
+    "chat web ui" is Chat. A bare "web ui" stays Development.
+    Whole-phrase matches only, longest first, so "preferences" is not
+    chosen just because a shorter alias sits inside another word.
+    """
+    text = re.sub(r"[?.!,]+", " ", (raw or "").lower())
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(
+        r"^(?:(?:can|could|would)\s+you\s+|please\s+)+",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"^(?:open\s+up|open|show\s+me|show|pull\s+up|bring\s+up|go\s+to|launch|pop\s+open|take\s+me\s+to)\s+",
+        "",
+        text,
+    )
+    text = re.sub(r"^(?:the|a|my)\s+", "", text)
+    text = re.sub(
+        r"\s+(?:in|on)\s+(?:brave|chrome|safari|firefox|the\s+browser)$",
+        "",
+        text,
+    ).strip()
+    if not text:
+        return None
+    if re.search(r"\bchat\b", text) and re.search(
+        r"\bweb\s*ui\b|\bwebui\b|\bweb\s+interface\b",
+        text,
+    ):
+        return "chat"
+    for key in sorted(_PAGE_MAP, key=len, reverse=True):
+        pattern = r"\b" + re.escape(key).replace(r"\ ", r"\s+") + r"\b"
+        if re.search(pattern, text):
+            return key
+    return None
+
+
 def _confirmation_for_path(path: str) -> str:
     """Short conversational confirmation for chat/TTS (no URLs — TTS strips http links)."""
     if not path:
@@ -207,14 +247,11 @@ class OpenPageTool(BaseTool):
         if page_lower in ("new chat", "new conversation"):
             return self._handle_new_chat()
 
-        # Look up the path
+        # Exact alias, then a whole-phrase match. No substring guessing.
         path = _PAGE_MAP.get(page_lower)
         if not path:
-            # Fuzzy: check if any key starts with or contains the input
-            for key, val in _PAGE_MAP.items():
-                if page_lower in key or key in page_lower:
-                    path = val
-                    break
+            key = resolve_open_page_key(page)
+            path = _PAGE_MAP.get(key) if key else None
 
         if not path:
             return (
