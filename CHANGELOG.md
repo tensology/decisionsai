@@ -40,10 +40,6 @@ Dictation writes into the active app more reliably, media commands follow the sa
 
 The shipped skill catalogue now includes a broader design, accessibility, frontend, animation, and product-quality pack. Bootstrap and harness setup keep those skills available to Codex and Cursor without repeatedly copying or losing them, while Development threads record the skills and model route used for the work.
 
-### Phone and messaging links are more durable
-
-The Decisions website, installer, relay, remote sessions, Telegram links, WhatsApp links, WebSocket connections, and mobile endpoints now use `https://decisions.tensology.com`. Mobile pairing has a stable device channel and an idle expiry, WhatsApp connection handling is more reliable, and old domains continue to redirect so existing links do not break.
-
 ### DecisionsAI is openly licensed
 
 The application is now under the MIT License. The old revenue threshold, non-compete language, and standalone resale restriction are gone. The website and relay retain separate terms for the hosted service, with privacy language written for South African law and the way the product actually moves data.
