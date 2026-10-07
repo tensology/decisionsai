@@ -535,6 +535,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         if platform.system() == 'Darwin' and APPKIT_AVAILABLE:
             ensure_macos_dock_visible(self)
             self._set_macos_dock_icon()
+            self._install_macos_wake_observer()
             QTimer.singleShot(0, lambda: ensure_macos_dock_visible(self))
             QTimer.singleShot(1500, lambda: ensure_macos_dock_visible(self))
         configure_qt_dock_identity(self)
@@ -764,9 +765,49 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         except Exception as e:
             logger.error("Failed to show action naming popup: %s", e, exc_info=True)
     
-    def check_audio_device_changes(self):
+    def _install_macos_wake_observer(self):
+        """Reopen voice IO after the lid opens, in whatever mode is already on."""
+        try:
+            from AppKit import NSWorkspace
+            from Foundation import NSObject
+        except Exception as exc:
+            logger.warning("Could not install macOS wake observer: %s", exc)
+            return
+
+        app = self
+
+        class _WakeObserver(NSObject):
+            def onWake_(self, _notification):
+                QTimer.singleShot(0, app._on_system_wake)
+
+        observer = _WakeObserver.alloc().init()
+        # The notification center does not retain the observer.
+        self._macos_wake_observer = observer
+        NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
+            observer,
+            "onWake:",
+            "NSWorkspaceDidWakeNotification",
+            None,
+        )
+        logger.info("Installed macOS wake observer")
+
+    def _on_system_wake(self):
+        logger.info("macOS woke; restoring the current voice session")
+        # CoreAudio is not ready in the same turn as the wake notification.
+        QTimer.singleShot(1000, self._restore_voice_after_wake)
+
+    def _restore_voice_after_wake(self):
+        if getattr(self, "_quitting", False):
+            return
+        try:
+            self.check_audio_device_changes(force=True)
+        except Exception:
+            logger.exception("Audio device check after wake failed")
+        self._send_command_to_agent("resume_after_wake", {})
+
+    def check_audio_device_changes(self, force: bool = False):
         """Check for audio device changes using a background thread."""
-        if not self._device_check_enabled:
+        if not self._device_check_enabled and not force:
             return
 
         if not hasattr(self, 'oracle_window') or not self.oracle_window:
@@ -782,7 +823,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             or is_system_default_device_name(settings.get('output_device'))
         )
 
-        if lock_sound_enabled and (locked_input or locked_output):
+        if force:
+            pass  # Lid open: always re-read the device list
+        elif lock_sound_enabled and (locked_input or locked_output):
             pass  # Remember my Audio Settings: restore named devices when they reappear
         elif has_locked_lists:
             pass  # Keep merged device lists fresh for the web UI

@@ -109,7 +109,11 @@ def test_hold_dictation_release_posts_single_ui_stop():
 
 
 def test_only_large_dictation_uses_loading_state(monkeypatch):
-    monkeypatch.setattr("distr.core.audio.dictation.insert_text", lambda *_args, **_kwargs: True)
+    calls = []
+    monkeypatch.setattr(
+        "distr.core.audio.dictation.insert_text",
+        lambda text, **kwargs: calls.append((text, kwargs)) or True,
+    )
     dummy = DummyLifecycleDictation()
 
     asyncio.run(dummy._type_dictation_text("short text"))
@@ -120,6 +124,7 @@ def test_only_large_dictation_uses_loading_state(monkeypatch):
         ("dictation_processing_started", {}),
         ("dictation_processing_finished", {}),
     ]
+    assert all(kwargs["instant"] is True for _text, kwargs in calls)
 
 
 def test_ticket_rewrite_only_runs_for_one_shot_when_enabled(monkeypatch):

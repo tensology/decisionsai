@@ -503,8 +503,46 @@ def brief_tool_completion_message(tool_name: Optional[str]) -> str:
         "stop_action": "Stopped the action.",
         "pause_action": "Paused the action.",
         "resume_action": "Resumed the action.",
+        "media_control": "I've handled the media control.",
+        "oracle_control": "I've updated the avatar.",
+        "start_project": "I've started that project.",
+        "google_workspace": "I've completed that Google Workspace action.",
     }
     return table.get(key, "The action completed.")
+
+
+def humanize_tool_completion(tool_name: Optional[str], result: object) -> Optional[str]:
+    """Turn known machine acknowledgements into short user-facing responses."""
+    key = (tool_name or "").strip().lower()
+    raw = str(result or "").strip()
+    lowered = raw.lower()
+    if not raw:
+        return None
+    if lowered in {"done", "the action completed", "the action completed."}:
+        return brief_tool_completion_message(key)
+    if key == "type_text" and re.match(r"^(typed|pasted) \d+ characters", lowered):
+        return brief_tool_completion_message(key)
+    if key in {"rework_clipboard", "summarize_clipboard"} and re.match(
+        r"^(reworked|summarized) \d+ characters", lowered
+    ):
+        return brief_tool_completion_message(key)
+    if key == "open_page" and lowered.startswith(("opened url:", "opened ", "successfully opened")):
+        return brief_tool_completion_message(key)
+    if key == "oracle_control":
+        if "hide" in lowered:
+            return "I've hidden the avatar."
+        if "show" in lowered:
+            return "I've shown the avatar."
+    if key == "media_control":
+        if "nexttrack" in lowered or "next track" in lowered:
+            return "I've skipped to the next track."
+        if "previoustrack" in lowered or "previous track" in lowered:
+            return "I've gone back to the previous track."
+        if "playpause" in lowered or "play/pause" in lowered:
+            return "I've toggled playback."
+    if key == "google_workspace" and "event created successfully" in lowered:
+        return "I've added that to your calendar."
+    return None
 
 
 def normalize_text(text: str) -> str:

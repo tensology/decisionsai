@@ -17,7 +17,11 @@ import time
 from typing import Optional
 
 from distr.core.signals import signal_manager
-from distr.core.agent.services.llm.text_utils import brief_tool_completion_message, clean_text_for_tts
+from distr.core.agent.services.llm.text_utils import (
+    brief_tool_completion_message,
+    clean_text_for_tts,
+    humanize_tool_completion,
+)
 from distr.core.agent.services.llm.tool_execution_policy import (
     remember_successful_tool_call,
     sanitized_tool_arguments,
@@ -411,17 +415,13 @@ class FastActionMixin:
             else:
                 response_text = "Cursor handoff created"
         else:
-            response_text = brief_tool_completion_message(getattr(tool, "name", ""))
-            if result and isinstance(result, str) and not is_error:
-                r = result.strip()
-                if getattr(tool, "name", None) == "open_page" and not r.startswith("{"):
-                    response_text = r
-                elif getattr(tool, "name", None) == "media_control":
-                    response_text = r
-                elif getattr(tool, "name", None) == "start_project":
-                    response_text = r
-                elif len(r) < 100 and "pasted" not in r.lower() and "Playing" in r:
-                    response_text = r
+            tool_name = getattr(tool, "name", "")
+            response_text = (
+                humanize_tool_completion(tool_name, result)
+                or brief_tool_completion_message(tool_name)
+            )
+            if tool_name == "start_project" and isinstance(result, str) and result.strip():
+                response_text = result.strip()
 
         if is_silent and not is_error:
             # Tool requested silence — push end frame without speaking so the

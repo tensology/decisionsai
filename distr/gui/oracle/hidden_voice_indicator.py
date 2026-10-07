@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import ctypes
 import math
 import platform
 import time
 
 from PyQt6 import QtCore, QtGui, QtWidgets
+
+
+def _macos_cursor_visible() -> bool:
+    """True when macOS is drawing the system pointer.
+
+    The pointer hides after idle, and Qt still reports the last coordinates.
+    """
+    try:
+        core_graphics = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+        )
+        core_graphics.CGCursorIsVisible.restype = ctypes.c_bool
+        return bool(core_graphics.CGCursorIsVisible())
+    except Exception:
+        return True
 
 
 class HiddenVoiceIndicator(QtWidgets.QWidget):
@@ -48,22 +64,39 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
         self._started_at = time.monotonic()
         self._sync_visibility()
 
+    def _system_cursor_visible(self) -> bool:
+        if platform.system() != "Darwin":
+            return True
+        return _macos_cursor_visible()
+
     def _sync_visibility(self) -> None:
-        should_show = self._oracle_hidden and self._state is not None
+        tracking = self._oracle_hidden and self._state is not None
+        should_show = tracking and self._system_cursor_visible()
+        if tracking:
+            # Keep ticking while the system pointer is hidden so the mark
+            # returns on the next mouse move. Do not restart from inside
+            # the timeout; Qt can crash if start() runs on the active timer.
+            if not self._timer.isActive():
+                self._timer.start()
+        else:
+            self._timer.stop()
         if should_show:
             self._move_beside_pointer()
             if not self.isVisible():
                 self.show()
                 self.raise_()
                 self._ensure_macos_overlay_level()
-            self._timer.start()
-        else:
-            self._timer.stop()
+        elif self.isVisible():
             self.hide()
 
     def _tick(self) -> None:
-        self._move_beside_pointer()
-        self.update()
+        self._sync_visibility()
+        if self.isVisible():
+            self.update()
+
+    def closeEvent(self, event) -> None:
+        self._timer.stop()
+        super().closeEvent(event)
 
     def _move_beside_pointer(self) -> None:
         pointer = QtGui.QCursor.pos()

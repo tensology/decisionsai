@@ -166,7 +166,7 @@ def test_media_done_acknowledgement_uses_tool_confirmation():
 
   assert handled is True
   assert service.event_queue == [
-    ("send_to_telegram", "Skipped to the next track."),
+    ("send_to_telegram", "I've skipped to the next track."),
   ]
   assert service.pushed == []
 

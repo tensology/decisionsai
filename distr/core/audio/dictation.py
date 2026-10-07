@@ -88,24 +88,33 @@ def is_instant_dictation_enabled(settings: Optional[dict] = None) -> bool:
 
 
 def _instant_type_text_macos(text: str, press_enter: bool = False) -> bool:
-    """Insert text through System Events without using or mutating the clipboard."""
-    script = (
-        'on run argv\n'
-        '  tell application "System Events"\n'
-        '    keystroke (item 1 of argv)\n'
-        + ('    key code 36\n' if press_enter else '')
-        + '  end tell\n'
-        'end run\n'
+    """Set the focused field's selection directly, without clipboard or simulated typing."""
+    from ApplicationServices import (
+        AXUIElementCopyAttributeValue,
+        AXUIElementCreateSystemWide,
+        AXUIElementSetAttributeValue,
+        kAXErrorSuccess,
+        kAXFocusedUIElementAttribute,
+        kAXSelectedTextAttribute,
     )
-    result = subprocess.run(
-        ["osascript", "-e", script, text],
-        capture_output=True,
-        text=True,
-        timeout=10,
+
+    error, focused = AXUIElementCopyAttributeValue(
+        AXUIElementCreateSystemWide(),
+        kAXFocusedUIElementAttribute,
+        None,
     )
-    if result.returncode != 0:
-        logger.warning("Dictation: Instant macOS insert failed: %s", (result.stderr or "").strip())
+    if error != kAXErrorSuccess or focused is None:
+        logger.warning("Dictation: Could not find the focused macOS text field")
         return False
+    if AXUIElementSetAttributeValue(focused, kAXSelectedTextAttribute, text) != kAXErrorSuccess:
+        logger.warning("Dictation: The focused macOS element does not accept direct text insertion")
+        return False
+    if press_enter:
+        controller = _get_keyboard_controller()
+        if not controller:
+            return False
+        controller.press(Key.enter)
+        controller.release(Key.enter)
     return True
 
 
@@ -273,6 +282,15 @@ def insert_text(
     """
     if not text:
         return True
+    use_instant = is_instant_dictation_enabled(settings) if instant is None else bool(instant)
+    if use_instant:
+        success = instant_type_text(text, press_enter=press_enter)
+        if success:
+            return True
+        if instant is True:
+            logger.error("Dictation: Direct insertion failed; refusing clipboard or typing fallback")
+            return False
+        logger.warning("Dictation: Falling back after instant insert failure")
     if should_paste_text(text):
         if paste_text_blob(text):
             return True
@@ -288,12 +306,6 @@ def insert_text(
                 return True
             logger.warning("Dictation: Falling back to pynput Shift+Enter typing")
         return _type_text_with_shift_enter(text)
-    use_instant = is_instant_dictation_enabled(settings) if instant is None else bool(instant)
-    if use_instant:
-        success = instant_type_text(text, press_enter=press_enter)
-        if success:
-            return True
-        logger.warning("Dictation: Falling back to standard typing after instant insert failure")
     success = type_text(text)
     if success and press_enter:
         controller = _get_keyboard_controller()

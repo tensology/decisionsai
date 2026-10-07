@@ -207,10 +207,31 @@ class OpenAIWhisperSTTService(BaseSTTService):
         self._realtime_connected = False
         logger.info("Disconnected from OpenAI Realtime API")
     
+    async def _reconnect_realtime_if_needed(self):
+        """Open a new transcription socket when hands-free is still on."""
+        if not self._is_hands_free or self._realtime_connected:
+            return
+        await self._connect_realtime()
+
+    def request_realtime_reconnect(self) -> None:
+        """Drop a half-dead socket and connect again without changing mode."""
+        if not self._is_hands_free:
+            return
+        loop = getattr(self, "_event_loop", None)
+        if loop is None or not loop.is_running():
+            return
+        asyncio.run_coroutine_threadsafe(self._force_reconnect_realtime(), loop)
+
+    async def _force_reconnect_realtime(self):
+        await self._disconnect_realtime()
+        if self._is_hands_free:
+            await self._connect_realtime()
+
     async def _realtime_listener(self):
         """Listen for events from OpenAI Realtime API"""
+        ws = self._realtime_ws
         try:
-            async for message in self._realtime_ws:
+            async for message in ws:
                 event = json.loads(message)
                 event_type = event.get("type", "")
                 
@@ -255,9 +276,20 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 
         except asyncio.CancelledError:
             logger.debug("Realtime listener cancelled")
+            raise
         except Exception as e:
             logger.error(f"Realtime listener error: {e}")
-            self._realtime_connected = False
+        if self._realtime_ws is not ws:
+            return
+        self._realtime_connected = False
+        self._realtime_ws = None
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        if self._is_hands_free:
+            await asyncio.sleep(0.25)
+            await self._reconnect_realtime_if_needed()
     
     async def _send_audio_realtime(self, audio_bytes: bytes):
         """Send audio chunk to Realtime API"""
@@ -275,6 +307,8 @@ class OpenAIWhisperSTTService(BaseSTTService):
         except Exception as e:
             logger.warning(f"Failed to send audio to Realtime API: {e}")
             self._realtime_connected = False
+            if self._is_hands_free:
+                asyncio.create_task(self._reconnect_realtime_if_needed())
 
     async def _commit_audio_realtime(self):
         """Commit the current live buffer after DecisionsAI's local VAD ends a turn."""
@@ -287,6 +321,8 @@ class OpenAIWhisperSTTService(BaseSTTService):
         except Exception as e:
             logger.warning(f"Failed to commit audio to Realtime API: {e}")
             self._realtime_connected = False
+            if self._is_hands_free:
+                asyncio.create_task(self._reconnect_realtime_if_needed())
 
     @staticmethod
     def _resample_pcm16_16khz_to_24khz(audio_bytes: bytes) -> bytes:

@@ -15,6 +15,7 @@ from distr.gui.oracle.window import OracleWindow
 def test_indicator_renders_every_hidden_voice_state() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     indicator = HiddenVoiceIndicator()
+    indicator._system_cursor_visible = lambda: True
 
     indicator.set_state("idle")
     assert not indicator.isVisible()
@@ -37,7 +38,33 @@ def test_indicator_renders_every_hidden_voice_state() -> None:
 
     indicator.set_oracle_hidden(False)
     assert not indicator.isVisible()
+    indicator._timer.stop()
     indicator.close()
+    indicator.deleteLater()
+    app.processEvents()
+
+
+def test_indicator_hides_when_the_system_cursor_hides() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    indicator = HiddenVoiceIndicator()
+    visible = {"cursor": False}
+    indicator._system_cursor_visible = lambda: visible["cursor"]
+
+    indicator.set_oracle_hidden(True)
+    indicator.set_state("listening")
+    app.processEvents()
+    assert indicator.state == "listening"
+    assert not indicator.isVisible()
+
+    visible["cursor"] = True
+    indicator._tick()
+    app.processEvents()
+    assert indicator.isVisible()
+    assert indicator.state == "listening"
+    indicator._timer.stop()
+    indicator.close()
+    indicator.deleteLater()
+    app.processEvents()
 
 
 def test_oracle_maps_hidden_voice_states_including_idle() -> None:
@@ -191,7 +218,9 @@ def test_state_change_does_not_reorder_visible_indicator() -> None:
         _ensure_macos_overlay_level=MagicMock(),
         _timer=MagicMock(),
         hide=MagicMock(),
+        _system_cursor_visible=lambda: True,
     )
+    indicator._timer.isActive.return_value = False
 
     HiddenVoiceIndicator._sync_visibility(indicator)
 

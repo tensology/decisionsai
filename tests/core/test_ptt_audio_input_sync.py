@@ -63,6 +63,32 @@ def test_set_audio_input_active_resumes_when_callbacks_stale():
     input_transport.resume_input.assert_called_once()
 
 
+def test_resume_after_wake_reopens_mic_and_hands_free_socket():
+    input_transport = MagicMock()
+    input_transport.get_input_health.return_value = {
+        "enabled": True,
+        "stream_active": True,
+        "audio_task_alive": True,
+        "stream_callbacks_stale": False,
+    }
+    stt = MagicMock()
+    s2s = MagicMock()
+    s2s._enabled = True
+    session = _session_with_input_transport(input_transport)
+    session.is_listening = True
+    session.is_hands_free = True
+    session.ptt_active = False
+    session.is_dictating = False
+    session.stt_service = stt
+    session.s2s_service = s2s
+
+    command_handler._cmd_resume_after_wake(session, {})
+
+    input_transport.resume_input.assert_called_once()
+    stt.request_realtime_reconnect.assert_called_once()
+    s2s._schedule_coro.assert_called_once()
+
+
 def test_set_audio_input_active_force_resumes_even_when_healthy():
     input_transport = MagicMock()
     input_transport.get_input_health.return_value = {

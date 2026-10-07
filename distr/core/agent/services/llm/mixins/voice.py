@@ -222,7 +222,7 @@ class VoiceDictationMixin:
                 if getattr(self, "_dictation_output_mode", "plain") == "ticket"
                 else "literal"
             )
-            success = insert_text(text, newline_mode=newline_mode)
+            success = insert_text(text, instant=True, newline_mode=newline_mode)
             if success:
                 logger.info("Dictation: Successfully typed text")
             else:

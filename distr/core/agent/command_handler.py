@@ -604,6 +604,30 @@ def _cmd_set_hands_free(session, params):
     session.logger.debug("All services updated - audio input power synced to active voice mode")
 
 
+def _cmd_resume_after_wake(session, params):
+    """Reopen the mic and live sockets without changing listening mode."""
+    del params
+    session.logger.info("Restoring voice IO after wake in the current mode")
+    _set_audio_input_active(
+        session,
+        _audio_input_should_be_active(session),
+        "system_wake",
+        force=True,
+    )
+    if getattr(session, "is_hands_free", False):
+        stt = getattr(session, "stt_service", None)
+        if stt is not None and hasattr(stt, "request_realtime_reconnect"):
+            stt.request_realtime_reconnect()
+    s2s = getattr(session, "s2s_service", None)
+    if (
+        s2s is not None
+        and getattr(s2s, "_enabled", False)
+        and hasattr(s2s, "_schedule_coro")
+        and hasattr(s2s, "_reconnect")
+    ):
+        s2s._schedule_coro(s2s._reconnect())
+
+
 def _cmd_set_dictating(session, params):
     enabled = params.get('enabled', False)
     session.is_dictating = enabled
@@ -1766,6 +1790,7 @@ _COMMAND_MAP = {
     # Mode
     'set_listening': _cmd_set_listening,
     'set_hands_free': _cmd_set_hands_free,
+    'resume_after_wake': _cmd_resume_after_wake,
     'set_dictating': _cmd_set_dictating,
     'set_speaker_enabled': _cmd_set_speaker_enabled,
     'stop_dictation': _cmd_stop_dictation,

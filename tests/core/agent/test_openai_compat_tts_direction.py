@@ -22,10 +22,13 @@ class _FakeService:
         self._telegram_fallback_text = None
         self.chat_manager = None
         self.pushed: list[tuple[str, object | None]] = []
+        self.spoken: list[str] = []
         self.event_queue = None
 
     async def push_frame(self, frame, direction=None):
         self.pushed.append((type(frame).__name__, direction))
+        if isinstance(frame, _TextFrame):
+            self.spoken.append(frame.text)
 
     async def _push_pipeline_frame(self, frame):
         await self.push_frame(frame, self._pipeline_direction)
@@ -100,6 +103,28 @@ def test_send_done_after_tools_routes_tts_frames_with_pipeline_direction():
         ("_TextFrame", service._pipeline_direction),
         ("LLMFullResponseEndFrame", service._pipeline_direction),
     ]
+    assert service.spoken == ["Task finished successfully."]
+
+
+def test_send_done_after_tools_humanizes_machine_acknowledgement():
+    service = _FakeService()
+    service._messages = [
+        {"role": "tool", "name": "type_text", "content": "Typed 166 characters as keyboard input."}
+    ]
+    original_text_frame = openai_compat_module.TextFrame
+    openai_compat_module.TextFrame = _TextFrame
+
+    try:
+        result = asyncio.run(OpenAICompatibleLLMService._send_done_after_tools(service))
+    finally:
+        openai_compat_module.TextFrame = original_text_frame
+
+    assert result is True
+    assert service.spoken == ["I've typed that for you."]
+    assert service._messages[-1] == {
+        "role": "assistant",
+        "content": "I've typed that for you.",
+    }
 
 
 def test_send_done_after_speak_on_desktop_does_not_speak_done():

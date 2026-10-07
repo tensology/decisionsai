@@ -1457,6 +1457,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         from distr.core.agent.services.llm.text_utils import (
             brief_tool_completion_message,
+            humanize_tool_completion,
             humanize_silent_navigation_json,
         )
 
@@ -1501,6 +1502,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 break  # Only check the most recent tool result
 
         generic_ack = brief_tool_completion_message(last_tool_name)
+        natural_ack = humanize_tool_completion(last_tool_name, tool_result_text)
 
         if OpenAICompatibleLLMService._is_direct_speech_tool_ack(last_tool_name, tool_result_text):
             await self._push_pipeline_frame(LLMFullResponseStartFrame())
@@ -1521,13 +1523,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         if getattr(self, '_is_telegram_request', False):
             # For Telegram, include the tool result as context
-            fallback = tool_result_text or generic_ack
+            fallback = natural_ack or tool_result_text or generic_ack
             self._telegram_fallback_text = fallback
         elif action_tool_spoke_directly:
             # Tool already spoke via speak_text_directly_event_queue -> command handler
             # and pushed its own Start/Text/End TTS frames. Do not emit extra frames
             # from the LLM fallback path, or we can suppress/close the player UI.
-            fallback = tool_result_text or generic_ack
+            fallback = natural_ack or tool_result_text or generic_ack
             if self.chat_manager:
                 chat = self.chat_manager.get_current_chat()
                 if chat:
@@ -1543,7 +1545,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             # We have a meaningful tool result — use it as the response instead of "Done"
             # so the user actually knows what happened.
             # Truncate long results for TTS, keeping the full text for history.
-            tts_text = tool_result_text
+            tts_text = natural_ack or tool_result_text
             if len(tts_text) > 500:
                 # For very long results, speak a brief summary
                 first_line = tts_text.split('\n')[0]
@@ -1554,7 +1556,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     tts_text = f"{first_line} ... and {line_count - 1} more lines."
             await self._push_pipeline_frame(LLMFullResponseStartFrame())
             await self._push_pipeline_frame(TextFrame(text=tts_text))
-            fallback = tool_result_text
+            fallback = natural_ack or tool_result_text
         else:
             await self._push_pipeline_frame(LLMFullResponseStartFrame())
             await self._push_pipeline_frame(TextFrame(text=generic_ack))
