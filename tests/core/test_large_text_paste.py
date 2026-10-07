@@ -76,20 +76,26 @@ def test_insert_short_text_can_still_press_enter(monkeypatch):
     assert calls == [("instant", "send this", True)]
 
 
-def test_macos_direct_insertion_sets_selected_text_without_clipboard(monkeypatch):
+def test_macos_direct_insertion_posts_one_unicode_event_without_clipboard(monkeypatch):
     calls = []
-    focused = object()
+    down_event = object()
+    up_event = object()
     fake_api = SimpleNamespace(
-        AXUIElementCreateSystemWide=lambda: "system",
-        AXUIElementCopyAttributeValue=lambda element, attribute, default: (0, focused),
-        AXUIElementSetAttributeValue=lambda element, attribute, value: (
-            calls.append((element, attribute, value)) or 0
+        CGEventCreateKeyboardEvent=lambda source, key_code, key_down: (
+            down_event if key_down else up_event
         ),
-        kAXErrorSuccess=0,
-        kAXFocusedUIElementAttribute="focused",
-        kAXSelectedTextAttribute="selected_text",
+        CGEventKeyboardSetUnicodeString=lambda target, length, value: calls.append(
+            ("set", target, length, value)
+        ),
+        CGEventPost=lambda tap, target: calls.append(("post", tap, target)),
+        kCGHIDEventTap="hid",
     )
-    monkeypatch.setitem(sys.modules, "ApplicationServices", fake_api)
+    monkeypatch.setitem(sys.modules, "Quartz", fake_api)
 
-    assert _instant_type_text_macos("the whole dictation") is True
-    assert calls == [(focused, "selected_text", "the whole dictation")]
+    text = "the whole dictation 😀"
+    assert _instant_type_text_macos(text) is True
+    assert calls == [
+        ("set", down_event, len(text.encode("utf-16-le")) // 2, text),
+        ("post", "hid", down_event),
+        ("post", "hid", up_event),
+    ]

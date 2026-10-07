@@ -88,33 +88,25 @@ def is_instant_dictation_enabled(settings: Optional[dict] = None) -> bool:
 
 
 def _instant_type_text_macos(text: str, press_enter: bool = False) -> bool:
-    """Set the focused field's selection directly, without clipboard or simulated typing."""
-    from ApplicationServices import (
-        AXUIElementCopyAttributeValue,
-        AXUIElementCreateSystemWide,
-        AXUIElementSetAttributeValue,
-        kAXErrorSuccess,
-        kAXFocusedUIElementAttribute,
-        kAXSelectedTextAttribute,
+    """Insert the full text with one Unicode event, without touching the clipboard."""
+    from Quartz import (
+        CGEventCreateKeyboardEvent,
+        CGEventKeyboardSetUnicodeString,
+        CGEventPost,
+        kCGHIDEventTap,
     )
 
-    error, focused = AXUIElementCopyAttributeValue(
-        AXUIElementCreateSystemWide(),
-        kAXFocusedUIElementAttribute,
-        None,
-    )
-    if error != kAXErrorSuccess or focused is None:
-        logger.warning("Dictation: Could not find the focused macOS text field")
+    event = CGEventCreateKeyboardEvent(None, 0, True)
+    if event is None:
+        logger.warning("Dictation: Could not create the macOS Unicode input event")
         return False
-    if AXUIElementSetAttributeValue(focused, kAXSelectedTextAttribute, text) != kAXErrorSuccess:
-        logger.warning("Dictation: The focused macOS element does not accept direct text insertion")
-        return False
+    utf16_length = len(text.encode("utf-16-le")) // 2
+    CGEventKeyboardSetUnicodeString(event, utf16_length, text)
+    CGEventPost(kCGHIDEventTap, event)
+    CGEventPost(kCGHIDEventTap, CGEventCreateKeyboardEvent(None, 0, False))
     if press_enter:
-        controller = _get_keyboard_controller()
-        if not controller:
-            return False
-        controller.press(Key.enter)
-        controller.release(Key.enter)
+        CGEventPost(kCGHIDEventTap, CGEventCreateKeyboardEvent(None, 36, True))
+        CGEventPost(kCGHIDEventTap, CGEventCreateKeyboardEvent(None, 36, False))
     return True
 
 
