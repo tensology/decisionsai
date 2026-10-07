@@ -108,7 +108,7 @@ def test_hold_dictation_release_posts_single_ui_stop():
     assert dummy.event_queue.items.count(("dictation_stopped", {})) == 1
 
 
-def test_only_large_dictation_uses_loading_state(monkeypatch):
+def test_dictation_inserts_instantly_without_focus_stealing_loading_state(monkeypatch):
     calls = []
     monkeypatch.setattr(
         "distr.core.audio.dictation.insert_text",
@@ -120,10 +120,8 @@ def test_only_large_dictation_uses_loading_state(monkeypatch):
     assert ("dictation_processing_started", {}) not in dummy.event_queue.items
 
     asyncio.run(dummy._type_dictation_text("x" * 180))
-    assert dummy.event_queue.items[-2:] == [
-        ("dictation_processing_started", {}),
-        ("dictation_processing_finished", {}),
-    ]
+    assert ("dictation_processing_started", {}) not in dummy.event_queue.items
+    assert ("dictation_processing_finished", {}) not in dummy.event_queue.items
     assert all(kwargs["instant"] is True for _text, kwargs in calls)
 
 

@@ -207,15 +207,8 @@ class VoiceDictationMixin:
         """Type dictation text as keyboard input."""
         if not text or not text.strip():
             return
-        show_loading = False
         try:
-            from distr.core.audio.dictation import insert_text, should_paste_text
-            show_loading = should_paste_text(text)
-            if show_loading and self.event_queue:
-                try:
-                    self.event_queue.put(('dictation_processing_started', {}), block=False)
-                except Exception as e:
-                    logger.debug("Error emitting dictation_processing_started: %s", e)
+            from distr.core.audio.dictation import insert_text
             logger.info("Dictation: Typing text (%d characters): '%s...'", len(text), text[:50])
             newline_mode = (
                 "shift_enter"
@@ -229,12 +222,6 @@ class VoiceDictationMixin:
                 logger.error("Dictation: Failed to type text")
         except Exception as e:
             logger.error("Dictation: Error typing text: %s", e, exc_info=True)
-        finally:
-            if show_loading and self.event_queue:
-                try:
-                    self.event_queue.put(('dictation_processing_finished', {}), block=False)
-                except Exception as e:
-                    logger.debug("Error emitting dictation_processing_finished: %s", e)
 
     def _normalize_dictation_output_mode(self, output_mode: str) -> str:
         if output_mode in ("ticket", "context"):
