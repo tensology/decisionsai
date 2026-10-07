@@ -12,6 +12,12 @@ import logging
 import os
 import time
 
+from distr.core.agent.services.llm.tool_execution_policy import (
+    remember_successful_tool_call,
+    sanitized_tool_arguments,
+    tool_execution_block_reason,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -305,6 +311,7 @@ class TelegramMixin:
             return False
 
         tool = self._tools_dict["send_file_to_telegram"]
+        tool_name = "send_file_to_telegram"
         last_user = self._last_user_message_text()
         is_telegram = bool(getattr(self, "_is_telegram_request", False))
         if not is_telegram:
@@ -320,8 +327,43 @@ class TelegramMixin:
             if last_user:
                 call_kwargs["last_user_message"] = last_user
                 call_kwargs["text"] = last_user
+            block_reason = tool_execution_block_reason(
+                self, tool_name, call_kwargs, last_user
+            )
+            from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
+
+            chat_manager = getattr(self, "chat_manager", None)
+            chat_id = chat_manager.get_current_chat() if chat_manager else None
+            event_queue = getattr(self, "event_queue", None)
+            if block_reason:
+                record_tool_execution(
+                    chat_id,
+                    tool_name,
+                    block_reason,
+                    "failed",
+                    event_queue=event_queue,
+                    metadata={"arguments": sanitized_tool_arguments(call_kwargs)},
+                )
+                threading.current_thread().suppress_tts_for_tool_chain = False
+                return False
+            record_tool_start(
+                chat_id,
+                tool_name,
+                metadata={"arguments": sanitized_tool_arguments(call_kwargs)},
+            )
             result = await loop.run_in_executor(
                 None, lambda t=tool, kw=call_kwargs: t._run(**kw)
+            )
+            record_tool_execution(
+                chat_id,
+                tool_name,
+                str(result),
+                "completed",
+                event_queue=event_queue,
+                metadata={"arguments": sanitized_tool_arguments(call_kwargs)},
+            )
+            remember_successful_tool_call(
+                self, tool_name, call_kwargs, last_user, result
             )
 
             self._messages.append({

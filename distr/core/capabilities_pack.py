@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import importlib.metadata as package_metadata
 import json
 import os
@@ -18,7 +19,7 @@ from distr.core.harness_bootstrap import (
     projection_paths,
     write_projection_skill,
 )
-from distr.core.plugins import ecc_vendor_dir, project_root
+from distr.core.plugins import community_skills_dir, ecc_vendor_dir, project_root
 
 PROJECT_ROOT = project_root()
 ECC_SKILLS = ecc_vendor_dir() / "skills"
@@ -55,12 +56,134 @@ LOCAL_HARNESS_SKILLS: tuple[str, ...] = (
     "decisions-harness-stack",
 )
 
+# Craft + audit stay on the UI pre-chain. The rest are installed and explicit.
+_DESIGN_SKILL_IDS: tuple[str, ...] = (
+    "impeccable",
+    "web-design-guidelines",
+    "frontend-design",
+    "web-artifacts-builder",
+    "perfect-ui",
+    "design-taste-frontend",
+    "redesign-existing-projects",
+    "minimalist-ui",
+    "industrial-brutalist-ui",
+    "high-end-visual-design",
+    "image-to-code",
+    "stitch-design-taste",
+    "design-taste",
+    "emil-design-eng",
+    "animate",
+    "review-animations",
+    "improve-animations",
+    "apple-design",
+    "pick-ui-library",
+    "prototype",
+    "find-animation-opportunities",
+    "animation-vocabulary",
+    "break-ui",
+    "mobile-native",
+    "ui-ux-pro-max",
+    "vercel-react-best-practices",
+    "vercel-composition-patterns",
+    "bencium-controlled-ux-designer",
+    "bencium-innovative-ux-designer",
+    "bencium-impact-designer",
+    "design-audit",
+    "ui-typography",
+    "relationship-design",
+    "accessibility-audit",
+    "accessibility-diff",
+    "accessibility-fix",
+    "accessibility-inspect",
+    "accessibility-scan",
+    "frontend-stack",
+)
+
+
+def _home_skill_candidates(skill_id: str) -> tuple[str, ...]:
+    return (
+        f".agents/skills/{skill_id}",
+        f".codex/skills/{skill_id}",
+        f".claude/skills/{skill_id}",
+        f".cursor/skills/{skill_id}",
+    )
+
+
 EXTERNAL_SKILL_CANDIDATES: dict[str, tuple[str, ...]] = {
-    "impeccable": (
-        ".agents/skills/impeccable",
-        ".codex/skills/impeccable",
-    ),
+    skill_id: _home_skill_candidates(skill_id) for skill_id in _DESIGN_SKILL_IDS
 }
+
+# First match wins. One lead, then at most two supports. Reasons are said to the agent.
+_DESIGN_RECOMMENDATIONS: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...] = (
+    (
+        ("wcag", "accessibility", "screen reader", "contrast"),
+        ("accessibility-audit", "web-design-guidelines"),
+        "We will use accessibility-audit and web-design-guidelines because this is an accessibility check: AccessLint finds the violations, and web-design-guidelines checks focus, labels, and contrast.",
+    ),
+    (
+        ("animation", "motion", "transition"),
+        ("animate", "review-animations"),
+        "We will use animate and review-animations because this is motion work: animate decides whether it should move and how, and review-animations checks the result.",
+    ),
+    (
+        ("brutalist",),
+        ("industrial-brutalist-ui", "impeccable"),
+        "We will use industrial-brutalist-ui and impeccable because the request asks for a brutalist look, and impeccable keeps the interface workable.",
+    ),
+    (
+        ("minimalist",),
+        ("minimalist-ui", "impeccable"),
+        "We will use minimalist-ui and impeccable because the request asks for a minimalist look, and impeccable keeps hierarchy and type honest.",
+    ),
+    (
+        ("landing page", "portfolio", "marketing page", "hero section"),
+        ("design-taste-frontend", "perfect-ui", "frontend-design"),
+        "We will use design-taste-frontend, perfect-ui, and frontend-design because this is a marketing page: Taste sets the direction, Perfect UI is built for that surface, and frontend-design keeps it from looking templated.",
+    ),
+    (
+        ("dashboard", "settings", "data table"),
+        ("impeccable", "web-design-guidelines", "frontend-design"),
+        "We will use impeccable, web-design-guidelines, and frontend-design because this is product UI: Impeccable shapes the screen, web-design-guidelines checks the table, focus, and labels, and frontend-design sets the visual direction.",
+    ),
+    (
+        ("redesign", "looks generic", "ai slop"),
+        ("impeccable", "redesign-existing-projects", "web-design-guidelines"),
+        "We will use impeccable, redesign-existing-projects, and web-design-guidelines because this is a redesign: Impeccable critiques what is there, the redesign skill raises the quality, and web-design-guidelines checks the interface still holds.",
+    ),
+    (
+        ("font pairing", "palette", "chart type"),
+        ("ui-ux-pro-max",),
+        "We will use ui-ux-pro-max because this needs a lookup: palettes, font pairings, chart types, or stack rules.",
+    ),
+    (
+        ("frontend", "interface", "layout", "component", "css"),
+        ("impeccable", "web-design-guidelines"),
+        "We will use impeccable and web-design-guidelines because this is interface work: Impeccable decides how the screen should look, and web-design-guidelines checks focus, labels, and structure.",
+    ),
+)
+
+
+def _mentions(text: str, phrase: str) -> bool:
+    parts = [re.escape(part) for part in phrase.split()]
+    return bool(re.search(rf"(?<!\w){' '.join(parts)}(?!\w)", text))
+
+
+def recommend_design_skills(text: str) -> tuple[list[str], str]:
+    """Return up to three design skills and the reason to say before using them."""
+    lowered = re.sub(r"[-_/]+", " ", str(text or "").lower())
+    if not lowered.strip():
+        return [], ""
+    from distr.core.harness.intake import classify_intake
+
+    ui_work = bool(classify_intake(lowered).get("ui_heavy"))
+    generic = ("frontend", "interface", "layout", "component", "css")
+    for phrases, skill_ids, reason in _DESIGN_RECOMMENDATIONS:
+        if not any(_mentions(lowered, phrase) for phrase in phrases):
+            continue
+        if phrases == generic and not ui_work:
+            return [], ""
+        return list(skill_ids), reason
+    return [], ""
 
 
 def _state_path(home: Path) -> Path:
@@ -86,7 +209,12 @@ def _skill_sources(*, home: Path | None = None) -> dict[str, Path]:
         path = LOCAL_SKILLS / skill_id
         if path.is_dir():
             sources[skill_id] = path
+    pack = community_skills_dir()
     for skill_id, candidates in EXTERNAL_SKILL_CANDIDATES.items():
+        vendored = pack / skill_id
+        if (vendored / "SKILL.md").is_file():
+            sources[skill_id] = vendored
+            continue
         for candidate in candidates:
             path = base_home / candidate
             if (path / "SKILL.md").is_file():
@@ -131,7 +259,7 @@ Hermes workflows, Codex, Cursor, Claude, and Pi without hunting the ECC tree.
 
 ## Installed skill families
 
-- **UI quality:** impeccable for design, refinement, audits, and polish
+- **UI quality:** on interface work, say which skills you will use and why, then read them. One lead and at most two supports. Product screens: impeccable, then web-design-guidelines. Marketing pages: design-taste-frontend and perfect-ui. Accessibility: accessibility-audit. Motion: animate. Do not load the whole design pack at once.
 - **Browser / QA:** browser-qa, webapp-testing, e2e-testing, decisions-playwright
 - **Native / cross-app control:** decisions-computer-use when the active runtime exposes computer-use tools
 - **Video / motion:** video-editing, remotion-video-creation, manim-video, videodb
@@ -310,8 +438,12 @@ def merge_browser_content_pre_chain(skill_ids: list[str], *, project_folder: str
     merged = merge_competition_pre_chain(skill_ids, project_folder=project_folder)
     blob = " ".join(merged).lower()
     routed: list[str] = []
-    if any(token in blob for token in ("ui", "frontend", "design", "css", "visual", "polish")):
-        routed.extend(["impeccable", "decisions-playwright"])
+    recommended, _reason = recommend_design_skills(blob)
+    if recommended:
+        routed.extend(recommended)
+        routed.append("decisions-playwright")
+    elif any(token in blob for token in ("ui", "frontend", "design", "css", "visual", "polish")):
+        routed.extend(["impeccable", "web-design-guidelines", "decisions-playwright"])
     elif any(token in blob for token in ("browser", "playwright", "e2e", "webapp")):
         routed.append("decisions-playwright")
     if any(token in blob for token in ("computer use", "computer-use", "native app", "cross-app")):
@@ -374,20 +506,21 @@ def ensure_capabilities_pack_setup(
             pass
 
     if not skip_heavy:
-        rows = [
-            {
-                "id": skill_id,
-                "path": str(path),
-                "source": (
-                    "ecc_vendor"
-                    if skill_id in BROWSER_CONTENT_ECC_SKILLS
+        rows = []
+        for skill_id, path in sources.items():
+            if skill_id in EXTERNAL_SKILL_CANDIDATES and not path.is_relative_to(ECC_SKILLS):
+                source = (
+                    "community_vendor"
+                    if path.is_relative_to(community_skills_dir())
                     else "external"
-                    if skill_id in EXTERNAL_SKILL_CANDIDATES
-                    else "local"
-                ),
-            }
-            for skill_id, path in sources.items()
-        ]
+                )
+            elif skill_id in BROWSER_CONTENT_ECC_SKILLS:
+                source = "ecc_vendor"
+            elif skill_id in LOCAL_HARNESS_SKILLS:
+                source = "local"
+            else:
+                source = "local"
+            rows.append({"id": skill_id, "path": str(path), "source": source})
         _write_json(registry_path, rows)
         _write_json(_mcp_recommendations_path(base_home), _mcp_recommendations())
         try:
@@ -404,9 +537,15 @@ def ensure_capabilities_pack_setup(
         also_commands=True,
     )
 
+    harness_text = _projection_text(harness="codex", registry_path=registry_path)
     for harness, path in projection_paths(base_home, detected, "decisions-browser-content-harness").items():
-        if write_projection_skill(path, _projection_text(harness=harness, registry_path=registry_path)):
+        text = _projection_text(harness=harness, registry_path=registry_path)
+        if write_projection_skill(path, text):
             written.append(str(path))
+    if (base_home / ".codex").is_dir():
+        codex_skill = base_home / ".codex" / "skills" / "decisions-browser-content-harness" / "SKILL.md"
+        if write_projection_skill(codex_skill, harness_text):
+            written.append(str(codex_skill))
 
     # Cursor rules stub for browser QA visibility
     if detected.get("cursor"):
@@ -415,9 +554,9 @@ def ensure_capabilities_pack_setup(
             "---\n"
             "description: DecisionsAI browser, Playwright, and content-creation harness skills are installed.\n"
             "globs:\n"
-            "alwaysApply: false\n"
+            "alwaysApply: true\n"
             "---\n\n"
-            "For UI design and polish use impeccable; for web QA use browser-qa, webapp-testing, e2e-testing, or decisions-playwright.\n"
+            "When the task is interface work, name the design skills you will use and why before editing. One lead, at most two supports. Product UI: impeccable and web-design-guidelines. Marketing pages: design-taste-frontend and perfect-ui. Accessibility: accessibility-audit. Motion: animate.\n"
             "For native or cross-app control use decisions-computer-use only when the runtime exposes computer-use tools.\n"
             "For video/content use video-editing, remotion-video-creation, content-engine, article-writing.\n"
             "For generated media configure fal-ai MCP (see ~/.decisions/harness/mcp-recommendations.json).\n"

@@ -18,6 +18,11 @@ from typing import Optional
 
 from distr.core.signals import signal_manager
 from distr.core.agent.services.llm.text_utils import brief_tool_completion_message, clean_text_for_tts
+from distr.core.agent.services.llm.tool_execution_policy import (
+    remember_successful_tool_call,
+    sanitized_tool_arguments,
+    tool_execution_block_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +66,41 @@ class FastActionMixin:
             # --- execute ---
             logger.info("Fast exec: %s(%s)", tool.name, fast_action.tool_args)
             safe_tool_args = self._normalize_tool_kwargs(tool, fast_action.tool_args)
+            user_text = self._last_user_message_text()
+            block_reason = tool_execution_block_reason(
+                self, tool.name, safe_tool_args, user_text
+            )
+            from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
+
+            if block_reason:
+                record_tool_execution(
+                    current_chat_id,
+                    tool.name,
+                    block_reason,
+                    "failed",
+                    event_queue=self.event_queue,
+                    metadata={"arguments": sanitized_tool_arguments(safe_tool_args)},
+                )
+                return False
+            record_tool_start(
+                current_chat_id,
+                tool.name,
+                metadata={"arguments": sanitized_tool_arguments(safe_tool_args)},
+            )
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None, lambda t=tool, a=safe_tool_args: t._run(**a)
+            )
+            record_tool_execution(
+                current_chat_id,
+                tool.name,
+                str(result),
+                "completed",
+                event_queue=self.event_queue,
+                metadata={"arguments": sanitized_tool_arguments(safe_tool_args)},
+            )
+            remember_successful_tool_call(
+                self, tool.name, safe_tool_args, user_text, result
             )
             logger.debug("LLM: Fast action result: %s", str(result)[:100])
 
@@ -379,6 +416,10 @@ class FastActionMixin:
                 r = result.strip()
                 if getattr(tool, "name", None) == "open_page" and not r.startswith("{"):
                     response_text = r
+                elif getattr(tool, "name", None) == "media_control":
+                    response_text = r
+                elif getattr(tool, "name", None) == "start_project":
+                    response_text = r
                 elif len(r) < 100 and "pasted" not in r.lower() and "Playing" in r:
                     response_text = r
 
@@ -391,6 +432,7 @@ class FastActionMixin:
         else:
             await self._fa_deliver_spoken_response(response_text)
         self._fa_save_to_history(chat_id, response_text)
+        self._messages.append({"role": "assistant", "content": response_text})
         return True
 
     async def _fa_handle_developer_context(self, fast_action, chat_id, result, tool) -> bool:

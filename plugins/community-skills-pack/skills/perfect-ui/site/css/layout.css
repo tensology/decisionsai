@@ -1,0 +1,67 @@
+/* Layout primitives — container, grid, sections */
+
+.container {
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: 0 var(--container-pad);
+  position: relative;
+  z-index: 2;
+}
+
+.grid-12 {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: var(--gutter);
+}
+
+section {
+  padding: var(--section-pad) 0;
+  border-top: 1px solid var(--rule);
+}
+
+section:first-of-type { border-top: 0; padding-top: 56px; }
+
+/* Section label */
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* Section header pattern */
+.sec-head {
+  grid-column: 1 / span 12;
+  margin-bottom: 56px;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: var(--gutter);
+  align-items: end;
+}
+.sec-head .label { grid-column: 1 / span 2; }
+.sec-head h2 {
+  grid-column: 3 / span 7;
+  font-size: clamp(32px, 4vw, 56px);
+  line-height: 1;
+}
+.sec-head .sec-meta {
+  grid-column: 11 / span 2;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .sec-head { display: block; }
+  .sec-head .label,
+  .sec-head h2,
+  .sec-head .sec-meta {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+  .sec-head h2 { margin-top: 8px; }
+  section { padding: 64px 0; }
+}

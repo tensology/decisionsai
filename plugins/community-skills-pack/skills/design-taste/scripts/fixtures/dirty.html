@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link href="https://fonts.googleapis.com/css2?family=Roboto" rel="stylesheet">
+<style>
+  .card {
+    transition: all 0.3s ease;
+    outline: none;
+  }
+  .modal { z-index: 999; }
+  .enter { transform: scale(0); }
+  .hero { height: 100vh; }
+  h1 { font-family: Georgia; }
+  h2 { font-family: Helvetica; }
+  h3 { font-family: "Comic Sans MS"; }
+  h4 { font-family: Papyrus; }
+  .btn:focus-visible { outline: 2px solid blue; }
+  .gradient-heading { background-clip: text; -webkit-background-clip: text; color: transparent; }
+  .callout { border-left: 4px solid red; }
+  .stripes { background: repeating-linear-gradient(45deg, #eee, #eee 10px, #ddd 10px, #ddd 20px); }
+  .noisy { cursor: url(cursor.png), auto; }
+  .old-black { color: #000; }
+</style>
+</head>
+<body class="h-screen">
+  <div class="tooltip z-[1400]">Tooltip</div>
+  <section class="eyebrow uppercase tracking-wide">One</section>
+  <section class="eyebrow uppercase tracking-wide">Two</section>
+  <section>Three</section>
+  <svg><filter id="noise"><feTurbulence baseFrequency="0.9" /></filter></svg>
+  <script>window.addEventListener('scroll', onScroll);</script>
+  <p>This headline uses an em dash — as a separator, which is banned.</p>
+  <p>This sentence uses a spaced en dash 2019 – 2026 as a separator.</p>
+</body>
+</html>

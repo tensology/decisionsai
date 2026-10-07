@@ -1,0 +1,47 @@
+/* Design tokens — vibe: editorial + manifesto wildcard
+   Palette + typography + motion constants locked at Phase 2. */
+
+:root {
+  /* Palette — warm cream + deep ink + dusk-rose accent */
+  --bg: #F5F1E8;
+  --bg-muted: #EDE6D6;
+  --bg-elev: #FBF7EE;
+  --ink: #1A1715;
+  --ink-muted: #5A5247;
+  --ink-subtle: #8C8275;
+  --accent: #B8635A;
+  --accent-soft: #E5C4BF;
+  --rule: rgba(26, 23, 21, 0.12);
+  --rule-strong: rgba(26, 23, 21, 0.32);
+
+  /* Typography */
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+  --font-body: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Motion — Brand Motion Identity: Editorial-Premium personality */
+  --ease-signature: cubic-bezier(0.16, 1, 0.3, 1);    /* primary 80% of moves */
+  --ease-emphasis: cubic-bezier(0.7, 0, 0.84, 0);     /* exits / emphasis */
+  --dur-quick: 0.2s;
+  --dur-standard: 0.5s;
+  --dur-slow: 0.9s;
+
+  /* Spatial */
+  --container-max: 1280px;
+  --container-pad: 32px;
+  --section-pad: 96px;
+  --gutter: 32px;
+
+  /* Type scale */
+  --fs-mono: 11px;
+  --fs-body: 16px;
+  --fs-lede: 17px;
+}
+
+@media (max-width: 900px) {
+  :root {
+    --container-pad: 20px;
+    --section-pad: 64px;
+    --gutter: 20px;
+  }
+}

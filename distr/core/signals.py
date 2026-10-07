@@ -54,6 +54,8 @@ class SignalManager(QObject):
     # Dictation signals (Agent -> GUI)
     dictation_started = pyqtSignal()
     dictation_stopped = pyqtSignal()
+    dictation_processing_started = pyqtSignal()
+    dictation_processing_finished = pyqtSignal()
 
     # Dictation hotkey signals (GUI hotkey -> Agent)
     dictation_hotkey_pressed = pyqtSignal()

@@ -172,6 +172,14 @@ def get_tool_parameters(tool_name: str) -> dict:
                 "text": {
                     "type": "string",
                     "description": "The full user request text (used to extract action if action not provided)"
+                },
+                "target_app": {
+                    "type": "string",
+                    "description": "Named browser to focus before refresh/reload, such as Brave or Chrome"
+                },
+                "restore_focus": {
+                    "type": "boolean",
+                    "description": "Return focus to the user's previous application after the named browser action"
                 }
             },
             "required": []

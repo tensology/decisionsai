@@ -95,19 +95,33 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "launch_app",
         (
-            r"\b(open|launch|start|bring\s+up|show)\b.*\b(spotify|music|terminal|finder|safari|chrome|brave|codex|codecs|notes|calculator|textedit)\b",
+            r"\b(open|launch|start|bring\s+up|show|focus|activate|switch\s+to|go\s+back\s+to|return\s+to)\b.*\b(spotify|music|terminal|finder|safari|chrome|brave|codex|codecs|cursor|slack|notes|calculator|textedit)\b",
+        ),
+    ),
+    (
+        "media_control",
+        (
+            r"\b(reload|refresh)\b.{0,40}\b(brave(?:\s+browser)?|google\s+chrome|chrome|safari|firefox)\b",
+            r"\b(brave(?:\s+browser)?|google\s+chrome|chrome|safari|firefox)\b.{0,40}\b(reload|refresh)\b",
         ),
     ),
     (
         "open_page",
         (
-            r"\b(open|show|launch|go\s+to|bring\s+up)\b.{0,80}\b(web\s*ui|web\s*interface|development(?:\s+section)?)\b",
+            r"\b(open(?:\s+up)?|show(?:\s+me)?|pull\s+up|launch|go\s+to|bring\s+up)\b.{0,80}\b(chat|web\s*ui|web\s*interface|development(?:\s+section)?|preferences?|settings)\b",
         ),
     ),
     (
         "open_project",
         (
-            r"\b(open|bring\s+up|show|launch)\b.{0,20}\b(?:the\s+|this\s+|a\s+|my\s+)?project\b(?!s\b)(?!\s+ticket)",
+            r"\b(open|bring\s+up|show)\b.{0,20}\b(?:the\s+|this\s+|a\s+|my\s+)?project\b(?!s\b)(?!\s+ticket)",
+        ),
+    ),
+    (
+        "start_project",
+        (
+            r"\b(start(?:\s+and\s+launch)?|launch(?:\s+and\s+start)?|run|boot\s+up|initialize)\s+(?:the\s+|this\s+|my\s+)?project\b(?!\s+(?:ticket|board))",
+            r"\bstart\s+project\b.{0,80}\band\s+(?:then\s+)?launch(?:\s+it)?\b",
         ),
     ),
     (
@@ -286,6 +300,7 @@ def forced_tool_names_for_text(text: str) -> list[str]:
 
 
 _WORKFLOW_FOLLOW_UP_PATTERNS: tuple[str, ...] = (
+    r"^(?:yes|yeah|yep|sure|okay|ok)[.!]?$",
     r"^(?:please\s+)?(?:try|retry)(?:\s+it|\s+that)?\s+again[.!]?$",
     r"^(?:please\s+)?do\s+(?:it|that)(?:\s+again)?[.!]?$",
     r"^(?:please\s+)?(?:go\s+ahead|continue|finish\s+it)[.!]?$",

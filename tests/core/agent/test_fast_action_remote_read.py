@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+from distr.core.agent.services.llm.fast_action_detector import ActionType
 from distr.core.agent.services.llm.mixins.fast_actions import FastActionMixin
 
 
@@ -108,6 +109,33 @@ def test_screenshot_failure_remote_response_never_uses_desktop_tts():
   assert service.pushed == []
 
 
+def test_project_fast_action_keeps_real_result_in_conversation_context():
+  service = DummyFastActionService(telegram=False)
+  spoken = []
+  service._fa_deliver_spoken_response = lambda text: _record_async(spoken, text)
+  fast_action = SimpleNamespace(action_type=ActionType.PROJECT_LIFECYCLE)
+  tool = SimpleNamespace(name="start_project")
+
+  asyncio.run(
+    service._fa_handle_done(
+      fast_action,
+      chat_id=92,
+      result="Project Tensology launched in your default browser.",
+      tool=tool,
+    )
+  )
+
+  assert spoken == ["Project Tensology launched in your default browser."]
+  assert service._messages[-1] == {
+    "role": "assistant",
+    "content": "Project Tensology launched in your default browser.",
+  }
+
+
+async def _record_async(items, value):
+  items.append(value)
+
+
 def test_done_acknowledgement_remote_response_never_uses_desktop_tts():
   from distr.core.agent.services.llm.fast_action_detector import ActionType
 
@@ -122,6 +150,24 @@ def test_done_acknowledgement_remote_response_never_uses_desktop_tts():
   assert handled is True
   assert len(service.event_queue) == 1
   assert service.event_queue[0][0] == "send_to_telegram"
+  assert service.pushed == []
+
+
+def test_media_done_acknowledgement_uses_tool_confirmation():
+  from distr.core.agent.services.llm.fast_action_detector import ActionType
+
+  service = DummyFastActionService(telegram=True)
+  fast_action = SimpleNamespace(action_type=ActionType.MEDIA_CONTROL)
+  tool = SimpleNamespace(name="media_control")
+
+  handled = asyncio.run(
+    service._fa_handle_done(fast_action, 92, "Skipped to the next track.", tool)
+  )
+
+  assert handled is True
+  assert service.event_queue == [
+    ("send_to_telegram", "Skipped to the next track."),
+  ]
   assert service.pushed == []
 
 

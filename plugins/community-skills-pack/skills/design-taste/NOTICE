@@ -1,0 +1,176 @@
+design-taste
+Copyright 2026 Nguyễn Phú Cường
+
+This product is a synthesis (combined and de-duplicated work) of three
+upstream design skills. The original synthesis (the SKILL.md core and the
+package composition) is licensed under the MIT License (see LICENSE).
+
+The reference/ files are derived, in part, verbatim from upstream projects
+and REMAIN UNDER THEIR ORIGINAL LICENSES. Where Apache-2.0 material is
+included, this NOTICE and LICENSES/Apache-2.0.txt are provided to comply with
+Section 4 of the Apache License, Version 2.0.
+
+================================================================================
+Upstream sources and their licenses
+================================================================================
+
+1. emilkowalski/skill  (skills/emil-design-eng)
+   Copyright Emil Kowalski and contributors.
+   License: MIT (https://github.com/emilkowalski/skill)
+   https://emilkowal.ski/skill | course: https://animations.dev
+
+2. pbakaus/impeccable
+   Copyright 2025 Paul Bakaus and contributors.
+   License: Apache License, Version 2.0 (https://github.com/pbakaus/impeccable)
+   Impeccable itself derives, in part, from Anthropic's "frontend-design"
+   skill (https://github.com/anthropics/skills), also Apache-2.0. That
+   upstream attribution is preserved here transitively.
+
+3. leonxlnx/taste-skill  (skills/taste-skill, "design-taste-frontend")
+   Copyright 2026 Leonxlnx.
+   License: MIT (https://github.com/leonxlnx/taste-skill)
+
+================================================================================
+Per-file provenance and license map
+================================================================================
+
+SKILL.md                         New synthesis. MIT, with Apache-2.0 passages
+                                 credited below (all within "Core design
+                                 rules"): the OKLCH / no-pure-#000-#fff /
+                                 tint-neutrals bullets from pbakaus/impeccable
+                                 skill/SKILL.md@e7e923c:62-63; the cards
+                                 bullet from skill/SKILL.md@e7e923c:87 and
+                                 .agent/skills/impeccable/reference/
+                                 craft-floor.md:25; the contrast bullet from
+                                 craft-floor.md:9; the type-measure bullets
+                                 (65-75ch, 6rem, -0.04em) from craft-floor.md:12;
+                                 the hierarchy bullet (scale + weight contrast,
+                                 >=1.25 ratio) from skill/SKILL.md@e7e923c:82
+                                 and the body line-length clause from :81; the
+                                 light-or-dark-from-scene clause from
+                                 craft-floor.md:42. The Routing section's
+                                 surface-mode register (Persuade / Operate /
+                                 Read / Experience) is adapted from
+                                 .agent/skills/impeccable/SKILL.md:32-41.
+                                 Modification: portfolio is routed to
+                                 Persuade, where upstream routes portfolios to
+                                 Experience; Experience here covers artifacts,
+                                 posters and one-off pieces.
+                                 Line numbers cited for .agent/skills/impeccable/*
+                                 paths refer to pbakaus/impeccable@e0881d2.
+README.md                        New synthesis. MIT.
+
+reference/motion.md              Derived from emilkowalski/skill. MIT.
+                                 Modified from upstream: U+2014 removed,
+                                 duplicate Review Format / Review Checklist
+                                 sections removed (canonical copies live in
+                                 pre-flight.md), Core Philosophy trimmed to a
+                                 pointer at SKILL.md, the four numbered step
+                                 headings ("1. Should this animate at all?" ...)
+                                 renamed to "Step one: ..." etc. so they cannot
+                                 be read as repo section cites.
+reference/interaction-states.md  Derived from pbakaus/impeccable
+                                 skill/reference/interaction-design.md@9ffd321.
+                                 APACHE-2.0.
+                                 Modified from upstream: added
+                                 `position-try-fallbacks: --flip-above;` to
+                                 the `.dropdown` rule so the declared
+                                 `@position-try` fallback is actually applied;
+                                 rewrote the stale browser-support line to
+                                 "Chromium 125+, Safari 26+; verify Firefox
+                                 before relying on it, and keep the
+                                 fixed-position fallback below."
+reference/anti-slop.md           Part 1 verbatim from pbakaus/impeccable
+                                 (Absolute bans + AI-slop test). APACHE-2.0.
+                                 Part 2 verbatim from leonxlnx/taste-skill
+                                 (Section 9, AI Tells). MIT.
+                                 Modified from upstream: U+2014 removed (and
+                                 one U+2013 range hyphenated per its own 9.G),
+                                 dangling link to an unshipped brand.md file
+                                 repointed to core-rules.md Section 4.2,
+                                 "Codex-specific" labeling replaced with "AI"
+                                 (this is a Claude skill).
+reference/core-rules.md          Verbatim from leonxlnx/taste-skill (Sections
+                                 4.1, 4.2, 4.4, 4.8, 4.9, 4.11, and 8). MIT.
+                                 Modified from upstream: U+2014 removed (one
+                                 instance in 4.1); 4.1's display default
+                                 changed from `tracking-tighter leading-none`
+                                 to `tracking-tight leading-[1.1]` (upstream's
+                                 own descender-clearance rule two lines below
+                                 contradicted `leading-none`); 8.C reworded to
+                                 the canonical dual-mode default sentence used
+                                 in SKILL.md and the Core pre-flight box; 4.8
+                                 and 4.9 each gained a "Persuade register
+                                 only" blockquote (design-taste original).
+reference/design-systems.md      Derived from leonxlnx/taste-skill (brief read,
+                                 dials, system map, GSAP, installs); Sections
+                                 5.D and 11 added verbatim from the same
+                                 upstream source. MIT.
+                                 Modified from upstream: U+2014 removed, cites
+                                 repointed, `transition: all` replaced with
+                                 explicit properties, Section 3 default
+                                 architecture made conditional on a React/Next
+                                 brief; 5.A's standalone `ScrollTrigger.create`
+                                 call (`pin`/`pinSpacing`/`endTrigger`/`end`)
+                                 removed: it conflicted with the CSS `sticky
+                                 top-0` on the same element, which now pins
+                                 alone; 3.C now notes
+                                 shadcn/ui projects keep `lucide-react`; 11.D
+                                 no longer cites the unported "Section 10
+                                 vocabulary"; the §1.B use-case table gained a
+                                 "Product UI / dashboard (Operate)" row
+                                 (design-taste original, no upstream preset
+                                 existed for it).
+reference/pre-flight.md          Review format/checklist from emilkowalski/skill
+                                 (MIT) + pre-flight matrix from
+                                 leonxlnx/taste-skill (MIT), now split into a
+                                 self-contained Universal Core plus five
+                                 addenda: Persuade and React / Next continue
+                                 the matrix above (renamed from Addendum A/B);
+                                 Operate is ported from pbakaus/impeccable
+                                 .agent/skills/impeccable/reference/operate.md
+                                 (APACHE-2.0) plus leonxlnx/taste-skill
+                                 skills/taste-skill/SKILL.md sections 4.5, 4.6
+                                 and 6.F (MIT), reformatted from prose into
+                                 checkboxes (the Color box glosses Restrained
+                                 with skill/SKILL.md@e7e923c:65; the "Product
+                                 can afford" box ends with a design-taste
+                                 original sentence tagging core-rules 4.8/4.9
+                                 as Persuade-only); Read and Experience are
+                                 design-taste originals seeded by
+                                 pbakaus/impeccable
+                                 .agent/skills/impeccable/SKILL.md:38-39 and,
+                                 for Read, the same operate.md:3.
+                                 Modified from upstream: U+2014 removed, N/A
+                                 rule added to the Core preamble, all cites
+                                 rewritten as file-path pointers (Core and the
+                                 four mode addenda no longer cite "Section N";
+                                 only Addendum: React / Next still cites
+                                 Sections 5.A/5.B), the sticky-stack box split
+                                 from the horizontal-pan box.
+scripts/preflight.mjs            New tooling, design-taste original. MIT.
+scripts/preflight.test.mjs       New tooling, design-taste original. MIT.
+scripts/preflight.gaps.test.mjs  New tooling, design-taste original. MIT.
+scripts/upstream-drift.sh        New tooling, design-taste original. MIT.
+scripts/upstream-snapshot.txt    Generated data file (sha256 pins consumed
+                                 by upstream-drift.sh). MIT.
+
+================================================================================
+Apache-2.0 notice (for the impeccable-derived portions)
+================================================================================
+
+   Portions of this project are derived from "impeccable" by Paul Bakaus,
+   and transitively from the "frontend-design" skill by Anthropic, licensed
+   under the Apache License, Version 2.0.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use those files except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.

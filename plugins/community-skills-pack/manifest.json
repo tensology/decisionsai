@@ -1,6 +1,6 @@
 {
   "pack_version": 1,
-  "description": "Curated community skills — no bulk copy of 44 marketing or 50 design aesthetics.",
+  "description": "Curated community skills \u2014 no bulk copy of 44 marketing or 50 design aesthetics.",
   "reference_roots": {
     "humanizer": "../reference/humanizer",
     "last30days": "../reference/last30days-skill/skills/last30days",
@@ -82,9 +82,231 @@
     },
     {
       "id": "design-taste-frontend",
-      "source": "taste-skill/taste-skill",
+      "source": "vendored",
       "overwrite": true,
-      "note": "Anti-slop frontend taste skill for landing pages, portfolios, and redesigns."
+      "note": "Vendored into the skills pack. Refresh from the upstream repo, then keep source as vendored."
+    },
+    {
+      "id": "impeccable",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "web-design-guidelines",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "web-artifacts-builder",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "perfect-ui",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "redesign-existing-projects",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "minimalist-ui",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "industrial-brutalist-ui",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "high-end-visual-design",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "image-to-code",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "stitch-design-taste",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "design-taste",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "emil-design-eng",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "animate",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "review-animations",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "improve-animations",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "apple-design",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "pick-ui-library",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "prototype",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "find-animation-opportunities",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "animation-vocabulary",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "break-ui",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "mobile-native",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "ui-ux-pro-max",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "vercel-react-best-practices",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "vercel-composition-patterns",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "bencium-controlled-ux-designer",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "bencium-innovative-ux-designer",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "bencium-impact-designer",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "design-audit",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "ui-typography",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "relationship-design",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "accessibility-audit",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "accessibility-diff",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "accessibility-fix",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "accessibility-inspect",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "accessibility-scan",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "frontend-stack",
+      "source": "vendored",
+      "overwrite": true,
+      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
     }
   ],
   "index_only": [

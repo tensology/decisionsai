@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  .card {
+    transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+  }
+  .card:focus-visible {
+    outline: 2px solid var(--accent);
+  }
+  .card:focus {
+    outline: none;
+  }
+  .modal { z-index: 40; }
+  .enter { transform: scale(0.95); opacity: 0; }
+  .hero { min-height: 100dvh; }
+  h1 { font-family: Geist; }
+  body { font-family: Geist; }
+  :root { --z-modal: 1400; }
+  .tooltip { z-index: 1400; }
+</style>
+</head>
+<body>
+  <section>One</section>
+  <section>Two</section>
+  <button class="outline-none focus-visible:ring-2">Go</button>
+  <p>This headline uses a period. No banned punctuation here.</p>
+</body>
+</html>

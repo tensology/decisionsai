@@ -39,6 +39,7 @@ def test_clipboard_to_calendar_instruction_forces_both_tools():
 
 
 def test_calendar_event_follow_ups_are_recognized():
+    assert is_workflow_follow_up("Yes.")
     assert is_workflow_follow_up("Try again.")
     assert is_workflow_follow_up("Create the fucking event.")
     assert is_workflow_follow_up("do it, read or ingest the clipboard and do it.")
@@ -160,10 +161,12 @@ def test_forces_desktop_control_tools_for_audited_phrases():
         assert "window_management" in forced_tool_names_for_text(request), request
 
     assert "launch_app" in forced_tool_names_for_text("Can you bring up Spotify?")
+    assert "launch_app" in forced_tool_names_for_text("Switch to Chrome")
     assert "open_page" in forced_tool_names_for_text("Bring up the web UI")
     assert "open_project" in forced_tool_names_for_text("Bring up the project")
     assert "create_ticket" in forced_tool_names_for_text("Bring up the ticket board")
     assert "smart_open" in forced_tool_names_for_text("Can you open up my Downloads folder?")
+    assert "media_control" in forced_tool_names_for_text("Can you reload Brave?")
 
     mouse_tools = forced_tool_names_for_text("Move the mouse to the Save button")
     assert "find_element" in mouse_tools

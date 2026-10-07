@@ -50,7 +50,7 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
         encoding="utf-8"
     )
     assert '"id": "impeccable"' in registry
-    assert '"source": "external"' in registry
+    assert '"source": "community_vendor"' in registry or '"source": "external"' in registry
     assert (tmp_path / ".decisions" / "harness" / "mcp-recommendations.json").is_file()
 
 
@@ -67,6 +67,16 @@ def test_merge_browser_content_pre_chain_keeps_generic_workflow_lean(tmp_path):
     assert "decisions-design-references" not in chain
 
 
+def test_recommend_design_skills_says_why():
+    from distr.core.capabilities_pack import recommend_design_skills
+
+    skills, reason = recommend_design_skills("Redesign the settings screen and fix the data table focus")
+    assert skills[:2] == ["impeccable", "web-design-guidelines"]
+    assert reason.startswith("We will use")
+    assert recommend_design_skills("Implement the API endpoint") == ([], "")
+    assert recommend_design_skills("Preserve the existing frontend and TrackPlayer work.") == ([], "")
+
+
 def test_merge_browser_content_pre_chain_routes_ui_tools_on_demand(tmp_path, monkeypatch):
     from distr.core.capabilities_pack import merge_browser_content_pre_chain
 
@@ -74,6 +84,7 @@ def test_merge_browser_content_pre_chain_routes_ui_tools_on_demand(tmp_path, mon
     chain = merge_browser_content_pre_chain(["frontend-polish"], project_folder=str(tmp_path))
 
     assert "impeccable" in chain
+    assert "web-design-guidelines" in chain
     assert "decisions-playwright" in chain
     assert "browser-qa" not in chain
     assert "decisions-design-references" not in chain

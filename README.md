@@ -2,523 +2,156 @@ https://github.com/user-attachments/assets/cba7775e-f61e-4625-aefd-76417e72ca33
 
 <h1 align="center">DecisionsAI</h1>
 
-<p align="center">
-  <strong>The last agent you'll ever need.</strong>
-</p>
-
-<p align="center">
-  A voice-first development agent for your computer, your projects, and your phone.
-</p>
+<p align="center"><strong>A local-first agent for your computer, projects, and phone.</strong></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14.0%2B-black?style=flat-square&logo=apple" alt="macOS" />
   <img src="https://img.shields.io/badge/Windows-10%2B-black?style=flat-square&logo=windows" alt="Windows" />
   <img src="https://img.shields.io/badge/Linux-black?style=flat-square&logo=linux" alt="Linux" />
   <img src="https://img.shields.io/badge/Python-3.12-blue?style=flat-square&logo=python" alt="Python 3.12" />
-  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Tensology-blue?style=flat-square" alt="License" /></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" /></a>
 </p>
 
 <p align="center">
   <a href="https://decisions.tensology.com/"><strong>Website</strong></a> ·
-  <a href="#start-simple"><strong>Start here</strong></a> ·
-  <a href="#installation"><strong>Install</strong></a> ·
-  <a href="#use-your-voice-in-three-different-ways"><strong>Voice &amp; dictation</strong></a> ·
-  <a href="#use-it-from-your-phone"><strong>Phone</strong></a> ·
-  <a href="#the-local-web-interface"><strong>Web UI</strong></a> ·
-  <a href="#memory-mempalace--seed-corpus"><strong>Memory</strong></a> ·
-  <a href="#workflows"><strong>Workflows</strong></a>
+  <a href="#install"><strong>Install</strong></a> ·
+  <a href="#how-it-fits-together"><strong>Architecture</strong></a> ·
+  <a href="CHANGELOG.md"><strong>Changelog</strong></a>
 </p>
 
----
+## What it is
 
-## DecisionsAI is an agent
+DecisionsAI is an open-source desktop agent that can talk, type, use tools, control your computer, and carry work through a real software project. It combines a voice-first desktop assistant with a local web workspace, durable development threads, workflows, connected services, and remote access from your phone.
 
-DecisionsAI is an agent that helps you develop faster and get everyday work done on your computer. Talk to it, dictate into any app, ask it to control your desktop, or give it work inside a real project. It can use your files, tools, skills, coding agents, and connected services to carry the request through instead of only telling you what to do.
+The product is local-first. Speech, project context, memory, and models can stay on your machine. Cloud models and services are optional and only receive data when you configure and use them.
 
-On the desktop, your main point of entry is the **Oracle**—or, more simply, your avatar. It is a small animated character that stays on top of your other windows, giving you a persistent place to speak to DecisionsAI or open its controls without hunting for another app window. It shows when the agent is idle, listening, thinking, or working. You can configure how it looks and choose the Oracle skin or another avatar; the character can change, but the DecisionsAI agent underneath remains the same.
+DecisionsAI is not tied to one model or coding tool. It can route work through local models, hosted providers, Codex, Cursor, Claude-compatible tools, Pi, and other configured CLIs while keeping the project, ticket, run history, and evidence together.
 
-Its local web interface is the control deck. That is where you chat, open the project-scoped **Development** area (planning, incoming work, boards, terminals, workflows, reports, and durable threads), review results, and step into Workflow Studio when you want more detail. You do not have to keep it open while the agent works.
+## Start with the Oracle
 
-Telegram is the remote control. From your phone, you can send the same agent a message, voice note, screenshot, or document; approve a decision; steer work already in progress; and receive the result when it is done.
+The Oracle is the small desktop avatar that stays above your windows. It is the quickest way to use DecisionsAI:
 
-WhatsApp can be a source of client work. Link one or more contacts or groups to an existing ticket board, then ask the agent from Telegram to check what came in. DecisionsAI can collect the relevant messages, media, and voice transcriptions, show you what it found, and wait for approval before creating tracked work. When approved work reaches QA, it can prepare a WhatsApp reply and return it to Telegram for you to send, revise, or leave as a draft. It does not send merely because a worker finished, and only you move the ticket from QA to Complete.
+- Hold **Option + Command** on macOS to speak to the agent.
+- Hold **Control + Command** to dictate into the app in front of you.
+- Drop in a file, ask about the screen, run an action, or open Chat.
+- Change shortcuts, audio devices, models, and voices in Preferences.
 
-DecisionsAI is **model-agnostic, provider-agnostic, and CLI-agnostic**. It does not lock your projects or memory to one AI company. Start with a local model, connect a cloud provider, use Codex, Cursor, Claude Code, Pi, or another coding CLI, and swap them later without rebuilding the way you work. Memory defaults to **MemPalace** (dual-write with legacy stores) and ships a bundled **seed corpus pack** that mines on first run so planning conventions, page stencils, and agent heuristics are available without a separate download.
+Voice can run through local speech recognition and text-to-speech, or through configured cloud providers. Push-to-talk, dictation, and continuous conversation are separate modes, so you can use only the parts you need.
 
-Start with the voice agent. Add projects, tickets, Telegram, and workflows when you need them.
+## Give work a project
 
-## Start simple
+Quick questions stay in Chat. Substantial work belongs in **Development**, where it keeps a durable identity and the correct project context.
 
-At its simplest, DecisionsAI gives you two voice hotkeys:
+Development brings these surfaces together:
 
-- Hold **Option + Command** *(the default macOS push-to-talk shortcut)* to speak to the agent, ask for something, and hear its reply.
-- Hold **Control + Command** *(the default macOS dictation shortcut)* to turn your speech into text inside whichever app you are using.
+| Surface | Purpose |
+|---|---|
+| Planning | Shape the outcome and split larger work into sensible tasks |
+| Incoming | Review requests from connected channels before they become work |
+| Boards | Track tickets from backlog through QA and completion |
+| Threads | Keep the conversation, tool activity, changes, and evidence together |
+| Terminals | Follow coding CLI and harness sessions |
+| Workflows | Run repeatable multi-step work with validation and retries |
+| Reports | Review what changed, what passed, and what still needs a decision |
 
-> “Open Safari.”  
-> “Reply to this message.”  
-> “Take what I’m saying and clean it up.”  
-> “Summarize what is on my screen.”
+The agent chooses the lightest route that fits the request. A bounded edit can run directly in a Development thread. Repeatable or independently verifiable work can use a workflow. A completed run is still checked against the original request before it is treated as done.
 
-The agent can talk back, control your computer, run an action, or answer in Chat. Dictation simply writes what you say at the cursor. Both modes can run locally, so you do not need to begin with projects, workflows, or a collection of cloud accounts.
+## Use it away from your desk
 
-That is the first layer: **ask for something and the agent does it**.
+Telegram can send text, voice notes, screenshots, documents, approvals, and corrections to the same agent. The secure remote interface adds screen viewing, clicking, scrolling, typing, and file transfer.
 
-## Use your voice in three different ways
+WhatsApp can feed selected contacts or groups into project intake. DecisionsAI can collect the relevant text and media, prepare a ticket, and wait for approval before work starts. Outbound replies remain drafts until you approve them.
 
-Voice is not a single mode in DecisionsAI. You can use it according to what you are trying to do:
-
-| What you want | How you use it | What happens |
-|---|---|---|
-| **Talk to the agent** | Hold **Option + Command** by default on macOS | DecisionsAI understands the request, performs work, and replies |
-| **Write with your voice** | Hold **Control + Command** by default on macOS | Your speech is transcribed and inserted where you are typing |
-| **Trigger something familiar** | Say a voice command or use a saved shortcut | DecisionsAI opens an app, runs an action, pastes a snippet, or starts a recorded macro |
-
-The default macOS shortcuts are **Option + Command** for push-to-talk and **Control + Command** for dictation. Shortcuts are editable in **Preferences → Shortcut Keys**, so they can fit around the tools you already use.
-
-You can begin here and never touch a workflow. Voice, dictation, shortcuts, snippets, Chat, and actions are useful on their own.
-
-### Continuous conversation and audio routing
-
-Continuous mode keeps listening while DecisionsAI speaks, using the microphone and TTS output as separate tracks for echo-aware turn taking. Production echo cancellation uses WebRTC AEC3 against the speaker reference; use the physical microphone as **Input** and headphones or a separate output device as **Output** in **Preferences → Audio**. Push-to-talk remains independent. Cloud TTS includes ElevenLabs and **Fish Audio** (live PCM streaming) alongside the local and OpenAI Realtime paths.
-
-## Use it from your phone
-
-Telegram gives you the quickest way to reach the same agent away from your desk. Send a text, voice note, screenshot, or document and receive the answer in the same conversation.
-
-When you need more than messaging, send `remote` to the Telegram bot. DecisionsAI returns a secure link to its mobile web interface, where you can talk or type to the agent, use snippets, view the screen, click, scroll, and transfer files. It is an encrypted web remote for your own DecisionsAI instance—not a separate native mobile app or a second agent.
-
-At this stage it can still be simple: ask a question, send something to your computer, or tell the agent to perform one action. The project and workflow layers become useful only when the request needs to be tracked or carried through several steps.
-
-## Then give it a project
-
-Link a real project folder and continue speaking naturally:
-
-> “On my website, make the green order button black.”
-
-DecisionsAI uses the active project to understand what “the green button” refers to. It can create a ticket so the change is trackable, send the work to your coding agent or CLI, check the result, record the time, and tell you what changed.
-
-You do not need to name a model, write a technical prompt, or manually assemble a workflow for a small request.
+## How it fits together
 
 ```text
-You ask  →  DecisionsAI does the work  →  You get the result
-                         │
-                         └─ A project ticket keeps the history
+Oracle, Chat, Telegram, WhatsApp, mobile remote
+                         |
+                  Decisions agent
+                         |
+       project + ticket + Development thread
+                         |
+       direct tools or a validated workflow run
+                         |
+        files, apps, models, CLIs, and services
+                         |
+             evidence, report, and memory
 ```
 
-Projects give the agent a home for the work. Tickets give each request a visible record. Memory keeps useful facts, decisions, files, failures, and next actions available when you return—even if you change models later.
+The main pieces are:
 
-## Let it handle a larger job
+- `distr/core`: agent pipeline, tools, models, voice, memory, and workflows
+- `distr/gui`: Oracle, tray, Preferences, and the local web interface
+- `sidecar`: native computer control for keyboard, mouse, screen, and accessibility
+- `plugins`: IDE adapters and vendored capability packs
+- `skills`: focused instructions used by the agent and its harnesses
+- `tests`: unit, integration, property, and browser-facing regression checks
 
-Now ask for something bigger:
+MemPalace is the default consolidated memory backend. A bundled seed corpus supplies product conventions and planning context on first run. Legacy memory remains available as a fallback, and switching models does not require rebuilding project memory.
 
-> “Rebuild the checkout flow, fix the mobile layout, test it, and report back when it is ready.”
+## Models and integrations
 
-This is where the orchestrator and workflows become useful. DecisionsAI can split the request into tickets, use the existing **Development** workflow, and move the work through six clear stages:
+Different roles can use different workers: conversation, planning, coding, vision, image generation, Computer Use, workflow steps, and review. DecisionsAI supports local Ollama models and configured hosted providers such as OpenAI, Anthropic, OpenRouter, Groq, Google, ElevenLabs, Fish Audio, and AssemblyAI.
 
-```text
-Understand → Plan → Build → Review and test → Fix what failed → Report
-```
+Connected services include Google Workspace, Telegram, WhatsApp, Discord, Jira, Trello, IDEs, and coding CLIs. Credentials are stored locally unless a service explicitly requires a relay or its own cloud API.
 
-The workflow is not the product you have to operate. It is the method DecisionsAI uses when a request is too large or risky for a single action. The Workflows screen is there when you want to inspect progress, see which worker is active, review evidence, or steer the run.
+## Install
 
-DecisionsAI reuses a suitable workflow before considering a new one. The Development workflow already covers project context, implementation, independent review, testing, correction, reporting, and memory. Specialist workflows are only useful when they add something genuinely different.
-
-## Grow into it
-
-The product becomes more capable as your work becomes more demanding:
-
-| Your request | What DecisionsAI adds |
-|---|---|
-| “Open this app” | Voice control and computer actions |
-| “Rewrite this paragraph” | Dictation, Chat, and the conversational model |
-| “Change this project” | Project context, a ticket, a coding worker, and time history |
-| “Build and test this feature” | Planning, implementation, independent validation, and correction |
-| “Handle these requests while I’m away” | Telegram, approvals, background runs, and reports |
-| “Use the best worker for every step” | Automatic routing across local models, APIs, and coding CLIs |
-
-Start with one model if that is all you need. Later, you can give planning, coding, vision, Computer Use, and review to different workers. DecisionsAI keeps the project and memory stable while Codex, Cursor, Claude Code, Pi, Ollama, OpenRouter, or another configured provider does a particular part of the job.
-
-As the work grows, Telegram grows with it. The same conversation that handled a quick voice note can receive progress, present approval buttons, accept a correction, steer a running workflow, and return the final report. The web interface becomes mission control rather than another inbox you must watch.
-
-**Ollama runs models. DecisionsAI runs work.**
-
-<p align="center">
-  <img src="assets/readme/avatar.webp" alt="DecisionsAI animated agent skins" />
-</p>
-
-## What you get
-
-| | Capability | In plain English |
-|---|---|---|
-| 🎙️ | **Voice and dictation** | Talk to the agent or dictate into any app |
-| 💬 | **Chat** | Ask questions, work with files, and follow activity |
-| 🗂️ | **Projects and tickets** | Keep every piece of work attached to the right place |
-| 🔁 | **Development area** | Plan, intake, board, terminal, workflow, report, and thread a job in one project home |
-| 📱 | **Telegram control** | Send work and make decisions from your phone |
-| 🧠 | **Portable memory (MemPalace)** | Keep what was learned—and a first-run seed corpus—when you change models or CLIs |
-| 🧰 | **Skills and tools** | Use the browser, Computer Use, code, files, connected apps, and project-specific instructions |
-| 👀 | **Visible progress** | See the current step, worker, elapsed time, evidence, and result |
-| 🔒 | **Local-first operation** | Keep speech, models, memory, and projects local when you choose |
-
-Ready to try it? Jump to [Installation](#installation). You can start with the voice agent and add the rest later.
-
----
-
-## The Local Web Interface
-
-DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open it from the Oracle menu or the in-app tray. The surfaces below are the ones you live in day to day—Development is the project home; the rest stay available for chat, preferences, and shared tools.
-
-| Section | What you do there |
-|---|---|
-| **Chat** | Talk to the agent, switch model and voice inside a thread, compact context, fork chats, and read system activity inline |
-| **Development** | Project-scoped home for real work. One place for planning, incoming requests, boards, terminals, workflows, reports, and durable threads so a job keeps its project, ticket, run, changes, and evidence together |
-| **Development → Planning** | Shape the outcome before tools run—break work into sensible tasks and keep the plan attached to the project |
-| **Development → Incoming** | Review work that arrived from WhatsApp, Telegram, or other intake before it becomes a tracked ticket |
-| **Development → Boards** | Local, Jira, and Trello boards; link WhatsApp contacts or groups; move work Backlog → In Progress → QA → Complete |
-| **Development → Terminals** | Watch coding CLI / harness sessions (Cursor, Codex, Claude Code, Pi, and friends) without leaving the project |
-| **Development → Workflows** | Multi-step runs with Loops presets, Step Runner execution, validation, harness steering, and browser evidence |
-| **Development → Reports** | Read what finished, what failed, and what still needs a decision |
-| **Development → Threads** | Durable conversation + run identity for a piece of work, including composer controls and steering |
-| **Workflow Studio** | Inspect and edit workflow definitions when you want the graph, not only the run |
-| **Projects** | Project workspace with context blocks, linked files, and IDE / coding backend setup |
-| **Preferences** | Models and voices (including Fish Audio and ElevenLabs), API keys, Google / Telegram / WhatsApp, MCP, and behavior |
-| **Skins** | Browse and swap avatar skins |
-| **Actions** | View, edit, rename, and trigger recorded macros |
-| **Snippets** | Manage text or code snippets with trigger words |
-| **Automations** | Scheduled instruction workflows with Run Now, history, and a calendar for time-entry blocks linked to tickets |
-| **Skills** | Browse local and vendored skills, including [ECC-backed capabilities](plugins/ecc/README.md) and optional Jev decision-routing skills, without duplicate setup |
-| **Discord Community** | Join the DecisionsAI community for updates, feedback, and support |
-
-<p align="center">
-  <img src="artifacts/development-refactor-2026-09-05/threads-1440.png" alt="DecisionsAI Development workspace" />
-</p>
-
----
-
-## Memory: MemPalace + seed corpus
-
-DecisionsAI keeps project memory portable across models and coding CLIs. By default it uses **MemPalace** as the consolidated memory backend (`mempalace_memory_backend`, default **on**). When the flag is on, useful writes dual-write into a Decisions-owned palace at `~/.decisions/mempalace/palace`, and reads prefer MemPalace with a legacy fallback. Turn it off with Settings or `DECISIONS_MEMPALACE_MEMORY_BACKEND=0` if you need a pure legacy path—nothing is deleted either way.
-
-A curated **seed corpus pack** ships inside the app at `distr/seed-corpus-pack` (about 9–12 MB of conventions, page stencils, entity/domain notes, harness ops, and agent heuristics—no Chroma database in git). On first run, when MemPalace is enabled and `chromadb` / `mempalace` are importable, Decisions mines that pack in the background into wing `seed_corpus_pack` so planning and quality context are already there. Soft-fails with a clear setup message when those optional deps are missing; the GUI still starts.
-
-Local one-shot helper (dev checkout):
-
-```bash
-python -m distr.core.mempalace
-```
-
-The macOS `.app` build rsyncs all of `distr/` (including the seed pack) into the bundle. Chroma data is created on the machine at first mine, not baked into the installer.
-
----
-
-## System Requirements
-
-### Offline / local mode
-
-| | |
-|---|---|
-| **OS** | macOS (Apple Silicon & Intel), Windows, Linux |
-| **RAM** | 8 GB minimum; 12 GB recommended for ornith:9b |
-| **Python** | 3.12 |
-| **System deps** | PortAudio, FFmpeg |
-| **Disk** | ~200 MB for cloud models; ~6 GB for full local models |
-
-> DecisionsAI detects your system RAM at first launch and picks models that fit. Local models use your machine's memory. Cloud models (marked `:cloud`) run remotely and do not load their weights into local RAM.
->
-> **Recommended local setup (12 GB+ RAM):**
->
-> | Role | Model | RAM needed |
-> |---|---|---|
-> | Chat | `ornith:9b` | ~6 GB |
-> | Coding | `ornith:9b` | ~6 GB |
-> | Vision | `qwen3-vl:2b` | ~1.9 GB |
-> | Image | `x/flux2-klein:latest` | local only |
->
-> **Local-only fallbacks (10 GB+ RAM):**
->
-> | RAM | Chat model | Coding model | Approx. VRAM |
-> |---|---|---|---|
-> | 10–11 GB | `qwen3:4b` | `qwen2.5-coder:3b` | ~3.5 GB |
-> | 12+ GB | `ornith:9b` | `ornith:9b` | ~6 GB |
-
-### Online / cloud mode
-
-| | |
-|---|---|
-| **RAM** | 4 GB minimum, 8 GB recommended |
-| **Disk** | ~200 MB |
-| **Internet** | Stable connection required |
-
-No large model downloads. Only Whisper.cpp and Kokoro install locally. Use local models for sensitive work and cloud models when you need bigger weights.
-
-<p align="center">
-  <img src="assets/readme/about.webp" alt="DecisionsAI About" />
-</p>
-
----
-
-## Installation
-
-### One-liner
+### One line
 
 ```bash
 curl -fsSL https://decisions.tensology.com/install.sh | bash
 ```
 
-### Quick start
+### From source
 
 ```bash
 git clone https://github.com/tensology/decisionsai.git
 cd decisionsai
 ```
 
-| Platform | Command |
+| Platform | Start command |
 |---|---|
-| **macOS** | Double-click `decisions.app`, or `./bin/decisions.sh` |
-| **Windows** | Double-click `bin/decisions.bat`, or `bin/decisions.ps1` |
-| **Linux** | `./decisions` |
+| macOS | Double-click `decisions.app`, or run `./bin/decisions.sh` |
+| Windows | Run `bin/decisions.bat` or `bin/decisions.ps1` |
+| Linux | Run `./decisions` |
 
-The launcher handles dependency checks, Python setup, model downloads, and launch automatically.
+The launcher checks dependencies, prepares Python, downloads the selected local models, and starts the app. Python 3.12, FFmpeg, and PortAudio are the main system requirements. Local models generally need at least 8 GB RAM; cloud-only use is lighter.
 
-When [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), or the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md) are available on the machine, setup and every `bin/start.py` run recalibrate the **harness stack**: repair IDE plugins, re-project skills (so plugin reinstall does not wipe them), refresh MCP recommendations, and merge safe MCP servers into Cursor/Codex configs. Third-party keys such as Composio and Cursor API tokens are stored in **Preferences → API Keys** and injected at recalibrate time — you should not need to edit `~/.cursor/mcp.json` by hand.
-
-### Manual installation
+To prepare a source checkout manually inside an existing Python 3.12 environment:
 
 ```bash
-# 1. Python environment
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 2. Dependencies
-pip install -r requirements.txt
-
-# 3. Download AI models
+python -m pip install -r requirements.txt
 python bin/setup.py
-
-# 4. Start
 python bin/start.py
 ```
 
-**System deps:** `brew install portaudio ffmpeg` (macOS) · `sudo apt-get install portaudio19-dev ffmpeg` (Linux) · winget/Chocolatey/Scoop (Windows)
+## Development
 
-### Optional components
-
-| Component | Install | Notes |
-|---|---|---|
-| **Vosk** (alt STT) | `python bin/setup_vosk.py` | ~1.8 GB English model |
-| **Voice cloning** | Built-in for Kokoro and ElevenLabs | Click **+ Custom** next to voice dropdown in Preferences |
-
----
-
-## Quality checks
-
-Run the test suite with:
+Run the Python checks with the project's Python 3.12 environment:
 
 ```bash
-pytest
+python -m pytest
 ```
 
-This runs the unit and property-based tests, skipping optional heavy dependencies by default.
+The setup and start paths also recalibrate installed Codex and Cursor integrations, project skills, and safe MCP configuration. More detail is available in [the orchestrator documentation](docs/orchestrator.md), [the sidecar README](sidecar/README.md), and the plugin READMEs under `plugins/`.
 
-## Keyboard & Voice Commands
+## Privacy and safety
 
-### Voice commands
+- No desktop telemetry is enabled by default.
+- Local models, speech, memory, and project work can remain local.
+- Cloud providers receive only the requests you send through them.
+- Remote and messaging features use the Decisions relay and have separate retention rules.
+- Tool mutations use shared safety controls so a stopped or repeated turn does not quietly repeat an external write.
 
-Exact phrasing can vary.
-
-| Category | Examples |
-|---|---|
-| **Navigation** | "Open Safari", "Focus on Slack", "New tab", "Close", "Open spotlight" |
-| **Text editing** | "Copy", "Paste", "Undo", "Select all", "Delete line" |
-| **Mouse** | "Mouse up", "Click", "Double click", "Scroll down", "Move mouse center" |
-| **AI assistant** | "Dictate", "Transcribe", "Explain this", "Rework this", "Summarize this", "Translate" |
-| **Macros** | "Start recording", "Stop recording", "Run action [name]" |
-| **Media** | "Pause", "Next track", "Volume up", "Mute" |
-| **System** | "Start listening", "Stop speaking", "Exit" |
-
-### Global shortcuts
-
-Defaults are editable in **Preferences → Shortcut Keys**.
-
-| Shortcut | Action |
-|---|---|
-| Hold `Option + Command` | Push-to-talk |
-| Hold `Control + Command` | Hold-to-dictate |
-| `Cmd + Option + C` | Open Chat web UI |
-| `Cmd + Option + J` | Open Projects web UI |
-| `Cmd + Option + A` | Open Actions web UI |
-| `Cmd + Option + N` | Open Snippets web UI |
-| `Cmd + Option + W` | Open Workflows web UI |
-| `Cmd + Option + ~` | Open Preferences web UI |
-| `Control + Command + Left / Right` | Previous / next skin |
-| `Cmd + Option + 1..9` | Select skin by index (`1` = Oracle) |
-| `Control + Command + Up / Down` | Increase / decrease Oracle size |
-| `Cmd + Option + S` | Toggle recording start/stop |
-
----
-
-## Integrations
-
-### Telegram
-
-Connect in **Preferences → Advanced → Telegram**. Telegram is the fastest way to hand DecisionsAI work from anywhere: send text, a voice note, screenshot, document, correction, or follow-up. The same orchestrator can answer directly, create/update a project ticket, start a workflow, pause for a decision, or steer an existing run. Inline buttons and typed or spoken replies support approve, reject, continue, stop, and feedback. Progress and final reports return to the same conversation. Type `remote` for an HMAC-encrypted link to the full remote-control UI: screen stream, click, type, scroll, and file transfer.
-
-### WhatsApp
-
-Connect WhatsApp in **Preferences → Advanced**, then link a contact or group feed to a Ticket Board. DecisionsAI can sync incoming text, voice/media metadata, captions, and conversation context; configured boards can auto-snapshot new messages into durable tickets. From there the normal approval and orchestration policy can route the ticket to a project, direct action, or workflow. This deliberately keeps ordinary conversation from becoming unintended execution: only the feeds and autonomy boundaries you configure become work.
-
-### Google Workspace
-
-Connect via **Preferences → Advanced → Google** (OAuth 2.0).
-
-| Service | Capabilities |
-|---|---|
-| **Gmail** | Read, send, draft, reply |
-| **Calendar** | Create events, check schedule |
-| **Drive** | List, read, upload |
-| **Docs** | Create from Markdown |
-| **Sheets** | Read and interact |
-
-### IDE Integration
-
-[Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md), and other coding backends attach to project context. Ticket-board work, IDE chats, workflow runs, and automation runs can report back to the orchestrator when the project link is set.
-
-Setup installs or repairs the local [Codex](plugins/codex-ide/README.md) and [Cursor](plugins/cursor-ide/README.md) plugins when those tools are present. They emit session events into [Orchestrator](docs/orchestrator.md) so the desktop agent can see IDE progress instead of losing it inside the editor.
-
-**Harness stack** (orchestrated from `distr/core/harness_stack.py`, run on `bin/setup.py` and quietly on every `bin/start.py`):
-
-| Pack | What it adds |
-|---|---|
-| ECC | Vendored skills, agents, commands (`plugins/ecc`) |
-| Competition | Ponytail + Fallow skills and Cursor ponytail rule — see [ponytail/fallow assessment](audit-docs/ponytail-fallow-reference-assessment.md) |
-| Capabilities | Browser QA, Playwright, content-engine, fal-ai-media |
-| Design references | Refero, Mobbin, Aceternity, Godly + UI ideation skills |
-| Agent Reach | Public web/social research (Twitter, Reddit, YouTube, Exa, …) |
-| Community skills | humanizer, last30days, curated marketing + design aesthetics |
-| yt-dlp | YouTube metadata/subtitles + workflow `ytdlp` steps |
-| Composio Connect | SaaS tool Router MCP (replaces deprecated Rube) |
-| Agent accountability | BuilderIO Agent Watchdog audits Codex, Cursor, Claude, PR, branch, and workflow completion claims |
-| Context compression | Headroom standalone MCP and skill are enabled by default with a local store; provider traffic proxying stays off |
-| MCP harness | Catalog + add-only merge into Cursor/Codex; see `~/.decisions/harness/mcp-recommendations.json` |
-
-Workflow runs can push a **pre_chain** of skills into the active project harness (browser, design, agent-watchdog, agent-reach, composio, yt-dlp, etc.) based on ticket text and project surface.
-
-Development threads own their workflow runs. Deterministic instruction analysis chooses direct execution or launches a `workflow_orchestrator` sub-agent in the same thread; its step workers inherit the run's model route, infrastructure skills, evidence contract, and parent-thread reporting identity.
-
-The Decisions agent exposes **`ide_thread`** to list, read, and prompt Codex/Cursor sessions. **Composio** API keys live under **Preferences → API Keys**; saving recalibrates MCP headers automatically.
-
-[Orchestrator](docs/orchestrator.md) holds tickets, boards, automations, workflows, browser runs, project folders, and IDE sessions in one ledger. Local skills live under `skills/`; vendor packs under `plugins/*-pack/`.
-
-### Models are roles, not a lock-in
-
-Preferences separates the conversational/orchestrator LLM, coding LLM, vision model, image model, Computer Use model, Step Runner, and board agent. Each workflow step can override the backend, provider, model, tools, skills, cost tier, and independence requirement.
-
-With opt-in **Auto** routing, DecisionsAI evaluates the step role, complexity, risk, capability requirements, and recorded failures. It can plan with Codex, implement bounded work with a free/local Ornith model, choose an independent reviewer such as HY3, and escalate to more expensive providers only when the lower tier has produced evidence that it is stuck. The chosen route and reason appear immediately in Runs/chat activity.
-
-[Ornith 1.0](https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B) is a particularly strong local fit: the open-source agentic-coding family includes 9B and 35B variants with tool calling. DecisionsAI supports `ornith:9b` for accessible local work and configured 35B variants for more capable machines, while keeping the project memory portable if you swap it out later.
-
----
-
-## Workflows
-
-Multi-step workflows run on the **Step Runner**. **Loops** are reusable development and operational playbooks on top of that runner. A group of project tickets can move through planning, implementation, independent review, tests, browser QA, approval, and reporting while each step uses a different model or CLI. Import a loop preset, steer a waiting harness from Telegram or the web UI, and inspect validation, routing history, executor context, evidence, heartbeats, and reports in the existing Runs/chat surfaces.
-
-| Concept | How it works |
-|---|---|
-| **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, Playwright scripts, or **yt-dlp** (metadata/subtitles/search) |
-| **Tool-calling agent** | Each step uses an LLM with native tool calling |
-| **Validation** | Text matching, rule-based checks, LLM judgment, or screenshot comparison |
-| **Static routing** | Pick a "go to" step for pass/fail |
-| **Agent routing** | Prompt the agent; it picks the next step |
-| **Recording** | 3-2-1 countdown, captures keyboard + mouse, replays automatically |
-| **Presets** | Export/import `.dwf` bundles (workflow + recordings + screenshots) |
-| **Scheduling** | Hourly, daily, or weekly on specific days |
-| **Agent Context** | One context block for rules, credentials, and conventions prepended to step prompts |
-| **Per-step workers** | Choose or auto-detect provider, model, CLI, capabilities, skills, tools, cost tier, and reviewer independence |
-| **Neutral memory** | Save facts, decisions, evidence, files changed, blockers, and next actions without binding the project to one harness |
-| **Remote interaction** | Approve, reject, continue, stop, or steer from Telegram; mirror meaningful progress and results back to the originating channel |
-
-<p align="center">
-  <img src="assets/readme/steprunner.webp" alt="Workflows" />
-</p>
-
----
-
-## Technology Stack
-
-You do not need to understand this stack to use DecisionsAI. These are the main components for people who want to extend or audit it.
-
-**Offline core:**
-
-| Component | Role |
-|---|---|
-| [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) | Fast, accurate offline speech recognition |
-| [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) | High-quality offline TTS + custom voice cloning (on-device) |
-| [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK, 100+ speakers) |
-| [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
-| [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
-| **[Orchestrator](docs/orchestrator.md)** | Internal ledger for ticket routing, IDE sessions, browser evidence, validation, correction loops, and run memory |
-| **[Sidecar (Go)](sidecar/README.md)** | Machine control: accessibility tree, mouse/keyboard, screenshots, drag, scroll, and Python execution |
-
-**Optional cloud services:**
-
-| Service | What it adds |
-|---|---|
-| [OpenRouter](https://openrouter.ai/) | One connection to a changing catalog of hosted models |
-| [OpenAI](https://openai.com/) | OpenAI language, vision, and tool-capable models |
-| [Anthropic](https://www.anthropic.com/) | Claude language and coding models |
-| [ElevenLabs](https://elevenlabs.io/) | Cloud TTS with voice cloning |
-| [Fish Audio](https://fish.audio/) | Cloud TTS provider (S2.1 Pro library + live PCM streaming) |
-| [MemPalace](distr/core/mempalace/SETUP.md) | Default-on consolidated memory + first-run seed corpus mine |
-| WebRTC AEC3 (`pywebrtc-audio`) | Echo cancellation for continuous conversational turn-taking |
-| [AssemblyAI](https://www.assemblyai.com/) | Advanced transcription and speech recognition |
-
----
-
-## Project Structure
-
-```
-bin/                 # Launchers and setup scripts
-distr/
-  core/mempalace/     # MemPalace adapter, flags, first-run seed mine
-  seed-corpus-pack/  # Vendored planning/conventions corpus (ships in .app)
-├── core/            # Agent pipeline, LLM, STT, TTS, actions, workflows
-├── gui/
-│   ├── dialogs/     # About, preferences windows
-│   ├── oracle/      # Oracle overlay and tray
-│   └── web/         # Local web UI (templates, static, API)
-plugins/             # IDE plugins (codex-ide, cursor-ide), ECC, and vendor harness packs (competition, agent-reach, community-skills, yt-dlp)
-skills/              # Local Decisions skills (harness stack, playwright, composio, design references, …)
-sidecar/             # Go binary: machine control (macOS/Windows)
-assets/
-├── avatars/         # Skin packs (Clippy, Nugget, Rusty, Masko, etc.)
-└── readme/          # README images
-docs/                # Orchestrator docs (local planning notes stay gitignored)
-.artifacts/          # Gitignored local runtime output (tickets, pi skills, cursor handoffs)
-tests/               # Property-based and unit tests
-```
-
----
-
-## Legal References
-
-| Document | URL | Policy check date |
-|---|---|---|
-| Privacy Policy | <https://decisions.tensology.com/privacy> | 2026-05-22 |
-| Terms and Conditions | <https://decisions.tensology.com/terms> | 2026-05-22 |
-
-Connected services can include WhatsApp, Telegram, Gmail, Jira, Trello, shared chat rooms, uploaded files, voice notes, images, project folders, CLI/IDE logs, model-provider requests, and workflow audit trails. Review the public policies before connecting external accounts or data sources.
-
----
+Read the current [Privacy Policy](https://decisions.tensology.com/privacy) and [Terms and Conditions](https://decisions.tensology.com/terms) before connecting external accounts or sensitive data.
 
 ## Contributing
 
-Suggestions, bug reports, and pull requests are welcome. Open an issue to discuss a change before sending a PR. Check existing issues first to avoid overlap.
+Issues and pull requests are welcome. Please check existing issues before opening a duplicate and keep changes focused enough to review and verify.
 
 ## License
 
-Licensed under the TENSOLOGY COMMUNITY LICENSE AGREEMENT. See [LICENSE.md](LICENSE.md) for details.
+DecisionsAI is licensed under the [MIT License](LICENSE.md). Third-party components and assets remain subject to their own notices and licences.
 
----
-
-> **Note:** This project has no cryptocurrency or token associated with it. Any coin using the DecisionsAI name is not affiliated with us.
+> DecisionsAI has no cryptocurrency or token. Any coin using the name is unaffiliated with this project.

@@ -24,6 +24,11 @@ from distr.core.agent.libs import (
 from distr.core.agent.services.llm.prompt import (
     load_system_prompt_template, build_tools_description,
 )
+from distr.core.agent.services.llm.tool_execution_policy import (
+    remember_successful_tool_call,
+    sanitized_tool_arguments,
+    tool_execution_block_reason,
+)
 from ..base_service import BaseLLMService
 
 logger = logging.getLogger(__name__)
@@ -360,14 +365,45 @@ class AnthropicLLMService(BaseLLMService):
                         try:
                             logger.info("🔧 Anthropic tool: %s (round %d)", tu["name"], round_num)
                             safe_input = self._normalize_tool_kwargs(tool, tu["input"])
+                            user_text = self._last_user_message_text()
+                            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                            from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
+
+                            block_reason = tool_execution_block_reason(
+                                self, tu["name"], safe_input, user_text
+                            )
+                            if block_reason:
+                                record_tool_execution(
+                                    chat_id,
+                                    tu["name"],
+                                    block_reason,
+                                    "failed",
+                                    event_queue=self.event_queue,
+                                    metadata={"arguments": sanitized_tool_arguments(safe_input)},
+                                )
+                                tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": block_reason})
+                                continue
+                            record_tool_start(
+                                chat_id,
+                                tu["name"],
+                                metadata={"arguments": sanitized_tool_arguments(safe_input)},
+                            )
                             loop = asyncio.get_running_loop()
                             result = await loop.run_in_executor(
                                 None, lambda t=tool, inp=safe_input: t._run(**inp)
                             )
                             tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": str(result)})
-                            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
-                            from distr.core.agent.tool_audit import record_tool_execution
-                            record_tool_execution(chat_id, tu["name"], str(result), "completed", event_queue=self.event_queue)
+                            record_tool_execution(
+                                chat_id,
+                                tu["name"],
+                                str(result),
+                                "completed",
+                                event_queue=self.event_queue,
+                                metadata={"arguments": sanitized_tool_arguments(safe_input)},
+                            )
+                            remember_successful_tool_call(
+                                self, tu["name"], safe_input, user_text, result
+                            )
                         except Exception as e:
                             err_content = f"Error: {e}"
                             tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": err_content})

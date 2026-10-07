@@ -233,6 +233,10 @@ class OpenPageTool(BaseTool):
         self._chat_manager = chat_manager
 
     def _run(self, page: str = "", **kwargs) -> str:
+        spoken = resolve_open_page_key(str(kwargs.get("last_user_message") or ""))
+        # The request the user actually said wins over a wrong page argument.
+        if spoken:
+            return self._open(spoken)
         return self._open(page)
 
     async def _arun(self, page: str = "", **kwargs) -> str:

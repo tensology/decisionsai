@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maison Lumière — A single bottle, twelve years of attar · perfect-ui example</title>
+  <script>document.documentElement.classList.remove('no-js');</script>
+  <meta name="description" content="Example landing page from perfect-ui — luxury vibe, heritage perfumery. Demonstrates Tier 3 Lenis smooth-scroll setup with mandatory guards + GSAP ScrollTrigger sync." />
+  <link rel="icon" type="image/svg+xml" href="../favicon-light.svg" />
+
+  <!-- Cormorant Garamond (display) + Cormorant (body) — both include Vietnamese subset -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* Luxury vibe tokens — heritage perfumery palette */
+    :root {
+      --bg: #0E0E0C;
+      --bg-muted: #1A1A17;
+      --bg-elev: #232320;
+      --ink: #F0EBE0;
+      --ink-muted: #B8B3A6;
+      --ink-subtle: #807B70;
+      --accent: #C9A961;
+      --accent-soft: #4A3F24;
+      --rule: rgba(240, 235, 224, 0.14);
+      --rule-strong: rgba(240, 235, 224, 0.34);
+      --font-display: 'Cormorant Garamond', Georgia, serif;
+      --font-body: 'Cormorant', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+      --ease-signature: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      --dur-quick: 0.2s;
+      --dur-standard: 0.6s;
+      --dur-slow: 1.1s;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body { margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+      font-size: 17px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      background-image:
+        radial-gradient(at 5% 10%, rgba(201, 169, 97, 0.06), transparent 38%),
+        radial-gradient(at 95% 90%, rgba(201, 169, 97, 0.04), transparent 42%);
+      min-height: 100vh;
+    }
+
+    /* Subtle grain on dark bg */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.04;
+      mix-blend-mode: screen;
+      z-index: 1;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.6 0'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+    }
+
+    h1, h2, h3, h4 {
+      font-family: var(--font-display);
+      font-weight: 400;
+      letter-spacing: -0.005em;
+      margin: 0;
+    }
+    p { margin: 0; }
+
+    a {
+      color: var(--ink);
+      text-decoration: underline;
+      text-decoration-color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 4px;
+      transition: color var(--dur-standard) var(--ease-signature);
+    }
+    a:hover { color: var(--accent); }
+
+    /* ============ SCROLLBAR (luxury — gold thumb on deep ink track) ============ */
+    html { scrollbar-width: thin; scrollbar-color: var(--ink-muted) transparent; }
+    ::-webkit-scrollbar { width: 12px; height: 12px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--ink-muted) 50%, transparent);
+      border: 3px solid var(--bg);
+      border-radius: 6px;
+      background-clip: padding-box;
+      transition: background var(--dur-standard) var(--ease-signature);
+    }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+    ::-webkit-scrollbar-corner { background: transparent; }
+
+    /* ============ BANNER (example watermark) ============ */
+    .example-banner {
+      background: var(--accent);
+      color: var(--bg);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 10px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      position: relative;
+      z-index: 5;
+    }
+    .example-banner a {
+      color: var(--bg);
+      text-decoration-color: var(--bg);
+    }
+
+    /* ============ LAYOUT ============ */
+    .lux-wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 40px;
+      position: relative;
+      z-index: 2;
+    }
+
+    /* ============ NAV ============ */
+    .lux-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 40px 0 36px;
+      border-bottom: 1px solid var(--rule);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+    }
+    .lux-brand {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 26px;
+      color: var(--ink);
+      letter-spacing: 0;
+      text-transform: none;
+      text-decoration: none;
+    }
+    .lux-cta-mini {
+      border: 1px solid var(--accent);
+      padding: 10px 18px;
+      color: var(--accent);
+      text-decoration: none;
+      transition: background var(--dur-standard) var(--ease-signature),
+                  color var(--dur-standard) var(--ease-signature);
+    }
+    .lux-cta-mini:hover { background: var(--accent); color: var(--bg); }
+
+    /* ============ HERO ============ */
+    .lux-hero {
+      padding: 120px 0 140px;
+      display: grid;
+      grid-template-columns: 7fr 5fr;
+      gap: 80px;
+      align-items: start;
+    }
+    .lux-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 40px;
+    }
+    .lux-h1 {
+      font-family: var(--font-display);
+      font-size: clamp(56px, 8.5vw, 132px);
+      line-height: 0.96;
+      letter-spacing: -0.01em;
+      margin: 0;
+    }
+    .lux-h1 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+    .lux-h1 .line-mask {
+      display: block;
+      overflow: hidden;
+    }
+    .lux-h1 .line-inner {
+      display: block;
+      transform: translateY(110%);
+      will-change: transform;
+    }
+
+    .lux-hero-aside {
+      align-self: end;
+      padding-bottom: 24px;
+    }
+    .lux-hero-sub {
+      font-size: 19px;
+      line-height: 1.55;
+      color: var(--ink-muted);
+      max-width: 38ch;
+      font-style: italic;
+    }
+    .lux-cta-row {
+      margin-top: 48px;
+      display: flex;
+      gap: 28px;
+      align-items: center;
+    }
+    .lux-cta-primary {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 18px 28px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      text-decoration: none;
+      transition: background var(--dur-standard) var(--ease-signature),
+                  letter-spacing var(--dur-standard) var(--ease-signature);
+    }
+    .lux-cta-primary:hover {
+      background: var(--ink);
+      letter-spacing: 0.22em;
+    }
+    .lux-cta-secondary {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      text-decoration: none;
+      border-bottom: 1px solid var(--accent);
+      padding-bottom: 3px;
+    }
+    .lux-cta-secondary:hover { color: var(--accent); }
+
+    .lux-hero-bottle {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+    }
+    .lux-hero-bottle svg {
+      max-width: 220px;
+      height: auto;
+    }
+
+    /* ============ LETTER ============ */
+    .lux-letter {
+      padding: 120px 0;
+      border-top: 1px solid var(--rule);
+      display: grid;
+      grid-template-columns: 3fr 7fr;
+      gap: 80px;
+      align-items: start;
+    }
+    .lux-letter-head {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .lux-letter-body h2 {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: clamp(36px, 4vw, 60px);
+      line-height: 1.05;
+      letter-spacing: -0.005em;
+      margin: 0 0 40px;
+      max-width: 20ch;
+    }
+    .lux-letter-body h2 em {
+      color: var(--accent);
+    }
+    .lux-letter-body p {
+      font-size: 19px;
+      line-height: 1.7;
+      color: var(--ink-muted);
+      max-width: 60ch;
+    }
+    .lux-letter-body p + p { margin-top: 22px; }
+
+    /* ============ ESSENCES (3 featured) ============ */
+    .lux-essences {
+      padding: 120px 0;
+      border-top: 1px solid var(--rule);
+    }
+    .lux-essences-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 64px;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .lux-essences-head h2 {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: clamp(36px, 4vw, 60px);
+      max-width: 18ch;
+      letter-spacing: -0.005em;
+      line-height: 1.05;
+    }
+    .lux-essences-head h2 em { color: var(--accent); }
+    .lux-essences-head-meta {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--ink-subtle);
+    }
+
+    .lux-essences-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+    }
+    .lux-essence {
+      border: 1px solid var(--rule);
+      padding: 36px 28px 32px;
+      background: var(--bg-muted);
+      transition: border-color var(--dur-standard) var(--ease-signature),
+                  transform var(--dur-standard) var(--ease-signature);
+    }
+    .lux-essence:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .lux-essence-num {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      color: var(--accent);
+    }
+    .lux-essence h3 {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 30px;
+      line-height: 1.05;
+      margin: 14px 0 6px;
+    }
+    .lux-essence-note {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--ink-subtle);
+      margin-bottom: 20px;
+    }
+    .lux-essence-desc {
+      font-size: 16px;
+      line-height: 1.55;
+      color: var(--ink-muted);
+      margin-bottom: 28px;
+    }
+    .lux-essence-price {
+      font-family: var(--font-display);
+      font-size: 22px;
+      color: var(--accent);
+      border-top: 1px solid var(--rule);
+      padding-top: 18px;
+    }
+
+    /* ============ PROCESS (4 steps with icons) ============ */
+    .lux-process {
+      padding: 120px 0;
+      border-top: 1px solid var(--rule);
+    }
+    .lux-process h2 {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: clamp(36px, 4vw, 60px);
+      letter-spacing: -0.005em;
+      margin: 0 0 72px;
+      max-width: 18ch;
+      line-height: 1.05;
+    }
+    .lux-process h2 em { color: var(--accent); }
+
+    .lux-process-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      counter-reset: stp;
+    }
+    .lux-process-step {
+      counter-increment: stp;
+      display: grid;
+      grid-template-columns: 80px 1fr 240px 60px;
+      gap: 40px;
+      padding: 40px 0;
+      border-top: 1px solid var(--rule);
+      align-items: start;
+    }
+    .lux-process-step:last-child { border-bottom: 1px solid var(--rule); }
+    .lux-process-step::before {
+      content: counter(stp, decimal-leading-zero);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.22em;
+      color: var(--accent);
+    }
+    .lux-process-step h3 {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 30px;
+      line-height: 1.05;
+      margin: 0 0 12px;
+    }
+    .lux-process-step p {
+      font-size: 17px;
+      line-height: 1.6;
+      color: var(--ink-muted);
+    }
+    .lux-process-meta {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-subtle);
+      padding-top: 12px;
+    }
+    .lux-process-icon {
+      justify-self: end;
+      color: var(--accent);
+    }
+    .lux-process-icon svg { display: block; }
+
+    /* ============ FINAL CTA ============ */
+    .lux-cta-final {
+      padding: 140px 0 80px;
+      border-top: 1px solid var(--accent);
+      display: grid;
+      grid-template-columns: 7fr 5fr;
+      gap: 80px;
+      align-items: end;
+    }
+    .lux-cta-final h2 {
+      font-family: var(--font-display);
+      font-size: clamp(48px, 6.5vw, 96px);
+      letter-spacing: -0.01em;
+      line-height: 1;
+      margin: 0;
+      max-width: 12ch;
+    }
+    .lux-cta-final h2 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+    .lux-cta-final-aside p {
+      font-size: 17px;
+      line-height: 1.6;
+      color: var(--ink-muted);
+      max-width: 38ch;
+      margin-bottom: 28px;
+      font-style: italic;
+    }
+
+    /* ============ FOOTER ============ */
+    .lux-foot {
+      padding: 56px 0 48px;
+      border-top: 1px solid var(--rule);
+      margin-top: 64px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-subtle);
+    }
+    .lux-foot a { color: var(--ink-subtle); text-decoration-color: var(--accent); }
+    .lux-foot a:hover { color: var(--accent); }
+
+    /* ============ REVEAL CLASSES (GSAP-driven) ============ */
+    .reveal {
+      opacity: 0;
+      transform: translateY(24px);
+      will-change: transform, opacity;
+    }
+    .reveal-soft {
+      opacity: 0;
+      transform: translateY(14px);
+      will-change: transform, opacity;
+    }
+    .reveal-fade { opacity: 0; will-change: opacity; }
+
+    /* No-JS + reduced-motion + Lenis-disabled fallback */
+    .no-js .reveal, .no-js .reveal-soft, .no-js .reveal-fade,
+    .no-js .lux-h1 .line-inner,
+    .lenis-disabled .lux-h1 .line-inner {
+      opacity: 1 !important;
+      transform: none !important;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+      .reveal, .reveal-soft, .reveal-fade,
+      .lux-h1 .line-inner {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+    }
+
+    /* Lenis required overrides — keep CSS-only scroll-behavior off when Lenis driving */
+    html.lenis, html.lenis body { height: auto; }
+    .lenis.lenis-smooth { scroll-behavior: auto !important; }
+    .lenis.lenis-stopped { overflow: hidden; }
+    .lenis.lenis-scrolling iframe { pointer-events: none; }
+    html.lenis-disabled { scroll-behavior: smooth; }
+
+    /* ============ RESPONSIVE ============ */
+    @media (max-width: 900px) {
+      .lux-wrap { padding: 0 24px; }
+      .lux-hero, .lux-letter, .lux-cta-final {
+        grid-template-columns: 1fr;
+        gap: 48px;
+      }
+      .lux-hero { padding: 80px 0 96px; }
+      .lux-letter, .lux-essences, .lux-process { padding: 80px 0; }
+      .lux-essences-grid { grid-template-columns: 1fr; gap: 24px; }
+      .lux-process-step { grid-template-columns: 60px 1fr; gap: 20px; }
+      .lux-process-meta, .lux-process-icon { display: none; }
+      .lux-hero-bottle { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Watermark banner — example output, not part of perfect-ui itself -->
+<div class="example-banner">
+  <span>Example output · luxury vibe · heritage perfumery · Tier 3 Lenis demo</span>
+  <a href="../index.html">← back to perfect-ui docs</a>
+</div>
+
+<div class="lux-wrap">
+
+  <!-- NAV -->
+  <nav class="lux-nav">
+    <a href="#" class="lux-brand">Maison Lumière</a>
+    <a href="#reserve" class="lux-cta-mini">Reserve a chapter</a>
+  </nav>
+
+  <!-- HERO -->
+  <header class="lux-hero">
+    <div class="reveal-fade">
+      <p class="lux-eyebrow">Grasse — established 1962</p>
+      <h1 class="lux-h1">
+        <span class="line-mask"><span class="line-inner">A single bottle,</span></span>
+        <span class="line-mask"><span class="line-inner"><em>twelve years</em></span></span>
+        <span class="line-mask"><span class="line-inner">of attar.</span></span>
+      </h1>
+      <div class="lux-cta-row reveal">
+        <a class="lux-cta-primary" href="#reserve">Reserve an essence</a>
+        <a class="lux-cta-secondary" href="#process">How it ages</a>
+      </div>
+    </div>
+
+    <aside class="lux-hero-aside reveal">
+      <p class="lux-hero-sub">
+        Hand-blended in Grasse from rare ingredients aged to the season the harvest demanded. Released a single batch each year.
+      </p>
+
+      <!-- Custom SVG: ornate perfume bottle silhouette with gold filigree -->
+      <div class="lux-hero-bottle" aria-hidden="true">
+        <svg viewBox="0 0 220 360" xmlns="http://www.w3.org/2000/svg">
+          <!-- Stopper -->
+          <rect x="86" y="6" width="48" height="22" rx="2" fill="none" stroke="currentColor" stroke-width="1.2" style="color: var(--accent);"/>
+          <line x1="98" y1="28" x2="98" y2="52" stroke="currentColor" stroke-width="1.2" style="color: var(--accent);"/>
+          <line x1="110" y1="28" x2="110" y2="52" stroke="currentColor" stroke-width="1.2" style="color: var(--accent);"/>
+          <line x1="122" y1="28" x2="122" y2="52" stroke="currentColor" stroke-width="1.2" style="color: var(--accent);"/>
+
+          <!-- Neck -->
+          <path d="M 88 52 L 80 78 L 80 86 L 140 86 L 140 78 L 132 52 Z" fill="none" stroke="currentColor" stroke-width="1.2" style="color: var(--accent);"/>
+
+          <!-- Body -->
+          <path d="M 60 86 Q 50 100 50 130 L 50 310 Q 50 340 80 340 L 140 340 Q 170 340 170 310 L 170 130 Q 170 100 160 86 Z" fill="none" stroke="currentColor" stroke-width="1.5" style="color: var(--accent);"/>
+
+          <!-- Liquid level -->
+          <path d="M 60 200 Q 110 195 160 200 L 160 310 Q 160 332 140 332 L 80 332 Q 60 332 60 310 Z" fill="currentColor" opacity="0.08" style="color: var(--accent);"/>
+          <path d="M 60 200 Q 110 195 160 200" stroke="currentColor" stroke-width="0.8" fill="none" opacity="0.4" style="color: var(--accent);"/>
+
+          <!-- Label band -->
+          <rect x="64" y="220" width="92" height="64" fill="none" stroke="currentColor" stroke-width="0.8" style="color: var(--accent);"/>
+          <line x1="76" y1="240" x2="144" y2="240" stroke="currentColor" stroke-width="0.5" opacity="0.6" style="color: var(--accent);"/>
+          <text x="110" y="258" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="14" fill="currentColor" style="color: var(--accent);">L</text>
+          <line x1="76" y1="270" x2="144" y2="270" stroke="currentColor" stroke-width="0.5" opacity="0.4" style="color: var(--accent);"/>
+
+          <!-- Botanical sprig left -->
+          <g style="color: var(--accent);">
+            <path d="M 22 270 Q 28 250 32 230 Q 36 218 38 206" stroke="currentColor" stroke-width="0.8" fill="none"/>
+            <path d="M 28 252 Q 22 248 18 252" stroke="currentColor" stroke-width="0.6" fill="none"/>
+            <path d="M 30 240 Q 36 236 40 240" stroke="currentColor" stroke-width="0.6" fill="none"/>
+            <path d="M 33 226 Q 27 220 23 224" stroke="currentColor" stroke-width="0.6" fill="none"/>
+            <path d="M 36 212 Q 42 208 46 212" stroke="currentColor" stroke-width="0.6" fill="none"/>
+          </g>
+
+          <!-- Botanical sprig right -->
+          <g style="color: var(--accent);">
+            <path d="M 198 270 Q 192 250 188 230 Q 184 218 182 206" stroke="currentColor" stroke-width="0.8" fill="none"/>
+            <path d="M 192 252 Q 198 248 202 252" stroke="currentColor" stroke-width="0.6" fill="none"/>
+            <path d="M 190 240 Q 184 236 180 240" stroke="currentColor" stroke-width="0.6" fill="none"/>
+            <path d="M 187 226 Q 193 220 197 224" stroke="currentColor" stroke-width="0.6" fill="none"/>
+            <path d="M 184 212 Q 178 208 174 212" stroke="currentColor" stroke-width="0.6" fill="none"/>
+          </g>
+        </svg>
+      </div>
+    </aside>
+  </header>
+
+  <!-- LETTER -->
+  <section class="lux-letter">
+    <div class="lux-letter-head">— A letter / Sylvain Beaumont, blender</div>
+    <div class="lux-letter-body reveal">
+      <h2>The slowest part is <em>waiting</em> for what's already true.</h2>
+      <p>My father bought the cellar in 1962 because the cliff behind it held still at fourteen degrees year-round. Twelve years later he opened the first amphora. The bergamot had become something my mother could not name; only smell, and decide it had been worth the wait.</p>
+      <p>We blend nothing in a hurry. Each year a single batch — fifty-four bottles, never more. They ship in the season the harvest demanded. If a vintage doesn't meet the cup, we hold it another year. We have not released a bad bottle in twenty-eight years because we have not released a bottle we doubted.</p>
+    </div>
+  </section>
+
+  <!-- ESSENCES (3 featured) -->
+  <section class="lux-essences" id="essences">
+    <div class="lux-essences-head">
+      <h2><em>Three essences,</em> presently aging.</h2>
+      <span class="lux-essences-head-meta">Released in the season of their making</span>
+    </div>
+
+    <div class="lux-essences-grid">
+      <article class="lux-essence reveal">
+        <div class="lux-essence-num">— 01</div>
+        <h3>Nuit Blanche</h3>
+        <div class="lux-essence-note">Aged 12 years · 30 ml · 54 bottles</div>
+        <p class="lux-essence-desc">White amber and iris over a base of vetiver carried out of season by patience alone.</p>
+        <div class="lux-essence-price">€340</div>
+      </article>
+
+      <article class="lux-essence reveal">
+        <div class="lux-essence-num">— 02</div>
+        <h3>Sous-Bois</h3>
+        <div class="lux-essence-note">Aged 14 years · 30 ml · 36 bottles</div>
+        <p class="lux-essence-desc">Wet oak moss and Atlas cedar, walked into being by a single autumn afternoon.</p>
+        <div class="lux-essence-price">€420</div>
+      </article>
+
+      <article class="lux-essence reveal">
+        <div class="lux-essence-num">— 03</div>
+        <h3>Premier Soleil</h3>
+        <div class="lux-essence-note">Aged 9 years · 30 ml · 72 bottles</div>
+        <p class="lux-essence-desc">Bergamot and saffron meeting late — the first warm hour after a long February.</p>
+        <div class="lux-essence-price">€280</div>
+      </article>
+    </div>
+  </section>
+
+  <!-- PROCESS -->
+  <section class="lux-process" id="process">
+    <h2><em>Four chapters,</em> each measured in years not weeks.</h2>
+
+    <ol class="lux-process-list">
+      <li class="lux-process-step reveal">
+        <div>
+          <h3>Source</h3>
+          <p>Six farms across Provence, Calabria, Sri Lanka. Handpicked at the morning the farmer says ready — never the morning the calendar does.</p>
+        </div>
+        <div class="lux-process-meta">Year 0 · harvest</div>
+        <span class="lux-process-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M24 6c-8 0-14 6-14 14 0 10 6 18 14 22 8-4 14-12 14-22 0-8-6-14-14-14z"/>
+            <path d="M24 6v36"/>
+            <path d="M18 16c2 1 4 4 6 4 2 0 4-3 6-4"/>
+            <path d="M16 24c3 1 5 4 8 4s5-3 8-4"/>
+          </svg>
+        </span>
+      </li>
+
+      <li class="lux-process-step reveal">
+        <div>
+          <h3>Age</h3>
+          <p>Sealed in clay amphorae set against the limestone cliff. Fourteen degrees, always. We open the seal once a year, smell it, write it down, close it again.</p>
+        </div>
+        <div class="lux-process-meta">Year 1 — 12 · cellar</div>
+        <span class="lux-process-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 10h16l-2 6h-12z"/>
+            <path d="M14 16c0 8 4 14 4 22 0 2 2 4 6 4s6-2 6-4c0-8 4-14 4-22"/>
+            <line x1="20" y1="22" x2="28" y2="22"/>
+            <line x1="20" y1="30" x2="28" y2="30"/>
+          </svg>
+        </span>
+      </li>
+
+      <li class="lux-process-step reveal">
+        <div>
+          <h3>Blend</h3>
+          <p>By hand. By Sylvain. Each batch in a single afternoon — no more than fifty-four bottles, sometimes thirty-six. The number is what the year gave us.</p>
+        </div>
+        <div class="lux-process-meta">Final year · atelier</div>
+        <span class="lux-process-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8h12v8l-2 4v18a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V20l-2-4z"/>
+            <line x1="20" y1="14" x2="28" y2="14"/>
+            <path d="M22 26h4"/>
+          </svg>
+        </span>
+      </li>
+
+      <li class="lux-process-step reveal">
+        <div>
+          <h3>Reserve</h3>
+          <p>Bottled by hand, sealed, signed. Each carries a chapter number out of the year's total. Yours is shipped within the season — by the farmer's calendar, not ours.</p>
+        </div>
+        <div class="lux-process-meta">Release · post + courier</div>
+        <span class="lux-process-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="8" y="14" width="32" height="24" rx="1"/>
+            <path d="M8 14l16 14L40 14"/>
+            <circle cx="24" cy="34" r="2.5" fill="currentColor"/>
+          </svg>
+        </span>
+      </li>
+    </ol>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="lux-cta-final" id="reserve">
+    <h2><em>Reserve</em> a chapter.</h2>
+    <div class="lux-cta-final-aside reveal">
+      <p>
+        Three essences open for reservation today. Each ships within the season of its making — we will write to you when yours is ready.
+      </p>
+      <a class="lux-cta-primary" href="#">Begin a reservation</a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="lux-foot">
+    <span>Maison Lumière · Grasse, France · est. 1962</span>
+    <span>Example output · perfect-ui v2.5.0</span>
+    <span><a href="../index.html">Docs ←</a></span>
+  </footer>
+
+</div>
+
+<!-- Lenis (Tier 3 smooth scroll runtime) -->
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
+
+<!-- GSAP + ScrollTrigger (Tier 4 sync — needed for scroll-triggered reveals + pinned scrub) -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+
+<script>
+/*
+  Tier 3-4 Lenis setup — verbatim pattern from references/smooth-scroll-flow.md.
+  This block is intentionally verbose + commented so skill users can copy-paste
+  for atmospheric vibes (luxury / glass-tech / organic / retro-futuristic / art-deco / playful).
+
+  Decision rationale (auto-applied at Phase 2e.1):
+  - Vibe: luxury (atmospheric set)
+  - Motion intensity: 2/3
+  - Hard guards (runtime): prefers-reduced-motion + touch-primary + CDN failure
+  → Tier 3 Lenis baseline + Tier 4 ScrollTrigger sync (because page uses scroll-triggered reveals).
+*/
+(function () {
+  'use strict';
+
+  // ---- Hard guards (NON-NEGOTIABLE) ------------------------------
+  // Skip smooth-scroll runtime if any of these fire.
+  // Native scroll fallback handles all three cases.
+
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.documentElement.classList.add('lenis-disabled');
+    return; // a11y — never override user preference
+  }
+
+  if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) {
+    document.documentElement.classList.add('lenis-disabled');
+    return; // touch-primary devices — native momentum beats Lenis
+  }
+
+  if (typeof window.Lenis === 'undefined' || typeof window.gsap === 'undefined') {
+    document.documentElement.classList.add('lenis-disabled');
+    return; // CDN failure — graceful fallback
+  }
+
+  // ---- Lenis init ------------------------------------------------
+  // Luxury config: slower lerp (0.08) for ultra-premium feel.
+  // duration 1.4 = slow enough to feel intentional, not draggy.
+  // syncTouch: false = mobile + tablet stylus use native momentum.
+  var lenis = new window.Lenis({
+    lerp: 0.08,
+    duration: 1.4,
+    smoothWheel: true,
+    syncTouch: false,
+    easing: function (t) { return Math.min(1, 1.001 - Math.pow(2, -10 * t)); }
+  });
+
+  window.__lenis = lenis;
+
+  // ---- GSAP / ScrollTrigger sync (Tier 4 upgrade) ----------------
+  // Drive Lenis from GSAP's ticker (single rAF — smoother than two loops).
+  // Keep ScrollTrigger in sync with Lenis's virtual scroll position.
+  if (window.ScrollTrigger) {
+    window.gsap.registerPlugin(window.ScrollTrigger);
+    window.gsap.ticker.add(function (time) {
+      lenis.raf(time * 1000);
+    });
+    window.gsap.ticker.lagSmoothing(0);
+    lenis.on('scroll', window.ScrollTrigger.update);
+  } else {
+    // Tier 3 fallback — standalone rAF loop (no GSAP available)
+    requestAnimationFrame(function raf(time) {
+      lenis.raf(time);
+      requestAnimationFrame(raf);
+    });
+  }
+
+  // ---- GSAP defaults — luxury Brand Motion Identity --------------
+  // Signature ease: cubic-bezier(0.25, 0.46, 0.45, 0.94) = "Premium" personality.
+  window.gsap.defaults({
+    ease: 'power2.out',
+    duration: 0.9
+  });
+
+  // ---- Hero — masked-line reveal --------------------------------
+  var heroLines = document.querySelectorAll('.lux-h1 .line-inner');
+  if (heroLines.length) {
+    var tl = window.gsap.timeline();
+    tl.to(document.querySelectorAll('.reveal-fade'), { opacity: 1, duration: 0.6 }, 0);
+    tl.to(heroLines, {
+      y: '0%',
+      duration: 1.4,
+      stagger: 0.14,
+      ease: 'power4.out'
+    }, 0.15);
+  }
+
+  // ---- Scroll-triggered reveals --------------------------------
+  if (window.ScrollTrigger) {
+    document.querySelectorAll('.reveal').forEach(function (el) {
+      window.gsap.to(el, {
+        y: 0,
+        opacity: 1,
+        duration: 1.0,
+        ease: 'power3.out',
+        scrollTrigger: {
+          trigger: el,
+          start: 'top 88%',
+          once: true
+        }
+      });
+    });
+
+    document.querySelectorAll('.reveal-soft').forEach(function (el) {
+      window.gsap.to(el, {
+        y: 0,
+        opacity: 1,
+        duration: 0.7,
+        ease: 'power3.out',
+        scrollTrigger: {
+          trigger: el,
+          start: 'top 90%',
+          once: true
+        }
+      });
+    });
+  }
+
+  // ---- Anchor link routing through Lenis ------------------------
+  // CRITICAL: when Lenis is active, native window.scrollTo bypasses it
+  // and ScrollTrigger desyncs. Route all in-page anchor clicks here.
+  var NAV_OFFSET = 56;
+  document.querySelectorAll('a[href^="#"]').forEach(function (link) {
+    link.addEventListener('click', function (e) {
+      var hash = link.getAttribute('href');
+      if (hash === '#' || hash.length < 2) return;
+      var target = document.querySelector(hash);
+      if (!target) return;
+      e.preventDefault();
+      lenis.scrollTo(target, { offset: -NAV_OFFSET, duration: 1.4 });
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

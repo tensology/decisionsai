@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.4 0"/>
+    </filter>
+    <radialGradient id="warm" cx="0.1" cy="0.1" r="0.8">
+      <stop offset="0%" stop-color="#B8635A" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#B8635A" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#F5F1E8"/>
+  <rect width="1200" height="630" fill="url(#warm)"/>
+  <rect width="1200" height="630" filter="url(#grain)" opacity="0.025"/>
+
+  <!-- Top eyebrow -->
+  <text x="80" y="120" font-family="ui-monospace, monospace" font-size="18" letter-spacing="3" fill="#5A5247">PERFECT-UI · v2.5.1 · MIT</text>
+
+  <!-- Main headline: matches current hero "UI design that doesn't look AI-made." -->
+  <text x="80" y="280" font-family="Georgia, serif" font-style="italic" font-size="130" letter-spacing="-4" fill="#1A1715">UI design</text>
+  <text x="80" y="410" font-family="Georgia, serif" font-style="italic" font-size="130" letter-spacing="-4" fill="#1A1715">that doesn't <tspan fill="#B8635A">look</tspan></text>
+  <text x="80" y="540" font-family="Georgia, serif" font-style="italic" font-size="130" letter-spacing="-4" fill="#B8635A">AI-made.</text>
+
+  <!-- Bottom separator + footer -->
+  <line x1="80" y1="580" x2="1120" y2="580" stroke="#1A1715" stroke-width="1" opacity="0.2"/>
+  <text x="80" y="608" font-family="ui-monospace, monospace" font-size="15" letter-spacing="2" fill="#5A5247">A Claude Code skill · npx skills add dris1153/perfect-ui</text>
+</svg>

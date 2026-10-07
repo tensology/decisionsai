@@ -257,6 +257,53 @@ def _attach_vendor_conflicts(rows: list[dict[str, Any]], scan: Any, metadata: di
         native.setdefault("conflict_policy", "local_preferred")
 
 
+def _community_pack_rows(existing_ids: set[str]) -> list[dict[str, Any]]:
+    """Skills shipped in the community skills pack. Bundled ids win on collision."""
+    from distr.core.plugins import COMMUNITY_SKILLS_PACK_DIR, community_skills_dir
+    from distr.core.skills.registry import _frontmatter_fields
+
+    manifest_path = COMMUNITY_SKILLS_PACK_DIR / "manifest.json"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("community skills manifest unreadable", exc_info=True)
+        return []
+    base = community_skills_dir()
+    rows: list[dict[str, Any]] = []
+    for entry in manifest.get("project_full") or []:
+        if not isinstance(entry, dict):
+            continue
+        skill_id = str(entry.get("id") or "").strip()
+        key = _canonical_id(skill_id)
+        if not key or key in existing_ids:
+            continue
+        skill_dir = base / skill_id
+        skill_file = _skill_file(skill_dir)
+        if not skill_file:
+            continue
+        try:
+            text = skill_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        name, description = _frontmatter_fields(text, skill_id)
+        rows.append(
+            {
+                "id": skill_id,
+                "name": name or skill_id,
+                "description": description or _body_excerpt(skill_file),
+                "path": _relative_path(skill_dir),
+                "source": "community_vendor",
+                "editable": False,
+                "tags": ["community", "skills-pack"],
+                "conflict_policy": "local_preferred",
+            }
+        )
+        existing_ids.add(key)
+    return rows
+
+
 @lru_cache(maxsize=1)
 def load_registry() -> tuple[dict[str, Any], ...]:
     """Load the deduped local + vendored skills registry as immutable rows."""
@@ -284,6 +331,7 @@ def load_registry() -> tuple[dict[str, Any], ...]:
             existing_ids.add(_canonical_id(skill_id))
 
     scan = _registry_scan()
+    rows.extend(_community_pack_rows(existing_ids))
     rows.extend(_external_capability_rows(existing_ids))
     metadata = _load_ecc_vendor_metadata()
     _attach_vendor_conflicts(rows, scan, metadata)
@@ -356,7 +404,10 @@ def infer_skills_for_ticket(text: str, *, limit: int = 5) -> list[str]:
         phrase = r"\s+".join(re.escape(part) for part in str(keyword or "").split())
         return bool(phrase and re.search(rf"(?<!\w){phrase}(?!\w)", lowered))
 
-    scored: list[tuple[int, str]] = []
+    from distr.core.capabilities_pack import recommend_design_skills
+
+    recommended, _reason = recommend_design_skills(lowered)
+    scored: list[tuple[int, str]] = [(len(_TICKET_SKILL_HINTS) + 1, sid) for sid in recommended]
     for keywords, skill_ids in _TICKET_SKILL_HINTS:
         # A preservation constraint such as "do not touch the frontend" must
         # not provision frontend/browser skills onto a backend worker.

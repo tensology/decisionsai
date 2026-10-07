@@ -8,6 +8,7 @@ from typing import Any, Optional
 from langchain.tools import BaseTool
 from pydantic import Field
 import logging
+import time
 from distr.core.agent.tools.base import get_platform_modifier_key
 
 # PyAutoGUI - import at module level and disable FAILSAFE
@@ -18,6 +19,19 @@ except ImportError:
     pyautogui = None
 
 logger = logging.getLogger(__name__)
+
+MEDIA_CONFIRMATIONS = {
+    "play": "Playing your media.",
+    "pause": "Paused your media.",
+    "stop": "Stopped playback.",
+    "next_track": "Skipped to the next track.",
+    "previous_track": "Went back to the previous track.",
+    "volume_up": "Turned the volume up.",
+    "volume_down": "Turned the volume down.",
+    "mute": "Muted the audio.",
+    "refresh": "Refreshed the page.",
+    "reload": "Reloaded the page.",
+}
 
 
 class MediaControlTool(BaseTool):
@@ -30,6 +44,8 @@ class MediaControlTool(BaseTool):
     DO NOT explain. DO NOT describe. JUST CALL IT.
     
     Actions: play, pause, stop, next_track, previous_track, volume_up, volume_down, mute, refresh, reload.
+    For refresh/reload in a named browser, pass target_app and restore_focus=true so the
+    browser is focused before the shortcut and the user's previous app is restored after it.
     
     CALL THE TOOL - never explain it."""
     
@@ -39,7 +55,14 @@ class MediaControlTool(BaseTool):
         super().__init__(**kwargs)
         self._chat_manager = chat_manager
     
-    def _run(self, action: str = "", text: str = "", **kwargs) -> str:
+    def _run(
+        self,
+        action: str = "",
+        text: str = "",
+        target_app: str = "",
+        restore_focus: bool = False,
+        **kwargs,
+    ) -> str:
         """Execute media control action."""
         try:
             if not pyautogui:
@@ -94,13 +117,59 @@ class MediaControlTool(BaseTool):
             
             # Handle refresh/reload with pyautogui (standard keyboard shortcut)
             if action in ["refresh", "reload"]:
+                previous_app = ""
+                focused_app = ""
+                if target_app:
+                    from distr.core.actions.desktop import (
+                        APP_ALIASES,
+                        get_frontmost_app_name,
+                        get_remembered_external_frontmost_app,
+                        is_own_app_name,
+                    )
+                    from distr.core.agent.tools.input.window_ops import (
+                        FocusWindowTool,
+                        LaunchAppTool,
+                    )
+
+                    focused_app = APP_ALIASES.get(
+                        " ".join(target_app.lower().split()), target_app.strip()
+                    )
+                    current_app = (get_frontmost_app_name() or "").strip()
+                    previous_app = (
+                        current_app
+                        if current_app and not is_own_app_name(current_app)
+                        else (get_remembered_external_frontmost_app() or "").strip()
+                    )
+                    focus_result = FocusWindowTool()._run(process_name=focused_app)
+                    if focus_result.startswith("Error:") or "failed" in focus_result.lower():
+                        launch_result = LaunchAppTool()._run(executable=focused_app)
+                        if launch_result.startswith("Error:") or "failed" in launch_result.lower():
+                            return f"Error: Could not focus {focused_app}: {focus_result}"
+                        time.sleep(0.3)
+                        focus_result = FocusWindowTool()._run(process_name=focused_app)
+                        if focus_result.startswith("Error:") or "failed" in focus_result.lower():
+                            return f"Error: Could not focus {focused_app}: {focus_result}"
+
                 keys = action_map.get(action.lower())
                 if isinstance(keys, list):
                     pyautogui.hotkey(*keys)
                 else:
                     pyautogui.press(keys)
                 logger.info(f"Executed {action} using pyautogui")
-                return f"Executed {action}"
+                if restore_focus and previous_app:
+                    previous_norm = previous_app.lower()
+                    focused_norm = focused_app.lower()
+                    same_app = previous_norm in focused_norm or focused_norm in previous_norm
+                    if not same_app:
+                        time.sleep(0.15)
+                        restore_result = FocusWindowTool()._run(process_name=previous_app)
+                        if restore_result.startswith("Error:"):
+                            return (
+                                f"Reloaded {focused_app}, but could not return focus to "
+                                f"{previous_app}: {restore_result}"
+                            )
+                        return f"Reloaded {focused_app} and returned focus to {previous_app}."
+                return f"Reloaded {focused_app}." if focused_app else MEDIA_CONFIRMATIONS[action.lower()]
             
             # Handle media keys using pynput (which supports media keys)
             keyboard = KeyboardController()
@@ -120,13 +189,13 @@ class MediaControlTool(BaseTool):
                 keyboard.press(key)
                 keyboard.release(key)
                 logger.info(f"Executed {action} using pynput media key")
-                return f"Executed media control action: {action}"
+                return MEDIA_CONFIRMATIONS[action.lower()]
             elif action.lower() == "stop":
                 # For stop, we'll use play/pause (toggle) - this is a limitation
                 keyboard.press(Key.media_play_pause)
                 keyboard.release(Key.media_play_pause)
                 logger.info("Executed stop (using play/pause toggle)")
-                return "Executed stop (using play/pause toggle)"
+                return MEDIA_CONFIRMATIONS["stop"]
             else:
                 return f"Error: Unknown action '{action}'. Available actions: {', '.join(action_map.keys())}"
             
@@ -137,7 +206,18 @@ class MediaControlTool(BaseTool):
             logger.error(f"Error in MediaControlTool: {e}", exc_info=True)
             return f"Error executing media control: {str(e)}"
     
-    async def _arun(self, action: str = "", text: str = "", **kwargs) -> str:
+    async def _arun(
+        self,
+        action: str = "",
+        text: str = "",
+        target_app: str = "",
+        restore_focus: bool = False,
+        **kwargs,
+    ) -> str:
         # Filter out any unexpected arguments (like 'transcription' from Ollama)
-        return self._run(action=action, text=text)
-
+        return self._run(
+            action=action,
+            text=text,
+            target_app=target_app,
+            restore_focus=restore_focus,
+        )

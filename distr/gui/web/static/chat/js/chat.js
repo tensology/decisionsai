@@ -417,18 +417,27 @@ async function persistGlobalVoiceToSettings(voiceProvider, voiceModel) {
     }
 }
 
+function providerIdFromRegistry(value, providers) {
+    const raw = (value || '').toString().trim();
+    if (!raw || !Array.isArray(providers)) return '';
+    const lower = raw.toLowerCase();
+    const key = lower.replace(/\([^)]*\)/g, '').replace(/[^a-z0-9]/g, '');
+    const match = providers.find(provider => {
+        const id = (provider?.id || '').toString().trim().toLowerCase();
+        const name = (provider?.name || '').toString().trim().toLowerCase();
+        if (id === lower || name === lower) return true;
+        const idKey = id.replace(/[^a-z0-9]/g, '');
+        const nameKey = name.replace(/\([^)]*\)/g, '').replace(/[^a-z0-9]/g, '');
+        return Boolean(key) && (idKey === key || nameKey === key);
+    });
+    return match?.id || '';
+}
+
 /** Align saved Settings voice fields with modal <option value="id"> (handles legacy display strings). */
 function canonicalVoiceProviderForSelect(generalData) {
     const raw = generalData && (generalData.tts_provider || generalData.voice_provider);
     if (!raw || raw === '—') return 'kokoro';
-    const s = String(raw).toLowerCase().trim();
-    if (_ttsProviders && _ttsProviders.length) {
-        const byId = _ttsProviders.find(p => (p.id || '').toLowerCase() === s);
-        if (byId && byId.id) return byId.id;
-        const bySub = _ttsProviders.find(p => s.includes((p.id || '').toLowerCase()));
-        if (bySub && bySub.id) return bySub.id;
-    }
-    return s;
+    return providerIdFromRegistry(raw, _ttsProviders) || String(raw).toLowerCase().trim();
 }
 
 // Listen for provider changes from the settings page (cross-tab via BroadcastChannel)
@@ -3916,11 +3925,12 @@ function bindActivityToggleHandlers() {
             navigator.clipboard.writeText(text).then(() => {
                 copyBtn.classList.add('is-copied');
                 copyBtn.setAttribute('aria-label', 'Copied');
+                showChatSnackbar('Dictation copied to clipboard', 'success');
                 setTimeout(() => {
                     copyBtn.classList.remove('is-copied');
                     copyBtn.setAttribute('aria-label', 'Copy transcription');
                 }, 1500);
-            }).catch(() => {});
+            }).catch(() => showChatSnackbar('Could not copy dictation', 'error'));
             return;
         }
         const toggle = e.target.closest('.activity-step-toggle');
@@ -4107,7 +4117,7 @@ function activityStepLabel(title, event) {
         return String((event && event.title) || title || 'Read aloud').trim();
     }
     if (toolName === 'context_note') {
-        return 'Context';
+        return 'Dictation';
     }
     const short = activityCollapsedActionLabel(title, event);
     return String(short || '').replace(/^system activity:\s*/i, '').trim() || 'Activity';
@@ -5489,7 +5499,8 @@ async function openChatConfigModal(chatId) {
             chatConfigLlmProvider.innerHTML = providers.length
                 ? providers.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')
                 : '<option value="">No providers configured</option>';
-            const providerId = providerIdFromDisplay(chatData.provider || currentChatSettings?.provider || '');
+            const rawProvider = chatData.provider || currentChatSettings?.provider || '';
+            const providerId = providerIdFromRegistry(rawProvider, providers) || providerIdFromDisplay(rawProvider);
             if (Array.from(chatConfigLlmProvider.options).some(o => o.value === providerId)) {
                 chatConfigLlmProvider.value = providerId;
             }

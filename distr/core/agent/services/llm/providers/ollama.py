@@ -35,6 +35,11 @@ from distr.core.agent.services.llm.text_utils import (
     clean_text_for_tts, parse_tool_calls_from_content,
 )
 from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
+from distr.core.agent.services.llm.tool_execution_policy import (
+    remember_successful_tool_call,
+    sanitized_tool_arguments,
+    tool_execution_block_reason,
+)
 from ..core_mixin import LLMSharedMixin
 from ..mixins.ollama_response import OllamaResponseMixin
 from distr.core.agent.tools import load_tools
@@ -1052,9 +1057,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
             if tool_name in self._tools_dict:
                 tool = self._tools_dict[tool_name]
-                from distr.core.agent.tool_audit import record_tool_start
+                from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
 
-                record_tool_start(chat_id, tool_name)
                 try:
                     # Inject context for tools that need it
                     if getattr(self, '_is_telegram_request', False):
@@ -1070,6 +1074,27 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                                     args_dict['text'] = msg.get('content', '')
                                     break
 
+                    user_text = str(args_dict.get("last_user_message") or last_user_message or "")
+                    block_reason = tool_execution_block_reason(
+                        self, tool_name, args_dict, user_text
+                    )
+                    if block_reason:
+                        record_tool_execution(
+                            chat_id,
+                            tool_name,
+                            block_reason,
+                            "failed",
+                            event_queue=self.event_queue,
+                            metadata={"arguments": sanitized_tool_arguments(args_dict)},
+                        )
+                        results.append(block_reason)
+                        continue
+                    record_tool_start(
+                        chat_id,
+                        tool_name,
+                        metadata={"arguments": sanitized_tool_arguments(args_dict)},
+                    )
+
                     loop = asyncio.get_running_loop()
                     args_dict = self._normalize_tool_kwargs(tool, args_dict)
                     result = await loop.run_in_executor(
@@ -1077,8 +1102,17 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     )
                     results.append(result)
 
-                    from distr.core.agent.tool_audit import record_tool_execution
-                    record_tool_execution(chat_id, tool_name, str(result), "completed", event_queue=self.event_queue)
+                    record_tool_execution(
+                        chat_id,
+                        tool_name,
+                        str(result),
+                        "completed",
+                        event_queue=self.event_queue,
+                        metadata={"arguments": sanitized_tool_arguments(args_dict)},
+                    )
+                    remember_successful_tool_call(
+                        self, tool_name, args_dict, user_text, result
+                    )
                 except Exception as e:
                     error_msg = f"Error executing tool {tool_name}: {e}"
                     logger.error(error_msg, exc_info=True)
@@ -1089,19 +1123,51 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 # Fuzzy match — LLM may have hallucinated a tool name
                 matched = self._fuzzy_match_tool(tool_name)
                 if matched:
-                    from distr.core.agent.tool_audit import record_tool_start
-
-                    record_tool_start(chat_id, matched.name, instruction_hint=f"Matched from {tool_name}")
                     try:
                         loop = asyncio.get_running_loop()
                         args_dict = self._normalize_tool_kwargs(matched, args_dict)
+                        user_text = str(args_dict.get("last_user_message") or last_user_message or "")
+                        block_reason = tool_execution_block_reason(
+                            self, matched.name, args_dict, user_text
+                        )
+                        if block_reason:
+                            from distr.core.agent.tool_audit import record_tool_execution
+
+                            record_tool_execution(
+                                chat_id,
+                                matched.name,
+                                block_reason,
+                                "failed",
+                                event_queue=self.event_queue,
+                                metadata={"arguments": sanitized_tool_arguments(args_dict)},
+                            )
+                            results.append(block_reason)
+                            continue
+                        from distr.core.agent.tool_audit import record_tool_start
+
+                        record_tool_start(
+                            chat_id,
+                            matched.name,
+                            instruction_hint=f"Matched from {tool_name}",
+                            metadata={"arguments": sanitized_tool_arguments(args_dict)},
+                        )
                         result = await loop.run_in_executor(
                             None, lambda t=matched, a=args_dict: t._run(**a)
                         )
                         results.append(result)
                         chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                         from distr.core.agent.tool_audit import record_tool_execution
-                        record_tool_execution(chat_id, matched.name, str(result), "completed", event_queue=self.event_queue)
+                        record_tool_execution(
+                            chat_id,
+                            matched.name,
+                            str(result),
+                            "completed",
+                            event_queue=self.event_queue,
+                            metadata={"arguments": sanitized_tool_arguments(args_dict)},
+                        )
+                        remember_successful_tool_call(
+                            self, matched.name, args_dict, user_text, result
+                        )
                     except Exception as e:
                         results.append(f"Error executing tool {matched.name}: {e}")
                 else:

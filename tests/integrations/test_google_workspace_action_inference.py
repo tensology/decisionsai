@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from distr.core.agent.tools.integrations.google_workspace_tool import (
     GoogleWorkspaceTool,
     _resolve_google_workspace_action,
@@ -56,7 +58,10 @@ def test_run_without_action_but_with_calendar_params(monkeypatch) -> None:
         end_time="2026-06-20T14:00:00",
     )
 
-    assert result == "Event created successfully (ID: evt-1)"
+    assert result == (
+        "Event created successfully (ID: evt-1; "
+        "start=2026-06-20T13:00:00; end=2026-06-20T14:00:00)"
+    )
     assert captured.get("summary") == "Visit Louis"
 
 
@@ -116,3 +121,37 @@ def test_calendar_event_can_be_deleted_by_returned_id(monkeypatch) -> None:
 
     assert result == "Calendar event deleted successfully (ID: calendar-event-123)"
     assert captured["event_id"] == "calendar-event-123"
+
+
+def test_calendar_event_can_be_updated_by_returned_id(monkeypatch) -> None:
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    captured = {}
+
+    def update_calendar_event(event_id, **kwargs):
+        captured.update(event_id=event_id, **kwargs)
+        return True
+
+    fake_connector = type(
+        "Conn",
+        (),
+        {
+            "is_connected": lambda self: True,
+            "update_calendar_event": staticmethod(update_calendar_event),
+        },
+    )()
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", fake_connector)
+
+    result = tool._run(
+        action="update_calendar_event",
+        params={
+            "event_id": "calendar-event-123",
+            "start_time": "2026-10-07T12:30:00",
+            "end_time": "2026-10-07T14:30:00",
+            "time_zone": "Africa/Johannesburg",
+        },
+    )
+
+    assert result == "Calendar event updated successfully (ID: calendar-event-123)"
+    assert captured["event_id"] == "calendar-event-123"
+    assert captured["start_time"] == datetime(2026, 10, 7, 12, 30)

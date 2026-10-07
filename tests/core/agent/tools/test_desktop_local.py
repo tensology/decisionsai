@@ -51,9 +51,14 @@ def test_focus_window_local_uses_appkit(monkeypatch):
     fake_appkit.NSRunningApplication = fake_ns
     fake_appkit.NSApplicationActivateIgnoringOtherApps = 1
     monkeypatch.setitem(sys.modules, "AppKit", fake_appkit)
+    focus_result = MagicMock(returncode=0, stdout="true\n", stderr="")
+    monkeypatch.setattr(
+        "distr.core.agent.tools.input.desktop_local.subprocess.run",
+        lambda *args, **kwargs: focus_result,
+    )
     result = run_local_desktop_tool("focus_window", {"pid": 222})
     assert result["success"] is True
-    assert result["via"] == "decisions"
+    assert result["via"] == "osascript"
     assert result["pid"] == 222
 
 

@@ -51,6 +51,26 @@ def test_filter_known_skill_ids_drops_unknown():
     assert known == ["gemini-api", "bigquery-basics"]
 
 
+def test_skills_pack_merges_design_skills_without_replacing_bundled():
+    load_registry.cache_clear()
+    try:
+        assert skill_directory_for_id("web-design-guidelines").parts[-3:] == (
+            "community-skills-pack",
+            "skills",
+            "web-design-guidelines",
+        )
+        assert skill_directory_for_id("frontend-design").parts[-2:] == (
+            "skills",
+            "frontend-design",
+        )
+        assert filter_known_skill_ids(["perfect-ui", "frontend-design"]) == [
+            "perfect-ui",
+            "frontend-design",
+        ]
+    finally:
+        load_registry.cache_clear()
+
+
 def test_decisions_browser_control_skills_are_known():
     known = filter_known_skill_ids(["decisions-playwright", "decisions-computer-use"])
 
@@ -58,23 +78,24 @@ def test_decisions_browser_control_skills_are_known():
 
 
 def test_external_capability_skill_is_available_to_catalog(tmp_path, monkeypatch):
-    skill_dir = tmp_path / "impeccable"
+    skill_dir = tmp_path / "external-only-skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: impeccable\ndescription: UI quality skill\n---\n# Impeccable\n",
+        "---\nname: external-only-skill\ndescription: UI quality skill\n---\n# External\n",
         encoding="utf-8",
     )
     registry = tmp_path / "capabilities-skills-registry.json"
     registry.write_text(
-        json.dumps([{"id": "impeccable", "path": str(skill_dir), "source": "external"}]),
+        json.dumps([{"id": "external-only-skill", "path": str(skill_dir), "source": "external"}]),
         encoding="utf-8",
     )
     monkeypatch.setattr("distr.core.skills.catalog._capabilities_registry_file", lambda: registry)
     load_registry.cache_clear()
 
     try:
-        assert filter_known_skill_ids(["impeccable"]) == ["impeccable"]
-        assert skill_directory_for_id("impeccable") == skill_dir
+        assert filter_known_skill_ids(["external-only-skill"]) == ["external-only-skill"]
+        assert skill_directory_for_id("external-only-skill") == skill_dir
+        assert "community-skills-pack" in str(skill_directory_for_id("impeccable"))
     finally:
         load_registry.cache_clear()
 

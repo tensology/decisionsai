@@ -1,0 +1,5 @@
+emilkowalski/skill skills/emil-design-eng/SKILL.md ffbe68e6007fb42cb8149f089b400a1ca007d59ba23e8948e2be4476f3175939
+pbakaus/impeccable .agent/skills/impeccable/SKILL.md 5fe12555b79963519720034acb9d720a72e9eedaa6c69814696d14e1c631962e
+pbakaus/impeccable .agent/skills/impeccable/reference/craft-floor.md 96e2e6bd4fcf9a2c6da65fb029f96d9176308fae2efd9d8653d3b8d838960e07
+pbakaus/impeccable .agent/skills/impeccable/reference/operate.md a9d2203acd45ca33a13d5c68b02b23ed512425ac15f0e8438318ed124b43729d
+leonxlnx/taste-skill skills/taste-skill/SKILL.md aa194351b246b8b4799099d4ed7b033d29eab6e6e3d58d8d2172978be7b3ec89

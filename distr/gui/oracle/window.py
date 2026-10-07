@@ -133,6 +133,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.about_window = about_window
         self.eula_window = eula_window  # Will be set after EULA window is created
         self._last_dictation_hotkey_release_mono = 0.0
+        self._hidden_dictation_processing = False
         # Connect the OracleWindow's move event to trigger PlayerWindow position update
         self.moveEvent = self.on_move_event
 
@@ -163,6 +164,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Connect to dictation signals
         signal_manager.dictation_started.connect(self.on_dictation_started)
         signal_manager.dictation_stopped.connect(self.on_dictation_stopped)
+        signal_manager.dictation_processing_started.connect(self.on_dictation_processing_started)
+        signal_manager.dictation_processing_finished.connect(self.on_dictation_processing_finished)
         signal_manager.shortcut_settings_changed.connect(self._on_shortcut_settings_changed)
         
         # Window flags already set above — don't call setWindowFlags again
@@ -1828,6 +1831,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._mark_voice_capture_blocked_not_listening()
             return
         self._dictation_hotkey_active = True
+        self._hidden_dictation_processing = False
         self._dictation_started_from_hotkey = True
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
         try:
@@ -1857,6 +1861,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._mark_voice_capture_blocked_not_listening()
             return
         self._dictation_hotkey_active = True
+        self._hidden_dictation_processing = False
         self._dictation_started_from_hotkey = True
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
         try:
@@ -1885,6 +1890,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
         self._last_dictation_hotkey_release_mono = time.monotonic()
         self._dictation_hotkey_active = False
+        self._hidden_dictation_processing = False
+        self._sync_hidden_voice_indicator()
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
         if getattr(self, "is_dictating", False):
             self.is_dictating = False
@@ -1914,6 +1921,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
         self._last_dictation_hotkey_release_mono = time.monotonic()
         self._dictation_hotkey_active = False
+        self._hidden_dictation_processing = False
+        self._sync_hidden_voice_indicator()
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
         if getattr(self, "is_dictating", False):
             self.is_dictating = False
@@ -2414,8 +2423,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.oracle_visible = False
         self.settings['oracle_visible'] = False
         save_settings_to_db({'oracle_visible': False})
-        self._hidden_voice_indicator.set_oracle_hidden(True)
-        self._sync_hidden_voice_indicator()
         logger.debug(f"Oracle hidden. self.isVisible(): {self.isVisible()}, oracle_visible: {self.oracle_visible}")
         if hasattr(self, '_chat_bubble'):
             self._chat_bubble.hide_bubble()
@@ -2424,7 +2431,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 self.player_window.hide_window_immediate()
             else:
                 self.player_window.hide()
-        QTimer.singleShot(0, self.hide)
+        def _hide_and_sync_indicator():
+            self.hide()
+            self._hidden_voice_indicator.set_oracle_hidden(True)
+            self._sync_hidden_voice_indicator()
+
+        QTimer.singleShot(0, _hide_and_sync_indicator)
         QTimer.singleShot(10, self.update_menu)
 
     def set_hidden_tts_active(self, active: bool) -> None:
@@ -2439,8 +2451,17 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
 
         current_hook = hook or self._event_dispatcher.get_current_hook()
-        if current_hook == "ptt_active":
+        if (
+            current_hook in {"dictation", "ticket_dictation"}
+            and bool(getattr(self, "_dictation_hotkey_active", False))
+        ):
+            state = "dictating"
+        elif current_hook == "hands_free_listening":
+            state = "hands_free"
+        elif current_hook == "ptt_active":
             state = "listening"
+        elif bool(getattr(self, "_hidden_dictation_processing", False)):
+            state = "loading"
         elif self._hidden_tts_active:
             state = "speaking"
         elif current_hook == "thinking":
@@ -2866,6 +2887,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         self._hands_free_before_dictation = False
         self._reconcile_interaction_visual_state("dictation_stopped")
+
+    def on_dictation_processing_started(self):
+        """Show loading only while a large dictated block is being pasted."""
+        self._hidden_dictation_processing = True
+        self._sync_hidden_voice_indicator()
+
+    def on_dictation_processing_finished(self):
+        """Return a hidden Oracle indicator to its current resting state after insertion."""
+        self._hidden_dictation_processing = False
+        self._sync_hidden_voice_indicator()
     
     def stop_dictating(self):
         """Stop dictation from menu"""

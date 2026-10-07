@@ -6,7 +6,7 @@
 
 DecisionsAI is a development agent and workspace that lives on your computer. Talk to it, type in Chat, or send it something from your phone. It can use your files, apps, models, coding tools, and connected services to carry out work instead of only giving you an answer.
 
-Version 2.9.0 is the point where the product becomes much more deliberately development-led. Version **2.9.2** layers MemPalace (default on) with a shipped seed corpus, hardens conversational turn-taking, and tightens WhatsApp / Telegram gates around the same Development home. The old ticket board / workflows experience has been reworked into a project-scoped Development area that brings planning, incoming work, boards, terminals, workflows, reports, and durable threads into one place. The system tray and surrounding web surfaces have been reworked around that same flow.
+Version 2.9.0 is the point where the product becomes much more deliberately development-led. Version **2.9.3** makes that system safer to use and easier to understand: work stays with the right project and Development thread, external tools stop when you tell them to, voice and desktop control share a cleaner path, and the public product now has a clear open-source licence and South African legal terms.
 
 The reason for the change is simple: planning is the focal point. If the outcome is shaped properly first, the work can be broken into sensible tasks and each task can be routed by complexity to the right model, CLI, or harness without the user needing to care which one is running underneath. The planning system is still being built out, including a compact language for describing plans and UI structure that can compile into the underlying implementation, much like CoffeeScript compiles to JavaScript, alongside Mermaid JS for ERDs and clearer PRD documents. The direction is now clear: better plans mean less doom prompting and better output.
 
@@ -22,15 +22,31 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ---
 
-## Domain migration - 2026-10-05
+## [2.9.3] - 2026-10-07
 
-### Decisions now lives at decisions.tensology.com
+### Work lands in the right place
 
-The canonical Decisions website, installer links, legal pages, remote sessions, Telegram links, WhatsApp links, WebSocket connections, and mobile app endpoints now use `https://decisions.tensology.com`. Requests to the legacy domains remain supported through permanent redirects so existing bookmarks and shared links continue to work.
+Chat remains the place for conversation. Project work now has a more deliberate route into Development, with stronger project identity, startup context, work intake, thread ownership, and harness handoff. A job is less likely to lose its ticket, start in the wrong surface, or split its history across unrelated runs.
 
-### Production and repository references cleaned up
+### Stop means stop, including for connected tools
 
-The production folder, web server configuration, service definitions, deployment scripts, website metadata, documentation, and Tensology website links now point to the Tensology subdomain. The old domain remains only where it is required to accept and redirect legacy traffic.
+External mutations now share a common safety gate. When a turn is stopped, retried, or repeated, tools can recognise the original action instead of blindly creating it again. Google Calendar updates preserve event identity, use the intended time zone, and leave an audit trail. This closes the path that could turn one calendar request into several duplicate events.
+
+### Voice and desktop control feel like one system
+
+Dictation writes into the active app more reliably, media commands follow the same control path, and the Oracle no longer appears just because a hidden voice indicator changed state. Project launch, bring-up, voice activity, and desktop controls now agree more closely about what is running and what the user should see.
+
+### The skill library became a real product surface
+
+The shipped skill catalogue now includes a broader design, accessibility, frontend, animation, and product-quality pack. Bootstrap and harness setup keep those skills available to Codex and Cursor without repeatedly copying or losing them, while Development threads record the skills and model route used for the work.
+
+### Phone and messaging links are more durable
+
+The Decisions website, installer, relay, remote sessions, Telegram links, WhatsApp links, WebSocket connections, and mobile endpoints now use `https://decisions.tensology.com`. Mobile pairing has a stable device channel and an idle expiry, WhatsApp connection handling is more reliable, and old domains continue to redirect so existing links do not break.
+
+### DecisionsAI is openly licensed
+
+The application is now under the MIT License. The old revenue threshold, non-compete language, and standalone resale restriction are gone. The website and relay retain separate terms for the hosted service, with privacy language written for South African law and the way the product actually moves data.
 
 ## [2.9.2] - 2026-10-02
 

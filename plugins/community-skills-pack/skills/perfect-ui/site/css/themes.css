@@ -1,0 +1,324 @@
+/* 11 themes — one per vibe anchor from references/visual-direction-guide.md.
+   Each theme overrides CSS custom properties on :root via [data-theme="X"].
+   Per-theme: 4-color palette + display font + body font + mono font + signature ease.
+
+   Fonts use Google Fonts substitutes for the paid foundry recommendations
+   (Söhne / Migra / PP Neue Machina / Tobias / GT Sectra etc.) — closest
+   free equivalents that preserve the vibe.
+
+   Glossary lock: vibe names + accent values lifted directly from
+   references/visual-direction-guide.md per perfect-ui workflow. */
+
+/* Smooth color transition during theme swap (added by JS only on switch) */
+.theme-transitioning,
+.theme-transitioning * {
+  transition: background-color 0.4s var(--ease-signature),
+              color 0.4s var(--ease-signature),
+              border-color 0.4s var(--ease-signature) !important;
+}
+
+/* =========================================================
+   01 MIN — Minimal (clean SaaS, design tools, editorial software)
+   ========================================================= */
+[data-theme="minimal"] {
+  --bg: #FAFAF7;
+  --bg-muted: #F1F0EB;
+  --bg-elev: #FFFFFF;
+  --ink: #181715;
+  --ink-muted: #5F5C56;
+  --ink-subtle: #8E8A82;
+  --accent: #2A4A3E;
+  --accent-soft: #C8D4CD;
+  --rule: rgba(24, 23, 21, 0.10);
+  --rule-strong: rgba(24, 23, 21, 0.28);
+  --font-display: 'Hanken Grotesk', system-ui, sans-serif;
+  --font-body: 'Hanken Grotesk', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* =========================================================
+   02 EDT — Editorial (DEFAULT — already in tokens.css)
+   Defined here so [data-theme="editorial"] is explicit + restorable.
+   ========================================================= */
+[data-theme="editorial"] {
+  --bg: #F5F1E8;
+  --bg-muted: #EDE6D6;
+  --bg-elev: #FBF7EE;
+  --ink: #1A1715;
+  --ink-muted: #5A5247;
+  --ink-subtle: #8C8275;
+  --accent: #B8635A;
+  --accent-soft: #E5C4BF;
+  --rule: rgba(26, 23, 21, 0.12);
+  --rule-strong: rgba(26, 23, 21, 0.32);
+  /* Fraunces — variable axes tuned for crisp editorial display
+     (replaces Instrument Serif which lacks Vietnamese subset) */
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-body: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.16, 1, 0.3, 1);
+}
+[data-theme="editorial"] h1,
+[data-theme="editorial"] h2,
+[data-theme="editorial"] h3,
+[data-theme="editorial"] h4 {
+  font-variation-settings: "opsz" 144, "SOFT" 30, "WONK" 0;
+}
+
+/* =========================================================
+   03 BRU — Brutalist (tech-rebel, dev tools, indie products)
+   ========================================================= */
+[data-theme="brutalist"] {
+  --bg: #E5E5E5;
+  --bg-muted: #F5F5F5;
+  --bg-elev: #FFFFFF;
+  --ink: #000000;
+  --ink-muted: #404040;
+  --ink-subtle: #707070;
+  --accent: #FF3B00;
+  --accent-soft: #FFD4C2;
+  --rule: rgba(0, 0, 0, 0.20);
+  --rule-strong: rgba(0, 0, 0, 0.55);
+  /* Archivo @ weight 900 = "Black" weight, same family as body,
+     with full Vietnamese precomposed glyphs (Ế Ố Ấ Ề Ồ etc.) +
+     true italic — replaces Archivo Black which lacks both. */
+  --font-display: 'Archivo', system-ui, sans-serif;
+  --font-body: 'Archivo', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.5, 0, 0.5, 1);
+}
+/* Brutalist needs explicit weight 900 to match the Archivo Black look */
+[data-theme="brutalist"] h1,
+[data-theme="brutalist"] h2,
+[data-theme="brutalist"] h3,
+[data-theme="brutalist"] h4,
+[data-theme="brutalist"] .wordmark,
+[data-theme="brutalist"] .stat-num,
+[data-theme="brutalist"] .nav-word {
+  font-weight: 900;
+}
+
+/* =========================================================
+   04 RET — Retro-futuristic (web3, gaming, synthwave)
+   ========================================================= */
+[data-theme="retro"] {
+  --bg: #0A0E27;
+  --bg-muted: #1A1F3A;
+  --bg-elev: #232847;
+  --ink: #E8E6F0;
+  --ink-muted: #A8A4C2;
+  --ink-subtle: #6F6C8C;
+  --accent: #FF6B9D;
+  --accent-soft: #4A2A40;
+  --rule: rgba(232, 230, 240, 0.14);
+  --rule-strong: rgba(232, 230, 240, 0.38);
+  /* Chakra Petch — geometric futuristic with full Vietnamese subset
+     (replaces Orbitron which has poor Vietnamese tone-stack rendering) */
+  --font-display: 'Chakra Petch', system-ui, sans-serif;
+  --font-body: 'JetBrains Mono', ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* =========================================================
+   05 ORG — Organic (wellness, nature, natural products)
+   ========================================================= */
+[data-theme="organic"] {
+  --bg: #F4EFE6;
+  --bg-muted: #E8DCC4;
+  --bg-elev: #FAF6EE;
+  --ink: #2C2418;
+  --ink-muted: #6E6354;
+  --ink-subtle: #998C7B;
+  --accent: #5C7A4A;
+  --accent-soft: #C4D6B6;
+  --rule: rgba(44, 36, 24, 0.12);
+  --rule-strong: rgba(44, 36, 24, 0.32);
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Lora', Georgia, serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.34, 1.32, 0.64, 1);
+}
+
+/* =========================================================
+   06 LUX — Luxury (high-end goods, premium services)
+   ========================================================= */
+[data-theme="luxury"] {
+  --bg: #0E0E0C;
+  --bg-muted: #1A1A17;
+  --bg-elev: #232320;
+  --ink: #F0EBE0;
+  --ink-muted: #B8B3A6;
+  --ink-subtle: #807B70;
+  --accent: #C9A961;
+  --accent-soft: #4A3F24;
+  --rule: rgba(240, 235, 224, 0.14);
+  --rule-strong: rgba(240, 235, 224, 0.34);
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --font-body: 'Cormorant', Georgia, serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* =========================================================
+   07 PLY — Playful (consumer apps, kids products, casual gaming)
+   ========================================================= */
+[data-theme="playful"] {
+  --bg: #FFF8E7;
+  --bg-muted: #FFE8C2;
+  --bg-elev: #FFFCF3;
+  --ink: #2D1F12;
+  --ink-muted: #6E5A44;
+  --ink-subtle: #998A74;
+  --accent: #FF6B4A;
+  --accent-soft: #FFD4C7;
+  --rule: rgba(45, 31, 18, 0.12);
+  --rule-strong: rgba(45, 31, 18, 0.32);
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.68, -0.4, 0.27, 1.4);
+}
+
+/* =========================================================
+   08 IND — Industrial (hardware, manufacturing, B2B serious)
+   ========================================================= */
+[data-theme="industrial"] {
+  --bg: #1F1E1B;
+  --bg-muted: #2D2C28;
+  --bg-elev: #3A3935;
+  --ink: #E5E2DC;
+  --ink-muted: #A8A49B;
+  --ink-subtle: #706C63;
+  --accent: #D45A1A;
+  --accent-soft: #5A2F12;
+  --rule: rgba(229, 226, 220, 0.12);
+  --rule-strong: rgba(229, 226, 220, 0.32);
+  --font-display: 'Archivo', system-ui, sans-serif;
+  --font-body: 'Archivo', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* =========================================================
+   09 ART — Art-deco (hospitality, finance, heritage brands)
+   ========================================================= */
+[data-theme="artdeco"] {
+  --bg: #1A1614;
+  --bg-muted: #2A211C;
+  --bg-elev: #332823;
+  --ink: #E8DCC4;
+  --ink-muted: #B0A48E;
+  --ink-subtle: #7A7062;
+  --accent: #C9A961;
+  --accent-soft: #4A3F24;
+  --rule: rgba(232, 220, 196, 0.14);
+  --rule-strong: rgba(232, 220, 196, 0.34);
+  --font-display: 'Playfair Display', Georgia, serif;
+  --font-body: 'Cormorant', Georgia, serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* =========================================================
+   10 GLA — Glass-tech (AI/ML products, futuristic tech)
+   ========================================================= */
+[data-theme="glass"] {
+  --bg: #0A0F1F;
+  --bg-muted: #141B33;
+  --bg-elev: #1C2545;
+  --ink: #E8EAF0;
+  --ink-muted: #A8AAB8;
+  --ink-subtle: #6E708C;
+  --accent: #5EE7DF;
+  --accent-soft: #1A4A47;
+  --rule: rgba(232, 234, 240, 0.14);
+  --rule-strong: rgba(232, 234, 240, 0.36);
+  --font-display: 'Sora', system-ui, sans-serif;
+  --font-body: 'Sora', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* =========================================================
+   11 HND — Hand-crafted (artisan goods, illustrators, makers)
+   ========================================================= */
+[data-theme="handcrafted"] {
+  --bg: #F4ECD8;
+  --bg-muted: #E5D6B5;
+  --bg-elev: #FAF4E4;
+  --ink: #2C1F0F;
+  --ink-muted: #6F5A40;
+  --ink-subtle: #998A6F;
+  --accent: #8B4A2A;
+  --accent-soft: #D6BFA8;
+  --rule: rgba(44, 31, 15, 0.14);
+  --rule-strong: rgba(44, 31, 15, 0.36);
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Spectral', Georgia, serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --ease-signature: cubic-bezier(0.34, 1.32, 0.64, 1);
+}
+
+/* =========================================================
+   Dark-theme defaults that need extra tuning across the site
+   (these don't touch palette — they recover contrast in specific components
+   where the editorial defaults assumed light bg) */
+
+[data-theme="retro"] body::after,
+[data-theme="luxury"] body::after,
+[data-theme="industrial"] body::after,
+[data-theme="artdeco"] body::after,
+[data-theme="glass"] body::after {
+  opacity: 0.04;
+  mix-blend-mode: screen;
+}
+
+[data-theme="retro"] .install-prompt,
+[data-theme="luxury"] .install-prompt,
+[data-theme="industrial"] .install-prompt,
+[data-theme="artdeco"] .install-prompt,
+[data-theme="glass"] .install-prompt {
+  box-shadow: 4px 4px 0 0 var(--accent);
+}
+
+[data-theme="retro"] .install-prompt:hover,
+[data-theme="luxury"] .install-prompt:hover,
+[data-theme="industrial"] .install-prompt:hover,
+[data-theme="artdeco"] .install-prompt:hover,
+[data-theme="glass"] .install-prompt:hover {
+  box-shadow: 6px 6px 0 0 var(--accent);
+}
+
+/* Tier-1 card uses accent-soft as background; on dark themes that color
+   inverts intent — swap to a translucent accent overlay instead */
+[data-theme="retro"] .tier-1,
+[data-theme="luxury"] .tier-1,
+[data-theme="industrial"] .tier-1,
+[data-theme="artdeco"] .tier-1,
+[data-theme="glass"] .tier-1 {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Hero H1 letter-spacing per vibe — brutalist + retro look better tight */
+[data-theme="brutalist"] .h1,
+[data-theme="retro"] .h1 {
+  letter-spacing: -0.04em;
+  text-transform: uppercase;
+}
+
+[data-theme="luxury"] .h1,
+[data-theme="artdeco"] .h1 {
+  letter-spacing: -0.015em;
+  font-weight: 400;
+}
+
+[data-theme="organic"] .h1,
+[data-theme="handcrafted"] .h1 {
+  letter-spacing: -0.015em;
+}
+
+[data-theme="playful"] .h1 {
+  letter-spacing: -0.02em;
+}

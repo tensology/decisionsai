@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.work_intake import WorkIntake, WorkIntakeAction, WorkIntakeAttachment
+from distr.core.work_intake.contracts import WorkIntakeDecision
 from distr.core.work_intake.service import OrchestratorIntakeService
 
 
@@ -71,6 +72,60 @@ def test_normal_chat_is_not_intercepted_or_queued(service):
     assert decision.action == WorkIntakeAction.ANSWER_DIRECTLY
     assert decision.handled is False
     assert "intake_id" not in decision.to_dict()
+
+
+@pytest.mark.parametrize("text", ["Yes.", "Yeah", "OK", "No."])
+def test_short_confirmations_stay_with_conversation_context(service, text):
+    decision = service.classify(
+        WorkIntake(source="web", user_text=text, project_hint="Tensology")
+    )
+
+    assert decision.action == WorkIntakeAction.ANSWER_DIRECTLY
+    assert decision.handled is False
+
+
+def test_voice_work_intake_persists_user_before_assistant(monkeypatch):
+    from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
+
+    order = []
+
+    class _ChatManager:
+        def get_current_chat(self):
+            return 77
+
+        def add_assistant_message(self, chat_id, text):
+            order.append(("assistant", text))
+
+    class _IntakeService:
+        def ingest(self, _intake):
+            return WorkIntakeDecision(
+                WorkIntakeAction.ASK_MISSING_INFO,
+                "Missing details",
+                handled=True,
+                response_text="What should I change?",
+            )
+
+    class _Harness:
+        chat_manager = _ChatManager()
+        event_queue = None
+        _messages = []
+
+        def _ensure_user_message_persisted(self, text):
+            order.append(("user", text))
+
+    def _raise_db_error():
+        raise RuntimeError("No database needed for this unit test")
+
+    monkeypatch.setattr("distr.core.db.get_session", _raise_db_error)
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service",
+        lambda: _IntakeService(),
+    )
+
+    handled = LLMSharedMixin._try_route_work_intake(_Harness(), "Fix", source="web")
+
+    assert handled is True
+    assert order == [("user", "Fix"), ("assistant", "What should I change?")]
 
 
 @pytest.mark.parametrize(("text", "expected"), [

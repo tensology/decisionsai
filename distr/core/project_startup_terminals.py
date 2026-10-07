@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+import webbrowser
+import json
+import urllib.request
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,8 @@ class ProjectTerminalActionResult:
     message: str = ""
     speak_message: str = ""
     diagnostics: list[dict[str, str]] = field(default_factory=list)
+    url: str = ""
+    opened: bool = False
 
 
 def parse_startup_command_lines(startup_instructions: str) -> list[str]:
@@ -56,6 +62,123 @@ def project_startup_terminals_running(project_id: int) -> bool:
     from distr.core.terminal import get_startup_sessions_for_project
 
     return bool(get_startup_sessions_for_project(project_id, purpose="startup"))
+
+
+def _rank_runtime_urls(snapshot: dict) -> list[str]:
+    """Prefer likely front-end URLs while preserving terminal discovery order."""
+    ranked: dict[str, int] = {}
+    for session in snapshot.get("sessions") or []:
+        command = str(session.get("command") or "").lower()
+        command_score = 20 if any(
+            token in command
+            for token in ("frontend", "vite", "next", "react", "npm run dev", "yarn dev", "pnpm dev")
+        ) else 0
+        if any(token in command for token in ("celery", "worker", "backend", "runserver")):
+            command_score -= 10
+        for item in session.get("urls") or []:
+            url = str(item.get("url") or "").strip()
+            if not url:
+                continue
+            port = item.get("port")
+            port_score = 10 if port in {3000, 4200, 5173, 5174, 8000, 8080} else 0
+            ranked[url] = max(ranked.get(url, -100), command_score + port_score)
+
+    for item in snapshot.get("urls") or []:
+        url = str(item.get("url") or "").strip()
+        if url:
+            ranked.setdefault(url, 0)
+    return sorted(ranked, key=lambda url: ranked[url], reverse=True)
+
+
+def _get_live_project_runtime_snapshot(project_id: int) -> dict:
+    """Read terminal buffers from the web process that owns the PTYs."""
+    try:
+        from distr.core.web_runtime import (
+            internal_api_headers,
+            resolve_local_web_base_url,
+        )
+
+        base_url = resolve_local_web_base_url()
+        if base_url:
+            request = urllib.request.Request(
+                f"{base_url}/api/projects/{int(project_id)}/startup-sessions",
+                headers=internal_api_headers(content_type=""),
+            )
+            with urllib.request.urlopen(request, timeout=2.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                return {"sessions": payload.get("sessions") or [], "urls": []}
+    except Exception as exc:
+        logger.debug("Live project runtime lookup failed: %s", exc)
+
+    from distr.core.terminal import get_project_runtime_snapshot
+
+    return get_project_runtime_snapshot(project_id)
+
+
+def launch_project_in_browser(
+    project_id: int,
+    *,
+    announce: bool = True,
+    timeout_sec: float = 20.0,
+    discovery_delay_sec: float = 1.0,
+    opener: Optional[Callable[[str], bool]] = None,
+    snapshot_getter: Optional[Callable[[int], dict]] = None,
+) -> ProjectTerminalActionResult:
+    """Ensure project terminals are running, then open their best URL."""
+    project = _load_project(project_id)
+    if not project:
+        result = ProjectTerminalActionResult(
+            False, project_id, "Project", "error",
+            message="Project not found.", speak_message="Project not found.",
+        )
+        if announce:
+            announce_project_terminal_feedback(result.speak_message)
+        return result
+
+    start_result = start_project_startup_terminals(project_id, announce=False)
+    if not start_result.success:
+        if announce:
+            announce_project_terminal_feedback(start_result.speak_message)
+        return start_result
+
+    deadline = time.monotonic() + max(0.0, timeout_sec)
+    discovered_at: Optional[float] = None
+    urls: list[str] = []
+    get_snapshot = snapshot_getter or _get_live_project_runtime_snapshot
+    while True:
+        urls = _rank_runtime_urls(get_snapshot(project_id))
+        if urls:
+            discovered_at = discovered_at or time.monotonic()
+            if time.monotonic() - discovered_at >= max(0.0, discovery_delay_sec):
+                break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+
+    if not urls:
+        speak = f"Project {project['name']} is running, but no local URL appeared in its terminals."
+        result = ProjectTerminalActionResult(
+            False, project_id, project["name"], "no_url",
+            started=start_result.started, message=speak, speak_message=speak,
+        )
+    else:
+        url = urls[0]
+        open_url = opener or (lambda value: webbrowser.open(value, new=2, autoraise=True))
+        opened = bool(open_url(url))
+        speak = (
+            f"Project {project['name']} launched in your default browser."
+            if opened else
+            f"Project {project['name']} is running at {url}, but the browser did not open."
+        )
+        result = ProjectTerminalActionResult(
+            opened, project_id, project["name"], "launched" if opened else "open_failed",
+            started=start_result.started, message=speak, speak_message=speak,
+            url=url, opened=opened,
+        )
+    if announce:
+        announce_project_terminal_feedback(result.speak_message)
+    return result
 
 
 def _load_project(project_id: int) -> Optional[dict]:

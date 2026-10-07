@@ -138,7 +138,8 @@ class EventHandlerMixin:
         # --- STT / dictation / hands-free ---
         elif event in ('stt_ready', 'stt_capture_started', 'stt_capture_stopped',
                         'stt_hands_free_glow_on', 'stt_hands_free_glow_off',
-                        'dictation_started', 'dictation_stopped', 'set_dictating',
+                        'dictation_started', 'dictation_stopped', 'dictation_processing_started',
+                        'dictation_processing_finished', 'set_dictating',
                         'hands_free_mode_changed'):
             self._evt_stt_dictation(event, data)
 
@@ -265,6 +266,10 @@ class EventHandlerMixin:
             signal_manager.dictation_started.emit()
         elif event == 'dictation_stopped':
             signal_manager.dictation_stopped.emit()
+        elif event == 'dictation_processing_started':
+            signal_manager.dictation_processing_started.emit()
+        elif event == 'dictation_processing_finished':
+            signal_manager.dictation_processing_finished.emit()
         elif event == 'set_dictating':
             enabled = bool(data.get('enabled', False))
             last_enabled = getattr(self, '_last_set_dictating_enabled', None)

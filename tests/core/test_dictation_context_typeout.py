@@ -1,3 +1,5 @@
+import asyncio
+
 from distr.core.agent.services.llm.mixins.voice import VoiceDictationMixin
 
 
@@ -104,6 +106,20 @@ def test_hold_dictation_release_posts_single_ui_stop():
 
     assert dummy.event_queue.items.count(("set_dictating", {"enabled": False})) == 1
     assert dummy.event_queue.items.count(("dictation_stopped", {})) == 1
+
+
+def test_only_large_dictation_uses_loading_state(monkeypatch):
+    monkeypatch.setattr("distr.core.audio.dictation.insert_text", lambda *_args, **_kwargs: True)
+    dummy = DummyLifecycleDictation()
+
+    asyncio.run(dummy._type_dictation_text("short text"))
+    assert ("dictation_processing_started", {}) not in dummy.event_queue.items
+
+    asyncio.run(dummy._type_dictation_text("x" * 180))
+    assert dummy.event_queue.items[-2:] == [
+        ("dictation_processing_started", {}),
+        ("dictation_processing_finished", {}),
+    ]
 
 
 def test_ticket_rewrite_only_runs_for_one_shot_when_enabled(monkeypatch):

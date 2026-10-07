@@ -23,6 +23,12 @@ import json
 import logging
 from typing import Optional
 
+from distr.core.agent.services.llm.tool_execution_policy import (
+    remember_successful_tool_call,
+    sanitized_tool_arguments,
+    tool_execution_block_reason,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -210,10 +216,42 @@ class BackgroundChainRunner:
             if func_name in self.service._tools_dict:
                 tool = self.service._tools_dict[func_name]
                 status = "completed"
+                block_reason = tool_execution_block_reason(
+                    self.service, func_name, func_args, last_user_message
+                )
+                if block_reason:
+                    if self.chat_id:
+                        from distr.core.agent.tool_audit import record_tool_execution
+
+                        record_tool_execution(
+                            self.chat_id,
+                            func_name,
+                            block_reason,
+                            "failed",
+                            event_queue=self.event_queue,
+                            metadata={"arguments": sanitized_tool_arguments(func_args)},
+                        )
+                    result = block_reason
+                    result_str = str(result)
+                    self.messages.append({
+                        "tool_call_id": tc["id"],
+                        "role": "tool",
+                        "name": func_name,
+                        "content": result_str,
+                    })
+                    results.append(result)
+                    continue
                 if self.chat_id:
                     from distr.core.agent.tool_audit import record_tool_start
 
-                    record_tool_start(self.chat_id, func_name, metadata={"background": True})
+                    record_tool_start(
+                        self.chat_id,
+                        func_name,
+                        metadata={
+                            "background": True,
+                            "arguments": sanitized_tool_arguments(func_args),
+                        },
+                    )
                 try:
                     safe_func_args = self.service._normalize_tool_kwargs(tool, func_args)
                     loop = asyncio.get_running_loop()
@@ -232,12 +270,46 @@ class BackgroundChainRunner:
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(
                         self.chat_id, func_name, str(result)[:2000], status,
-                        event_queue=self.event_queue
+                        event_queue=self.event_queue,
+                        metadata={"arguments": sanitized_tool_arguments(func_args)},
+                    )
+                if status == "completed":
+                    remember_successful_tool_call(
+                        self.service, func_name, func_args, last_user_message, result
                     )
             else:
                 # Try fuzzy match
                 matched = self.service._fuzzy_match_tool(func_name) if hasattr(self.service, '_fuzzy_match_tool') else None
                 if matched:
+                    try:
+                        matched_args = json.loads(tc["function"].get("arguments", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        matched_args = {}
+                    block_reason = tool_execution_block_reason(
+                        self.service, matched.name, matched_args, last_user_message
+                    )
+                    if block_reason:
+                        result = block_reason
+                        if self.chat_id:
+                            from distr.core.agent.tool_audit import record_tool_execution
+
+                            record_tool_execution(
+                                self.chat_id,
+                                matched.name,
+                                block_reason,
+                                "failed",
+                                event_queue=self.event_queue,
+                                metadata={"arguments": sanitized_tool_arguments(matched_args)},
+                            )
+                        result_str = str(result)
+                        self.messages.append({
+                            "tool_call_id": tc["id"],
+                            "role": "tool",
+                            "name": matched.name,
+                            "content": result_str,
+                        })
+                        results.append(result)
+                        continue
                     if self.chat_id:
                         from distr.core.agent.tool_audit import record_tool_start
 
@@ -245,10 +317,12 @@ class BackgroundChainRunner:
                             self.chat_id,
                             matched.name,
                             instruction_hint=f"Matched from {func_name}",
-                            metadata={"background": True},
+                            metadata={
+                                "background": True,
+                                "arguments": sanitized_tool_arguments(matched_args),
+                            },
                         )
                     try:
-                        matched_args = json.loads(tc["function"].get("arguments", "{}"))
                         matched_args = self.service._normalize_tool_kwargs(matched, matched_args)
                         result = matched._run(**matched_args)
                     except Exception as e:
@@ -262,7 +336,11 @@ class BackgroundChainRunner:
                             str(result)[:2000],
                             "failed" if str(result).lower().startswith("error") else "completed",
                             event_queue=self.event_queue,
+                            metadata={"arguments": sanitized_tool_arguments(matched_args)},
                         )
+                    remember_successful_tool_call(
+                        self.service, matched.name, matched_args, last_user_message, result
+                    )
                 else:
                     result = f"Error: Tool '{func_name}' not found'"
 

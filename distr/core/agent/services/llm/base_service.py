@@ -27,6 +27,11 @@ from distr.core.agent.libs import (
 )
 from distr.core.agent.tools import load_tools
 from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
+from distr.core.agent.services.llm.tool_execution_policy import (
+    remember_successful_tool_call,
+    sanitized_tool_arguments,
+    tool_execution_block_reason,
+)
 from distr.core.signals import signal_manager
 from .core_mixin import LLMSharedMixin
 
@@ -330,9 +335,33 @@ class BaseLLMService(LLMSharedMixin, LLMService):
 
             tool = self._tools_dict.get(tool_name) or next((t for t in self._tools if t.name == tool_name), None)
             if tool:
-                from distr.core.agent.tool_audit import record_tool_start
+                from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
 
-                record_tool_start(chat_id, tool_name)
+                user_text = str(tool_args.get("last_user_message") or "")
+                block_reason = tool_execution_block_reason(
+                    self, tool_name, tool_args, user_text
+                )
+                if block_reason:
+                    record_tool_execution(
+                        chat_id,
+                        tool_name,
+                        block_reason,
+                        "failed",
+                        event_queue=self.event_queue,
+                        metadata={"arguments": sanitized_tool_arguments(tool_args)},
+                    )
+                    results.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "name": tool_name,
+                        "content": block_reason,
+                    })
+                    continue
+                record_tool_start(
+                    chat_id,
+                    tool_name,
+                    metadata={"arguments": sanitized_tool_arguments(tool_args)},
+                )
                 try:
                     # Self-reflection: check for failure loops before re-issuing
                     reflection_prompt = None
@@ -379,8 +408,17 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                         "name": tool_name,
                         "content": str(result)
                     })
-                    from distr.core.agent.tool_audit import record_tool_execution
-                    record_tool_execution(chat_id, tool_name, str(result), "completed", event_queue=self.event_queue)
+                    record_tool_execution(
+                        chat_id,
+                        tool_name,
+                        str(result),
+                        "completed",
+                        event_queue=self.event_queue,
+                        metadata={"arguments": sanitized_tool_arguments(safe_tool_args)},
+                    )
+                    remember_successful_tool_call(
+                        self, tool_name, safe_tool_args, user_text, result
+                    )
                     # Record successful execution for self-reflection
                     if hasattr(self, 'record_tool_attempt'):
                         self.record_tool_attempt(tool_name, safe_tool_args, "success", str(result))

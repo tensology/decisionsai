@@ -208,6 +208,11 @@ class OrchestratorIntakeService:
         value = intake.text.strip()
         if not value and not intake.attachments:
             return WorkIntakeDecision(WorkIntakeAction.ASK_MISSING_INFO, "No request text or attachment was supplied", response_text="What would you like DecisionsAI to do?")
+        if re.fullmatch(r"(?:yes|yeah|yep|sure|okay|ok|no|nope)[.!]?", value, re.IGNORECASE):
+            return WorkIntakeDecision(
+                WorkIntakeAction.ANSWER_DIRECTLY,
+                "Short confirmation requires the active conversation context",
+            )
         steer = _STEER_RE.search(value)
         if steer:
             return WorkIntakeDecision(WorkIntakeAction.STEER_RUN, "Explicit workflow-run control command", diagnostics={"run_id": int(steer.group(3)), "command": steer.group(1).lower()})

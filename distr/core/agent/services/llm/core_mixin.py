@@ -201,7 +201,15 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                         from distr.core.agent.tool_audit import record_tool_execution
 
                         chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
-                        record_tool_execution(chat_id, tool_name, result, event_queue=self.event_queue)
+                        from distr.core.agent.services.llm.tool_execution_policy import sanitized_tool_arguments
+
+                        record_tool_execution(
+                            chat_id,
+                            tool_name,
+                            result,
+                            event_queue=self.event_queue,
+                            metadata={"arguments": sanitized_tool_arguments(safe_arguments)},
+                        )
                     except Exception:
                         logger.debug("Could not audit delegated mail read", exc_info=True)
                 msg = "Mailbox read results (summarize by source):\n" + json.dumps(results, ensure_ascii=False)
@@ -943,6 +951,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             decision = get_work_intake_service().ingest(intake)
             if not decision.handled:
                 return False
+            self._ensure_user_message_persisted(clean)
+            self._messages.append({"role": "user", "content": clean})
             reply = decision.response_text or "Your request was routed."
             if chat_id is not None and getattr(self, "chat_manager", None):
                 try:
@@ -2319,8 +2329,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             # Voice/oracle front door: work-intent → WorkIntake → Development thread
             # (do not load Dev threads into Chat agent; bridge via intake/dispatch).
             if self._try_route_work_intake(text, source="web"):
-                current_chat_id = self._ensure_user_message_persisted(text)
-                self._messages.append({"role": "user", "content": text})
                 return
 
             # Fast action detection
@@ -2375,14 +2383,35 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 try:
                     if 'text' not in args:
                         args['text'] = text
-                    from distr.core.agent.tool_audit import record_tool_start
-
-                    record_tool_start(current_chat_id, tool.name, instruction_hint=text[:160])
                     args = self._normalize_tool_kwargs(tool, args)
-                    loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(
-                        None, lambda t=tool, a=args: t._run(**a)
+                    from distr.core.agent.services.llm.tool_execution_policy import (
+                        remember_successful_tool_call,
+                        sanitized_tool_arguments,
+                        tool_execution_block_reason,
                     )
+                    from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
+
+                    block_reason = tool_execution_block_reason(
+                        self, tool.name, args, text
+                    )
+                    record_tool_start(
+                        current_chat_id,
+                        tool.name,
+                        instruction_hint=text[:160],
+                        metadata={"arguments": sanitized_tool_arguments(args)},
+                    )
+                    if block_reason:
+                        result = block_reason
+                        tool_status = "failed"
+                    else:
+                        loop = asyncio.get_running_loop()
+                        result = await loop.run_in_executor(
+                            None, lambda t=tool, a=args: t._run(**a)
+                        )
+                        tool_status = "completed"
+                        remember_successful_tool_call(
+                            self, tool.name, args, text, result
+                        )
 
                     if hasattr(tool, '_read_task') and tool._read_task:
                         try:
@@ -2392,8 +2421,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                         finally:
                             tool._read_task = None
 
-                    from distr.core.agent.tool_audit import record_tool_execution
-                    record_tool_execution(current_chat_id, tool.name, str(result), "completed", event_queue=self.event_queue)
+                    record_tool_execution(
+                        current_chat_id,
+                        tool.name,
+                        str(result),
+                        tool_status,
+                        event_queue=self.event_queue,
+                        metadata={"arguments": sanitized_tool_arguments(args)},
+                    )
 
                     # Convert raw tool result to a natural response for chat/TTS
                     display_result = "Done"

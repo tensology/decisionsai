@@ -57,7 +57,9 @@ class DevelopmentControlTool(BaseTool):
         "For scheduled or recurring agent tasks, use this tool to create, inspect, edit, pause, resume, run, or delete the automation. "
         "Automation deletion is completed from the three-dot UI or the automation-owned thread after verified later-turn user confirmation. "
         "Use kanban_ticket for boards/tickets and terminal_overview for project terminals. "
-        "Never use Chat load/send endpoints for a Development thread."
+        "Never use Chat load/send endpoints for a Development thread. "
+        "Create a Development thread only for an instruction that changes or produces project work. "
+        "Questions, stories, and status checks stay in the current chat, even when they mention a project."
     )
     args_schema: type[BaseModel] = DevelopmentControlInput
 
@@ -216,8 +218,21 @@ class DevelopmentControlTool(BaseTool):
 
                 return self._json(thread_export(self._require_thread_id(thread_id), redacted=True))
             if action == "create_thread":
-                from distr.core.workflow.development_threads import ensure_development_thread
+                from distr.core.workflow.development_threads import (
+                    ensure_development_thread,
+                    orchestrator_surface,
+                )
 
+                request_text = str(instruction or title or "").strip()
+                if orchestrator_surface(request_text) == "chat":
+                    return self._json({
+                        "surface": "chat",
+                        "created": False,
+                        "reason": (
+                            "This is a conversation, not project work. "
+                            "Answer it in the current chat."
+                        ),
+                    })
                 created = ensure_development_thread(
                     title=str(title or "Development work").strip(),
                     project_id=project_id,

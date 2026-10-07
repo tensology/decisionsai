@@ -69,6 +69,7 @@ class ActionType(Enum):
     WEB_SEARCH = "web_search"                  # Search the web for current info
     WORKFLOW_CONTINUE = "workflow_continue"    # Continue waiting workflow run
     DEVELOPER_CONTEXT = "developer_context"    # Inspect recorded developer/Codex/Cursor context
+    PROJECT_LIFECYCLE = "project_lifecycle"    # Start and/or launch a project
     CONVERSATIONAL = "conversational"         # Pass to LLM for response
     UNKNOWN = "unknown"                       # Need LLM to determine
 
@@ -108,6 +109,12 @@ class FastActionDetector:
         # Ticket board / product page / project beat "bring up <remainder>".
         _polite = r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
         _open = r'(?:open(?:\s+up)?|show(?:\s+me)?|pull\s+up|launch|go\s+to|bring\s+up)'
+        self.PROJECT_LIFECYCLE_PATTERN = re.compile(
+            _polite
+            + r'(?:start(?:\s+and\s+launch)?|launch(?:\s+and\s+start)?|run|boot\s+up|initialize)'
+            + r'\s+(?:(?:the|this|my)\s+)?project\b(?!\s+(?:ticket|board))',
+            re.IGNORECASE,
+        )
 
         # Action patterns - ordered by specificity (most specific first)
         self.action_patterns = [
@@ -126,8 +133,10 @@ class FastActionDetector:
              ActionType.OPEN_WINDOW, "create_ticket",
              {"action": "open_board", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # Resolve known product pages before generic window/screenshot tools.
+            # Not anchored at the start: "I want you to open the chat web UI" still counts.
             (re.compile(
-                _polite + _open + r'\s+(?:the\s+)?(?:decisions\s*ai\s+)?'
+                r'(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
+                + _open + r'\s+(?:the\s+)?(?:decisions\s*ai\s+)?'
                 r'(chat|development|incoming|automations?|terminals?|reports?|'
                 r'web\s*ui|web\s*interface|webui|preferences?|settings)'
                 r'(?:\s+(?:web\s*ui|window|page|section|interface))?'
@@ -659,6 +668,15 @@ class FastActionDetector:
              {"target": "__FOCUS_APP_NAME__", "text": "__FOCUS_APP_NAME__"}, False, "done"),
             (re.compile(
                 r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
+                r'(?:switch|go|return)(?:\s+back)?\s+to\s+(?:the\s+)?'
+                r'(brave(?:\s+browser)?|google\s+chrome|chrome|safari|firefox|cursor|codex|'
+                r'terminal|finder|spotify|slack|notes|mail|messages)'
+                r'(?:\s+please)?\s*[.?!]?\s*$',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "smart_open",
+             {"target": "__FOCUS_APP_NAME__", "text": "__FOCUS_APP_NAME__"}, False, "done"),
+            (re.compile(
+                r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
                 r'bring\s+up\s+(?:the\s+|a\s+|my\s+)?'
                 r'(?!website\b|window\b|page\b|section\b|boards?\b|projects?\b|it\b|that\b)'
                 r'([A-Za-z][\w.+-]{0,24}(?:\s+[A-Za-z][\w.+-]{0,24}){0,2})'
@@ -858,6 +876,20 @@ class FastActionDetector:
             # "swap window", "swap windows", "next window", "other window", "cycle window", "switch window"
             (re.compile(r'\b(swap|next|other|cycle|switch)\s+window(s)?\.?$', re.IGNORECASE), 
              ActionType.KEYBOARD_SHORTCUT, "keyboard_shortcut", {"shortcut": "swap_window", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+
+            # A named browser action must focus that browser before sending the shortcut,
+            # then return the user to the app they were working in.
+            (re.compile(
+                _polite
+                + r'(?:reload|refresh)(?:\s+(?:the\s+)?(?:current\s+)?(?:page|tab))?'
+                r'(?:\s+(?:in|on))?\s+(?:the\s+)?'
+                r'(brave(?:\s+browser)?|google\s+chrome|chrome|safari|firefox)'
+                r'(?:\s+please)?\s*[.?!]?\s*$',
+                re.IGNORECASE,
+            ),
+             ActionType.MEDIA_CONTROL, "media_control",
+             {"action": "refresh", "target_app": "__TARGET_APP_MATCH__", "restore_focus": True},
+             False, "done"),
             
             # === MEDIA CONTROL ===
             # "play", "pause", "stop"
@@ -1026,6 +1058,17 @@ class FastActionDetector:
         text_lower = text.lower()
         
         logger.debug(f"FastActionDetector: Analyzing '{text}'")
+
+        if self.PROJECT_LIFECYCLE_PATTERN.search(text):
+            return DetectedAction(
+                action_type=ActionType.PROJECT_LIFECYCLE,
+                tool_name="start_project",
+                tool_args={"text": text},
+                needs_copy_first=False,
+                response_type="done",
+                confidence=0.98,
+                original_text=text,
+            )
         
         # COMPOUND SENTENCE CHECK: If the text contains multiple sentences/clauses
         # and mixes conversational content with commands, route to LLM so it can
@@ -1207,6 +1250,9 @@ class FastActionDetector:
                                 final_args[key] = "volume_down"
                             elif "mute" in vol_match:
                                 final_args[key] = "mute"
+                    elif value == "__TARGET_APP_MATCH__":
+                        if match.groups():
+                            final_args[key] = match.group(1)
                     elif value == "__PAGE_MATCH__":
                         # Map "up" -> "page_up", "down" -> "page_down"
                         if match.groups():
@@ -1318,18 +1364,15 @@ class FastActionDetector:
                         from distr.core.agent.tools.chat.open_page import resolve_open_page_key
 
                         resolved = resolve_open_page_key(text)
-                        if resolved:
-                            final_args[key] = resolved
-                        else:
-                            page = (match.group(1) or "").strip().lower()
-                            final_args[key] = {
-                                "automation": "automations",
-                                "terminal": "terminals",
-                                "report": "reports",
-                                "web ui": "development",
-                                "web interface": "development",
-                                "webui": "development",
-                            }.get(page, page)
+                        page = resolved or (match.group(1) or "").strip().lower()
+                        final_args[key] = {
+                            "automation": "automations",
+                            "terminal": "terminals",
+                            "report": "reports",
+                            "web ui": "development",
+                            "web interface": "development",
+                            "webui": "development",
+                        }.get(page, page)
                 
                 logger.info(f"FastActionDetector: MATCHED '{text}' -> {action_type.value} (tool: {tool_name}, copy_first: {needs_copy})")
                 
@@ -1532,7 +1575,7 @@ class FastActionDetector:
                     # Code
                     'code', 'script', 'index',
                     # Media
-                    'transcribe', 'record', 'screenshot', 'capture',
+                    'transcribe', 'record', 'screenshot', 'capture', 'reload', 'refresh',
                     # Misc tools
                     'snippet', 'telegram', 'generate', 'export', 'import',
                     'automate', 'workflow', 'project', 'ticket board', 'ticket',

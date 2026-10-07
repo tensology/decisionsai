@@ -110,7 +110,7 @@ class GoogleWorkspaceInput(BaseModel):
     """Input schema for Google Workspace tool."""
 
     action: str = Field(
-        description="The action to perform. Options: 'check_inbox', 'read_email', 'get_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'download_email_attachment', 'download_email_attachments', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'delete_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
+        description="The action to perform. Options: 'check_inbox', 'read_email', 'get_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'download_email_attachment', 'download_email_attachments', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
     )
     params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -174,6 +174,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "\n"
         "GOOGLE CALENDAR:\n"
         "- 'create_calendar_event': Create ONE event (params: summary, start_time, end_time, description, location)\n"
+        "- 'update_calendar_event': Correct an existing event by the event_id returned from creation (params: event_id and any of summary, start_time, end_time, description, location, time_zone). Use this for corrections; NEVER create a replacement event.\n"
         "- 'delete_calendar_event': Delete ONE event using the event_id returned by create_calendar_event (params: event_id)\n"
         "- 'create_calendar_events_batch': Create MANY events in ONE tool call. "
         "You MUST include a non-empty JSON array named events (top-level next to action is best). "
@@ -382,6 +383,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
             'folder_id', 'file_id', 'name', 'mime_type', 'summary',
             'event_id',
             'start_time', 'end_time', 'description', 'location', 'time_min',
+            'time_zone',
             'time_max', 'title', 'markdown_content', 'convert_to_google_doc',
             'events', 'calendar_events', 'calendarEvents',
             'attachment_id', 'filename', 'destination_dir',
@@ -704,14 +706,64 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     end_time = datetime.fromisoformat(end_time_str)
                 except (ValueError, TypeError):
                     return "Error: Invalid date format. Use ISO format (YYYY-MM-DDTHH:MM:SS)"
+                if end_time <= start_time:
+                    return "Error: end_time must be after start_time"
                 
-                event_id = self.connector.create_calendar_event(summary, start_time, end_time, description, location)
+                time_zone = params.get('time_zone')
+                event_id = self.connector.create_calendar_event(
+                    summary,
+                    start_time,
+                    end_time,
+                    description,
+                    location,
+                    time_zone,
+                )
                 if event_id:
-                    return f"Event created successfully (ID: {event_id})"
+                    return (
+                        f"Event created successfully (ID: {event_id}; "
+                        f"start={start_time.isoformat()}; end={end_time.isoformat()})"
+                    )
                 connector_error = str(getattr(self.connector, "last_error", "") or "").strip()
                 if connector_error:
                     return f"Error: {connector_error}"
                 return "Error: Calendar API failed to create the event. Verify the event fields and connection."
+
+            elif action == 'update_calendar_event':
+                from datetime import datetime
+
+                event_id = str(params.get('event_id') or '').strip()
+                if not event_id:
+                    return "Error: event_id is required to update a calendar event"
+
+                def _optional_datetime(key: str):
+                    value = params.get(key)
+                    if value in (None, ""):
+                        return None
+                    try:
+                        return datetime.fromisoformat(value)
+                    except (ValueError, TypeError):
+                        raise ValueError(f"Invalid {key} format. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
+
+                try:
+                    start_time = _optional_datetime('start_time')
+                    end_time = _optional_datetime('end_time')
+                except ValueError as exc:
+                    return f"Error: {exc}"
+                if start_time is not None and end_time is not None and end_time <= start_time:
+                    return "Error: end_time must be after start_time"
+                updated = self.connector.update_calendar_event(
+                    event_id,
+                    summary=params.get('summary'),
+                    start_time=start_time,
+                    end_time=end_time,
+                    description=params.get('description'),
+                    location=params.get('location'),
+                    time_zone=params.get('time_zone'),
+                )
+                if updated:
+                    return f"Calendar event updated successfully (ID: {event_id})"
+                connector_error = str(getattr(self.connector, "last_error", "") or "").strip()
+                return f"Error: {connector_error or 'Failed to update calendar event'}"
 
             elif action == 'delete_calendar_event':
                 event_id = str(params.get('event_id') or '').strip()
@@ -768,6 +820,9 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                             f"[{idx}] need summary and valid ISO start_time/end_time; got summary={summary!r}"
                         )
                         continue
+                    if et <= st:
+                        parse_errors.append(f"[{idx}] end_time must be after start_time")
+                        continue
                     parsed.append(
                         {
                             "_batch_index": idx,
@@ -776,6 +831,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                             "end_time": et,
                             "description": ev.get("description"),
                             "location": ev.get("location"),
+                            "time_zone": ev.get("time_zone"),
                         }
                     )
 
@@ -892,7 +948,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 return f"Document created successfully (ID: {doc_id})" if doc_id else "Error: Failed to create document"
             
             else:
-                return f"Error: Unknown action '{action}'. Available actions: check_inbox, read_email, get_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, download_email_attachment, download_email_attachments, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, delete_calendar_event, create_calendar_events_batch, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
+                return f"Error: Unknown action '{action}'. Available actions: check_inbox, read_email, get_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, download_email_attachment, download_email_attachments, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, update_calendar_event, delete_calendar_event, create_calendar_events_batch, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
         
         except Exception as e:
             logger.error(f"Error executing Google Workspace action: {e}", exc_info=True)

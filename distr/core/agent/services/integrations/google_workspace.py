@@ -14,8 +14,9 @@ import json
 import os
 import io
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
 from email.mime.text import MIMEText
 import base64
@@ -24,6 +25,23 @@ import re
 logger = logging.getLogger(__name__)
 
 _REFRESH_FAILURE_BACKOFF = timedelta(minutes=15)
+
+
+def _calendar_datetime(value: datetime, time_zone: Optional[str] = None) -> datetime:
+    """Attach the requested or system-local zone to naive calendar datetimes."""
+    if value.tzinfo is not None:
+        return value
+    if time_zone:
+        try:
+            return value.replace(tzinfo=ZoneInfo(time_zone))
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Unknown calendar time zone: {time_zone}") from exc
+    return value.replace(tzinfo=datetime.now().astimezone().tzinfo)
+
+
+def _calendar_query_time(value: datetime) -> str:
+    aware = _calendar_datetime(value)
+    return aware.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _walk_gmail_parts(part: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1008,23 +1026,28 @@ class GoogleWorkspaceConnector:
     
     # ==================== Google Calendar Methods ====================
     
-    def create_calendar_event(self, summary: str, start_time: datetime, end_time: datetime, 
-                             description: Optional[str] = None, location: Optional[str] = None) -> Optional[str]:
+    def create_calendar_event(self, summary: str, start_time: datetime, end_time: datetime,
+                             description: Optional[str] = None, location: Optional[str] = None,
+                             time_zone: Optional[str] = None) -> Optional[str]:
         """Create calendar event"""
         if not self._ensure_valid_token():
             return None
-        
+
+        start_time = _calendar_datetime(start_time, time_zone)
+        end_time = _calendar_datetime(end_time, time_zone)
         event = {
             'summary': summary,
             'start': {
                 'dateTime': start_time.isoformat(),
-                'timeZone': 'UTC'
             },
             'end': {
                 'dateTime': end_time.isoformat(),
-                'timeZone': 'UTC'
             }
         }
+        calendar_zone = time_zone or getattr(start_time.tzinfo, "key", None)
+        if calendar_zone:
+            event['start']['timeZone'] = calendar_zone
+            event['end']['timeZone'] = calendar_zone
         
         if description:
             event['description'] = description
@@ -1035,6 +1058,46 @@ class GoogleWorkspaceConnector:
         result = self._make_request('POST', url, json=event)
         
         return result.get('id') if result else None
+
+    def update_calendar_event(
+        self,
+        event_id: str,
+        *,
+        summary: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        description: Optional[str] = None,
+        location: Optional[str] = None,
+        time_zone: Optional[str] = None,
+    ) -> bool:
+        """Update one primary-calendar event without creating a replacement."""
+        if not event_id or not self._ensure_valid_token():
+            return False
+        from urllib.parse import quote
+
+        event: Dict[str, Any] = {}
+        if summary is not None:
+            event["summary"] = summary
+        if description is not None:
+            event["description"] = description
+        if location is not None:
+            event["location"] = location
+        for key, value in (("start", start_time), ("end", end_time)):
+            if value is None:
+                continue
+            aware = _calendar_datetime(value, time_zone)
+            payload = {"dateTime": aware.isoformat()}
+            calendar_zone = time_zone or getattr(aware.tzinfo, "key", None)
+            if calendar_zone:
+                payload["timeZone"] = calendar_zone
+            event[key] = payload
+        if not event:
+            return False
+        url = (
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
+            + quote(str(event_id), safe="")
+        )
+        return self._make_request("PATCH", url, json=event) is not None
 
     def delete_calendar_event(self, event_id: str) -> bool:
         """Delete one event from the primary calendar by its event ID."""
@@ -1094,6 +1157,7 @@ class GoogleWorkspaceConnector:
                 et,
                 ev.get("description"),
                 ev.get("location"),
+                ev.get("time_zone"),
             )
             results.append(
                 {
@@ -1119,9 +1183,9 @@ class GoogleWorkspaceConnector:
         }
         
         if time_min:
-            params['timeMin'] = time_min.isoformat() + 'Z'
+            params['timeMin'] = _calendar_query_time(time_min)
         if time_max:
-            params['timeMax'] = time_max.isoformat() + 'Z'
+            params['timeMax'] = _calendar_query_time(time_max)
         
         result = self._make_request('GET', url, params=params)
         
@@ -1132,14 +1196,14 @@ class GoogleWorkspaceConnector:
     
     def get_schedule_tomorrow(self) -> Optional[List[Dict[str, Any]]]:
         """Get schedule for tomorrow"""
-        tomorrow = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        tomorrow = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         time_min = tomorrow
         time_max = tomorrow + timedelta(days=1)
         return self.get_calendar_events(time_min=time_min, time_max=time_max)
     
     def get_schedule_this_week(self) -> Optional[List[Dict[str, Any]]]:
         """Get schedule for this week"""
-        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
         # Get Monday of current week
         days_since_monday = today.weekday()
         monday = today - timedelta(days=days_since_monday)

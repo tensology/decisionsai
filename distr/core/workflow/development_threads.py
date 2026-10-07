@@ -8,6 +8,7 @@ thread.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from sqlalchemy import func
@@ -482,6 +483,51 @@ def _upsert_work_item(
         board_ticket_lane=item.ticket_lane,
     )
     return item
+
+
+_EXPLICIT_DEVELOPMENT = re.compile(
+    r"\b(development thread|in development|new thread|under the project)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_CHAT = re.compile(
+    r"\b(new chat|just chat|in chat|stay in chat)\b",
+    re.IGNORECASE,
+)
+_IMPERATIVE_WORK = re.compile(
+    r"(?:^|please\s+|can you\s+|could you\s+|i need you to\s+)"
+    r"(build|implement|fix|edit|verify|add|create|define|refactor|write|ship|"
+    r"deploy|scratch|change|prepare|develop|patch|debug|make|run)\b",
+    re.IGNORECASE,
+)
+_WORK_WORD = re.compile(
+    r"\b(build|implement|fix|edit|verify|refactor|scratch|patch|debug|deploy)\b",
+    re.IGNORECASE,
+)
+_CHAT_QUESTION = re.compile(
+    r"\b(what's|whats|what|who's|who|why|how's|how|when|where|tell me|explain|describe|are you|can you tell)\b",
+    re.IGNORECASE,
+)
+
+
+def orchestrator_surface(text: str) -> str:
+    """Choose chat or development for a new orchestrator request.
+
+    Development is an instruction to change or produce project work.
+    Chat is a question, story, or status check, including questions about a project.
+    Empty text stays unspecified so an explicit create_thread call can proceed.
+    """
+    raw = _clean(text)
+    if not raw:
+        return "unspecified"
+    if _EXPLICIT_CHAT.search(raw):
+        return "chat"
+    if _EXPLICIT_DEVELOPMENT.search(raw) or _IMPERATIVE_WORK.search(raw):
+        return "development"
+    if _CHAT_QUESTION.search(raw):
+        return "chat"
+    if _WORK_WORD.search(raw):
+        return "development"
+    return "unspecified"
 
 
 def ensure_development_thread(

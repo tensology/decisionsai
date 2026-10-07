@@ -106,6 +106,8 @@ def test_open_chat_window_is_deterministically_routed_to_internal_page_tool():
         "open up the chat web ui",
         "show me the chat web ui",
         "open the web ui chat",
+        "I want you to open the chat web ui",
+        "could you open up the chat web ui",
     ):
         action = detect_fast_action(command)
         assert action.tool_name == "open_page", command
@@ -118,7 +120,7 @@ def test_open_chat_web_ui_does_not_fall_through_to_preferences(monkeypatch):
 
     bare_web_ui = detect_fast_action("open the web ui")
     assert bare_web_ui.tool_name == "open_page"
-    assert bare_web_ui.tool_args == {"page": "web ui"}
+    assert bare_web_ui.tool_args == {"page": "development"}
 
     preferences = detect_fast_action("open the preferences")
     assert preferences.tool_name == "open_page"
@@ -137,10 +139,12 @@ def test_open_chat_web_ui_does_not_fall_through_to_preferences(monkeypatch):
     tool._run(page="open the chat web ui")
     tool._run(page="chat web ui")
     tool._run(page="web ui")
+    tool._run(page="preferences", last_user_message="open the chat web ui")
     assert opened == [
         "http://127.0.0.1:8765/chat/",
         "http://127.0.0.1:8765/chat/",
         "http://127.0.0.1:8765/development/",
+        "http://127.0.0.1:8765/chat/",
     ]
     missed = tool._run(page="not a real page")
     assert missed.startswith("Unknown page")

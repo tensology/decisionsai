@@ -1,0 +1,98 @@
+/* Motion utilities — GSAP-prepared reveal classes
+   Brand Motion Identity: Editorial-Premium personality
+   - signature easing: cubic-bezier(0.16, 1, 0.3, 1)
+   - duration palette: quick 0.2s / standard 0.5s / slow 0.9s
+   - entrance pattern: subtle upward translate + opacity */
+
+/* Reveal-ready (JS will animate to visible) */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  will-change: transform, opacity;
+}
+
+.reveal-soft {
+  opacity: 0;
+  transform: translateY(12px);
+  will-change: transform, opacity;
+}
+
+.reveal-fade {
+  opacity: 0;
+  will-change: opacity;
+}
+
+/* SplitText-ready container — children get masked-line reveal */
+.split-lines {
+  overflow: hidden;
+}
+.split-lines > .line-mask {
+  display: block;
+  overflow: hidden;
+}
+.split-lines > .line-mask > .line-inner {
+  display: block;
+  transform: translateY(110%);
+  will-change: transform;
+}
+
+/* Stagger groups (JS reads children) */
+.stagger > * {
+  opacity: 0;
+  transform: translateY(16px);
+  will-change: transform, opacity;
+}
+
+/* Hero number counters — JS animates */
+.counter[data-target] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Cursor accent — small dot follows pointer in hero */
+.cursor-accent {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 999;
+  mix-blend-mode: multiply;
+  transform: translate3d(-100px, -100px, 0);
+  opacity: 0;
+  transition: opacity var(--dur-standard) var(--ease-signature);
+}
+.cursor-accent.active { opacity: 0.7; }
+
+@media (hover: none), (pointer: coarse) {
+  .cursor-accent { display: none; }
+}
+
+/* Reduced motion — neutralize everything */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .reveal, .reveal-soft, .reveal-fade,
+  .stagger > *,
+  .split-lines > .line-mask > .line-inner {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .cursor-accent { display: none; }
+}
+
+/* No-JS fallback — show everything */
+.no-js .reveal,
+.no-js .reveal-soft,
+.no-js .reveal-fade,
+.no-js .stagger > *,
+.no-js .split-lines > .line-mask > .line-inner {
+  opacity: 1 !important;
+  transform: none !important;
+}

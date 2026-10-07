@@ -731,12 +731,14 @@ def get_startup_sessions_for_project(project_id: int, purpose: Optional[str] = "
             if purpose and sess.purpose != purpose:
                 continue
             _sync_runtime_session_to_orchestrator(sess)
+            buffer = sess.get_buffer(80)
             results.append({
                 "process_id": session_key,
                 "pid": sess.pid,
                 "command": sess.shell_command or "",
                 "alive": True,
                 "purpose": sess.purpose,
+                "urls": _infer_urls_from_terminal_buffer(buffer),
             })
     return results
 

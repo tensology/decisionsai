@@ -27,6 +27,11 @@ from distr.core.agent.libs import (
 )
 from distr.core.agent.services.llm.tool_format import convert_tools_to_openai_format
 from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
+from distr.core.agent.services.llm.tool_execution_policy import (
+    remember_successful_tool_call,
+    sanitized_tool_arguments,
+    tool_execution_block_reason,
+)
 from .base_service import BaseLLMService
 
 logger = logging.getLogger(__name__)
@@ -813,6 +818,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 last_user_message,
                 tickets_verified=tickets_verified,
             )
+            intent_block = intent_block or tool_execution_block_reason(
+                self, func_name, func_args, last_user_message
+            )
             dependency_block = (
                 branch_failed and func_name in self._MUTATING_ORCHESTRATION_TOOLS
             )
@@ -824,7 +832,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                 from distr.core.agent.tool_audit import record_tool_execution
                 record_tool_execution(
-                    chat_id, func_name, result_str, "failed", event_queue=self.event_queue
+                    chat_id,
+                    func_name,
+                    result_str,
+                    "failed",
+                    event_queue=self.event_queue,
+                    metadata={"arguments": sanitized_tool_arguments(func_args)},
                 )
                 self._messages.append({
                     "tool_call_id": tc["id"],
@@ -877,7 +890,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 status = "completed"
                 from distr.core.agent.tool_audit import record_tool_start
 
-                record_tool_start(chat_id, func_name)
+                record_tool_start(
+                    chat_id,
+                    func_name,
+                    metadata={"arguments": sanitized_tool_arguments(func_args)},
+                )
                 try:
                     result = await self._run_tool_with_timeout(tool, func_args, func_name)
                 except asyncio.CancelledError:
@@ -889,9 +906,20 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     logger.error("Error executing tool %s: %s", func_name, e, exc_info=True)
 
                 from distr.core.agent.tool_audit import record_tool_execution
-                record_tool_execution(chat_id, func_name, str(result), status, event_queue=self.event_queue)
+                record_tool_execution(
+                    chat_id,
+                    func_name,
+                    str(result),
+                    status,
+                    event_queue=self.event_queue,
+                    metadata={"arguments": sanitized_tool_arguments(func_args)},
+                )
 
                 result_str = str(result)
+                if status == "completed":
+                    remember_successful_tool_call(
+                        self, func_name, func_args, last_user_message, result_str
+                    )
                 if self._is_verified_ticket_result(func_name, result_str):
                     tickets_verified = True
 
@@ -905,17 +933,58 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 if matched:
                     from distr.core.agent.tool_audit import record_tool_start
 
-                    record_tool_start(chat_id, matched.name, instruction_hint=f"Matched from {func_name}")
                     try:
                         matched_args = json.loads(tc["function"].get("arguments", "{}"))
-                        matched_args = self._normalize_tool_kwargs(matched, matched_args)
+                    except (json.JSONDecodeError, TypeError):
+                        matched_args = {}
+                    matched_args = self._normalize_tool_kwargs(matched, matched_args)
+                    matched_block = tool_execution_block_reason(
+                        self, matched.name, matched_args, last_user_message
+                    )
+                    if matched_block:
+                        from distr.core.agent.tool_audit import record_tool_execution
+
+                        record_tool_execution(
+                            chat_id,
+                            matched.name,
+                            matched_block,
+                            "failed",
+                            event_queue=self.event_queue,
+                            metadata={"arguments": sanitized_tool_arguments(matched_args)},
+                        )
+                        resp = {
+                            "tool_call_id": tc["id"],
+                            "role": "tool",
+                            "name": matched.name,
+                            "content": matched_block,
+                        }
+                        self._messages.append(resp)
+                        continue
+                    record_tool_start(
+                        chat_id,
+                        matched.name,
+                        instruction_hint=f"Matched from {func_name}",
+                        metadata={"arguments": sanitized_tool_arguments(matched_args)},
+                    )
+                    try:
                         result = matched._run(**matched_args)
                         status = "completed"
                     except Exception as e:
                         result = f"Error: {e}"
                         status = "failed"
                     from distr.core.agent.tool_audit import record_tool_execution
-                    record_tool_execution(chat_id, matched.name, str(result), status, event_queue=self.event_queue)
+                    record_tool_execution(
+                        chat_id,
+                        matched.name,
+                        str(result),
+                        status,
+                        event_queue=self.event_queue,
+                        metadata={"arguments": sanitized_tool_arguments(matched_args)},
+                    )
+                    if status == "completed":
+                        remember_successful_tool_call(
+                            self, matched.name, matched_args, last_user_message, result
+                        )
                     resp = {"tool_call_id": tc["id"], "role": "tool", "name": matched.name, "content": str(result)}
                 else:
                     resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name,
@@ -1044,6 +1113,28 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if getattr(self, '_is_telegram_request', False):
                 func_args.setdefault("is_telegram_request", True)
 
+            block_reason = tool_execution_block_reason(
+                self, func_name, func_args, last_user_message
+            )
+            if block_reason:
+                from distr.core.agent.tool_audit import record_tool_execution
+
+                record_tool_execution(
+                    chat_id,
+                    func_name,
+                    block_reason,
+                    "failed",
+                    event_queue=self.event_queue,
+                    metadata={"arguments": sanitized_tool_arguments(func_args)},
+                )
+                self._messages.append({
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": func_name,
+                    "content": block_reason,
+                })
+                continue
+
             if not decision.get("allow", True):
                 self._messages.append({
                     "tool_call_id": tc["id"],
@@ -1060,7 +1151,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 tool = self._tools_dict[func_name]
                 from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
 
-                record_tool_start(chat_id, func_name)
+                record_tool_start(
+                    chat_id,
+                    func_name,
+                    metadata={"arguments": sanitized_tool_arguments(func_args)},
+                )
                 try:
                     result = await self._run_tool_with_timeout(tool, func_args, func_name)
                     result_str = str(result)
@@ -1070,6 +1165,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         result_str,
                         "completed",
                         event_queue=self.event_queue,
+                        metadata={"arguments": sanitized_tool_arguments(func_args)},
+                    )
+                    remember_successful_tool_call(
+                        self, func_name, func_args, last_user_message, result_str
                     )
 
                     if hasattr(threading.current_thread(), 'suppress_tts_for_tool_chain'):

@@ -196,6 +196,27 @@ def _parse_startup_command_lines(startup_instructions: str) -> list[str]:
     return out
 
 
+def _parse_project_lifecycle_request(text: str) -> tuple[str, bool]:
+    """Return the requested project name and whether it should open in a browser."""
+    raw = (text or "").strip().rstrip(".?!")
+    launch = bool(re.search(r"\blaunch\b|\bopen\b.{0,40}\b(?:browser|chrome|brave)\b", raw, re.IGNORECASE))
+    name = re.sub(
+        r"^\s*(?:(?:can|could|would)\s+you\s+|please\s+)?"
+        r"(?:start\s+and\s+launch|launch\s+and\s+start|start|launch|run|boot\s+up|initialize|open\s+and\s+start)"
+        r"\s+(?:(?:the|this|my)\s+)?project\b\s*",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    name = re.sub(
+        r"(?:,?\s+(?:and\s+)?then\s+|\s+and\s+)(?:launch|start)(?:\s+(?:it|the\s+project))?\s*$",
+        "",
+        name,
+        flags=re.IGNORECASE,
+    ).strip()
+    return name, launch
+
+
 def _build_decisions_meta() -> str:
     """Build workflow callback metadata for .tickets files when applicable."""
     from distr.core.workflow.dispatcher import get_current_workflow_env
@@ -597,6 +618,10 @@ class OpenAndStartProjectInput(BaseModel):
         default="",
         description="The name of the project to open. Extract this from the user's request. If not specified, will use the currently active project."
     )
+    launch: bool = Field(
+        default=False,
+        description="Open the detected local project URL in the operating system's default browser after ensuring terminals are running."
+    )
 
 
 class OpenAndStartProjectTool(BaseTool):
@@ -636,7 +661,7 @@ class OpenAndStartProjectTool(BaseTool):
             "open project", "launch the project"
         ]
 
-    def _run(self, project_name: str = "", **kwargs) -> str:
+    def _run(self, project_name: str = "", launch: bool = False, **kwargs) -> str:
         """Execute open and start project action."""
         try:
             from distr.core.db import get_session
@@ -755,7 +780,12 @@ class OpenAndStartProjectTool(BaseTool):
                     return f"Error activating project: {activate_result.get('error')}"
 
                 logger.info(f"Activated project: {project.name} (ID: {project.id})")
-                folder_location = project.folder_location
+
+                if launch:
+                    from distr.core.project_startup_terminals import launch_project_in_browser
+
+                    result = launch_project_in_browser(project.id, announce=True)
+                    return result.message if result.success else f"Error: {result.message}"
 
                 # Start in-app PTY terminals for each startup command
                 startup_instructions = project.startup_instructions.strip() if project.startup_instructions else ""
@@ -1670,15 +1700,15 @@ class SelfUpdateViaCursorTool(BaseTool):
 
 
 class StartProjectTool(BaseTool):
-    """Tool for starting a project by opening it in an editor and running startup commands in Terminal."""
+    """Start project terminals and optionally launch the detected local URL."""
 
     name: str = "start_project"
-    description: str = """Start the current project by opening it in Cursor/VS Code and launching startup commands in Terminal.
+    description: str = """Start a project, or launch it in the default browser.
 
     This tool:
-    1. Opens the project folder in Cursor (or VS Code if Cursor not available)
-    2. Reads the startup_instructions from the active project (one shell command per non-empty line)
-    3. Runs each command in a new Terminal tab or window (macOS Terminal.app; see implementation for Linux/Windows)
+    1. Starts configured project terminals for "start project".
+    2. For "launch project", starts terminals if needed, detects local URLs in their output, and opens the best URL in the operating system default browser.
+    3. Treats "start and launch" and "launch and start" as the same combined action.
 
     Triggers (use this tool for these):
     - "Start the project"
@@ -1688,7 +1718,7 @@ class StartProjectTool(BaseTool):
     - "Boot up the project"
     - "Initialize the project"
 
-    Returns: Confirmation of editor opened and terminals launched.
+    Returns: Confirmation of terminals started or project URL launched.
     """
     event_queue: Any = Field(default=None, exclude=True)
 
@@ -1710,18 +1740,7 @@ class StartProjectTool(BaseTool):
         try:
             from distr.core.agent.services.rag.project import get_active_project
 
-            # Extract project name from text (e.g. "start project auctionnow" → "auctionnow")
-            search_name = ""
-            if text:
-                text_lower = text.lower().strip().rstrip('.')
-                # Strip common prefixes to get the project name
-                for prefix in ['start project', 'start the project', 'open project', 'open and start project',
-                               'launch project', 'run project', 'start']:
-                    if text_lower.startswith(prefix):
-                        search_name = text_lower[len(prefix):].strip()
-                        break
-                if not search_name:
-                    search_name = text_lower
+            search_name, launch = _parse_project_lifecycle_request(text)
 
             # If a project name was specified, find it by fuzzy matching
             if search_name:
@@ -1734,7 +1753,7 @@ class StartProjectTool(BaseTool):
                     best_match = None
                     best_score = 0.0
                     for p in all_projects:
-                        score = SequenceMatcher(None, search_name, p.name.lower()).ratio()
+                        score = SequenceMatcher(None, search_name.lower(), p.name.lower()).ratio()
                         if score > best_score:
                             best_score = score
                             best_match = p
@@ -1742,7 +1761,7 @@ class StartProjectTool(BaseTool):
                         try:
                             triggers = json.loads(p.additional_trigger_words) if p.additional_trigger_words else []
                             for tw in triggers:
-                                tw_score = SequenceMatcher(None, search_name, tw.lower()).ratio()
+                                tw_score = SequenceMatcher(None, search_name.lower(), tw.lower()).ratio()
                                 if tw_score > best_score:
                                     best_score = tw_score
                                     best_match = p
@@ -1754,7 +1773,7 @@ class StartProjectTool(BaseTool):
                         # Delegate to OpenAndStartProjectTool with the matched name
                         from distr.core.agent.tools.system.project_tools import OpenAndStartProjectTool
                         opener = OpenAndStartProjectTool()
-                        return opener._run(project_name=best_match.name)
+                        return opener._run(project_name=best_match.name, launch=launch)
 
             project = get_active_project()
 
@@ -1765,12 +1784,11 @@ class StartProjectTool(BaseTool):
             if not project.get('folder_location'):
                 return f"Error: Project '{project['name']}' does not have a folder location set. Please set the folder location in the Projects Manager first."
 
-            # Check if project has startup instructions
-            startup_instructions = project.get('startup_instructions', '').strip()
-            if not startup_instructions:
-                return f"Project '{project['name']}' does not have any startup instructions configured.\n\nPlease add startup instructions in the Projects Manager (Advanced tab) first."
-            if not _parse_startup_command_lines(startup_instructions):
-                return f"Project '{project['name']}' startup instructions have no runnable commands (add one shell command per line, or remove # comments only)."
+            if launch:
+                from distr.core.project_startup_terminals import launch_project_in_browser
+
+                result = launch_project_in_browser(project['id'], announce=True)
+                return result.message if result.success else f"Error: {result.message}"
 
             from distr.core.project_startup_terminals import start_project_startup_terminals
 

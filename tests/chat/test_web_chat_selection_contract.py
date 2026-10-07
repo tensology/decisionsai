@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 
@@ -483,6 +484,41 @@ def test_chat_config_saves_only_changed_fields_and_skips_noop_patch():
     assert "await persistChatSettingsPatch(patch" in save_block
 
 
+def test_chat_config_resolves_saved_provider_labels_against_registry_ids():
+    src = _chat_js_source()
+    resolver_block = src.split("function providerIdFromRegistry", 1)[1].split(
+        "/** Align saved Settings voice fields",
+        1,
+    )[0]
+    voice_block = src.split("function canonicalVoiceProviderForSelect", 1)[1].split(
+        "// Listen for provider changes",
+        1,
+    )[0]
+    open_block = src.split("async function openChatConfigModal", 1)[1].split(
+        "function hideChatConfigModal",
+        1,
+    )[0]
+
+    assert "provider?.name" in resolver_block
+    assert "replace(/\\([^)]*\\)/g, '')" in resolver_block
+    assert "replace(/[^a-z0-9]/g, '')" in resolver_block
+    assert "providerIdFromRegistry(raw, _ttsProviders)" in voice_block
+    assert "providerIdFromRegistry(rawProvider, providers)" in open_block
+
+    resolver_source = "function providerIdFromRegistry" + resolver_block
+    script = resolver_source + """
+const providers = [
+  { id: 'coqui', name: 'Coqui TTS (Offline)' },
+  { id: 'fishaudio', name: 'Fish Audio (Online)' },
+  { id: 'openrouter', name: 'OpenRouter' }
+];
+if (providerIdFromRegistry('Fish Audio (Online)', providers) !== 'fishaudio') process.exit(1);
+if (providerIdFromRegistry('fishaudio', providers) !== 'fishaudio') process.exit(2);
+if (providerIdFromRegistry('OpenRouter', providers) !== 'openrouter') process.exit(3);
+"""
+    subprocess.run(["node", "-e", script], check=True)
+
+
 def test_chat_settings_events_are_never_rendered_in_transcript():
     src = _chat_js_source()
     normalize_block = src.split("function normalizeTraceMessages(messages)", 1)[1].split(
@@ -634,6 +670,23 @@ def test_assistant_activity_renders_as_system_activity_sibling():
     assert "getOrCreateAssistantActivitySibling(assistantEl)" in append_block
     assert "label: activityStepLabel(title, event)" in tool_item_block
     assert "label: activitySystemLabel(title, event)" not in tool_item_block
+
+
+def test_dictation_activity_uses_dictation_label_and_copy_snackbar():
+    src = _chat_js_source()
+    label_block = src.split("function activityStepLabel(title, event) {", 1)[1].split(
+        "function buildActivityCollapsibleStep",
+        1,
+    )[0]
+    copy_block = src.split("const copyBtn = e.target.closest('.activity-step-copy');", 1)[1].split(
+        "const toggle = e.target.closest('.activity-step-toggle');",
+        1,
+    )[0]
+
+    assert "toolName === 'context_note'" in label_block
+    assert "return 'Dictation';" in label_block
+    assert "showChatSnackbar('Dictation copied to clipboard', 'success');" in copy_block
+    assert "showChatSnackbar('Could not copy dictation', 'error')" in copy_block
 
 
 def test_header_settings_edited_via_configure_modal_only():

@@ -45,10 +45,35 @@ def test_bring_up_brave_is_short_app_open():
     assert result.tool_args.get("target") == "Brave"
 
 
+def test_switch_to_chrome_is_an_app_focus_command():
+    result = _detect("Can you switch to Chrome?")
+
+    assert result.tool_name == "smart_open"
+    assert result.tool_args.get("target") == "Chrome"
+
+
 def test_bring_up_google_is_site_open():
     result = _detect("Bring up Google")
     assert result.tool_name == "open_window"
     assert result.tool_args.get("app_name") == "google"
+
+
+def test_reload_brave_focuses_named_browser_and_restores_previous_app():
+    result = _detect("Can you reload Brave?")
+
+    assert result.tool_name == "media_control"
+    assert result.tool_args == {
+        "action": "refresh",
+        "target_app": "Brave",
+        "restore_focus": True,
+    }
+
+
+def test_refresh_page_in_chrome_focuses_named_browser():
+    result = _detect("Refresh the page in Chrome")
+
+    assert result.tool_name == "media_control"
+    assert result.tool_args["target_app"] == "Chrome"
 
 
 def test_intents_force_page_and_board_for_spoken_list():

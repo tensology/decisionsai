@@ -141,8 +141,37 @@ def _focus_window(params: dict[str, Any]) -> dict[str, Any]:
     app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
     if app is None:
         raise RuntimeError(f"no running application for pid={pid}")
+    app_name = str(app.localizedName() or "").strip()
+    if not app_name:
+        return {"success": False, "pid": pid, "via": "decisions", "error": "application name unavailable"}
+    escaped_name = app_name.replace("\\", "\\\\").replace('"', '\\"')
+    focus_script = f'''
+set targetPid to {pid}
+tell application "{escaped_name}" to activate
+tell application "System Events"
+    repeat 50 times
+        if (unix id of first application process whose frontmost is true) is targetPid then return "true"
+        delay 0.1
+    end repeat
+end tell
+return "false"
+'''
+    result = subprocess.run(
+        ["osascript", "-e", focus_script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=7,
+    )
+    if result.returncode == 0 and result.stdout.strip().lower() == "true":
+        return {"success": True, "pid": pid, "via": "osascript"}
     ok = bool(app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps))
-    return {"success": ok, "pid": pid, "via": "decisions"}
+    return {
+        "success": ok,
+        "pid": pid,
+        "via": "appkit",
+        "error": (result.stderr or "").strip(),
+    }
 
 
 def _primary_visible_rect() -> tuple[int, int, int, int]:

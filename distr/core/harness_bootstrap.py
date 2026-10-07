@@ -62,7 +62,9 @@ def copy_skill_tree(src: Path, dest: Path) -> bool:
     if not src.is_dir():
         return False
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
+    if dest.is_symlink():
+        dest.unlink()
+    elif dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(
         src,

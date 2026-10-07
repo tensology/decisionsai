@@ -12,7 +12,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 class HiddenVoiceIndicator(QtWidgets.QWidget):
     """Render compact voice feedback beside the pointer."""
 
-    STATES = {"idle", "listening", "thinking", "speaking"}
+    STATES = {"idle", "listening", "dictating", "hands_free", "loading", "thinking", "speaking"}
 
     def __init__(self) -> None:
         flags = (
@@ -91,7 +91,7 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
         try:
             import objc
             from AppKit import (
-                NSScreenSaverWindowLevel,
+                NSStatusWindowLevel,
                 NSWindowCollectionBehaviorCanJoinAllSpaces,
                 NSWindowCollectionBehaviorFullScreenAuxiliary,
                 NSWindowCollectionBehaviorStationary,
@@ -99,7 +99,7 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
 
             native_view = objc.objc_object(c_void_p=int(self.winId()))
             native_window = native_view.window()
-            native_window.setLevel_(NSScreenSaverWindowLevel)
+            native_window.setLevel_(NSStatusWindowLevel)
             native_window.setIgnoresMouseEvents_(True)
             native_window.setHidesOnDeactivate_(False)
             native_window.setCollectionBehavior_(
@@ -121,12 +121,18 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
             self._paint_idle(painter)
         elif self._state == "listening":
             self._paint_listening(painter, phase)
+        elif self._state == "dictating":
+            self._paint_dictating(painter, phase)
+        elif self._state == "hands_free":
+            self._paint_hands_free(painter, phase)
+        elif self._state == "loading":
+            self._paint_loading(painter, phase)
         elif self._state == "thinking":
             self._paint_thinking(painter, phase)
         elif self._state == "speaking":
             self._paint_speaking(painter, phase)
 
-    def _paint_idle(self, painter: QtGui.QPainter) -> None:
+    def _paint_idle(self, painter: QtGui.QPainter, color: QtGui.QColor | None = None) -> None:
         points = (
             QtCore.QPointF(14, 3),
             QtCore.QPointF(16, 8),
@@ -138,7 +144,7 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
             QtCore.QPointF(12, 8),
         )
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(QtGui.QColor(74, 167, 255))
+        painter.setBrush(color or QtGui.QColor(74, 167, 255))
         painter.drawPolygon(QtGui.QPolygonF(points))
 
     def _paint_listening(self, painter: QtGui.QPainter, phase: float) -> None:
@@ -147,6 +153,33 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor(74, 167, 255, alpha))
         for index, height in enumerate((3, 4, 5, 4, 3)):
             painter.drawRoundedRect(QtCore.QRectF(5 + index * 4, 11 - height / 2, 2, height), 1, 1)
+
+    @staticmethod
+    def _dictation_color(phase: float) -> QtGui.QColor:
+        return QtGui.QColor.fromHsvF((0.58 + phase * 0.12) % 1.0, 0.72, 1.0)
+
+    def _paint_dictating(self, painter: QtGui.QPainter, phase: float) -> None:
+        self._paint_idle(painter, self._dictation_color(phase))
+
+    @staticmethod
+    def _hands_free_color(phase: float) -> QtGui.QColor:
+        progress = (1 - math.cos(phase * math.tau * 0.12)) / 2
+        return QtGui.QColor.fromHsvF(0.54 + progress * 0.08, 0.72, 1.0)
+
+    def _paint_hands_free(self, painter: QtGui.QPainter, phase: float) -> None:
+        self._paint_idle(painter, self._hands_free_color(phase))
+
+    def _paint_loading(self, painter: QtGui.QPainter, phase: float) -> None:
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        active = int(phase * 7) % 4
+        for index, (x, y, angle) in enumerate(((14, 5, 0), (20, 11, 90), (14, 17, 0), (8, 11, 90))):
+            distance = (index - active) % 4
+            painter.setBrush(QtGui.QColor(124, 196, 255, 255 - distance * 55))
+            painter.save()
+            painter.translate(x, y)
+            painter.rotate(angle)
+            painter.drawRoundedRect(QtCore.QRectF(-1.5, -3, 3, 6), 1.5, 1.5)
+            painter.restore()
 
     def _paint_thinking(self, painter: QtGui.QPainter, phase: float) -> None:
         painter.setPen(QtCore.Qt.PenStyle.NoPen)

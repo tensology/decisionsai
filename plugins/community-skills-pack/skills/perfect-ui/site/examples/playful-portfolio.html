@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mochi Studio — Illustration + motion that makes small things bounce big · perfect-ui example</title>
+  <script>document.documentElement.classList.remove('no-js');</script>
+  <meta name="description" content="Example portfolio page from perfect-ui — playful vibe, Bento Grid macrostructure. Heavy GSAP choreography (kinetic shapes + tile reveals + marquee + cursor magnetism), Tier 4 Lenis + ScrollTrigger sync." />
+  <link rel="icon" type="image/svg+xml" href="../favicon-light.svg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..900,30..90;1,9..144,400..900,30..90&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <style>
+    /*
+      <design_plan> — pre-emit verification stamped per references/preemit-design-plan.md
+      macrostructure_diversification: Bento Grid (differs from coffee=Letter, luxury=Letter)
+      vibe_validity: playful + kinetic wildcard
+      dial_alignment: DESIGN_VARIANCE high / VISUAL_DENSITY rich (playful defaults)
+      motion_personality: Playful — signature ease cubic-bezier(0.68, -0.4, 0.27, 1.4) (bouncy)
+      hero_math: container 1280, H1 clamp 56-128, 3 lines (≤ playful ceiling 4)
+      bento_density: 6 tiles, grid-flow-dense, no empty cells
+      label_sweep: no meta-labels ("SECTION 01" etc.)
+      button_contrast: focus-visible 2px coral + AA contrast ink on paper
+      honest_copy: real-feeling project names, no fake metrics
+      gsap_decision: intensity 3/3 → GSAP + Lenis Tier 4 + ScrollTrigger sync
+      pre_emit_verdict: ALL PASS
+    */
+
+    :root {
+      --bg: #FFF8E7;
+      --bg-muted: #FFE8C2;
+      --bg-elev: #FFFCF3;
+      --ink: #2D1F12;
+      --ink-muted: #6E5A44;
+      --ink-subtle: #998A74;
+      --accent: #FF6B4A;
+      --accent-2: #FFD23F;
+      --accent-3: #4ABEC9;
+      --accent-soft: #FFD4C7;
+      --rule: rgba(45, 31, 18, 0.14);
+      --rule-strong: rgba(45, 31, 18, 0.36);
+      --font-display: 'Fraunces', Georgia, serif;
+      --font-body: 'Plus Jakarta Sans', system-ui, sans-serif;
+      --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+      --ease-signature: cubic-bezier(0.68, -0.4, 0.27, 1.4);
+      --ease-snap: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --dur-quick: 0.3s;
+      --dur-standard: 0.7s;
+      --dur-slow: 1.2s;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+      font-size: 16px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+      background-image:
+        radial-gradient(at 8% 12%, rgba(255, 107, 74, 0.08), transparent 35%),
+        radial-gradient(at 90% 8%, rgba(74, 190, 201, 0.07), transparent 38%),
+        radial-gradient(at 75% 95%, rgba(255, 210, 63, 0.07), transparent 40%);
+    }
+
+    h1, h2, h3, h4 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      margin: 0;
+      font-variation-settings: "opsz" 144, "SOFT" 50;
+    }
+    p { margin: 0; }
+    a {
+      color: var(--ink);
+      text-decoration: underline;
+      text-decoration-color: var(--accent);
+      text-decoration-thickness: 1.5px;
+      text-underline-offset: 4px;
+      transition: color var(--dur-standard) var(--ease-signature);
+    }
+    a:hover { color: var(--accent); }
+    a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+    /* ============ SCROLLBAR (playful — bouncy coral thumb on cream track) ============ */
+    html { scrollbar-width: thin; scrollbar-color: var(--ink-muted) transparent; }
+    ::-webkit-scrollbar { width: 14px; height: 14px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--ink-muted) 55%, transparent);
+      border: 3px solid var(--bg);
+      border-radius: 999px;
+      background-clip: padding-box;
+      transition: background var(--dur-standard) var(--ease-signature);
+    }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+    ::-webkit-scrollbar-corner { background: transparent; }
+
+    /* ============ BANNER ============ */
+    .example-banner {
+      background: var(--ink);
+      color: var(--bg);
+      font-family: var(--font-body);
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 12px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      position: relative;
+      z-index: 5;
+    }
+    .example-banner a {
+      color: var(--accent-2);
+      text-decoration-color: var(--accent-2);
+    }
+
+    .mochi-wrap {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 0 32px;
+      position: relative;
+      z-index: 2;
+    }
+
+    /* ============ NAV ============ */
+    .mochi-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 32px 0 20px;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .mochi-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--ink);
+    }
+    .mochi-brand-mark {
+      width: 38px;
+      height: 38px;
+      flex-shrink: 0;
+    }
+    .mochi-brand-name {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-style: italic;
+      font-size: 24px;
+      letter-spacing: -0.01em;
+    }
+    .mochi-nav-links {
+      display: flex;
+      gap: 28px;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .mochi-nav-links a {
+      text-decoration: none;
+      color: var(--ink-muted);
+      border-bottom: 2px solid transparent;
+      padding-bottom: 2px;
+      transition: color var(--dur-standard) var(--ease-signature),
+                  border-color var(--dur-standard) var(--ease-signature);
+    }
+    .mochi-nav-links a:hover { color: var(--ink); border-bottom-color: var(--accent); }
+    .mochi-available {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--ink);
+      color: var(--bg);
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .mochi-available::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      animation: mochi-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes mochi-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.85); }
+    }
+
+    /* ============ HERO ============ */
+    .mochi-hero {
+      position: relative;
+      padding: 60px 0 120px;
+      overflow: visible;
+    }
+    .mochi-hero-shapes {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .mochi-hero-shape {
+      position: absolute;
+      will-change: transform;
+    }
+    .shape-blob   { top: 5%;   left: -4%;  width: 180px; opacity: 0.85; }
+    .shape-circle { top: 60%;  left: 88%;  width: 110px; opacity: 0.9; }
+    .shape-star   { top: 20%;  right: 8%;  width: 80px; }
+    .shape-squiggle{top: 75%;  left: 12%;  width: 130px; }
+    .shape-plus   { top: 38%;  right: 22%; width: 50px; }
+    .shape-donut  { top: 12%;  left: 50%;  width: 90px; opacity: 0.8; }
+
+    .mochi-h1 {
+      position: relative;
+      z-index: 2;
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: clamp(56px, 10vw, 152px);
+      line-height: 0.92;
+      letter-spacing: -0.045em;
+      margin: 64px 0 56px;
+      max-width: 16ch;
+    }
+    .mochi-h1 .word {
+      display: inline-block;
+      will-change: transform;
+    }
+    .mochi-h1 .word em {
+      font-style: italic;
+      color: var(--accent);
+      font-variation-settings: "SOFT" 90, "WONK" 1;
+    }
+    .mochi-h1 .word .accent-2 { color: var(--accent-3); }
+    .mochi-h1 .word .accent-3 { color: var(--accent-2); }
+
+    .mochi-hero-foot {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: 7fr 5fr;
+      gap: 48px;
+      align-items: end;
+      max-width: 1080px;
+    }
+    .mochi-hero-sub {
+      font-size: 18px;
+      line-height: 1.6;
+      color: var(--ink-muted);
+      max-width: 42ch;
+    }
+    .mochi-hero-meta {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink-subtle);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      text-align: right;
+    }
+
+    /* ============ MARQUEE ============ */
+    .mochi-marquee {
+      overflow: hidden;
+      border-top: 1.5px solid var(--ink);
+      border-bottom: 1.5px solid var(--ink);
+      background: var(--accent);
+      padding: 18px 0;
+      margin: 0 0 80px;
+      position: relative;
+      z-index: 3;
+    }
+    .mochi-marquee-track {
+      display: inline-flex;
+      align-items: center;
+      gap: 48px;
+      white-space: nowrap;
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 36px;
+      font-weight: 500;
+      color: var(--ink);
+      will-change: transform;
+    }
+    .mochi-marquee-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 48px;
+    }
+    .mochi-marquee-dot {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--ink);
+      flex-shrink: 0;
+    }
+
+    /* ============ BENTO GRID (6 projects) ============ */
+    .mochi-work {
+      padding: 0 0 120px;
+    }
+    .mochi-work-head {
+      display: grid;
+      grid-template-columns: 7fr 5fr;
+      gap: 40px;
+      align-items: end;
+      margin-bottom: 56px;
+    }
+    .mochi-work-head h2 {
+      font-size: clamp(38px, 5vw, 72px);
+      line-height: 1.02;
+      max-width: 14ch;
+      letter-spacing: -0.025em;
+    }
+    .mochi-work-head h2 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+    .mochi-work-head .mochi-work-meta {
+      font-size: 14px;
+      color: var(--ink-muted);
+      max-width: 32ch;
+      line-height: 1.55;
+      font-weight: 500;
+    }
+
+    .mochi-bento {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      grid-auto-flow: dense;
+      gap: 20px;
+    }
+    .mochi-tile {
+      position: relative;
+      background: var(--bg-elev);
+      border: 1.5px solid var(--ink);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 280px;
+      overflow: hidden;
+      cursor: pointer;
+      will-change: transform;
+      transition: background var(--dur-standard) var(--ease-signature);
+      text-decoration: none;
+      color: var(--ink);
+    }
+    .mochi-tile:hover { background: var(--bg-muted); }
+    .mochi-tile-num {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .mochi-tile-art {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 16px 0;
+    }
+    .mochi-tile-art svg {
+      width: 100%;
+      max-height: 200px;
+      height: auto;
+    }
+    .mochi-tile-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 12px;
+    }
+    .mochi-tile-name {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-style: italic;
+      font-size: 28px;
+      line-height: 1;
+      letter-spacing: -0.01em;
+    }
+    .mochi-tile-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      padding-bottom: 4px;
+    }
+
+    /* Bento tile spans (dense playful layout, no empty cells) */
+    .bento-1 { grid-column: span 4; background: #FFE0B5; }
+    .bento-2 { grid-column: span 2; background: #C7E9D8; }
+    .bento-3 { grid-column: span 2; grid-row: span 2; background: var(--accent); color: var(--bg-elev); }
+    .bento-3 .mochi-tile-num,
+    .bento-3 .mochi-tile-tag { color: var(--bg); opacity: 0.85; }
+    .bento-4 { grid-column: span 2; background: #FFD7CC; }
+    .bento-5 { grid-column: span 2; background: #B2E0E6; }
+    .bento-6 { grid-column: span 4; background: var(--ink); color: var(--bg-elev); }
+    .bento-6 .mochi-tile-num { color: var(--accent-2); }
+    .bento-6 .mochi-tile-tag { color: var(--bg); opacity: 0.7; }
+
+    /* ============ ABOUT ============ */
+    .mochi-about {
+      padding: 100px 0;
+      display: grid;
+      grid-template-columns: 5fr 7fr;
+      gap: 80px;
+      align-items: center;
+      border-top: 2px dashed var(--ink-muted);
+      border-bottom: 2px dashed var(--ink-muted);
+    }
+    .mochi-about-portrait {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 320px;
+    }
+    .mochi-about-portrait svg {
+      width: 100%;
+      max-width: 320px;
+      height: auto;
+    }
+    .mochi-about-body h2 {
+      font-size: clamp(34px, 4.5vw, 60px);
+      line-height: 1.05;
+      letter-spacing: -0.02em;
+      margin-bottom: 28px;
+    }
+    .mochi-about-body h2 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+    .mochi-about-body p {
+      font-size: 17px;
+      line-height: 1.65;
+      color: var(--ink-muted);
+      max-width: 56ch;
+    }
+    .mochi-about-body p + p { margin-top: 16px; }
+
+    /* ============ PROCESS ============ */
+    .mochi-process {
+      padding: 100px 0;
+    }
+    .mochi-process h2 {
+      font-size: clamp(38px, 5vw, 72px);
+      line-height: 1.02;
+      letter-spacing: -0.025em;
+      max-width: 14ch;
+      margin-bottom: 64px;
+    }
+    .mochi-process h2 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+    .mochi-process-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+    }
+    .mochi-step {
+      position: relative;
+      background: var(--bg-elev);
+      border: 1.5px solid var(--ink);
+      padding: 28px 24px;
+      min-height: 220px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .mochi-step:nth-child(odd)  { transform: rotate(-1deg); }
+    .mochi-step:nth-child(even) { transform: rotate(1deg); }
+    .mochi-step:hover            { transform: rotate(0deg) scale(1.02); transition: transform var(--dur-standard) var(--ease-signature); }
+    .mochi-step-icon {
+      width: 56px;
+      height: 56px;
+      margin-bottom: 18px;
+      color: var(--accent);
+    }
+    .mochi-step-num {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink-subtle);
+      margin-bottom: 8px;
+    }
+    .mochi-step h3 {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 28px;
+      line-height: 1;
+      margin: 0 0 10px;
+    }
+    .mochi-step p {
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--ink-muted);
+    }
+
+    /* ============ CONTACT CTA ============ */
+    .mochi-contact {
+      padding: 120px 0 60px;
+      text-align: center;
+      position: relative;
+    }
+    .mochi-contact h2 {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: clamp(56px, 9vw, 144px);
+      line-height: 0.96;
+      letter-spacing: -0.04em;
+      max-width: 16ch;
+      margin: 0 auto 48px;
+    }
+    .mochi-contact h2 em {
+      font-style: italic;
+      color: var(--accent);
+      font-variation-settings: "SOFT" 90, "WONK" 1;
+    }
+    .mochi-contact-btn {
+      display: inline-block;
+      background: var(--ink);
+      color: var(--bg);
+      padding: 22px 44px;
+      font-family: var(--font-body);
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: 0.04em;
+      text-decoration: none;
+      border-radius: 999px;
+      transition: transform var(--dur-standard) var(--ease-signature),
+                  background var(--dur-standard) var(--ease-signature);
+    }
+    .mochi-contact-btn:hover {
+      background: var(--accent);
+      transform: scale(1.05) rotate(-1.5deg);
+    }
+
+    /* ============ FOOTER ============ */
+    .mochi-foot {
+      padding: 56px 0 40px;
+      border-top: 1.5px solid var(--ink);
+      margin-top: 56px;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink-muted);
+      letter-spacing: 0.04em;
+    }
+    .mochi-foot a { color: var(--ink-muted); }
+
+    /* ============ CURSOR ACCENT ============ */
+    .mochi-cursor {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 14px;
+      height: 14px;
+      background: var(--accent);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 999;
+      mix-blend-mode: multiply;
+      transform: translate3d(-100px, -100px, 0);
+      opacity: 0;
+      transition: opacity var(--dur-standard) var(--ease-signature);
+    }
+    .mochi-cursor.active { opacity: 0.7; }
+    @media (hover: none), (pointer: coarse) {
+      .mochi-cursor { display: none; }
+    }
+
+    /* ============ REVEAL CLASSES (GSAP-driven) ============ */
+    .reveal {
+      opacity: 0;
+      transform: translateY(40px) rotate(-2deg) scale(0.94);
+      will-change: transform, opacity;
+    }
+    .reveal-soft {
+      opacity: 0;
+      transform: translateY(20px);
+      will-change: transform, opacity;
+    }
+
+    .no-js .reveal, .no-js .reveal-soft,
+    .lenis-disabled .reveal, .lenis-disabled .reveal-soft {
+      opacity: 1 !important;
+      transform: none !important;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+      .reveal, .reveal-soft, .mochi-hero-shape {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+      .mochi-step { transform: none !important; }
+    }
+
+    /* Lenis CSS overrides */
+    html.lenis, html.lenis body { height: auto; }
+    .lenis.lenis-smooth { scroll-behavior: auto !important; }
+    .lenis.lenis-stopped { overflow: hidden; }
+    .lenis.lenis-scrolling iframe { pointer-events: none; }
+    html.lenis-disabled { scroll-behavior: smooth; }
+
+    /* ============ RESPONSIVE ============ */
+    @media (max-width: 1024px) {
+      .mochi-bento { grid-template-columns: repeat(4, 1fr); }
+      .bento-1 { grid-column: span 4; }
+      .bento-2 { grid-column: span 2; }
+      .bento-3 { grid-column: span 2; grid-row: span 2; }
+      .bento-4 { grid-column: span 2; }
+      .bento-5 { grid-column: span 2; }
+      .bento-6 { grid-column: span 4; }
+      .mochi-process-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 700px) {
+      .mochi-wrap { padding: 0 20px; }
+      .mochi-nav-links { display: none; }
+      .mochi-hero { padding: 40px 0 80px; }
+      .mochi-hero-foot, .mochi-work-head, .mochi-about { grid-template-columns: 1fr; gap: 32px; }
+      .mochi-marquee-track { font-size: 24px; gap: 28px; }
+      .mochi-bento { grid-template-columns: 1fr; }
+      .bento-1, .bento-2, .bento-3, .bento-4, .bento-5, .bento-6 {
+        grid-column: span 1;
+        grid-row: auto;
+      }
+      .mochi-process-grid { grid-template-columns: 1fr; }
+      .mochi-hero-shape { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="example-banner">
+  <span>Example output · playful vibe + kinetic wildcard · Bento Grid · Tier 4 Lenis + heavy GSAP</span>
+  <a href="../index.html">← back to perfect-ui docs</a>
+</div>
+
+<div class="mochi-wrap">
+
+  <!-- ============ NAV ============ -->
+  <nav class="mochi-nav">
+    <a class="mochi-brand" href="#">
+      <!-- Custom monogram — playful tilted M with bounce -->
+      <svg class="mochi-brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+        <rect x="2" y="2" width="36" height="36" rx="11" fill="var(--accent)" transform="rotate(-3 20 20)"/>
+        <path d="M11 28V12l4.5 8 4.5-8v16M22 28V12" stroke="var(--bg-elev)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+      <span class="mochi-brand-name">Mochi Studio</span>
+    </a>
+
+    <ul class="mochi-nav-links">
+      <li><a href="#work">Work</a></li>
+      <li><a href="#about">About</a></li>
+      <li><a href="#process">Process</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ul>
+
+    <a href="#contact" class="mochi-available">Available from June 2026</a>
+  </nav>
+
+  <!-- ============ HERO ============ -->
+  <header class="mochi-hero">
+    <!-- Floating kinetic shapes (animated by GSAP) -->
+    <div class="mochi-hero-shapes" aria-hidden="true">
+      <svg class="mochi-hero-shape shape-blob" viewBox="0 0 180 180">
+        <path d="M90,15 C130,15 165,50 165,90 C165,130 130,165 90,165 C50,165 15,130 15,90 C15,50 50,15 90,15 Z" fill="var(--accent)" opacity="0.85"/>
+      </svg>
+      <svg class="mochi-hero-shape shape-circle" viewBox="0 0 110 110">
+        <circle cx="55" cy="55" r="48" fill="none" stroke="var(--accent-3)" stroke-width="6"/>
+        <circle cx="55" cy="55" r="20" fill="var(--accent-3)"/>
+      </svg>
+      <svg class="mochi-hero-shape shape-star" viewBox="0 0 80 80">
+        <path d="M40 6 L48 30 L74 32 L54 48 L62 72 L40 58 L18 72 L26 48 L6 32 L32 30 Z" fill="var(--accent-2)"/>
+      </svg>
+      <svg class="mochi-hero-shape shape-squiggle" viewBox="0 0 130 60">
+        <path d="M6 30 Q22 6 38 30 T70 30 T102 30 T130 30" stroke="var(--ink)" stroke-width="6" fill="none" stroke-linecap="round"/>
+      </svg>
+      <svg class="mochi-hero-shape shape-plus" viewBox="0 0 50 50">
+        <path d="M25 6 V44 M6 25 H44" stroke="var(--accent)" stroke-width="8" stroke-linecap="round"/>
+      </svg>
+      <svg class="mochi-hero-shape shape-donut" viewBox="0 0 90 90">
+        <circle cx="45" cy="45" r="38" fill="var(--accent-2)"/>
+        <circle cx="45" cy="45" r="14" fill="var(--bg)"/>
+        <circle cx="28" cy="32" r="3" fill="var(--accent)"/>
+        <circle cx="62" cy="36" r="3" fill="var(--accent-3)"/>
+        <circle cx="55" cy="60" r="3" fill="var(--accent)"/>
+        <circle cx="32" cy="58" r="3" fill="var(--accent-3)"/>
+      </svg>
+    </div>
+
+    <h1 class="mochi-h1">
+      <span class="word">We</span>
+      <span class="word">make</span>
+      <span class="word"><em>small</em></span>
+      <span class="word">things</span>
+      <br/>
+      <span class="word"><span class="accent-2">bounce</span></span>
+      <span class="word">big.</span>
+    </h1>
+
+    <div class="mochi-hero-foot reveal-soft">
+      <p class="mochi-hero-sub">
+        An illustration + motion design duo in Lisbon, working with playful brands, wellness apps, and the occasional zine.
+      </p>
+      <div class="mochi-hero-meta">
+        Aria Sato + Lin Park<br/>
+        Est. 2021 · Lisbon
+      </div>
+    </div>
+  </header>
+
+  </div><!-- /mochi-wrap (marquee breaks bounds) -->
+
+  <!-- ============ MARQUEE (full-bleed) ============ -->
+  <div class="mochi-marquee" aria-hidden="true">
+    <div class="mochi-marquee-track">
+      <span class="mochi-marquee-item">Six selected projects <span class="mochi-marquee-dot"></span></span>
+      <span class="mochi-marquee-item">Now booking for autumn <span class="mochi-marquee-dot"></span></span>
+      <span class="mochi-marquee-item">Brand · Editorial · Motion <span class="mochi-marquee-dot"></span></span>
+      <span class="mochi-marquee-item">Says hello to small studios <span class="mochi-marquee-dot"></span></span>
+      <span class="mochi-marquee-item">Six selected projects <span class="mochi-marquee-dot"></span></span>
+      <span class="mochi-marquee-item">Now booking for autumn <span class="mochi-marquee-dot"></span></span>
+      <span class="mochi-marquee-item">Brand · Editorial · Motion <span class="mochi-marquee-dot"></span></span>
+      <span class="mochi-marquee-item">Says hello to small studios <span class="mochi-marquee-dot"></span></span>
+    </div>
+  </div>
+
+  <div class="mochi-wrap">
+
+  <!-- ============ WORK (BENTO 6 tiles) ============ -->
+  <section class="mochi-work" id="work">
+    <div class="mochi-work-head">
+      <h2><em>Six</em> small things, recently.</h2>
+      <p class="mochi-work-meta">Selected work from the past eighteen months. Hover for a peek; click for the full case (coming soon).</p>
+    </div>
+
+    <div class="mochi-bento">
+
+      <!-- T1 — Yume kids' app -->
+      <a class="mochi-tile bento-1 reveal" href="#">
+        <span class="mochi-tile-num">— 01</span>
+        <div class="mochi-tile-art" aria-hidden="true">
+          <svg viewBox="0 0 360 180">
+            <!-- moon -->
+            <circle cx="80" cy="80" r="42" fill="#FFFCF3"/>
+            <circle cx="92" cy="76" r="42" fill="#FFE0B5"/>
+            <!-- stars -->
+            <path d="M170 40 L174 50 L184 52 L176 60 L178 70 L170 64 L162 70 L164 60 L156 52 L166 50 Z" fill="var(--ink)"/>
+            <path d="M250 100 L253 108 L261 110 L255 116 L257 124 L250 119 L243 124 L245 116 L239 110 L247 108 Z" fill="var(--accent)"/>
+            <circle cx="220" cy="60" r="4" fill="var(--accent)"/>
+            <circle cx="300" cy="50" r="5" fill="var(--ink)"/>
+            <circle cx="320" cy="120" r="4" fill="var(--accent)"/>
+            <!-- cloud -->
+            <path d="M180 140 Q190 120 210 125 Q220 110 240 120 Q260 115 265 135 Q275 135 275 145 L180 145 Z" fill="var(--bg-elev)" stroke="var(--ink)" stroke-width="2"/>
+          </svg>
+        </div>
+        <div class="mochi-tile-info">
+          <span class="mochi-tile-name">Yume</span>
+          <span class="mochi-tile-tag">Kids' app · 24 illustrations</span>
+        </div>
+      </a>
+
+      <!-- T2 — Bloom Festival -->
+      <a class="mochi-tile bento-2 reveal" href="#">
+        <span class="mochi-tile-num">— 02</span>
+        <div class="mochi-tile-art" aria-hidden="true">
+          <svg viewBox="0 0 200 200">
+            <!-- abstract flower bouquet -->
+            <circle cx="100" cy="80" r="32" fill="var(--accent)"/>
+            <circle cx="70" cy="100" r="22" fill="var(--accent-2)"/>
+            <circle cx="130" cy="100" r="22" fill="var(--accent-3)"/>
+            <circle cx="100" cy="120" r="18" fill="var(--ink)"/>
+            <circle cx="100" cy="80" r="10" fill="var(--bg-elev)"/>
+            <!-- stems -->
+            <path d="M100 130 L100 180" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/>
+            <path d="M70 122 Q80 150 100 180" stroke="var(--ink)" stroke-width="3" stroke-linecap="round" fill="none"/>
+            <path d="M130 122 Q120 150 100 180" stroke="var(--ink)" stroke-width="3" stroke-linecap="round" fill="none"/>
+            <!-- tiny leaf -->
+            <ellipse cx="84" cy="155" rx="7" ry="4" fill="#5C7A4A" transform="rotate(-30 84 155)"/>
+            <ellipse cx="116" cy="155" rx="7" ry="4" fill="#5C7A4A" transform="rotate(30 116 155)"/>
+          </svg>
+        </div>
+        <div class="mochi-tile-info">
+          <span class="mochi-tile-name">Bloom</span>
+          <span class="mochi-tile-tag">Festival ID</span>
+        </div>
+      </a>
+
+      <!-- T3 — Hoppa (large coral 2x2) -->
+      <a class="mochi-tile bento-3 reveal" href="#">
+        <span class="mochi-tile-num">— 03</span>
+        <div class="mochi-tile-art" aria-hidden="true">
+          <svg viewBox="0 0 200 280">
+            <!-- big moon glow -->
+            <circle cx="100" cy="80" r="56" fill="#FFFCF3" opacity="0.35"/>
+            <circle cx="100" cy="80" r="40" fill="#FFFCF3"/>
+            <!-- leaping rabbit silhouette -->
+            <path d="M40 200 Q50 170 70 165 Q70 145 85 140 Q90 125 100 130 Q105 125 110 135 Q120 132 122 150 Q135 158 140 175 Q150 178 158 195 Q165 200 165 215 Q160 220 145 218 Q150 230 140 235 Q130 232 125 218 L80 220 Q72 232 60 230 Q56 218 65 213 Q50 218 40 215 Q35 205 40 200 Z" fill="#FFFCF3"/>
+            <!-- eye -->
+            <circle cx="138" cy="170" r="3" fill="var(--ink)"/>
+            <!-- z's (sleep app) -->
+            <text x="155" y="60" font-family="Georgia, serif" font-style="italic" font-size="36" fill="#FFFCF3">z</text>
+            <text x="175" y="50" font-family="Georgia, serif" font-style="italic" font-size="24" fill="#FFFCF3">z</text>
+            <text x="188" y="42" font-family="Georgia, serif" font-style="italic" font-size="16" fill="#FFFCF3">z</text>
+          </svg>
+        </div>
+        <div class="mochi-tile-info">
+          <span class="mochi-tile-name">Hoppa</span>
+          <span class="mochi-tile-tag">Sleep app · onboarding set</span>
+        </div>
+      </a>
+
+      <!-- T4 — Donut Diner -->
+      <a class="mochi-tile bento-4 reveal" href="#">
+        <span class="mochi-tile-num">— 04</span>
+        <div class="mochi-tile-art" aria-hidden="true">
+          <svg viewBox="0 0 200 200">
+            <!-- stack of 3 donuts -->
+            <!-- bottom donut -->
+            <ellipse cx="100" cy="160" rx="60" ry="14" fill="var(--ink)" opacity="0.15"/>
+            <ellipse cx="100" cy="155" rx="55" ry="16" fill="#A0623A"/>
+            <ellipse cx="100" cy="155" rx="18" ry="6" fill="var(--bg-elev)"/>
+            <!-- middle donut -->
+            <ellipse cx="100" cy="120" rx="50" ry="16" fill="#D4715D"/>
+            <ellipse cx="100" cy="120" rx="15" ry="6" fill="var(--bg-elev)"/>
+            <!-- sprinkles -->
+            <rect x="65" y="116" width="4" height="9" fill="var(--accent-3)" transform="rotate(20 67 120)"/>
+            <rect x="120" y="118" width="4" height="9" fill="var(--accent-2)" transform="rotate(-15 122 122)"/>
+            <rect x="90" y="113" width="4" height="9" fill="var(--ink)" transform="rotate(40 92 117)"/>
+            <!-- top donut -->
+            <ellipse cx="100" cy="80" rx="46" ry="16" fill="var(--accent)"/>
+            <ellipse cx="100" cy="80" rx="14" ry="6" fill="var(--bg-elev)"/>
+            <rect x="78" y="73" width="3" height="9" fill="var(--accent-2)" transform="rotate(30 80 77)"/>
+            <rect x="115" y="76" width="3" height="9" fill="var(--accent-3)" transform="rotate(-20 117 80)"/>
+            <rect x="98" y="71" width="3" height="9" fill="var(--bg-elev)" transform="rotate(55 100 75)"/>
+          </svg>
+        </div>
+        <div class="mochi-tile-info">
+          <span class="mochi-tile-name">Donut Diner</span>
+          <span class="mochi-tile-tag">Brand</span>
+        </div>
+      </a>
+
+      <!-- T5 — Soft Skies -->
+      <a class="mochi-tile bento-5 reveal" href="#">
+        <span class="mochi-tile-num">— 05</span>
+        <div class="mochi-tile-art" aria-hidden="true">
+          <svg viewBox="0 0 200 200">
+            <!-- main cloud with face -->
+            <path d="M40 110 Q40 80 70 80 Q75 60 105 65 Q120 50 145 65 Q175 65 175 95 Q190 95 190 115 L40 115 Q30 115 30 110 Z" fill="#B2E0E6" stroke="var(--ink)" stroke-width="2.5"/>
+            <!-- eyes -->
+            <circle cx="92" cy="92" r="3.5" fill="var(--ink)"/>
+            <circle cx="120" cy="92" r="3.5" fill="var(--ink)"/>
+            <!-- smile -->
+            <path d="M96 100 Q106 110 116 100" stroke="var(--ink)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <!-- cheeks -->
+            <ellipse cx="85" cy="100" rx="5" ry="3" fill="var(--accent)" opacity="0.5"/>
+            <ellipse cx="128" cy="100" rx="5" ry="3" fill="var(--accent)" opacity="0.5"/>
+            <!-- tiny birds -->
+            <path d="M30 50 Q35 45 40 50 Q45 45 50 50" stroke="var(--ink)" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M160 40 Q165 35 170 40 Q175 35 180 40" stroke="var(--ink)" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M140 160 Q145 155 150 160 Q155 155 160 160" stroke="var(--ink)" stroke-width="2" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="mochi-tile-info">
+          <span class="mochi-tile-name">Soft Skies</span>
+          <span class="mochi-tile-tag">Children's book</span>
+        </div>
+      </a>
+
+      <!-- T6 — Birds in Margins (dark wide) -->
+      <a class="mochi-tile bento-6 reveal" href="#">
+        <span class="mochi-tile-num">— 06</span>
+        <div class="mochi-tile-art" aria-hidden="true">
+          <svg viewBox="0 0 360 180">
+            <!-- bird flight formation right -->
+            <g fill="var(--accent-2)">
+              <path d="M20 90 Q30 80 40 90 Q50 80 60 90" stroke="var(--accent-2)" stroke-width="3" fill="none" stroke-linecap="round"/>
+              <path d="M80 70 Q90 60 100 70 Q110 60 120 70" stroke="var(--accent-2)" stroke-width="3" fill="none" stroke-linecap="round"/>
+              <path d="M140 100 Q150 90 160 100 Q170 90 180 100" stroke="var(--accent-2)" stroke-width="3" fill="none" stroke-linecap="round"/>
+              <path d="M200 80 Q210 70 220 80 Q230 70 240 80" stroke="var(--accent-2)" stroke-width="3" fill="none" stroke-linecap="round"/>
+              <path d="M260 110 Q270 100 280 110 Q290 100 300 110" stroke="var(--accent-2)" stroke-width="3" fill="none" stroke-linecap="round"/>
+              <path d="M310 90 Q320 80 330 90 Q340 80 350 90" stroke="var(--accent-2)" stroke-width="3" fill="none" stroke-linecap="round"/>
+            </g>
+            <!-- larger lead bird right -->
+            <path d="M280 130 Q310 110 340 130 Q310 145 280 130 Z" fill="var(--accent)"/>
+            <circle cx="335" cy="125" r="3" fill="var(--bg)"/>
+          </svg>
+        </div>
+        <div class="mochi-tile-info">
+          <span class="mochi-tile-name">Birds in Margins</span>
+          <span class="mochi-tile-tag">Animated zine · personal</span>
+        </div>
+      </a>
+
+    </div>
+  </section>
+
+  <!-- ============ ABOUT ============ -->
+  <section class="mochi-about" id="about">
+    <div class="mochi-about-portrait reveal" aria-hidden="true">
+      <!-- Abstract duo portrait — two friendly blob shapes -->
+      <svg viewBox="0 0 320 320">
+        <!-- background bg shape -->
+        <circle cx="160" cy="160" r="140" fill="var(--accent)" opacity="0.2"/>
+        <!-- Aria (left) -->
+        <g>
+          <ellipse cx="115" cy="180" rx="55" ry="78" fill="var(--accent)"/>
+          <circle cx="115" cy="120" r="45" fill="#F4D2B0"/>
+          <!-- hair -->
+          <path d="M70 105 Q80 70 115 70 Q150 70 160 105 Q160 95 150 90 Q155 75 130 72 Q125 60 110 65 Q90 65 85 80 Q75 90 70 105 Z" fill="var(--ink)"/>
+          <!-- eyes -->
+          <circle cx="103" cy="125" r="2.5" fill="var(--ink)"/>
+          <circle cx="125" cy="125" r="2.5" fill="var(--ink)"/>
+          <path d="M105 138 Q114 144 123 138" stroke="var(--ink)" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <ellipse cx="96" cy="132" rx="4" ry="2" fill="var(--accent)" opacity="0.6"/>
+          <ellipse cx="132" cy="132" rx="4" ry="2" fill="var(--accent)" opacity="0.6"/>
+        </g>
+        <!-- Lin (right) -->
+        <g>
+          <ellipse cx="215" cy="180" rx="55" ry="78" fill="var(--accent-3)"/>
+          <circle cx="215" cy="120" r="45" fill="#F4D2B0"/>
+          <!-- hair short -->
+          <path d="M170 105 Q175 75 215 75 Q255 75 260 110 Q258 92 245 88 Q230 72 215 75 Q198 70 188 85 Q175 90 170 105 Z" fill="#5C3A20"/>
+          <!-- eyes -->
+          <circle cx="203" cy="125" r="2.5" fill="var(--ink)"/>
+          <circle cx="225" cy="125" r="2.5" fill="var(--ink)"/>
+          <path d="M205 138 Q214 144 223 138" stroke="var(--ink)" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <ellipse cx="196" cy="132" rx="4" ry="2" fill="var(--accent)" opacity="0.6"/>
+          <ellipse cx="232" cy="132" rx="4" ry="2" fill="var(--accent)" opacity="0.6"/>
+        </g>
+        <!-- little star sprinkles -->
+        <path d="M50 60 L52 65 L57 66 L53 70 L54 75 L50 72 L46 75 L47 70 L43 66 L48 65 Z" fill="var(--accent-2)"/>
+        <path d="M275 55 L277 60 L282 61 L278 65 L279 70 L275 67 L271 70 L272 65 L268 61 L273 60 Z" fill="var(--accent-2)"/>
+      </svg>
+    </div>
+    <div class="mochi-about-body">
+      <h2><em>Two people,</em> one drafting table.</h2>
+      <p class="reveal-soft">We met at a risograph workshop in 2020 and started Mochi a year later, after Lin spilled a coffee on Aria's sketchbook and Aria said "draw something in it." That ruined sketchbook became our first client deck.</p>
+      <p class="reveal-soft">Today we make illustration sets, brand identities, and short motion pieces — usually for small studios, wellness apps, and a few publishing friends. We work slowly and on purpose; one project at a time.</p>
+    </div>
+  </section>
+
+  <!-- ============ PROCESS ============ -->
+  <section class="mochi-process" id="process">
+    <h2><em>Four steps,</em> usually six weeks.</h2>
+
+    <div class="mochi-process-grid">
+
+      <div class="mochi-step reveal">
+        <div>
+          <svg class="mochi-step-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="24" cy="24" r="18"/>
+            <path d="M18 22a2 2 0 0 0 4 0M26 22a2 2 0 0 0 4 0"/>
+            <path d="M18 30c2 2 8 2 12 0"/>
+          </svg>
+          <div class="mochi-step-num">Step 01</div>
+          <h3>Hello</h3>
+          <p>A 30-minute call. We ask too many questions. You ask whatever you like. Free, no scope yet.</p>
+        </div>
+      </div>
+
+      <div class="mochi-step reveal">
+        <div>
+          <svg class="mochi-step-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 36L36 8l4 4L12 40z"/>
+            <path d="M30 14l4 4"/>
+            <circle cx="14" cy="34" r="2"/>
+          </svg>
+          <div class="mochi-step-num">Step 02</div>
+          <h3>Sketch</h3>
+          <p>Quick pencil sketches, fast iterations. You see three directions in week one. We pick one.</p>
+        </div>
+      </div>
+
+      <div class="mochi-step reveal">
+        <div>
+          <svg class="mochi-step-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M24 6l4 12 12 2-9 8 3 12-10-6-10 6 3-12-9-8 12-2z"/>
+          </svg>
+          <div class="mochi-step-num">Step 03</div>
+          <h3>Polish</h3>
+          <p>Final illustrations + delivery in your preferred formats. SVG, PNG, Lottie — whichever fits.</p>
+        </div>
+      </div>
+
+      <div class="mochi-step reveal">
+        <div>
+          <svg class="mochi-step-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="24" cy="24" r="6"/>
+            <path d="M8 24c4-8 12-12 16-12s12 4 16 12c-4 8-12 12-16 12s-12-4-16-12z"/>
+            <path d="M24 8v4M24 36v4M8 24h4M36 24h4"/>
+          </svg>
+          <div class="mochi-step-num">Step 04</div>
+          <h3>Bounce</h3>
+          <p>If you want motion: 1-2 short animations after launch. Otherwise we send a postcard.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ CONTACT CTA ============ -->
+  <section class="mochi-contact" id="contact">
+    <h2>Got something to <em>bounce?</em> Send a note.</h2>
+    <a class="mochi-contact-btn" href="mailto:hello@mochi-studio.example">hello@mochi-studio.example</a>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="mochi-foot">
+    <span>Mochi Studio · Lisbon · Available from June 2026</span>
+    <span>Example output · perfect-ui v2.5.1</span>
+    <span><a href="../index.html">Docs ←</a></span>
+  </footer>
+
+</div>
+
+<!-- Cursor accent -->
+<div class="mochi-cursor" aria-hidden="true"></div>
+
+<!-- Lenis (Tier 4 — landing/portfolio auto-Lenis per v2.5.1+ type-gate rule) -->
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
+
+<!-- GSAP + ScrollTrigger (intensity 3/3 — heavy choreography) -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+
+<script>
+/*
+  Tier 4 setup — Lenis + GSAP ScrollTrigger sync per references/smooth-scroll-flow.md.
+  Decision rationale (Phase 2e.1):
+  - Type: portfolio (special tier) → type-gated auto-Lenis
+  - Vibe: playful (Brand Motion Identity: bouncy ease)
+  - Intensity: 3/3 → Tier 4 (Lenis + ScrollTrigger sync)
+  - Tier 5 escalation gate: 0 parallax data-speed sections, 0 pinned scrub → stay Tier 4
+*/
+(function () {
+  'use strict';
+
+  // ---- Hard guards (NON-NEGOTIABLE) -------------------------------
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.documentElement.classList.add('lenis-disabled');
+    return;
+  }
+  if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) {
+    document.documentElement.classList.add('lenis-disabled');
+    return;
+  }
+  if (typeof window.Lenis === 'undefined' || typeof window.gsap === 'undefined') {
+    document.documentElement.classList.add('lenis-disabled');
+    return;
+  }
+
+  var gsap = window.gsap;
+
+  // ---- Lenis init — playful config (slightly faster lerp 0.12 + bouncy easing) ----
+  var lenis = new window.Lenis({
+    lerp: 0.12,
+    duration: 1.1,
+    smoothWheel: true,
+    syncTouch: false,
+    easing: function (t) { return Math.min(1, 1.001 - Math.pow(2, -10 * t)); }
+  });
+  window.__lenis = lenis;
+
+  // ---- GSAP ScrollTrigger sync (Tier 4) ----
+  if (window.ScrollTrigger) {
+    gsap.registerPlugin(window.ScrollTrigger);
+    gsap.ticker.add(function (time) { lenis.raf(time * 1000); });
+    gsap.ticker.lagSmoothing(0);
+    lenis.on('scroll', window.ScrollTrigger.update);
+  } else {
+    requestAnimationFrame(function raf(time) {
+      lenis.raf(time);
+      requestAnimationFrame(raf);
+    });
+  }
+
+  // ---- Brand Motion Identity (playful) ----
+  gsap.defaults({
+    ease: 'back.out(1.7)',  // bouncy
+    duration: 0.7
+  });
+
+  // ---- HERO — bouncy word reveal ----
+  var words = document.querySelectorAll('.mochi-h1 .word');
+  if (words.length) {
+    gsap.set(words, { opacity: 0, y: 60, rotate: -6, scale: 0.7 });
+    gsap.to(words, {
+      opacity: 1,
+      y: 0,
+      rotate: 0,
+      scale: 1,
+      duration: 0.9,
+      stagger: 0.08,
+      ease: 'back.out(2.2)',
+      delay: 0.2
+    });
+  }
+
+  // ---- Hero floating shapes — continuous kinetic motion ----
+  var shapes = [
+    { sel: '.shape-blob',     rotate: 360, dur: 28, y: 30 },
+    { sel: '.shape-circle',   rotate: -360, dur: 24, y: -25 },
+    { sel: '.shape-star',     rotate: 360, dur: 18, y: 40 },
+    { sel: '.shape-squiggle', rotate: -180, dur: 22, y: -20 },
+    { sel: '.shape-plus',     rotate: 720, dur: 14, y: 15 },
+    { sel: '.shape-donut',    rotate: 360, dur: 30, y: -35 }
+  ];
+  shapes.forEach(function (s) {
+    var el = document.querySelector(s.sel);
+    if (!el) return;
+    gsap.to(el, { rotate: s.rotate, duration: s.dur, ease: 'none', repeat: -1 });
+    gsap.to(el, { y: s.y, duration: s.dur / 4, ease: 'sine.inOut', yoyo: true, repeat: -1 });
+  });
+
+  // ---- MARQUEE — seamless horizontal loop ----
+  var marqueeTrack = document.querySelector('.mochi-marquee-track');
+  if (marqueeTrack) {
+    // Track contains 2 copies of items — animate -50% then reset
+    gsap.to(marqueeTrack, {
+      xPercent: -50,
+      duration: 28,
+      ease: 'none',
+      repeat: -1
+    });
+  }
+
+  // ---- Bento tile staggered reveal (scroll-triggered) ----
+  if (window.ScrollTrigger) {
+    gsap.utils.toArray('.mochi-bento .reveal').forEach(function (tile, idx) {
+      gsap.to(tile, {
+        opacity: 1,
+        y: 0,
+        rotate: 0,
+        scale: 1,
+        duration: 1.0,
+        ease: 'back.out(1.6)',
+        delay: idx * 0.08,
+        scrollTrigger: {
+          trigger: tile,
+          start: 'top 88%',
+          once: true
+        }
+      });
+
+      // Bouncy hover micro-interaction
+      var randomRotate = (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 2 + 1);
+      tile.addEventListener('mouseenter', function () {
+        gsap.to(tile, { rotate: randomRotate, scale: 1.03, duration: 0.45, ease: 'back.out(2)' });
+      });
+      tile.addEventListener('mouseleave', function () {
+        gsap.to(tile, { rotate: 0, scale: 1, duration: 0.45, ease: 'back.out(2)' });
+      });
+    });
+
+    // Other reveals (about, process, hero-foot)
+    gsap.utils.toArray('.reveal-soft').forEach(function (el) {
+      gsap.to(el, {
+        opacity: 1,
+        y: 0,
+        duration: 0.8,
+        ease: 'power3.out',
+        scrollTrigger: {
+          trigger: el,
+          start: 'top 90%',
+          once: true
+        }
+      });
+    });
+
+    gsap.utils.toArray('.mochi-step.reveal, .mochi-about-portrait.reveal').forEach(function (el, idx) {
+      gsap.to(el, {
+        opacity: 1,
+        y: 0,
+        rotate: 0,
+        scale: 1,
+        duration: 0.9,
+        ease: 'back.out(1.7)',
+        delay: idx * 0.06,
+        scrollTrigger: {
+          trigger: el,
+          start: 'top 88%',
+          once: true
+        }
+      });
+    });
+  }
+
+  // ---- Cursor accent — magnetic effect near interactive elements ----
+  var cursor = document.querySelector('.mochi-cursor');
+  if (cursor && window.matchMedia('(pointer: fine)').matches) {
+    var hasMoved = false;
+    var tx = -100, ty = -100, x = -100, y = -100;
+
+    document.addEventListener('mousemove', function (e) {
+      if (!hasMoved) { cursor.classList.add('active'); hasMoved = true; }
+      tx = e.clientX;
+      ty = e.clientY;
+    });
+
+    gsap.ticker.add(function () {
+      x += (tx - x) * 0.18;
+      y += (ty - y) * 0.18;
+      cursor.style.transform = 'translate3d(' + (x - 7) + 'px,' + (y - 7) + 'px,0)';
+    });
+
+    document.querySelectorAll('a, button, .mochi-tile').forEach(function (el) {
+      el.addEventListener('mouseenter', function () {
+        gsap.to(cursor, { scale: 3.5, opacity: 0.4, duration: 0.3 });
+      });
+      el.addEventListener('mouseleave', function () {
+        gsap.to(cursor, { scale: 1, opacity: 0.7, duration: 0.3 });
+      });
+    });
+  }
+
+  // ---- Anchor link routing through Lenis ----
+  var NAV_OFFSET = 56;
+  document.querySelectorAll('a[href^="#"]').forEach(function (link) {
+    link.addEventListener('click', function (e) {
+      var hash = link.getAttribute('href');
+      if (hash === '#' || hash.length < 2) return;
+      var target = document.querySelector(hash);
+      if (!target) return;
+      e.preventDefault();
+      lenis.scrollTo(target, { offset: -NAV_OFFSET, duration: 1.2 });
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

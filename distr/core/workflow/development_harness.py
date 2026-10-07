@@ -1034,13 +1034,22 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
         else "Work as the active IDE coding agent. Inspect, edit, run checks, and continue until this request is genuinely handled or a user decision is required."
     )
     selected_skills = [str(skill_id).strip() for skill_id in (metadata.get("turn_skill_ids") or []) if str(skill_id).strip()]
-    skill_instruction = (
-        "Skills selected by the user for this turn: "
-        + ", ".join(selected_skills)
-        + ". Read each exact skill with read_harness_skill before acting, then apply its instructions. Do not search or list the skill catalog first."
-        if selected_skills
-        else ""
-    )
+    recommendation = str(metadata.get("skill_recommendation") or "").strip()
+    if selected_skills and recommendation:
+        skill_instruction = (
+            recommendation
+            + " Skills for this turn: "
+            + ", ".join(selected_skills)
+            + ". Read each exact skill with read_harness_skill before acting, then apply its instructions. Do not search or list the skill catalog first."
+        )
+    elif selected_skills:
+        skill_instruction = (
+            "Skills selected by the user for this turn: "
+            + ", ".join(selected_skills)
+            + ". Read each exact skill with read_harness_skill before acting, then apply its instructions. Do not search or list the skill catalog first."
+        )
+    else:
+        skill_instruction = ""
     return "\n\n".join(
         part
         for part in (
@@ -1187,6 +1196,7 @@ async def _run_execution(
     assessment: dict[str, Any],
     attachments: list[dict[str, Any]],
     skill_ids: list[str],
+    skill_recommendation: str,
     use_playwright: bool,
     autonomy_level: str,
     tool_event_id: str | None,
@@ -1212,6 +1222,7 @@ async def _run_execution(
     )
     runtime_metadata["turn_attachments"] = list(attachments)
     runtime_metadata["turn_skill_ids"] = list(skill_ids)
+    runtime_metadata["skill_recommendation"] = skill_recommendation
     if autonomy_level == "plan":
         adapter_options["read_only_expected"] = True
     native_tool_events: dict[str, str] = {}
@@ -1337,6 +1348,7 @@ async def _run_execution(
         )
         runtime_metadata["turn_attachments"] = list(attachments)
         runtime_metadata["turn_skill_ids"] = list(skill_ids)
+        runtime_metadata["skill_recommendation"] = skill_recommendation
         request = replace(
             request,
             instruction=_agent_instruction(chat_id, prompt, runtime_metadata, autonomy_level=autonomy_level),
@@ -1892,6 +1904,14 @@ def dispatch_development_prompt(
             limit=5,
         )
         turn_skill_ids = filter_known_skill_ids(list(inferred or []))[:12]
+    from distr.core.capabilities_pack import recommend_design_skills
+
+    recommended, skill_recommendation = recommend_design_skills(
+        "\n".join(part for part in (clean, str((metadata or {}).get("ticket_title") or "")) if part)
+    )
+    for skill_id in filter_known_skill_ids(recommended):
+        if skill_id not in turn_skill_ids and len(turn_skill_ids) < 12:
+            turn_skill_ids.append(skill_id)
     backend, model, _, _ = _route(project, metadata, assessment)
     git_status_before = _git_status_snapshot(str(project.folder_location or ""))
     git_untracked_before = _git_untracked_fingerprints(
@@ -1936,6 +1956,7 @@ def dispatch_development_prompt(
         "assessment": assessment,
         "attachments": turn_attachments,
         "skill_ids": turn_skill_ids,
+        "skill_recommendation": skill_recommendation,
         "use_playwright": bool(use_playwright),
         "autonomy_level": autonomy_level,
         "tool_event_id": tool_event_id,

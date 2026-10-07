@@ -90,7 +90,13 @@ def get_clipboard_content() -> Optional[str]:
 
 class TypeTextInput(BaseModel):
     """Input schema for type_text tool."""
-    text: Optional[str] = Field(default=None, description="Text to type directly. If None, will extract from user command or use clipboard.")
+    text: Optional[str] = Field(
+        default=None,
+        description=(
+            "Final text to type, not the user's instruction. If the user asks you to "
+            "write, draft, or create content, compose it first and pass only that content."
+        ),
+    )
     source: Optional[str] = Field(default="auto", description="Source of text: 'clipboard', 'direct', or 'auto' (extract from command).")
 
 
@@ -107,7 +113,8 @@ class TypeTextTool(BaseTool):
     4. "type text here" - Types whatever text comes immediately after "type"
     
     RULES:
-    - When user says "type" followed by text/quotes/brackets → EXTRACT that text and type it DIRECTLY
+    - When user gives literal text after "type" or in quotes/brackets → type that text directly
+    - When user asks to write, draft, or create something and type it → compose it first, then type only the finished content
     - When user says "type from clipboard" → Type clipboard content (ONLY if explicitly says "from clipboard")
     - DO NOT use agent response text unless explicitly requested
     - DO NOT ask for confirmation - just type the text
@@ -123,7 +130,7 @@ class TypeTextTool(BaseTool):
     name: str = "type_text"
     description: str = (
         "⚠️ DIRECT TYPING TOOL - NO AMBIGUITY ⚠️\n"
-        "Types text directly as keyboard input. Use ONLY when user explicitly says 'type' followed by text.\n"
+        "Types final text directly as keyboard input.\n"
         "\n"
         "EXACT PATTERNS:\n"
         "1. 'type \"text\"' or 'type 'text'' → Type the quoted text\n"
@@ -132,7 +139,9 @@ class TypeTextTool(BaseTool):
         "4. 'type text here' → Type whatever comes after 'type'\n"
         "\n"
         "CRITICAL RULES:\n"
-        "- Extract text DIRECTLY from user's command - do NOT use agent response\n"
+        "- Literal request: extract and type only the literal payload\n"
+        "- Generative request: compose the requested content first, then pass only the finished content in 'text'\n"
+        "- NEVER type the user's instruction itself when it asks for a story, email, draft, reply, or other new content\n"
         "- 'type from clipboard' is EXPLICIT - only use clipboard if user says 'from clipboard'\n"
         "- This is SENSITIVE - be explicit about what you're typing\n"
         "- DO NOT ask for confirmation - just execute\n"
@@ -149,14 +158,8 @@ class TypeTextTool(BaseTool):
         self.llm_service = llm_service
     
     def get_triggers(self) -> list[str]:
-        """Get explicit triggers for type command."""
-        return [
-            "type",
-            "type '",
-            'type "',
-            "type <",
-            "type from clipboard",
-        ]
+        """Dedicated fast-action patterns own literal typing commands."""
+        return []
     
     def _get_agent_response_text(self) -> Optional[str]:
         """Get the most recent agent response text from LLM service."""

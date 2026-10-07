@@ -470,6 +470,7 @@ def record_tool_execution(
     routing_path: Optional[str] = None,
     routing_hint: Optional[str] = None,
     chat_visible: Optional[bool] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record a tool execution to the chat-local audit log."""
     if not chat_id:
@@ -498,7 +499,10 @@ def record_tool_execution(
                 tool_name,
                 title=_tool_activity_title(tool_name, result, instruction_hint),
                 summary="Running…",
-                metadata={"routing_path": routing_hint or routing_path or ""},
+                metadata={
+                    "routing_path": routing_hint or routing_path or "",
+                    **(metadata or {}),
+                },
             )
         if lifecycle_event_id:
             if status == "waiting_for_user":
@@ -508,7 +512,10 @@ def record_tool_execution(
                     status="waiting_for_user",
                     summary=_preview_result(result, 420),
                     detail=_full_result_for_chat(result),
-                    metadata={"routing_path": routing_hint or routing_path or ""},
+                    metadata={
+                        "routing_path": routing_hint or routing_path or "",
+                        **(metadata or {}),
+                    },
                 )
             else:
                 finish_tool(
@@ -516,7 +523,10 @@ def record_tool_execution(
                     success=status not in {"failed", "error", "cancelled"},
                     summary=_preview_result(result, 420),
                     detail=_full_result_for_chat(result),
-                    metadata={"routing_path": routing_hint or routing_path or ""},
+                    metadata={
+                        "routing_path": routing_hint or routing_path or "",
+                        **(metadata or {}),
+                    },
                 )
     except StopIteration:
         pass
@@ -546,17 +556,20 @@ def record_tool_execution(
         turn_chat_id=turn_chat_id,
     )
     chat_event["chat_visible"] = bool(visible)
+    if metadata:
+        chat_event["metadata"] = metadata
     if not _persist_chat_tool_event(chat_event):
         return
 
     inst = instruction_hint or f"Executed {tool_name}"
     pv = _preview_result(result)
     _activity_logger.info(
-        "[agent_tool] chat_id=%s tool=%s status=%s instruction=%s result=%s",
+        "[agent_tool] chat_id=%s tool=%s status=%s instruction=%s arguments=%s result=%s",
         chat_id,
         tool_name,
         status,
         _preview_result(inst, 120),
+        _preview_result(json.dumps((metadata or {}).get("arguments", {}), ensure_ascii=False), 320),
         pv or "(empty)",
     )
 
