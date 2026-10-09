@@ -78,6 +78,37 @@ def test_reportlab_new_pdf_is_auto_approved(
     assert plan["will_overwrite"] is False
 
 
+def test_reportlab_existing_pdf_still_requires_confirmation(
+    fs: FileOperationSafety,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    target = tmp_path / "90_day_tracker.pdf"
+    target.write_bytes(b"existing")
+    code = (
+        "from reportlab.pdfgen import canvas\n"
+        f'c = canvas.Canvas("{target}")\n'
+        "c.save()\n"
+    )
+    monkeypatch.setattr(interceptor, "get_file_safety", lambda: fs)
+    monkeypatch.setattr(
+        interceptor,
+        "_request_confirmation_via_queue",
+        lambda *args, **kwargs: (False, args[5]),
+    )
+
+    allowed, plan = interceptor.check_and_confirm_code_execution(
+        code,
+        "python",
+        "Replace a 90-day tracker PDF",
+        event_queue=object(),
+        confirmation_results_dict={},
+    )
+
+    assert allowed is False
+    assert plan["will_overwrite"] is True
+
+
 def test_direct_new_document_write_is_auto_approved(
     fs: FileOperationSafety,
     monkeypatch: pytest.MonkeyPatch,
