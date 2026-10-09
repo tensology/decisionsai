@@ -132,6 +132,9 @@ class FileOperationSafety:
             r'\bpathlib\.Path\s*\([^)]*\)\.write_bytes\s*\(',  # pathlib.Path(...).write_bytes()
             r'\.write_text\s*\(',  # Any .write_text() call
             r'\.write_bytes\s*\(',  # Any .write_bytes() call
+            r'\bcanvas\.Canvas\s*\(',  # ReportLab PDF output
+            r'\bSimpleDocTemplate\s*\(',  # ReportLab document output
+            r'\.save\s*\([^)]*["\']',  # Document/image save to a literal path
             r'\bmv\s+',
             r'\bmove\s+',
             r'\brename\s+',
@@ -309,6 +312,9 @@ class FileOperationSafety:
             (r'\bPath\s*\(["\']([^"\']+)["\']\)\.write_bytes\s*\(', 'WRITE', 'Path.write_bytes'),
             (r'\bpathlib\.Path\s*\(["\']([^"\']+)["\']\)\.write_text\s*\(', 'WRITE', 'pathlib.Path.write_text'),
             (r'\bpathlib\.Path\s*\(["\']([^"\']+)["\']\)\.write_bytes\s*\(', 'WRITE', 'pathlib.Path.write_bytes'),
+            (r'\bcanvas\.Canvas\s*\(\s*["\']([^"\']+)["\']', 'WRITE', 'canvas.Canvas'),
+            (r'\bSimpleDocTemplate\s*\(\s*["\']([^"\']+)["\']', 'WRITE', 'SimpleDocTemplate'),
+            (r'\.save\s*\(\s*["\']([^"\']+)["\']', 'WRITE', '.save'),
             (r'\btouch\s+([^\s;|&]+)', 'WRITE', 'touch'),
         ]
         

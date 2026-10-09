@@ -416,6 +416,30 @@ def check_and_confirm_code_execution(
     # This is needed to properly determine if we can auto-approve
     intent = _extract_intent_from_code(code, task, op_type) if operations else (task or 'File operation')
     quick_plan = file_safety.generate_plan(operations, intent) if operations else None
+    is_high_risk, risk_reasons = file_safety.check_high_risk(operations) if operations else (False, [])
+    if quick_plan and is_high_risk:
+        quick_plan['high_risk'] = True
+        quick_plan['risk_reasons'] = risk_reasons
+
+    if (
+        op_type == OperationType.WRITE
+        and operations
+        and all(
+            op.get('type') == 'WRITE'
+            and not op.get('is_dynamic')
+            and not op.get('will_overwrite')
+            and not op.get('will_delete')
+            for op in operations
+        )
+        and not file_safety.cannot_bypass_file_confirmation(plan=quick_plan)
+    ):
+        file_safety.log_operation('create_only_allowed', {
+            'code': code[:500],
+            'language': language,
+            'task': task,
+            'plan': quick_plan,
+        })
+        return (True, quick_plan)
     
     # Check if file change confirmations are enabled (Initiative settings)
     try:
@@ -628,7 +652,6 @@ def check_and_confirm_code_execution(
         plan['warning'] = 'Some file paths are determined dynamically at runtime - review the code below carefully'
     
     # Check for high-risk conditions
-    is_high_risk, risk_reasons = file_safety.check_high_risk(operations)
     if is_high_risk:
         logger.warning(f"High-risk operation detected: {risk_reasons}")
         plan['high_risk'] = True
@@ -816,6 +839,22 @@ def check_and_confirm_direct_file_operation(
                 return (False, plan)
         except OSError:
             pass
+
+    if (
+        operation_type == 'WRITE'
+        and not operation['will_overwrite']
+        and not file_safety.cannot_bypass_file_confirmation(
+            operation_type=operation_type,
+            plan=plan,
+        )
+    ):
+        file_safety.log_operation('create_only_allowed', {
+            'operation_type': operation_type,
+            'source_path': source_path,
+            'originating_pathway': originating_pathway,
+            'plan': plan,
+        })
+        return (True, plan)
     
     # Respect user's preference to skip *routine* prompts — never for DELETE or bulk/high-risk plans.
     try:
