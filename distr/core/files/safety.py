@@ -343,8 +343,8 @@ class FileOperationSafety:
             # Write operations with variables
             (r'\bopen\s*\(\s*(\w+)\s*,\s*["\']w', 'WRITE', 'open(var, w)'),
             (r'\bopen\s*\(\s*(\w+)\s*,\s*["\']a', 'WRITE', 'open(var, a)'),
-            (r'\.write_text\s*\(', 'WRITE', '.write_text()'),
-            (r'\.write_bytes\s*\(', 'WRITE', '.write_bytes()'),
+            (r'\b(\w+)\.write_text\s*\(', 'WRITE', '.write_text()'),
+            (r'\b(\w+)\.write_bytes\s*\(', 'WRITE', '.write_bytes()'),
             
             # Directory creation
             (r'\bos\.makedirs\s*\(\s*(\w+)', 'WRITE', 'os.makedirs(var)'),
@@ -734,8 +734,6 @@ class FileOperationSafety:
                                 files_to_move += 1
                         elif op_type == 'COPY':
                             files_to_copy += 1
-                        elif op_type == 'WRITE':
-                            files_to_modify += 1
                     elif source_path.is_dir():
                         # Count files in directory for this operation
                         try:

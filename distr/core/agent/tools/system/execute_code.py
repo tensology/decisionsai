@@ -518,7 +518,11 @@ Corrected code:"""
                 
                 if not allowed:
                     if plan:
-                        files_count = plan.get('files_affected_count', 0)
+                        outcome = plan.get('outcome_summary')
+                        if outcome:
+                            logger.warning("File operations blocked - %s", outcome)
+                            return f"File operations were cancelled. {outcome}"
+                        files_count = plan.get('file_count', plan.get('files_affected_count', 0))
                         logger.warning(f"File operations blocked - {files_count} file(s) would be affected")
                         return f"File operations were cancelled. The operation would have affected {files_count} file(s)."
                     else:
