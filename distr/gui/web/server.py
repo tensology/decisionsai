@@ -33,6 +33,23 @@ logger = logging.getLogger(__name__)
 # Server configuration
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+TENSOLOGY_HEARTBEAT_SECONDS = 60
+
+
+async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_SECONDS):
+    """Refresh Tensology's authenticated connection status while DecisionsAI runs."""
+    import asyncio
+
+    from distr.core.tensology_client import TensologyApiError, send_tensology_heartbeat
+
+    while True:
+        try:
+            await asyncio.to_thread(send_tensology_heartbeat)
+        except TensologyApiError as exc:
+            logger.debug("Tensology heartbeat unavailable: %s", exc)
+        except Exception as exc:
+            logger.warning("Tensology heartbeat failed safely: %s", exc)
+        await asyncio.sleep(interval_seconds)
 
 
 def _web_port_available(host: str, port: int) -> bool:
@@ -1017,6 +1034,15 @@ def create_app() -> FastAPI:
             )
         except Exception as e:
             logger.debug("Background maintenance could not be scheduled: %s", e)
+
+    @app.on_event("startup")
+    async def _schedule_tensology_heartbeat():
+        """Keep the local DecisionsAI and Tensology connection live."""
+        import asyncio
+
+        app.state.tensology_heartbeat_task = asyncio.create_task(
+            _tensology_heartbeat_loop()
+        )
 
     @app.on_event("startup")
     async def _bind_unified_server_loop():

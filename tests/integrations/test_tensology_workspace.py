@@ -1,8 +1,10 @@
 import json
+import asyncio
 from unittest.mock import MagicMock, patch
 
 from distr.core.agent.tools.integrations.tensology_workspace import TensologyWorkspaceTool
 from distr.core.tensology_client import TensologyClient
+from distr.gui.web.server import _tensology_heartbeat_loop
 
 
 def test_tensology_client_sends_scoped_headers_and_unwraps_data():
@@ -18,6 +20,19 @@ def test_tensology_client_sends_scoped_headers_and_unwraps_data():
     request = urlopen.call_args.args[0]
     assert request.full_url == "https://example.test/api/integrations/v1/capabilities"
     assert request.get_header("Authorization") == "Bearer tns_decisionsai_secret"
+
+
+def test_tensology_heartbeat_authenticates_once_before_waiting():
+    with (
+        patch("distr.core.tensology_client.send_tensology_heartbeat") as heartbeat,
+        patch("asyncio.sleep", side_effect=asyncio.CancelledError),
+    ):
+        try:
+            asyncio.run(_tensology_heartbeat_loop(interval_seconds=60))
+        except asyncio.CancelledError:
+            pass
+
+    heartbeat.assert_called_once_with()
 
 
 def test_send_mail_stops_before_api_without_explicit_approval():

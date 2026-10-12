@@ -108,3 +108,8 @@ def configured_tensology_client(source: str = "decisionsai") -> TensologyClient:
         api_key=key,
         source=source,
     )
+
+
+def send_tensology_heartbeat() -> None:
+    """Keep the configured Tensology connection visibly online."""
+    configured_tensology_client(source="decisionsai-heartbeat").get("identity")
