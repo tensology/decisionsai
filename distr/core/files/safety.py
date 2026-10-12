@@ -9,6 +9,7 @@ This module provides:
 - Audit logging
 """
 
+import ast
 import logging
 import os
 import platform
@@ -276,6 +277,56 @@ class FileOperationSafety:
             List of operation dicts with type, paths, and details
         """
         operations = []
+        static_assignments = {
+            match.group(1): match.group(3)
+            for match in re.finditer(
+                r'^\s*(\w+)\s*=\s*(["\'])(.*?)\2\s*$',
+                code,
+                re.MULTILINE,
+            )
+        }
+
+        def dotted_name(node):
+            if isinstance(node, ast.Name):
+                return node.id
+            if isinstance(node, ast.Attribute):
+                base = dotted_name(node.value)
+                return f"{base}.{node.attr}" if base else None
+            return None
+
+        def static_path(node):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return node.value
+            if isinstance(node, ast.Name):
+                return static_assignments.get(node.id)
+            if not isinstance(node, ast.Call) or node.keywords:
+                return None
+
+            function_name = dotted_name(node.func)
+            arguments = [static_path(argument) for argument in node.args]
+            if any(argument is None for argument in arguments):
+                return None
+            if function_name == "os.path.expanduser" and len(arguments) == 1:
+                return os.path.expanduser(arguments[0])
+            if function_name == "os.path.join" and arguments:
+                return os.path.join(*arguments)
+            return None
+
+        try:
+            for statement in ast.parse(code).body:
+                if (
+                    isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                ):
+                    variable_name = statement.targets[0].id
+                    value = static_path(statement.value)
+                    if value is None:
+                        static_assignments.pop(variable_name, None)
+                    else:
+                        static_assignments[variable_name] = value
+        except SyntaxError:
+            pass
         
         # First, analyze code for file creation patterns (especially in loops)
         creation_analysis = self._analyze_code_for_file_creation(code)
@@ -343,6 +394,8 @@ class FileOperationSafety:
             # Write operations with variables
             (r'\bopen\s*\(\s*(\w+)\s*,\s*["\']w', 'WRITE', 'open(var, w)'),
             (r'\bopen\s*\(\s*(\w+)\s*,\s*["\']a', 'WRITE', 'open(var, a)'),
+            (r'\bcanvas\.Canvas\s*\(\s*(\w+)', 'WRITE', 'canvas.Canvas'),
+            (r'\bSimpleDocTemplate\s*\(\s*(\w+)', 'WRITE', 'SimpleDocTemplate'),
             (r'\b(\w+)\.write_text\s*\(', 'WRITE', '.write_text()'),
             (r'\b(\w+)\.write_bytes\s*\(', 'WRITE', '.write_bytes()'),
             
@@ -405,6 +458,18 @@ class FileOperationSafety:
                 
                 # Skip if this looks like a string literal path (already caught by patterns above)
                 if var_name.startswith('"') or var_name.startswith("'"):
+                    continue
+
+                if op_type == 'WRITE' and var_name in static_assignments:
+                    file_path = self._resolve_path(static_assignments[var_name])
+                    operations.append({
+                        'type': op_type,
+                        'name': op_name,
+                        'source': file_path,
+                        'destination': None,
+                        'will_overwrite': os.path.exists(file_path),
+                        'will_delete': False,
+                    })
                     continue
                 
                 operations.append({

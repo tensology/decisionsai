@@ -97,7 +97,7 @@ class TypeTextInput(BaseModel):
             "write, draft, or create content, compose it first and pass only that content."
         ),
     )
-    source: Optional[str] = Field(default="auto", description="Source of text: 'clipboard', 'direct', or 'auto' (extract from command).")
+    source: Optional[str] = Field(default="auto", description="Source of text: 'clipboard', 'last_dictation', 'direct', or 'auto' (extract from command).")
 
 
 class TypeTextTool(BaseTool):
@@ -196,6 +196,22 @@ class TypeTextTool(BaseTool):
         except Exception as e:
             logger.error(f"TypeText: Error getting agent response: {e}", exc_info=True)
             return None
+
+    def _get_last_dictation_text(self) -> Optional[str]:
+        """Return the latest persisted context dictation in the active chat."""
+        if not self.chat_manager:
+            return None
+        try:
+            chat_id = self.chat_manager.get_current_chat()
+            if not chat_id:
+                return None
+            from distr.core.agent.tool_audit import load_context_notes
+
+            notes = load_context_notes(int(chat_id))
+            return notes[-1].strip() if notes and notes[-1].strip() else None
+        except Exception as e:
+            logger.warning("TypeText: Could not get last dictation: %s", e)
+            return None
     
     def _extract_text_from_command(self, command: str) -> Optional[str]:
         """
@@ -268,12 +284,19 @@ class TypeTextTool(BaseTool):
             text_to_type = None
             original_text = kwargs.get('text', '') or kwargs.get('transcription', '') or kwargs.get('original_text', '')
             
-            # Priority 1: If text is provided directly in tool call, use it
-            if text and text.strip():
+            # Priority 1: Resolve chat-backed dictation without reading the clipboard.
+            if source == "last_dictation":
+                text_to_type = self._get_last_dictation_text()
+                if not text_to_type:
+                    return "Error: No previous dictation was found in this chat."
+                logger.info("TypeText: Using last dictation (%d chars)", len(text_to_type))
+
+            # Priority 2: If text is provided directly in tool call, use it
+            elif text and text.strip():
                 text_to_type = text.strip()
                 logger.info(f"TypeText: Using provided text parameter ({len(text_to_type)} chars)")
             
-            # Priority 2: Extract from user's command (explicit patterns)
+            # Priority 3: Extract from user's command (explicit patterns)
             elif source == "auto" or source == "direct":
                 extracted = self._extract_text_from_command(original_text)
                 if extracted:
@@ -287,7 +310,7 @@ class TypeTextTool(BaseTool):
                     text_to_type = text_to_type.strip()
                     logger.info(f"TypeText: Using clipboard (explicit 'from clipboard' command) ({len(text_to_type)} chars)")
             
-            # Priority 3: Explicit clipboard source
+            # Priority 4: Explicit clipboard source
             elif source == "clipboard":
                 text_to_type = get_clipboard_content()
                 if not text_to_type or not text_to_type.strip():
@@ -299,9 +322,12 @@ class TypeTextTool(BaseTool):
             if not text_to_type or not text_to_type.strip():
                 return "Error: No text to type. Please provide text in quotes, brackets, or use 'type from clipboard'."
             
-            # Large or multi-line text is pasted. Typing would send Enter and submit early.
+            # Last dictation must never touch the clipboard, regardless of its size.
             logger.info(f"TypeText: Delivering {len(text_to_type)} characters")
-            if should_paste_text(text_to_type):
+            if source == "last_dictation":
+                success = insert_text(text_to_type, instant=True, press_enter=False)
+                verb = "Pasted"
+            elif should_paste_text(text_to_type):
                 success = insert_text(text_to_type, press_enter=False)
                 verb = "Pasted"
             else:

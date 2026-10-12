@@ -80,6 +80,77 @@ def test_reportlab_new_pdf_is_auto_approved(
     assert plan["will_overwrite"] is False
 
 
+def test_reportlab_new_pdf_from_literal_variable_is_auto_approved(
+    fs: FileOperationSafety,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    target = tmp_path / "90_day_tracker.pdf"
+    code = (
+        "from reportlab.pdfgen import canvas\n"
+        f"pdf_path = {str(target)!r}\n"
+        "c = canvas.Canvas(pdf_path)\n"
+        "c.save()\n"
+    )
+    monkeypatch.setattr(interceptor, "get_file_safety", lambda: fs)
+    monkeypatch.setattr(
+        interceptor,
+        "_request_confirmation_via_queue",
+        lambda *args, **kwargs: pytest.fail("new document creation requested confirmation"),
+    )
+    monkeypatch.setattr(
+        interceptor,
+        "confirm_file_operations_with_plan",
+        lambda *args, **kwargs: pytest.fail("new document creation requested confirmation"),
+    )
+
+    allowed, plan = interceptor.check_and_confirm_code_execution(
+        code,
+        "python",
+        "Create a PDF with 90 day blocks for diet tracking",
+        event_queue=object(),
+        confirmation_results_dict={},
+    )
+
+    assert allowed is True
+    assert plan["files"] == [str(target)]
+    assert plan["will_overwrite"] is False
+
+
+def test_reportlab_new_pdf_from_static_path_expression_is_auto_approved(
+    fs: FileOperationSafety,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    target = tmp_path / "90_day_tracker.pdf"
+    code = (
+        "import os\n"
+        "from reportlab.pdfgen import canvas\n"
+        f"output_dir = os.path.expanduser({str(tmp_path)!r})\n"
+        'pdf_path = os.path.join(output_dir, "90_day_tracker.pdf")\n'
+        "c = canvas.Canvas(pdf_path)\n"
+        "c.save()\n"
+    )
+    monkeypatch.setattr(interceptor, "get_file_safety", lambda: fs)
+    monkeypatch.setattr(
+        interceptor,
+        "_request_confirmation_via_queue",
+        lambda *args, **kwargs: pytest.fail("new document creation requested confirmation"),
+    )
+
+    allowed, plan = interceptor.check_and_confirm_code_execution(
+        code,
+        "python",
+        "Create a PDF with 90 day blocks for diet tracking",
+        event_queue=object(),
+        confirmation_results_dict={},
+    )
+
+    assert allowed is True
+    assert plan["files"] == [str(target)]
+    assert plan["will_overwrite"] is False
+
+
 def test_reportlab_existing_pdf_still_requires_confirmation(
     fs: FileOperationSafety,
     monkeypatch: pytest.MonkeyPatch,
@@ -109,6 +180,105 @@ def test_reportlab_existing_pdf_still_requires_confirmation(
 
     assert allowed is False
     assert plan["will_overwrite"] is True
+
+
+def test_reportlab_existing_pdf_from_literal_variable_still_requires_confirmation(
+    fs: FileOperationSafety,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    target = tmp_path / "90_day_tracker.pdf"
+    target.write_bytes(b"existing")
+    code = (
+        "from reportlab.pdfgen import canvas\n"
+        f"pdf_path = {str(target)!r}\n"
+        "c = canvas.Canvas(pdf_path)\n"
+        "c.save()\n"
+    )
+    monkeypatch.setattr(interceptor, "get_file_safety", lambda: fs)
+    monkeypatch.setattr(
+        interceptor,
+        "_request_confirmation_via_queue",
+        lambda *args, **kwargs: (False, args[5]),
+    )
+
+    allowed, plan = interceptor.check_and_confirm_code_execution(
+        code,
+        "python",
+        "Replace a 90-day tracker PDF",
+        event_queue=object(),
+        confirmation_results_dict={},
+    )
+
+    assert allowed is False
+    assert plan["files"] == [str(target)]
+    assert plan["will_overwrite"] is True
+
+
+def test_reportlab_existing_pdf_from_static_path_expression_requires_confirmation(
+    fs: FileOperationSafety,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    target = tmp_path / "90_day_tracker.pdf"
+    target.write_bytes(b"existing")
+    code = (
+        "import os\n"
+        "from reportlab.pdfgen import canvas\n"
+        f"output_dir = os.path.expanduser({str(tmp_path)!r})\n"
+        'pdf_path = os.path.join(output_dir, "90_day_tracker.pdf")\n'
+        "c = canvas.Canvas(pdf_path)\n"
+        "c.save()\n"
+    )
+    monkeypatch.setattr(interceptor, "get_file_safety", lambda: fs)
+    monkeypatch.setattr(
+        interceptor,
+        "_request_confirmation_via_queue",
+        lambda *args, **kwargs: (False, args[5]),
+    )
+
+    allowed, plan = interceptor.check_and_confirm_code_execution(
+        code,
+        "python",
+        "Replace a 90-day tracker PDF",
+        event_queue=object(),
+        confirmation_results_dict={},
+    )
+
+    assert allowed is False
+    assert plan["files"] == [str(target)]
+    assert plan["will_overwrite"] is True
+
+
+def test_dynamic_reassignment_still_requires_confirmation(
+    fs: FileOperationSafety,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = (
+        "from reportlab.pdfgen import canvas\n"
+        f"pdf_path = {str(tmp_path / 'safe.pdf')!r}\n"
+        "pdf_path = choose_output_path()\n"
+        "c = canvas.Canvas(pdf_path)\n"
+    )
+    monkeypatch.setattr(interceptor, "get_file_safety", lambda: fs)
+    monkeypatch.setattr(
+        interceptor,
+        "_request_confirmation_via_queue",
+        lambda *args, **kwargs: (False, args[5]),
+    )
+
+    allowed, plan = interceptor.check_and_confirm_code_execution(
+        code,
+        "python",
+        "Create a PDF at a runtime-selected path",
+        event_queue=object(),
+        confirmation_results_dict={},
+    )
+
+    assert allowed is False
+    assert plan["operations"][0]["source"] == "$pdf_path"
+    assert plan["high_risk"] is True
 
 
 def test_direct_new_document_write_is_auto_approved(
@@ -192,6 +362,30 @@ def test_telegram_reportlab_pdf_creation_end_to_end(tmp_path) -> None:
     )
 
     assert target.read_bytes().startswith(b"%PDF")
+    assert "ACTION REQUIRED: Call send_file_to_telegram" in result
+
+
+def test_telegram_reportlab_static_download_path_creation_end_to_end(tmp_path) -> None:
+    target = tmp_path / "90_day_tracker.pdf"
+    code = (
+        "import os\n"
+        "from reportlab.pdfgen import canvas\n"
+        f"pdf_path = os.path.join(os.path.expanduser({str(tmp_path)!r}), "
+        '"90_day_tracker.pdf")\n'
+        "c = canvas.Canvas(pdf_path)\n"
+        "c.drawString(72, 720, '90 Day Tracker')\n"
+        "c.save()\n"
+        "result = pdf_path\n"
+    )
+
+    result = ExecuteCodeTool()._run(
+        code=code,
+        description="Create the requested 90-day tracker PDF",
+        is_telegram_request=True,
+    )
+
+    assert target.read_bytes().startswith(b"%PDF")
+    assert "cancelled" not in result.lower()
     assert "ACTION REQUIRED: Call send_file_to_telegram" in result
 
 

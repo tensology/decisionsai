@@ -10,12 +10,20 @@ from distr.core.plugins import CODEX_PLUGIN_NAME
 
 
 def detected_harnesses() -> dict[str, bool]:
+    home = Path.home()
     return {
         "codex": bool(shutil.which("codex")),
         "claude": bool(shutil.which("claude")),
         "cursor": bool(shutil.which("cursor") or shutil.which("cursor-agent")),
         "pi": bool(shutil.which("pi")),
         "cline": bool(shutil.which("cline")),
+        "kiro": bool(shutil.which("kiro-cli") or (home / ".kiro").is_dir()),
+        # Grok Bot 0.68 uses Cursor-compatible .cursor/skills and .cursor/rules.
+        "grok": bool(
+            shutil.which("grok")
+            or (Path("/Applications") / "Grok Bot.app").is_dir()
+            or (home / "Library" / "Application Support" / "Grok Bot").is_dir()
+        ),
     }
 
 
@@ -39,6 +47,10 @@ def harness_skill_bases(home: Path, detected: dict[str, bool]) -> dict[str, Path
         bases["cline"] = home / ".cline" / "skills"
     if detected.get("gemini"):
         bases["gemini"] = home / ".gemini" / "skills"
+    if detected.get("kiro"):
+        bases["kiro"] = home / ".kiro" / "skills"
+    if detected.get("grok") and not detected.get("cursor"):
+        bases["grok"] = home / ".cursor" / "skills"
     return bases
 
 
@@ -135,5 +147,7 @@ def projection_paths(home: Path, detected: dict[str, bool], skill_name: str) -> 
         "cursor": home / ".cursor" / "skills" / skill_name / "SKILL.md",
         "pi": home / ".pi" / "skills" / skill_name / "SKILL.md",
         "cline": home / ".cline" / "skills" / skill_name / "SKILL.md",
+        "kiro": home / ".kiro" / "skills" / skill_name / "SKILL.md",
+        "grok": home / ".cursor" / "skills" / skill_name / "SKILL.md",
     }
     return {key: path for key, path in mapping.items() if detected.get(key)}

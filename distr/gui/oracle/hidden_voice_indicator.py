@@ -47,6 +47,9 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
         self._state: str | None = None
         self._oracle_hidden = False
         self._started_at = time.monotonic()
+        self._last_pointer: QtCore.QPoint | None = None
+        self._last_pointer_at = self._started_at
+        self._cursor_clearance = 0.0
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
@@ -100,6 +103,23 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
 
     def _move_beside_pointer(self) -> None:
         pointer = QtGui.QCursor.pos()
+        now = time.monotonic()
+        if self._last_pointer is not None:
+            elapsed = max(now - self._last_pointer_at, 0.001)
+            distance = math.hypot(
+                pointer.x() - self._last_pointer.x(),
+                pointer.y() - self._last_pointer.y(),
+            )
+            # ponytail: velocity approximates macOS shake-to-locate; use a native
+            # cursor-size signal if Apple exposes one through a stable public API.
+            target = 22.0 if platform.system() == "Darwin" and distance / elapsed > 1400 else 0.0
+            response = 0.45 if target else 0.18
+            self._cursor_clearance += (target - self._cursor_clearance) * response
+            if target == 0.0 and self._cursor_clearance < 0.5:
+                self._cursor_clearance = 0.0
+        self._last_pointer = QtCore.QPoint(pointer)
+        self._last_pointer_at = now
+
         screen = QtGui.QGuiApplication.screenAt(pointer)
         available = (
             screen.availableGeometry()
@@ -107,8 +127,9 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
             else QtGui.QGuiApplication.primaryScreen().availableGeometry()
         )
 
-        x = pointer.x() + 16
-        y = pointer.y() + 16
+        offset = 16 + round(self._cursor_clearance)
+        x = pointer.x() + offset
+        y = pointer.y() + offset
         if x + self.width() > available.right():
             x = pointer.x() - self.width() - 12
         if y + self.height() > available.bottom():

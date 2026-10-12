@@ -15,6 +15,7 @@ import subprocess
 import sys
 from typing import Any
 
+from distr.core.harness_bootstrap import detected_harnesses
 from distr.core.plugins import (
     CODEX_PLUGIN_NAME,
     COMPETITION_PACK_DIR,
@@ -51,13 +52,7 @@ def _vendor_ready() -> bool:
 
 
 def _detected_harnesses() -> dict[str, bool]:
-    return {
-        "codex": bool(shutil.which("codex")),
-        "claude": bool(shutil.which("claude")),
-        "cursor": bool(shutil.which("cursor") or shutil.which("cursor-agent")),
-        "pi": bool(shutil.which("pi")),
-        "cline": bool(shutil.which("cline")),
-    }
+    return detected_harnesses()
 
 
 def competition_skill_roots() -> list[Path]:
@@ -166,6 +161,10 @@ def _required_projection_paths(home: Path, detected: dict[str, bool]) -> list[Pa
         paths.append(home / ".cursor" / "skills" / "fallow" / "SKILL.md")
     if detected.get("pi"):
         paths.append(home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md")
+    if detected.get("kiro"):
+        paths.append(home / ".kiro" / "skills" / "decisions-competition-harness" / "SKILL.md")
+    if detected.get("grok"):
+        paths.append(home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md")
     return paths
 
 
@@ -229,6 +228,20 @@ def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
                 skill_targets[f"pi:{skill_dir.name}"] = base / skill_dir.name
         skill_targets["pi:fallow"] = base / "fallow"
         skill_targets["pi:decisions-competition-harness"] = base / "decisions-competition-harness"
+    if detected.get("kiro"):
+        base = home / ".kiro" / "skills"
+        for skill_dir in sorted(ponytail_src.iterdir()) if ponytail_src.is_dir() else []:
+            if skill_dir.is_dir():
+                skill_targets[f"kiro:{skill_dir.name}"] = base / skill_dir.name
+        skill_targets["kiro:fallow"] = base / "fallow"
+        skill_targets["kiro:decisions-competition-harness"] = base / "decisions-competition-harness"
+    if detected.get("grok") and not detected.get("cursor"):
+        base = home / ".cursor" / "skills"
+        for skill_dir in sorted(ponytail_src.iterdir()) if ponytail_src.is_dir() else []:
+            if skill_dir.is_dir():
+                skill_targets[f"grok:{skill_dir.name}"] = base / skill_dir.name
+        skill_targets["grok:fallow"] = base / "fallow"
+        skill_targets["grok:decisions-competition-harness"] = base / "decisions-competition-harness"
 
     for key, dest in skill_targets.items():
         harness, name = key.split(":", 1)
@@ -244,6 +257,8 @@ def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
         "claude": home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md",
         "cursor": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
         "pi": home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md",
+        "kiro": home / ".kiro" / "skills" / "decisions-competition-harness" / "SKILL.md",
+        "grok": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
     }
     for harness, path in projection_targets.items():
         if not detected.get(harness):

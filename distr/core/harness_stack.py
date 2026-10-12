@@ -61,6 +61,8 @@ def _project_reference_skills(base_home: Path) -> list[str]:
         ("pi", ".pi"),
         ("cline", ".cline"),
         ("gemini", ".gemini"),
+        ("kiro", ".kiro"),
+        ("grok", ".cursor"),
     ):
         if (base_home / config_dir).exists():
             detected[harness_id] = True
@@ -91,6 +93,37 @@ def _project_reference_skills(base_home: Path) -> list[str]:
         also_commands=True,
         overwrite=True,
     )
+
+
+def _synchronize_compatible_user_skills(base_home: Path) -> list[str]:
+    """Make valid Agent Skills available in Codex, Cursor/Grok, and Kiro without replacing any."""
+    from distr.core.harness_bootstrap import copy_skill_tree
+
+    roots = [
+        base_home / ".agents" / "skills",
+        base_home / ".codex" / "skills",
+        base_home / ".cursor" / "skills",
+        base_home / ".kiro" / "skills",
+    ]
+    sources: dict[str, Path] = {}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for skill_dir in root.iterdir():
+            if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+                sources.setdefault(skill_dir.name, skill_dir)
+
+    written: list[str] = []
+    for root in roots[1:]:
+        if not root.parent.is_dir():
+            continue
+        for skill_id, source in sources.items():
+            destination = root / skill_id
+            if destination.exists():
+                continue
+            if copy_skill_tree(source, destination):
+                written.append(str(destination))
+    return written
 
 
 def ensure_harness_stack_setup(
@@ -256,8 +289,10 @@ def ensure_harness_stack_setup(
             run_full=False,
         )
         results["reference_skills"] = _project_reference_skills(base_home)
+        results["shared_user_skills"] = _synchronize_compatible_user_skills(base_home)
     except Exception:
         results["reference_skills"] = []
+        results["shared_user_skills"] = []
 
     return results
 

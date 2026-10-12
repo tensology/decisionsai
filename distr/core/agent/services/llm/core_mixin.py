@@ -2320,12 +2320,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if await self._check_and_execute_voice_command(text_lower, direction):
                 return
 
-            # Duplicate message detection
-            last_user_msg = self._messages[-1] if self._messages else None
-            if last_user_msg and last_user_msg.get('role') == 'user' and last_user_msg.get('content') == text:
-                logger.warning("Duplicate user message detected: '%s...' — skipping", text[:50])
-                return
-
             # Voice/oracle front door: work-intent → WorkIntake → Development thread
             # (do not load Dev threads into Chat agent; bridge via intake/dispatch).
             if self._try_route_work_intake(text, source="web"):

@@ -26,6 +26,7 @@ def test_indicator_renders_every_hidden_voice_state() -> None:
 
     pointer = QtGui.QGuiApplication.primaryScreen().availableGeometry().center()
     QtGui.QCursor.setPos(pointer)
+    indicator._last_pointer = None
     indicator._move_beside_pointer()
     assert indicator.pos() == pointer + QtCore.QPoint(16, 16)
 
@@ -62,6 +63,36 @@ def test_indicator_hides_when_the_system_cursor_hides() -> None:
     assert indicator.isVisible()
     assert indicator.state == "listening"
     indicator._timer.stop()
+    indicator.close()
+    indicator.deleteLater()
+    app.processEvents()
+
+
+def test_macos_fast_pointer_motion_temporarily_moves_indicator_further_away(monkeypatch) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    indicator = HiddenVoiceIndicator()
+    screen = QtGui.QGuiApplication.primaryScreen().availableGeometry()
+    start = screen.center() - QtCore.QPoint(100, 100)
+    finish = start + QtCore.QPoint(100, 0)
+    times = iter((10.0, 10.02, 10.12))
+    monkeypatch.setattr(
+        "distr.gui.oracle.hidden_voice_indicator.time.monotonic",
+        lambda: next(times),
+    )
+    monkeypatch.setattr(
+        "distr.gui.oracle.hidden_voice_indicator.platform.system",
+        lambda: "Darwin",
+    )
+
+    QtGui.QCursor.setPos(start)
+    indicator._move_beside_pointer()
+    QtGui.QCursor.setPos(finish)
+    indicator._move_beside_pointer()
+    fast_offset = indicator.pos().x() - finish.x()
+    indicator._move_beside_pointer()
+
+    assert fast_offset > 16
+    assert indicator.pos().x() - finish.x() < fast_offset
     indicator.close()
     indicator.deleteLater()
     app.processEvents()

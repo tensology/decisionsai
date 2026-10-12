@@ -179,8 +179,8 @@
     {
       "id": "apple-design",
       "source": "vendored",
-      "overwrite": true,
-      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+      "overwrite": false,
+      "note": "Fallback copy. The pulled reference/apple-design-skill source takes precedence when present."
     },
     {
       "id": "pick-ui-library",

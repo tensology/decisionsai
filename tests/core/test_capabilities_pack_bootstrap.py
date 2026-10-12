@@ -8,7 +8,14 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "distr.core.capabilities_pack.detected_harnesses",
-        lambda: {"codex": True, "cursor": True, "claude": False, "pi": False},
+        lambda: {
+            "codex": True,
+            "cursor": True,
+            "claude": False,
+            "pi": False,
+            "kiro": True,
+            "grok": True,
+        },
     )
     monkeypatch.setattr(
         "distr.core.capabilities_pack._ensure_playwright_browsers",
@@ -46,6 +53,14 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "decisions-computer-use" / "SKILL.md").is_file()
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "impeccable" / "SKILL.md").is_file()
     assert (tmp_path / ".codex" / "skills" / "impeccable" / "SKILL.md").is_file()
+    assert (tmp_path / ".kiro" / "skills" / "apple-design" / "SKILL.md").is_file()
+    assert (tmp_path / ".kiro" / "skills" / "impeccable" / "SKILL.md").is_file()
+    assert (tmp_path / ".kiro" / "steering" / "decisions-agent-standard.md").is_file()
+    cursor_rule = (tmp_path / ".cursor" / "rules" / "decisions-browser-content.mdc").read_text(
+        encoding="utf-8"
+    )
+    assert "apple-design and impeccable together" in cursor_rule
+    assert "% Done." in cursor_rule
     registry = (tmp_path / ".decisions" / "harness" / "capabilities-skills-registry.json").read_text(
         encoding="utf-8"
     )
@@ -71,7 +86,8 @@ def test_recommend_design_skills_says_why():
     from distr.core.capabilities_pack import recommend_design_skills
 
     skills, reason = recommend_design_skills("Redesign the settings screen and fix the data table focus")
-    assert skills[:2] == ["impeccable", "web-design-guidelines"]
+    assert skills[:2] == ["apple-design", "impeccable"]
+    assert "web-design-guidelines" in skills
     assert reason.startswith("We will use")
     assert recommend_design_skills("Implement the API endpoint") == ([], "")
     assert recommend_design_skills("Preserve the existing frontend and TrackPlayer work.") == ([], "")
@@ -84,7 +100,7 @@ def test_merge_browser_content_pre_chain_routes_ui_tools_on_demand(tmp_path, mon
     chain = merge_browser_content_pre_chain(["frontend-polish"], project_folder=str(tmp_path))
 
     assert "impeccable" in chain
-    assert "web-design-guidelines" in chain
+    assert "apple-design" in chain
     assert "decisions-playwright" in chain
     assert "browser-qa" not in chain
     assert "decisions-design-references" not in chain
@@ -141,3 +157,24 @@ def test_harness_stack_runs_all_packs(tmp_path, monkeypatch):
     assert "ecc" in stack and "competition" in stack and "capabilities" in stack
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "ecc-harness-pack" / "SKILL.md").is_file()
     assert (tmp_path / ".codex" / "commands" / "decisions-harness-audit.md").is_file()
+
+
+def test_shared_user_skills_fill_missing_harnesses_without_overwriting(tmp_path):
+    from distr.core.harness_stack import _synchronize_compatible_user_skills
+
+    codex_skill = tmp_path / ".codex" / "skills" / "codex-only"
+    cursor_skill = tmp_path / ".cursor" / "skills" / "cursor-only"
+    kiro_existing = tmp_path / ".kiro" / "skills" / "codex-only"
+    for path, text in (
+        (codex_skill, "# Codex\n"),
+        (cursor_skill, "# Cursor\n"),
+        (kiro_existing, "# Kiro override\n"),
+    ):
+        path.mkdir(parents=True)
+        (path / "SKILL.md").write_text(text, encoding="utf-8")
+
+    _synchronize_compatible_user_skills(tmp_path)
+
+    assert (tmp_path / ".kiro" / "skills" / "cursor-only" / "SKILL.md").is_file()
+    assert (tmp_path / ".cursor" / "skills" / "codex-only" / "SKILL.md").is_file()
+    assert (kiro_existing / "SKILL.md").read_text(encoding="utf-8") == "# Kiro override\n"

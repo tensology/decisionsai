@@ -196,6 +196,14 @@ class FastActionDetector:
             #   "Dictate the terms of the agreement" → LLM
             # Guard: require explicit type/dictate intent — quoted strings, intent keywords,
             # or short direct phrases. NOT "type of", "type your", "dictate the terms".
+            (re.compile(
+                _polite
+                + r'(?:paste|type|insert)[\s,.:;-]+'
+                r'(?:(?:the|my|at)[\s,.:;-]+)?'
+                r'(?:last|latest|previous|lost)[\s,.:;-]+dictation[\s.!?,]*$',
+                re.IGNORECASE,
+            ),
+             ActionType.TYPE_TEXT, "type_text", {"source": "last_dictation"}, False, "done"),
             (re.compile(r'\btype\s+(?:out\s+)?from\s+clipboard\b', re.IGNORECASE),
              ActionType.TYPE_TEXT, "type_text", {"source": "clipboard"}, False, "done"),
             (re.compile(r'\bdictate\s+from\s+clipboard\b', re.IGNORECASE),

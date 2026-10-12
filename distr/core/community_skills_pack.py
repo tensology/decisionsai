@@ -121,11 +121,11 @@ Curated pack (not a bulk dump of 44 marketing or 50 design skills).
 - **minimal**, **enterprise**, **professional**, **shadcn**, **bento** — design aesthetic tokens
 - **decisions-marketing-skills** / **decisions-design-aesthetics** — indexes for on-demand skills
 - **design-taste-frontend** — anti-slop frontend taste and anti-template UI guidance
-- **Design craft pack** — impeccable, web-design-guidelines, Taste, Emil, Perfect UI, UI UX Pro Max, Bencium UX, and AccessLint. Bundled skills keep the same id. UI workflows still auto-load impeccable and web-design-guidelines only.
+- **Design craft pack** — apple-design, impeccable, web-design-guidelines, Taste, Emil, Perfect UI, UI UX Pro Max, Bencium UX, and AccessLint. UI workflows always load apple-design and impeccable together, then at most one specialist.
 
 Registry: `{registry_path}`
 
-Reference clones: `{ref}/marketingskills`, `{ref}/awesome-design-skills`
+Reference clones: `{ref}/marketingskills`, `{ref}/awesome-design-skills`, `{ref}/apple-design-skill`
 
 Sync vendor: `python3 scripts/sync_community_skills_pack.py`
 """

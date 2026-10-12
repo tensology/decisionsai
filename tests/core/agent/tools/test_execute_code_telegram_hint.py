@@ -30,6 +30,16 @@ def _code_returning_path(path: Path) -> str:
     return f"result = {str(path)!r}"
 
 
+def test_active_project_does_not_block_personal_file_tasks():
+    description = ExecuteCodeTool.model_fields["description"].default
+
+    assert (
+        "Personal files, system tasks, and files outside the active project may still use this tool"
+        in description
+    )
+    assert "only when NO active project" not in description
+
+
 def test_helper_desktop_message_does_not_hint():
     assert _should_append_telegram_send_hint(last_user_message="zip my Desktop notes into notes.zip") is False
     assert _user_explicitly_asked_telegram("create a png of the chart") is False

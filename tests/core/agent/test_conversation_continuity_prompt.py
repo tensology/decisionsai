@@ -1,0 +1,22 @@
+from distr.core.agent.services.llm.prompt import load_system_prompt_template
+
+
+def test_full_prompt_treats_voice_transcripts_as_conversation_history():
+    prompt = load_system_prompt_template(
+        model_name="gpt-5",
+        provider_name="openrouter",
+    )
+
+    assert "Voice notes are transcribed into ordinary user messages" in prompt
+    assert "Never claim you cannot access an earlier voice note" in prompt
+    assert '"it", "that", "again", "do it"' in prompt
+
+
+def test_lite_prompt_preserves_voice_note_continuity_rule():
+    prompt = load_system_prompt_template(
+        model_name="qwen2.5:0.5b",
+        provider_name="ollama",
+    )
+
+    assert "Voice notes are transcribed into ordinary user messages" in prompt
+    assert "Never claim the voice note is inaccessible" in prompt

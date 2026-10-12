@@ -43,12 +43,17 @@ class _Harness(LLMSharedMixin):
         self.chat_manager = _ChatManager()
         self.typed = []
         self.pushed = []
+        self.work_intakes = []
 
     async def _type_dictation_text(self, text: str):
         self.typed.append(text)
 
     async def push_frame(self, frame, direction):
         self.pushed.append((frame, direction))
+
+    def _try_route_work_intake(self, text: str, *, source: str = "web") -> bool:
+        self.work_intakes.append((text, source))
+        return True
 
 
 def test_dictation_transcript_does_not_touch_agent_ptt_state(monkeypatch):
@@ -118,6 +123,7 @@ def test_completed_ptt_reserves_exactly_one_transcript(monkeypatch):
 
     assert harness._voice_capture_pending is False
     assert harness._last_ptt_transcription_text == "captured speech"
+    assert harness.work_intakes == [("captured speech", "web")]
 
 
 def test_empty_completed_ptt_reports_no_speech_and_clears_authorization(monkeypatch):

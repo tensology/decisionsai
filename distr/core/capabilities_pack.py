@@ -22,9 +22,10 @@ from distr.core.harness_bootstrap import (
 from distr.core.plugins import community_skills_dir, ecc_vendor_dir, project_root
 
 PROJECT_ROOT = project_root()
+APPLE_DESIGN_REFERENCE = PROJECT_ROOT.parent / "reference" / "apple-design-skill"
 ECC_SKILLS = ecc_vendor_dir() / "skills"
 LOCAL_SKILLS = PROJECT_ROOT / "skills"
-STATE_VERSION = 2
+STATE_VERSION = 3
 BROWSER_USE_VERSION = "0.11.13"
 
 # ECC skills for browser QA, Playwright, video, Remotion, and content pipelines.
@@ -182,7 +183,20 @@ def recommend_design_skills(text: str) -> tuple[list[str], str]:
             continue
         if phrases == generic and not ui_work:
             return [], ""
-        return list(skill_ids), reason
+        specialist = next(
+            (skill_id for skill_id in skill_ids if skill_id not in {"apple-design", "impeccable"}),
+            "",
+        )
+        selected = ["apple-design", "impeccable", *([specialist] if specialist else [])]
+        return selected, (
+            "We will use apple-design and impeccable together because all UI work must follow "
+            "platform conventions and accessibility as well as visual craft. " + reason
+        )
+    if ui_work:
+        return ["apple-design", "impeccable"], (
+            "We will use apple-design and impeccable together because this is UI work: "
+            "Apple Design covers platform conventions and accessibility, while Impeccable covers craft and hierarchy."
+        )
     return [], ""
 
 
@@ -211,6 +225,9 @@ def _skill_sources(*, home: Path | None = None) -> dict[str, Path]:
             sources[skill_id] = path
     pack = community_skills_dir()
     for skill_id, candidates in EXTERNAL_SKILL_CANDIDATES.items():
+        if skill_id == "apple-design" and (APPLE_DESIGN_REFERENCE / "SKILL.md").is_file():
+            sources[skill_id] = APPLE_DESIGN_REFERENCE
+            continue
         vendored = pack / skill_id
         if (vendored / "SKILL.md").is_file():
             sources[skill_id] = vendored
@@ -259,7 +276,7 @@ Hermes workflows, Codex, Cursor, Claude, and Pi without hunting the ECC tree.
 
 ## Installed skill families
 
-- **UI quality:** on interface work, say which skills you will use and why, then read them. One lead and at most two supports. Product screens: impeccable, then web-design-guidelines. Marketing pages: design-taste-frontend and perfect-ui. Accessibility: accessibility-audit. Motion: animate. Do not load the whole design pack at once.
+- **UI quality:** every interface task must use apple-design and impeccable together, then at most one task-specific specialist. Apple Design covers platform conventions and accessibility; Impeccable covers craft and hierarchy. Say why before editing. Do not load the whole design pack at once.
 - **Browser / QA:** browser-qa, webapp-testing, e2e-testing, decisions-playwright
 - **Native / cross-app control:** decisions-computer-use when the active runtime exposes computer-use tools
 - **Video / motion:** video-editing, remotion-video-creation, manim-video, videodb
@@ -548,7 +565,7 @@ def ensure_capabilities_pack_setup(
             written.append(str(codex_skill))
 
     # Cursor rules stub for browser QA visibility
-    if detected.get("cursor"):
+    if detected.get("cursor") or detected.get("grok"):
         rule_path = base_home / ".cursor" / "rules" / "decisions-browser-content.mdc"
         rule_text = (
             "---\n"
@@ -556,13 +573,29 @@ def ensure_capabilities_pack_setup(
             "globs:\n"
             "alwaysApply: true\n"
             "---\n\n"
-            "When the task is interface work, name the design skills you will use and why before editing. One lead, at most two supports. Product UI: impeccable and web-design-guidelines. Marketing pages: design-taste-frontend and perfect-ui. Accessibility: accessibility-audit. Motion: animate.\n"
+            "For every interface task, read and use apple-design and impeccable together, then at most one task-specific design specialist. Name them and explain why before editing. Apple Design owns platform conventions and accessibility; Impeccable owns craft and hierarchy.\n"
+            "For ordinary written task updates and final responses, start with `<x>% Done.` using an evidence-based estimate, and reserve 100% until verification is complete. Omit this only when the response itself is requested copy. Never use Unicode em dash or en dash characters.\n"
+            "Use humanizer for publishable human-facing copy, and use design-taste only when its visual-direction guidance is relevant.\n"
             "For native or cross-app control use decisions-computer-use only when the runtime exposes computer-use tools.\n"
             "For video/content use video-editing, remotion-video-creation, content-engine, article-writing.\n"
             "For generated media configure fal-ai MCP (see ~/.decisions/harness/mcp-recommendations.json).\n"
         )
         if write_projection_skill(rule_path, rule_text):
             written.append(str(rule_path))
+
+    if detected.get("kiro"):
+        steering_path = base_home / ".kiro" / "steering" / "decisions-agent-standard.md"
+        steering_text = (
+            "---\n"
+            "inclusion: always\n"
+            "---\n\n"
+            "# DecisionsAI shared agent standard\n\n"
+            "For every interface task, read and use `apple-design` and `impeccable` together, then at most one task-specific design specialist. Apple Design owns platform conventions and accessibility; Impeccable owns craft and hierarchy.\n\n"
+            "For ordinary written task updates and final responses, start with `<x>% Done.` using an evidence-based estimate, and reserve 100% until verification is complete. Omit this only when the response itself is requested copy. Never use Unicode em dash or en dash characters.\n\n"
+            "Use `humanizer` for publishable human-facing copy, and use `design-taste` only when its visual-direction guidance is relevant.\n"
+        )
+        if write_projection_skill(steering_path, steering_text):
+            written.append(str(steering_path))
 
     playwright = _ensure_playwright_browsers() if run_full else {"ok": True, "skipped": True}
     browser_use = _ensure_browser_use_package(enabled=install_browser_use and run_full)
