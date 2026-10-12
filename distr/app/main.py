@@ -107,6 +107,7 @@ from distr.gui.oracle import OracleWindow
 from distr.gui.dialogs.about import AboutWindow
 from distr.gui.dialogs.eula import EulaWindow
 from distr.gui.dialogs.audio import DeviceSelectionDialog
+from distr.gui.development_hot_corner import DevelopmentHotCornerPanel
 from distr.core.audio.utils import (
     get_current_device_list_hash,
     get_system_default_device_fingerprints,
@@ -1073,6 +1074,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         self.eula_window = EulaWindow(oracle_window=self.oracle_window)
         # Now set the EULA window reference in oracle window
         self.oracle_window.eula_window = self.eula_window
+        self.development_hot_corner = DevelopmentHotCornerPanel(
+            enabled=bool(self.settings.get("accepted_eula", False))
+        )
         # Hide oracle window until EULA is accepted
         self.oracle_window.hide()
         self.player_window.set_oracle_window(self.oracle_window)
@@ -1205,6 +1209,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     def _start_post_eula_initialization(self):
         """Start the initialization sequence after EULA acceptance: devices first, then everything else."""
         logger.info("Starting post-EULA initialization sequence")
+        self.development_hot_corner.set_enabled(True)
         # Step 1: Select devices first (blocking if dialog is shown)
         # Check if devices are already selected, otherwise call select_devices which will check settings
         if not self.selected_input_device or not self.selected_output_device:
