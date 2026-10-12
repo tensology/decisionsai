@@ -632,6 +632,18 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         logger.info("[ORACLE] Executing hook '%s' (prev='%s') → animation=%s, glow=%s",
                      new_hook, previous_hook, response.animation, response.glow)
 
+        try:
+            from distr.core.integrations.telegram.remote_skin import notify_remote_avatar_state
+
+            notify_remote_avatar_state(
+                folder_name=self._skin_folder,
+                hook=new_hook,
+                animation=response.animation,
+                playback=response.playback,
+            )
+        except Exception:
+            logger.debug("Remote avatar state notify skipped", exc_info=True)
+
         # 1. Check for transition animation
         transition_file = self._event_dispatcher.get_transition(previous_hook, new_hook)
         if transition_file:

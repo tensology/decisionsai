@@ -86,8 +86,8 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
         if should_show:
             self._move_beside_pointer()
             if not self.isVisible():
+                # Raising this overlay activates Decisions over the user's current app.
                 self.show()
-                self.raise_()
                 self._ensure_macos_overlay_level()
         elif self.isVisible():
             self.hide()
@@ -161,7 +161,6 @@ class HiddenVoiceIndicator(QtWidgets.QWidget):
                 | NSWindowCollectionBehaviorFullScreenAuxiliary
                 | NSWindowCollectionBehaviorStationary
             )
-            native_window.orderFrontRegardless()
         except Exception:
             pass
 

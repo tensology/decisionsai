@@ -261,7 +261,27 @@ def test_state_change_does_not_reorder_visible_indicator() -> None:
     indicator._timer.start.assert_called_once_with()
 
 
-def test_macos_overlay_is_promoted_above_inactive_apps(monkeypatch) -> None:
+def test_showing_indicator_never_requests_foreground_ordering() -> None:
+    indicator = SimpleNamespace(
+        _oracle_hidden=True,
+        _state="listening",
+        _move_beside_pointer=MagicMock(),
+        isVisible=MagicMock(return_value=False),
+        show=MagicMock(),
+        _ensure_macos_overlay_level=MagicMock(),
+        _timer=MagicMock(),
+        hide=MagicMock(),
+        _system_cursor_visible=lambda: True,
+    )
+    indicator._timer.isActive.return_value = True
+
+    HiddenVoiceIndicator._sync_visibility(indicator)
+
+    indicator.show.assert_called_once_with()
+    indicator._ensure_macos_overlay_level.assert_called_once_with()
+
+
+def test_macos_overlay_is_configured_without_reordering(monkeypatch) -> None:
     native_window = MagicMock()
     native_view = SimpleNamespace(window=lambda: native_window)
     objc_object = MagicMock(return_value=native_view)
@@ -285,7 +305,7 @@ def test_macos_overlay_is_promoted_above_inactive_apps(monkeypatch) -> None:
     objc_object.assert_called_once()
     native_window.setLevel_.assert_called_once_with(25)
     native_window.setHidesOnDeactivate_.assert_called_once_with(False)
-    native_window.orderFrontRegardless.assert_called_once_with()
+    native_window.orderFrontRegardless.assert_not_called()
 
 
 def test_oracle_visibility_actions_persist_the_restart_state(monkeypatch) -> None:

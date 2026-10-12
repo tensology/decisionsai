@@ -70,3 +70,40 @@ def notify_remote_skin_changed(
     except Exception:
         logger.exception("Failed to notify remote control of skin change")
         return False
+
+
+def notify_remote_avatar_state(
+    *,
+    folder_name: str,
+    hook: str,
+    animation: str,
+    playback: str = "loop",
+) -> bool:
+    """Push the active skin animation to connected remote-control pages."""
+    manager = _resolve_telegram_manager()
+    if manager is None:
+        return False
+
+    selected = str(folder_name or "").strip()
+    state = str(hook or "").strip()
+    filename = str(animation or "").strip()
+    if not selected or not state or not filename:
+        return False
+
+    try:
+        return bool(
+            manager._send_websocket_message(
+                {
+                    "type": "remote_avatar_state",
+                    "data": {
+                        "selected_skin": selected,
+                        "hook": state,
+                        "animation": filename,
+                        "playback": playback or "loop",
+                    },
+                }
+            )
+        )
+    except Exception:
+        logger.exception("Failed to notify remote control of avatar state")
+        return False
