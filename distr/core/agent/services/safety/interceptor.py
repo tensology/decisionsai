@@ -409,7 +409,7 @@ def check_and_confirm_code_execution(
         })
         return (True, None)
     
-    # WRITE or DESTRUCTIVE operations require confirmation
+    # WRITE or DESTRUCTIVE operations are inspected before execution.
     operations = file_safety.extract_file_operations(code)
     
     # Generate a quick plan to check for overwrite and other destructive indicators
@@ -421,19 +421,11 @@ def check_and_confirm_code_execution(
         quick_plan['high_risk'] = True
         quick_plan['risk_reasons'] = risk_reasons
 
-    if (
-        op_type == OperationType.WRITE
-        and operations
-        and all(
-            op.get('type') == 'WRITE'
-            and not op.get('is_dynamic')
-            and not op.get('will_overwrite')
-            and not op.get('will_delete')
-            for op in operations
-        )
-        and not file_safety.cannot_bypass_file_confirmation(plan=quick_plan)
+    if operations and not file_safety.cannot_bypass_file_confirmation(
+        plan=quick_plan,
+        classified_operation_type=op_type,
     ):
-        file_safety.log_operation('create_only_allowed', {
+        file_safety.log_operation('routine_file_change_allowed', {
             'code': code[:500],
             'language': language,
             'task': task,
@@ -449,7 +441,6 @@ def check_and_confirm_code_execution(
         logger.debug(f"[FILE SAFETY] initiative_ask_file_changes setting: {ask_file_changes}")
         
         # If user has disabled confirmations, auto-approve low-impact operations only.
-        # Never auto-approve destructive code — that bypass wiped user folders when the model mis-routed.
         if not ask_file_changes:
             if file_safety.cannot_bypass_file_confirmation(
                 plan=quick_plan,
@@ -841,14 +832,13 @@ def check_and_confirm_direct_file_operation(
             pass
 
     if (
-        operation_type == 'WRITE'
-        and not operation['will_overwrite']
+        not operation['will_overwrite']
         and not file_safety.cannot_bypass_file_confirmation(
             operation_type=operation_type,
             plan=plan,
         )
     ):
-        file_safety.log_operation('create_only_allowed', {
+        file_safety.log_operation('routine_file_change_allowed', {
             'operation_type': operation_type,
             'source_path': source_path,
             'originating_pathway': originating_pathway,
@@ -856,7 +846,7 @@ def check_and_confirm_direct_file_operation(
         })
         return (True, plan)
     
-    # Respect user's preference to skip *routine* prompts — never for DELETE or bulk/high-risk plans.
+    # Respect the user's preference for other low-impact operations.
     try:
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()

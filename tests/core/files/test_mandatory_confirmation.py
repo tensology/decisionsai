@@ -13,12 +13,30 @@ def fs() -> FileOperationSafety:
     return FileOperationSafety(log_dir="/tmp/decisions_mandatory_confirmation_test_logs")
 
 
-def test_delete_always_mandatory(fs: FileOperationSafety) -> None:
+def test_delete_without_an_exact_plan_is_mandatory(fs: FileOperationSafety) -> None:
     assert fs.cannot_bypass_file_confirmation(operation_type="DELETE", plan=None) is True
-    assert fs.cannot_bypass_file_confirmation(operation_type="delete", plan={"file_count": 1}) is True
 
 
-def test_destructive_classification_mandatory(fs: FileOperationSafety) -> None:
+def test_exact_single_file_delete_may_bypass(fs: FileOperationSafety, tmp_path) -> None:
+    target = tmp_path / "old.txt"
+    target.write_text("old")
+    operation = {
+        "type": "DELETE",
+        "source": str(target),
+        "destination": None,
+        "will_overwrite": False,
+        "will_delete": True,
+    }
+    plan = fs.generate_plan([operation], "Delete one file")
+
+    assert fs.cannot_bypass_file_confirmation(
+        operation_type="DELETE",
+        plan=plan,
+        classified_operation_type=OperationType.DESTRUCTIVE,
+    ) is False
+
+
+def test_unresolved_destructive_classification_mandatory(fs: FileOperationSafety) -> None:
     assert fs.cannot_bypass_file_confirmation(
         classified_operation_type=OperationType.DESTRUCTIVE,
     ) is True
@@ -39,9 +57,19 @@ def test_small_write_may_bypass(fs: FileOperationSafety) -> None:
     assert fs.cannot_bypass_file_confirmation(operation_type="WRITE", plan=plan) is False
 
 
-def test_will_delete_flag_mandatory(fs: FileOperationSafety) -> None:
-    plan = {"will_delete": True, "file_count": 1}
-    assert fs.cannot_bypass_file_confirmation(operation_type="WRITE", plan=plan) is True
+def test_directory_operation_mandatory(fs: FileOperationSafety, tmp_path) -> None:
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    operation = {
+        "type": "MOVE",
+        "source": str(folder),
+        "destination": str(tmp_path / "moved"),
+        "will_overwrite": False,
+        "will_delete": True,
+    }
+    plan = fs.generate_plan([operation], "Move a folder")
+
+    assert fs.cannot_bypass_file_confirmation(operation_type="MOVE", plan=plan) is True
 
 
 def test_reportlab_new_pdf_is_auto_approved(
@@ -389,6 +417,61 @@ def test_telegram_reportlab_static_download_path_creation_end_to_end(tmp_path) -
     assert "ACTION REQUIRED: Call send_file_to_telegram" in result
 
 
+def test_telegram_transcript_creation_end_to_end(tmp_path) -> None:
+    target = tmp_path / "transcript.txt"
+    code = (
+        "from pathlib import Path\n"
+        f"target = Path({str(target)!r})\n"
+        "target.write_text('Speaker: Test transcript')\n"
+        "result = str(target)\n"
+    )
+
+    result = ExecuteCodeTool()._run(
+        code=code,
+        description="Create the requested transcript",
+        is_telegram_request=True,
+    )
+
+    assert target.read_text() == "Speaker: Test transcript"
+    assert "cancelled" not in result.lower()
+    assert "ACTION REQUIRED: Call send_file_to_telegram" in result
+
+
+def test_telegram_small_file_move_end_to_end(tmp_path) -> None:
+    source = tmp_path / "draft.txt"
+    destination = tmp_path / "complete.txt"
+    source.write_text("done")
+    code = (
+        "import shutil\n"
+        f"shutil.move({str(source)!r}, {str(destination)!r})\n"
+        f"result = {str(destination)!r}\n"
+    )
+
+    result = ExecuteCodeTool()._run(
+        code=code,
+        description="Move the requested file",
+        is_telegram_request=True,
+    )
+
+    assert not source.exists()
+    assert destination.read_text() == "done"
+    assert "cancelled" not in result.lower()
+
+
+def test_telegram_single_file_delete_end_to_end(tmp_path) -> None:
+    target = tmp_path / "discard.txt"
+    target.write_text("discard")
+
+    result = ExecuteCodeTool()._run(
+        code=f"import os\nos.remove({str(target)!r})\nresult = 'deleted'",
+        description="Delete the requested single file",
+        is_telegram_request=True,
+    )
+
+    assert not target.exists()
+    assert "cancelled" not in result.lower()
+
+
 def test_execute_code_blocks_unconfirmed_small_edit(tmp_path) -> None:
     target = tmp_path / "notes.txt"
     target.write_text("original")
@@ -443,7 +526,7 @@ def test_execute_code_blocks_recursive_folder_delete_before_execution(tmp_path) 
     assert "bulk deletion is disabled" in result
 
 
-def test_execute_code_blocks_unconfirmed_single_file_delete(tmp_path) -> None:
+def test_execute_code_allows_exact_single_file_delete(tmp_path) -> None:
     target = tmp_path / "keep.txt"
     target.write_text("keep")
 
@@ -452,8 +535,8 @@ def test_execute_code_blocks_unconfirmed_single_file_delete(tmp_path) -> None:
         "Create a document",
     )
 
-    assert target.read_text() == "keep"
-    assert "Delete 1 file(s)." in result
+    assert not target.exists()
+    assert "cancelled" not in result.lower()
 
 
 def test_execute_code_blocks_bulk_file_creation_without_confirmation(tmp_path) -> None:
@@ -485,3 +568,40 @@ def test_file_operations_create_read_and_refuse_directory_delete(
 
     assert folder.is_dir()
     assert "Directory deletion through DecisionsAI is disabled" in delete_result
+
+
+def test_file_operations_move_and_delete_single_files_without_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    source = tmp_path / "draft.txt"
+    destination = tmp_path / "complete.txt"
+    source.write_text("done")
+    tool = FileOperationsTool()
+    monkeypatch.setattr(tool, "_resolve_folder_path", lambda path: path)
+
+    move_result = tool._run("move", str(source), destination=str(destination))
+    delete_result = tool._run("delete", str(destination))
+
+    assert move_result.startswith("Moved:")
+    assert delete_result.startswith("File deleted:")
+    assert not source.exists()
+    assert not destination.exists()
+
+
+def test_file_operations_move_still_blocks_overwrite_without_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    source = tmp_path / "draft.txt"
+    destination = tmp_path / "existing.txt"
+    source.write_text("new")
+    destination.write_text("existing")
+    tool = FileOperationsTool()
+    monkeypatch.setattr(tool, "_resolve_folder_path", lambda path: path)
+
+    result = tool._run("move", str(source), destination=str(destination))
+
+    assert "cancelled" in result.lower()
+    assert source.read_text() == "new"
+    assert destination.read_text() == "existing"

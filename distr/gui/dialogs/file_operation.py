@@ -137,7 +137,7 @@ class FileOperationConfirmationDialog(QDialog):
             }
         """)
         layout.addWidget(self.dont_show_again_checkbox)
-        # Never offer "don't ask again" for deletes or bulk/high-risk plans — that bypass wiped library folders.
+        # Never offer "don't ask again" for bulk/high-risk plans.
         try:
             from distr.core.files.safety import get_file_safety
             if get_file_safety().cannot_bypass_file_confirmation(
@@ -506,7 +506,7 @@ class FileOperationConfirmationDialog(QDialog):
                     logger.warning(f"Please type '{self.confirmation_phrase}' exactly to confirm.")
                 return
         
-        # Save "Don't show again" only for low-impact operations (never after DELETE / bulk / high-risk).
+        # Save "Don't show again" only for low-impact operations.
         if self.dont_show_again_checkbox.isVisible() and self.dont_show_again_checkbox.isChecked():
             try:
                 from distr.core.files.safety import get_file_safety
@@ -759,7 +759,7 @@ def confirm_file_operations_with_plan(plan: Dict,
     else:
         plan_op_type = "WRITE"
 
-    # Routine low-impact auto-approve only; never skip dialogs for deletes or bulk/high-risk plans.
+    # Routine low-impact auto-approve only; never skip bulk/high-risk dialogs.
     try:
         from distr.core.settings import load_settings_from_db
         from distr.core.files.safety import get_file_safety

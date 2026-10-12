@@ -310,6 +310,8 @@ class FileOperationSafety:
                 return os.path.expanduser(arguments[0])
             if function_name == "os.path.join" and arguments:
                 return os.path.join(*arguments)
+            if function_name in {"Path", "pathlib.Path"} and len(arguments) == 1:
+                return arguments[0]
             return None
 
         try:
@@ -604,22 +606,14 @@ class FileOperationSafety:
         When True, the user must see an explicit confirmation dialog even if
         ``initiative_ask_file_changes`` is turned off.
 
-        Turning off routine prompts must never silently approve mass deletes,
-        recursive wipes of library folders, or other catastrophic filesystem ops.
+        Routine exact file operations may proceed without a dialog. Bulk,
+        directory, overwrite, protected-path, and unresolved operations may not.
         """
-        if classified_operation_type == OperationType.DESTRUCTIVE:
-            return True
-
         ot = (operation_type or "").strip().upper()
-        if ot == "DELETE":
-            return True
-
         if not plan:
-            return False
+            return classified_operation_type == OperationType.DESTRUCTIVE or ot == "DELETE"
 
-        if plan.get("will_delete"):
-            return True
-        if plan.get("high_risk"):
+        if plan.get("high_risk") or plan.get("will_overwrite"):
             return True
 
         threshold = self.MAX_FILES_WITHOUT_EXTRA_CONFIRMATION
@@ -636,6 +630,19 @@ class FileOperationSafety:
         ):
             if int(plan.get(key) or 0) > threshold:
                 return True
+
+        operations = plan.get("operations") or []
+        if not operations:
+            return classified_operation_type == OperationType.DESTRUCTIVE or ot == "DELETE"
+        if any(
+            op.get("is_dynamic")
+            or op.get("type") not in {"WRITE", "DELETE", "MOVE", "COPY"}
+            for op in operations
+        ):
+            return True
+
+        if int(plan.get("directory_count") or 0) > 0:
+            return True
 
         return False
     
