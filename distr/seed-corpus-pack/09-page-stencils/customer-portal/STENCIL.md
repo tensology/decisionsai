@@ -1,23 +1,21 @@
-# Stencil: Customer portal — SYNTHESIZED
+# Stencil: Customer portal - SYNTHESIZED
 
-Refs: Merrypak `pages/shop`, `pages/auth`, `components/checkout`.
+Read the global `ui-ux-principles` skill first. This stencil adds commerce-specific requirements only.
 
-## Surfaces
-- Catalog list + product detail (variants, gallery, ATP)
-- Cart drawer/page
-- Checkout steps: address → shipping → payment → review
-- Account: orders, addresses, profile
-- Auth: login/register/forgot
+Compile an approved `ScreenContract` with the `customer-portal` executable pack before model-authored changes.
 
-## Layout
-- Storefront chrome (header search, cart badge, account).
-- Product detail: gallery + buy box sticky on desktop.
-- Checkout: progress indicator; order summary aside.
+## Commerce flow
 
-## Validation / AC
-- [ ] Variant selection required before add-to-cart
-- [ ] Cart survives refresh; price revalidate messaging
-- [ ] Checkout idempotent submit (no double charge UX)
-- [ ] Guest vs account path explicit
-- [ ] Order confirmation shows snapshot totals
-- [ ] Premium gate green (brand tokens, not admin density)
+- Make variant selection explicit before add-to-cart when variants affect fulfillment.
+- Persist the cart across refresh and explain price revalidation.
+- Keep checkout submission idempotent so repeated activation cannot double charge.
+- Make guest and account paths explicit.
+- Show the frozen order snapshot and totals after confirmation.
+
+## Acceptance
+
+- Given a product requires a variant, when none is selected, then add-to-cart remains unavailable with a field-level explanation.
+- Given a cart survives refresh, when prices changed, then the updated values and reason are visible before checkout.
+- Given checkout is submitted repeatedly, when the order is processed, then only one charge and order are created.
+- Given checkout completes, when confirmation renders, then it shows the frozen order snapshot and totals.
+- The feature is incomplete until the global Definition of Done - UI and applicable FRAC criteria pass.

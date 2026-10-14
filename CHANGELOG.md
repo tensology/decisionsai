@@ -494,11 +494,11 @@ Stability & offline use: Speech-to-text (Vosk fallback, Whisper load failures) a
 
 ## [2.6.9] - 2026-03-31
 
-### Google Gemini, Kiro CLI Pipeline, Telegram Overhaul, Windows Polish
+### Google Gemini, CLI Pipeline, Telegram Overhaul, Windows Polish
 
 Google Gemini Support: You can now use Google Gemini as an LLM provider. Add your API key in the providers UI, pick a Gemini or Gemma model, and you're good to go. API errors like quota limits, rate limits, and bad keys now show up clearly in the chat instead of silently failing.
 
-Kiro CLI as an Agent Tool: The orchestrator can now send coding tasks to Kiro CLI directly. When a kanban ticket is linked to a project, the agent routes it to Kiro CLI for execution instead of trying to do it itself. Tickets flow through lanes automatically: from Current to QA/Assess instead of jumping straight to Done: so there's an actual review step. You can create multiple tickets from a single voice command, and the agent logs everything it does in a real-time audit trail that streams to the UI.
+CLI as an Agent Tool: The orchestrator can send coding tasks to the configured project CLI. When a kanban ticket is linked to a project, the agent routes it to that CLI for execution instead of trying to do it itself. Tickets flow through lanes automatically: from Current to QA/Assess instead of jumping straight to Done: so there's an actual review step. You can create multiple tickets from a single voice command, and the agent logs everything it does in a real-time audit trail that streams to the UI.
 
 Kanban Boards Got Smarter: Boards now link to projects, so the agent knows which codebase a ticket belongs to. Each board has its own agent check-in toggle (the robot icon in the sidebar) and configurable lane routing. You can set how often the agent checks in: down to every few minutes if you want. Trello and Jira boards show up alongside local boards, and you can archive/unarchive boards from the context menu.
 

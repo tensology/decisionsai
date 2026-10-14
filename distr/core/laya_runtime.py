@@ -195,6 +195,101 @@ def assess_request(request: str) -> dict[str, Any]:
     }
 
 
+def assess_discussion(context: dict[str, Any]) -> dict[str, Any]:
+    repositories = list(context.get("repositories") or [])[:16]
+    repository_choices = {
+        "none": "No repository context is required.",
+        "all": "Evidence may be needed from more than one registered repository.",
+        "unknown": "The relevant repository cannot be identified from the discussion context.",
+    }
+    repository_labels = {"none": "none", "all": "all", "unknown": "unknown"}
+    for index, repository in enumerate(repositories, 1):
+        key = f"repository_{index}"
+        name = str(repository.get("name") or key)[:80]
+        repository_choices[key] = f"Only the repository named {name}: {str(repository.get('purpose') or '')[:160]}"
+        repository_labels[key] = name
+    questions = {
+        "scope": {
+            "type": "choice",
+            "instructions": "Classify the new message only against the supplied ticket and project context.",
+            "criteria": {
+                "in_scope": "Directly advances, clarifies, or reports on the existing ticket.",
+                "ambiguous": "Could be relevant but needs a focused clarification question.",
+                "rescope": "Materially expands the existing ticket's accepted work.",
+                "new_ticket": "A separate useful work item that should be proposed as another ticket.",
+                "unrelated": "Not relevant to the ticket or project, including recipes or general chat.",
+            },
+        },
+        "needs_repository_context": {
+            "type": "noul",
+            "instructions": "Would a safe, grounded answer require reading registered repository content?",
+        },
+        "reply_policy": {
+            "type": "choice",
+            "instructions": "Choose whether the AI should remain silent, respond, or warn that the request is outside scope.",
+            "criteria": {
+                "silent": "No useful AI response is needed for this human coordination message.",
+                "respond": "A scoped answer or clarification would be useful.",
+                "scope_warning": "The request needs an out-of-scope warning or separate-ticket proposal.",
+            },
+        },
+        "needs_full_model_review": {
+            "type": "noul",
+            "instructions": "Should the configured discussion model review this instead of trusting this fast classification alone?",
+        },
+        "risk_level": {
+            "type": "score",
+            "instructions": "Rate the risk of acting on this classification without human or full-model review.",
+            "criteria": [
+                "No action and negligible risk.",
+                "Low-risk discussion guidance.",
+                "Moderate ambiguity or scope impact.",
+                "High scope, security, billing, or production impact.",
+                "Critical destructive, credential, privacy, or production risk.",
+            ],
+        },
+        "target_repository_group": {
+            "type": "choice",
+            "instructions": "If repository context is needed, identify the smallest relevant repository group.",
+            "criteria": repository_choices,
+        },
+    }
+    result = call_tool(
+        "laya_predict",
+        {
+            "state": {"ticket_discussion": context},
+            "questions": questions,
+            "model": "auto",
+            "task": "typed_decisions",
+            "min_confidence": 0.65,
+        },
+    )
+    answers = result.get("answers") or {}
+    confidence_by_question = {
+        name: float(answer.get("answer_confidence", answer.get("confidence", 0.0)))
+        for name, answer in answers.items()
+        if isinstance(answer, dict)
+    }
+    confidence = min(confidence_by_question.values(), default=0.0)
+    repository_key = str((answers.get("target_repository_group") or {}).get("choice") or "unknown")
+    predicted_full_review = float((answers.get("needs_full_model_review") or {}).get("noul", 1.0)) >= 0.5
+    return {
+        "status": "complete",
+        "version": LAYA_VERSION,
+        "scope": str((answers.get("scope") or {}).get("choice") or "ambiguous"),
+        "needs_repository_context": float((answers.get("needs_repository_context") or {}).get("noul", 1.0)) >= 0.5,
+        "reply_policy": str((answers.get("reply_policy") or {}).get("choice") or "respond"),
+        "needs_full_model_review": predicted_full_review or confidence < 0.65,
+        "risk_level": max(0, min(4, round(float((answers.get("risk_level") or {}).get("score", 4))))),
+        "target_repository_group": repository_labels.get(repository_key, "unknown"),
+        "confidence": confidence,
+        "qualified_for_routing": confidence >= 0.80,
+        "question_confidence": confidence_by_question,
+        "latency_ms": round(float(result.get("latency_ms") or 0)),
+        "routing": result.get("routing") or {},
+    }
+
+
 def test_integration() -> dict[str, Any]:
     from distr.core.mcp.runtime import get_mcp_hub
 

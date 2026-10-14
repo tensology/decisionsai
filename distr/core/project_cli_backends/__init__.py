@@ -7,6 +7,7 @@ from .registry import (
     get_project_backend_id,
     list_backends,
     normalize_backend_id,
+    normalize_route_backend_id,
     resolve_backend_for_capabilities,
     run_project_task,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "get_project_backend_id",
     "list_backends",
     "normalize_backend_id",
+    "normalize_route_backend_id",
     "resolve_backend_for_capabilities",
     "run_project_task",
 ]

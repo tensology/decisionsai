@@ -13,7 +13,6 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
             "cursor": True,
             "claude": False,
             "pi": False,
-            "kiro": True,
             "grok": True,
         },
     )
@@ -53,9 +52,6 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "decisions-computer-use" / "SKILL.md").is_file()
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "impeccable" / "SKILL.md").is_file()
     assert (tmp_path / ".codex" / "skills" / "impeccable" / "SKILL.md").is_file()
-    assert (tmp_path / ".kiro" / "skills" / "apple-design" / "SKILL.md").is_file()
-    assert (tmp_path / ".kiro" / "skills" / "impeccable" / "SKILL.md").is_file()
-    assert (tmp_path / ".kiro" / "steering" / "decisions-agent-standard.md").is_file()
     cursor_rule = (tmp_path / ".cursor" / "rules" / "decisions-browser-content.mdc").read_text(
         encoding="utf-8"
     )
@@ -164,17 +160,13 @@ def test_shared_user_skills_fill_missing_harnesses_without_overwriting(tmp_path)
 
     codex_skill = tmp_path / ".codex" / "skills" / "codex-only"
     cursor_skill = tmp_path / ".cursor" / "skills" / "cursor-only"
-    kiro_existing = tmp_path / ".kiro" / "skills" / "codex-only"
     for path, text in (
         (codex_skill, "# Codex\n"),
         (cursor_skill, "# Cursor\n"),
-        (kiro_existing, "# Kiro override\n"),
     ):
         path.mkdir(parents=True)
         (path / "SKILL.md").write_text(text, encoding="utf-8")
 
     _synchronize_compatible_user_skills(tmp_path)
 
-    assert (tmp_path / ".kiro" / "skills" / "cursor-only" / "SKILL.md").is_file()
     assert (tmp_path / ".cursor" / "skills" / "codex-only" / "SKILL.md").is_file()
-    assert (kiro_existing / "SKILL.md").read_text(encoding="utf-8") == "# Kiro override\n"

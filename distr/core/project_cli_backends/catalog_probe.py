@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import threading
 import time
@@ -24,13 +25,12 @@ from distr.core.project_cli_backends.models_catalog import (
 from distr.core.project_cli_backends.registry import _cursor_api_key
 
 
-CLI_BACKEND_IDS = ("codex", "claude_code", "opencode", "kiro", "cursor", "cline", "pi")
+CLI_BACKEND_IDS = ("codex", "claude_code", "opencode", "cursor", "cline", "pi")
 VERIFIED_MODEL_SOURCES = {
     "anthropic-api",
-    "codex-cli",
+    "codex-app-server",
     "cursor-api",
     "cursor-cli",
-    "kiro-cli",
     "opencode-cli",
     "pi-models",
 }
@@ -39,7 +39,6 @@ PARTIAL_MODEL_SOURCES = {
     "cline-config",
     "codex-unverified",
     "cursor-defaults",
-    "kiro-unverified",
 }
 
 _MODEL_RESULT_CACHE_LOCK = threading.RLock()
@@ -74,33 +73,6 @@ def _clone_model_result(result: dict[str, Any]) -> dict[str, Any]:
     cloned = dict(result or {})
     cloned["models"] = [dict(model) for model in cloned.get("models") or []]
     return cloned
-
-
-def kiro_models(settings: dict) -> tuple[list[dict], str, str]:
-    try:
-        backend = get_backend("kiro")
-        status = backend.setup_status()
-        if not status.path:
-            raise RuntimeError("Kiro CLI not found")
-        result = subprocess.run(
-            [status.path, "chat", "--list-models", "--format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=12,
-        )
-        if result.returncode == 0:
-            payload = json.loads((result.stdout or "").strip() or "{}")
-            rows = []
-            for item in payload.get("models") or []:
-                mid = (item.get("model_id") or item.get("model_name") or "").strip()
-                name = (item.get("model_name") or mid).strip()
-                if mid:
-                    rows.append(model_entry(mid, "kiro", name, scope="available", free=False))
-            if rows:
-                return dedupe_model_entries(rows), "kiro-cli", ""
-    except Exception as exc:
-        return [model_entry("auto", "kiro", "Auto", scope="scoped")], "kiro-unverified", f"Could not fetch verified Kiro models: {exc}. Only Auto is available."
-    return [model_entry("auto", "kiro", "Auto", scope="scoped")], "kiro-unverified", "Kiro did not return a verified model list. Only Auto is available."
 
 
 def cursor_cli_models() -> tuple[list[dict], str, str]:
@@ -242,29 +214,95 @@ def anthropic_models(settings: dict) -> tuple[list[dict], str, str]:
 
 def codex_models(settings: dict | None = None) -> tuple[list[dict], str, str]:
     del settings
+    message = "Could not load the Codex session model catalog."
+    process = None
     try:
-        result = subprocess.run(
-            ["codex", "models"],
-            capture_output=True,
+        process = subprocess.Popen(
+            ["codex", "app-server", "--listen", "stdio://"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
-            timeout=8,
+            bufsize=1,
         )
-        if result.returncode == 0:
-            text = (result.stdout or "").strip()
-            models = []
-            for line in text.splitlines():
-                mid = line.strip().split()[0] if line.strip() else ""
-                if mid and not mid.lower().startswith(("-", "usage", "error")):
-                    models.append(model_entry(mid, "codex"))
-            if models:
-                return dedupe_model_entries(models), "codex-cli", ""
-    except Exception:
-        pass
+        if process.stdin is None or process.stdout is None:
+            raise RuntimeError("Codex app-server pipes are unavailable")
+        responses: queue.Queue[dict | None] = queue.Queue()
+
+        def read_responses() -> None:
+            for line in process.stdout:
+                try:
+                    responses.put(json.loads(line))
+                except (TypeError, ValueError):
+                    continue
+            responses.put(None)
+
+        threading.Thread(target=read_responses, daemon=True).start()
+
+        def request(request_id: int, method: str, params: dict) -> dict:
+            process.stdin.write(json.dumps({"id": request_id, "method": method, "params": params}) + "\n")
+            process.stdin.flush()
+            deadline = time.monotonic() + 12
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"Codex app-server {method} timed out")
+                try:
+                    payload = responses.get(timeout=remaining)
+                except queue.Empty as exc:
+                    raise TimeoutError(f"Codex app-server {method} timed out") from exc
+                if payload is None:
+                    raise RuntimeError("Codex app-server exited before responding")
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("id") == request_id:
+                    if payload.get("error"):
+                        raise RuntimeError(str(payload["error"]))
+                    return payload.get("result") or {}
+
+        request(
+            1,
+            "initialize",
+            {"clientInfo": {"name": "DecisionsAI", "version": "1"}, "capabilities": {}},
+        )
+        catalog = request(2, "model/list", {"limit": 100, "includeHidden": False})
+        models = []
+        for item in catalog.get("data") or []:
+            model_id = str(item.get("id") or item.get("model") or "").strip()
+            if not model_id or item.get("hidden"):
+                continue
+            row = model_entry(
+                model_id,
+                "codex",
+                str(item.get("displayName") or item.get("model") or model_id),
+                free=False,
+                scope="scoped",
+            )
+            row["supported_reasoning_efforts"] = [
+                str(value.get("reasoningEffort") or "")
+                for value in (item.get("supportedReasoningEfforts") or [])
+                if value.get("reasoningEffort")
+            ]
+            row["default_reasoning_effort"] = str(item.get("defaultReasoningEffort") or "")
+            row["input_modalities"] = list(item.get("inputModalities") or [])
+            row["is_default"] = bool(item.get("isDefault"))
+            models.append(row)
+        if models:
+            return dedupe_model_entries(models), "codex-app-server", ""
+    except Exception as exc:
+        message = f"Could not load the Codex session model catalog: {exc}"
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
     return (
         [model_entry("auto", "codex", "Auto", scope="scoped")],
         "codex-unverified",
-        "Codex CLI is connected, but it did not expose a verified model list in this session. Use Auto for Codex-managed model selection.",
+        message,
     )
 
 
@@ -350,8 +388,6 @@ def models_for_cli_backend(backend_id: str, settings: dict | None = None) -> dic
         )
     elif backend_id == "opencode":
         models, source, message = opencode_models(settings)
-    elif backend_id == "kiro":
-        models, source, message = kiro_models(settings)
     else:
         models, source, message = pi_cli_models(settings), "pi-models", ""
     for model in models:
@@ -380,7 +416,7 @@ def backend_capability_contract(backend_id: str) -> list[dict[str, Any]]:
         return [
             {"id": "model", "label": "Model alias", "source": "verified-alias-or-api", "values": ["default", "sonnet", "opus", "haiku", "sonnet[1m]", "opusplan"]},
         ]
-    if backend_id in {"cursor", "opencode", "kiro", "cline", "pi"}:
+    if backend_id in {"cursor", "opencode", "cline", "pi"}:
         return [
             {"id": "model", "label": "Model", "source": "verified-when-cli-or-provider-reports", "values": []},
         ]
@@ -391,15 +427,13 @@ def backend_probe_commands(backend_id: str, executable_path: str | None) -> list
     backend_id = normalize_backend_id(backend_id)
     executable = executable_path or backend_id
     if backend_id == "codex":
-        return [[executable, "models"], [executable, "exec", "--help"], [executable, "--help"]]
+        return [[executable, "doctor", "--json"], [executable, "exec", "--help"], [executable, "--help"]]
     if backend_id == "cursor":
         return [[executable, "--version"], [executable, "status"]]
     if backend_id == "claude_code":
         return [[executable, "--version"], [executable, "--help"]]
     if backend_id == "opencode":
         return [[executable, "models"], [executable, "--help"]]
-    if backend_id == "kiro":
-        return [[executable, "chat", "--list-models", "--format", "json"], [executable, "--help"]]
     if backend_id == "cline":
         return [[executable, "--version"], [executable, "--help"]]
     if backend_id == "pi":

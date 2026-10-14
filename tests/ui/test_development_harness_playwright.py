@@ -35,6 +35,7 @@ def _install_api(
     live_activity: bool = False,
     autonomy_level: str = "full",
     unassigned_recent: bool = False,
+    recent_project_count: int = 0,
     run_status: str | None = None,
     running_timer: bool = False,
     board_linked_projectless: bool = False,
@@ -70,6 +71,7 @@ def _install_api(
     terminal_status_available: bool = True,
     terminal_command: str = "npm run dev",
     unified_direct_run: bool = False,
+    routing_execution_mode: str = "direct",
 ) -> None:
     projects = [
         {"id": 7, "name": "DecisionsAI", "folder_location": "/tmp/decisions", "in_use": True, "kanban_board_id": 70, "startup_instructions": startup_instructions},
@@ -125,8 +127,11 @@ def _install_api(
         "execution_profile": "code",
         "autonomy_level": autonomy_level,
         "development": ({"execution": direct_run, "ticket_id": 42} if direct_execution else True),
+        "development_source_type": "prompt",
         "development_workflow_id": 44 if (not direct_execution or stale_workflow_on_direct_thread) else None,
         "development_execution": direct_run,
+        "development_time_running": running_timer,
+        "development_time_seconds": 5 if running_timer else 125,
         "development_ticket_id": 42,
         "development_board_key": "decisions:70" if current_board_linked else None,
         "development_board_ticket_key": "decisions:42" if current_board_linked else None,
@@ -135,6 +140,7 @@ def _install_api(
         "permission_profile": {"mode": "standard"},
         "remote_continuation": False,
         "archived": False,
+        "modified_date": "2026-08-27T10:12:34Z",
         "messages": ([
             {"role": "user", "content": "Implement DEV-42", "chat_row_id": 19},
             {
@@ -344,14 +350,30 @@ def _install_api(
                 "project_id": None,
                 "development_board_key": "decisions:70" if board_linked_projectless else None,
                 "development": True,
+                "development_source_type": "prompt",
+                "development_execution": {},
+                "modified_date": "2026-08-27T10:13:34Z",
                 "archived": False,
             }] if unassigned_recent else [])
+            recent_projects = [{
+                "id": 100 + index,
+                "title": f"Recent project thread {index + 1}",
+                "project_id": 7,
+                "development_board_key": "decisions:70",
+                "development": True,
+                "development_source_type": "prompt",
+                "development_execution": {},
+                "modified_date": f"2026-08-27T09:{index:02d}:00Z",
+                "archived": False,
+                "pinned": False,
+            } for index in range(recent_project_count)]
             payload = {
                 "last_chat_id": 1,
                 "chats": [
                     {"id": 1, "title": "Ordinary voice chat", "project_id": 7, "development": False},
                     *([{key: value for key, value in chat.items() if key != "messages"}] if 17 not in deleted_chat_ids else []),
                     *recent,
+                    *recent_projects,
                 ],
             }
         elif path == "/api/tickets/boards/70" and request.method == "PUT":
@@ -418,6 +440,7 @@ def _install_api(
             if request.method == "PATCH":
                 body = json.loads(request.post_data or "{}")
                 thread_time.update({"seconds": body.get("seconds", 0), "accumulated_seconds": body.get("seconds", 0)})
+                chat.update({"development_time_running": thread_time["running"], "development_time_seconds": thread_time["seconds"]})
             payload = thread_time
         elif path == "/api/workflows/studio/tasks/17/execution/changes/undo":
             direct_run["changes"]["undone"] = True
@@ -449,9 +472,11 @@ def _install_api(
             payload = {**direct_run, "stopped": True}
         elif path == "/api/workflows/studio/tasks/17/time/play":
             thread_time.update({"paused": False, "running": True, "started_at": None})
+            chat["development_time_running"] = True
             payload = thread_time
         elif path == "/api/workflows/studio/tasks/17/time/pause":
             thread_time.update({"paused": True, "running": False, "started_at": None})
+            chat["development_time_running"] = False
             payload = thread_time
         elif path == "/api/workflows/studio/tasks/17/clear-context":
             payload = {"chat_id": 17, "cleared": True, "boundary_chat_row_id": 19}
@@ -844,6 +869,16 @@ def _install_api(
             if "backend_id=" in request.url:
                 backend = request.url.split("backend_id=", 1)[1].split("&", 1)[0]
             models_by_backend = {
+                "pi": [
+                    {
+                        "id": "gpt-test",
+                        "name": "GPT Test",
+                        "provider": "openai",
+                        "reasoning_efforts": ["low", "medium", "high"],
+                        "service_tiers": ["standard", "priority"],
+                    },
+                    {"id": "kilo-auto/free", "name": "Kilo Auto Free", "provider": "kilocode"},
+                ],
                 "cursor": [
                     {"id": "auto", "name": "Auto"},
                     {"id": "cursor-grok-4.6-medium", "name": "Cursor Grok 4.6 Medium"},
@@ -898,7 +933,7 @@ def _install_api(
                     "fallback_backend": "pi",
                     "fallback_model": "local-coder:30b",
                 },
-                "execution_mode": "direct",
+                "execution_mode": routing_execution_mode,
                 "reason": "Medium → cursor",
             }
         elif path == "/api/workflows/44/run":
@@ -919,13 +954,14 @@ def _install_api(
     page.route("**/api/**", handler)
 
 
-def test_recents_section_is_hidden_when_no_recent_threads_exist(page: Page):
+def test_recent_section_is_collapsed_by_default_with_project_threads(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, current_board_linked=True)
     page.goto(URL)
 
-    expect(page.locator("#recents-section")).to_be_hidden()
-    expect(page.get_by_text("Recents", exact=True)).to_be_hidden()
+    expect(page.locator("#recents-section")).to_be_visible()
+    expect(page.locator("#recents-toggle")).to_have_attribute("aria-expanded", "false")
+    expect(page.locator("#recents-content")).to_be_hidden()
 
 
 def test_recents_section_appears_when_an_open_ended_thread_exists(page: Page):
@@ -934,18 +970,39 @@ def test_recents_section_appears_when_an_open_ended_thread_exists(page: Page):
     page.goto(URL)
 
     expect(page.locator("#recents-section")).to_be_visible()
-    expect(page.get_by_text("Recents", exact=True)).to_be_visible()
+    page.locator("#recents-toggle").click()
     expect(page.get_by_text("Open-ended development", exact=True)).to_be_visible()
 
 
-def test_board_linked_projectless_thread_is_not_duplicated_in_recents(page: Page):
+def test_board_linked_thread_appears_in_board_and_recent(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, unassigned_recent=True, board_linked_projectless=True)
     page.goto(URL)
 
-    expect(page.locator('[data-chat-id="19"]')).to_have_count(1)
+    page.locator("#recents-toggle").click()
+
+    expect(page.locator('[data-chat-id="19"]')).to_have_count(2)
     expect(page.locator('[data-board-group="decisions:70"] [data-chat-id="19"]')).to_be_visible()
-    expect(page.locator("#recents-section")).to_be_hidden()
+    expect(page.locator('#recent-task-group [data-chat-id="19"]')).to_be_visible()
+
+
+def test_recent_show_more_opens_full_recent_development_view(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, recent_project_count=6)
+    page.goto(URL)
+
+    page.locator("#recents-toggle").click()
+    expect(page.locator("#recent-task-group [data-chat-id]")).to_have_count(5)
+    expect(page.locator("#recents-show-more")).to_be_visible()
+
+    page.locator("#recents-show-more").click()
+    expect(page).to_have_url(re.compile(r"/development/\?recent=1$"))
+    expect(page.locator("#recents-toggle")).to_have_attribute("aria-expanded", "true")
+    expect(page.locator("#recent-task-group [data-chat-id]")).to_have_count(7)
+
+    page.reload()
+    expect(page.locator("#recents-toggle")).to_have_attribute("aria-expanded", "true")
+    expect(page.locator("#recent-task-group [data-chat-id]")).to_have_count(7)
 
 
 def test_new_thread_wins_over_a_stale_thread_load(page: Page):
@@ -1465,6 +1522,63 @@ def test_sidebar_hover_highlights_the_complete_row_without_boxing_the_add_action
     page.screenshot(path="/private/tmp/development-sidebar-full-row-hover.png", full_page=True)
 
 
+def test_project_context_pin_keeps_projects_first_and_collapse_persists(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(URL)
+
+    page.locator('[data-board-select="decisions:70"]').click(button="right")
+    page.get_by_role("menuitem", name="Pin Board", exact=True).click()
+
+    pinned_group = page.locator('#pinned-board-tree [data-board-group="decisions:70"]')
+    expect(page.locator("#pinned-board-section")).to_be_visible()
+    expect(pinned_group).to_be_visible()
+    expect(pinned_group.locator('[data-board-pin="decisions:70"]')).to_have_count(0)
+    pinned_group.locator('[data-board-select="decisions:70"]').click(button="right")
+    expect(page.get_by_role("menuitem", name="Unpin Board", exact=True)).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator("#pinned-board-tree .project-group").first).to_have_attribute(
+        "data-board-group", "decisions:70"
+    )
+    page.screenshot(path="/tmp/development-project-pins.png", full_page=True)
+
+    pinned_group.locator('[data-board-toggle="decisions:70"]').click()
+    expect(pinned_group.locator('[data-chat-id="17"]')).to_be_hidden()
+    page.reload()
+    expect(page.locator('#pinned-board-tree [data-board-group="decisions:70"] [data-chat-id="17"]')).to_be_hidden()
+    page.evaluate("window.localStorage.removeItem('decisions-development-pinned-boards')")
+
+
+def test_boards_section_only_collapses_when_a_board_is_pinned(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    page.goto(URL)
+
+    expect(page.locator("#boards-toggle")).to_be_hidden()
+    expect(page.locator("#boards-label")).to_be_visible()
+    expect(page.locator("#boards-content")).to_be_visible()
+
+    page.locator('[data-board-select="decisions:70"]').click(button="right")
+    page.get_by_role("menuitem", name="Pin Board", exact=True).click()
+    expect(page.locator("#boards-toggle")).to_be_visible()
+    expect(page.locator("#boards-toggle")).to_have_attribute("aria-expanded", "true")
+
+    page.locator("#boards-toggle").click()
+    expect(page.locator("#boards-content")).to_be_hidden()
+    expect(page.locator("#boards-toggle")).to_have_attribute("aria-expanded", "false")
+
+    page.reload()
+    expect(page.locator("#boards-content")).to_be_hidden()
+    expect(page.locator("#boards-toggle")).to_have_attribute("aria-expanded", "false")
+
+    page.evaluate("window.localStorage.removeItem('decisions-development-pinned-boards')")
+    page.reload()
+    expect(page.locator("#boards-toggle")).to_be_hidden()
+    expect(page.locator("#boards-content")).to_be_visible()
+    page.evaluate("window.localStorage.removeItem('decisions-development-collapsed-boards')")
+
+
 def test_desktop_controls_are_real_and_contextual(page: Page):
     requests: list[tuple[str, str]] = []
     submitted_payloads: list[dict] = []
@@ -1608,18 +1722,15 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator("#model-auto-value")).to_be_visible()
     expect(page.locator("#model-harness-value")).to_have_text("Auto")
     page.locator('[data-model-pane="harness"]').click()
-    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(4)
+    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(5)
+    expect(page.locator("#model-submenu-list")).to_contain_text("Kilo")
+    expect(page.locator("#model-submenu-list")).not_to_contain_text("Glimmer")
     expect(page.locator("#model-submenu-list .model-choice").first).to_be_visible()
     submenu_box = page.locator("#model-submenu").bounding_box()
     assert submenu_box and submenu_box["height"] > 80
     page.screenshot(path="/private/tmp/development-harness-models.png", full_page=True)
     page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
-    expect(page.locator("#model-submenu-title")).to_have_text("Provider")
-    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(3)
-    expect(page.locator("#model-submenu-list .model-choice").filter(has_text="Provider ·")).to_have_count(0)
-    page.get_by_role("menuitemradio", name=re.compile(r"^OpenAI\b")).click()
     expect(page.locator("#model-submenu-title")).to_have_text("Model")
-    expect(page.locator("#model-submenu-list .model-choice").filter(has_text="Provider ·")).to_have_count(0)
     expect(page.locator("#model-submenu-search")).to_be_visible()
     page.locator("#model-submenu-search").fill("GPT Test")
     expect(page.locator("#model-submenu-list .model-choice").filter(has_text="GPT Test")).to_have_count(1)
@@ -1643,8 +1754,7 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     page.keyboard.press("Escape")
 
     page.locator("#model-button").click()
-    expect(page.locator("#model-provider-row")).to_be_visible()
-    expect(page.locator("#model-provider-value")).to_have_text("OpenAI")
+    expect(page.locator("#model-provider-row")).to_be_hidden()
     expect(page.locator("#model-catalog-value")).to_have_text("gpt-test")
     page.locator('[data-model-pane="harness"]').click()
     page.get_by_role("menuitemradio", name=re.compile(r"^Cursor\b")).click()
@@ -1656,10 +1766,12 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator("#model-provider-row")).to_be_hidden()
     expect(page.locator("#model-catalog-value")).to_have_text("cursor-grok-4.6-medium")
     page.locator('[data-model-pane="harness"]').click()
-    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
-    page.get_by_role("menuitemradio", name=re.compile(r"^OpenAI\b")).click()
-    page.get_by_role("menuitemradio", name=re.compile("GPT Test")).click()
-    expect(page.locator("#model-label")).to_have_text("Pi · OpenAI · gpt-test · High")
+    page.get_by_role("menuitemradio", name=re.compile(r"^Kilo\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Model")
+    expect(page.locator("#model-submenu-list")).to_contain_text("Kilo Auto Free")
+    expect(page.locator("#model-submenu-list")).not_to_contain_text("GPT Test")
+    page.get_by_role("menuitemradio", name=re.compile("Kilo Auto Free")).click()
+    expect(page.locator("#model-label")).to_have_text("Kilo · kilo-auto/free")
     page.keyboard.press("Escape")
 
     expect(page.locator("#composer-board-picker")).to_be_hidden()
@@ -1770,11 +1882,61 @@ def test_web_and_telegram_share_the_pending_run_control(page: Page):
     page.goto(URL)
 
     _open_details(page)
-    expect(page.get_by_text("Input required in web or Telegram")).to_be_visible()
+    expect(page.get_by_text("Workflow checkpoint available in web or Telegram")).to_be_visible()
     page.get_by_role("button", name="Approve", exact=True).click()
     page.wait_for_timeout(150)
 
     assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
+
+
+def test_pending_checkpoint_requires_explicit_revision_and_blocks_normal_send(page: Page):
+    requests: list[tuple[str, str]] = []
+    submitted_payloads: list[dict] = []
+    _install_api(
+        page,
+        requests,
+        pending_interaction=True,
+        submitted_payloads=submitted_payloads,
+    )
+    page.goto(URL)
+
+    page.locator("#task-prompt").fill("This should stay in the composer")
+    page.locator("#send-button").click()
+    expect(page.locator("#task-inspector")).to_be_visible()
+    expect(page.locator("#studio-toast")).to_contain_text("checkpoint decision")
+    assert submitted_payloads == []
+
+    feedback = page.locator("[data-checkpoint-feedback] textarea")
+    expect(feedback).to_be_visible()
+    feedback.fill("Revise the implementation plan before continuing")
+    page.get_by_role("button", name="Submit revision", exact=True).click()
+    page.wait_for_timeout(100)
+
+    assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
+
+
+def test_workflow_confirmation_can_send_the_same_prompt_directly(page: Page):
+    requests: list[tuple[str, str]] = []
+    submitted_payloads: list[dict] = []
+    _install_api(
+        page,
+        requests,
+        submitted_payloads=submitted_payloads,
+        routing_execution_mode="workflow",
+        direct_execution=True,
+        run_status="completed",
+        terminal_session=False,
+    )
+    page.goto(URL)
+
+    page.locator("#task-prompt").fill("Plan, implement, review, and test the production migration")
+    page.locator("#send-button").click()
+    expect(page.locator("#decisions-confirm-modal")).to_be_visible()
+    page.get_by_role("button", name="Send directly", exact=True).click()
+    page.wait_for_timeout(150)
+
+    assert submitted_payloads[-1]["routing_assessment"]["execution_mode_override"] == "direct"
+    assert ("POST", "/api/workflows/studio/tasks/17/messages") in requests
 
 
 def test_run_mode_and_contextual_automation_are_functional(page: Page):
@@ -3134,6 +3296,28 @@ def test_running_thread_timer_uses_server_snapshot_without_timezone_double_count
     expect(page.locator("#run-elapsed")).not_to_contain_text("02:")
 
 
+def test_sidebar_timer_toggle_and_context_reset_share_thread_time_api(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    page.goto(URL)
+
+    expect(page.locator('[data-thread-time-id="17"]')).to_have_count(0)
+    page.locator('[data-chat-id="17"]').first.click(button="right")
+    page.get_by_role("menuitem", name="Start timer", exact=True).click()
+    page.locator('[data-chat-id="17"]').first.click(button="right")
+    page.get_by_role("menuitem", name="Pause timer", exact=True).click()
+
+    page.locator('[data-chat-id="17"]').first.click(button="right")
+    expect(page.get_by_role("menuitem", name="Reset timer", exact=True)).to_be_visible()
+    page.screenshot(path="/private/tmp/development-sidebar-thread-timer-menu.png", full_page=True)
+    page.get_by_role("menuitem", name="Reset timer", exact=True).click()
+    page.screenshot(path="/private/tmp/development-sidebar-thread-timer.png", full_page=True)
+
+    assert ("POST", "/api/workflows/studio/tasks/17/time/play") in requests
+    assert ("POST", "/api/workflows/studio/tasks/17/time/pause") in requests
+    assert ("PATCH", "/api/workflows/studio/tasks/17/time") in requests
+
+
 def test_playwright_is_a_per_prompt_browser_flag_not_an_injected_skill(page: Page):
     requests: list[tuple[str, str]] = []
     submitted_payloads: list[dict] = []
@@ -3194,6 +3378,32 @@ def test_legacy_generated_skill_instructions_render_as_an_icon(page: Page):
     expect(user_message.locator(".message-skill-icon")).to_have_count(1)
 
 
+def test_model_picker_separates_harnesses_from_models_and_loads_kilo(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    page.goto(URL)
+
+    page.locator("#model-button").click()
+    page.locator('[data-model-pane="harness"]').click()
+    choices = page.locator("#model-submenu-list .model-choice")
+    expect(choices).to_have_count(5)
+    expect(page.locator("#model-submenu-list")).to_contain_text("Pi")
+    expect(page.locator("#model-submenu-list")).to_contain_text("Cursor")
+    expect(page.locator("#model-submenu-list")).to_contain_text("Codex")
+    expect(page.locator("#model-submenu-list")).to_contain_text("Claude Code")
+    expect(page.locator("#model-submenu-list")).to_contain_text("Kilo")
+    expect(page.locator("#model-submenu-list")).not_to_contain_text("Glimmer")
+    expect(page.locator("#model-submenu-list")).not_to_contain_text("codegemma")
+
+    page.get_by_role("menuitemradio", name=re.compile(r"^Kilo\b")).click()
+    expect(page.locator("#model-submenu-title")).to_have_text("Model")
+    expect(page.locator("#model-submenu-list")).to_contain_text("Kilo Auto Free")
+    expect(page.locator("#model-submenu-list")).not_to_contain_text("GPT Test")
+    page.get_by_role("menuitemradio", name=re.compile("Kilo Auto Free")).click()
+    expect(page.locator("#model-label")).to_have_text("Kilo · kilo-auto/free")
+    assert ("PATCH", "/api/workflows/studio/tasks/17/model-route") in requests
+
+
 def test_auto_routing_is_visible_and_manual_image_incompatibility_blocks_send(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
@@ -3209,12 +3419,10 @@ def test_auto_routing_is_visible_and_manual_image_incompatibility_blocks_send(pa
     page.goto(URL)
     page.locator("#model-button").click()
     page.locator('[data-model-pane="harness"]').click()
-    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(4)
-    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
-    expect(page.locator("#model-submenu-title")).to_have_text("Provider")
-    page.get_by_role("menuitemradio", name=re.compile(r"^Anthropic\b")).click()
+    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(5)
+    page.get_by_role("menuitemradio", name=re.compile(r"^Claude Code\b")).click()
     expect(page.locator("#model-submenu-title")).to_have_text("Model")
-    page.get_by_role("menuitemradio", name=re.compile("Claude Test")).click()
+    page.get_by_role("menuitemradio", name=re.compile("Claude Sonnet 4")).click()
     expect(page.locator("#model-effort-row")).to_be_hidden()
     expect(page.locator("#model-speed-row")).to_be_hidden()
     page.locator("#context-file-input").set_input_files({"name": "reference.png", "mimeType": "image/png", "buffer": b"image"})
@@ -3656,12 +3864,10 @@ def test_image_drop_turns_red_for_a_model_without_vision(page: Page):
     page.goto(URL)
     page.locator("#model-button").click()
     page.locator('[data-model-pane="harness"]').click()
-    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(4)
-    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
-    expect(page.locator("#model-submenu-title")).to_have_text("Provider")
-    page.get_by_role("menuitemradio", name=re.compile(r"^Anthropic\b")).click()
+    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(5)
+    page.get_by_role("menuitemradio", name=re.compile(r"^Claude Code\b")).click()
     expect(page.locator("#model-submenu-title")).to_have_text("Model")
-    page.get_by_role("menuitemradio", name=re.compile("Claude Test")).click()
+    page.get_by_role("menuitemradio", name=re.compile("Claude Sonnet 4")).click()
     page.locator("#model-dialog").evaluate("node => node.close()")
     page.wait_for_timeout(100)
 

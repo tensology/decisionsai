@@ -3,6 +3,11 @@ name: decisions-open-design
 description: Use Open Design for agent-native UI prototypes, decks, motion, and hand-drawn diagrams — complementary to Decisions Mermaid viewer for technical charts.
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Decisions + Open Design
 
 **I am using Open Design when the deliverable is a design artifact (screen, deck, motion clip) — not a Mermaid technical chart.**

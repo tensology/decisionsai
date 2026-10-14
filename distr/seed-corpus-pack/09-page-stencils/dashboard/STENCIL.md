@@ -1,18 +1,17 @@
-# Stencil: Dashboard — SYNTHESIZED
+# Stencil: Dashboard - SYNTHESIZED
 
-Refs: open-dashboard chart page + awesome-design enterprise.
+Read the global `ui-ux-principles` skill first. This stencil adds dashboard-specific rules only.
 
-## Layout
-- App shell: sidebar or top nav + content.
-- Top row: 3–4 stat cards (label, value, delta, spark optional).
-- Main: 1–2 charts + optional table below.
-- Filters (date range / channel) URL-synced when possible.
+Compile an approved `ScreenContract` with the `dashboard` executable pack before model-authored changes.
 
-## Components
-- StatCard, Area/Bar/Pie charts, DataTable snippet, empty-state, skeleton loaders.
+## Scope
 
-## Validation / AC
-- [ ] Loading skeletons; empty “no data” state
-- [ ] Numbers formatted; timezone labeled if relevant
-- [ ] Filter changes refetch; no silent stale cache
-- [ ] Premium gate + enterprise/clean aesthetic
+- Define the operational question or decision that each requested measure supports.
+- Show the unit, timeframe, freshness, and comparison basis needed to interpret each measure.
+- Use the visualization type that makes the requested comparison or trend testable.
+
+## Acceptance
+
+- Given a requested measure renders, when a user interprets it, then its unit, timeframe, freshness, and comparison basis are visible.
+- Given a visualization is selected, when it is reviewed against the dashboard's operational question, then it supports the required comparison or trend without obscuring the underlying value.
+- The feature is incomplete until the global Definition of Done - UI and applicable FRAC criteria pass.

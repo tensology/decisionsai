@@ -713,7 +713,65 @@ def build_frac(
     cues: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     primary = _primary_routes(routes, limit=14)
-    lines = ["# Functional requirements and acceptance criteria", ""]
+    lines = [
+        "# Functional requirements and acceptance criteria",
+        "",
+        "Interface source of truth: global `ui-ux-principles` skill > `UX Principles` and `UI Principles`.",
+        "Completion source of truth: global `completion-protocol` skill.",
+        "",
+        "Every user-facing screen must include all applicable Given / When / Then criteria from the canonical FRAC template and pass the global Pre-ship Check. The feature is incomplete until they pass.",
+        "Every affected surface must appear in the completion coverage ledger with fresh evidence or an explicitly approved exclusion. Negative-space checks and complete end-to-end journeys are mandatory before a complete verdict.",
+        "",
+        "## Global UX and UI acceptance gate",
+        "",
+        "- UI-AC-001: Given the feature includes an entity list on desktop, when the list loads, then a table provides search, filters, sorting, pagination, and relevant bulk actions.",
+        "- UI-AC-002: Given the feature includes an entity list on mobile, when the mobile breakpoint is reached, then the table becomes cards without losing actions or state.",
+        "- UI-AC-003: Given the feature includes create and edit, when either action opens, then both use the same form component with record-specific initial values.",
+        "- UI-AC-004: Given a form has five or fewer fields and no nested data, when it opens, then it uses a modal.",
+        "- UI-AC-005: Given a form has more than five fields without complex related data, when it opens, then it uses a page or side drawer, and a chosen drawer becomes a full-screen sheet on mobile.",
+        "- UI-AC-006: Given a record has tabs, nested items, or related lists, when it opens for editing, then it uses a full page.",
+        "- UI-AC-007: Given an entity list is empty, when it loads, then it explains what belongs there and offers the single primary action.",
+        "- UI-AC-008: Given a list or record is loading, when data is pending, then skeletons preserve the page layout.",
+        "- UI-AC-009: Given a list or record fails to load, when the error appears, then it remains visible with a retry action.",
+        "- UI-AC-010: Given filters, sort, page, or the open record changes, when the URL is copied or refreshed, then the same state is restored.",
+        "- UI-AC-011: Given a save succeeds, when the form closes, then the user returns to the originating view with the changed record visible and briefly highlighted.",
+        "- UI-AC-012: Given a reversible single-record delete succeeds, when feedback appears, then the record is soft deleted and an automatically disappearing Undo toast is available.",
+        "- UI-AC-013: Given an irreversible or bulk delete is initiated, when confirmation appears, then it names the consequence and destructive styling is used.",
+        "- UI-AC-014: Given a destructive action is at scale, when the typed record name does not match, then execution remains blocked.",
+        "- UI-AC-015: Given the feature includes a modal, when it opens, then it was user-triggered for a focused short task rather than information that can live on the page, and no second modal can open from it.",
+        "- UI-AC-016: Given the page first loads, when no user action has occurred, then no popup or modal opens.",
+        "- UI-AC-017: Given a modal has no unsaved changes, when Escape is pressed or the user clicks outside, then it closes.",
+        "- UI-AC-018: Given a modal has unsaved changes, when Escape is pressed or the user clicks outside, then a warning appears and the modal remains open.",
+        "- UI-AC-019: Given a modal is open, when the user navigates by keyboard, then focus stays inside it.",
+        "- UI-AC-020: Given a modal closes, when focus is restored, then it returns to the triggering element.",
+        "- UI-AC-021: Given a modal presents actions, when it renders, then Cancel is on the left, a specific primary verb is on the right, and labels such as OK and Yes are absent.",
+        "- UI-AC-022: Given an action succeeds, when feedback appears, then it is an automatically disappearing success toast.",
+        "- UI-AC-023: Given an error occurs, when feedback appears, then it remains visible until dismissed or fixed and browser alert and confirm dialogs are absent.",
+        "- UI-AC-024: Given a page renders, when its header is visible, then it shows the title and at most one primary action in the top right.",
+        "- UI-AC-025: Given a view is styled, when its computed values are inspected, then spacing, color, type, and radius use design tokens.",
+        "- UI-AC-026: Given permissions are evaluated, when the view renders, then unauthorized actions are hidden and temporarily unavailable actions are disabled with an explanatory tooltip.",
+        "- UI-AC-027: Given a table contains numbers, currency, dates, or times, when cells render, then numbers and currency are right-aligned and dates and times use the application format.",
+        "- UI-AC-028: Given a keyboard-only user traverses the view, when controls receive focus, then every labelled control is reachable, focus is visible, and contrast meets WCAG AA.",
+        "- UI-AC-029: Given the same action is repeated from the same state, when it completes, then it produces the same result in the same place without surprise navigation or layout shift.",
+        "- UI-AC-030: Given a screen is defined, when its purpose is reviewed, then it performs one job and does not merge list, create, edit, and detail views.",
+        "- UI-AC-031: Given a CRUD screen is implemented, when its controls are inspected, then forms are not embedded in lists and edit-in-place or expanding-row forms are absent unless explicitly required.",
+        "- UI-AC-032: Given a user completes an action, when the result appears, then location, available actions, and outcome feedback are clear.",
+        "- UI-AC-033: Given a task can be completed safely in fewer steps, when the flow is reviewed, then unnecessary clicks are removed.",
+        "- UI-AC-034: Given a tab, page, or modal title is visible, when its content renders, then the same label is not repeated in headings, breadcrumbs, cards, body copy, or button text.",
+        "- UI-AC-035: Given information and actions render in a view, when the screen is inspected, then counts, summaries, subtitles, and primary actions are not duplicated.",
+        "- UI-AC-036: Given a screen is complete, when every visual element is reviewed, then generic heroes, gratuitous icons, gradient cards, stock illustrations, emoji, and welcome copy are absent unless explicitly required.",
+        "- UI-AC-037: Given content is grouped, when containment is inspected, then it uses one wrapper level unless another is structurally necessary.",
+        "- UI-AC-038: Given labels and supporting text render, when copy is reviewed, then it is short and functional without placeholder marketing or repeated helper text.",
+        "- UI-AC-039: Given the requirements do not request analytics, when the view renders, then unsolicited dashboards, statistics widgets, and charts are absent.",
+        "- UI-AC-040: Given whitespace is visible, when spacing is inspected, then it comes from design tokens rather than accumulated padding.",
+        "- UI-AC-041: Given the screen is ready to ship, when the global Pre-ship Check is run, then every yes answer is fixed before completion.",
+        "- COMPLETE-AC-001: Given the requested outcome spans multiple surfaces, states, data sources, or journeys, when planning finishes, then every reasonably affected item appears in the scope inventory rather than only the examples named in the request.",
+        "- COMPLETE-AC-002: Given implementation is ready for review, when coverage is reconciled, then every inventory item is verified with fresh evidence or explicitly excluded with user approval and a reason.",
+        "- COMPLETE-AC-003: Given review begins, when the negative-space audit runs, then it searches for omitted routes, records, states, content sources, integrations, outputs, and legacy behavior relevant to the requested outcome.",
+        "- COMPLETE-AC-004: Given the feature crosses a user or system boundary, when end-to-end verification runs, then the complete journey passes across every affected boundary rather than only isolated components.",
+        "- COMPLETE-AC-005: Given any inventory item is blocked, unverified, or excluded without approval, when completion is evaluated, then the manifest verdict is incomplete and names the remaining work.",
+        "",
+    ]
     if not primary:
         lines.extend(
             [
@@ -747,6 +805,17 @@ def build_frac(
                 f"- AC-{index:03d}.{ac}: Given the {row['title']} form, when the user provides `{_title(field)}`{detail}, then the value is accepted by the page."
             )
             ac += 1
+        if cue.get("fields"):
+            lines.extend(
+                [
+                    f"- AC-{index:03d}.{ac}: Given the {row['title']} form contains an invalid value, when the field loses focus or the form is submitted, then an inline error appears beside the field and the user's input remains.",
+                    f"- AC-{index:03d}.{ac + 1}: Given the {row['title']} form has unsaved changes, when the user closes it or navigates away, then an unsaved-changes warning appears and the form remains open until the user explicitly saves or discards.",
+                    f"- AC-{index:03d}.{ac + 2}: Given create and edit are available for {row['title']}, when either action opens, then both use the same form component and the container follows the global `ui-ux-principles` skill's Fixed CRUD flow.",
+                    f"- AC-{index:03d}.{ac + 3}: Given the {row['title']} form is presented in a modal, when it opens and closes, then focus is trapped while open and returns to the triggering element on close, with no stacked modal.",
+                    f"- AC-{index:03d}.{ac + 4}: Given a {row['title']} save succeeds, when the form closes, then the user returns to the originating view with the changed record visible and briefly highlighted.",
+                ]
+            )
+            ac += 5
         for button in (cue.get("buttons") or [])[:2]:
             lines.append(
                 f"- AC-{index:03d}.{ac}: Given the {row['title']} page, when the user activates `{button}`, then the expected navigation or submit action runs."

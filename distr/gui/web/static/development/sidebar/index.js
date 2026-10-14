@@ -3,7 +3,10 @@ export function createSidebar({ context, actions, el }) {
     const state = {
         pinnedBoardKeys: [],
         collapsedBoardKeys: new Set(),
+        boardsCollapsed: false,
         boardsExpanded: false,
+        recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
+        showAllRecents: new URLSearchParams(window.location.search).get('recent') === '1',
         contextBoardKey: '',
         contextThreadId: null
     };
@@ -12,8 +15,12 @@ export function createSidebar({ context, actions, el }) {
         const collapsed = JSON.parse(window.localStorage.getItem('decisions-development-collapsed-boards') || '[]');
         state.pinnedBoardKeys = Array.isArray(pinned) ? pinned : [];
         state.collapsedBoardKeys = new Set(Array.isArray(collapsed) ? collapsed : []);
+        state.boardsCollapsed = window.localStorage.getItem('decisions-development-boards-collapsed') === 'true';
     } catch (_) {
         /* Keep default preferences if storage is unavailable. */
+    }
+    function threadRowHtml(chat, active, pinned = false) {
+        return `<div class="task-row-wrap${active ? ' active' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}>${actions.threadRowContentHtml(chat, pinned)}</button></div>`;
     }
     function renderSidebar() {
         const pinnedBoards = context.boards.filter((board) => state.pinnedBoardKeys.includes(board.key));
@@ -23,11 +30,18 @@ export function createSidebar({ context, actions, el }) {
         const pinnedRows = pinnedThreads
             .map((chat) => {
                 const active = context.workspaceMode === 'chat' && Number(context.currentChat?.id) === Number(chat.id);
-                return `<div class="task-row-wrap${active ? ' active' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}>${actions.threadRowContentHtml(chat, true)}</button></div>`;
+                return threadRowHtml(chat, active, true);
             })
             .join('');
         el('pinned-board-tree').innerHTML = pinnedRows + pinnedBoards.map(boardGroupHtml).join('');
         el('pinned-board-section').classList.toggle('hidden', !pinnedThreads.length && !pinnedBoards.length);
+        const boardsCollapsible = pinnedBoards.length > 0;
+        const boardsCollapsed = boardsCollapsible && state.boardsCollapsed;
+        el('boards-toggle').classList.toggle('hidden', !boardsCollapsible);
+        el('boards-label').classList.toggle('hidden', boardsCollapsible);
+        el('boards-toggle').setAttribute('aria-expanded', String(!boardsCollapsed));
+        el('boards-toggle').querySelector('.chevron').textContent = boardsCollapsed ? '▶' : '▼';
+        el('boards-content').classList.toggle('hidden', boardsCollapsed);
         const groupedBoards = ['jira', 'trello', 'decisions']
             .map((provider) => ({
                 provider,
@@ -75,20 +89,28 @@ export function createSidebar({ context, actions, el }) {
             ? `<details class="archived-threads"><summary>Archived <span>${context.archivedChats.length}</span></summary>${context.archivedChats.map((chat) => `<div class="task-row-wrap"><button class="task-row" data-chat-id="${Number(chat.id)}"><span class="task-title">${actions.escapeHtml(chat.title || 'Archived thread')}</span></button></div>`).join('')}</details>`
             : '';
 
-        const unassigned = context.chats.filter(
-            (chat) => !chat.project_id && !chat.development_board_key && !chat.pinned && chat.development_source_type !== 'automation'
-        );
-        el('recents-section').classList.toggle('hidden', !unassigned.length && !context.archivedChats.length);
-        el('recents-label').classList.toggle('hidden', !unassigned.length);
-        el('unassigned-task-group').innerHTML = unassigned.length
-            ? unassigned
-                  .slice(0, 8)
-                  .map((chat) => {
-                      const active = context.workspaceMode === 'chat' && Number(context.currentChat?.id) === Number(chat.id);
-                      return `<div class="task-row-wrap${active ? ' active' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}>${actions.threadRowContentHtml(chat)}</button></div>`;
-                  })
-                  .join('') + archived
-            : archived;
+        const activeStatuses = new Set(['initializing', 'queued', 'running', 'waiting']);
+        const recentThreads = context.chats
+            .filter((chat) => chat.development_source_type !== 'automation')
+            .slice()
+            .sort((a, b) => {
+                const activeA = Number(activeStatuses.has(String(a.development_execution?.status || '').toLowerCase()));
+                const activeB = Number(activeStatuses.has(String(b.development_execution?.status || '').toLowerCase()));
+                return activeB - activeA || String(b.modified_date || '').localeCompare(String(a.modified_date || '')) || Number(b.id) - Number(a.id);
+            });
+        const visibleRecent = state.showAllRecents ? recentThreads : recentThreads.slice(0, 5);
+        el('recents-section').classList.toggle('hidden', !recentThreads.length);
+        el('recents-content').classList.toggle('hidden', !state.recentsExpanded);
+        el('recents-toggle').setAttribute('aria-expanded', String(state.recentsExpanded));
+        el('recents-toggle').querySelector('.chevron').textContent = state.recentsExpanded ? '▼' : '▶';
+        el('recent-task-group').innerHTML = visibleRecent
+            .map((chat) => {
+                const active = context.workspaceMode === 'chat' && Number(context.currentChat?.id) === Number(chat.id);
+                return threadRowHtml(chat, active);
+            })
+            .join('');
+        el('archived-task-group').innerHTML = archived;
+        el('recents-show-more').classList.toggle('hidden', state.showAllRecents || recentThreads.length <= 5);
 
         document.querySelectorAll('[data-board-toggle]').forEach(bindProjectToggle);
         document.querySelectorAll('[data-board-select]').forEach((button) => {
@@ -96,12 +118,6 @@ export function createSidebar({ context, actions, el }) {
             button.addEventListener('contextmenu', (event) => {
                 event.preventDefault();
                 openBoardContextMenu(event, button.dataset.boardSelect);
-            });
-        });
-        document.querySelectorAll('[data-board-pin]').forEach((button) => {
-            button.addEventListener('click', (event) => {
-                event.stopPropagation();
-                toggleBoardPin(button.dataset.boardPin);
             });
         });
         document.querySelectorAll('[data-board-new-chat]').forEach((button) => {
@@ -208,6 +224,7 @@ export function createSidebar({ context, actions, el }) {
         state.contextThreadId = Number(chatId);
         const menu = el('thread-context-menu');
         el('thread-context-pin').querySelector('.context-menu-label').textContent = chat.pinned ? 'Unpin thread' : 'Pin thread';
+        el('thread-context-toggle-time').querySelector('.context-menu-label').textContent = chat.development_time_running ? 'Pause timer' : 'Start timer';
         el('thread-context-archive').querySelector('.context-menu-label').textContent = chat.archived ? 'Restore thread' : 'Archive thread';
         menu.classList.remove('hidden');
         menu.style.left = `${Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8)}px`;
@@ -407,11 +424,7 @@ export function createSidebar({ context, actions, el }) {
         const rows = orderedChats
             .map((chat) => {
                 const active = context.workspaceMode === 'chat' && Number(context.currentChat?.id) === Number(chat.id);
-                return `<div class="task-row-wrap${active ? ' active' : ''}">
-                <button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}>
-                    ${actions.threadRowContentHtml(chat, Boolean(chat.pinned))}
-                </button>
-            </div>`;
+                return threadRowHtml(chat, active, Boolean(chat.pinned));
             })
             .join('');
         const selected = !['terminals', 'terminals_home'].includes(context.workspaceMode) && context.selectedBoardKey === board.key;
@@ -594,6 +607,16 @@ export function createSidebar({ context, actions, el }) {
             closeThreadContextMenu();
             if (chatId) actions.openThreadDialog(chatId);
         });
+        el('thread-context-toggle-time').addEventListener('click', () => {
+            const chatId = state.contextThreadId;
+            closeThreadContextMenu();
+            if (chatId) actions.toggleThreadTimer(chatId);
+        });
+        el('thread-context-reset-time').addEventListener('click', () => {
+            const chatId = state.contextThreadId;
+            closeThreadContextMenu();
+            if (chatId) actions.resetThreadTimer(chatId);
+        });
         el('thread-context-terminal-toggle').addEventListener('click', toggleThreadContextTerminals);
         el('thread-context-archive').addEventListener('click', contextArchiveThread);
         el('thread-context-delete').addEventListener('click', () => {
@@ -612,6 +635,16 @@ export function createSidebar({ context, actions, el }) {
             state.boardsExpanded = !state.boardsExpanded;
             renderSidebar();
         });
+        el('boards-toggle').addEventListener('click', () => {
+            state.boardsCollapsed = !state.boardsCollapsed;
+            window.localStorage.setItem('decisions-development-boards-collapsed', String(state.boardsCollapsed));
+            renderSidebar();
+        });
+        el('recents-toggle').addEventListener('click', () => {
+            state.recentsExpanded = !state.recentsExpanded;
+            renderSidebar();
+        });
+        el('recents-show-more').addEventListener('click', actions.openRecentThreads);
         el('sidebar-open').addEventListener('click', actions.openSidebar);
         el('sidebar-close').addEventListener('click', actions.closeDrawers);
     }
@@ -621,6 +654,11 @@ export function createSidebar({ context, actions, el }) {
         closeThreadContextMenu,
         openBoardContextMenu,
         openBoardLinkDialog,
+        openRecents() {
+            state.recentsExpanded = true;
+            state.showAllRecents = true;
+            renderSidebar();
+        },
         renderSidebar,
         threadBoard
     };

@@ -235,6 +235,7 @@ def test_reports_http_route_reads_scoped_records_and_enforces_limit(automation_d
         chat = Chat(title="Timed thread", params="{}")
         db.add(chat)
         db.flush()
+        timed_chat_id = int(chat.id)
         item = DevelopmentWorkItem(chat_id=chat.id, identity_key=f"thread:{chat.id}")
         db.add(item)
         db.flush()
@@ -245,6 +246,27 @@ def test_reports_http_route_reads_scoped_records_and_enforces_limit(automation_d
                 started_at=utc_now() - timedelta(minutes=5),
                 ended_at=utc_now(),
                 seconds=300,
+                source="play",
+            )
+        )
+        db.flush()
+        db.add(
+            DevelopmentTimeEntry(
+                work_item_id=item.id,
+                chat_id=chat.id,
+                started_at=utc_now() - timedelta(minutes=2),
+                ended_at=utc_now() - timedelta(minutes=2),
+                seconds=0,
+                source="reset",
+            )
+        )
+        db.add(
+            DevelopmentTimeEntry(
+                work_item_id=item.id,
+                chat_id=chat.id,
+                started_at=utc_now() - timedelta(minutes=1),
+                ended_at=utc_now(),
+                seconds=45,
                 source="play",
             )
         )
@@ -259,7 +281,8 @@ def test_reports_http_route_reads_scoped_records_and_enforces_limit(automation_d
         db.commit()
     time_response = client.get("/api/workflows/studio/reports/time?limit=10")
     assert time_response.status_code == 200
-    assert any(row["seconds"] == 300 for row in time_response.json()["items"])
+    thread_rows = [row for row in time_response.json()["items"] if row["chat_id"] == timed_chat_id]
+    assert [row["seconds"] for row in thread_rows] == [45]
     runaway = client.get("/api/workflows/studio/reports?limit=50")
     cancelled = [row for row in runaway.json()["items"] if row["status"] == "cancelled"]
     assert cancelled

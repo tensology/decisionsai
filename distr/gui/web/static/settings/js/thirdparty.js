@@ -121,14 +121,14 @@ const PROVIDERS = [
     },
     {
         id: 'kilocode',
-        name: 'KiloCode',
+        name: 'Kilo',
         keyField: 'key',
         settingsKey: 'kilo',
         blurb: 'Kilo cloud access for coding and model-powered workflows.',
         docsLabel: 'Kilo.ai',
         docsUrl: 'https://kilo.ai/',
-        helper: 'Add your KiloCode key here if this workspace should use Kilo-backed services.',
-        infoHtml: 'Get your KiloCode API key from <a href="https://kilo.ai/" target="_blank">Kilo.ai</a> → Dashboard → API Keys',
+        helper: 'Add your Kilo API key here if this workspace should use Kilo-backed services.',
+        infoHtml: 'Get your Kilo API key from <a href="https://kilo.ai/" target="_blank">Kilo.ai</a> → Dashboard → API Keys',
         color: 'from-amber-400/25 to-orange-500/10',
         iconPath: '/assets/img/providers/kilocode.png'
     },
@@ -1920,7 +1920,7 @@ function initThirdPartySettingsUi() {
     }
     loadThirdPartySettings();
     applyThirdPartyConnectDeepLink();
-    loadThirdPartyConnectStatus(false);
+    loadThirdPartyConnectStatus(true);
     loadThirdPartyConnectorDraft(false);
 }
 

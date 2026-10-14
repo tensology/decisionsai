@@ -27,7 +27,7 @@ def test_cli_backends_endpoint_filters_out_ide_backends(monkeypatch):
 
     assert response.status_code == 200
     rows = response.json()["backends"]
-    assert len(rows) == 1
+    assert [row["id"] for row in rows] == ["codex", "kilocode"]
     assert rows[0]["kind"] == "cli"
     assert rows[0]["supports_model_picker"] is True
 
@@ -236,26 +236,18 @@ def test_terminal_buffer_endpoint_reports_live_one_shot_cli_state(monkeypatch):
     assert "Working on it" in payload["buffer"]
 
 
-def test_cli_models_endpoint_returns_verified_kiro_models(monkeypatch):
+def test_cli_models_endpoint_returns_kilo_api_models(monkeypatch):
     from distr.gui.web.routes.settings import create_routes
 
     monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
 
-    class _FakeBackend:
-        def setup_status(self):
-            return types.SimpleNamespace(path="/usr/local/bin/kiro-cli")
-
-    class _FakeCompleted:
-        returncode = 0
-        stdout = '{"models":[{"model_id":"auto","model_name":"Auto"},{"model_id":"claude-sonnet-4-5","model_name":"Claude Sonnet 4.5"}]}'
-
     monkeypatch.setattr(
-        "distr.core.project_cli_backends.catalog_probe.get_backend",
-        lambda backend_id: _FakeBackend(),
-    )
-    monkeypatch.setattr(
-        "distr.core.project_cli_backends.catalog_probe.subprocess.run",
-        lambda *args, **kwargs: _FakeCompleted(),
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings=None: [
+            {"id": "kilo-auto/free", "name": "Kilo Auto Free", "provider": "kilocode"},
+            {"id": "openai/gpt-5", "name": "GPT 5", "provider": "kilocode"},
+            {"id": "llama3.2", "name": "Llama", "provider": "ollama"},
+        ],
     )
 
     app = FastAPI()
@@ -263,18 +255,30 @@ def test_cli_models_endpoint_returns_verified_kiro_models(monkeypatch):
     app.include_router(create_routes(templates_dir), prefix="/api")
     client = TestClient(app)
 
-    response = client.get("/api/projects/cli-models", params={"backend_id": "kiro"})
+    response = client.get("/api/projects/cli-models", params={"backend_id": "kilocode"})
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["source"] == "kiro-cli"
-    assert [row["id"] for row in payload["models"]] == ["auto", "claude-sonnet-4-5"]
+    assert payload["backend_id"] == "kilocode"
+    assert payload["current_provider"] == "kilocode"
+    assert payload["source"] == "kilo-api"
+    assert [row["id"] for row in payload["models"]] == ["kilo-auto/free", "openai/gpt-5"]
 
 
 def test_cli_models_endpoint_returns_auto_only_when_codex_catalog_is_unverified(monkeypatch):
     from distr.gui.web.routes.settings import create_routes
 
     monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.catalog_probe.models_for_cli_backend",
+        lambda backend_id, settings=None: {
+            "models": [{"id": "auto", "name": "Auto", "provider": "codex"}],
+            "source": "codex-unverified",
+            "message": "Could not load the Codex session model catalog: unavailable",
+            "kind": "cli",
+            "supports_model_picker": True,
+        },
+    )
 
     app = FastAPI()
     templates_dir = Path(__file__).resolve().parents[2] / "distr/gui/web/templates"
@@ -287,7 +291,7 @@ def test_cli_models_endpoint_returns_auto_only_when_codex_catalog_is_unverified(
     payload = response.json()
     assert payload["source"] == "codex-unverified"
     assert [row["id"] for row in payload["models"]] == ["auto"]
-    assert "Use Auto for Codex-managed model selection" in payload["message"]
+    assert "Could not load the Codex session model catalog" in payload["message"]
 
 
 def test_cli_setup_marks_local_cli_keys_as_optional(monkeypatch):

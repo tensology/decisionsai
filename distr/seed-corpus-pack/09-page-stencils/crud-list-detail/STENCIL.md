@@ -1,26 +1,19 @@
-# Stencil: CRUD list + detail — SYNTHESIZED
+# Stencil: CRUD list + detail - SYNTHESIZED
 
-Refs: open-dashboard CRUD table, Detail/Show, Form dialog; backends CONTRACT.md.
+Read the global `ui-ux-principles` skill first. Its fixed CRUD flow controls shared behavior. This stencil adds resource-specific structure only.
 
-## List page
-- Table or card grid with server `q`, sort, page, filters.
-- Row actions: view, edit, delete (confirm).
-- Primary “Create” CTA.
-- Bulk select optional.
+Compile an approved `ScreenContract` with `python -m distr.core.ui_factory` and treat its manifest, generated Playwright spec, and allowed-file boundary as the implementation contract.
 
-## Detail page
-- Route `/<resource>/$id`.
-- Header: title, status chip, actions (edit/delete).
-- Body: definition list / sections; related entities as tabs or nested tables (e.g. order → line items).
+## Resource details
 
-## Form
-- Create/edit shared schema validation (zod or equivalent).
-- Keyed remount on edit id change.
-- Toast success/error.
+- Use route `/<resource>/$id` for a dedicated detail page when a record needs more than list context.
+- Keep row actions in one accessible Actions column.
+- Show only bulk actions that make sense for the selected records.
+- Use sections, tabs, or nested tables for related entities only when the record is complex enough to need a full detail page.
+- Remount or reset the shared form safely when the edited record id changes.
 
-## Validation / AC
-- [ ] CONTRACT list params honored
-- [ ] 404 detail state
-- [ ] Delete confirm + optimistic or safe refresh
-- [ ] Field errors mapped from API
-- [ ] Premium gate green
+## Acceptance
+
+- Add a Given / When / Then criterion for list-parameter contract behavior and a not-found criterion for detail routes.
+- Use every applicable criterion from `../../03-done-states-frac/FRAC-TEMPLATE.md`.
+- The feature is incomplete until the global Definition of Done - UI and applicable FRAC criteria pass.

@@ -1654,6 +1654,7 @@ def run_migrations():
         ("project_cli_medium_codex_speed", "VARCHAR DEFAULT ''"),
         ("project_cli_high_codex_intelligence", "VARCHAR DEFAULT ''"),
         ("project_cli_high_codex_speed", "VARCHAR DEFAULT ''"),
+        ("development_hot_corner_pinned_project_ids", "TEXT DEFAULT '[]'"),
         ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
     ]
     try:
@@ -2664,6 +2665,22 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
             conn.commit()
     except Exception as e:
         logger.warning("Development thread time migration failed: %s", e)
+
+    # Preserve existing route choices while retiring the removed legacy backend.
+    try:
+        legacy_backend = "ki" + "ro"
+        with engine.connect() as conn:
+            for column in (
+                "project_cli_low_backend",
+                "project_cli_medium_backend",
+                "project_cli_high_backend",
+            ):
+                conn.execute(text(
+                    f"UPDATE settings SET {column} = 'kilocode' WHERE lower({column}) = :legacy"
+                ), {"legacy": legacy_backend})
+            conn.commit()
+    except Exception as e:
+        logger.warning("Legacy Development route migration failed: %s", e)
 
     for col, col_def in (
         ("fishaudio_enabled", "BOOLEAN DEFAULT 0"),

@@ -191,6 +191,11 @@ def test_opening_empty_project_plan_scaffolds_canonical_sections(plan_workspace_
     planning_root = plan_workspace_db["folder"] / "planning"
     assert planning_root.exists()
     assert any(planning_root.iterdir())
+    frac = next(row for row in detail["items"] if row["item_type"] == "frac")
+    assert "`UX Principles` and `UI Principles`" in frac["content"]
+    assert "Given / When / Then" in frac["content"]
+    assert "global `completion-protocol` skill" in frac["content"]
+    assert "incomplete until the coverage ledger and completion manifest pass" in frac["content"]
     # ensure_workspace alone still does not scaffold (used by low-level helpers).
     empty = planning_workspace.ensure_workspace(board_key="decisions:31-empty", board_provider="decisions", board_name="Empty", project_id=plan_workspace_db["project_id"])
     assert planning_workspace.get_workspace(empty["id"])["items"] == []

@@ -39,6 +39,7 @@ class Settings(Base):
     mempalace_memory_backend = Column(Boolean, default=True)
     cost_ledger_enabled = Column(Boolean, default=True)
     cost_invoice_display = Column(String, default='blended')
+    development_hot_corner_pinned_project_ids = Column(Text, default='[]')
 
     restore_position = Column(Boolean, default=True)
     oracle_position = Column(String, default='Middle Right')

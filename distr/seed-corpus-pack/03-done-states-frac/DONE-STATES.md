@@ -9,9 +9,9 @@
 | Fulfill / ship | Fulfillment lines; tracking; on_hand decremented once; emails |
 | Cancel | Compensating transition; inventory released; void/refund path |
 | Return/refund | RMA; restock decision; refund partial/full; AC checklist green |
-| Admin CRUD | open-dashboard invariants; CONTRACT tests pass |
+| Admin CRUD | Global `Design Principles`, `UX Principles`, `UI Principles`, and Definition of Done - UI applied; all applicable Given / When / Then criteria and CONTRACT tests pass |
 | FE scaffold | Vite build green; routes stubbed; theme tokens applied |
 | BE scaffold | API contract for resource; migrations; healthcheck |
 | Trading strategy change | UI_STANDARDS respected; evals/tests green; **no prod execution change unless explicit** |
 
-Iron law: no completion claims without fresh verification evidence.
+Iron law: no completion claims without the global `completion-protocol` inventory, full coverage ledger, negative-space audit, verified end-to-end journeys, independent audit, and fresh evidence in a valid `completion_manifest`.

@@ -1968,7 +1968,7 @@
         { id: "codex", label: "Codex CLI" },
         { id: "claude_code", label: "Claude Code" },
         { id: "opencode", label: "OpenCode" },
-        { id: "kiro", label: "Kiro CLI" },
+        { id: "kilocode", label: "Kilo" },
         { id: "cursor", label: "Cursor CLI" },
         { id: "cline", label: "Cline" },
         { id: "hermes_agent", label: "External agent (optional)" },
@@ -1979,7 +1979,7 @@
         codex: 0,
         claude_code: 1,
         opencode: 2,
-        kiro: 3,
+        kilocode: 3,
         pi: 99
     };
 

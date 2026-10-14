@@ -36,7 +36,7 @@ from distr.core.kanban.ticket_policy import (
     normalize_ticket_complexity,
     resolve_ticket_complexity,
 )
-from distr.core.kanban.lifecycle import ensure_delivery_lanes
+from distr.core.kanban.lifecycle import ensure_delivery_lanes, ensure_project_boards
 from distr.core.db import get_session
 from distr.core.db.orm_compat import orm_get_by_id
 from distr.core.db import WhatsAppMessage
@@ -3222,6 +3222,7 @@ def create_routes():
     @router.get("/tickets/boards")
     async def list_boards(include_archived: bool = False):
         with get_session() as s:
+            ensure_project_boards(s)
             query = s.query(KanbanBoard)
             if not include_archived:
                 query = query.filter((KanbanBoard.archived == False) | (KanbanBoard.archived == None))

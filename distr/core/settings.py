@@ -40,6 +40,7 @@ DEFAULT_SETTINGS = {
     # Invoice display: blended (one figure) | explicit (tokens + provider + resource).
     # Env: DECISIONS_COST_INVOICE_DISPLAY. UI query param display= overrides for view only.
     "cost_invoice_display": "blended",
+    "development_hot_corner_pinned_project_ids": [],
 
     'load_splash_sound': True,
     'show_about': False,

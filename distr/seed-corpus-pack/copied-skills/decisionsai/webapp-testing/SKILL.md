@@ -4,6 +4,9 @@ description: Toolkit for interacting with and testing local web applications usi
 license: Complete terms in LICENSE.txt
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+Before testing any interface, read the current global `ui-ux-principles` skill. Verify its applicable `Design Principles`, `UX Principles`, `UI Principles`, FRAC criteria, and exact `Definition of Done - UI`; a feature is incomplete while any applicable criterion fails.
+
 # Web Application Testing
 
 To test local web applications, write native Python Playwright scripts.

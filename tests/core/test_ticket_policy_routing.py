@@ -74,6 +74,29 @@ def test_complexity_route_maps_legacy_default_to_policy_backend(monkeypatch):
     assert resolve_ticket_cli_route(project, "medium")["backend"] == "codex"
 
 
+def test_complexity_route_executes_kilo_through_pi_with_provider_metadata(monkeypatch):
+    class Backend:
+        def setup_status(self):
+            return type("Status", (), {"ready": True})()
+
+    monkeypatch.setattr("distr.core.project_cli_backends.get_backend", lambda backend_id: Backend())
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {
+            "project_cli_medium_backend": "kilocode",
+            "project_cli_medium_model": "kilo-auto/free",
+        },
+    )
+    project = type("Project", (), {"coding_backend": "pi", "coding_backend_model": ""})()
+
+    assert resolve_ticket_cli_route(project, "medium") == {
+        "complexity": "medium",
+        "backend": "pi",
+        "model": "kilo-auto/free",
+        "model_provider": "kilocode",
+    }
+
+
 def test_complexity_route_uses_configured_ide_fallback(monkeypatch):
     class Backend:
         def __init__(self, backend_id):

@@ -1980,6 +1980,7 @@ class StepExecutorMixin:
                                     "disable_tools": bool(config.get("disable_tools")),
                                     "step_role": requested_step_role,
                                     "expected_outputs": list(config.get("expected_outputs") or []),
+                                    "output_token_budget": config.get("output_token_budget"),
                                     "inspection_budget": resolve_inspection_budget(
                                         config.get("inspection_budget"),
                                         complexity=str(route.get("complexity") or "medium"),

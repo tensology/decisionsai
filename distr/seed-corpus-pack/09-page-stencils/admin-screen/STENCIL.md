@@ -1,21 +1,18 @@
-# Stencil: Admin screen — SYNTHESIZED
+# Stencil: Admin screen - SYNTHESIZED
 
-Refs: open-dashboard app shell + Merrypak Django Unfold habits translated to React admin.
+Read the global `ui-ux-principles` skill first. This stencil adds admin-specific structure only.
 
-## Layout
-- Persistent shell (nav grouped by domain: Catalog, Orders, Customers, Settings).
-- Breadcrumbs on nested pages.
-- Dense but readable (enterprise aesthetic); data > decoration.
+Compile an approved `ScreenContract` with the `admin-screen` executable pack before model-authored changes.
 
-## Screen types to pick
-- CRUD list/detail (compose `crud-list-detail`)
-- Master-detail (orders)
-- Settings forms
-- Ops tools (reindex, sync) with danger confirm
+## Admin structure
 
-## Validation / AC
-- [ ] Auth-gated; role-aware nav if roles exist
-- [ ] Destructive actions confirmed
-- [ ] Audit-friendly toasts (what changed)
-- [ ] Matches open-dashboard invariants
-- [ ] Premium gate with **enterprise/clean/shadcn** family (not playful marketing)
+- Group persistent navigation by product domain.
+- Use breadcrumbs on nested pages only when they aid orientation, and omit the final item when it repeats the visible page title.
+- Use the CRUD stencil for entity management and preserve selection in the URL for master-detail workflows.
+- For operations tools, make scope, permission, consequence, and audit evidence explicit.
+
+## Acceptance
+
+- Given an authenticated user opens an admin screen, when permissions are evaluated, then authorized navigation and actions are visible while unauthorized actions are absent.
+- Given an administrative change succeeds, when feedback appears, then it names what changed without exposing internal identifiers or secrets.
+- The feature is incomplete until the global Definition of Done - UI and applicable FRAC criteria pass.

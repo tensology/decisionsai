@@ -1,5 +1,17 @@
 [
   {
+    "id": "completion-protocol",
+    "name": "completion-protocol",
+    "description": "Prove completeness for non-trivial work with a full affected-surface inventory, coverage ledger, negative-space audit, end-to-end evidence, and machine-checkable verdict.",
+    "path": "completion-protocol",
+    "source": "local",
+    "tags": [
+      "completion",
+      "verification",
+      "quality"
+    ]
+  },
+  {
     "id": "decisions-computer-use",
     "name": "decisions-computer-use",
     "description": "Use native computer-use safely in Decisions workflows when the active harness exposes a CUA or computer-use runtime.",

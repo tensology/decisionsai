@@ -117,6 +117,56 @@ def test_board_crud_owns_the_project_folder_and_terminal_commands(board_api):
         assert db.get(Project, project_id) is None
 
 
+def test_board_catalog_repairs_missing_project_boards_without_duplicates(board_api):
+    client, get_session, _tmp_path = board_api
+    with get_session() as db:
+        missing = Project(name="Missing delivery", position=1)
+        archived_project = Project(name="Archived delivery", position=2)
+        linked = Project(name="Linked externally", position=3)
+        db.add_all([missing, archived_project, linked])
+        db.flush()
+        external = KanbanBoard(
+            name="Linked externally",
+            source="jira",
+            external_board_id="DEV",
+            default_project_id=linked.id,
+        )
+        archived = KanbanBoard(
+            name="Archived primary",
+            source="database",
+            default_project_id=archived_project.id,
+            archived=True,
+        )
+        db.add_all([external, archived])
+        db.flush()
+        archived_project.kanban_board_id = archived.id
+        linked.kanban_board_id = external.id
+        missing_id = missing.id
+        archived_project_id = archived_project.id
+        linked_id = linked.id
+        external_id = external.id
+
+    first = client.get("/api/tickets/boards")
+    second = client.get("/api/tickets/boards")
+
+    assert first.status_code == second.status_code == 200
+    first_rows = first.json()
+    assert len(first_rows) == len(second.json()) == 3
+    repaired = next(row for row in first_rows if row["default_project_id"] == missing_id)
+    restored = next(row for row in first_rows if row["default_project_id"] == archived_project_id)
+    preserved = next(row for row in first_rows if row["default_project_id"] == linked_id)
+    assert repaired["name"] == "Missing delivery"
+    assert restored["name"] == "Archived primary"
+    assert restored["archived"] is False
+    assert preserved["id"] == external_id
+    assert preserved["source"] == "jira"
+    with get_session() as db:
+        project = db.get(Project, missing_id)
+        board = db.get(KanbanBoard, project.kanban_board_id)
+        assert board.default_project_id == missing_id
+        assert [lane.name for lane in board.lanes] == ["Backlog", "In Progress", "QA", "Complete"]
+
+
 def test_board_delete_can_optionally_remove_only_the_exact_repository(board_api):
     client, _get_session, tmp_path = board_api
     repository = tmp_path / "managed" / "topic-repo"

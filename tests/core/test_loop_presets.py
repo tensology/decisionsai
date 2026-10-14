@@ -221,6 +221,7 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
     assert steps[1]["config"]["disable_tools"] is True
     assert steps[1]["config"]["required_context"] == [
         "context_packet",
+        "scope_inventory",
         "unknowns",
         "route_recommendation",
         "ui_design_read_if_applicable",
@@ -228,6 +229,11 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
     assert steps[0]["max_retries"] == 1
     assert steps[1]["max_retries"] == 1
     assert "ui_design_read_if_applicable" in steps[0]["config"]["expected_outputs"]
+    assert "scope_inventory" in steps[0]["config"]["expected_outputs"]
+    assert "coverage_ledger" in steps[1]["config"]["expected_outputs"]
+    assert "negative_space_audit" in steps[3]["config"]["expected_outputs"]
+    assert "end_to_end_evidence" in steps[3]["config"]["expected_outputs"]
+    assert "completion_manifest" in steps[5]["config"]["expected_outputs"]
     assert "observable visual claims" in steps[1]["instruction"]
     assert "desktop and mobile viewports" in steps[3]["instruction"]
     assert "visual_claim_verdicts" in steps[3]["config"]["expected_outputs"]
@@ -238,6 +244,9 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
     assert steps[3]["config"]["read_only"] is True
     assert steps[2]["config"]["required_context"] == [
         "execution_contract",
+        "coverage_ledger",
+        "negative_space_plan",
+        "end_to_end_journeys",
         "dependency_status",
         "reusable_artifacts",
         "copy_manifest_if_applicable",
@@ -335,7 +344,9 @@ def test_consolidation_leaves_one_development_workflow_and_preserves_history(
         settings = json.loads(canonical.run_settings or "{}")
         assert settings["memory_enabled"] is True
         assert settings["capture_failures_and_lessons"] is True
-        assert settings["canonical_workflow_version"] == 13
+        assert settings["canonical_workflow_version"] == 15
+        assert settings["ui_local_first"] is True
+        assert settings["hosted_ui_escalation_after_failures"] == 2
         history = db.query(AutoWorkflow).filter(
             AutoWorkflow.id == result["historical_workflow_id"]
         ).one()
@@ -387,7 +398,9 @@ def test_canonical_resolution_upgrades_only_development_and_preserves_history(db
     with db_factory() as db:
         current = db.get(AutoWorkflow, development_id)
         assert len(current.steps) == 7
-        assert json.loads(current.run_settings)["canonical_workflow_version"] == 13
+        settings = json.loads(current.run_settings)
+        assert settings["canonical_workflow_version"] == 15
+        assert settings["ui_local_first"] is True
         assert db.get(AutoWorkflow, unrelated_id).status == "active"
         history = db.query(AutoWorkflow).filter(
             AutoWorkflow.workflow_type == "audit",

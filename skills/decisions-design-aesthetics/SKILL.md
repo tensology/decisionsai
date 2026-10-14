@@ -3,6 +3,11 @@ name: decisions-design-aesthetics
 description: Pick a design aesthetic from awesome-design-skills — bundled minimal/professional/enterprise/shadcn/bento; full catalog in reference for on-demand load.
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Design Aesthetics (awesome-design-skills)
 
 ## Bundled in harness (tokens + SKILL.md)

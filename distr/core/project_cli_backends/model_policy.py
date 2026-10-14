@@ -321,6 +321,14 @@ def apply_auto_step_role_policy(
     selected: dict[str, Any]
     rationale: str
 
+    ui_local_first = bool(policy.get("ui_local_first") or cfg.get("ui_local_first"))
+    quality_failures = int(
+        cfg.get("quality_gate_failures")
+        or task_profile.get("quality_gate_failures")
+        or 0
+    )
+    hosted_threshold = max(1, int(policy.get("hosted_ui_escalation_after_failures") or 2))
+
     if role == "final_polish" and bool(task_profile.get("read_only")):
         selected = _free_eligible_model(
             settings,
@@ -332,9 +340,23 @@ def apply_auto_step_role_policy(
             "This is a read-only evidence pass, so Auto kept final verification on a "
             "healthy free route instead of paying Codex to make no implementation change."
         )
+    elif role == "final_polish" and ui_local_first and quality_failures < hosted_threshold:
+        selected = _free_eligible_model(
+            settings,
+            complexity=complexity,
+            prefer_local=True,
+            avoid_proven_limited=True,
+        )
+        rationale = (
+            "The UI production pass stays on a healthy local model until executable "
+            f"quality gates fail {hosted_threshold} times."
+        )
     elif role == "final_polish":
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
-        rationale = "The final production polish uses Codex after cheaper implementation and independent review complete."
+        rationale = (
+            "Hosted final polish was unlocked by repeated local quality-gate failures "
+            "or by a workflow that does not opt into local-first UI execution."
+        )
     elif role == "planning" and complexity in {"medium", "high"} and not prefer_free_local:
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
         rationale = (

@@ -334,6 +334,7 @@ kbd {
 
 .board-kanban { font-size: 13px; }
 
+
 .task-list { position: relative; margin-left: 0; padding-left: 0; }
 
 .task-list::before { display: none; }
@@ -594,6 +595,10 @@ kbd {
 .waiting-actions { display: flex; gap: 6px; }
 
 .waiting-actions button { flex: 1; min-height: 28px; border: 1px solid #56472d; border-radius: 6px; background: transparent; font-size: 8px; }
+.checkpoint-feedback { display: grid; gap: 6px; margin-top: 9px; }
+.checkpoint-feedback label { display: grid; gap: 4px; color: var(--muted); font-size: 8px; }
+.checkpoint-feedback textarea { min-height: 64px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-deep); color: var(--text); padding: 7px; font: inherit; }
+.checkpoint-feedback button { min-height: 30px; border: 1px solid #56472d; border-radius: 6px; background: transparent; font-size: 8px; }
 
 .pin-mark { margin-right: 5px; color: var(--studio-accent); font-size: 6px; vertical-align: middle; }
 

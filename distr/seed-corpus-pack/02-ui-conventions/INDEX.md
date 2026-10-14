@@ -1,5 +1,7 @@
 # UI sources index
 
+- Canonical: global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`
+
 - `../vendor/open-dashboard/PATTERNS.md`
 - `../vendor/open-dashboard/backends/CONTRACT.md`
 - `../domains/ecommerce/merrypak/ARCHITECTURE.md`

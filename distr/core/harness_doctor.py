@@ -84,7 +84,6 @@ def _detected_with_homes(home: Path) -> dict[str, bool]:
         "pi": bool(detected.get("pi") or shutil.which("pi") or (home / ".pi").exists()),
         "cline": bool(detected.get("cline") or shutil.which("cline") or (home / ".cline").exists()),
         "gemini": bool(shutil.which("gemini") or (home / ".gemini").exists()),
-        "kiro": bool(detected.get("kiro") or shutil.which("kiro-cli") or (home / ".kiro").exists()),
         "grok": bool(detected.get("grok") or (Path("/Applications") / "Grok Bot.app").exists()),
         "rtk": bool(shutil.which("rtk")),
     }
@@ -180,8 +179,6 @@ def _reference_skill_paths(home: Path, harness_id: str) -> list[Path]:
         return [home / ".cline" / "skills" / skill_id / "SKILL.md" for skill_id in REFERENCE_SKILLS]
     if harness_id == "gemini":
         return [home / ".gemini" / "commands" / f"{skill_id}.md" for skill_id in REFERENCE_SKILLS]
-    if harness_id == "kiro":
-        return [home / ".kiro" / "skills" / skill_id / "SKILL.md" for skill_id in REFERENCE_SKILLS]
     if harness_id == "grok":
         return [home / ".cursor" / "skills" / skill_id / "SKILL.md" for skill_id in REFERENCE_SKILLS]
     return []
@@ -195,7 +192,6 @@ def _projection_rows(home: Path, harness_id: str, detected: dict[str, bool]) -> 
             "claude": home / ".claude" / "skills" / "decisions-ecc-harness" / "SKILL.md",
             "cursor": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
             "pi": home / ".pi" / "skills" / "decisions-ecc-harness" / "SKILL.md",
-            "kiro": home / ".kiro" / "skills" / "decisions-ecc-harness" / "SKILL.md",
             "grok": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
         },
         "competition": {
@@ -203,7 +199,6 @@ def _projection_rows(home: Path, harness_id: str, detected: dict[str, bool]) -> 
             "claude": home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md",
             "cursor": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
             "pi": home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md",
-            "kiro": home / ".kiro" / "skills" / "decisions-competition-harness" / "SKILL.md",
             "grok": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
         },
     }
@@ -253,7 +248,7 @@ def _setup_command_for_harness(harness_id: str) -> str:
         return "NONINTERACTIVE=1 bash scripts/setup_project_clis.sh claude"
     if harness_id in {"codex", "cursor", "pi", "cline", "rtk"}:
         return f"NONINTERACTIVE=1 bash scripts/setup_project_clis.sh {harness_id}"
-    if harness_id in {"kiro", "grok"}:
+    if harness_id == "grok":
         return HARNESS_REPAIR_COMMAND
     if harness_id == "gemini":
         return "NONINTERACTIVE=1 bash scripts/setup_project_clis.sh all"
@@ -268,12 +263,11 @@ def _harness_rows(home: Path, detected: dict[str, bool], clis: dict[str, dict[st
         "pi": "pi",
         "cline": "cline",
         "gemini": "gemini",
-        "kiro": "kiro",
         "grok": "",
         "rtk": "rtk",
     }
     rows: dict[str, dict[str, Any]] = {}
-    for harness_id in ("codex", "claude", "cursor", "pi", "cline", "gemini", "kiro", "grok", "rtk"):
+    for harness_id in ("codex", "claude", "cursor", "pi", "cline", "gemini", "grok", "rtk"):
         cli_id = cli_by_harness[harness_id]
         cli = clis.get(cli_id, {})
         projections = {} if harness_id == "rtk" else _projection_rows(home, harness_id, detected)

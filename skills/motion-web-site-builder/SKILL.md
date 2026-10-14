@@ -4,6 +4,11 @@ description: Build a motion website implementation plan (and optional starter st
 license: MIT
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Motion Web Site Builder
 
 **I am helping create a usable 3D motion website so the user gets a fast, readable, visually distinctive page instead of a static mockup.**
@@ -27,11 +32,7 @@ It is intended for:
 
 1. **Decision board**: what motion patterns are enabled/disabled and why.
 2. **Token set**: spacing, palette, font, duration, easing.
-3. **Component map**:
-   - hero
-   - feature reveal section
-   - CTA block
-   - footer
+3. **Component map**: include only sections required by the approved brief. Hero, feature reveal, CTA, and footer sections are optional rather than defaults.
 4. **Motion plan**:
    - scroll response rules
    - hover response rules
@@ -42,7 +43,7 @@ It is intended for:
 
 ## Must-follow constraints
 
-- Keep one primary call to action visible in each major section.
+- Keep one primary action per view. Do not repeat the same call to action in multiple sections.
 - Avoid motion loops that repeat faster than one full cycle every 6s unless user requests it.
 - Always include low-motion fallback states.
 - Respect user accessibility: contrast and readable copy first, decorative movement second.

@@ -4,6 +4,9 @@ description: Builds interactive HTML presentation with 6 tabs (Overview, Require
 license: MIT
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+Before planning, building, or reviewing the presentation interface, read the current global `ui-ux-principles` skill. Its `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI` are authoritative and override conflicting interface guidance here. Presentation-specific navigation and visual treatments must still earn their place under those principles.
+
 > **Paths:** File paths (`shared/`, `references/`, `../ln-*`) are relative to skills repo root. If not found at CWD, locate this SKILL.md directory and go up one level for repo root.
 
 # HTML Presentation Builder

@@ -95,15 +95,13 @@ def test_manual_route_resolves_legacy_glimmer_alias(monkeypatch):
     assert options["local_harness_available"] is True
 
 
-def test_composer_no_longer_hardcodes_qwen_glimmer_as_picker_source():
+def test_composer_harness_picker_contains_only_real_routes():
     from pathlib import Path
 
     text = Path("distr/gui/web/static/development/threads/composer/index.js").read_text()
     assert "HARNESS_OPTIONS" in text
-    assert "local_ollama:" in text
-    assert "localOllamaWorkers" in text
-    assert "ensureLocalHarnessPresets" in text
-    # Demoted hints may remain, but picker must not hard-code those as HARNESS_OPTIONS entries.
+    assert "{ id: 'kilocode', label: 'Kilo' }" in text
+    assert "return HARNESS_OPTIONS;" in text
     assert "{ id: 'qwen38_27b'" not in text
     assert "{ id: 'glimmer'" not in text
 

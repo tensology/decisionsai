@@ -5,7 +5,7 @@ The agent uses this tool when the user asks it to work on code, run tasks,
 or perform development actions on the current project. Pi is the specialist
 that does the actual coding work, communicating via structured JSONL events.
 
-Replaces the old kiro_cli.py which used kiro-cli in fire-and-forget mode.
+Provides a persistent Pi RPC coding-agent integration.
 """
 import logging
 from typing import Any, Optional, List

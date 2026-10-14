@@ -4,6 +4,11 @@ description: "Frontend structure worker: SCAFFOLD new React project or RESTRUCTU
 license: MIT
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 > **Paths:** File paths (`shared/`, `references/`, `../ln-*`) are relative to skills repo root. If not found at CWD, locate this SKILL.md directory and go up one level for repo root.
 
 # ln-721-frontend-restructure

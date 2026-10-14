@@ -368,10 +368,9 @@ def get_orchestrator_role_model(role: str) -> tuple[str, str]:
         if provider or model:
             return provider, model
         if role == "orchestrator":
-            return (
-                (settings.get("workflow_llm_provider") or "").strip(),
-                (settings.get("workflow_llm_model") or "").strip(),
-            )
+            from distr.core.llm_factory import resolve_settings_keys
+
+            return resolve_settings_keys(settings)
     except Exception:
         pass
     return "", ""

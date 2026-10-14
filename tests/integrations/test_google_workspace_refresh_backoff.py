@@ -1,8 +1,36 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+
+
+def test_google_workspace_accepts_timezone_aware_connected_at(monkeypatch):
+    connected_at = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(
+        "distr.gui.web.oauth.load_google_oauth_config",
+        lambda: {"web": {"client_id": "client-id", "client_secret": "client-secret"}},
+    )
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {
+            "connected_accounts": [
+                {
+                    "provider": "google",
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "expires_in": 3600,
+                    "connected_at": connected_at,
+                }
+            ]
+        },
+    )
+
+    connector = GoogleWorkspaceConnector()
+
+    assert connector.token_expires_at is not None
+    assert connector.token_expires_at.tzinfo is None
+    assert connector.connection_health() == (True, "")
 
 
 def test_google_workspace_refresh_failure_uses_cooldown(monkeypatch):

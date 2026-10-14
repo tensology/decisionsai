@@ -15,6 +15,7 @@ from sqlalchemy import func
 
 from distr.core.chat import ChatService, _chat_params
 from distr.core.db import Chat, get_session
+from distr.core.db.time import utc_now_naive
 from distr.core.db.workflow import DevelopmentWorkItem
 
 
@@ -128,6 +129,9 @@ def development_thread_record(db, chat: Chat) -> dict[str, Any]:
     ).first()
     if item is None:
         return metadata
+    seconds = max(0, int(item.time_accumulated_seconds or 0))
+    if not item.time_paused and item.time_started_at:
+        seconds += max(0, int((utc_now_naive() - item.time_started_at).total_seconds()))
     authoritative = {
         "workflow_id": item.workflow_id,
         "ticket_id": item.local_ticket_id,
@@ -137,6 +141,8 @@ def development_thread_record(db, chat: Chat) -> dict[str, Any]:
         "board_ticket_key": item.ticket_key,
         "board_ticket_title": item.ticket_title,
         "board_ticket_lane": item.ticket_lane,
+        "time_running": not bool(item.time_paused),
+        "time_seconds": seconds,
     }
     for key, value in authoritative.items():
         if value is not None and value != "":

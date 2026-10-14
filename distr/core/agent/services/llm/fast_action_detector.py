@@ -1377,9 +1377,9 @@ class FastActionDetector:
                             "automation": "automations",
                             "terminal": "terminals",
                             "report": "reports",
-                            "web ui": "development",
-                            "web interface": "development",
-                            "webui": "development",
+                            "web ui": "chat",
+                            "web interface": "chat",
+                            "webui": "chat",
                         }.get(page, page)
                 
                 logger.info(f"FastActionDetector: MATCHED '{text}' -> {action_type.value} (tool: {tool_name}, copy_first: {needs_copy})")

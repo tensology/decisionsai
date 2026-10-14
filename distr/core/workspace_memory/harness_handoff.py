@@ -122,7 +122,7 @@ def _paste_block(
 ) -> str:
     read_lines = "\n".join(f"{i + 1}. `{item['path']}` — {item['why']}" for i, item in enumerate(read_order))
     harness_note = (
-        "Works with Cursor, Codex, Claude Code, Pi, Cline, Hermes Agent, VS Code, Antigravity, Kiro, "
+        "Works with Cursor, Codex, Claude Code, Pi, Cline, Hermes Agent, VS Code, Antigravity, "
         "or any harness that accepts project instructions. Paste into your agent's first message, "
         "custom instructions, or AGENTS.md rules — DecisionsAI does not need to launch the harness for you."
     )

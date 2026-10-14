@@ -14,7 +14,6 @@
             <button type="button" class="llm-config-tab" data-llm-subtab="image" role="tab" aria-selected="false">Image Generation</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="video" role="tab" aria-selected="false">Video Generation</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="workflow" role="tab" aria-selected="false">Workflow</button>
-            <button type="button" class="llm-config-tab" data-llm-subtab="decision_routing" role="tab" aria-selected="false">Decision Routing</button>
         </div>
 
         <!-- Speech to Text -->
@@ -209,7 +208,7 @@
         <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="workflow">
             <p class="mb-3 text-center text-xs text-gray-500">
                 <span class="block">Dedicated model for workflow execution.</span>
-                <span class="block">Falls back to Conversational if empty.</span>
+                <span class="block">Falls back to Coding, then Conversational, if empty.</span>
             </p>
             <div class="flex items-center gap-4 llms-row">
                 <label for="workflow_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
@@ -218,7 +217,7 @@
                             class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
                                     focus:outline-none focus:border-[#10a37f] transition-colors
                                     hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="">Inherit from Conversational</option>
+                        <option value="">Inherit from Coding</option>
                     </select>
                 </div>
                 <label for="workflow_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
@@ -258,12 +257,12 @@
             </div>
         </div>
 
-        <!-- Decision routing -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="decision_routing">
+        <!-- Decision engine -->
+        <section class="mt-6 border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]" aria-labelledby="laya_heading">
             <div class="flex flex-wrap items-start justify-between gap-3 border-b border-[#34364a] pb-4">
                 <div>
-                    <h3 class="text-base font-semibold text-white">Laya local decision engine</h3>
-                    <p class="mt-1 text-xs text-gray-400">Fast structured routing and triage. Generative work still runs on the selected LLM.</p>
+                    <h3 id="laya_heading" class="text-base font-semibold text-white">Laya decision engine</h3>
+                    <p class="mt-1 text-xs text-gray-400">Controls automatic routing and triage for Development threads. Generative work still runs on the selected coding route.</p>
                 </div>
                 <div id="laya_status" class="rounded-full border border-[#565869] px-3 py-1 text-xs text-gray-300" role="status">Checking...</div>
             </div>
@@ -286,14 +285,17 @@
             </fieldset>
             <p id="laya_mode_help" class="mt-3 text-xs text-gray-500">Failures always fall back to the existing router. Laya never generates code or prose.</p>
 
-            <div class="mt-4 flex flex-wrap items-center gap-2">
-                <button type="button" id="laya_install" class="rounded-md bg-[#10a37f] px-3 py-2 text-xs font-medium text-white hover:bg-[#0d8f70]">Install or repair</button>
-                <button type="button" id="laya_update" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Update reviewed version</button>
-                <button type="button" id="laya_test" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Test tools and routing</button>
-                <button type="button" id="laya_remove" class="ml-auto rounded-md border border-[#7f1d1d] px-3 py-2 text-xs font-medium text-[#fca5a5] hover:bg-[#3f1d2e]">Remove</button>
-            </div>
-            <p id="laya_test_result" class="mt-3 min-h-5 text-xs text-gray-400" aria-live="polite"></p>
-        </div>
+            <details class="mt-4 rounded-lg border border-[#34364a] bg-[#20264a] p-3">
+                <summary class="cursor-pointer text-sm font-medium text-gray-200">Advanced maintenance</summary>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <button type="button" id="laya_install" class="rounded-md bg-[#10a37f] px-3 py-2 text-xs font-medium text-white hover:bg-[#0d8f70]">Install or repair</button>
+                    <button type="button" id="laya_update" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Update reviewed version</button>
+                    <button type="button" id="laya_test" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Test tools and routing</button>
+                    <button type="button" id="laya_remove" class="ml-auto rounded-md border border-[#7f1d1d] px-3 py-2 text-xs font-medium text-[#fca5a5] hover:bg-[#3f1d2e]">Remove</button>
+                </div>
+                <p id="laya_test_result" class="mt-3 min-h-5 text-xs text-gray-400" aria-live="polite"></p>
+            </details>
+        </section>
 
 
         <div class="flex justify-center pt-2">

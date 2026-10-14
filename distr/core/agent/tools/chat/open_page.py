@@ -25,9 +25,9 @@ _PAGE_MAP = {
     # Development workspace
     "development":    "/development/",
     "development threads": "/development/",
-    "web ui":         "/development/",
-    "webui":          "/development/",
-    "web interface":  "/development/",
+    "web ui":         "/chat/",
+    "webui":          "/chat/",
+    "web interface":  "/chat/",
     "incoming":       "/development/incoming/",
     "automations":    "/development/automations/",
     "automation":     "/development/automations/",
@@ -119,7 +119,7 @@ _KNOWN_PAGES = ", ".join(sorted({
 def resolve_open_page_key(raw: str) -> Optional[str]:
     """Pick one known page from a name or a full spoken request.
 
-    "chat web ui" is Chat. A bare "web ui" stays Development.
+    "chat web ui" and a bare "web ui" both open Chat.
     Whole-phrase matches only, longest first, so "preferences" is not
     chosen just because a shorter alias sits inside another word.
     """

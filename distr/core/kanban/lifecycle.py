@@ -6,7 +6,8 @@ from typing import Any, Iterable
 
 from sqlalchemy import func
 
-from distr.core.db.kanban import KanbanLane, KanbanTicket
+from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.projects import Project
 
 
 DELIVERY_LANES: tuple[str, ...] = (
@@ -24,6 +25,50 @@ _LEGACY_DELIVERY_LANE_ALIASES: dict[str, tuple[str, ...]] = {
     "QA": ("QA / Assess", "QA/Assess", "Review", "Testing"),
     "Complete": ("Done", "Completed", "Closed"),
 }
+
+
+def ensure_project_boards(session: Any) -> dict[int, KanbanBoard]:
+    """Return one visible primary board per project, creating only missing boards."""
+    projects = session.query(Project).order_by(Project.position, Project.name, Project.id).all()
+    boards = (
+        session.query(KanbanBoard)
+        .order_by(KanbanBoard.archived, KanbanBoard.position, KanbanBoard.name, KanbanBoard.id)
+        .all()
+    )
+    by_id = {int(board.id): board for board in boards}
+    by_project: dict[int, KanbanBoard] = {}
+    for board in boards:
+        if board.default_project_id is not None:
+            by_project.setdefault(int(board.default_project_id), board)
+
+    result: dict[int, KanbanBoard] = {}
+    for project in projects:
+        project_id = int(project.id)
+        explicit = by_id.get(int(project.kanban_board_id or 0))
+        board = (
+            explicit
+            if explicit is not None and int(explicit.default_project_id or project_id) == project_id
+            else by_project.get(project_id)
+        )
+        if board is None:
+            board = KanbanBoard(
+                name=project.name or "Untitled",
+                description=f"Board for project: {project.name or 'Untitled'}",
+                source="database",
+                default_project_id=project_id,
+            )
+            session.add(board)
+            session.flush()
+            ensure_delivery_lanes(session, int(board.id))
+            by_id[int(board.id)] = board
+        elif board.default_project_id is None:
+            board.default_project_id = project_id
+        board.archived = False
+        project.kanban_board_id = int(board.id)
+        by_project[project_id] = board
+        result[project_id] = board
+    session.flush()
+    return result
 
 
 def require_automation_lane(lane_name: str) -> str:

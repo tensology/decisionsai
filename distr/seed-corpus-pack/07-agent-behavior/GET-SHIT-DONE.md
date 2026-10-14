@@ -24,8 +24,10 @@
 
 ## Micro-protocol
 
-1. Score vagueness (`VAGUENESS-DIAL.md`).
-2. Expand entities (`01-entity-domain/MODEL-INFERENCE.md`).
-3. Apply page stencil + premium gate.
-4. FRAC only the risky deltas; implement the rest.
-5. Verify before claiming done (`04-verify-feedback-loops`).
+1. Read the global `completion-protocol` skill and inventory the complete affected surface.
+2. Score vagueness (`VAGUENESS-DIAL.md`).
+3. Expand entities (`01-entity-domain/MODEL-INFERENCE.md`).
+4. Apply page stencil + premium gate where relevant.
+5. Convert the inventory into a coverage ledger, omission checks, and end-to-end journeys.
+6. FRAC the behavior, implement the bounded scope, and update the ledger.
+7. Independently audit against the original request and return a valid `completion_manifest` before claiming done (`04-verify-feedback-loops`).

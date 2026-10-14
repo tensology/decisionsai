@@ -141,3 +141,16 @@ def test_chat_detail_requires_the_matching_surface_contract():
     assert conversational.json()["detail"] == "This thread belongs to Development, not Chat."
     assert development.status_code == 200
     assert isinstance(development.json()["development"], dict)
+
+
+def test_development_chat_list_exposes_shared_timer_state():
+    from distr.core.workflow.development_control import resume_thread_time
+
+    chat_id = ensure_development_thread(title="Shared timer state")
+    resume_thread_time(chat_id)
+
+    response = _client().get("/api/chats?include_archived=true&surface=development")
+    row = next(chat for chat in response.json()["chats"] if chat["id"] == chat_id)
+
+    assert row["development_time_running"] is True
+    assert row["development_time_seconds"] >= 0

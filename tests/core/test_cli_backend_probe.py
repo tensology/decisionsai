@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from unittest.mock import patch
 
 from distr.core.project_cli_backends.catalog_probe import (
@@ -20,18 +21,60 @@ def test_codex_capability_contract_is_explicit():
     assert items[2]["values"] == ["default", "flex", "fast"]
 
 
-def test_codex_probe_commands_include_models():
+def test_codex_probe_commands_use_supported_health_probe():
     commands = backend_probe_commands("codex", "/usr/local/bin/codex")
-    assert commands[0] == ["/usr/local/bin/codex", "models"]
-    assert ["codex", "models"] != commands[0]
+    assert commands[0] == ["/usr/local/bin/codex", "doctor", "--json"]
+
+
+class _FakeCodexAppServer:
+    def __init__(self):
+        self.stdin = io.StringIO()
+        self.stdout = io.StringIO(
+            '\n'.join(
+                [
+                    '{"id":1,"result":{}}',
+                    '{"id":2,"result":{"data":[{"id":"gpt-5.3-codex","displayName":"GPT-5.3 Codex","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"high"}],"inputModalities":["text","image"]}]}}',
+                ]
+            )
+            + '\n'
+        )
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = 0
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+
+def test_codex_models_reads_the_app_server_catalog():
+    with patch(
+        "distr.core.project_cli_backends.catalog_probe.subprocess.Popen",
+        return_value=_FakeCodexAppServer(),
+    ):
+        models, source, message = codex_models({})
+
+    assert source == "codex-app-server"
+    assert message == ""
+    assert models[0]["id"] == "gpt-5.3-codex"
+    assert models[0]["name"] == "GPT-5.3 Codex"
+    assert models[0]["supported_reasoning_efforts"] == ["high"]
+    assert models[0]["input_modalities"] == ["text", "image"]
+    assert models[0]["is_default"] is True
 
 
 def test_codex_models_falls_back_to_auto_when_unverified():
-    with patch("distr.core.project_cli_backends.catalog_probe.subprocess.run", side_effect=RuntimeError("boom")):
+    with patch("distr.core.project_cli_backends.catalog_probe.subprocess.Popen", side_effect=RuntimeError("boom")):
         models, source, message = codex_models({})
     assert source == "codex-unverified"
     assert models[0]["id"] == "auto"
-    assert "Use Auto for Codex-managed model selection" in message
+    assert "Could not load the Codex session model catalog: boom" in message
 
 
 def test_probe_cli_backend_surfaces_setup_message():
@@ -85,16 +128,16 @@ def test_backend_truth_contract_marks_codex_unverified_as_not_workflow_ready():
 
 def test_backend_truth_contract_marks_verified_catalog_as_ready():
     status = BackendStatus(
-        id="kiro",
-        name="Kiro CLI",
+        id="cursor",
+        name="Cursor CLI",
         installed=True,
         ready=True,
         state="ready",
-        message="Kiro CLI is installed and ready.",
+        message="Cursor CLI is installed and ready.",
     )
     truth = backend_truth_contract(status, {
-        "models": [{"id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "provider": "kiro"}],
-        "source": "kiro-cli",
+        "models": [{"id": "composer-2.5", "name": "Composer 2.5", "provider": "cursor"}],
+        "source": "cursor-api",
         "message": "",
         "kind": "cli",
         "supports_model_picker": True,

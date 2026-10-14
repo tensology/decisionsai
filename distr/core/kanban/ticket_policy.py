@@ -112,7 +112,7 @@ DEFAULT_COMPLEXITY_ROUTES: dict[str, dict[str, str]] = {
 
 def _global_complexity_route(level: str) -> dict[str, str]:
     from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
-    from distr.core.project_cli_backends import normalize_backend_id
+    from distr.core.project_cli_backends import normalize_backend_id, normalize_route_backend_id
     from distr.core.settings import load_settings_from_db
 
     defaults = DEFAULT_COMPLEXITY_ROUTES[level]
@@ -120,9 +120,14 @@ def _global_complexity_route(level: str) -> dict[str, str]:
         settings = load_settings_from_db()
     except Exception:
         settings = {}
-    backend = normalize_backend_id(settings.get(f"project_cli_{level}_backend") or defaults["backend"])
+    configured_backend = normalize_route_backend_id(
+        settings.get(f"project_cli_{level}_backend") or defaults["backend"]
+    )
+    backend = "pi" if configured_backend == "kilocode" else configured_backend
     model = (settings.get(f"project_cli_{level}_model") or defaults["model"]).strip()
     model_provider = str(settings.get(f"project_cli_{level}_model_provider") or "").strip().lower()
+    if configured_backend == "kilocode":
+        model_provider = "kilocode"
     from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
     if is_ide_backend(backend):

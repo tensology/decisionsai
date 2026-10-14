@@ -180,6 +180,44 @@ class Profile(models.Model):
     assert len(result["passes"]) >= 2
 
 
+def test_generated_frac_applies_global_ui_principles_to_forms(tmp_path):
+    root = tmp_path / "FormApp"
+    root.mkdir()
+    frontend = root / "frontend" / "src"
+    pages = frontend / "pages"
+    pages.mkdir(parents=True)
+    (frontend / "routes.jsx").write_text(
+        'export const routes = [{ url: "/customers/new", name: "customer_create", view: "customer-form" }];\n',
+        encoding="utf-8",
+    )
+    (pages / "customer-form.tsx").write_text(
+        """
+export function CustomerForm() {
+  return <form><TextField label="Name" /><button>Save customer</button></form>;
+}
+""",
+        encoding="utf-8",
+    )
+
+    frac = scan_project(root, project_name="FormApp")["artifacts"]["frac"]
+
+    assert "`UX Principles` and `UI Principles`" in frac
+    assert "field loses focus or the form is submitted" in frac
+    assert "unsaved-changes warning appears" in frac
+    assert "same form component" in frac
+    assert "page or side drawer" in frac
+    assert "global `ui-ux-principles` skill's Fixed CRUD flow" in frac
+    assert "focus is trapped while open" in frac
+    assert "changed record visible and briefly highlighted" in frac
+    assert "UI-AC-001" in frac
+    assert "performs one job" in frac
+    assert "same label is not repeated" in frac
+    assert "generic heroes" in frac
+    assert "unsolicited dashboards" in frac
+    assert "spacing is inspected" in frac
+    assert "global Pre-ship Check" in frac
+
+
 def test_scan_auction_project_uses_django_urls_when_no_frontend_routes(tmp_path):
     root = tmp_path / "AuctionNow"
     root.mkdir()

@@ -230,6 +230,8 @@ def register_routes(router, templates):
         if _stt_unavailable:
             _stt_short = _fallback_stt_choice(_stt_options)
 
+        from distr.core.project_cli_backends import normalize_route_backend_id
+
         return JSONResponse({
             "stt_model": _stt_short,
             "stt_options": _stt_options,
@@ -248,11 +250,11 @@ def register_routes(router, templates):
             "workflow_model": (settings.get("workflow_llm_model") or "").strip(),
             "computer_use_provider": (settings.get("computer_use_provider") or "").strip().lower() or "",
             "computer_use_model": (settings.get("computer_use_model") or "").strip(),
-            "project_cli_low_backend": (settings.get("project_cli_low_backend") or "cursor").strip().lower(),
+            "project_cli_low_backend": normalize_route_backend_id(settings.get("project_cli_low_backend") or "cursor"),
             "project_cli_low_model": (settings.get("project_cli_low_model") or "auto").strip(),
-            "project_cli_medium_backend": (settings.get("project_cli_medium_backend") or "codex").strip().lower(),
+            "project_cli_medium_backend": normalize_route_backend_id(settings.get("project_cli_medium_backend") or "codex"),
             "project_cli_medium_model": (settings.get("project_cli_medium_model") or "auto").strip(),
-            "project_cli_high_backend": (settings.get("project_cli_high_backend") or "codex").strip().lower(),
+            "project_cli_high_backend": normalize_route_backend_id(settings.get("project_cli_high_backend") or "codex"),
             "project_cli_high_model": (settings.get("project_cli_high_model") or "gpt-5.3-codex").strip(),
             "project_cli_low_codex_intelligence": (settings.get("project_cli_low_codex_intelligence") or "").strip(),
             "project_cli_low_codex_speed": (settings.get("project_cli_low_codex_speed") or "").strip(),
@@ -360,12 +362,12 @@ def register_routes(router, templates):
         settings["computer_use_provider"] = (settings_data.computer_use_provider or "").strip()
         settings["computer_use_model"] = (settings_data.computer_use_model or "").strip()
         from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
-        from distr.core.project_cli_backends import normalize_backend_id
-        settings["project_cli_low_backend"] = normalize_backend_id(settings_data.project_cli_low_backend or "cursor")
+        from distr.core.project_cli_backends import normalize_route_backend_id
+        settings["project_cli_low_backend"] = normalize_route_backend_id(settings_data.project_cli_low_backend or "cursor")
         settings["project_cli_low_model"] = (settings_data.project_cli_low_model or "auto").strip()
-        settings["project_cli_medium_backend"] = normalize_backend_id(settings_data.project_cli_medium_backend or "codex")
+        settings["project_cli_medium_backend"] = normalize_route_backend_id(settings_data.project_cli_medium_backend or "codex")
         settings["project_cli_medium_model"] = (settings_data.project_cli_medium_model or "auto").strip()
-        settings["project_cli_high_backend"] = normalize_backend_id(settings_data.project_cli_high_backend or "codex")
+        settings["project_cli_high_backend"] = normalize_route_backend_id(settings_data.project_cli_high_backend or "codex")
         settings["project_cli_high_model"] = (settings_data.project_cli_high_model or "gpt-5.3-codex").strip()
         settings["project_cli_low_codex_intelligence"] = normalize_codex_intelligence(
             settings_data.project_cli_low_codex_intelligence
@@ -490,7 +492,7 @@ def register_routes(router, templates):
             ("anthropic", "Anthropic", "anthropic_enabled", "anthropic_key"),
             ("groq", "Groq", "groq_enabled", "groq_key"),
             ("openrouter", "OpenRouter", "openrouter_enabled", "openrouter_key"),
-            ("kilocode", "KiloCode", "kilo_enabled", "kilo_key"),
+            ("kilocode", "Kilo", "kilo_enabled", "kilo_key"),
             ("gemini", "Google Gemini", "gemini_enabled", "gemini_key"),
             ("nvidia", "NVIDIA", "nvidia_enabled", "nvidia_key"),
         ]
@@ -539,7 +541,7 @@ def register_routes(router, templates):
             ),
             (
                 "kilocode",
-                "KiloCode",
+                "Kilo",
                 thirdparty_llm_provider_ready(settings, "kilo_enabled", "kilo_key"),
                 "Connected" if thirdparty_llm_provider_ready(settings, "kilo_enabled", "kilo_key") else "Key missing",
                 "Kilo gateway provider",

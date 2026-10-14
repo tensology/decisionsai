@@ -73,9 +73,10 @@ def register_routes(router, templates):
         from distr.core.kanban.ticket_policy import infer_ticket_complexity, resolve_ticket_cli_route
 
         instruction = str(data.instruction or "").strip()
+        # Route the request the user is sending now. Historical assistant prose
+        # must not turn a harmless follow-up into a production-risk workflow.
         routing_text = "\n".join(
             [instruction, data.ticket_title or "", data.ticket_description or ""]
-            + [str(item or "") for item in (data.recent_messages or [])[-6:]]
         )
         combined = routing_text.lower()
         complexity = infer_ticket_complexity(

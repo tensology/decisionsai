@@ -146,7 +146,10 @@ function developmentRoute() {
         .split('/')
         .filter(Boolean)
         .map((part) => decodeURIComponent(part));
-    if (parts[0] !== 'development' || parts.length === 1) return { kind: 'home', path: '/development/' };
+    if (parts[0] !== 'development' || parts.length === 1)
+        return query.get('recent') === '1'
+            ? { kind: 'recent', path: '/development/?recent=1' }
+            : { kind: 'home', path: '/development/' };
     if (parts[1] === 'new') return { kind: 'new', path: '/development/new/' };
     if (parts[1] === 'threads' && Number(parts[2])) {
         const chatId = Number(parts[2]);
@@ -832,6 +835,29 @@ async function updateThreadTime(action) {
         el('time-pause-button').disabled = state.threadTime.paused;
         updateElapsedTime();
         toast(action === 'reset' ? 'Thread time reset.' : action === 'play' ? 'Time logging resumed.' : 'Time logging paused.');
+    } catch (error) {
+        toast(error.message || 'Could not update thread time.', 'error');
+    }
+}
+
+async function updateSidebarThreadTime(chatId, action = null) {
+    const chat = state.chats.find((item) => Number(item.id) === Number(chatId));
+    if (!chat) return;
+    const command = action || (chat.development_time_running ? 'pause' : 'play');
+    try {
+        const time = timerSnapshot(
+            command === 'reset'
+                ? await api(`/workflows/studio/tasks/${chatId}/time`, { method: 'PATCH', body: { seconds: 0 } })
+                : await api(`/workflows/studio/tasks/${chatId}/time/${command}`, { method: 'POST', body: {} })
+        );
+        chat.development_time_running = !time.paused;
+        chat.development_time_seconds = Number(time.seconds || 0);
+        if (Number(state.currentChat?.id) === Number(chatId)) {
+            state.threadTime = time;
+            updateElapsedTime();
+        }
+        sidebar.renderSidebar();
+        toast(command === 'reset' ? 'Thread time reset.' : command === 'play' ? 'Time logging resumed.' : 'Time logging paused.');
     } catch (error) {
         toast(error.message || 'Could not update thread time.', 'error');
     }
@@ -1713,6 +1739,12 @@ async function restoreDevelopmentLocation(options) {
             await restoreDevelopmentHome(options);
             return;
         }
+        if (route.kind === 'recent') {
+            showEmptyTask();
+            setWorkspaceMode('chat', { focus: false, updateUrl: false });
+            sidebar.openRecents();
+            return;
+        }
         if (route.kind === 'thread') {
             const thread = developmentChatById(route.chatId);
             if (!thread) {
@@ -1968,6 +2000,12 @@ const sidebar = createSidebar({
         openBoardPlan: (...args) => openBoardPlan(...args),
         openBoardTerminals: (...args) => openBoardTerminals(...args),
         openKanbanTicketDialog: (...args) => boards.openKanbanTicketDialog(...args),
+        openRecentThreads: () => {
+            showEmptyTask();
+            setWorkspaceMode('chat', { focus: false, updateUrl: false });
+            setDevelopmentLocation('/development/?recent=1');
+            sidebar.openRecents();
+        },
         openRenameThreadDialog: (...args) => openRenameThreadDialog(...args),
         openSidebar: (...args) => openSidebar(...args),
         openThreadDialog: (...args) => openThreadDialog(...args),
@@ -1983,6 +2021,8 @@ const sidebar = createSidebar({
         startNewDevelopmentFromSidebar: (...args) => startNewDevelopmentFromSidebar(...args),
         systemFileManagerLabel: (...args) => systemFileManagerLabel(...args),
         threadRowContentHtml: (...args) => threadRowContentHtml(...args),
+        toggleThreadTimer: (...args) => updateSidebarThreadTime(...args),
+        resetThreadTimer: (chatId) => updateSidebarThreadTime(chatId, 'reset'),
         toast: (...args) => toast(...args),
         unlinkIncomingChannel: (...args) => incoming.unlinkIncomingChannel(...args),
         waitForRouteReady: (...args) => waitForRouteReady(...args)
@@ -2379,6 +2419,7 @@ const threads_composer = createThreadsComposer({
         escapeHtml: (...args) => escapeHtml(...args),
         isActiveAgentRun: (...args) => isActiveAgentRun(...args),
         loadChat: (...args) => loadChat(...args),
+        openInspector: (...args) => openInspector(...args),
         openBoardFromSidebar: (...args) => openBoardFromSidebar(...args),
         projectById: (...args) => projectById(...args),
         refreshShell: (...args) => refreshShell(...args),

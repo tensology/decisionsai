@@ -1,4 +1,6 @@
 """Read-only Development run history and time log, with explicit source identities."""
+from sqlalchemy import func, or_
+
 from distr.core.db import Chat, get_session
 from distr.core.db.automation import Automation, AutomationRun
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, DevelopmentTimeEntry, DevelopmentWorkItem
@@ -92,10 +94,26 @@ def list_time_entries(*, limit=100):
     """Closed Development thread time intervals for the Reports Time log tab."""
     limit = max(1, min(int(limit), 200))
     with get_session() as db:
+        reset_ids = (
+            db.query(
+                DevelopmentTimeEntry.chat_id.label("chat_id"),
+                func.max(DevelopmentTimeEntry.id).label("reset_id"),
+            )
+            .filter(DevelopmentTimeEntry.source == "reset")
+            .group_by(DevelopmentTimeEntry.chat_id)
+            .subquery()
+        )
         rows = (
             db.query(DevelopmentTimeEntry, DevelopmentWorkItem, Chat)
             .outerjoin(DevelopmentWorkItem, DevelopmentTimeEntry.work_item_id == DevelopmentWorkItem.id)
             .outerjoin(Chat, Chat.id == DevelopmentTimeEntry.chat_id)
+            .outerjoin(reset_ids, reset_ids.c.chat_id == DevelopmentTimeEntry.chat_id)
+            .filter(
+                or_(
+                    reset_ids.c.reset_id.is_(None),
+                    DevelopmentTimeEntry.id > reset_ids.c.reset_id,
+                )
+            )
             .order_by(DevelopmentTimeEntry.started_at.desc(), DevelopmentTimeEntry.id.desc())
             .limit(limit)
             .all()

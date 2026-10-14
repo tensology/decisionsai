@@ -583,20 +583,6 @@ def ensure_capabilities_pack_setup(
         if write_projection_skill(rule_path, rule_text):
             written.append(str(rule_path))
 
-    if detected.get("kiro"):
-        steering_path = base_home / ".kiro" / "steering" / "decisions-agent-standard.md"
-        steering_text = (
-            "---\n"
-            "inclusion: always\n"
-            "---\n\n"
-            "# DecisionsAI shared agent standard\n\n"
-            "For every interface task, read and use `apple-design` and `impeccable` together, then at most one task-specific design specialist. Apple Design owns platform conventions and accessibility; Impeccable owns craft and hierarchy.\n\n"
-            "For ordinary written task updates and final responses, start with `<x>% Done.` using an evidence-based estimate, and reserve 100% until verification is complete. Omit this only when the response itself is requested copy. Never use Unicode em dash or en dash characters.\n\n"
-            "Use `humanizer` for publishable human-facing copy, and use `design-taste` only when its visual-direction guidance is relevant.\n"
-        )
-        if write_projection_skill(steering_path, steering_text):
-            written.append(str(steering_path))
-
     playwright = _ensure_playwright_browsers() if run_full else {"ok": True, "skipped": True}
     browser_use = _ensure_browser_use_package(enabled=install_browser_use and run_full)
 

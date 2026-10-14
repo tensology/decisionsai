@@ -74,6 +74,9 @@ def _project_reference_skills(base_home: Path) -> list[str]:
         "codebase-design",
         "domain-modeling",
         "architecture-deepening-review",
+        "ui-ux-principles",
+        "ui-crud-discipline",
+        "completion-protocol",
         "jev",
         "jev-task-router",
         "jev-model-router",
@@ -96,14 +99,13 @@ def _project_reference_skills(base_home: Path) -> list[str]:
 
 
 def _synchronize_compatible_user_skills(base_home: Path) -> list[str]:
-    """Make valid Agent Skills available in Codex, Cursor/Grok, and Kiro without replacing any."""
+    """Make valid Agent Skills available in Codex and Cursor/Grok without replacing any."""
     from distr.core.harness_bootstrap import copy_skill_tree
 
     roots = [
         base_home / ".agents" / "skills",
         base_home / ".codex" / "skills",
         base_home / ".cursor" / "skills",
-        base_home / ".kiro" / "skills",
     ]
     sources: dict[str, Path] = {}
     for root in roots:

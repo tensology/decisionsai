@@ -259,6 +259,8 @@ class TestWorkflowAgentExecute:
         settings = {
             "workflow_llm_provider": "OpenAI",
             "workflow_llm_model": "gpt-5.5",
+            "coding_llm_provider": "Ollama",
+            "coding_llm_model": "qwen3-coder",
             "conversational_llm_provider": "KiloCode",
             "conversational_llm_model": "anthropic/claude-opus-4.5",
             "openai_key": "sk-test",
@@ -274,13 +276,20 @@ class TestWorkflowAgentExecute:
                 raise RuntimeError("You exceeded your current quota, please check your plan and billing details.")
             return "fallback response", []
 
-        with patch.object(agent, "_call_openai_compat", side_effect=fake_openai_compat):
+        def fake_ollama():
+            calls.append((agent.provider, agent.model))
+            raise RuntimeError("local model unavailable")
+
+        with patch.object(agent, "_call_openai_compat", side_effect=fake_openai_compat), patch.object(
+            agent, "_call_ollama", side_effect=fake_ollama
+        ):
             text, tool_calls = agent._call_llm_sync()
 
         assert text == "fallback response"
         assert tool_calls == []
         assert calls == [
             ("OpenAI", "gpt-5.5"),
+            ("Ollama", "qwen3-coder"),
             ("KiloCode", "anthropic/claude-opus-4.5"),
         ]
         assert agent.provider == "KiloCode"

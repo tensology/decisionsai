@@ -4,6 +4,11 @@ description: Guidance for distinctive, intentional visual design when building n
 license: Complete terms in LICENSE.txt
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Frontend Design
 
 Approach this as the design lead at a design studio known for giving every client a distinct visual identity that is not mistaken for anyone else's. This client has already rejected proposals that felt cliché or templated, and is paying for a distinctive point of view: make deliberate, opinionated choices about palette, typography, and layout that are specific to this brief, and take aesthetic risk if justified.
@@ -14,7 +19,7 @@ If the brief does not identify what the product or subject matter is, identify i
 
 ## Design principles
 
-For web designs, the hero is the first thing viewers will see. Open with the most characteristic thing in the subject's world, in the form that is most appropriate: a headline, an image, an animation, a live demo, an interactive moment, or other treatments. Be deliberate with your choice: a big number with a small label, supporting stats, and a gradient accent is the default treatment, so only use it if that's truly the best option.
+When the approved brief explicitly requires a marketing or landing-page hero, open with the most characteristic necessary content in the subject's world. Application screens and ordinary content pages do not receive a hero by default.
 
 Typography carries the personality of the page. You don't need a different typeface for display or headline text and body content: use one family or two, and if two, make them clearly distinct.
 
@@ -31,7 +36,7 @@ Visual structure is information. Structural devices like outlines, borders, numb
 
 Use non-user-triggered motion sparingly and deliberately, only to draw attention. A single orchestrated moment — one page-load sequence or one reveal — lands better than scattered effects; fade-and-slide-up entrances on each section and hover transitions on every card are the generic default and read as AI-generated. Motion that answers a person's action (opening, expanding, confirming) is welcome when it shows what changed.
 
-Consider written content carefully. Often a design brief may not contain real content, and it's up to you to come up with copy and placeholder content. Copy can make a design feel as templated as the design itself. See the below section on writing for more guidance.
+Consider written content carefully. If required content is missing, use short functional labels or request the missing content. Do not invent placeholder marketing copy to fill space.
 
 ## Process: plan, review against the brief, build, critique
 

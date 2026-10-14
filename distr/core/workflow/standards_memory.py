@@ -28,6 +28,8 @@ GLOBAL_STANDARD_CATEGORIES = {
 
 UNIVERSAL_WORKFLOW_STANDARDS = """[UNIVERSAL WORKFLOW QUALITY STANDARDS]
 - Do not mark a ticket complete just because code changed; completion requires evidence that the requested outcome works.
+- For non-trivial work, apply the global completion-protocol: inventory the full affected surface before implementation, maintain a coverage ledger, search for omissions, verify complete end-to-end journeys, and independently audit against the original request.
+- A completion claim requires a valid completion_manifest. Every inventory item must be verified or explicitly approved as excluded; any blocker, failed omission check, unverified journey, or unresolved audit finding requires an incomplete verdict.
 - Match validation to the work type: UI and user-facing flow changes need browser or Playwright validation, backend/API changes need relevant tests or integration checks, and data changes need integrity/rollback consideration.
 - Prefer meaningful unit, regression, integration, or browser tests when they reduce real risk; do not invent filler tests or documentation.
 - Documentation is only useful when it explains a real decision, behavior, integration, or operational change.
@@ -61,6 +63,14 @@ _FEEDBACK_SIGNALS = (
     "audit",
     "documentation",
     "docs",
+    "missed",
+    "forgot",
+    "omitted",
+    "continuity",
+    "partial",
+    "translation",
+    "placeholder",
+    "fallback",
 )
 
 
@@ -222,6 +232,13 @@ def capture_feedback_as_global_standard(
         confidence=0.82,
         payload={"original_feedback": clean},
     )
+    if memory_uid:
+        try:
+            from distr.core.completion_protocol import record_completion_correction
+
+            record_completion_correction(clean, project_id=project_id)
+        except Exception:
+            pass
     return bool(memory_uid)
 
 

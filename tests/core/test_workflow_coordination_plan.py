@@ -159,6 +159,25 @@ def test_existing_canonical_development_workflow_gets_adaptive_default(monkeypat
     assert custom["strategy"] == "single"
 
 
+def test_coordination_plan_does_not_apply_a_pi_model_to_codex():
+    workflow = _workflow(adaptive=False)
+    workflow.run_settings = json.dumps({"auto_route_models": False})
+    plan = build_run_coordination_plan(
+        workflow,
+        {"execution_route": {"complexity": "high", "backend": "codex", "model": "auto"}},
+        settings={
+            "project_cli_high_backend": "pi",
+            "project_cli_high_model": "qwen3.8:27b",
+        },
+    )
+
+    assert all(
+        assignment["primary_route"]["backend"] == "codex"
+        and assignment["primary_route"]["model"] == "auto"
+        for assignment in plan["assignments"].values()
+    )
+
+
 def test_coordination_map_marks_current_step_and_shows_every_assignment(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.model_policy.apply_auto_step_role_policy",

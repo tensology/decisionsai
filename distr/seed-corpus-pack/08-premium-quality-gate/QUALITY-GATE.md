@@ -1,33 +1,16 @@
-# Premium styling — non-negotiable quality gate — SYNTHESIZED
+# Interface quality gate - SYNTHESIZED
 
 ## Gate law
 
-**No UI ships until it passes this checklist.** “Looks fine” is not evidence.
+No interface ships until it passes the current global `ui-ux-principles` skill, including `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules override aesthetic references and page stencils.
 
-## Mandatory sources (in-pack copies + live refs)
+## Evidence
 
-| Source | Pack path | Role |
-|--------|-----------|------|
-| taste-skill | `copied-skills/taste/` | Anti-slop baselines, typography, motion, density |
-| awesome-design | `copied-skills/awesome-design/` | Named aesthetic systems (enterprise/clean/shadcn/…) |
-| decisions-design-references | `copied-skills/decisionsai/decisions-design-references/` | Which reference tool for which job |
-| builderio | `copied-skills/builderio/` | Visual plan / arbiter / stay-within-limits |
-| open-design | live `reference/open-design` + decisions-open-design skill | Design systems / templates |
-| frontend-design | `copied-skills/decisionsai/frontend-design/` | Distinctive production UI |
+- Verify each applicable FRAC criterion with a test, Playwright assertion, or documented QA observation.
+- Inspect the final desktop and mobile views after the last change.
+- Record any user correction through the global `Taste Memory` process.
+- If a criterion or any applicable Definition of Done - UI check fails, fix it before completion.
 
-Also consult: `copied-skills/gstack/DESIGN.md`, `ETHOS.md`, design-html skill.
+## Optional aesthetic references
 
-## Pre-ship checklist (every component / page)
-
-- [ ] **Aesthetic committed** — named direction from awesome-design or project brand (not generic AI purple/Inter slop).
-- [ ] **Taste baselines applied** — typography, spacing, density, motion match taste-skill (or explicit user override).
-- [ ] **Anti-emoji / anti-cliché** — no emoji UI; no calc-flex percentage grids; prefer CSS grid; `min-h-[100dvh]` not `h-screen` heroes.
-- [ ] **Tokens** — colors/type/radius from one theme source (Tailwind theme or CSS variables).
-- [ ] **Stencil match** — page type satisfies `09-page-stencils/<type>/`.
-- [ ] **Reference check** — at least one pass against design-references playbook (Aceternity/Refero/Mobbin/Godly as appropriate) *or* explicit “no external ref needed” note for trivial chrome.
-- [ ] **Builderio discipline** — stayed within visual plan / limits; no drive-by redesign of unrelated surfaces.
-- [ ] **Verify evidence** — screenshot or Playwright assert attached for user-facing pages.
-
-## Fail → fix
-
-If any box unchecked: fix before FRAC done-state. Do not merge “we’ll polish later” for first customer-visible screens.
+Use project brand, design references, and named aesthetic systems only after functional necessity, hierarchy, and restraint are established. An aesthetic reference does not authorize decorative filler, duplicate content, unsolicited widgets, or extra containment.

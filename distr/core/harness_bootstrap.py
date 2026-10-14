@@ -12,12 +12,13 @@ from distr.core.plugins import CODEX_PLUGIN_NAME
 def detected_harnesses() -> dict[str, bool]:
     home = Path.home()
     return {
-        "codex": bool(shutil.which("codex")),
-        "claude": bool(shutil.which("claude")),
-        "cursor": bool(shutil.which("cursor") or shutil.which("cursor-agent")),
-        "pi": bool(shutil.which("pi")),
-        "cline": bool(shutil.which("cline")),
-        "kiro": bool(shutil.which("kiro-cli") or (home / ".kiro").is_dir()),
+        "codex": bool(shutil.which("codex") or (home / ".codex").is_dir()),
+        "claude": bool(shutil.which("claude") or (home / ".claude").is_dir()),
+        "cursor": bool(shutil.which("cursor") or shutil.which("cursor-agent") or (home / ".cursor").is_dir()),
+        "pi": bool(shutil.which("pi") or (home / ".pi").is_dir()),
+        "cline": bool(shutil.which("cline") or (home / ".cline").is_dir()),
+        "gemini": bool(shutil.which("gemini") or (home / ".gemini").is_dir()),
+        "kiro": bool(shutil.which("kiro") or (home / ".kiro").is_dir()),
         # Grok Bot 0.68 uses Cursor-compatible .cursor/skills and .cursor/rules.
         "grok": bool(
             shutil.which("grok")
@@ -30,6 +31,8 @@ def detected_harnesses() -> dict[str, bool]:
 def harness_skill_bases(home: Path, detected: dict[str, bool]) -> dict[str, Path]:
     """Return per-harness directories where SKILL.md trees should be copied."""
     bases: dict[str, Path] = {}
+    if (home / ".agents").is_dir():
+        bases["agents_global"] = home / ".agents" / "skills"
     if detected.get("codex"):
         # Keep the Decisions plugin source populated for plugin packaging and
         # also project to Codex's canonical user-level skill directory. Local
@@ -67,6 +70,8 @@ def harness_command_bases(home: Path, detected: dict[str, bool]) -> dict[str, Pa
         bases["pi"] = home / ".pi" / "commands"
     if detected.get("gemini"):
         bases["gemini"] = home / ".gemini" / "commands"
+    if detected.get("kiro"):
+        bases["kiro"] = home / ".kiro" / "commands"
     return bases
 
 
@@ -147,7 +152,8 @@ def projection_paths(home: Path, detected: dict[str, bool], skill_name: str) -> 
         "cursor": home / ".cursor" / "skills" / skill_name / "SKILL.md",
         "pi": home / ".pi" / "skills" / skill_name / "SKILL.md",
         "cline": home / ".cline" / "skills" / skill_name / "SKILL.md",
-        "kiro": home / ".kiro" / "skills" / skill_name / "SKILL.md",
         "grok": home / ".cursor" / "skills" / skill_name / "SKILL.md",
+        "gemini": home / ".gemini" / "skills" / skill_name / "SKILL.md",
+        "kiro": home / ".kiro" / "skills" / skill_name / "SKILL.md",
     }
     return {key: path for key, path in mapping.items() if detected.get(key)}

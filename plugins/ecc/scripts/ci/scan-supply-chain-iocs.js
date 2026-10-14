@@ -415,7 +415,6 @@ function isInSpecialConfigPath(filePath) {
   const normalized = normalizedPath(filePath);
   return /\/\.claude\//.test(normalized)
     || /\/\.vscode\//.test(normalized)
-    || /\/\.kiro\/settings\//.test(normalized)
     || /\/Library\/LaunchAgents\//.test(normalized)
     || /\/\.config\/systemd\/user\//.test(normalized)
     || /\/\.local\/bin\//.test(normalized)

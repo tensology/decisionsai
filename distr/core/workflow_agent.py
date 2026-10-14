@@ -371,11 +371,11 @@ class WorkflowAgent:
         add(self._provider, self._model)
         for provider_key, model_key in (
             ("workflow_llm_provider", "workflow_llm_model"),
+            ("coding_llm_provider", "coding_llm_model"),
             ("step_runner_llm_provider", "step_runner_llm_model"),
             ("conversational_llm_provider", "conversational_llm_model"),
             ("agent_provider", "agent_model"),
             ("llm_provider", "llm_model"),
-            ("coding_llm_provider", "coding_llm_model"),
         ):
             add(self._settings.get(provider_key), self._settings.get(model_key))
 

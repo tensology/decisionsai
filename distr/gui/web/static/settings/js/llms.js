@@ -32,7 +32,9 @@ let benchmarkModalState = null;
 const llmModelRequestCache = new Map();
 const projectCliModelRequestCache = new Map();
 let projectCliBackendsRequest = null;
-let activeLlmSubtab = 'speech';
+let activeLlmSubtab = new URLSearchParams(window.location.search).get('llm') === 'workflow'
+    ? 'workflow'
+    : 'speech';
 
 // Populate provider dropdowns from available providers (Third-Party configured only)
 async function populateProviderDropdowns() {
@@ -48,7 +50,7 @@ async function populateProviderDropdowns() {
         const llmTypes = LLM_TYPES;
         const optionalTypes = ['workflow', 'computer_use', 'video'];
         const emptyLabels = {
-            'workflow': 'Inherit from Conversational',
+            'workflow': 'Inherit from Coding',
             'computer_use': 'Disabled (accessibility tree only)',
             'video': 'Disabled',
         };

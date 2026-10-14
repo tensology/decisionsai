@@ -35,6 +35,7 @@ One Decisions install enhances every CLI/IDE you already use. Run `bin/setup.py`
 - `playwright_browser` — browser automation
 - Runtime computer-use/CUA when the active IDE exposes it, routed through `decisions-computer-use`
 - `agent-watchdog` for independent evidence-based audits of another agent's completion claims
+- `completion-protocol` for scope inventory, coverage accounting, omission audits, and machine-checkable completion verdicts on non-trivial work
 - `decisions-headroom` for local on-demand compression of unusually large logs, files, or tool output
 - Workflow skill provision — pushes pre_chain skills into the active project harness; copies Ponytail rule to project `.cursor/rules/` for Cursor backends
 - Loop preset **Engineering: Implement + Fallow Audit (JS)** (`implement-js-fallow-audit`) — explicit fallow audit gate

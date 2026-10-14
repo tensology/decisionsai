@@ -19,14 +19,14 @@ from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 ITEM_TYPES = {
     "brief": ("Outcome brief", "markdown", "# Outcome brief\n\n## Outcome\n\nDescribe the result this board should deliver.\n\n## Boundaries\n\n- In scope\n- Out of scope\n"),
     "prd": ("Product requirements", "markdown", "# Product requirements\n\n## Outcome\n\n## Users\n\n## Requirements\n\n- FR-001: \n\n## Open questions\n\n"),
-    "frac": ("Functional requirements", "markdown", "# Functional requirements and acceptance criteria\n\n## FR-001\n\nRequirement.\n\n- AC-001.1: Given ..., when ..., then ...\n"),
+    "frac": ("Functional requirements", "markdown", "# Functional requirements and acceptance criteria\n\nCompletion source of truth: global `completion-protocol` skill. Interface source of truth: global `ui-ux-principles` skill > `UX Principles` and `UI Principles`.\n\nInventory every affected surface before implementation. Every requirement needs Given / When / Then criteria, evidence, negative-space checks, and an end-to-end journey where applicable. The feature is incomplete until the coverage ledger and completion manifest pass.\n\n## FR-001\n\nRequirement.\n\n- AC-001.1: Given ..., when ..., then ...\n"),
     "wireframe": ("Wireframes", "wire", "screen \"New screen\" device=desktop\n  stack\n    heading \"Primary screen\"\n    text \"Describe the user journey and states.\"\n    button \"Continue\" variant=primary\n"),
     "erd": ("Entity relationship diagram", "mermaid", "erDiagram\n    PROJECT ||--o{ ITEM : contains\n    ITEM ||--o{ REVISION : versions\n"),
     "diagram": ("System diagram", "mermaid", "flowchart LR\n    User --> DecisionsAI\n    DecisionsAI --> Project\n"),
     "decision": ("Decision", "markdown", "# Decision\n\n## Context\n\n## Decision\n\n## Consequences\n\n"),
     "architecture": ("Architecture and ERD", "mermaid", "erDiagram\n    PROJECT ||--o{ ITEM : contains\n    ITEM ||--o{ REVISION : versions\n"),
     "flows": ("Flows and wireframes", "wire", "screen \"Primary flow\" device=desktop\n  stack\n    heading \"Primary screen\"\n    text \"Describe the user journey and the screen states.\"\n"),
-    "skills": ("Skills and instructions", "markdown", "# Skills and instructions\n\n## Required skills\n\n- Identify the skills needed to deliver this plan.\n\n## Working instructions\n\n- Keep implementation aligned with the approved requirements.\n"),
+    "skills": ("Skills and instructions", "markdown", "# Skills and instructions\n\n## Required skills\n\n- `completion-protocol` for every non-trivial delivery.\n- Identify any additional skills needed to deliver this plan.\n\n## Working instructions\n\n- Keep implementation aligned with the approved requirements and prove complete coverage before completion.\n"),
     "handover": ("Handover", "markdown", "# Handover\n\n## What is ready\n\n## Open items\n\n## Next actions\n\n- Confirm the unresolved decisions before execution.\n"),
     "file_structure": ("File structure", "markdown", "# File structure\n\nThis is the bounded file tree observed in the linked project. It is regenerated only when you explicitly ask Plan to inspect the project.\n"),
 }

@@ -518,6 +518,11 @@ def _planning_model_tiers(settings: dict) -> List[tuple]:
             (override.orchestrator_model or "").strip() or "llama3.2",
         ))
 
+    workflow_provider = (settings.get("workflow_llm_provider") or "").strip()
+    workflow_model = (settings.get("workflow_llm_model") or "").strip()
+    if workflow_provider:
+        tiers.append(("workflow", workflow_provider.lower(), workflow_model or ""))
+
     coding_provider = (settings.get("coding_llm_provider") or "").strip()
     coding_model = (settings.get("coding_llm_model") or "").strip()
     if coding_provider:
@@ -536,11 +541,6 @@ def _planning_model_tiers(settings: dict) -> List[tuple]:
         model = (settings.get(model_key) or "").strip()
         if model and model.lower() != "auto":
             tiers.append((label, conv_provider, model))
-
-    workflow_provider = (settings.get("workflow_llm_provider") or "").strip()
-    workflow_model = (settings.get("workflow_llm_model") or "").strip()
-    if workflow_provider:
-        tiers.append(("workflow", workflow_provider.lower(), workflow_model or ""))
 
     tiers.append((
         "conversational",

@@ -381,10 +381,20 @@ def test_step_title_wins_over_incidental_plan_words_in_instruction():
     )) == "final_polish"
 
 
-def test_auto_role_policy_reserves_codex_for_final_polish(monkeypatch):
+def test_auto_role_policy_keeps_final_polish_local_until_gate_fails(monkeypatch):
     from distr.core.project_cli_backends.model_policy import apply_auto_step_role_policy
 
-    workflow = type("Workflow", (), {"run_settings": json.dumps({"auto_route_models": True})})()
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.model_policy._free_eligible_model",
+        lambda *_args, **_kwargs: {
+            "backend": "pi", "provider": "ollama", "model": "qwen3.8:27b"
+        },
+    )
+    workflow = type("Workflow", (), {"run_settings": json.dumps({
+        "auto_route_models": True,
+        "ui_local_first": True,
+        "hosted_ui_escalation_after_failures": 2,
+    })})()
     route = apply_auto_step_role_policy(
         {"backend": "pi", "model": "ornith:35b", "model_provider": "ollama", "complexity": "high"},
         workflow=workflow,
@@ -393,9 +403,29 @@ def test_auto_role_policy_reserves_codex_for_final_polish(monkeypatch):
         step_role="final_polish",
     )
 
+    assert route["backend"] == "pi"
+    assert route["model"] == "qwen3.8:27b"
+    assert "stays on a healthy local model" in route["policy_reason"].lower()
+
+
+def test_auto_role_policy_unlocks_codex_after_two_ui_gate_failures():
+    from distr.core.project_cli_backends.model_policy import apply_auto_step_role_policy
+
+    workflow = type("Workflow", (), {"run_settings": json.dumps({
+        "auto_route_models": True,
+        "ui_local_first": True,
+        "hosted_ui_escalation_after_failures": 2,
+    })})()
+    route = apply_auto_step_role_policy(
+        {"backend": "pi", "model": "qwen3.8:27b", "model_provider": "ollama"},
+        workflow=workflow,
+        config={"quality_gate_failures": 2},
+        settings={},
+        step_role="final_polish",
+    )
+
     assert route["backend"] == "codex"
-    assert route["model"] == "auto"
-    assert "final production polish" in route["policy_reason"].lower()
+    assert "unlocked" in route["policy_reason"].lower()
 
 
 def test_auto_role_policy_does_not_spend_codex_on_read_only_final_polish(monkeypatch):

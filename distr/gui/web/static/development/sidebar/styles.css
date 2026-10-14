@@ -39,6 +39,7 @@
 .sidebar-section-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; }
 .sidebar-section-actions .icon-button { width: 30px; height: 30px; font-size: 13px; letter-spacing: 0; text-transform: none; }
 .sidebar-section-label button { margin-left: auto; border: 0; background: transparent; color: var(--studio-dim); }
+.sidebar-section-label .sidebar-section-toggle { display: flex; width: 100%; min-height: 28px; align-items: center; gap: 6px; margin: 0; padding: 0; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; }
 .sidebar-primary-actions { display: grid; gap: 7px; padding: 7px 7px 12px; border-bottom: 1px solid var(--studio-line-soft); }
 .task-row-wrap { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; border-radius: 6px; }
 .task-row-wrap:hover { background: rgba(255,255,255,.045); }

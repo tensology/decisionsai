@@ -60,6 +60,34 @@ def test_ui_artifacts_fail_without_layout_hierarchy_notes():
     assert result["missing"] == ["layout_hierarchy_notes"]
 
 
+def test_contract_ui_evidence_requires_all_manifest_states_themes_and_criteria(tmp_path):
+    screenshot = tmp_path / "screen.png"
+    _write_png(screenshot, (255, 255, 255))
+    result = evaluate_ui_artifacts({
+        "before_unavailable_reason": "new screen",
+        "after_screenshot": str(screenshot),
+        "flow_summary": "Open the list.",
+        "happy_path_steps": ["Open the list"],
+        "click_count": 0,
+        "layout_hierarchy_notes": "Header and table align.",
+        "source_revision": "abc123",
+        "captured_at": "2026-10-14T12:00:00Z",
+        "viewports_checked": ["desktop", "mobile"],
+        "themes_checked": ["light"],
+        "states_checked": ["loading", "empty", "error", "populated"],
+        "acceptance_evidence": {"customers-renders": "Playwright passed"},
+        "ui_manifest": {
+            "required_viewports": ["desktop", "mobile"],
+            "required_themes": ["light", "dark"],
+            "required_states": ["loading", "empty", "error", "populated"],
+            "acceptance_criteria": ["customers-renders"],
+        },
+    })
+
+    assert result["verdict"] == "fail"
+    assert "themes_checked:dark" in result["missing"]
+
+
 def test_ui_artifacts_require_taste_checks_for_common_rejections():
     taste_summary = {
         "labels": {

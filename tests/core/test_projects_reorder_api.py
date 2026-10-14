@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
+from distr.core.db.kanban import KanbanBoard
 from distr.core.db.projects import Project
 from distr.gui.web.routes.settings import projects as project_routes
 
@@ -92,8 +93,14 @@ def test_update_project_persists_identity_fields_and_rejects_blank_name():
     with factory() as session:
         project = Project(name="Before", folder_location="/tmp/before", position=0)
         session.add(project)
+        session.flush()
+        board = KanbanBoard(name="Before", source="database", default_project_id=project.id)
+        session.add(board)
+        session.flush()
+        project.kanban_board_id = board.id
         session.commit()
         project_id = project.id
+        board_id = board.id
 
     def get_session():
         return _session_ctx(factory)
@@ -115,6 +122,32 @@ def test_update_project_persists_identity_fields_and_rejects_blank_name():
         updated = session.get(Project, project_id)
         assert updated.name == "After"
         assert updated.folder_location == "/tmp/after"
+        assert session.get(KanbanBoard, board_id).name == "After"
+
+
+def test_create_project_also_creates_its_development_board():
+    factory = _make_factory()
+
+    def get_session():
+        return _session_ctx(factory)
+
+    client = _make_client(factory)
+    with (
+        patch("distr.core.db.get_session", get_session),
+        patch("distr.core.workspace_memory.provision.bootstrap_project"),
+    ):
+        response = client.post(
+            "/api/projects",
+            json={"name": "Shared surface", "folder_location": "/tmp/shared"},
+        )
+
+    assert response.status_code == 200, response.text
+    with factory() as session:
+        project = session.get(Project, response.json()["id"])
+        board = session.get(KanbanBoard, project.kanban_board_id)
+        assert board.name == "Shared surface"
+        assert board.default_project_id == project.id
+        assert [lane.name for lane in board.lanes] == ["Backlog", "In Progress", "QA", "Complete"]
 
 
 def test_terminal_status_returns_shared_startup_and_shell_state():

@@ -997,6 +997,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                             "development_board_ticket_title": development.get("board_ticket_title"),
                             "development_board_ticket_lane": development.get("board_ticket_lane"),
                             "development_execution": development.get("execution") or {},
+                            "development_time_running": bool(development.get("time_running")),
+                            "development_time_seconds": max(0, int(development.get("time_seconds") or 0)),
                             "pinned": bool(development.get("pinned")),
                             "permission_profile": development.get("permission_profile") or {},
                             "remote_continuation": bool(development.get("remote_continuation")),

@@ -12,7 +12,6 @@ def test_harness_pack_bootstrap_projects_vendor_context_to_detected_harnesses(tm
         "cursor": "/usr/local/bin/cursor",
         "cursor-agent": "/usr/local/bin/cursor-agent",
         "pi": "/usr/local/bin/pi",
-        "kiro-cli": "/usr/local/bin/kiro-cli",
     }
 
     monkeypatch.setattr("distr.core.harness_pack.shutil.which", lambda name: detected.get(name))
@@ -29,7 +28,6 @@ def test_harness_pack_bootstrap_projects_vendor_context_to_detected_harnesses(tm
     assert result["detected"]["claude"] is True
     assert result["detected"]["cursor"] is True
     assert result["detected"]["pi"] is True
-    assert result["detected"]["kiro"] is True
 
     state_path = tmp_path / ".decisions" / "harness-pack-state.json"
     assert state_path.exists()
@@ -49,7 +47,6 @@ def test_harness_pack_bootstrap_projects_vendor_context_to_detected_harnesses(tm
         ".claude/skills/decisions-ecc-harness/SKILL.md",
         ".cursor/skills/decisions-ecc-harness/SKILL.md",
         ".pi/skills/decisions-ecc-harness/SKILL.md",
-        ".kiro/skills/decisions-ecc-harness/SKILL.md",
         "plugins/decisions-codex/skills/ecc-harness-pack/SKILL.md",
     ]:
         path = tmp_path / relative

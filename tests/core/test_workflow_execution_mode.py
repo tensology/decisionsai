@@ -25,6 +25,33 @@ def test_explicit_direct_override_wins():
     assert decision["signals"] == ["explicit_direct_override"]
 
 
+def test_risk_alone_does_not_turn_a_short_request_into_a_workflow():
+    from distr.core.workflow.execution_mode import choose_development_execution_mode
+
+    decision = choose_development_execution_mode(
+        "hello",
+        assessment={"complexity": "high", "operational_state": "risk"},
+    )
+
+    assert decision["mode"] == "direct"
+
+
+def test_confirmation_direct_choice_is_preserved_by_dispatch():
+    from distr.core.workflow.execution_mode import choose_development_execution_mode
+
+    decision = choose_development_execution_mode(
+        "Plan, implement, audit, and test the production migration end to end.",
+        assessment={
+            "complexity": "high",
+            "operational_state": "risk",
+            "execution_mode_override": "direct",
+        },
+    )
+
+    assert decision["mode"] == "direct"
+    assert decision["signals"] == ["user_selected_direct"]
+
+
 def test_infrastructure_skills_are_available_to_every_step():
     from distr.core.workflow.execution_mode import workflow_step_skills
 

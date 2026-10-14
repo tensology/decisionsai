@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from typing import Any
 
 
@@ -102,13 +103,46 @@ def evaluate_ui_artifacts(
         or data.get("user_standards_check")
     ):
         missing.append("standards_assessment")
+    manifest = data.get("ui_manifest") or data.get("screen_contract_manifest")
+    if isinstance(manifest, str) and Path(manifest).is_file():
+        try:
+            manifest = json.loads(Path(manifest).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+    contract_required: list[str] = []
+    if isinstance(manifest, dict) and manifest:
+        for field in ("source_revision", "captured_at", "acceptance_evidence"):
+            if not _present(data.get(field)):
+                contract_required.append(field)
+        coverage = {
+            "viewports_checked": manifest.get("required_viewports") or [],
+            "themes_checked": manifest.get("required_themes") or [],
+            "states_checked": manifest.get("required_states") or [],
+        }
+        for field, required_values in coverage.items():
+            actual = {str(item) for item in (data.get(field) or [])}
+            absent = [str(item) for item in required_values if str(item) not in actual]
+            if absent:
+                contract_required.append(f"{field}:{','.join(absent)}")
+        evidence = data.get("acceptance_evidence") or {}
+        for criterion_id in manifest.get("acceptance_criteria") or []:
+            if not isinstance(evidence, dict) or not _present(evidence.get(str(criterion_id))):
+                contract_required.append(f"acceptance_evidence:{criterion_id}")
+        screenshots = list((data.get("screenshots_by_screen") or {}).values())
+        if not screenshots and _present(data.get("after_screenshot")):
+            screenshots = [data.get("after_screenshot")]
+        for screenshot in screenshots:
+            if not Path(str(screenshot)).is_file():
+                contract_required.append(f"missing_screenshot:{screenshot}")
+    missing.extend(contract_required)
     return {
         "verdict": "pass" if not missing else "fail",
         "missing": missing,
         "required": list(REQUIRED_UI_ARTIFACT_FIELDS)
         + ["before_screenshot_or_reason"]
         + [f"taste_check:{item['label']}" for item in taste_requirements]
-        + (["standards_assessment"] if global_standards_required else []),
+        + (["standards_assessment"] if global_standards_required else [])
+        + contract_required,
         "taste_requirements": taste_requirements,
         "global_standards_required": global_standards_required,
         "artifacts": data,

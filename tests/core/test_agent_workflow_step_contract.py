@@ -104,7 +104,7 @@ def test_current_development_bundle_preserves_nested_model_and_output_contracts(
         "ticket", "board", "project", "workflow_memory", "project_memory", "linked_attachments"
     ]
     assert first["expected_outputs"] == [
-        "context_packet", "unknowns", "route_recommendation", "ui_design_read_if_applicable"
+            "context_packet", "scope_inventory", "unknowns", "route_recommendation", "ui_design_read_if_applicable"
     ]
 
     review = next(step for step in steps if step["title"] == "Independently review and validate the change")

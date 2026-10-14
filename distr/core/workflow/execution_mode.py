@@ -72,6 +72,14 @@ def choose_development_execution_mode(
     operational_state = str(
         assessment.get("operational_state") or assessment.get("sentiment") or "neutral"
     ).strip().lower()
+    if str(assessment.get("execution_mode_override") or "").strip().lower() == "direct":
+        return {
+            "mode": "direct",
+            "complexity": complexity,
+            "operational_state": operational_state,
+            "signals": ["user_selected_direct"],
+            "reason": "The user chose one direct development-agent turn.",
+        }
     if any(marker in text for marker in _DIRECT_OVERRIDES):
         return {
             "mode": "direct",
@@ -96,7 +104,6 @@ def choose_development_execution_mode(
     needs_workflow = bool(
         explicit_workflow
         or (complexity == "high" and any(signal in signals for signal in ("multi_phase_scope", "large_instruction")))
-        or (complexity == "high" and operational_state in {"blocked", "failing", "risk"})
     )
     return {
         "mode": "workflow" if needs_workflow else "direct",

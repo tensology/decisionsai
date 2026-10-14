@@ -7,7 +7,7 @@ from typing import Any
 
 DEVELOPER_WORKFLOW_NAME = "Development"
 DEVELOPER_WORKFLOW_SLUG = "development-ticket-to-implementation"
-DEVELOPER_WORKFLOW_VERSION = 13
+DEVELOPER_WORKFLOW_VERSION = 15
 
 DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "execution_mode": "sequential",
@@ -18,6 +18,8 @@ DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "adaptive_multi_model_enabled": True,
     "max_parallel_evaluators": 2,
     "prefer_free_local": True,
+    "ui_local_first": True,
+    "hosted_ui_escalation_after_failures": 2,
     "independent_validation": True,
     "allow_provider_failover": True,
     "memory_enabled": True,

@@ -214,18 +214,23 @@ def build_run_coordination_plan(
     # Some run creators know complexity before choosing a backend. Resolve the
     # configured complexity route here so every assignment and the run summary
     # have a concrete worker even when role-aware Auto is disabled.
+    configured_backend = str(
+        settings.get(f"project_cli_{complexity}_backend")
+        or settings.get("project_cli_medium_backend")
+        or "pi"
+    ).strip() or "pi"
     if not str(base_route.get("backend") or "").strip():
-        base_route["backend"] = str(
-            settings.get(f"project_cli_{complexity}_backend")
-            or settings.get("project_cli_medium_backend")
-            or "pi"
-        ).strip() or "pi"
+        base_route["backend"] = configured_backend
     if not str(base_route.get("model") or "").strip() or str(base_route.get("model")).strip().lower() == "auto":
-        base_route["model"] = str(
-            settings.get(f"project_cli_{complexity}_model")
-            or settings.get("project_cli_medium_model")
-            or "auto"
-        ).strip() or "auto"
+        base_route["model"] = (
+            str(
+                settings.get(f"project_cli_{complexity}_model")
+                or settings.get("project_cli_medium_model")
+                or "auto"
+            ).strip()
+            if str(base_route.get("backend") or "").strip().lower() == configured_backend.lower()
+            else "auto"
+        ) or "auto"
     assignments: dict[str, dict[str, Any]] = {}
     role_routes: dict[str, dict[str, Any]] = {}
     prior_step_id: int | None = None

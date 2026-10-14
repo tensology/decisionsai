@@ -141,6 +141,8 @@ class GoogleWorkspaceConnector:
             if connected_at:
                 try:
                     connected_time = datetime.fromisoformat(connected_at.replace('Z', '+00:00'))
+                    if connected_time.tzinfo is not None:
+                        connected_time = connected_time.astimezone(timezone.utc).replace(tzinfo=None)
                     self.token_expires_at = connected_time + timedelta(seconds=expires_in)
                 except (ValueError, TypeError):
                     self.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)

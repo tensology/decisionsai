@@ -23,7 +23,7 @@ Flow of work: **planning → wireframes → final production**.
 
 1. **Scan or outline screens** for the main journey (entry, success, empty, validation, failure).
 2. **Show the set** — All pages carousel and/or Sitemap.
-3. **FRAC the risky deltas**; reuse pack done-states for the rest.
+3. **FRAC the risky deltas**; for every user-facing screen, include all applicable Given / When / Then criteria required by the global `UX Principles` and `UI Principles`. Reuse pack done-states only for behavior outside that mandatory coverage.
 4. **ERD** for entities touched by those screens (`bind=Entity.field`).
 5. **Link each page** to view / model / logic annotations; do not invent payment/inventory topology.
 6. **Build tasks** only when enough decisions exist (see Plan conversation rules).
@@ -52,3 +52,4 @@ Full production render-in-template and complete V/M/BL wiring may land later; al
 - Stall on chrome (fonts, spacing) before screens and FRAC exist.
 - Leave the user staring at raw path dumps or "Invalid wireframe" walls — plain English + next step.
 - Treat discussion as permission to rewrite artifacts until Paul asks to record/update.
+- Begin interface planning from memory. Read the current global `ui-ux-principles` skill first.

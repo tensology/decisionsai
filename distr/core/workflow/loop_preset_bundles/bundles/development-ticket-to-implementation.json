@@ -7,7 +7,7 @@
   "category": "Engineering",
   "archetype": "incremental_ship",
   "description": "Ingest a ticket as the delivery plan, confirm its execution contract, implement with scoped CLI harness iteration, capture evidence, correct defects, and close the development slice with compact memory.",
-  "kickoff": "Start the \"Development\" loop.\nGoal: one linked ticket is implemented on the linked project with CLI harness iteration\nMax iterations: 6\nExit when: the ticket execution contract is confirmed, the scoped slice is implemented, relevant checks are green or explicitly blocked, browser evidence exists or is marked N/A with reason, and the ticket has a compact result packet.\nStep 1: Load the ticket, board, project, workflow memory, AGENTS.md/context files, linked files/media, and acceptance criteria before changing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "kickoff": "Start the \"Development\" loop.\nGoal: one linked ticket is implemented on the linked project with CLI harness iteration\nMax iterations: 6\nExit when: the ticket execution contract and complete affected-surface inventory are confirmed, every coverage-ledger item is verified or explicitly approved as excluded, negative-space and end-to-end checks pass, an independent completion audit passes, and the ticket has a valid completion manifest and compact result packet.\nStep 1: Load the ticket, board, project, workflow memory, AGENTS.md/context files, linked files/media, and acceptance criteria before changing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
   "loop_contract": {
     "name": "Development",
     "goal": "linked ticket slice implemented from its confirmed execution contract with harness evidence",
@@ -20,7 +20,7 @@
       "If stuck after several iterations, stop and report blockers instead of gaming metrics"
     ],
     "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
-    "step_1": "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, required files to inspect, missing information, and the proposed CLI/model route. For UI-bearing work, also infer a one-line design read from the audience, brand/reference assets, existing interface, intended user journey, and appropriate visual density; do not substitute a generic AI aesthetic. Prefer existing result packets, project documentation/evidence indexes, and high-signal manifests/configuration over a fresh whole-repository scan. Inspect existing docs/evidence before claiming there are no prior artifacts; for a routed UI app, inspect its route entrypoint before claiming a screen or homepage is absent. Use at most 12 focused read/list/search calls, never enumerate dependency, virtual-environment, cache, database, media, or generated trees, and stop inspecting as soon as every expected output is supported. Do not edit files in this step.",
+    "step_1": "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, required files to inspect, missing information, the proposed CLI/model route, and a bounded affected-surface inventory covering every route, state, content/data source, integration, output, and user journey reasonably implicated by the requested outcome. Do not treat examples in the request as the complete inventory. For UI-bearing work, also infer a one-line design read from the audience, brand/reference assets, existing interface, intended user journey, and appropriate visual density; do not substitute a generic AI aesthetic. Prefer existing result packets, project documentation/evidence indexes, and high-signal manifests/configuration over a fresh whole-repository scan. Stay within the configured focused inspection budget (10 calls for low, 18 for medium, 30 for high-complexity tickets), never enumerate dependency, virtual-environment, cache, database, media, or generated trees, and stop inspecting as soon as every expected output is supported. Inspect existing docs/evidence before claiming there are no prior artifacts; for a routed UI app, inspect its route entrypoint before claiming a screen or homepage is absent. The handoff already contains the ticket and summarized memory: do not reread the same path, invent sibling paths, or inspect old agent/session iteration history. When the ticket supplies public source URLs, record them as implementation inputs; do not fetch or research them during this context-only phase. Do not edit files in this step.",
     "archetype": "incremental_ship",
     "role": "senior_software_engineer"
   },
@@ -42,6 +42,8 @@
     "adaptive_multi_model_enabled": true,
     "max_parallel_evaluators": 2,
     "prefer_free_local": true,
+    "ui_local_first": true,
+    "hosted_ui_escalation_after_failures": 2,
     "independent_validation": true,
     "allow_provider_failover": true,
     "memory_enabled": true,
@@ -53,8 +55,9 @@
   "steps": [
     {
       "name": "Understand ticket and acceptance criteria",
-      "instruction": "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, required files to inspect, missing information, and the proposed CLI/model route. For UI-bearing work, also infer a one-line design read from the audience, brand/reference assets, existing interface, intended user journey, and appropriate visual density; do not substitute a generic AI aesthetic. Prefer existing result packets, project documentation/evidence indexes, and high-signal manifests/configuration over a fresh whole-repository scan. Stay within the configured focused inspection budget (10 calls for low, 18 for medium, 30 for high-complexity tickets), never enumerate dependency, virtual-environment, cache, database, media, or generated trees, and stop inspecting as soon as every expected output is supported. Inspect existing docs/evidence before claiming there are no prior artifacts; for a routed UI app, inspect its route entrypoint before claiming a screen or homepage is absent. The handoff already contains the ticket and summarized memory: do not reread the same path, invent sibling paths, or inspect old agent/session iteration history. When the ticket supplies public source URLs, record them as implementation inputs; do not fetch or research them during this context-only phase. Do not edit files in this step.",
+      "instruction": "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, required files to inspect, missing information, the proposed CLI/model route, and a bounded affected-surface inventory covering every route, state, content/data source, integration, output, and user journey reasonably implicated by the requested outcome. Do not treat examples in the request as the complete inventory. For UI-bearing work, also infer a one-line design read from the audience, brand/reference assets, existing interface, intended user journey, and appropriate visual density; do not substitute a generic AI aesthetic. Prefer existing result packets, project documentation/evidence indexes, and high-signal manifests/configuration over a fresh whole-repository scan. Stay within the configured focused inspection budget (10 calls for low, 18 for medium, 30 for high-complexity tickets), never enumerate dependency, virtual-environment, cache, database, media, or generated trees, and stop inspecting as soon as every expected output is supported. Inspect existing docs/evidence before claiming there are no prior artifacts; for a routed UI app, inspect its route entrypoint before claiming a screen or homepage is absent. The handoff already contains the ticket and summarized memory: do not reread the same path, invent sibling paths, or inspect old agent/session iteration history. When the ticket supplies public source URLs, record them as implementation inputs; do not fetch or research them during this context-only phase. Do not edit files in this step.",
       "skills": [
+        "completion-protocol",
         "product-lens",
         "brainstorming",
         "systematic-debugging"
@@ -68,7 +71,8 @@
         "Ticket scope, non-goals, or acceptance criteria are missing",
         "Project folder or repository shape was not identified",
         "Linked files/media or memory files were not checked or marked unavailable",
-        "The agent started editing before the context packet was produced"
+        "The agent started editing before the context packet was produced",
+        "The affected-surface inventory follows only examples from the prompt or omits system-discovered surfaces"
       ],
       "validation_prompt": "A context packet exists with ticket scope, non-goals, project route, linked files/media status, memory status, unknowns, and CLI/model route.",
       "validation_type": "llm_judgment",
@@ -87,12 +91,12 @@
           "prefer_local": true
         },
         "inspection_budget": {
-          "max_tool_calls": 18,
+          "max_tool_calls": 60,
           "max_files": 24,
           "max_tool_calls_by_complexity": {
-            "low": 10,
-            "medium": 18,
-            "high": 30
+            "low": 30,
+            "medium": 60,
+            "high": 99
           }
         },
         "required_context": [
@@ -105,16 +109,19 @@
         ],
         "expected_outputs": [
           "context_packet",
+          "scope_inventory",
           "unknowns",
           "route_recommendation",
           "ui_design_read_if_applicable"
-        ]
+        ],
+        "output_token_budget": 2500
       }
     },
     {
       "name": "Confirm ticket execution contract",
-      "instruction": "Treat the selected ticket and its acceptance criteria as the implementation plan. Confirm the smallest shippable slice, upstream ticket dependencies, existing artifacts to reuse, files expected to change, discovered commands, browser/evidence path, rollback notes, and ticket-specific skip rules. For UI-bearing work, define the primary user flow, observable visual claims, required desktop/mobile viewports, interaction states, brand/design tokens to preserve, and explicit anti-bloat constraints. Return this as a compact execution contract in the workflow handoff; do not create plan.md or another parallel project plan. If the ticket is not executable, pause with one precise missing decision instead of producing more planning documents. The complete ticket and upstream planning fields are already attached. Synthesize them directly: do not call tools, reread workspace files, or rescan the project.",
+      "instruction": "Treat the selected ticket and its acceptance criteria as the implementation plan. Confirm the smallest shippable slice, upstream ticket dependencies, existing artifacts to reuse, files expected to change, discovered commands, browser/evidence path, rollback notes, and ticket-specific skip rules. Convert the affected-surface inventory into a coverage ledger with evidence requirements, approved exclusions, negative-space checks designed to find omissions, and complete end-to-end journeys. For UI-bearing work, define the primary user flow, observable visual claims, required desktop/mobile viewports, interaction states, brand/design tokens to preserve, and explicit anti-bloat constraints. Return this as a compact execution contract in the workflow handoff; do not create plan.md or another parallel project plan. If the ticket is not executable, pause with one precise missing decision instead of producing more planning documents. The complete ticket and upstream planning fields are already attached. Synthesize them directly: do not call tools, reread workspace files, or rescan the project.",
       "skills": [
+        "completion-protocol",
         "writing-plans",
         "executing-plans",
         "doc-coauthoring"
@@ -128,7 +135,8 @@
         "A duplicate plan.md or parallel project plan was created",
         "Execution contract is broader than the ticket",
         "Upstream dependencies or reusable artifacts were not checked",
-        "Expected files, checks, browser evidence, rollback, or skip rules are missing"
+        "Expected files, checks, browser evidence, rollback, or skip rules are missing",
+        "Coverage ledger, negative-space checks, or end-to-end journeys are missing"
       ],
       "validation_prompt": "A compact execution contract exists in the run handoff, treats the ticket as the plan, confirms dependencies and reusable artifacts, and includes expected files, checks, evidence, rollback, and skip rules without creating plan.md.",
       "validation_type": "llm_judgment",
@@ -148,17 +156,22 @@
         },
         "required_context": [
           "context_packet",
+          "scope_inventory",
           "unknowns",
           "route_recommendation",
           "ui_design_read_if_applicable"
         ],
         "expected_outputs": [
           "execution_contract",
+          "coverage_ledger",
+          "negative_space_plan",
+          "end_to_end_journeys",
           "dependency_status",
           "reusable_artifacts",
           "copy_manifest_if_applicable",
           "ui_acceptance_contract_if_applicable"
-        ]
+        ],
+        "output_token_budget": 2500
       }
     },
     {
@@ -195,6 +208,9 @@
         },
         "required_context": [
           "execution_contract",
+          "coverage_ledger",
+          "negative_space_plan",
+          "end_to_end_journeys",
           "dependency_status",
           "reusable_artifacts",
           "copy_manifest_if_applicable",
@@ -202,18 +218,21 @@
         ],
         "expected_outputs": [
           "changed_files",
+          "coverage_ledger_update",
           "command_log",
           "security_sanitisation",
           "blockers",
           "ui_flow_evidence_if_applicable"
-        ]
+        ],
+        "output_token_budget": 8000
       },
       "on_fail_goto_position": 2
     },
     {
       "name": "Independently review and validate the change",
-      "instruction": "Review the implementation independently from the implementation model. Inspect the diff for correctness, regressions, security, maintainability, dead code, and acceptance-criteria coverage. Run the repository's discovered lint, test, and build commands. For UI work, start the app and use Playwright or the browser tool to capture screenshot evidence at the contract's desktop and mobile viewports. Verify each visible claim separately, walk the primary flow, inspect console/runtime errors, and critique information hierarchy, spacing/density, copy, control placement, state behavior, accessibility, visual consistency, brand fit, and obvious AI-template bloat. 'Looks good' is not evidence. For non-UI work, record why browser validation is not applicable. Classify every finding as either a ticket blocker or a wider project-release finding. The ship_verdict applies only to the linked ticket: a pre-existing or out-of-scope defect must be preserved as a project_release_finding and must not fail this ticket unless the ticket introduced it, modified the affected surface, or cannot satisfy acceptance safely without it. Do not edit files in this review step.",
+      "instruction": "Review the implementation independently from the implementation model. Inspect the diff for correctness, regressions, security, maintainability, dead code, and acceptance-criteria coverage. Run the repository's discovered lint, test, and build commands. For UI work, start the app and use Playwright or the browser tool to capture screenshot evidence at the contract's desktop and mobile viewports. Verify each visible claim separately, walk the primary flow, inspect console/runtime errors, and critique information hierarchy, spacing/density, copy, control placement, state behavior, accessibility, visual consistency, brand fit, and obvious AI-template bloat. 'Looks good' is not evidence. For non-UI work, record why browser validation is not applicable. Classify every finding as either a ticket blocker or a wider project-release finding. The ship_verdict applies only to the linked ticket: a pre-existing or out-of-scope defect must be preserved as a project_release_finding and must not fail this ticket unless the ticket introduced it, modified the affected surface, or cannot satisfy acceptance safely without it. Audit the full coverage ledger against the original request, not merely the changed files. Run the planned negative-space checks to find omitted surfaces and exercise every required end-to-end journey. Do not edit files in this review step.",
       "skills": [
+        "completion-protocol",
         "qa-tester",
         "verification-loop",
         "browser-qa",
@@ -233,7 +252,8 @@
         "Acceptance criteria were not checked against the diff",
         "UI work lacks desktop/mobile screenshot evidence, observable claim verdicts, or a concrete blocker",
         "UI review ignores hierarchy, density, task flow, states, accessibility, brand fit, or template-like bloat",
-        "Findings do not have severity and actionable evidence"
+        "Findings do not have severity and actionable evidence",
+        "Review did not search for omitted surfaces or compare the coverage ledger to the original request"
       ],
       "validation_prompt": "Independent review reports no unresolved ticket-blocking findings, repository checks relevant to this ticket pass, acceptance criteria are covered, and UI evidence exists or is explicitly N/A with reason. Wider project-release findings remain visible but do not change the ticket verdict unless causally related.",
       "validation_type": "llm_judgment",
@@ -250,19 +270,27 @@
         },
         "required_context": [
           "execution_contract",
+          "coverage_ledger",
+          "negative_space_plan",
+          "end_to_end_journeys",
           "changed_files",
           "command_log",
           "acceptance_criteria"
         ],
         "expected_outputs": [
           "review_findings",
+          "coverage_ledger_audit",
+          "negative_space_audit",
+          "end_to_end_evidence",
+          "completion_gaps",
           "project_release_findings",
           "check_results",
           "security_audit",
           "browser_evidence",
           "visual_claim_verdicts",
           "ship_verdict"
-        ]
+        ],
+        "output_token_budget": 2000
       },
       "on_pass_goto_position": 5,
       "on_fail_goto_position": 4
@@ -307,15 +335,17 @@
           "rerun_results",
           "skip_or_blocker_reason",
           "next_action"
-        ]
+        ],
+        "output_token_budget": 8000
       },
       "on_pass_goto_position": 3,
       "on_fail_goto_position": 4
     },
     {
       "name": "Final production polish and ship audit",
-      "instruction": "Use Codex as the strongest final production pass after implementation and independent review. Read the ticket execution contract, the diff, review findings, correction evidence, and the exact acceptance criteria. Fix only remaining release-blocking defects, then run the discovered project checks and the required Playwright/browser path for UI work. For every UI-bearing ticket, inspect the rendered desktop and mobile experience as a senior product designer: the task flow must be immediately understandable; hierarchy, spacing and density must feel deliberate; buttons and controls must be simple, consistent, well placed and fully stateful; copy must be clear; brand/reference assets must drive the aesthetic; and no generic AI cards, pills, gradients, excess whitespace, visual noise, clipped content, awkward responsiveness or unmotivated motion may remain. Confirm that no placeholder content, debug residue, dead code, broken navigation, console errors, missing responsive states, or unverified checkout/auth paths remain. Produce a concise ship verdict with before/after screenshot evidence and per-claim verdicts; do not broaden the ticket or redesign accepted work.",
+      "instruction": "Use the certified local UI worker for the final production pass after implementation and independent review. Escalate to a hosted model only after two recorded local quality-gate failures or when a required capability is unavailable locally. Read the ticket execution contract, the diff, review findings, correction evidence, and the exact acceptance criteria. Fix only remaining release-blocking defects, then run the discovered project checks and the required Playwright/browser path for UI work. Reconcile every coverage-ledger item, repeat failed negative-space checks and journeys after corrections, and return the one-line JSON `completion_manifest` required by the global completion-protocol skill. A complete verdict is forbidden while any item is unverified, excluded without approval, blocked, or supported only by stale/self-authored evidence. For every UI-bearing ticket, inspect the rendered desktop and mobile experience as a senior product designer: the task flow must be immediately understandable; hierarchy, spacing and density must feel deliberate; buttons and controls must be simple, consistent, well placed and fully stateful; copy must be clear; brand/reference assets must drive the aesthetic; and no generic AI cards, pills, gradients, excess whitespace, visual noise, clipped content, awkward responsiveness or unmotivated motion may remain. Confirm that no placeholder content, debug residue, dead code, broken navigation, console errors, missing responsive states, or unverified checkout/auth paths remain. Produce a concise ship verdict with before/after screenshot evidence and per-claim verdicts; do not broaden the ticket or redesign accepted work.",
       "skills": [
+        "completion-protocol",
         "verification-loop",
         "finishing-a-development-branch",
         "browser-qa",
@@ -333,9 +363,10 @@
         "UI work lacks final desktop/mobile screenshot evidence and per-claim verdicts",
         "Rendered UI remains confusing, bloated, visually inconsistent, inaccessible, off-brand, or template-like",
         "Console/runtime errors or broken critical flows remain",
-        "Ship verdict does not map evidence to acceptance criteria"
+        "Ship verdict does not map evidence to acceptance criteria",
+        "Completion manifest is missing, invalid, or does not account for every inventory item"
       ],
-      "validation_prompt": "Codex final polish resolves release blockers, project and browser checks pass, and the ship verdict maps evidence to every acceptance criterion.",
+      "validation_prompt": "Final polish resolves release blockers, project and browser checks pass, and the ship verdict maps evidence to every acceptance criterion.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "action_type": "send_to_project_cli",
@@ -345,10 +376,15 @@
         "step_role": "final_polish",
         "model_policy": {
           "auto_route_models": true,
-          "preferred_backend": "codex"
+          "ui_local_first": true
         },
+        "quality_gate_failure_threshold": 2,
         "required_context": [
           "execution_contract",
+          "coverage_ledger",
+          "negative_space_audit",
+          "end_to_end_evidence",
+          "completion_gaps",
           "changed_files",
           "review_findings",
           "rerun_results",
@@ -360,8 +396,10 @@
           "final_security_audit",
           "final_browser_evidence",
           "visual_quality_verdict",
-          "ship_verdict"
-        ]
+          "ship_verdict",
+          "completion_manifest"
+        ],
+        "output_token_budget": 2500
       },
       "on_pass_goto_position": 6,
       "on_fail_goto_position": 4
@@ -408,7 +446,8 @@
           "compact_memory_delta",
           "failed_attempts",
           "lessons"
-        ]
+        ],
+        "output_token_budget": 800
       },
       "on_fail_goto_position": 4,
       "validation_pass_action": "end_loop",

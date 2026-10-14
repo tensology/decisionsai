@@ -33,18 +33,25 @@ logger = logging.getLogger(__name__)
 # Server configuration
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
-TENSOLOGY_HEARTBEAT_SECONDS = 60
+TENSOLOGY_HEARTBEAT_SECONDS = 1
 
 
 async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_SECONDS):
     """Refresh Tensology's authenticated connection status while DecisionsAI runs."""
     import asyncio
 
-    from distr.core.tensology_client import TensologyApiError, send_tensology_heartbeat
+    from distr.core.tensology_client import (
+        TensologyApiError,
+        process_tensology_discussion_context,
+        process_tensology_discussion_assessments,
+        send_tensology_heartbeat,
+    )
 
     while True:
         try:
             await asyncio.to_thread(send_tensology_heartbeat)
+            await asyncio.to_thread(process_tensology_discussion_assessments)
+            await asyncio.to_thread(process_tensology_discussion_context)
         except TensologyApiError as exc:
             logger.debug("Tensology heartbeat unavailable: %s", exc)
         except Exception as exc:

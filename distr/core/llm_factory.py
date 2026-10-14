@@ -87,8 +87,8 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     those take precedence over global settings.
 
     Fallback order:
-      provider: workflow_llm_provider -> conversational_llm_provider -> agent_provider -> llm_provider -> "Ollama"
-      model:    workflow_llm_model   -> conversational_llm_model   -> agent_model   -> llm_model   -> ""
+      provider: workflow_llm_provider -> coding_llm_provider -> conversational_llm_provider -> agent_provider -> llm_provider -> "Ollama"
+      model:    workflow_llm_model   -> coding_llm_model   -> conversational_llm_model   -> agent_model   -> llm_model   -> ""
     """
     from distr.core.llm_override import get_llm_override
 
@@ -108,13 +108,15 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
         return normalize_provider(workflow_provider), workflow_model
 
     provider = (
-        (settings.get("conversational_llm_provider") or "").strip()
+        (settings.get("coding_llm_provider") or "").strip()
+        or (settings.get("conversational_llm_provider") or "").strip()
         or (settings.get("agent_provider") or "").strip()
         or (settings.get("llm_provider") or "").strip()
         or "Ollama"
     )
     model = (
-        (settings.get("conversational_llm_model") or "").strip()
+        (settings.get("coding_llm_model") or "").strip()
+        or (settings.get("conversational_llm_model") or "").strip()
         or (settings.get("agent_model") or "").strip()
         or (settings.get("llm_model") or "").strip()
         or ""
@@ -126,7 +128,7 @@ def resolve_llm_candidates(settings: Dict[str, Any]) -> List[Tuple[str, str]]:
     """Return provider/model pairs for retryable lightweight LLM calls.
 
     Matches WorkflowAgent resolution: workflow LLM when configured, otherwise
-    conversational (Settings → Workflow → "Inherit from Conversational"), then
+    coding (Settings → Workflow → "Inherit from Coding"), conversational, then
     legacy agent keys, then a local Ollama fallback.
     """
     from distr.core.llm_override import get_llm_override
@@ -153,6 +155,10 @@ def resolve_llm_candidates(settings: Dict[str, Any]) -> List[Tuple[str, str]]:
     workflow_provider = (settings.get("workflow_llm_provider") or "").strip()
     if workflow_provider:
         add(workflow_provider, settings.get("workflow_llm_model") or "")
+
+    coding_provider = (settings.get("coding_llm_provider") or "").strip()
+    if coding_provider:
+        add(coding_provider, settings.get("coding_llm_model") or "")
 
     conv_provider = (
         (settings.get("conversational_llm_provider") or "").strip()

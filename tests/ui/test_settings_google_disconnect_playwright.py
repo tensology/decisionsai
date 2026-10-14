@@ -1,6 +1,7 @@
 """Browser coverage for the Google disconnect flow on Third Party settings."""
 
 import json
+import time
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -9,6 +10,25 @@ from playwright.sync_api import Page, Route, expect
 
 pytestmark = pytest.mark.e2e_playwright
 BASE_URL = "http://127.0.0.1:8765"
+
+
+def test_google_oauth_return_renders_connected_status_after_delayed_health_check(page: Page):
+    def route_connection_status(route: Route):
+        time.sleep(0.2)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"google_connected": True, "google_error": ""}),
+        )
+
+    page.route("**/api/advanced/connection-status", route_connection_status)
+    page.goto(
+        f"{BASE_URL}/settings?subtab=connect&provider=google&google=connected#thirdparty",
+        wait_until="domcontentloaded",
+    )
+
+    expect(page.get_by_text("Google is connected.", exact=False)).to_be_visible()
+    expect(page.get_by_role("button", name="Reconnect", exact=True)).to_be_visible()
 
 
 def test_google_disconnect_confirms_executes_and_refreshes_ui(page: Page):

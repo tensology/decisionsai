@@ -24,7 +24,7 @@ def test_bring_up_development_goes_to_open_page():
 def test_bring_up_web_ui_goes_to_open_page():
     result = _detect("Can you bring up the web UI?")
     assert result.tool_name == "open_page"
-    assert result.tool_args.get("page") == "development"
+    assert result.tool_args.get("page") == "chat"
 
 
 def test_bring_up_named_board_keeps_board_name():

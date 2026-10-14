@@ -3,6 +3,11 @@ name: decisions-ui-ideation
 description: Run before implementing UI — research real product patterns (Refero/Mobbin MCP), pick a design direction, and output tokens or a short DESIGN.md before writing code.
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Decisions UI Ideation
 
 **I am running research and direction-setting so the user gets designed UI, not generic AI layout.**

@@ -4,6 +4,11 @@ description: Suite of tools for creating elaborate, multi-component claude.ai HT
 license: Complete terms in LICENSE.txt
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Web Artifacts Builder
 
 To build powerful frontend claude.ai artifacts, follow these steps:
@@ -11,7 +16,7 @@ To build powerful frontend claude.ai artifacts, follow these steps:
 2. Develop your artifact by editing the generated code
 3. Bundle all code into a single HTML file using `scripts/bundle-artifact.sh`
 4. Display artifact to user
-5. (Optional) Test the artifact
+5. Test and visually inspect the artifact against the global Definition of Done - UI
 
 **Stack**: React 18 + TypeScript + Vite + Parcel (bundling) + Tailwind CSS + shadcn/ui
 
@@ -63,11 +68,9 @@ This creates `bundle.html` - a self-contained artifact with all JavaScript, CSS,
 
 Finally, share the bundled HTML file in conversation with the user so they can view it as an artifact.
 
-### Step 5: Testing/Visualizing the Artifact (Optional)
+### Step 5: Test and visualize the artifact
 
-Note: This is a completely optional step. Only perform if necessary or requested.
-
-To test/visualize the artifact, use available tools (including other Skills or built-in tools like Playwright or Puppeteer). In general, avoid testing the artifact upfront as it adds latency between the request and when the finished artifact can be seen. Test later, after presenting the artifact, if requested or if issues arise.
+Before presenting the artifact, use available tools such as Playwright or Puppeteer to exercise its primary behavior. Visually inspect the final desktop and mobile views, run the global Definition of Done - UI, and fix every failed applicable check.
 
 ## Reference
 

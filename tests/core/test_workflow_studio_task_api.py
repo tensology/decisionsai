@@ -152,6 +152,24 @@ def test_studio_auto_routing_assessment_keeps_small_copy_edit_low():
     assert payload["execution_mode"] == "direct"
 
 
+def test_studio_auto_routing_ignores_risk_words_from_old_messages():
+    response = _client().post(
+        "/api/workflows/studio/routing-assessment",
+        json={
+            "instruction": "hello",
+            "recent_messages": [
+                "Audit the production migration and run end-to-end tests after implementation."
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["complexity"] != "high"
+    assert payload["operational_state"] == "neutral"
+    assert payload["execution_mode"] == "direct"
+
+
 def test_studio_auto_routing_uses_confident_laya_assessment(monkeypatch):
     monkeypatch.setattr("distr.core.laya_runtime.get_mode", lambda: "auto")
     monkeypatch.setattr(

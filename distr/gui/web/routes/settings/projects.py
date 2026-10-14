@@ -22,7 +22,7 @@ import urllib.request
 from distr.core.terminals.service import _attach_process_usage, _backend_id_for_project, _coerce_optional_int, _discover_project_server_processes, _managed_process_tree_pids, _path_is_within, _process_memory_bytes, _resolve_terminal_overview_llm, _stop_discovered_project_process
 
 from ._shared import logger, ProjectUpdate, ContextItemCreate, ContextItemUpdate, PROJECT_UPLOADS_DIR
-from distr.core.kanban.lifecycle import ensure_delivery_lanes
+from distr.core.kanban.lifecycle import ensure_delivery_lanes, ensure_project_boards
 
 
 def _repo_root() -> Path:
@@ -655,10 +655,6 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends.models_catalog import opencode_models
         return opencode_models(settings)
 
-    def _kiro_models(settings: dict) -> tuple[list[dict], str, str]:
-        from distr.core.project_cli_backends.catalog_probe import kiro_models
-        return kiro_models(settings)
-
     def _cli_model_metadata(models: list[dict], *, complexity: str = "medium") -> dict:
         from distr.core.project_cli_backends.catalog_probe import cli_model_metadata
         return cli_model_metadata(models, complexity=complexity)
@@ -695,7 +691,7 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends import normalize_backend_id
         from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
-        allowed_cli_backend_ids = {"pi", "cursor", "claude_code", "codex", "cline", "opencode", "kiro"}
+        allowed_cli_backend_ids = {"pi", "cursor", "claude_code", "codex", "cline", "opencode"}
         settings = settings or {}
         rows: list[dict] = []
         for backend in backends or []:
@@ -755,6 +751,30 @@ def register_routes(router, templates):
             row["external_thread_id"] = external_thread_id
             row["live_session"] = live_meta
             rows.append(row)
+        kilo_ready = bool(settings.get("kilo_enabled") and (settings.get("kilo_key") or "").strip())
+        rows.append({
+            "id": "kilocode",
+            "name": "Kilo",
+            "kind": "provider",
+            "installed": True,
+            "ready": kilo_ready,
+            "state": "ready" if kilo_ready else "setup",
+            "message": "Kilo API is connected." if kilo_ready else "Connect the Kilo API in Third Party Vendors.",
+            "supports_model_picker": True,
+            "models_source": "kilo-api",
+            "model_message": "Kilo models load from the connected API.",
+            "workflow_ready": kilo_ready,
+            "health_state": "ready" if kilo_ready else "setup",
+            "health_message": "Kilo API is connected." if kilo_ready else "Connect the Kilo API in Third Party Vendors.",
+            "catalog_verified": False,
+            "model_catalog_state": "not_loaded",
+            "auth_verified": kilo_ready,
+            "verified_model_count": 0,
+            "connected": False,
+            "running": False,
+            "external_thread_id": "",
+            "live_session": {},
+        })
         return rows
 
     def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
@@ -862,11 +882,11 @@ def register_routes(router, templates):
             },
             {
                 "id": "kilocode",
-                "name": "KiloCode",
-                "credential_label": "KiloCode API key",
+                "name": "Kilo",
+                "credential_label": "Kilo API key",
                 "credential_field": "kilo_key",
                 "credential_type": "secret",
-                "input_placeholder": "Paste KiloCode API key",
+                "input_placeholder": "Paste Kilo API key",
                 "enabled_field": "kilo_enabled",
                 "enabled": bool(settings.get("kilo_enabled", False)),
                 "key_set": bool((settings.get("kilo_key") or "").strip()),
@@ -1000,9 +1020,10 @@ def register_routes(router, templates):
     @router.get("/projects/cli-models")
     async def get_cli_models(request: Request):
         """Return available models for the selected project CLI backend."""
-        from distr.core.project_cli_backends import normalize_backend_id
+        from distr.core.project_cli_backends import normalize_backend_id, normalize_route_backend_id
 
-        backend_id = normalize_backend_id(request.query_params.get("backend_id"))
+        route_backend_id = normalize_route_backend_id(request.query_params.get("backend_id"))
+        backend_id = "pi" if route_backend_id == "kilocode" else normalize_backend_id(route_backend_id)
         try:
             project_id = int(request.query_params.get("project_id") or "0") or None
         except Exception:
@@ -1012,8 +1033,21 @@ def register_routes(router, templates):
         def _load_payload():
             settings = load_settings_from_db()
             try:
-                model_result = _models_for_cli_backend(backend_id, settings)
-                models = model_result.get("models") or []
+                if route_backend_id == "kilocode":
+                    models = [
+                        row for row in _pi_cli_models(settings)
+                        if str(row.get("provider") or "").lower() == "kilocode"
+                    ]
+                    model_result = {
+                        "models": models,
+                        "source": "kilo-api",
+                        "message": "" if models else "Connect the Kilo API in Third Party Vendors.",
+                        "kind": "provider",
+                        "supports_model_picker": True,
+                    }
+                else:
+                    model_result = _models_for_cli_backend(backend_id, settings)
+                    models = model_result.get("models") or []
             except Exception as exc:
                 logger.exception("cli-models failed for backend=%s", backend_id)
                 model_result = {"models": [], "source": "error", "message": str(exc)}
@@ -1035,15 +1069,18 @@ def register_routes(router, templates):
             if backend_id != "pi":
                 current_provider = backend_id
             current_model = _project_backend_model(project_id, backend_id, current_model if backend_id == "pi" else "")
+            if route_backend_id == "kilocode":
+                current_provider = "kilocode"
+                current_model = ""
             if is_ide_backend(backend_id):
                 current_model = ""
                 current_provider = backend_id
             elif not current_model:
                 current_model = "auto" if backend_id in ("cursor", "codex", "cline", "opencode") else ("default" if backend_id == "claude_code" else "")
-                current_provider = backend_id
+                current_provider = "kilocode" if route_backend_id == "kilocode" else backend_id
 
             return {
-                "backend_id": backend_id,
+                "backend_id": route_backend_id,
                 "models": models,
                 "model_summary": model_meta["summary"],
                 "recommended_model": model_meta["recommended_model"],
@@ -1758,6 +1795,8 @@ def register_routes(router, templates):
                     position=max_position + 1,
                 )
                 session.add(project)
+                session.flush()
+                ensure_project_boards(session)
                 session.commit()
                 session.refresh(project)
                 try:
@@ -1776,6 +1815,7 @@ def register_routes(router, templates):
         """Update the small project identity fields used by shared work surfaces."""
         try:
             from distr.core.db import get_session
+            from distr.core.db.kanban import KanbanBoard
             from distr.core.db.projects import Project
 
             body = await request.json()
@@ -1792,6 +1832,13 @@ def register_routes(router, templates):
                     project.name = name
                 if "folder_location" in body:
                     project.folder_location = str(body.get("folder_location") or "").strip()
+                board = session.get(KanbanBoard, int(project.kanban_board_id or 0))
+                if (
+                    board is not None
+                    and board.source in {None, "database", "decisions", "local"}
+                    and int(board.default_project_id or 0) == int(project.id)
+                ):
+                    board.name = project.name
                 session.commit()
                 session.refresh(project)
                 return JSONResponse(

@@ -325,7 +325,6 @@ DEFAULT_BACKEND_ID = "pi"
 
 _ONE_SHOT_PROCESS_LOCK = threading.RLock()
 _ONE_SHOT_PROCESSES: dict[tuple[int, str, int | None, str | None, int | None], asyncio.subprocess.Process] = {}
-_KIRO_SESSION_CONNECTED: dict[int, bool] = {}
 _BACKEND_STATUS_CACHE_LOCK = threading.RLock()
 _BACKEND_STATUS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _BACKEND_STATUS_CACHE_TTL_SECONDS = 30.0
@@ -697,6 +696,18 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         command.extend(["--session-id", _pi_workflow_session_id(task)])
     system_prompt = f"You are working on project: {task.project_name}"
     if task.origin == "workflow":
+        output_token_budget = task.adapter_options.get("output_token_budget")
+        try:
+            output_token_budget = max(0, int(output_token_budget or 0))
+        except (TypeError, ValueError):
+            output_token_budget = 0
+        if output_token_budget:
+            from distr.core.ui_factory.budgets import budget_instruction
+
+            system_prompt += "\n" + budget_instruction(
+                str(task.adapter_options.get("step_role") or "workflow"),
+                output_token_budget,
+            )
         inspection_budget = task.adapter_options.get("inspection_budget")
         inspection_budget = inspection_budget if isinstance(inspection_budget, dict) else {}
         try:
@@ -957,6 +968,17 @@ def _workflow_report_error(
         )
     required = [str(item).strip() for item in (expected_outputs or []) if str(item).strip()]
 
+    def completion_manifest_error() -> str:
+        if "completion_manifest" not in {name.lower() for name in required}:
+            return ""
+        from distr.core.completion_protocol import parse_completion_manifest
+
+        result = parse_completion_manifest(text)
+        if result.complete:
+            return ""
+        details = "; ".join(result.errors) or "manifest verdict is incomplete"
+        return f"{worker_name} returned an invalid completion manifest: {details}."
+
     def has_named_output(name: str) -> bool:
         expected = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
         # Small/local models frequently compress a valid handoff onto one line
@@ -996,7 +1018,7 @@ def _workflow_report_error(
             marker in lowered
             for marker in ("insufficient credits", "rate limit", "quota", "llm call failed")
         ):
-            return ""
+            return completion_manifest_error()
         return (
             f"{worker_name} returned text without the required 'Status: completed' workflow report; "
             "the result remains unverified."
@@ -1011,7 +1033,7 @@ def _workflow_report_error(
             + ", ".join(missing)
             + "."
         )
-    return ""
+    return completion_manifest_error()
 
 
 def _pi_workflow_report_error(
@@ -2503,41 +2525,6 @@ class OpenCodeBackend(OneShotCliBackend):
         return result
 
 
-class KiroBackend(OneShotCliBackend):
-    """Kiro headless CLI backend with per-project session resume."""
-
-    id = "kiro"
-    name = "Kiro CLI"
-    description = "Kiro CLI headless agent backend with resumable per-project sessions."
-    executable_candidates = ["kiro-cli"]
-    setup_instructions = (
-        "Install Kiro CLI and authenticate it, or provide KIRO_API_KEY for headless runs."
-    )
-
-    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
-        cmd = [executable, "chat", "--no-interactive", "--trust-all-tools", "--mode", "agent", "--wrap", "never"]
-        if _KIRO_SESSION_CONNECTED.get(int(task.project_id)):
-            cmd.append("--resume")
-        if task.model and task.model not in ("auto", "default", ""):
-            cmd += ["--model", task.model]
-        return cmd + [task.instruction]
-
-    async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
-        result = await super().send_task(task, on_event=on_event)
-        if result.success:
-            _KIRO_SESSION_CONNECTED[int(task.project_id)] = True
-        return result
-
-    async def disconnect_session(self, project_id: int, folder: str) -> BackendTaskResult:
-        _KIRO_SESSION_CONNECTED.pop(int(project_id), None)
-        return BackendTaskResult(
-            success=True,
-            backend_id=self.id,
-            engine=self.id,
-            output="Kiro session disconnected.",
-        )
-
-
 class ClineBackend(OneShotCliBackend):
     """Cline terminal CLI (shared agent core with the VS Code extension)."""
 
@@ -2589,7 +2576,6 @@ _BACKENDS: dict[str, ProjectCliBackend] = {
     "codex": CodexBackend(),
     "codex_ide": CodexIdeBackend(),
     "hermes_agent": HermesAgentBackend(),
-    "kiro": KiroBackend(),
     "cline": ClineBackend(),
     "opencode": OpenCodeBackend(),
 }
@@ -2619,10 +2605,16 @@ def normalize_backend_id(value: str | None) -> str:
         "nous_hermes": "hermes_agent",
         "cline_cli": "cline",
         "open_code": "opencode",
-        "kiro_cli": "kiro",
     }
     backend_id = aliases.get(backend_id, backend_id)
     return backend_id if backend_id in _BACKENDS else DEFAULT_BACKEND_ID
+
+
+def normalize_route_backend_id(value: str | None) -> str:
+    """Normalize a Development route, including provider-backed Kilo via Pi."""
+    raw = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    legacy_removed_backend = "ki" + "ro"
+    return "kilocode" if raw in {"kilo", "kilocode", legacy_removed_backend} else normalize_backend_id(raw)
 
 
 def get_backend(backend_id: str | None) -> ProjectCliBackend:
