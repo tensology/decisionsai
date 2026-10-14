@@ -126,7 +126,12 @@ def _state(owner: Any, user_text: str) -> dict[str, Any]:
     key = _turn_key(owner, user_text)
     state = getattr(owner, "_tool_execution_policy_state", None)
     if not isinstance(state, dict) or state.get("turn_key") != key:
-        state = {"turn_key": key, "fingerprints": set(), "scopes": set()}
+        state = {
+            "turn_key": key,
+            "fingerprints": set(),
+            "scopes": set(),
+            "read_fingerprints": set(),
+        }
         setattr(owner, "_tool_execution_policy_state", state)
     return state
 
@@ -160,6 +165,13 @@ def tool_execution_block_reason(
     """Block forbidden mutations and successful mutation replays within one user turn."""
     args = arguments if isinstance(arguments, dict) else {}
     if not is_mutating_tool_call(tool_name, args):
+        state = _state(owner, user_text)
+        _, fingerprint = _mutation_keys(tool_name, args)
+        if fingerprint in state.setdefault("read_fingerprints", set()):
+            return (
+                "Blocked duplicate read: this exact information was already retrieved in the "
+                "current user turn. Use the existing tool result and continue the task."
+            )
         return ""
     if no_action_requested(user_text):
         return (
@@ -187,13 +199,14 @@ def remember_successful_tool_call(
 ) -> None:
     """Remember successful mutations so later tool rounds cannot replay them."""
     args = arguments if isinstance(arguments, dict) else {}
-    if not is_mutating_tool_call(tool_name, args):
-        return
     text = str(result or "").strip().lower()
     if not text or text.startswith(("error", "failed", "blocked", "skipped", "stopped")):
         return
     state = _state(owner, user_text)
     scope, fingerprint = _mutation_keys(tool_name, args)
+    if not is_mutating_tool_call(tool_name, args):
+        state.setdefault("read_fingerprints", set()).add(fingerprint)
+        return
     state["scopes"].add(scope)
     state["fingerprints"].add(fingerprint)
 

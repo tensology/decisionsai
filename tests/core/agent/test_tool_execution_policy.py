@@ -77,6 +77,33 @@ def test_explicit_multiple_request_allows_distinct_mutations() -> None:
     )
 
 
+def test_successful_read_cannot_repeat_exactly_in_same_turn() -> None:
+    text = "Read the email and turn it into calendar blocks."
+    owner = _owner(text)
+    read = {
+        "action": "read_email",
+        "params": {"message_id": "message-one"},
+    }
+
+    assert tool_execution_block_reason(owner, "google_workspace", read, text) == ""
+    remember_successful_tool_call(owner, "google_workspace", read, text, "Email body")
+
+    assert "duplicate read" in tool_execution_block_reason(
+        owner, "google_workspace", read, text
+    ).lower()
+
+
+def test_distinct_reads_remain_allowed_in_same_turn() -> None:
+    text = "Read both matching emails."
+    owner = _owner(text)
+    first = {"action": "read_email", "params": {"message_id": "message-one"}}
+    second = {"action": "read_email", "params": {"message_id": "message-two"}}
+
+    remember_successful_tool_call(owner, "google_workspace", first, text, "First body")
+
+    assert tool_execution_block_reason(owner, "google_workspace", second, text) == ""
+
+
 def test_mutation_classification_covers_multiplexed_and_named_tools() -> None:
     assert not is_mutating_tool_call("google_workspace", {"action": "check_inbox"})
     assert is_mutating_tool_call("google_workspace", {"action": "send_email"})

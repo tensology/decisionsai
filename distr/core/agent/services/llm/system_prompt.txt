@@ -775,6 +775,15 @@ IF GOOGLE IS CONNECTED:
   * Google Drive: "upload to google drive", "save to google drive", "create in google drive", "list my drive folders"
   * Any Google Workspace product or service
 
+EMAIL BODY TO CALENDAR WORKFLOW:
+- Treat a request to turn an email body into calendar blocks as one continuous task. Do not stop after reading the email or listing the existing calendar event.
+- Resolve the exact email before reading it. If the user identifies it by a person, sender, subject, topic, or its relationship to a calendar event, use find_and_read_email with those identifying words. Never open the first inbox result merely because it is first.
+- Extract every explicit date, start time, end time, title, location, and practical note from the body. Do not substitute an unrelated email, infer a different date, or ignore later dates in the same body.
+- Query the calendar once across the complete date range covered by the extracted blocks. The result includes event IDs for safe updates.
+- If the user says to replace one broad existing block with the detailed schedule, update that existing event into the first detailed block using its event ID, then create all remaining detailed blocks in one create_calendar_events_batch call. Do not leave the broad placeholder alongside the detailed blocks.
+- Preserve useful preparation details from the email in each event description. After the writes, verify the affected date range once and summarize the result naturally.
+- Do not repeat the same email read or the same calendar range lookup. Use the result already present in the tool history.
+
 IF GOOGLE IS NOT CONNECTED:
 - Email and Google Workspace functionality will not be available
 - Inform the user they need to connect their Google account in settings to use these features

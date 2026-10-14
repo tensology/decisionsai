@@ -51,6 +51,76 @@ def test_connection_status_reports_verified_google_authentication(monkeypatch) -
     assert "connected and authentication is healthy" in result
 
 
+def test_find_and_read_email_uses_targeted_query_and_returns_body(monkeypatch) -> None:
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    captured = {}
+
+    class Connector:
+        last_error = None
+
+        def is_connected(self):
+            return True
+
+        def check_inbox(self, max_results=10, query="in:inbox"):
+            captured.update(max_results=max_results, query=query)
+            return [
+                {
+                    "id": "wedding-message",
+                    "from": "Kaneil",
+                    "to": "Paul",
+                    "subject": "Wedding itinerary",
+                    "date": "2026-10-04",
+                    "body": "Padel from noon to two.",
+                    "attachments": [],
+                }
+            ]
+
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", Connector())
+
+    result = tool._run(
+        action="find_and_read_email",
+        params={"query": "Neil wedding"},
+    )
+
+    assert captured == {"max_results": 5, "query": "in:inbox Neil wedding"}
+    assert "Subject: Wedding itinerary" in result
+    assert "Body:\nPadel from noon to two." in result
+
+
+def test_calendar_lookup_includes_event_id_for_safe_replacement(monkeypatch) -> None:
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+
+    class Connector:
+        last_error = None
+
+        def is_connected(self):
+            return True
+
+        def get_calendar_events(self, *_args):
+            return [
+                {
+                    "id": "existing-event-id",
+                    "summary": "Wedding placeholder",
+                    "start": {"dateTime": "2026-11-26T12:00:00+02:00"},
+                    "end": {"dateTime": "2026-11-27T00:00:00+02:00"},
+                }
+            ]
+
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", Connector())
+
+    result = tool._run(
+        action="get_calendar_events",
+        params={
+            "time_min": "2026-11-26T00:00:00+02:00",
+            "time_max": "2026-11-29T00:00:00+02:00",
+        },
+    )
+
+    assert "Event ID: existing-event-id" in result
+
+
 def test_list_drafts_clamps_zero_max_results(monkeypatch) -> None:
     tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
     captured = {}

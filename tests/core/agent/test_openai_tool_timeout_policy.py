@@ -102,6 +102,24 @@ def test_google_model_question_is_not_treated_as_workspace_status():
     assert args == {}
 
 
+def test_named_email_read_is_repaired_to_targeted_search_and_read():
+    name, args = OpenAICompatibleLLMService._rewrite_tool_for_intent(
+        "google_workspace",
+        {"action": "read_email", "params": {"message_id": "wrong-first-result"}},
+        "Go into the email about Neil, get the body, and calendarize it.",
+    )
+
+    assert name == "google_workspace"
+    assert args == {
+        "action": "find_and_read_email",
+        "params": {"query": "Neil"},
+    }
+
+
+def test_follow_up_stream_timeout_allows_long_tool_reasoning():
+    assert OpenAICompatibleLLMService._FOLLOW_UP_STREAM_TIMEOUT_SEC == 60.0
+
+
 def test_raw_window_bounds_cannot_bypass_numbered_display_resolver():
     reason = OpenAICompatibleLLMService._tool_intent_block_reason(
         "set_window_bounds", "Move the terminal to the third screen."

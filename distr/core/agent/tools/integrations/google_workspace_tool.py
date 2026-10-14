@@ -110,7 +110,7 @@ class GoogleWorkspaceInput(BaseModel):
     """Input schema for Google Workspace tool."""
 
     action: str = Field(
-        description="The action to perform. Options: 'connection_status', 'check_inbox', 'read_email', 'get_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'download_email_attachment', 'download_email_attachments', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
+        description="The action to perform. Options: 'connection_status', 'check_inbox', 'find_and_read_email', 'read_email', 'get_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'download_email_attachment', 'download_email_attachments', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
     )
     params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -157,6 +157,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "\n"
         "GMAIL:\n"
                 "- 'check_inbox': Check Gmail inbox - shows all inbox emails by default (params: max_results, query). Default query is 'in:inbox' to show all emails. Use 'is:unread' to show only unread emails. Each email includes a Message ID — use this ID with read_email.\n"
+        "- 'find_and_read_email': Search Gmail by the identifying words the user gave and read the full body of the most recent match in one action (params: query, optional max_results). Prefer this when the user names an email by person, subject, topic, or its relationship to a calendar event. Never reuse the first unrelated inbox item.\n"
         "- 'read_email' or 'get_email': Read full email by Message ID from check_inbox. Includes attachment list with attachment_id values. (params: message_id)\n"
         "- 'download_email_attachment': Download one Gmail attachment to disk (default ~/Downloads). (params: message_id, attachment_id, filename; or message_id + filename to match). Optional destination_dir.\n"
         "- 'download_email_attachments': Download every attachment on an email to disk (default ~/Downloads). (params: message_id, optional destination_dir)\n"
@@ -203,6 +204,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- 'create a draft' or 'draft an email' or 'create draft email' -> action='draft_email', params={'to': '...', 'subject': '...', 'body': '...'}\n"
         "- 'create a draft to bob@bob.com about pineapples' -> action='draft_email', params={'to': 'bob@bob.com', 'subject': 'Thank you', 'body': 'Thank you for the pineapples.'}\n"
         "- 'list my drafts' or 'show my drafts' or 'get my drafts' -> action='list_drafts'\n"
+        "- 'read the email about Neil' -> action='find_and_read_email', params={'query': 'Neil wedding'}\n"
         "- 'get the last draft' or 'open the last draft' -> action='list_drafts', params={'max_results': 1}, then use 'get_draft' with the draft_id\n"
         "- 'show my sent emails' -> action='list_emails_by_type', params={'email_type': 'sent'}\n"
         "- 'show my starred emails' -> action='list_emails_by_type', params={'email_type': 'starred'}\n"
@@ -463,6 +465,30 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     result += f"Snippet: {msg.get('snippet', '')}\n"
                     result += f"Date: {msg.get('date', '')}\n"
                     result += f"Message ID: {msg.get('id', '')}\n\n"
+                return result
+
+            elif action == 'find_and_read_email':
+                query = str(params.get('query') or '').strip()
+                if not query:
+                    return "Error: query is required to find and read a specific email. Use the person's name, sender, subject, or topic from the user's request."
+                max_results = max(1, min(20, int(params.get('max_results', 5) or 5)))
+                gmail_query = query if query.startswith(('in:', 'is:')) else f'in:inbox {query}'
+                messages = self.connector.check_inbox(max_results=max_results, query=gmail_query)
+                if not messages and self.connector.last_error:
+                    return f"Error: {self.connector.last_error}"
+                if not messages:
+                    return f"No emails found matching: {query}"
+                email = messages[0]
+                result = (
+                    f"Matched {len(messages)} email(s); reading the most recent match.\n"
+                    f"Message ID: {email.get('id', '')}\n"
+                    f"From: {email.get('from', 'Unknown')}\n"
+                    f"To: {email.get('to', 'Unknown')}\n"
+                    f"Subject: {email.get('subject', 'No Subject')}\n"
+                    f"Date: {email.get('date', '')}\n\n"
+                )
+                result += self._format_attachments_section(email.get('attachments') or [])
+                result += f"\nBody:\n{email.get('body', '')}\n"
                 return result
             
             elif action in ('read_email', 'get_email'):
@@ -904,6 +930,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 
                 result = f"Found {len(events)} event(s):\n\n"
                 for event in events:
+                    result += f"Event ID: {event.get('id', '')}\n"
                     result += f"Summary: {event.get('summary', 'No Title')}\n"
                     start = event.get('start', {}).get('dateTime', event.get('start', {}).get('date', ''))
                     end = event.get('end', {}).get('dateTime', event.get('end', {}).get('date', ''))
@@ -963,7 +990,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 return f"Document created successfully (ID: {doc_id})" if doc_id else "Error: Failed to create document"
             
             else:
-                return f"Error: Unknown action '{action}'. Available actions: check_inbox, read_email, get_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, download_email_attachment, download_email_attachments, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, update_calendar_event, delete_calendar_event, create_calendar_events_batch, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
+                return f"Error: Unknown action '{action}'. Available actions: connection_status, check_inbox, find_and_read_email, read_email, get_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, download_email_attachment, download_email_attachments, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, update_calendar_event, delete_calendar_event, create_calendar_events_batch, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
         
         except Exception as e:
             logger.error(f"Error executing Google Workspace action: {e}", exc_info=True)

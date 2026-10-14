@@ -47,6 +47,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
     """
 
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
+    _FOLLOW_UP_STREAM_TIMEOUT_SEC = 60.0
     _TOOL_EXECUTION_TIMEOUT_SEC = 90.0
     _LONG_RUNNING_TOOL_TIMEOUTS = {"save_audio": 1800.0}
     _tool_execution_in_progress = False
@@ -149,8 +150,23 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
     @staticmethod
     def _rewrite_tool_for_intent(func_name: str, func_args: dict, user_message: str):
-        """Repair a common provider-status misroute before executing the tool."""
+        """Repair deterministic provider-status and named-email misroutes."""
         text = str(user_message or "")
+        action = str((func_args or {}).get("action") or "").strip().lower()
+        email_topic_match = re.search(
+            r"\bemail\s+(?:about|from|regarding)\s+([^,.!?]+)", text, re.IGNORECASE
+        )
+        if (
+            func_name == "google_workspace"
+            and action in {"read_email", "get_email"}
+            and email_topic_match
+        ):
+            topic = email_topic_match.group(1).strip()
+            if topic:
+                return "google_workspace", {
+                    "action": "find_and_read_email",
+                    "params": {"query": topic},
+                }
         google_status = re.search(
             r"\b(google|gmail|google\s+calendar|google\s+drive|google\s+workspace)\b",
             text,
@@ -1078,9 +1094,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
                             self.event_queue.put(('chat_stream_token', {'token': display_chunk}), block=False)
 
         try:
-            await asyncio.wait_for(_inner(), timeout=30.0)
+            await asyncio.wait_for(
+                _inner(), timeout=self._FOLLOW_UP_STREAM_TIMEOUT_SEC
+            )
         except (asyncio.TimeoutError, TimeoutError):
-            logger.warning("%s: Follow-up stream timed out after 30s", self.SERVICE_NAME)
+            logger.warning(
+                "%s: Follow-up stream timed out after %.0fs",
+                self.SERVICE_NAME,
+                self._FOLLOW_UP_STREAM_TIMEOUT_SEC,
+            )
 
         if current_tc:
             tool_calls.append(current_tc)
@@ -1130,6 +1152,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 func_args = json.loads(tc["function"]["arguments"])
             except (json.JSONDecodeError, TypeError):
                 func_args = {}
+
+            func_name, func_args = self._rewrite_tool_for_intent(
+                func_name, func_args, last_user_message
+            )
 
             if last_user_message:
                 func_args["last_user_message"] = last_user_message
