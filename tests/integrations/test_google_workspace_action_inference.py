@@ -33,6 +33,67 @@ def test_resolve_action_from_events_batch() -> None:
     assert action == "create_calendar_events_batch"
 
 
+def test_connection_status_reports_verified_google_authentication(monkeypatch) -> None:
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    fake_connector = type(
+        "Conn",
+        (),
+        {
+            "is_connected": lambda self: True,
+            "connection_health": lambda self: (True, ""),
+        },
+    )()
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", fake_connector)
+
+    result = tool._run(action="connection_status")
+
+    assert "connected and authentication is healthy" in result
+
+
+def test_list_drafts_clamps_zero_max_results(monkeypatch) -> None:
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    captured = {}
+
+    class Connector:
+        last_error = None
+
+        def is_connected(self):
+            return True
+
+        def list_drafts(self, max_results=10):
+            captured["max_results"] = max_results
+            return []
+
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", Connector())
+
+    result = tool._run(action="list_drafts", params={"max_results": 0})
+
+    assert result == "No drafts found."
+    assert captured["max_results"] == 10
+
+
+def test_list_drafts_surfaces_connector_error(monkeypatch) -> None:
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+
+    class Connector:
+        last_error = "Gmail rejected the request"
+
+        def is_connected(self):
+            return True
+
+        def list_drafts(self, max_results=10):
+            return []
+
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", Connector())
+
+    result = tool._run(action="list_drafts")
+
+    assert result == "Error: Gmail rejected the request"
+
+
 def test_run_without_action_but_with_calendar_params(monkeypatch) -> None:
     tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
     captured: dict = {}

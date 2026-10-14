@@ -14,6 +14,15 @@ def test_gmail_attachment_intent_forces_google_workspace() -> None:
     )
 
 
+def test_google_connection_status_forces_google_workspace() -> None:
+    for request in (
+        "Are you connected to my Gmail?",
+        "Can you check whether Google Calendar is working?",
+        "Try to access Google Workspace again.",
+    ):
+        assert "google_workspace" in forced_tool_names_for_text(request)
+
+
 def test_location_specific_business_lookup_forces_web_search() -> None:
     request = (
         "Can you find me in Claremont, Cape Town, near Cavendish Square, "

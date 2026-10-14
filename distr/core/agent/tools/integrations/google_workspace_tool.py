@@ -110,7 +110,7 @@ class GoogleWorkspaceInput(BaseModel):
     """Input schema for Google Workspace tool."""
 
     action: str = Field(
-        description="The action to perform. Options: 'check_inbox', 'read_email', 'get_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'download_email_attachment', 'download_email_attachments', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
+        description="The action to perform. Options: 'connection_status', 'check_inbox', 'read_email', 'get_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'download_email_attachment', 'download_email_attachments', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
     )
     params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -151,6 +151,9 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "If Google is connected, ALWAYS use this tool for email/Gmail.\n"
         "\n"
         "AVAILABLE ACTIONS:\n"
+        "\n"
+        "CONNECTION:\n"
+        "- 'connection_status': Verify the saved Google Workspace authentication before claiming Gmail, Calendar, or Drive is unavailable.\n"
         "\n"
         "GMAIL:\n"
                 "- 'check_inbox': Check Gmail inbox - shows all inbox emails by default (params: max_results, query). Default query is 'in:inbox' to show all emails. Use 'is:unread' to show only unread emails. Each email includes a Message ID — use this ID with read_email.\n"
@@ -348,7 +351,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         self._ensure_initialized()
         # Check connection status first
         if not self.connector.is_connected():
-            return "Error: Google is not connected. Please connect your Google account in Settings > Advanced."
+            return "Error: Google is not connected. Please connect your Google account in Settings > Third Party Vendors."
         
         # Handle params - it might be a string (JSON) or dict
         # LangChain tools receive params from JSON, which might be passed incorrectly
@@ -421,9 +424,15 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         action = resolved_action
 
         try:
+            if action == 'connection_status':
+                healthy, error = self.connector.connection_health()
+                if healthy:
+                    return "Google Workspace is connected and authentication is healthy. Gmail, Calendar, Drive, Docs, and Sheets are available."
+                return f"Error: {error or 'Google Workspace authentication could not be verified. Reconnect the account in Settings.'}"
+
             # Gmail actions
             if action == 'check_inbox':
-                max_results = params.get('max_results', 10)
+                max_results = max(1, int(params.get('max_results', 10) or 10))
                 query = params.get('query')
                 
                 # If query is provided as a string (from LLM), check for unread/new keywords
@@ -441,6 +450,8 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                         query = f'in:inbox {query}'
                 
                 messages = self.connector.check_inbox(max_results=max_results, query=query)
+                if not messages and self.connector.last_error:
+                    return f"Error: {self.connector.last_error}"
                 if messages is None:
                     return "Error: Gmail API is not enabled. Please enable Gmail API in Google Cloud Console at https://console.cloud.google.com/apis/library/gmail.googleapis.com"
                 if not messages:
@@ -566,8 +577,10 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     return "Error: Failed to create draft. Check logs for details."
             
             elif action == 'list_drafts':
-                max_results = params.get('max_results', 10)
+                max_results = max(1, int(params.get('max_results', 10) or 10))
                 drafts = self.connector.list_drafts(max_results=max_results)
+                if not drafts and self.connector.last_error:
+                    return f"Error: {self.connector.last_error}"
                 if drafts is None:
                     return "Error: Gmail API is not enabled. Please enable Gmail API in Google Cloud Console at https://console.cloud.google.com/apis/library/gmail.googleapis.com"
                 if not drafts:
@@ -599,8 +612,10 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
             
             elif action == 'list_emails_by_type':
                 email_type = params.get('email_type', 'sent')
-                max_results = params.get('max_results', 10)
+                max_results = max(1, int(params.get('max_results', 10) or 10))
                 messages = self.connector.list_emails_by_type(email_type, max_results)
+                if not messages and self.connector.last_error:
+                    return f"Error: {self.connector.last_error}"
                 if messages is None:
                     return "Error: Gmail API is not enabled. Please enable Gmail API in Google Cloud Console at https://console.cloud.google.com/apis/library/gmail.googleapis.com"
                 if not messages:

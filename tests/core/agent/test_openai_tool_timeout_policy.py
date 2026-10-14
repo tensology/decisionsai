@@ -75,6 +75,33 @@ def test_system_info_requires_a_system_or_model_question():
     ) == ""
 
 
+def test_google_connection_question_repairs_system_info_misroute():
+    name, args = OpenAICompatibleLLMService._rewrite_tool_for_intent(
+        "system_info", {}, "Are you connected to my Gmail?"
+    )
+
+    assert name == "google_workspace"
+    assert args == {"action": "connection_status"}
+
+
+def test_model_question_keeps_system_info_tool():
+    name, args = OpenAICompatibleLLMService._rewrite_tool_for_intent(
+        "system_info", {}, "Which model are you using?"
+    )
+
+    assert name == "system_info"
+    assert args == {}
+
+
+def test_google_model_question_is_not_treated_as_workspace_status():
+    name, args = OpenAICompatibleLLMService._rewrite_tool_for_intent(
+        "system_info", {}, "Are you using a Google Gemini model?"
+    )
+
+    assert name == "system_info"
+    assert args == {}
+
+
 def test_raw_window_bounds_cannot_bypass_numbered_display_resolver():
     reason = OpenAICompatibleLLMService._tool_intent_block_reason(
         "set_window_bounds", "Move the terminal to the third screen."

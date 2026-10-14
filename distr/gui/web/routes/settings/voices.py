@@ -31,23 +31,9 @@ VOICE_REFERENCE_LIMITS = {
 
 def _tts_online_provider_verified(settings: dict, provider_id: str) -> bool:
     """Third-party TTS gates mirroring /api/llms/available-providers (enabled + non-empty key)."""
-    if provider_id == "openai":
-        return bool(settings.get("openai_enabled")) and bool(
-            str(settings.get("openai_key") or "").strip()
-        )
-    if provider_id == "elevenlabs":
-        return bool(settings.get("elevenlabs_enabled")) and bool(
-            str(settings.get("elevenlabs_key") or "").strip()
-        )
-    if provider_id == "pixazo":
-        from distr.core.third_party_keys import pixazo_enabled
+    from distr.core.chat import voice_provider_is_usable
 
-        return pixazo_enabled()
-    if provider_id == "fishaudio":
-        return bool(settings.get("fishaudio_enabled")) and bool(
-            str(settings.get("fishaudio_key") or "").strip()
-        )
-    return True
+    return voice_provider_is_usable(provider_id, settings)
 
 
 def fold_db_custom_voices(voices: list, rows) -> list:

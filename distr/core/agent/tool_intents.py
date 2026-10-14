@@ -211,6 +211,9 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "google_workspace",
         (
+            r"\b(?:connected|connect(?:ed|ion)?|authenticated|authentication|working)\b.{0,80}\b(?:google|gmail|google\s+calendar|google\s+workspace)\b",
+            r"\b(?:google|gmail|google\s+calendar|google\s+workspace)\b.{0,80}\b(?:connected|connect(?:ed|ion)?|authenticated|authentication|working)\b",
+            r"\b(?:check|read|show|list|open|access|use|try)\b.{0,80}\b(?:gmail|google\s+calendar|google\s+drive|google\s+workspace)\b",
             r"\b(?:google\s+)?calendar\b.*\b(?:create|add|make|schedule|event|appointment)\b",
             r"\b(?:create|add|make|schedule)\b.*\b(?:google\s+)?calendar\b",
             r"\b(?:create|add|make|schedule)\s+(?:the\s+|an?\s+)?(?:calendar\s+)?event\b",

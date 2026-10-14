@@ -500,6 +500,63 @@ def resolve_voice_model_from_global_settings(
     return None
 
 
+def voice_provider_is_usable(provider_id: Optional[str], settings) -> bool:
+    """Return whether a TTS provider can actually start with these settings."""
+    from distr.core.agent.constants import normalize_voice_provider
+    from distr.core.agent.services.tts.registry import tts_registry
+
+    pid = normalize_voice_provider(provider_id or "")
+    try:
+        descriptor = tts_registry.get(pid)
+    except KeyError:
+        return False
+    if descriptor.type == "offline":
+        return True
+    gates = {
+        "openai": ("openai_enabled", "openai_key"),
+        "elevenlabs": ("elevenlabs_enabled", "elevenlabs_key"),
+        "pixazo": ("pixazo_enabled", "pixazo_key"),
+        "fishaudio": ("fishaudio_enabled", "fishaudio_key"),
+    }
+    enabled_key, secret_key = gates.get(pid, (None, None))
+    if not enabled_key:
+        return False
+    configured = bool(_setting_val(settings, enabled_key)) and bool(
+        str(_setting_val(settings, secret_key) or "").strip()
+    )
+    if pid == "pixazo" and not configured:
+        try:
+            from distr.core.third_party_keys import pixazo_enabled
+
+            return pixazo_enabled()
+        except Exception:
+            logger.debug("Could not resolve Pixazo credentials", exc_info=True)
+    return configured
+
+
+def resolve_usable_voice_selection(
+    requested_provider: Optional[str], requested_model: Optional[str], settings
+) -> tuple[str, str]:
+    """Keep a usable chat voice, otherwise fall back to the configured global voice."""
+    from distr.core.agent.constants import normalize_voice_provider
+
+    requested = normalize_voice_provider(requested_provider or "")
+    if requested and voice_provider_is_usable(requested, settings):
+        model = (requested_model or "").strip()
+        return requested, model or (resolve_voice_model_from_global_settings(requested, settings) or "")
+
+    global_provider = normalize_voice_provider(
+        _setting_val(settings, "voice_provider")
+        or _setting_val(settings, "tts_provider")
+        or "kokoro"
+    )
+    candidates = [global_provider, "fishaudio", "openai", "pixazo", "elevenlabs", "kokoro"]
+    for candidate in dict.fromkeys(candidates):
+        if voice_provider_is_usable(candidate, settings):
+            return candidate, resolve_voice_model_from_global_settings(candidate, settings) or ""
+    return "kokoro", resolve_voice_model_from_global_settings("kokoro", settings) or ""
+
+
 class ChatService:
     """Central service for chat DB and settings. Used by web routes and ChatManager. No Qt/signals."""
 

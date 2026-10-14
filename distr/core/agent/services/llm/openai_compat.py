@@ -148,6 +148,25 @@ class OpenAICompatibleLLMService(BaseLLMService):
         return ""
 
     @staticmethod
+    def _rewrite_tool_for_intent(func_name: str, func_args: dict, user_message: str):
+        """Repair a common provider-status misroute before executing the tool."""
+        text = str(user_message or "")
+        google_status = re.search(
+            r"\b(google|gmail|google\s+calendar|google\s+drive|google\s+workspace)\b",
+            text,
+            re.IGNORECASE,
+        ) and not re.search(
+            r"\b(model|gemini|vertex|llm)\b", text, re.IGNORECASE
+        ) and re.search(
+            r"\b(connect(?:ed|ion)?|auth(?:enticated|entication)?|working|access|use|check|try)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if func_name == "system_info" and google_status:
+            return "google_workspace", {"action": "connection_status"}
+        return func_name, func_args
+
+    @staticmethod
     def _is_verified_ticket_result(tool_name: str, result: str) -> bool:
         if tool_name != "create_ticket":
             return False
@@ -806,6 +825,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 func_args = json.loads(tc["function"]["arguments"])
             except (json.JSONDecodeError, TypeError):
                 func_args = {}
+
+            func_name, func_args = self._rewrite_tool_for_intent(
+                func_name, func_args, last_user_message
+            )
 
             logger.info("🔧 Tool: %s", func_name)
             if last_user_message:

@@ -492,6 +492,35 @@ class AgentSession:
         from distr.core.agent.services.tts.registry import tts_registry
         voice_provider_raw = chat_voice_provider or self.settings.get('voice_provider', '') or self.settings.get('tts_provider', '')
         voice_provider = normalize_voice_provider(voice_provider_raw)
+        voice_model_from_chat = chat_voice_model
+        from distr.core.chat import resolve_usable_voice_selection
+        usable_provider, usable_model = resolve_usable_voice_selection(
+            voice_provider, voice_model_from_chat, self.settings
+        )
+        provider_fell_back = usable_provider != voice_provider
+        requested_voice_provider = voice_provider
+        voice_provider = usable_provider
+        voice_model_from_chat = usable_model
+        if provider_fell_back:
+            self.logger.warning(
+                "Voice provider %s is disabled or unconfigured; using configured provider %s",
+                requested_voice_provider,
+                voice_provider,
+            )
+            if chat_voice_provider and self._initial_chat_id:
+                try:
+                    with get_session() as voice_session:
+                        voice_chat = voice_session.get(Chat, self._initial_chat_id)
+                        if voice_chat:
+                            voice_chat.voice_provider = voice_provider
+                            voice_chat.voice_model = voice_model_from_chat
+                            voice_session.commit()
+                except Exception:
+                    self.logger.warning(
+                        "Could not persist usable voice fallback for chat %s",
+                        self._initial_chat_id,
+                        exc_info=True,
+                    )
         enabled_voice_providers = set(tts_registry.provider_ids())
         if voice_provider not in enabled_voice_providers:
             self.logger.warning(
@@ -499,8 +528,6 @@ class AgentSession:
                 voice_provider,
             )
             voice_provider = 'kokoro'
-        voice_model_from_chat = chat_voice_model
-
         # Voice settings lookup table: provider -> (engine, voice_key, default, extra_keys)
         # Built dynamically from the TTS provider registry.
         _VOICE_SETTINGS = {d.id: d.get_voice_settings_entry() for d in tts_registry.all_providers()}
