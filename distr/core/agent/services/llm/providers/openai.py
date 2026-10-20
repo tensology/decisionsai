@@ -58,6 +58,18 @@ class OpenAILLMService(OpenAICompatibleLLMService):
     #  Provider-specific overrides
     # ------------------------------------------------------------------
 
+    def _chat_completion_compatibility_kwargs(self, tools_list) -> dict:
+        """Keep Luna function tools compatible with Chat Completions.
+
+        OpenAI rejects function tools for GPT-5.6 Luna on ``/v1/chat/completions``
+        unless reasoning is explicitly disabled. Requests without tools retain the
+        model's default reasoning behavior.
+        """
+        model_name = str(self._model_name or "").strip().lower()
+        if tools_list and model_name.startswith("gpt-5.6-luna"):
+            return {"reasoning_effort": "none"}
+        return {}
+
     def _format_vision_message(self, text: str, base64_image: str, mime_type: str):
         """OpenAI vision format."""
         return [

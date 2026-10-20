@@ -554,6 +554,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
         patched.insert(0, {"role": "system", "content": brevity_instruction})
         return patched
 
+    def _chat_completion_compatibility_kwargs(self, tools_list) -> dict:
+        """Return provider-specific arguments for a chat completion request."""
+        return {}
+
     async def _call_stream(self, messages, tools_list=None, max_retries=3):
         """Create a streaming chat completion with retry logic."""
         retry_delay = 1.0
@@ -567,6 +571,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     messages=messages,
                     tools=use_tools,
                     stream=True,
+                    **self._chat_completion_compatibility_kwargs(use_tools),
                 )
             except Exception as e:
                 last_error = e
