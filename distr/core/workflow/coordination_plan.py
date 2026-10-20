@@ -174,7 +174,13 @@ def build_run_coordination_plan(
 
     settings = dict(settings or {})
     workflow_settings = _dict(getattr(workflow, "run_settings", None))
-    if bool(workflow_settings.get("auto_route_models", False)):
+    base_route = _dict(run_data.get("execution_route"))
+    manual_thread_route = (
+        str(base_route.get("route_mode") or "").strip().lower() == "manual"
+        and str(base_route.get("source") or "").strip().lower() == "thread_model_route"
+        and bool(str(base_route.get("backend") or "").strip())
+    )
+    if bool(workflow_settings.get("auto_route_models", False)) and not manual_thread_route:
         # Model discovery can probe Ollama and several hosted catalogues.  A
         # whole-run plan must do that once, not once per step/evaluator; the
         # latter made starting a seven-step workflow look frozen for minutes.
@@ -186,7 +192,7 @@ def build_run_coordination_plan(
             settings["_pi_cli_models_cache"] = []
     is_canonical_development = str(getattr(workflow, "name", None) or "").strip().lower() == "development"
     adaptive_default = is_canonical_development and bool(workflow_settings.get("auto_route_models", False))
-    adaptive_multi_model = bool(
+    adaptive_multi_model = False if manual_thread_route else bool(
         workflow_settings.get("adaptive_multi_model_enabled", adaptive_default)
     )
     try:
@@ -197,7 +203,6 @@ def build_run_coordination_plan(
     except (TypeError, ValueError):
         max_parallel_evaluators = 2
     steps = sorted(list(getattr(workflow, "steps", None) or []), key=lambda item: int(item.position or 0))
-    base_route = _dict(run_data.get("execution_route"))
     complexity = str(
         base_route.get("complexity")
         or _dict(run_data.get("ticket_execution_profile")).get("complexity")
@@ -246,7 +251,7 @@ def build_run_coordination_plan(
         role = _step_role(step, config)
         seeded = dict(base_route)
         seeded.setdefault("complexity", complexity)
-        primary = apply_auto_step_role_policy(
+        primary = seeded if manual_thread_route else apply_auto_step_role_policy(
             seeded,
             workflow=workflow,
             config=config,
@@ -352,6 +357,7 @@ def build_run_coordination_plan(
         "created_at": now,
         "updated_at": now,
         "strategy": strategy,
+        "manual_route_locked": manual_thread_route,
         "complexity": complexity,
         "risk_level": risk_level,
         "immutable_workflow": True,
@@ -437,6 +443,7 @@ def revise_plan_after_step(
 
     target = _dict(assignments[str(next_step_id)])
     previous = _dict(target.get("primary_route"))
+    manual_route_locked = bool(updated.get("manual_route_locked"))
     target_role = str(target.get("role") or "").strip().lower()
     requested_review_mode = str(
         target.get("requested_review_mode") or target.get("review_mode") or "deterministic"
@@ -448,6 +455,8 @@ def revise_plan_after_step(
     # Without this reconciliation the UI claimed an independent review while
     # silently asking the same model to review its own work.
     if (
+        not manual_route_locked
+        and
         passed
         and executed
         and target_role == "review"
@@ -522,6 +531,28 @@ def revise_plan_after_step(
     evidence_count = int(target.get("replan_evidence_count") or 0) + 1
     target["replan_evidence_count"] = evidence_count
     target["needs_replan"] = True
+    if manual_route_locked:
+        target["needs_replan"] = False
+        target["revision"] = int(target.get("revision") or 0) + 1
+        assignments[str(next_step_id)] = target
+        revision = {
+            "from_step_id": completed_step_id,
+            "target_step_id": next_step_id,
+            "previous_route": previous,
+            "new_route": previous,
+            "reason": (
+                f"{reason or 'Validation failed.'} Retry the manually selected worker; "
+                "automatic provider replacement is disabled for this run."
+            ),
+            "replan_evidence_count": evidence_count,
+            "route_changed": False,
+            "manual_route_locked": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        updated["assignments"] = assignments
+        updated["updated_at"] = revision["created_at"]
+        updated.setdefault("revisions", []).append(revision)
+        return updated, revision
     if evidence_count < 2:
         target["revision"] = int(target.get("revision") or 0) + 1
         assignments[str(next_step_id)] = target

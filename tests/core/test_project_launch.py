@@ -12,6 +12,51 @@ from distr.core.project_startup_terminals import (
 )
 
 
+def test_activate_project_also_activates_its_local_board(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from distr.core.agent.services.rag import project as project_service
+    from distr.core.db import Base
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.projects import Project
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        old_project = Project(name="Old", folder_location="/tmp/old", in_use=True)
+        selected_project = Project(name="Selected", folder_location="/tmp/selected")
+        session.add_all([old_project, selected_project])
+        session.flush()
+        old_board = KanbanBoard(name="Old board", default_project_id=old_project.id, in_use=True)
+        selected_board = KanbanBoard(name="Selected board", default_project_id=selected_project.id)
+        session.add_all([old_board, selected_board])
+        session.flush()
+        selected_project.kanban_board_id = selected_board.id
+        session.commit()
+        selected_project_id = int(selected_project.id)
+        selected_board_id = int(selected_board.id)
+        old_board_id = int(old_board.id)
+
+    monkeypatch.setattr("distr.core.db.get_session", factory)
+    monkeypatch.setattr(project_service, "get_project_rag_service", lambda *_args, **_kwargs: None)
+
+    result = project_service.activate_project(selected_project_id)
+
+    assert result["success"] is True
+    with factory() as session:
+        assert session.get(Project, selected_project_id).in_use is True
+        assert session.get(KanbanBoard, selected_board_id).in_use is True
+        assert session.get(KanbanBoard, old_board_id).in_use is False
+    engine.dispose()
+
+
 def test_project_launch_flow_prefers_frontend_and_routes_natural_phrases(monkeypatch):
     snapshot = {
         "sessions": [

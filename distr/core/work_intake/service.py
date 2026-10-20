@@ -607,6 +607,10 @@ class OrchestratorIntakeService:
                     scored.sort(key=lambda item: item[0], reverse=True)
                     if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
                         project = scored[0][1]
+            if project is None:
+                active_projects = [row for row in projects if bool(row.in_use)]
+                if len(active_projects) == 1:
+                    project = active_projects[0]
 
             board = None
             hint = str(intake.board_hint or "").strip()

@@ -1730,6 +1730,41 @@
     position: relative;
 }
 
+.message.assistant .message-avatar:has(.assistant-avatar-image) {
+    overflow: hidden;
+    background: #0d1642;
+}
+
+.message.assistant .message-avatar:has(.assistant-avatar-image.avatar) {
+    border-radius: 10px;
+}
+
+.assistant-avatar-image {
+    position: relative;
+    z-index: 1;
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-position: center;
+}
+
+.assistant-avatar-image.oracle {
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.assistant-avatar-image.avatar {
+    object-fit: contain;
+}
+
+.assistant-avatar-fallback {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    background: rgba(249, 115, 22, 0.2);
+}
+
 /* Hero-style blur glow behind assistant avatar (stronger on hover) */
 .message.assistant .message-avatar::before {
     content: '';
@@ -2044,6 +2079,8 @@
     /* Keep the decorative avatar tappable without laying an invisible
        280px square over messages and turn controls on a phone. */
     .llama-click-target { width: 88px; height: 112px; }
+    .chat-messages,
+    .empty-state { background-size: 112px auto; }
 }
 .speaker-toggle[aria-pressed="false"] {
     color: #8e8ea0;
@@ -2250,6 +2287,21 @@
 .chat-settings-title-wrap:hover .chat-settings-title--marquee,
 .chat-settings-title-wrap:focus-within .chat-settings-title--marquee {
     animation-play-state: running;
+}
+
+@media (hover: none) {
+    .chat-settings-title-wrap--marquee {
+        mask-image: none;
+    }
+
+    .chat-settings-title--marquee {
+        display: block;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        animation: none;
+        transform: none;
+    }
 }
 
 .chat-settings-controls {

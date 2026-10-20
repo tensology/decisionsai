@@ -259,10 +259,6 @@ def register_routes(router, templates):
                 permission_profile={"mode": permission_mode, "persisted": True},
                 remote_continuation=False,
             )
-            from distr.core.workflow.development_control import resume_thread_time
-
-            await asyncio.to_thread(resume_thread_time, int(chat_id))
-
             from distr.core.workflow.development_threads import update_development_model_route
 
             await asyncio.to_thread(
@@ -290,6 +286,29 @@ def register_routes(router, templates):
                 if data.workflow_id is not None:
                     from distr.core.workflow.work_dispatch import dispatch_work_item
 
+                    run_metadata = {
+                        "skill_ids": skill_ids,
+                        "routing_assessment": data.routing_assessment or {},
+                    }
+                    if data.use_playwright:
+                        run_metadata["use_playwright"] = True
+                    if route_mode == "manual":
+                        run_metadata["model_route"] = {
+                            "route_mode": "manual",
+                            "backend": str(data.backend or "").strip(),
+                            "provider": provider,
+                            "model_name": model_name,
+                            "reasoning_effort": str(data.reasoning_effort or "medium").strip().lower(),
+                            "service_tier": str(data.service_tier or "standard").strip().lower(),
+                        }
+                        run_metadata["execution_route"] = {
+                            "route_mode": "manual",
+                            "backend": str(data.backend or "").strip(),
+                            "model_provider": provider,
+                            "model": model_name or "auto",
+                            "source": "thread_model_route",
+                            "complexity": str((data.routing_assessment or {}).get("complexity") or "medium"),
+                        }
                     execution = await asyncio.to_thread(
                         dispatch_work_item,
                         workflow_id=int(data.workflow_id),
@@ -298,7 +317,7 @@ def register_routes(router, templates):
                         project_id=data.project_id,
                         ticket_id=ticket_id,
                         source_type="studio_thread",
-                        run_metadata={"skill_ids": skill_ids, "routing_assessment": data.routing_assessment or {}},
+                        run_metadata=run_metadata,
                         dispatch_async=True,
                     )
                 else:
@@ -323,6 +342,15 @@ def register_routes(router, templates):
                         },
                         status_code=409,
                     )
+                from distr.core.workflow.development_control import resume_thread_time
+
+                track_time = True
+                if data.project_id is not None:
+                    with get_session() as db:
+                        selected_project = db.get(Project, int(data.project_id))
+                        track_time = bool(selected_project is None or selected_project.start_time_tracker)
+                if track_time:
+                    await asyncio.to_thread(resume_thread_time, int(chat_id))
 
             with get_session() as db:
                 chat = db.get(Chat, int(chat_id))
@@ -392,10 +420,6 @@ def register_routes(router, templates):
                 message,
                 metadata={"skill_ids": skill_ids} if skill_ids else None,
             )
-            from distr.core.workflow.development_control import resume_thread_time
-
-            await asyncio.to_thread(resume_thread_time, int(chat_id))
-
             if autonomy_level == "approval":
                 return JSONResponse(
                     {
@@ -441,6 +465,17 @@ def register_routes(router, templates):
                     f"Execution could not start: {execution['error']}",
                 )
                 return JSONResponse({"detail": execution["error"]}, status_code=409)
+            from distr.core.workflow.development_control import resume_thread_time
+
+            track_time = True
+            if project_id is not None:
+                from distr.core.db.projects import Project
+
+                with get_session() as db:
+                    selected_project = db.get(Project, int(project_id))
+                    track_time = bool(selected_project is None or selected_project.start_time_tracker)
+            if track_time:
+                await asyncio.to_thread(resume_thread_time, int(chat_id))
             from distr.gui.web.workflow_events import increment_workflow_updated
 
             increment_workflow_updated()

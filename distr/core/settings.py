@@ -91,6 +91,7 @@ DEFAULT_SETTINGS = {
     # Note: Jira and Trello accounts are now stored in connected_accounts JSON field
     'kanban_cli_tool': '',
     'kanban_cli_auth': '',
+    'project_cli_auto_refresh_enabled': True,
     'project_cli_low_backend': 'cursor',
     'project_cli_low_model': 'auto',
     'project_cli_low_model_provider': '',

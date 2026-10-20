@@ -515,10 +515,17 @@ export function createTerminals({ context, actions, el, token }) {
         const launchedCommand = String(session.command || '')
             .replace(/[\u0000-\u001f\u007f]/g, ' ')
             .trim();
-        if (launchedCommand) term.writeln(`\x1b[38;5;244m$ ${launchedCommand}\x1b[0m`);
+        if (launchedCommand && String(session.purpose || '').toLowerCase() !== 'cli_shell') term.writeln(`\x1b[38;5;244m$ ${launchedCommand}\x1b[0m`);
         const resize = () => {
-            const cols = Math.max(20, Math.floor((container.clientWidth - 14) / 7.4));
-            const rows = Math.max(6, Math.floor((container.clientHeight - 10) / 16));
+            const terminalScreen = container.querySelector('.xterm-screen');
+            const screenRect = terminalScreen?.getBoundingClientRect();
+            const containerStyle = window.getComputedStyle(container);
+            const horizontalPadding = parseFloat(containerStyle.paddingLeft) + parseFloat(containerStyle.paddingRight);
+            const verticalPadding = parseFloat(containerStyle.paddingTop) + parseFloat(containerStyle.paddingBottom);
+            const cellWidth = screenRect?.width && term.cols ? screenRect.width / term.cols : 7.4;
+            const cellHeight = screenRect?.height && term.rows ? screenRect.height / term.rows : 16;
+            const cols = Math.max(20, Math.floor((container.clientWidth - horizontalPadding) / cellWidth));
+            const rows = Math.max(6, Math.floor((container.clientHeight - verticalPadding - 8) / cellHeight));
             try {
                 term.resize(cols, rows);
             } catch (_) {
@@ -579,6 +586,14 @@ export function createTerminals({ context, actions, el, token }) {
         }, 0);
     }
 
+    function terminalSessionLabel(session) {
+        const command = String(session.command || session.purpose || 'Terminal');
+        if (String(session.purpose || '').toLowerCase() !== 'cli_shell') return command;
+        const named = command.match(/\[(zsh|bash)\]/i);
+        if (named) return named[1].toLowerCase();
+        return command.split(/\s+/)[0] || 'shell';
+    }
+
     function renderTerminalWorkspace(sessions) {
         if (context.workspaceMode !== 'terminals') return;
         const projectId = Number(state.terminalProjectId || actions.boardByKey(state.terminalBoardKey)?.project_id || 0);
@@ -609,21 +624,21 @@ export function createTerminals({ context, actions, el, token }) {
         sessionList.dataset.sessionKey = sessionKey;
         const managedIds = managedRows.map((session) => String(session.process_id || session.terminal_id || ''));
         if (!managedIds.includes(state.terminalActiveSessionId)) state.terminalActiveSessionId = managedIds[0] || '';
-        const tabsHtml = managedRows.length
-            ? `<div class="terminal-session-tabs" role="tablist" aria-label="Running terminals">${managedRows
+        const addTerminalButton =
+            '<button type="button" class="terminal-tab-add" data-terminal-add aria-label="New terminal" title="New terminal"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 3.25v9.5M3.25 8h9.5"></path></svg></button>';
+        const tabsHtml = `<div class="terminal-session-tabs"><div class="terminal-session-tablist" role="tablist" aria-label="Running terminals">${managedRows
                   .map((session, index) => {
                       const processId = String(session.process_id || session.terminal_id || '');
-                      const command = session.command || session.purpose || 'Terminal';
+                      const command = terminalSessionLabel(session);
                       const active = processId === state.terminalActiveSessionId;
                       const starting = String(session.status || '').toLowerCase() === 'starting' || processId.startsWith('starting:');
                       return `<div class="terminal-session-tab-shell${active ? ' active' : ''}"><button type="button" role="tab" class="terminal-session-tab${active ? ' active' : ''}" data-terminal-tab="${actions.escapeHtml(processId)}" aria-selected="${active ? 'true' : 'false'}" aria-controls="terminal-panel-${actions.escapeHtml(processId)}" tabindex="${active ? '0' : '-1'}"><span class="terminal-state${starting ? ' starting' : ''}" aria-hidden="true"></span><b>${String(index + 1).padStart(2, '0')}</b><code title="${actions.escapeHtml(command)}">${actions.escapeHtml(command)}</code></button>${starting ? '' : `<button type="button" class="terminal-tab-stop" data-terminal-kill="${actions.escapeHtml(processId)}" data-terminal-pid="${actions.escapeHtml(session.pid || '')}" aria-label="Stop terminal ${index + 1}" title="Stop this terminal">×</button>`}</div>`;
                   })
-                  .join('')}</div>`
-            : '';
+                  .join('')}</div>${addTerminalButton}</div>`;
         const managedHtml = managedRows
             .map((session) => {
                 const processId = String(session.process_id || session.terminal_id || '');
-                const command = session.command || session.purpose || 'Terminal';
+                const command = terminalSessionLabel(session);
                 const starting = String(session.status || '').toLowerCase() === 'starting' || processId.startsWith('starting:');
                 const active = processId === state.terminalActiveSessionId;
                 return `<article id="terminal-panel-${actions.escapeHtml(processId)}" role="tabpanel" class="terminal-session${starting ? ' starting' : ''}${active ? ' active' : ''}" data-terminal-session="${actions.escapeHtml(processId)}"${active ? '' : ' hidden'}><div class="terminal-output" data-terminal-output="${actions.escapeHtml(processId)}"><div class="terminal-output-fallback"><code>$ ${actions.escapeHtml(command)}</code><span>${starting ? 'Starting terminal...' : 'Connecting...'}</span></div></div></article>`;
@@ -638,15 +653,13 @@ export function createTerminals({ context, actions, el, token }) {
                   })
                   .join('')}</div>`
             : '';
-        const terminalDeck = managedRows.length
-            ? `<section class="terminal-session-deck">${tabsHtml}<div class="terminal-session-panels">${managedHtml}</div></section>`
-            : '';
-        sessionList.innerHTML = visibleRows.length
-            ? `${terminalDeck}${discoveredHtml}`
-            : '<div class="terminal-session-empty"><code>&gt;_</code><span>No terminal processes are running.</span></div>';
+        const panels = managedHtml || '<div class="terminal-session-empty"><code>&gt;_</code><span>No terminal processes are running.</span></div>';
+        const terminalDeck = `<section class="terminal-session-deck">${tabsHtml}<div class="terminal-session-panels">${panels}</div></section>`;
+        sessionList.innerHTML = `${terminalDeck}${discoveredHtml}`;
         sessionList
             .querySelectorAll('[data-terminal-tab]')
             .forEach((tab) => tab.addEventListener('click', () => selectTerminalSession(tab.dataset.terminalTab)));
+        sessionList.querySelector('[data-terminal-add]')?.addEventListener('click', openShellTerminal);
         sessionList
             .querySelectorAll('[data-terminal-kill]')
             .forEach((button) => button.addEventListener('click', () => killTerminal(button.dataset.terminalKill, button.dataset.terminalPid)));
@@ -674,6 +687,31 @@ export function createTerminals({ context, actions, el, token }) {
         } catch (error) {
             renderTerminalWorkspace();
             actions.toast(error.message || 'Could not load project terminals.', 'error');
+        }
+    }
+
+    let openingShell = false;
+
+    async function openShellTerminal() {
+        const projectId = Number(state.terminalProjectId || actions.boardByKey(state.terminalBoardKey)?.project_id || 0);
+        const button = el('terminal-session-list')?.querySelector('[data-terminal-add]');
+        if (!projectId || openingShell) return;
+        openingShell = true;
+        if (button) button.disabled = true;
+        try {
+            const result = await actions.api(`/projects/${projectId}/shell-terminal/start`, {
+                method: 'POST',
+                body: { new: true }
+            });
+            if (!result?.success) throw new Error(result?.error || 'Could not open a terminal.');
+            if (result.process_id) state.terminalActiveSessionId = String(result.process_id);
+            await refreshTerminalSessions();
+            if (result.process_id) selectTerminalSession(result.process_id);
+        } catch (error) {
+            actions.toast(error.message || 'Could not open a terminal.', 'error');
+            if (button?.isConnected) button.disabled = false;
+        } finally {
+            openingShell = false;
         }
     }
 

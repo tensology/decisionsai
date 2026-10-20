@@ -28,6 +28,144 @@ def test_playwright_chromium_launches_and_evals():
         pytest.skip(f"Playwright/Chromium unavailable: {exc}")
 
 
+def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
+    """Persisted and newly streamed assistant rows share the selected skin identity."""
+    from playwright.sync_api import sync_playwright
+
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "distr/gui/web/templates/chat/chat.html").read_text(encoding="utf-8")
+    identity_script_path = root / "distr/gui/web/static/shared/js/assistant_identity.js"
+    script_path = root / "distr/gui/web/static/chat/js/chat.js"
+    style_path = root / "distr/gui/web/static/chat/css/chat.css"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_content(template)
+            page.evaluate("document.head.insertAdjacentHTML('afterbegin', '<base href=\"http://decisions.test/\">')")
+            page.route(
+                "http://decisions.test/api/skins/oracle/preview/idle.png",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="image/svg+xml",
+                    body='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#e88932"/><circle cx="32" cy="32" r="18" fill="none" stroke="#fff" stroke-width="4"/><circle cx="32" cy="32" r="5" fill="#fff"/></svg>',
+                ),
+            )
+            page.route(
+                "http://decisions.test/assets/img/llama.png",
+                lambda route: route.fulfill(status=200, content_type="image/png", path=str(root / "assets/img/llama.png")),
+            )
+            page.evaluate(
+                """() => {
+                    window.fetch = async (url) => {
+                        if (String(url) === '/api/skins') {
+                            return new Response(JSON.stringify({
+                                selected_skin: 'oracle',
+                                skins: [{
+                                    folder_name: 'oracle', name: 'Oracle', type: 'oracle',
+                                    idle_animation: 'idle.png', chroma_key: null
+                                }]
+                            }), {status: 200, headers: {'Content-Type': 'application/json'}});
+                        }
+                        return new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}});
+                    };
+                }"""
+            )
+            page.add_style_tag(content="*,*::before,*::after{box-sizing:border-box}")
+            page.add_style_tag(path=str(style_path))
+            page.add_script_tag(path=str(identity_script_path))
+            page.add_script_tag(path=str(script_path))
+            page.evaluate(
+                """async () => {
+                    await loadAssistantAvatarSkin();
+                    currentChatId = 163;
+                    loadedChatId = 163;
+                    renderMessages([
+                        {role: 'user', content: 'Earlier question', chat_row_id: 1},
+                        {role: 'assistant', content: 'Earlier answer', chat_row_id: 1}
+                    ], false);
+                    handleChatEventStreamStarted({event: 'stream_started', chat_id: 163});
+                    document.body.classList.add('chat-has-active-thread');
+                    document.getElementById('emptyState').style.display = 'none';
+                    document.getElementById('chatMessages').style.display = 'flex';
+                }"""
+            )
+
+            history_avatar = page.locator("#chatMessages .message.assistant .assistant-avatar-image").first
+            assert history_avatar.get_attribute("data-skin-name") == "Oracle"
+            assert history_avatar.get_attribute("src").endswith("/api/skins/oracle/preview/idle.png")
+            assert page.locator("#chatMessages .message.user .assistant-avatar-image").count() == 0
+            assert page.locator("#streamingAssistantMessage .assistant-avatar-image").count() == 1
+
+            for width, height in ((1440, 900), (1024, 900), (390, 844)):
+                page.set_viewport_size({"width": width, "height": height})
+                page.locator(".app-container").screenshot(path=str(tmp_path / f"chat-oracle-{width}x{height}.png"))
+            page.set_viewport_size({"width": 390, "height": 844})
+            assert page.locator("#chatMessages").evaluate("node => getComputedStyle(node).backgroundSize").startswith("112px")
+            assert page.locator("#llamaClickTarget").evaluate("node => Math.round(node.getBoundingClientRect().width)") == 88
+
+            page.evaluate(
+                """async () => {
+                    window.fetch = async () => new Response(JSON.stringify({
+                        selected_skin: 'clippy',
+                        skins: [{
+                            folder_name: 'clippy', name: 'Clippy', type: 'avatar',
+                            idle_animation: 'idle.png', chroma_key: null
+                        }]
+                    }), {status: 200, headers: {'Content-Type': 'application/json'}});
+                    await loadAssistantAvatarSkin(true);
+                }"""
+            )
+            switched_avatars = page.locator("#chatMessages .message.assistant .assistant-avatar-image.avatar")
+            assert switched_avatars.count() == 2
+            assert all(name == "Clippy" for name in switched_avatars.evaluate_all("nodes => nodes.map(node => node.dataset.skinName)"))
+        finally:
+            browser.close()
+
+
+def test_chat_http_retry_reuses_one_work_intake_identity():
+    """A lost HTTP response must not turn one submission into two tickets."""
+    from playwright.sync_api import sync_playwright
+
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "distr/gui/web/templates/chat/chat.html").read_text(encoding="utf-8")
+    script_path = root / "distr/gui/web/static/chat/js/chat.js"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_content(template)
+            page.add_script_tag(path=str(script_path))
+            result = page.evaluate(
+                """async () => {
+                    loadedChatId = 163;
+                    currentChatSettings = null;
+                    ttsEnabled = false;
+                    const requests = [];
+                    let attempt = 0;
+                    window.fetch = async (_url, options) => {
+                        requests.push(JSON.parse(options.body));
+                        attempt += 1;
+                        return new Response(attempt === 1 ? 'temporarily unavailable' : '{}', {
+                            status: attempt === 1 ? 503 : 200,
+                            headers: {'Content-Type': 'application/json'}
+                        });
+                    };
+                    await sendToAgentWhenReady('Fix the project login', null);
+                    return requests;
+                }"""
+            )
+            assert len(result) == 2
+            assert result[0]["message"] == result[1]["message"] == "Fix the project login"
+            assert result[0]["chat_id"] == result[1]["chat_id"] == 163
+            assert result[0]["intake_source_message_id"] == result[1]["intake_source_message_id"]
+            assert result[0]["intake_source_message_id"].startswith("web:163:")
+        finally:
+            browser.close()
+
+
 def test_delayed_websocket_user_event_does_not_duplicate_rendered_turn():
     """Reproduce the voice WS plus persisted poll race from the chat screenshots."""
     from playwright.sync_api import sync_playwright

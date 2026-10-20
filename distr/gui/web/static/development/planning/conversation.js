@@ -102,8 +102,11 @@ export function createPlanConversation(host, root) {
                 <button type="button" id="plan-back" aria-label="Back to plans"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
                 <strong class="plan-project" title="${esc(session.workspace.board_name)}">${esc(session.workspace.board_name)}</strong>
                 <nav class="plan-tabs" aria-label="Plan sections">${Object.entries(TABS).map(([tab, info]) => `<button type="button" data-plan-tab="${tab}" title="${esc(info.help || info.label)}" aria-pressed="${session.tab === tab}">${info.label}</button>`).join('')}</nav>
+                <button type="button" id="plan-canvas-toggle" aria-pressed="false">Hide artifacts</button>
+                <span class="plan-header-actions">
                 <button type="button" id="plan-rebuild-sitemap">Rebuild sitemap</button>
                 <button type="button" id="plan-build">Build tasks</button>
+                </span>
             </header>
             <div class="plan-detail-body">
                 <section class="plan-artifacts" id="plan-artifacts" aria-label="Artifacts"></section>
@@ -139,6 +142,10 @@ export function createPlanConversation(host, root) {
         });
         root.querySelector('#plan-language').addEventListener('submit', (event) => { event.preventDefault(); send(session); });
         root.querySelector('#plan-back').onclick = () => host.openHome();
+        root.querySelector('#plan-canvas-toggle').onclick = () => {
+            session.canvasClosed = !session.canvasClosed;
+            renderArtifacts(session);
+        };
         root.querySelector('#plan-rebuild-sitemap').onclick = () => rebuildSitemap(session);
         root.querySelector('#plan-build').onclick = () => build(session);
         root.querySelector('#plan-provider').onchange = async (event) => {
@@ -212,13 +219,20 @@ export function createPlanConversation(host, root) {
         if (!current(session)) return;
         const log = root.querySelector('#plan-messages');
         const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 64;
-        log.innerHTML = (session.conversation.messages || []).map((message) => `<article class="plan-message${message.role === 'user' ? ' plan-message-user' : ''}"><strong>${esc(message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Assistant' : message.role)}</strong><div class="plan-message-content">${esc(message.content)}</div>${(message.artifacts || []).map((id) => {
+        log.innerHTML = (session.conversation.messages || []).map((message) => {
+            const isAssistant = message.role === 'assistant';
+            const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+            const author = isAssistant
+                ? `<strong class="plan-message-author"><span class="plan-message-avatar" data-assistant-identity>${assistantIdentity}</span><span data-assistant-name>${esc(window.DecisionsAssistantIdentity?.name() || 'Assistant')}</span></strong>`
+                : `<strong>${esc(message.role === 'user' ? 'You' : message.role)}</strong>`;
+            return `<article class="plan-message${message.role === 'user' ? ' plan-message-user' : ''}">${author}<div class="plan-message-content">${esc(message.content)}</div>${(message.artifacts || []).map((id) => {
             const item = (session.workspace.items || []).find((item) => String(item.id) === String(id));
             return item ? `<button type="button" data-message-artifact="${esc(item.id)}">${esc(item.title)}</button>` : '';
-        }).join('')}${message.role === 'assistant' ? buildResultsHtml(message.build_result, esc) : ''}</article>`).join('') || (session.loaded
+        }).join('')}${isAssistant ? buildResultsHtml(message.build_result, esc) : ''}</article>`;
+        }).join('') || (session.loaded
             ? `<div class="plan-conversation-empty">${allStarters(session)
                 ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Read the sitemap in Public, Account, and Signed in</li><li>Tighten requirements, then ask for build tasks</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
-                : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Dictate the journey. Plan expects: screens &amp; sitemap → FRAC/requirements → data (ERD) → front-end &amp; back-end notes → build.</p>`}</div>`
+                : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Start with the pages, then define requirements and data before building tasks.</p>`}</div>`
             : '');
         log.querySelectorAll('[data-message-artifact]').forEach((button) => {
             button.onclick = () => {
@@ -514,8 +528,11 @@ export function createPlanConversation(host, root) {
     function renderArtifacts(session) {
         if (!current(session)) return;
         const panel = root.querySelector('#plan-artifacts');
+        const toggle = root.querySelector('#plan-canvas-toggle');
         root.querySelector('.plan-detail-body').classList.toggle('plan-chat-only', Boolean(session.canvasClosed));
         panel.hidden = Boolean(session.canvasClosed);
+        toggle.textContent = session.canvasClosed ? 'Show artifacts' : 'Hide artifacts';
+        toggle.setAttribute('aria-pressed', String(Boolean(session.canvasClosed)));
         root.querySelectorAll('[data-plan-tab]').forEach(button => button.setAttribute('aria-pressed', String(!session.canvasClosed && session.tab === button.dataset.planTab)));
         if (session.canvasClosed) return;
         const item = selected(session);

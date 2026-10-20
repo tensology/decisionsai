@@ -95,6 +95,14 @@ def is_mutating_tool_call(tool_name: str, arguments: dict[str, Any] | None = Non
     """Conservatively classify a tool call as read-only or side-effecting."""
     name = str(tool_name or "").strip().lower()
     args = arguments if isinstance(arguments, dict) else {}
+    if name == "execute_code" and isinstance(args.get("code"), str):
+        from distr.core.files.safety import FileOperationSafety, OperationType
+
+        operation = FileOperationSafety.classify_operation(
+            args["code"],
+            str(args.get("description") or ""),
+        )
+        return operation != OperationType.READ_ONLY
     action = _action_name(args)
     if action:
         if _starts_with_any(action, _READ_ACTION_PREFIXES):
@@ -130,7 +138,6 @@ def _state(owner: Any, user_text: str) -> dict[str, Any]:
             "turn_key": key,
             "fingerprints": set(),
             "scopes": set(),
-            "read_fingerprints": set(),
         }
         setattr(owner, "_tool_execution_policy_state", state)
     return state
@@ -165,13 +172,6 @@ def tool_execution_block_reason(
     """Block forbidden mutations and successful mutation replays within one user turn."""
     args = arguments if isinstance(arguments, dict) else {}
     if not is_mutating_tool_call(tool_name, args):
-        state = _state(owner, user_text)
-        _, fingerprint = _mutation_keys(tool_name, args)
-        if fingerprint in state.setdefault("read_fingerprints", set()):
-            return (
-                "Blocked duplicate read: this exact information was already retrieved in the "
-                "current user turn. Use the existing tool result and continue the task."
-            )
         return ""
     if no_action_requested(user_text):
         return (
@@ -205,7 +205,6 @@ def remember_successful_tool_call(
     state = _state(owner, user_text)
     scope, fingerprint = _mutation_keys(tool_name, args)
     if not is_mutating_tool_call(tool_name, args):
-        state.setdefault("read_fingerprints", set()).add(fingerprint)
         return
     state["scopes"].add(scope)
     state["fingerprints"].add(fingerprint)

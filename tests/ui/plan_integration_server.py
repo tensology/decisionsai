@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 
 from fastapi import APIRouter, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -114,12 +114,18 @@ def create_app(folder):
     @app.get("/api/llms/models")
     def models():
         return {"models": ["fixture-model"]}
+    @app.get("/api/skins")
+    def skins():
+        return {"selected_skin": "oracle", "skins": [{"folder_name": "oracle", "name": "Oracle", "type": "oracle", "idle_animation": "idle.svg"}]}
+    @app.get("/api/skins/oracle/preview/idle.svg")
+    def skin_preview():
+        return Response('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#e88932"/><circle cx="32" cy="32" r="18" fill="none" stroke="#fff" stroke-width="4"/><circle cx="32" cy="32" r="5" fill="#fff"/></svg>', media_type="image/svg+xml")
     @app.get("/")
     def page():
         return HTMLResponse('''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Isolated Plan integration</title><link rel="stylesheet" href="/static/development/styles.css?v=plan-routes-2">
         <style>html,body{margin:0;height:100%;background:var(--studio-bg);color:var(--studio-text);font-family:Arial,sans-serif}#plan-root{height:100dvh}button,input,select,textarea{font:inherit;color:inherit;box-sizing:border-box}*{box-sizing:border-box}</style></head>
-        <body><main id="plan-root"></main><script type="module">
+        <body><main id="plan-root"></main><script src="/static/shared/js/assistant_identity.js"></script><script type="module">
         import {createPlanConversation} from '/static/development/planning/conversation.js';
         const api = async (path, options={}) => { const response=await fetch('/api'+path,{...options,headers:options.body instanceof FormData?{}:{'Content-Type':'application/json'},body:options.body instanceof FormData?options.body:options.body?JSON.stringify(options.body):undefined}); const data=await response.json(); if(!response.ok)throw Error(data.detail||'Request failed'); return data; };
         const escapeHtml=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

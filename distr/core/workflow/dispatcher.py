@@ -58,6 +58,17 @@ DEFAULT_RUN_SETTINGS = {
 }
 
 
+def should_refresh_auto_model_policy(run_metadata: dict[str, Any] | None) -> bool:
+    """Manual thread routes are resolved already and must not wait on Auto discovery."""
+    metadata = run_metadata if isinstance(run_metadata, dict) else {}
+    route = metadata.get("execution_route") if isinstance(metadata.get("execution_route"), dict) else {}
+    return not (
+        str(route.get("route_mode") or "").strip().lower() == "manual"
+        and str(route.get("source") or "").strip().lower() == "thread_model_route"
+        and bool(str(route.get("backend") or "").strip())
+    )
+
+
 def _workflow_run_settings(wf: AutoWorkflow) -> Dict[str, Any]:
     try:
         raw = json.loads(getattr(wf, "run_settings", None) or "{}")
@@ -2075,16 +2086,17 @@ def start_workflow_run(
         # the already asynchronous initialization phase so clicking Run returns
         # immediately and cannot freeze the desktop/web event loop. The step
         # executor reads the refreshed route from the database before dispatch.
-        try:
-            from distr.core.project_cli_backends.policy_manager import refresh_auto_model_policy_for_workflow
+        if should_refresh_auto_model_policy(normalized_metadata):
+            try:
+                from distr.core.project_cli_backends.policy_manager import refresh_auto_model_policy_for_workflow
 
-            refresh_auto_model_policy_for_workflow(workflow_id)
-        except Exception:
-            logger.warning(
-                "start_workflow_run: Auto model-policy refresh failed for workflow=%s; retaining last known-good routes",
-                workflow_id,
-                exc_info=True,
-            )
+                refresh_auto_model_policy_for_workflow(workflow_id)
+            except Exception:
+                logger.warning(
+                    "start_workflow_run: Auto model-policy refresh failed for workflow=%s; retaining last known-good routes",
+                    workflow_id,
+                    exc_info=True,
+                )
         _enrich_run_context()
         init_error = _initialize_run_context()
         if init_error:
@@ -3623,7 +3635,24 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                 if not isinstance(plan, dict) or not plan.get("assignments"):
                     return
                 assignment = (plan.get("assignments") or {}).get(str(int(step_id)))
-                if not isinstance(assignment, dict) or not assignment.get("needs_replan"):
+                if not isinstance(assignment, dict):
+                    return
+                if bool(plan.get("manual_route_locked")):
+                    locked_route = dict(assignment.get("primary_route") or {})
+                    if locked_route:
+                        current = (
+                            dict(run_data.get("execution_route") or {})
+                            if isinstance(run_data.get("execution_route"), dict)
+                            else {}
+                        )
+                        run_data["execution_route"] = {**current, **locked_route}
+                        step_routes, role_routes = coordination_plan_routes(plan)
+                        run_data["step_routes"] = step_routes
+                        run_data["step_role_routes"] = role_routes
+                        run.run_data = json.dumps(run_data)
+                        db.commit()
+                    return
+                if not assignment.get("needs_replan"):
                     return
                 workflow = (
                     db.query(AutoWorkflow)

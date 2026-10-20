@@ -77,6 +77,12 @@ def test_decisions_browser_control_skills_are_known():
     assert known == ["decisions-playwright", "decisions-computer-use"]
 
 
+def test_shared_ui_quality_skills_are_known():
+    known = filter_known_skill_ids(["completion-protocol", "ui-ux-principles", "ui-crud-discipline"])
+
+    assert known == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
+
+
 def test_external_capability_skill_is_available_to_catalog(tmp_path, monkeypatch):
     skill_dir = tmp_path / "external-only-skill"
     skill_dir.mkdir()

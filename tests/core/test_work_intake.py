@@ -128,6 +128,37 @@ def test_voice_work_intake_persists_user_before_assistant(monkeypatch):
     assert order == [("user", "Fix"), ("assistant", "What should I change?")]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "run action login",
+        "Run the action login",
+        "Run, action, login.",
+        "Jesus, run, action, login.",
+    ],
+)
+def test_voice_direct_action_playback_bypasses_work_intake(monkeypatch, text):
+    from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
+
+    intake_calls = []
+
+    class _IntakeService:
+        def ingest(self, intake):
+            intake_calls.append(intake)
+            return WorkIntakeDecision(WorkIntakeAction.ANSWER_DIRECTLY, "unexpected")
+
+    class _Harness:
+        chat_manager = None
+
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service",
+        lambda: _IntakeService(),
+    )
+
+    assert LLMSharedMixin._try_route_work_intake(_Harness(), text, source="web") is False
+    assert intake_calls == []
+
+
 @pytest.mark.parametrize(("text", "expected"), [
     ("Make the green button black", WorkIntakeAction.CREATE_TICKET),
     ("Can you fix the checkout error?", WorkIntakeAction.RUN_WORKFLOW),
@@ -549,6 +580,33 @@ def test_active_project_single_line_request_creates_ticket_and_starts_lightweigh
     assert decision.diagnostics.get("approval_via_workflow") is True
     start_workflow.assert_called_once()
     start_lightweight.assert_not_called()
+
+
+def test_implicit_work_prefers_active_project_over_stale_active_board(intake_db):
+    from distr.core.db.projects import Project
+
+    factory, ids = intake_db
+    session = factory()
+    pizza_project = session.get(Project, ids["pizza_project"])
+    pizza_project.in_use = True
+    session.commit()
+    session.close()
+
+    session_provider = lambda: _session_ctx(factory)
+    service = OrchestratorIntakeService()
+    service._start_workflow = Mock()
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider), \
+         patch("distr.core.orchestrator.emit_channel_intake_event"):
+        decision = service.ingest(WorkIntake(
+            source="web",
+            user_text="Fix the checkout button validation",
+            source_message_id="web-active-project-1",
+        ))
+
+    assert decision.project_id == ids["pizza_project"]
+    assert decision.board_id == ids["pizza_board"]
+    assert decision.board_id != ids["unrelated_board"]
+    service._start_workflow.assert_called_once()
 
 
 def test_final_chat_response_is_correlated_to_pending_direct_intake(intake_db):

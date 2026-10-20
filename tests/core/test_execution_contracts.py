@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from distr.core.workflow.dispatcher import should_refresh_auto_model_policy
+
 from distr.core.project_cli_backends.base import BackendTaskResult, ProjectTask
 from distr.core.project_cli_backends.contracts import (
     BackendCapabilities,
@@ -45,6 +47,17 @@ from distr.core.workflow.step_executor import (
 )
 from distr.core.workflow.verification import _run_verification
 from distr.core.kanban.ticket_workflow_engagement import build_route_selection_message
+
+
+def test_manual_thread_route_skips_auto_model_catalog_refresh():
+    assert should_refresh_auto_model_policy({
+        "execution_route": {
+            "route_mode": "manual",
+            "source": "thread_model_route",
+            "backend": "cursor",
+        }
+    }) is False
+    assert should_refresh_auto_model_policy({"execution_route": {"backend": "pi"}}) is True
 
 
 async def _async_value(value):
@@ -293,6 +306,23 @@ def test_read_only_workspace_snapshot_ignores_only_configured_runtime_db(tmp_pat
     delta = _workspace_state_delta(before, after)
 
     assert delta["modified"] == ["db/schema.sql"]
+
+
+def test_read_only_workspace_snapshot_ignores_decisions_memory_but_not_product_code(tmp_path):
+    decisions_memory = tmp_path / ".decisions" / "memory"
+    decisions_memory.mkdir(parents=True)
+    handoff = decisions_memory / "handoff.md"
+    handoff.write_text("before\n", encoding="utf-8")
+    app = tmp_path / "app.py"
+    app.write_text("value = 1\n", encoding="utf-8")
+    before = _workspace_state_snapshot(str(tmp_path))
+
+    handoff.write_text("after\n", encoding="utf-8")
+    app.write_text("value = 2\n", encoding="utf-8")
+    after = _workspace_state_snapshot(str(tmp_path))
+    delta = _workspace_state_delta(before, after)
+
+    assert delta["modified"] == ["app.py"]
 
 
 def test_backend_capabilities_are_name_not_backend_based():

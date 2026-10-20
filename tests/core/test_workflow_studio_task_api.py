@@ -526,6 +526,44 @@ def test_studio_task_with_explicit_workflow_dispatches_the_workflow_runner(monke
     }]
 
 
+def test_explicit_workflow_preserves_manual_route_skills_and_browser_contract(monkeypatch):
+    calls = _patch_studio_dependencies(monkeypatch, autonomy="full", workflow_id=44)
+    monkeypatch.setattr(
+        "distr.core.skills.catalog.filter_known_skill_ids",
+        lambda values: list(values),
+    )
+
+    response = _client().post(
+        "/api/workflows/studio/tasks",
+        json={
+            "prompt": "Implement and audit the responsive UI",
+            "workflow_id": 44,
+            "autonomy_level": "full",
+            "route_mode": "manual",
+            "backend": "cursor",
+            "provider": "cursor",
+            "model_name": "grok-4.7-medium",
+            "routing_assessment": {"complexity": "medium"},
+            "skill_ids": ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"],
+            "use_playwright": True,
+        },
+    )
+
+    assert response.status_code == 200
+    metadata = calls["workflow_dispatch"][0]["run_metadata"]
+    assert metadata["skill_ids"] == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
+    assert metadata["use_playwright"] is True
+    assert metadata["model_route"]["route_mode"] == "manual"
+    assert metadata["execution_route"] == {
+        "route_mode": "manual",
+        "backend": "cursor",
+        "model_provider": "cursor",
+        "model": "grok-4.7-medium",
+        "source": "thread_model_route",
+        "complexity": "medium",
+    }
+
+
 def test_studio_plan_only_uses_the_direct_agent_harness(monkeypatch):
     calls = _patch_studio_dependencies(monkeypatch, autonomy="plan")
 

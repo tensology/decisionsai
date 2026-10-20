@@ -154,8 +154,10 @@ def test_plan_home_lists_sidebar_boards_that_have_a_project():
     assert "Archived or unnamed boards are not shown as plans." not in studio_js
     assert 'id="plan-language-mic"' not in plan_js
     assert 'id="plan-voice-status"' not in plan_js
-    assert ".plan-home { width: min(1040px, calc(100% - 48px)); margin: 0 auto; padding: 16px 0 32px; height: 100%; overflow: auto; }" in plan_css
+    assert ".plan-home { width: min(1040px, calc(100% - 48px)); margin: 0 auto; padding: 20px 0 32px; height: 100%; overflow: auto; }" in plan_css
     assert ".plan-workspace { padding: 0; overflow: hidden; background: var(--studio-bg); }" in plan_css
+    assert 'placeholder="Search plans"' in plan_js
+    assert 'class="plan-loading"' in plan_js
 
 
 def test_stale_plan_revision_is_rejected_without_changing_content(plan_workspace_db):

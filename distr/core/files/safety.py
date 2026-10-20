@@ -81,7 +81,8 @@ class FileOperationSafety:
         self.quarantine_base = os.path.join(os.path.expanduser("~"), "Documents", "InterpreterQuarantine")
         os.makedirs(self.quarantine_base, exist_ok=True)
     
-    def classify_operation(self, code: str, task: str = "") -> OperationType:
+    @staticmethod
+    def classify_operation(code: str, task: str = "") -> OperationType:
         """
         Classify an operation as READ_ONLY, WRITE, or DESTRUCTIVE.
         

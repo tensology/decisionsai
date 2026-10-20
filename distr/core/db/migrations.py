@@ -1639,6 +1639,7 @@ def run_migrations():
     _kanban_settings_columns = [
         ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
         ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
+        ("project_cli_auto_refresh_enabled", "BOOLEAN DEFAULT 1"),
         ("project_cli_low_backend", "VARCHAR DEFAULT 'cursor'"),
         ("project_cli_low_model", "VARCHAR DEFAULT 'auto'"),
         ("project_cli_low_model_provider", "VARCHAR DEFAULT ''"),

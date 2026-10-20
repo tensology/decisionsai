@@ -129,6 +129,36 @@ def test_launch_auto_policy_selects_sota_free_route_and_cross_provider_fallback(
         assert saved[f"project_cli_{level}_fallback_model"] == "local-coder:30b"
 
 
+def test_launch_auto_policy_preserves_explicit_pinned_complexity_routes(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {
+            "project_cli_auto_refresh_enabled": False,
+            "project_cli_medium_backend": "pi",
+            "project_cli_medium_model_provider": "ollama",
+            "project_cli_medium_model": "qwen3.8:27b",
+            "project_cli_medium_fallback_backend": "codex",
+            "project_cli_medium_fallback_model": "auto",
+        },
+    )
+    monkeypatch.setattr(
+        "distr.core.settings.save_settings_to_db",
+        lambda updates: saved.update(updates),
+    )
+
+    result = refresh_global_auto_model_policy()
+
+    assert result["skipped"] is True
+    assert result["primary"] == {
+        "backend": "pi",
+        "model_provider": "ollama",
+        "model": "qwen3.8:27b",
+    }
+    assert result["fallback"] == {"backend": "codex", "model": "auto"}
+    assert saved == {}
+
+
 @pytest.fixture()
 def policy_db(monkeypatch):
     engine = create_engine(

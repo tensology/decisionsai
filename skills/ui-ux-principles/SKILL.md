@@ -9,6 +9,13 @@ This skill is the source of truth for interface behavior and presentation. Read 
 
 ## Design Principles
 
+### Preserve product truth
+
+- Treat the current product behavior, approved screenshots, committed navigation, shared shells, and user-named exemplars as constraints. `Polish`, `clean up`, `audit`, and `make this better` do not authorize a redesign.
+- Make the requested delta only. Do not rename, relocate, add, or remove adjacent navigation, controls, content, or workflows unless the request requires it.
+- Never fabricate product semantics, counts, statuses, roles, copy, controls, or workflows to fill a gap. Inspect the real implementation and data first. If the intended meaning is still unclear, ask before building it.
+- When an approved reference and the current implementation differ, identify the exact difference and confirm which one is authoritative before replacing behavior.
+
 ### Design for the product mode
 
 - Operational interfaces are compact, quiet, and structured around the work surface.
@@ -24,6 +31,7 @@ This skill is the source of truth for interface behavior and presentation. Read 
 - A container must represent a genuine interaction or content boundary.
 - Avoid wrapper soup, decorative cards, accumulated padding, and unused empty canvas.
 - Responsive layouts recompose around task order. They do not merely scale down a desktop canvas.
+- Related routes use the same application shell, navigation, header, footer, form controls, title hierarchy, and interaction contracts. Do not create a parallel base template for one page unless the product intentionally has a separate mode.
 
 ### Typography
 
@@ -83,6 +91,8 @@ This skill is the source of truth for interface behavior and presentation. Read 
 - Check alignment, hierarchy, rhythm, truncation, overflow, collisions, focus, target size, asset quality, content order, state consistency, color pairing, and theme completeness.
 - Verify representative desktop, mid-width, and mobile views after the last content or layout change.
 - Do not use stale screenshots, source review, automated contrast results, or automated tests as substitutes for final visual inspection.
+- Reconcile the finished UI line by line against the user's request and any supplied reference. A successful build, a representative screenshot, or a passing happy path does not prove that every requested item is present.
+- For multi-route or role-sensitive work, maintain a coverage matrix of route, role, permission, state, viewport, and requested behavior. Every applicable cell must be verified, explicitly excluded with a reason, or reported as blocked.
 
 ## UX Principles
 
@@ -130,6 +140,7 @@ Every element must earn its place. If removing it loses no function or necessary
 - Remove helper text, tooltips, and descriptions that merely repeat the label.
 - Do not add dashboards, statistics widgets, or charts that were not requested.
 - Whitespace comes from spacing tokens, not accumulated padding used to fill the screen.
+- Never use invented copy, fake metrics, placeholder counts, or speculative controls to make a screen appear finished. Missing product meaning is a requirements question, not a visual-design opportunity.
 
 ### Consistency and accessibility
 
@@ -163,6 +174,8 @@ Older skill references to the `Pre-ship Check` mean this section.
 A UI task is not complete until every relevant item passes:
 
 - [ ] The current Design Principles and last 20 taste-log entries were reviewed before implementation.
+- [ ] The requested change was separated from untouched product behavior, and approved navigation, labels, workflows, and shared shells remain unchanged unless explicitly in scope.
+- [ ] No product meaning, data, count, status, role, control, or workflow was invented to fill an unclear requirement.
 - [ ] The screen has one job, one title, and one visually dominant primary action.
 - [ ] Removing any element would remove a function or necessary meaning.
 - [ ] Titles, actions, information, and helper copy are not duplicated.
@@ -179,6 +192,8 @@ A UI task is not complete until every relevant item passes:
 - [ ] Mobile reflows according to task order, uses practical touch targets, and has no accidental horizontal overflow.
 - [ ] The inspection checked clipping, collisions, layout shift, truncation, broken assets, excessive containment, stale content, visual misalignment, token leakage, and incomplete theme coverage.
 - [ ] Screenshots or other visual evidence identify the route, viewport, timestamp, and current build or commit.
+- [ ] A route-role-permission-state-viewport coverage matrix accounts for every affected surface, including negative cases and hidden or unavailable actions.
+- [ ] The final implementation was reconciled line by line against every item in the user's request and supplied references.
 - [ ] Every applicable FRAC acceptance criterion passes.
 
 Recommended review widths are 1440x900, a representative width from 980px to 1120px, and 390x844.
@@ -194,3 +209,5 @@ Recommended review widths are 1440x900, a representative width from 980px to 112
 | 2026-10-14 | UI corrections were fixed locally but did not reliably change future behavior. | Added Fix Memory, the Pre-ship Check, and a required changelog entry for principle changes. |
 | 2026-10-14 | Product-specific visual taste was implicit across exemplar projects rather than available as standing guidance. | Added Design Principles and replaced the narrow pre-ship questions with Definition of Done - UI. |
 | 2026-10-14 | Foreground/background mismatches and partially styled dark-mode components could pass broad token or contrast checks while remaining visibly broken. | Added color-pairing, semantic-token, full-state theme coverage, and release-blocking theme-completeness rules. |
+| 2026-10-19 | UI polish requests repeatedly changed unrelated navigation, shells, labels, and workflows or filled unclear gaps with invented product behavior. | Added Preserve product truth and prohibited speculative product semantics, data, and controls. |
+| 2026-10-19 | Builds and representative screenshots were treated as completion while requested items, roles, states, routes, or responsive layouts remained unchecked. | Added line-by-line request reconciliation and a route-role-permission-state-viewport coverage matrix to Definition of Done. |

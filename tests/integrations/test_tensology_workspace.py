@@ -5,9 +5,14 @@ from unittest.mock import MagicMock, patch
 from distr.core.agent.tools.integrations.tensology_workspace import TensologyWorkspaceTool
 from distr.core.tensology_client import (
     TensologyClient,
+    TensologyApiError,
+    _create_tensology_thread,
+    _execution_skill_ids,
     process_tensology_discussion_context,
     process_tensology_discussion_assessments,
+    process_tensology_approved_tickets,
     send_tensology_heartbeat,
+    _remote_execution_status,
 )
 from distr.gui.web.server import _tensology_heartbeat_loop
 
@@ -32,6 +37,7 @@ def test_tensology_heartbeat_authenticates_once_before_waiting():
         patch("distr.core.tensology_client.send_tensology_heartbeat") as heartbeat,
         patch("distr.core.tensology_client.process_tensology_discussion_assessments") as assessments,
         patch("distr.core.tensology_client.process_tensology_discussion_context") as context,
+        patch("distr.core.tensology_client.process_tensology_approved_tickets") as tickets,
         patch("asyncio.sleep", side_effect=asyncio.CancelledError),
     ):
         try:
@@ -42,6 +48,168 @@ def test_tensology_heartbeat_authenticates_once_before_waiting():
     heartbeat.assert_called_once_with()
     assessments.assert_called_once_with()
     context.assert_called_once_with()
+    tickets.assert_called_once_with()
+
+
+def test_tensology_ticket_poll_still_runs_when_an_unrelated_operation_fails():
+    with (
+        patch(
+            "distr.core.tensology_client.send_tensology_heartbeat",
+            side_effect=TensologyApiError("presence unavailable", status=403),
+        ) as heartbeat,
+        patch("distr.core.tensology_client.process_tensology_discussion_assessments") as assessments,
+        patch("distr.core.tensology_client.process_tensology_discussion_context") as context,
+        patch("distr.core.tensology_client.process_tensology_approved_tickets") as tickets,
+        patch("asyncio.sleep", side_effect=asyncio.CancelledError),
+    ):
+        try:
+            asyncio.run(_tensology_heartbeat_loop(interval_seconds=60))
+        except asyncio.CancelledError:
+            pass
+
+    heartbeat.assert_called_once_with()
+    assessments.assert_called_once_with()
+    context.assert_called_once_with()
+    tickets.assert_called_once_with()
+
+
+def test_approved_ticket_creates_visible_project_thread_and_claims_remote_ticket():
+    client = MagicMock()
+    client.get.return_value = [{
+        "id": 17,
+        "project_id": 9,
+        "project_name": "Snuza",
+        "reference": "PROJ-9-001",
+        "title": "Fix contact form",
+        "description": "Reduce spam",
+        "tasks": ["Add honeypot", "Test submission"],
+        "execution_status": "awaiting_decisions",
+        "decisions_thread_id": "",
+        "repository_ready": True,
+    }]
+    with (
+        patch("distr.core.tensology_client.configured_tensology_client", return_value=client),
+        patch("distr.core.tensology_client._resolve_tensology_project", return_value={
+            "id": 8, "name": "Snuza", "folder_location": "/tmp/snuza", "start_time_tracker": True,
+        }),
+        patch("distr.core.tensology_client._existing_tensology_thread", return_value=None),
+        patch("distr.core.tensology_client._create_tensology_thread", return_value=(42, {
+            "complexity": "medium", "backend": "pi", "provider": "ollama", "model": "qwen3.8:27b",
+        })),
+    ):
+        assert process_tensology_approved_tickets(force=True) == 1
+
+    client.post.assert_called_once()
+    path, body = client.post.call_args.args[:2]
+    assert path == "tickets/17/execution"
+    assert body["thread_id"] == "42"
+    assert body["status"] == "development"
+    assert body["thread_url"].endswith("/development/threads/42/")
+
+
+def test_existing_ticket_thread_syncs_completed_execution_to_done():
+    client = MagicMock()
+    client.get.return_value = [{
+        "id": 17,
+        "project_id": 9,
+        "project_name": "Snuza",
+        "reference": "PROJ-9-001",
+        "title": "Fix contact form",
+        "execution_status": "development",
+        "decisions_thread_id": "42",
+        "repository_ready": True,
+    }]
+    with (
+        patch("distr.core.tensology_client.configured_tensology_client", return_value=client),
+        patch("distr.core.tensology_client._resolve_tensology_project", return_value={
+            "id": 8, "name": "Snuza", "folder_location": "/tmp/snuza", "start_time_tracker": True,
+        }),
+        patch("distr.core.tensology_client._existing_tensology_thread", return_value=42),
+        patch("distr.core.workflow.development_harness.development_execution_state", return_value={
+            "status": "completed", "summary": "Tests and final verification passed.", "job_id": "job-1",
+        }),
+    ):
+        assert process_tensology_approved_tickets(force=True) == 1
+
+    client.patch.assert_called_once()
+    path, body = client.patch.call_args.args[:2]
+    assert path == "tickets/17/execution"
+    assert body["status"] == "done"
+
+
+def test_execution_stage_markers_drive_visible_lifecycle_and_gate_done():
+    assert _remote_execution_status("running", {"streamed_output": "[DECISIONS_STAGE: testing]"}) == "testing"
+    assert _remote_execution_status("running", {"streamed_output": "[DECISIONS_STAGE: refinement]"}) == "refinement"
+    assert _remote_execution_status("completed", {"summary": "Implementation completed."}) == "failed"
+    assert _remote_execution_status("completed", {"summary": "[DECISIONS_STAGE: done]"}) == "done"
+
+
+def test_ui_ticket_inherits_completion_and_ui_quality_skills():
+    skills, use_playwright = _execution_skill_ids({
+        "title": "Improve the responsive customer settings screen",
+        "description": "Polish the form, table, notification states, and mobile layout.",
+        "tasks": ["Verify keyboard focus and empty, loading, error, and success states"],
+    })
+
+    assert skills == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
+    assert use_playwright is True
+
+
+def test_non_ui_ticket_uses_completion_protocol_without_browser_requirement():
+    skills, use_playwright = _execution_skill_ids({
+        "title": "Rotate the background cache index",
+        "description": "Update the deterministic maintenance command.",
+    })
+
+    assert skills == ["completion-protocol"]
+    assert use_playwright is False
+
+
+def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
+    ticket = {
+        "id": 17,
+        "project_id": 9,
+        "reference": "TEST-001",
+        "title": "Improve the responsive settings form",
+        "description": "Verify the UI states on desktop and mobile.",
+        "tasks": ["Implement the form", "Run browser tests"],
+        "success_criteria": ["Desktop and mobile evidence passes"],
+        "execution_complexity": "auto",
+    }
+    project = {"id": 11, "name": "Local Model Smoke"}
+    local_response = {"task": {"id": 42}}
+
+    with (
+        patch(
+            "distr.core.workflow.developer_workflow.get_or_create_development_workflow",
+            return_value=374,
+        ),
+        patch("distr.core.tensology_client._ensure_tensology_kanban_ticket", return_value=91),
+        patch(
+            "distr.core.kanban.ticket_policy.resolve_ticket_complexity",
+            return_value="medium",
+        ),
+        patch(
+            "distr.core.kanban.ticket_policy.resolve_ticket_cli_route",
+            return_value={"backend": "cursor", "model": "grok-4.7-medium"},
+        ),
+        patch("distr.core.tensology_client._local_api_post", return_value=local_response) as post,
+    ):
+        chat_id, route = _create_tensology_thread(ticket, project)
+
+    assert chat_id == 42
+    assert route == {
+        "complexity": "medium",
+        "backend": "cursor",
+        "provider": "cursor",
+        "model": "grok-4.7-medium",
+    }
+    path, body = post.call_args.args
+    assert path == "workflows/studio/tasks"
+    assert body["workflow_id"] == 374
+    assert body["ticket_id"] == 91
+    assert body["skill_ids"] == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
+    assert body["use_playwright"] is True
 
 
 def test_tensology_heartbeat_reports_machine_account_and_development_defaults():

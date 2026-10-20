@@ -107,10 +107,7 @@ from distr.gui.oracle import OracleWindow
 from distr.gui.dialogs.about import AboutWindow
 from distr.gui.dialogs.eula import EulaWindow
 from distr.gui.dialogs.audio import DeviceSelectionDialog
-from distr.gui.development_hot_corner import (
-    DevelopmentHotCornerPanel,
-    PINNED_PROJECTS_SETTING,
-)
+from distr.gui.development_hot_corner import DevelopmentHotCornerPanel
 from distr.core.audio.utils import (
     get_current_device_list_hash,
     get_system_default_device_fingerprints,
@@ -1080,7 +1077,6 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         self.development_hot_corner = DevelopmentHotCornerPanel(
             enabled=bool(self.settings.get("accepted_eula", False)),
             open_path=self.oracle_window._open_web_url,
-            pinned_project_ids=self.settings.get(PINNED_PROJECTS_SETTING, []),
         )
         # Hide oracle window until EULA is accepted
         self.oracle_window.hide()

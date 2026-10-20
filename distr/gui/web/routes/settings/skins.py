@@ -42,6 +42,10 @@ def register_routes(router, templates):
                 "type": config.type,
                 "idle_animation": idle_anim.animation if idle_anim else None,
                 "idle_playback": idle_anim.playback if idle_anim else "loop",
+                "shape": config.rendering.shape,
+                "image_scale": config.rendering.image_scale,
+                "image_offset_x": config.rendering.image_offset_x,
+                "image_offset_y": config.rendering.image_offset_y,
                 "chroma_key": list(config.rendering.chroma_key) if config.rendering.chroma_key else None,
                 "chroma_threshold": config.rendering.chroma_threshold,
             })

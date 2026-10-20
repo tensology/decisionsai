@@ -55,12 +55,26 @@ def plan_server(tmp_path):
                 process.wait(timeout=5)
 
 
-@pytest.mark.parametrize("size", [{"width": 1440, "height": 900}, {"width": 390, "height": 844}], ids=["desktop", "mobile"])
+@pytest.mark.parametrize(
+    "size",
+    [
+        {"width": 1440, "height": 900},
+        {"width": 1024, "height": 900},
+        {"width": 390, "height": 844},
+    ],
+    ids=["desktop", "mid", "mobile"],
+)
 def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, size, tmp_path):
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.set_viewport_size(size)
     page.goto(plan_server)
+    expect(page.get_by_role("button", name="Hide artifacts", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Hide artifacts", exact=True).click()
+    expect(page.get_by_role("region", name="Artifacts", exact=True)).to_be_hidden()
+    expect(page.get_by_role("button", name="Show artifacts", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Show artifacts", exact=True).click()
+    expect(page.get_by_role("region", name="Artifacts", exact=True)).to_be_visible()
     expect(page.get_by_label("Model", exact=True)).to_have_value("fixture-model")
     expect(page.get_by_role("button", name="Build tasks", exact=True)).to_be_enabled()
     expect(page.locator('select[aria-label="Browse pages"]')).to_have_count(0)
@@ -71,6 +85,10 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
         page.get_by_role("button", name="Send message", exact=True).click()
     assert response.value.status == 200
     expect(page.get_by_text("Added the phone field to Customers.", exact=True)).to_be_visible()
+    expect(page.locator(".plan-message-author [data-assistant-identity] .assistant-avatar-image").first).to_be_visible()
+    expect(page.locator(".plan-message-author [data-assistant-name]").first).to_have_text("Oracle")
+    page.locator(".plan-message-author").first.scroll_into_view_if_needed()
+    page.screenshot(path=str(tmp_path / f"plan-oracle-{size['width']}x{size['height']}.png"), full_page=True)
     page.get_by_role("button", name="Data", exact=True).click()
     expect(page.locator(".plan-mermaid svg")).to_be_visible()
     expect(page.locator(".plan-mermaid")).to_contain_text("phone")
@@ -94,7 +112,10 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
     assert repeated.value.json()["created"] == 0
     assert repeated.value.json()["reused"] == 3
     assert [task["id"] for task in repeated.value.json()["tasks"]] == [task["id"] for task in first.value.json()["tasks"]]
-    page.screenshot(path=str(tmp_path / "plan-tasks.png"), full_page=True)
+    page.screenshot(
+        path=str(tmp_path / f"plan-tasks-{size['width']}x{size['height']}.png"),
+        full_page=True,
+    )
     assert not errors
 
 

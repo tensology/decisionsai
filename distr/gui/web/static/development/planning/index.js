@@ -18,7 +18,7 @@ export function createPlanning(host, root = document.getElementById('plan-root')
             if (!projectFor(board)) return false;
             return true;
         });
-        return `<div class="plan-board-grid">${
+        return `<div class="plan-board-grid" role="list">${
             boards
                 .map((board) => {
                     const workspace = workspaceFor(board);
@@ -28,20 +28,26 @@ export function createPlanning(host, root = document.getElementById('plan-root')
                     const folder = project?.folder_location || 'No project folder';
                     const boardName = board.name || 'Ticket board';
                     const key = escapeHtml(board.key);
-                    return `<article class="plan-board-card" data-plan-board="${key}">
+                    const searchText = escapeHtml(`${boardName} ${folder}`.toLowerCase());
+                    return `<article class="plan-board-card" role="listitem" data-plan-board="${key}" data-plan-search="${searchText}">
                     <div class="plan-board-open">
                         <span class="plan-board-copy"><strong>${escapeHtml(boardName)}</strong><small>${escapeHtml(folder)}</small></span>
                         <span class="plan-board-state"><button type="button" class="plan-board-action" data-plan-board-open="${key}">${actionLabel}</button></span>
                     </div>
                 </article>`;
                 })
-                .join('') || '<div class="plan-empty plan-home-empty">No boards are ready for planning.</div>'
+                .join('') || '<div class="plan-home-empty">No boards are ready for planning.</div>'
         }</div>`;
     }
 
     function homeHtml() {
         return `<div class="plan-home">
+            <header class="plan-home-header">
+                <h1>Plans</h1>
+                <label class="plan-search"><span class="sr-only">Search plans</span><input type="search" id="plan-search" placeholder="Search plans" autocomplete="off"></label>
+            </header>
             <div id="plan-home-results">${homeResultsHtml()}</div>
+            <div class="plan-home-empty" id="plan-search-empty" hidden>No plans match this search.</div>
         </div>`;
     }
 
@@ -64,6 +70,22 @@ export function createPlanning(host, root = document.getElementById('plan-root')
 
     function bindHome() {
         bindHomeResults();
+        const search = root.querySelector('#plan-search');
+        const empty = root.querySelector('#plan-search-empty');
+        search?.addEventListener('input', () => {
+            const query = search.value.trim().toLowerCase();
+            let visible = 0;
+            root.querySelectorAll('[data-plan-search]').forEach((card) => {
+                const matches = !query || card.dataset.planSearch.includes(query);
+                card.hidden = !matches;
+                if (matches) visible += 1;
+            });
+            if (empty) empty.hidden = visible !== 0;
+        });
+    }
+
+    function retryHtml(message, action) {
+        return `<div class="plan-empty error" role="alert"><strong>${escapeHtml(message)}</strong><button type="button" class="plan-retry" data-plan-retry="${action}">Retry plans</button></div>`;
     }
 
     async function openHome(boards, projects) {
@@ -74,11 +96,13 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         state.view = 'home';
         state.workspace = null;
         state.item = null;
+        root.innerHTML = '<div class="plan-loading" role="status" aria-label="Loading plans"><span></span><span></span><span></span></div>';
         try {
             await loadWorkspaces();
         } catch (error) {
             if (navigation !== state.navigation) return;
-            root.innerHTML = `<div class="plan-empty error">${escapeHtml(error.message || 'Could not load plans.')}</div>`;
+            root.innerHTML = retryHtml(error.message || 'Could not load plans.', 'home');
+            root.querySelector('[data-plan-retry="home"]')?.addEventListener('click', () => openHome(state.boards, state.projects));
             return;
         }
         if (navigation !== state.navigation) return;
@@ -97,7 +121,7 @@ export function createPlanning(host, root = document.getElementById('plan-root')
             host.openHome();
             return false;
         }
-        root.innerHTML = '<div class="plan-empty" role="status">Loading plan...</div>';
+        root.innerHTML = '<div class="plan-loading" role="status" aria-label="Loading plan"><span></span><span></span><span></span></div>';
         try {
             const detail = await api('/workflows/studio/plan-workspaces', {
                 method: 'POST',
@@ -112,8 +136,10 @@ export function createPlanning(host, root = document.getElementById('plan-root')
             conversation.open(detail);
             return true;
         } catch (error) {
-            if (navigation === state.navigation)
-                root.innerHTML = `<div class="plan-empty error">${escapeHtml(error.message || 'Could not open this plan.')}</div>`;
+            if (navigation === state.navigation) {
+                root.innerHTML = retryHtml(error.message || 'Could not open this plan.', 'board');
+                root.querySelector('[data-plan-retry="board"]')?.addEventListener('click', () => openBoard(board, state.projects));
+            }
             return false;
         }
     }

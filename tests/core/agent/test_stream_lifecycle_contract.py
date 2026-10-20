@@ -35,15 +35,33 @@ def test_idle_interruption_does_not_emit_response_terminal_event():
     assert _events(harness, "chat_stream_finished") == []
 
 
-def test_repeated_interruption_emits_one_terminal_event_for_active_generation():
+def test_repeated_interruption_emits_one_terminal_event_for_active_generation(monkeypatch):
     harness = _Harness()
     harness._generation_task = _Task(done=False)
     harness._mark_chat_stream_started(41)
+    terminal_calls = []
+    monkeypatch.setattr("distr.core.chat_turns.latest_active_turn_id", lambda chat_id: 73)
+    monkeypatch.setattr(
+        "distr.core.chat_turns.terminal_turn",
+        lambda chat_id, event_type, **kwargs: terminal_calls.append(
+            (chat_id, event_type, kwargs)
+        ),
+    )
 
     harness._emit_interruption_cleanup()
     harness._emit_interruption_cleanup()
 
     assert _events(harness, "chat_stream_finished") == [
         {"chat_id": 41, "response_text": "", "status": "cancelled"}
+    ]
+    assert terminal_calls == [
+        (
+            41,
+            "turn_cancelled",
+            {
+                "turn_id": 73,
+                "summary": "Interrupted by a new voice or dictation request.",
+            },
+        )
     ]
 

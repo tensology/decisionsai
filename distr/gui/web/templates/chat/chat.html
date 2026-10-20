@@ -420,6 +420,7 @@
 
 {% block body_scripts %}
 <script src="/static/shared/js/mermaid_viewer.js"></script>
+<script src="/static/shared/js/assistant_identity.js?v={{ app_version or 'dev' }}"></script>
 <script src="/settings/static/js/s2s_locks.js"></script>
 <script src="/settings/static/js/llms.js"></script>
 <script src="{{ base_path }}/static/js/chat.js?v={{ app_version or 'dev' }}"></script>

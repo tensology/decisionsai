@@ -77,7 +77,7 @@ def test_explicit_multiple_request_allows_distinct_mutations() -> None:
     )
 
 
-def test_successful_read_cannot_repeat_exactly_in_same_turn() -> None:
+def test_successful_read_can_repeat_exactly_in_same_turn() -> None:
     text = "Read the email and turn it into calendar blocks."
     owner = _owner(text)
     read = {
@@ -88,9 +88,7 @@ def test_successful_read_cannot_repeat_exactly_in_same_turn() -> None:
     assert tool_execution_block_reason(owner, "google_workspace", read, text) == ""
     remember_successful_tool_call(owner, "google_workspace", read, text, "Email body")
 
-    assert "duplicate read" in tool_execution_block_reason(
-        owner, "google_workspace", read, text
-    ).lower()
+    assert tool_execution_block_reason(owner, "google_workspace", read, text) == ""
 
 
 def test_distinct_reads_remain_allowed_in_same_turn() -> None:
@@ -102,6 +100,49 @@ def test_distinct_reads_remain_allowed_in_same_turn() -> None:
     remember_successful_tool_call(owner, "google_workspace", first, text, "First body")
 
     assert tool_execution_block_reason(owner, "google_workspace", second, text) == ""
+
+
+def test_distinct_read_only_execute_code_lookups_remain_allowed() -> None:
+    text = "Look inside Plan My Charter for RabbitMQ and publication messaging."
+    owner = _owner(text)
+    listing = {
+        "code": "import os; print(os.listdir('/tmp/project'))",
+        "description": "List project files",
+    }
+    search = {
+        "code": (
+            "import os; "
+            "[print(path) for path, _, files in os.walk('/tmp/project') "
+            "for name in files if 'rabbitmq' in name.lower()]"
+        ),
+        "description": "Search project files",
+    }
+
+    assert not is_mutating_tool_call("execute_code", listing)
+    remember_successful_tool_call(owner, "execute_code", listing, text, "Files listed")
+
+    assert not is_mutating_tool_call("execute_code", search)
+    assert tool_execution_block_reason(owner, "execute_code", search, text) == ""
+
+
+def test_execute_code_writes_keep_mutation_replay_protection() -> None:
+    text = "Create the report."
+    owner = _owner(text)
+    first = {
+        "code": "open('/tmp/report.txt', 'w').write('first')",
+        "description": "Create report",
+    }
+    changed = {
+        "code": "open('/tmp/report.txt', 'w').write('second')",
+        "description": "Replace report",
+    }
+
+    assert is_mutating_tool_call("execute_code", first)
+    remember_successful_tool_call(owner, "execute_code", first, text, "Report created")
+
+    assert "already succeeded" in tool_execution_block_reason(
+        owner, "execute_code", changed, text
+    )
 
 
 def test_mutation_classification_covers_multiplexed_and_named_tools() -> None:

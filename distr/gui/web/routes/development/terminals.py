@@ -608,12 +608,23 @@ def register_routes(router, templates):
         return JSONResponse({"sessions": sessions})
 
     @router.post("/projects/{project_id}/shell-terminal/start")
-    async def start_project_shell_terminal(project_id: int):
-        """Create one interactive shell PTY for the project's root folder."""
+    async def start_project_shell_terminal(project_id: int, request: Request):
+        """Create an interactive shell PTY in the project's root folder.
+
+        The project page reuses one shell. ``{"new": true}`` always opens another.
+        """
         import shutil
         from distr.core.db import get_session as db_session
         from distr.core.db.projects import Project
         from distr.core.terminal import create_startup_shell_session, get_startup_sessions_for_project
+
+        force_new = False
+        if request.headers.get("content-type", "").startswith("application/json"):
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            force_new = bool(isinstance(body, dict) and body.get("new"))
 
         with db_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
@@ -625,7 +636,7 @@ def register_routes(router, templates):
             canonical = os.path.realpath(folder)
 
         existing = get_startup_sessions_for_project(project_id, purpose="cli_shell")
-        if existing:
+        if existing and not force_new:
             return JSONResponse({"success": True, "process_id": existing[0]["process_id"], "pid": existing[0]["pid"], "reused": True})
 
         user_shell = os.environ.get("SHELL", "").strip()

@@ -96,6 +96,11 @@ const el = (id) => document.getElementById(id);
 
 const token = document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
 
+document.addEventListener('decisions:assistant-identity-changed', () => {
+    window.DecisionsAssistantIdentity?.apply(document.getElementById('message-list'));
+    window.DecisionsAssistantIdentity?.apply(document.getElementById('plan-messages'));
+});
+
 const developmentModePaths = {
     plan: '/development/plan/',
     incoming: '/development/incoming/',
@@ -332,9 +337,14 @@ function isProcessingAgentRun(run) {
 function threadIsProcessing(chat) {
     const isCurrent = Number(state.currentChat?.id) === Number(chat?.id);
     if (isCurrent && state.busy) return true;
+    const run = (isCurrent && state.currentRun) || directExecutionForChat(chat);
+    const settled = Boolean(run && ['completed', 'failed', 'cancelled'].includes(String(run.status || '').toLowerCase()));
+    if (settled) {
+        const workflow = workflowForChat(chat?.id);
+        return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id)));
+    }
     if (isCurrent && state.currentChat?.active_turn?.active) return true;
-    if (isCurrent && state.currentRun && !isProcessingAgentRun(state.currentRun)) return false;
-    if (isProcessingAgentRun(directExecutionForChat(chat))) return true;
+    if (isProcessingAgentRun(run)) return true;
     const workflow = workflowForChat(chat?.id);
     return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id)));
 }

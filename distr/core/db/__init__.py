@@ -107,6 +107,7 @@ class Settings(Base):
     video_llm_model = Column(String, default='')
     computer_use_provider = Column(String, default='')
     computer_use_model = Column(String, default='')
+    project_cli_auto_refresh_enabled = Column(Boolean, default=True)
     project_cli_low_backend = Column(String, default='cursor')
     project_cli_low_model = Column(String, default='auto')
     project_cli_low_model_provider = Column(String, default='')

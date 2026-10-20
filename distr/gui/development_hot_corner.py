@@ -22,12 +22,21 @@ logger = logging.getLogger(__name__)
 PINNED_PROJECTS_SETTING = "development_hot_corner_pinned_project_ids"
 
 
-def save_pinned_projects(project_ids: list[int]) -> None:
-    from distr.core.settings import load_settings_from_db, save_settings_to_db
+def load_pinned_projects() -> list[int]:
+    from distr.core.settings import load_settings_from_db
 
-    settings = load_settings_from_db()
-    settings[PINNED_PROJECTS_SETTING] = sorted({int(project_id) for project_id in project_ids})
-    save_settings_to_db(settings)
+    value = load_settings_from_db().get(PINNED_PROJECTS_SETTING, [])
+    if not isinstance(value, list):
+        return []
+    return sorted({int(project_id) for project_id in value})
+
+
+def save_pinned_projects(project_ids: list[int]) -> None:
+    from distr.core.utils import save_settings_to_db
+
+    save_settings_to_db(
+        {PINNED_PROJECTS_SETTING: sorted({int(project_id) for project_id in project_ids})}
+    )
 
 
 def load_development_default_route() -> tuple[str, str]:
@@ -223,6 +232,123 @@ def _prefers_reduced_motion() -> bool:
         return False
 
 
+class ThreadTitleWidget(QtWidgets.QWidget):
+    """Compact thread title with overflow marquee and active-work spinner."""
+
+    SPINNER_SIZE = 9
+    SPINNER_GAP = 5
+    MARQUEE_GAP = 28
+    MARQUEE_PIXELS_PER_SECOND = 28
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        active: bool,
+        tree: QtWidgets.QTreeWidget,
+        item: QtWidgets.QTreeWidgetItem,
+    ) -> None:
+        super().__init__(tree.viewport())
+        self._title = title
+        self._active = bool(active)
+        self._tree = tree
+        self._item = item
+        self._motion_reduced = _prefers_reduced_motion()
+        self._animation_started_at = time.monotonic()
+        self._animation_now = self._animation_started_at
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.setFixedHeight(24)
+        self.setAccessibleName(title)
+
+    @property
+    def title(self) -> str:
+        return self._title
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def set_thread_state(self, *, title: str, active: bool) -> None:
+        if title != self._title:
+            self._title = title
+            self._animation_started_at = time.monotonic()
+            self.setAccessibleName(title)
+        self._active = bool(active)
+        self.update()
+
+    def advance(self, now: float) -> None:
+        self._animation_now = now
+        self.update()
+
+    def paintEvent(self, _event: QtGui.QPaintEvent) -> None:
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        selected = self._tree.currentItem() is self._item
+        foreground = QtGui.QColor(
+            "#ffffff" if selected else "#72a7ff" if self._active else "#d6d9df"
+        )
+        text_left = 0
+        if self._active:
+            spinner_top = (self.height() - self.SPINNER_SIZE) // 2
+            spinner_rect = QtCore.QRectF(
+                0.5,
+                spinner_top + 0.5,
+                self.SPINNER_SIZE - 1,
+                self.SPINNER_SIZE - 1,
+            )
+            pen = QtGui.QPen(foreground, 1.5)
+            pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            start_angle = 90 if self._motion_reduced else int(self._animation_now * 300) % 360
+            painter.drawArc(spinner_rect, start_angle * 16, 250 * 16)
+            text_left = self.SPINNER_SIZE + self.SPINNER_GAP
+
+        text_rect = QtCore.QRectF(
+            text_left,
+            0,
+            max(0, self.width() - text_left),
+            self.height(),
+        )
+        painter.setPen(foreground)
+        metrics = painter.fontMetrics()
+        title_width = metrics.horizontalAdvance(self._title)
+        if title_width <= text_rect.width():
+            painter.drawText(
+                text_rect,
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                self._title,
+            )
+            return
+        if self._motion_reduced:
+            painter.drawText(
+                text_rect,
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                metrics.elidedText(
+                    self._title,
+                    QtCore.Qt.TextElideMode.ElideRight,
+                    int(text_rect.width()),
+                ),
+            )
+            return
+
+        painter.save()
+        painter.setClipRect(text_rect)
+        loop_width = title_width + self.MARQUEE_GAP
+        offset = int(
+            max(0.0, self._animation_now - self._animation_started_at)
+            * self.MARQUEE_PIXELS_PER_SECOND
+        ) % loop_width
+        baseline = (self.height() + metrics.ascent() - metrics.descent()) / 2
+        first_x = text_rect.left() - offset
+        painter.drawText(QtCore.QPointF(first_x, baseline), self._title)
+        painter.drawText(QtCore.QPointF(first_x + loop_width, baseline), self._title)
+        painter.restore()
+
+
 class DevelopmentHotCornerPanel(QtWidgets.QWidget):
     """Slide in a compact Development board selector after a short dwell."""
 
@@ -259,7 +385,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._open_path = open_path or (lambda _path: None)
         self._thread_factory = thread_factory
         self._time_updater = time_updater
-        self._pinned_project_ids = {int(project_id) for project_id in (pinned_project_ids or [])}
+        resolved_pins = load_pinned_projects() if pinned_project_ids is None else pinned_project_ids
+        self._pinned_project_ids = {int(project_id) for project_id in resolved_pins}
         self._pin_saver = pin_saver
         self._corner_screen: QtGui.QScreen | None = None
         self._corner_started_at: float | None = None
@@ -268,6 +395,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._selected_chat_id: int | None = None
         self._selected_item_key: tuple[str, int | None] | None = None
         self._thread_rows: list[tuple[QtWidgets.QTreeWidgetItem, dict[str, Any]]] = []
+        self._thread_title_widgets: list[
+            tuple[QtWidgets.QTreeWidgetItem, dict[str, Any], ThreadTitleWidget]
+        ] = []
         self._project_rows: list[tuple[QtWidgets.QTreeWidgetItem, dict[str, Any]]] = []
         self._section_rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
         self._section_expanded = {"recent": False, "projects": True}
@@ -380,9 +510,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                 show-decoration-selected: 1;
             }
             QTreeWidget::item {
-                min-height: 30px;
+                min-height: 24px;
                 border-radius: 6px;
-                padding: 2px 6px;
+                padding: 0 4px;
             }
             QTreeWidget::item:hover {
                 background: #17191d;
@@ -456,10 +586,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             self.tree.header().setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.tree.header().hide()
         self.tree.setRootIsDecorated(True)
-        self.tree.setIndentation(12)
-        self.tree.setWordWrap(True)
+        self.tree.setIndentation(8)
+        self.tree.setWordWrap(False)
         self.tree.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.tree.setTextElideMode(QtCore.Qt.TextElideMode.ElideNone)
+        self.tree.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
         self.tree.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.tree.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
@@ -525,6 +655,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         now = time.monotonic()
 
         if self.isVisible():
+            self._refresh_thread_title_widgets(now)
             if now - self._last_live_sync >= 1:
                 self._sync_live_state(now)
             else:
@@ -610,6 +741,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             self._project_expanded[group["project_id"]] = item.isExpanded()
         self.tree.clear()
         self._thread_rows.clear()
+        self._thread_title_widgets.clear()
         self._project_rows.clear()
         self._section_rows.clear()
         try:
@@ -669,22 +801,21 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         thread: dict[str, Any],
         selected_key: tuple[str, int | None] | None,
     ) -> None:
-        active = thread["active"]
-        prefix = "●" if active else "○"
         item = QtWidgets.QTreeWidgetItem([
-            f"{prefix}  {thread['title']}",
+            "",
             format_duration(thread["elapsed_seconds"]),
             "",
             "↗",
         ])
         item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "thread", **thread})
+        item.setData(0, QtCore.Qt.ItemDataRole.AccessibleTextRole, str(thread["title"]))
         item.setToolTip(0, str(thread["title"]))
         item.setToolTip(1, "Thread time")
         item.setToolTip(3, "Open chat in the web UI")
-        item.setSizeHint(0, self._project_title_size(item.text(0), item.font(0), 125))
-        item.setForeground(0, QtGui.QColor("#72a7ff" if active else "#d6d9df"))
+        item.setSizeHint(0, QtCore.QSize(125, 24))
         section.addChild(item)
         self._thread_rows.append((item, thread))
+        self._install_thread_title(item, thread)
         if selected_key == ("thread", int(thread["chat_id"])):
             self.tree.setCurrentItem(item)
 
@@ -720,22 +851,21 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         if selected_key == ("project", group["project_id"]):
             self.tree.setCurrentItem(project_item)
         for thread in group["threads"]:
-            active = thread["active"]
-            prefix = "●" if active else "○"
             child = QtWidgets.QTreeWidgetItem([
-                f"{prefix}  {thread['title']}",
+                "",
                 format_duration(thread["elapsed_seconds"]),
                 "",
                 "↗",
             ])
             child.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "thread", **thread})
+            child.setData(0, QtCore.Qt.ItemDataRole.AccessibleTextRole, str(thread["title"]))
             child.setToolTip(0, str(thread["title"]))
             child.setToolTip(1, "Thread time")
             child.setToolTip(3, "Open chat in the web UI")
-            child.setSizeHint(0, self._project_title_size(child.text(0), child.font(0), 125))
-            child.setForeground(0, QtGui.QColor("#72a7ff" if active else "#d6d9df"))
+            child.setSizeHint(0, QtCore.QSize(125, 24))
             project_item.addChild(child)
             self._thread_rows.append((child, thread))
+            self._install_thread_title(child, thread)
             if selected_key == ("thread", int(thread["chat_id"])):
                 self.tree.setCurrentItem(child)
         project_item.setExpanded(
@@ -744,6 +874,28 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                 any(thread["active"] for thread in group["threads"]),
             )
         )
+
+    def _install_thread_title(
+        self,
+        item: QtWidgets.QTreeWidgetItem,
+        thread: dict[str, Any],
+    ) -> None:
+        widget = ThreadTitleWidget(
+            title=str(thread["title"]),
+            active=bool(thread["active"]),
+            tree=self.tree,
+            item=item,
+        )
+        self.tree.setItemWidget(item, 0, widget)
+        self._thread_title_widgets.append((item, thread, widget))
+
+    def _refresh_thread_title_widgets(self, now: float) -> None:
+        for _item, thread, widget in self._thread_title_widgets:
+            widget.set_thread_state(
+                title=str(thread["title"]),
+                active=bool(thread["active"]),
+            )
+            widget.advance(now)
 
     def _project_title_size(
         self,
@@ -813,10 +965,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                 if isinstance(value, dict):
                     value.update(fresh_thread)
                     item.setData(0, QtCore.Qt.ItemDataRole.UserRole, value)
-                item.setForeground(0, QtGui.QColor("#72a7ff" if thread["active"] else "#d6d9df"))
         self._refresh_recent_rows(fresh_groups)
         self._rendered_at = now
         self._refresh_elapsed_labels(now)
+        self._refresh_thread_title_widgets(now)
 
     def _refresh_recent_rows(self, groups: list[dict[str, Any]]) -> None:
         section = self._section_rows.get("recent")
@@ -825,6 +977,11 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._thread_rows = [
             (item, thread)
             for item, thread in self._thread_rows
+            if item.parent() is not section
+        ]
+        self._thread_title_widgets = [
+            (item, thread, widget)
+            for item, thread, widget in self._thread_title_widgets
             if item.parent() is not section
         ]
         section.takeChildren()
@@ -939,6 +1096,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         elif value.get("kind") == "project":
             self._selected_chat_id = None
             self._selected_item_key = ("project", value.get("project_id"))
+        for _item, _thread, widget in self._thread_title_widgets:
+            widget.update()
 
     def _ensure_macos_overlay_level(self) -> None:
         if platform.system() != "Darwin" or QtGui.QGuiApplication.platformName() != "cocoa":

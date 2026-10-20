@@ -122,6 +122,32 @@ def test_coordination_plan_allocates_the_whole_workflow_without_mutating_it(monk
     assert role_routes["implementation"]["model"] == "ornith:35b"
 
 
+def test_coordination_plan_honors_manual_thread_route_for_primary_steps(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.model_policy.apply_auto_step_role_policy",
+        _fake_role_policy,
+    )
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda _settings: (_ for _ in ()).throw(AssertionError("manual routes must not discover Auto models")),
+    )
+    route = {
+        "route_mode": "manual",
+        "source": "thread_model_route",
+        "complexity": "medium",
+        "backend": "cursor",
+        "model_provider": "cursor",
+        "model": "grok-4.7-medium",
+    }
+
+    plan = build_run_coordination_plan(_workflow(adaptive=False), {"execution_route": route}, settings={})
+
+    for assignment in plan["assignments"].values():
+        assert assignment["primary_route"]["backend"] == "cursor"
+        assert assignment["primary_route"]["model"] == "grok-4.7-medium"
+        assert assignment["evaluation_routes"] == []
+
+
 def test_coordination_plan_keeps_legacy_workflows_deterministic(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.model_policy.apply_auto_step_role_policy",
@@ -266,6 +292,45 @@ def test_failed_step_replans_only_the_next_run_assignment():
     assert escalation is not None
     assert escalation["route_changed"] is True
     assert escalated["assignments"]["12"]["primary_route"]["backend"] == "codex"
+
+
+def test_failed_step_never_replaces_a_manually_locked_route():
+    route = {
+        "route_mode": "manual",
+        "backend": "cursor",
+        "model_provider": "cursor",
+        "model": "grok-4.7-medium",
+    }
+    plan = {
+        "manual_route_locked": True,
+        "assignments": {
+            "11": {"status": "planned", "primary_route": dict(route)},
+            "12": {"status": "planned", "revision": 0, "primary_route": dict(route)},
+        },
+        "revisions": [],
+    }
+
+    first, first_revision = revise_plan_after_step(
+        plan,
+        completed_step_id=11,
+        next_step_id=12,
+        passed=False,
+        reason="Review requested a correction.",
+        settings={},
+    )
+    second, second_revision = revise_plan_after_step(
+        first,
+        completed_step_id=11,
+        next_step_id=12,
+        passed=False,
+        reason="Review still requested a correction.",
+        settings={},
+    )
+
+    assert first_revision["manual_route_locked"] is True
+    assert second_revision["manual_route_locked"] is True
+    assert second["assignments"]["12"]["primary_route"] == route
+    assert second["assignments"]["12"]["needs_replan"] is False
 
 
 def test_actual_fallback_route_is_preserved_and_same_model_review_is_replanned(monkeypatch):

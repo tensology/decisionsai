@@ -46,6 +46,16 @@ class SignalBridgeMixin:
         clean = str(message or "").strip()
         if not clean:
             return False
+        # Explicit recorded-action playback is a local command, not project
+        # work. Let the agent's deterministic fast-action path execute it
+        # before WorkIntake can turn "run action X" into a ticket/workflow.
+        try:
+            from distr.core.agent.services.llm.fast_action_detector import is_direct_action_playback
+
+            if is_direct_action_playback(clean):
+                return False
+        except Exception:
+            logger.debug("Direct action playback preflight failed", exc_info=True)
         try:
             from distr.core.work_intake import WorkIntake, get_work_intake_service
 

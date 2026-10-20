@@ -1,3 +1,5 @@
+import pytest
+
 from distr.core.agent.services.llm.bulk_instruction import (
     augment_bulk_instruction,
     profile_bulk_instruction,
@@ -57,13 +59,20 @@ def test_automation_run_action_instruction_bypasses_fast_action_detection():
     assert _StubMixin()._check_fast_actions() is None
 
 
-def test_direct_run_action_still_detects_fast_action():
-    text = "run action fuzzy"
-
+@pytest.mark.parametrize(
+    ("text", "expected_name"),
+    [
+        ("run action fuzzy", "fuzzy"),
+        ("Run the action login", "login"),
+        ("Run, action, login.", "login"),
+        ("Jesus, run, action, login.", "login"),
+    ],
+)
+def test_direct_run_action_still_detects_fast_action(text, expected_name):
     assert not should_bypass_fast_action_detection(text)
     detected = detect_fast_action(text)
     assert detected.action_type == ActionType.ACTION_PLAY
-    assert detected.tool_args.get("action_name") == "fuzzy"
+    assert detected.tool_args.get("action_name") == expected_name
 
 
 def test_again_replays_recent_successful_fast_action():

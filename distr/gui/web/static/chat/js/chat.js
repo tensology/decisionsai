@@ -547,6 +547,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTTSPlayer();
     _ensureTTSProviders();
     loadDefaultSettings();
+    loadAssistantAvatarSkin();
 
     // Llama click → show about window + play splash sound
     const llamaEl = document.getElementById('llamaClickTarget');
@@ -879,7 +880,7 @@ function startChatWebSocket(force) {
                                 const content = (lastAssistant && lastAssistant.content) || raw;
                                 wrap.id = '';
                                 wrap.innerHTML = `
-                                    <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+                                    <div class="message-avatar">${assistantAvatarHtml()}</div>
                                     <div class="message-content">
                                         <div class="message-text">${formatMessage(content)}</div>
                                         <div class="message-actions">
@@ -1237,7 +1238,7 @@ function ensureStreamingAssistantMessageElement() {
     div.className = 'message assistant';
     div.id = 'streamingAssistantMessage';
     div.innerHTML = `
-        <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+        <div class="message-avatar">${assistantAvatarHtml()}</div>
         <div class="message-content">
             <div class="message-text" id="streamingAssistantText"></div>
             <div class="typing-indicator" id="streamingTypingIndicator">
@@ -1694,7 +1695,7 @@ function handleChatEventStreamFinished(msg) {
         const clock = _formatTimestamp(finishedAt);
         const headerTs = clock ? `<span class="message-header-timestamp">${clock}</span>` : '';
         wrap.innerHTML = `
-            <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+            <div class="message-avatar">${assistantAvatarHtml()}</div>
             <div class="message-content">
                 ${headerTs}
                 <div class="message-text">${formatMessage(raw)}</div>
@@ -1789,7 +1790,7 @@ function handleChatEventStreamError(msg) {
         const errorEl = document.createElement('div');
         errorEl.className = 'message assistant';
         errorEl.innerHTML = `
-            <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+            <div class="message-avatar">${assistantAvatarHtml()}</div>
             <div class="message-content">
                 <div class="message-text" style="color:#f87171">${escapeHtml(displayError)}</div>
             </div>
@@ -2074,7 +2075,7 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
             wrap.className = 'message assistant';
             wrap.id = 'transcriptionStatus';
             wrap.innerHTML = `
-                <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+                <div class="message-avatar">${assistantAvatarHtml()}</div>
                 <div class="message-content">
                     <div class="message-text" id="transcriptionStatusText"></div>
                 </div>
@@ -2083,7 +2084,7 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
         } else {
             wrap.className = 'message assistant';
             const av = wrap.querySelector('.message-avatar');
-            if (av) av.innerHTML = AVATAR_SVG_ASSISTANT;
+            if (av) av.innerHTML = assistantAvatarHtml();
             wrap.querySelectorAll('.message-meta, .stt-preview-label').forEach(el => el.remove());
         }
         const textEl = document.getElementById('transcriptionStatusText');
@@ -2886,6 +2887,8 @@ function applySelectedSkin() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skin_name: _emptyStateSkinSelection })
+    }).then(function(response) {
+        if (response.ok) return loadAssistantAvatarSkin(true);
     }).catch(function(e) { console.error('Failed to apply skin:', e); });
 }
 
@@ -3023,6 +3026,8 @@ function applyModalSelectedSkin() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skin_name: _modalSkinSelection })
+    }).then(function(response) {
+        if (response.ok) return loadAssistantAvatarSkin(true);
     }).catch(function(e) { console.error('Failed to apply skin:', e); });
 }
 
@@ -3876,7 +3881,7 @@ function createMessageElement(message) {
     if (message.chat_row_id != null && message.chat_row_id !== '') {
         div.dataset.turnChatId = String(message.chat_row_id);
     }
-    const avatarSvg = message.role === 'user' ? AVATAR_SVG_USER : AVATAR_SVG_ASSISTANT;
+    const avatarSvg = message.role === 'user' ? AVATAR_SVG_USER : assistantAvatarHtml();
     const actionsHtml = message.role === 'assistant'
         ? `<button class="message-action-btn" onclick="copyMessage(this)">Copy</button>
            <button class="message-action-btn message-action-play" onclick="playTTS(this)" title="Play with TTS">Play</button>`
@@ -4510,6 +4515,13 @@ async function sendMessage() {
 async function sendToAgentWhenReady(message, abortSignal) {
     // Capture chat ID once — loadedChatId may change if user switches chats during retry delays
     const targetChatId = loadedChatId;
+    // One logical submission keeps one identity through transport retries.  If
+    // the server accepted a request but the response was lost, WorkIntake can
+    // now reuse the original ticket instead of creating another one.
+    const requestNonce = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const intakeSourceMessageId = `web:${targetChatId}:${requestNonce}`;
     // New chat from modal: POST /chats already emitted web_create_chat_emits_requested, which runs
     // current_chat_changed(initial_message) on the agent. Do NOT call load-in-agent here — that
     // path sends interrupt_tts first and cancels the in-flight LLM/TTS for the starting question.
@@ -4524,7 +4536,12 @@ async function sendToAgentWhenReady(message, abortSignal) {
     const maxDelayMs = 3000;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if (abortSignal && abortSignal.aborted) throw new DOMException('Aborted', 'AbortError');
-        const body = { message, chat_id: targetChatId, speak: Boolean(ttsEnabled) };
+        const body = {
+            message,
+            chat_id: targetChatId,
+            speak: Boolean(ttsEnabled),
+            intake_source_message_id: intakeSourceMessageId
+        };
         if (currentChatSettings?.provider && currentChatSettings?.model_name) {
             body.provider = currentChatSettings.provider;
             body.model_name = currentChatSettings.model_name;
@@ -4788,7 +4805,7 @@ function createTypingIndicator() {
     div.className = 'message assistant message-waiting';
     div.id = 'typingIndicator';
     div.innerHTML = `
-        <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+        <div class="message-avatar">${assistantAvatarHtml()}</div>
         <div class="message-content">
             <div class="typing-indicator">
                 <div class="typing-dot"></div>
@@ -4811,7 +4828,7 @@ function addErrorMessage(text) {
     const div = document.createElement('div');
     div.className = 'message assistant message-error';
     div.innerHTML = `
-        <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+        <div class="message-avatar">${assistantAvatarHtml()}</div>
         <div class="message-content">
             <div class="message-text">${escapeHtml(text)}</div>
         </div>
@@ -4931,8 +4948,25 @@ function scrollToBottomImmediate() {
 
 // Avatar SVGs matching website Hero (Hero.tsx): user = Volume2, assistant = brain/arcs (animated like Hero)
 const AVATAR_SVG_USER = '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
-const AVATAR_SVG_ASSISTANT = '<div class="avatar-icon-spin"><svg class="avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 3a9 9 0 0 1 9 9"/><path d="M12 21a9 9 0 0 1-9-9"/></svg></div>';
 const AVATAR_SVG_ACTIVITY = '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>';
+
+function assistantAvatarHtml() {
+    return window.DecisionsAssistantIdentity?.html()
+        || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+}
+
+function refreshRenderedAssistantAvatars() {
+    if (!chatMessages) return;
+    chatMessages.querySelectorAll('.message.assistant .message-avatar').forEach((avatar) => {
+        avatar.setAttribute('data-assistant-identity', '');
+        avatar.innerHTML = assistantAvatarHtml();
+    });
+}
+
+async function loadAssistantAvatarSkin(force = false) {
+    await window.DecisionsAssistantIdentity?.load({ force });
+    refreshRenderedAssistantAvatars();
+}
 
 // Utility Functions
 function escapeHtml(text) {

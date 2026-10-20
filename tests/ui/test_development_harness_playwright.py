@@ -71,6 +71,7 @@ def _install_api(
     terminal_status_available: bool = True,
     terminal_command: str = "npm run dev",
     unified_direct_run: bool = False,
+    cancelled_open_turn: bool = False,
     routing_execution_mode: str = "direct",
 ) -> None:
     projects = [
@@ -210,6 +211,11 @@ def _install_api(
             ],
         }] if (completed_activity or durable_url_activity) else []),
     }
+    if cancelled_open_turn:
+        direct_run["status"] = "cancelled"
+        direct_run["activity"] = "Standalone provider session was interrupted by app restart."
+        chat["active_turn"] = {"turn_id": 19, "status": "running", "active": True, "events": []}
+        chat["development_execution"] = direct_run
     if message_skills and chat["messages"]:
         chat["messages"][0]["skills"] = list(message_skills)
     if legacy_skill_message and chat["messages"]:
@@ -278,7 +284,29 @@ def _install_api(
             route.continue_()
             return
         payload = None
-        if path == "/api/workflows/studio/reports":
+        if path == "/api/skins":
+            payload = {
+                "selected_skin": "oracle",
+                "skins": [{
+                    "folder_name": "oracle",
+                    "name": "Oracle",
+                    "type": "oracle",
+                    "idle_animation": "idle.svg",
+                    "image_scale": 1,
+                    "image_offset_x": 0,
+                    "image_offset_y": 0,
+                    "chroma_key": None,
+                    "chroma_threshold": 30,
+                }],
+            }
+        elif path == "/api/skins/oracle/preview/idle.svg":
+            route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#e88932"/><circle cx="32" cy="32" r="18" fill="none" stroke="#fff" stroke-width="4"/><circle cx="32" cy="32" r="5" fill="#fff"/></svg>',
+            )
+            return
+        elif path == "/api/workflows/studio/reports":
             payload = {"items": []}
         elif path == "/api/workflows/studio/reports/time":
             payload = {"items": []}
@@ -491,6 +519,12 @@ def _install_api(
             payload = {"sessions": [session for session in managed_startup_sessions if session.get("purpose") == "startup"] + discovered_sessions}
         elif path == "/api/projects/7/shell-terminal":
             payload = {"sessions": list(shell_sessions)}
+        elif path == "/api/projects/7/shell-terminal/start" and request.method == "POST":
+            body = json.loads(request.post_data or "{}")
+            assert body.get("new") is True
+            created = {"process_id": "shell-404", "pid": 404, "command": "[zsh] exec zsh -il", "cwd": "/tmp/decisions", "purpose": "cli_shell", "memory_bytes": 33554432}
+            shell_sessions.append(created)
+            payload = {"success": True, "process_id": "shell-404", "pid": 404, "reused": False}
         elif path == "/api/projects/7/startup-terminals/stop":
             stopped_count = len(startup_sessions)
             startup_sessions.clear()
@@ -1129,6 +1163,7 @@ def test_development_navigation_uses_clean_urls_and_restores_history(page: Page)
     expect(page).to_have_url(TEST_BASE_URL + "/development/plan/")
     expect(page.locator("#plan-workspace")).to_be_visible()
     expect(page.locator("#plan-workspace h1")).to_have_text("Plans")
+    expect(page.get_by_label("Search plans", exact=True)).to_be_visible()
     page.locator("#sidebar-incoming-toggle").click()
     expect(page).to_have_url(TEST_BASE_URL + "/development/incoming/")
     expect(page.locator("#incoming-workspace h1")).to_have_count(0)
@@ -1318,6 +1353,25 @@ def test_running_terminals_use_tabs_instead_of_a_vertical_stack(page: Page):
     expect(page.locator(".terminal-session-tab-shell.active .terminal-tab-stop")).to_have_attribute("aria-label", "Stop terminal 2")
 
 
+def test_plus_beside_the_last_tab_opens_a_shell_you_can_select(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, terminal_session=True)
+    page.goto(TEST_BASE_URL + "/development/terminals/7/")
+
+    plus = page.get_by_role("button", name="New terminal")
+    expect(plus).to_be_visible()
+    assert page.locator(".terminal-session-tablist").evaluate(
+        "node => node.nextElementSibling?.matches('[data-terminal-add]')"
+    )
+    plus.click()
+    expect(page.get_by_role("tab")).to_have_count(2)
+    shell_tab = page.get_by_role("tab", name=re.compile(r"zsh"))
+    expect(shell_tab).to_have_attribute("aria-selected", "true")
+    expect(page.locator('[data-terminal-session="shell-404"]')).to_be_visible()
+    expect(page.locator("#terminal-running-count")).to_have_text("2 terminals")
+    assert ("POST", "/api/projects/7/shell-terminal/start") in requests
+
+
 def test_terminal_viewport_is_compact_and_http_links_open_in_a_new_tab(page: Page):
     requests: list[tuple[str, str]] = []
     terminal_command = "vite --host http://localhost:5173/"
@@ -1348,6 +1402,10 @@ def test_terminal_viewport_is_compact_and_http_links_open_in_a_new_tab(page: Pag
     expect(terminal).to_be_visible()
     expect(terminal.locator(".xterm-rows")).to_contain_text("http://localhost:5173/")
     assert terminal.bounding_box()["height"] <= 400
+    terminal_output = terminal.locator(".terminal-output").bounding_box()
+    terminal_screen = terminal.locator(".xterm-screen").bounding_box()
+    assert terminal_output and terminal_screen
+    assert terminal_screen["y"] + terminal_screen["height"] <= terminal_output["y"] + terminal_output["height"] - 8
     page.screenshot(path="/private/tmp/development-terminal-compact-links.png", full_page=True)
     link = page.evaluate(
         """() => new Promise((resolve) => {
@@ -2194,6 +2252,15 @@ def test_scheduled_import_is_polished_and_duplicate_safe(page: Page):
     expect(page.locator("#automation-import-dialog")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.screenshot(path="/private/tmp/development-automation-import-modal-compact.png", full_page=True)
+
+
+def test_cancelled_execution_does_not_leave_a_sidebar_spinner(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, direct_execution=True, cancelled_open_turn=True)
+    page.goto(URL)
+
+    expect(page.locator("#task-state")).to_contain_text("Ready")
+    expect(page.locator('[data-chat-id="17"] .task-run-state')).to_have_count(0)
 
 
 def test_live_agent_tool_changes_and_evidence_are_visible_without_empty_tabs(page: Page):
@@ -3534,9 +3601,19 @@ def test_thread_destructive_controls_are_guarded_and_operable(page: Page):
     assert not any(method == "UNMOCKED" for method, _ in requests), requests
 
 
-def test_assistant_results_render_as_readable_markdown(page: Page):
+@pytest.mark.parametrize(
+    "size",
+    [
+        {"width": 1440, "height": 900},
+        {"width": 1024, "height": 900},
+        {"width": 390, "height": 844},
+    ],
+    ids=["desktop", "mid", "mobile"],
+)
+def test_assistant_results_render_as_readable_markdown(page: Page, size, tmp_path):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, assistant_markdown=True)
+    page.set_viewport_size(size)
     page.goto(URL)
 
     expect(page.locator(".message-markdown h3")).to_have_text("Result")
@@ -3550,6 +3627,11 @@ def test_assistant_results_render_as_readable_markdown(page: Page):
     expect(page.locator(".message-markdown .diff-add")).to_contain_text("ready = true")
     expect(page.locator('.message-markdown a[href="http://localhost:5174/"]')).to_have_text("http://localhost:5174/")
     expect(page.locator('.message-markdown a[href="http://localhost:5174/"]')).to_have_attribute("target", "_blank")
+    avatar = page.locator(".studio-message.assistant [data-assistant-identity] .assistant-avatar-image")
+    expect(avatar).to_be_visible()
+    expect(avatar).to_have_attribute("data-skin-name", "Oracle")
+    expect(page.locator(".studio-message.assistant .message-avatar")).not_to_have_text("AI")
+    page.screenshot(path=str(tmp_path / f"development-oracle-{size['width']}x{size['height']}.png"), full_page=True)
 
 
 def test_completed_turns_keep_codex_style_collapsible_activity(page: Page):

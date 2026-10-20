@@ -12,6 +12,30 @@
     ]
   },
   {
+    "id": "ui-ux-principles",
+    "name": "ui-ux-principles",
+    "description": "Apply the shared UI and UX principles, visual quality gates, responsive verification, and independent interface audit requirements.",
+    "path": "/Users/paul/.codex/skills/ui-ux-principles",
+    "source": "local",
+    "tags": [
+      "ui",
+      "ux",
+      "verification"
+    ]
+  },
+  {
+    "id": "ui-crud-discipline",
+    "name": "ui-crud-discipline",
+    "description": "Apply the shared fixed CRUD flow, notification delivery, audit logging, and read-only activity log discipline.",
+    "path": "/Users/paul/.codex/skills/ui-crud-discipline",
+    "source": "local",
+    "tags": [
+      "ui",
+      "crud",
+      "audit"
+    ]
+  },
+  {
     "id": "decisions-computer-use",
     "name": "decisions-computer-use",
     "description": "Use native computer-use safely in Decisions workflows when the active harness exposes a CUA or computer-use runtime.",

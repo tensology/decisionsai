@@ -395,6 +395,21 @@ def refresh_global_auto_model_policy() -> dict[str, Any]:
     from distr.core.settings import load_settings_from_db, save_settings_to_db
 
     settings = load_settings_from_db()
+    if settings.get("project_cli_auto_refresh_enabled") is False:
+        return {
+            "primary": {
+                "backend": str(settings.get("project_cli_medium_backend") or "pi"),
+                "model_provider": str(settings.get("project_cli_medium_model_provider") or ""),
+                "model": str(settings.get("project_cli_medium_model") or "auto"),
+            },
+            "fallback": {
+                "backend": str(settings.get("project_cli_medium_fallback_backend") or ""),
+                "model": str(settings.get("project_cli_medium_fallback_model") or ""),
+            },
+            "candidate_count": 0,
+            "ready_count": 0,
+            "skipped": True,
+        }
     ranked = _ranked_free_routes(settings, complexity="high")
     ready: list[dict[str, Any]] = []
     for route in ranked:

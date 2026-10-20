@@ -44,18 +44,24 @@ async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_
         TensologyApiError,
         process_tensology_discussion_context,
         process_tensology_discussion_assessments,
+        process_tensology_approved_tickets,
         send_tensology_heartbeat,
     )
 
     while True:
-        try:
-            await asyncio.to_thread(send_tensology_heartbeat)
-            await asyncio.to_thread(process_tensology_discussion_assessments)
-            await asyncio.to_thread(process_tensology_discussion_context)
-        except TensologyApiError as exc:
-            logger.debug("Tensology heartbeat unavailable: %s", exc)
-        except Exception as exc:
-            logger.warning("Tensology heartbeat failed safely: %s", exc)
+        operations = (
+            ("presence", send_tensology_heartbeat),
+            ("discussion assessments", process_tensology_discussion_assessments),
+            ("discussion context", process_tensology_discussion_context),
+            ("approved tickets", process_tensology_approved_tickets),
+        )
+        for label, operation in operations:
+            try:
+                await asyncio.to_thread(operation)
+            except TensologyApiError as exc:
+                logger.debug("Tensology %s unavailable: %s", label, exc)
+            except Exception as exc:
+                logger.warning("Tensology %s failed safely: %s", label, exc)
         await asyncio.sleep(interval_seconds)
 
 

@@ -1284,6 +1284,10 @@ class StepExecutorMixin:
                     stored_step_routes = stored_step_routes if isinstance(stored_step_routes, dict) else {}
                     stored_step_route = stored_step_routes.get(str(step_data.get("id")))
                     stored_step_route = stored_step_route if isinstance(stored_step_route, dict) else {}
+                    if stored_step_route:
+                        route = dict(stored_step_route)
+                        route.setdefault("source", "active_step_route")
+                        route.setdefault("rationale", "Continuing this step with its recorded execution route.")
                     if ticket_id is not None:
                         try:
                             from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
@@ -1325,9 +1329,7 @@ class StepExecutorMixin:
                                     ).strip().lower() or "medium"
                                     route.setdefault("source", "step_execution_route")
                                 elif stored_step_route:
-                                    route = dict(stored_step_route)
-                                    route.setdefault("source", "active_step_route")
-                                    route.setdefault("rationale", "Continuing this step with its recorded execution route.")
+                                    pass
                                 elif not auto_step_routing and self._active_run_execution_route(run_data_local):
                                     route = self._active_run_execution_route(run_data_local)
                                     route.setdefault("source", "active_run_route")
@@ -3536,11 +3538,14 @@ class StepExecutorMixin:
             if str(item).strip()
         ]
         if expected_outputs:
+            required_names = ", ".join(expected_outputs)
             output_contract = "\n".join(
                 f"- {item}: <concise value, artifact reference, or N/A with a ticket-specific reason>"
                 for item in expected_outputs
             )
             step_instruction = (
+                "[REQUIRED NAMED OUTPUTS - DO NOT OMIT]\n"
+                f"{required_names}\n\n"
                 f"{step_instruction}\n\n[EXPECTED OUTPUT CONTRACT]\n"
                 "Return every named field below. Keep raw logs at their artifact source; pass only decisions, evidence and references.\n"
                 f"{output_contract}"

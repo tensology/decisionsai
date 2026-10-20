@@ -918,6 +918,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         if not clean:
             return False
         try:
+            from distr.core.agent.services.llm.fast_action_detector import is_direct_action_playback
+
+            if is_direct_action_playback(clean):
+                return False
+        except Exception:
+            logger.debug("Direct action playback preflight failed", exc_info=True)
+        try:
             from distr.core.work_intake import WorkIntake, get_work_intake_service
 
             chat_id = None
@@ -1494,6 +1501,19 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if not self._emit_chat_stream_finished("", status="cancelled"):
                 return
             self._interruption_cleanup_key = interruption_key
+            try:
+                from distr.core.chat_turns import latest_active_turn_id, terminal_turn
+
+                turn_id = latest_active_turn_id(int(current_chat_id))
+                if turn_id is not None:
+                    terminal_turn(
+                        int(current_chat_id),
+                        "turn_cancelled",
+                        turn_id=int(turn_id),
+                        summary="Interrupted by a new voice or dictation request.",
+                    )
+            except Exception:
+                logger.debug("Could not persist interrupted chat turn", exc_info=True)
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
             else:

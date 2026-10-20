@@ -335,6 +335,7 @@ def activate_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str
     """
     global _active_project_id
     from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanBoard
     from distr.core.db.projects import Project
 
     session = get_session()
@@ -349,6 +350,28 @@ def activate_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str
 
         project.in_use = True
         project.modified_date = datetime.utcnow()
+
+        # Project and board selection are one scope decision.  Leaving an old
+        # board active makes the next implicit work request target that board's
+        # project even though the user just switched projects.
+        linked_board = None
+        if getattr(project, "kanban_board_id", None):
+            linked_board = session.query(KanbanBoard).filter(
+                KanbanBoard.id == int(project.kanban_board_id),
+                KanbanBoard.archived.is_(False),
+            ).first()
+        if linked_board is None:
+            linked_board = session.query(KanbanBoard).filter(
+                KanbanBoard.default_project_id == int(project.id),
+                KanbanBoard.archived.is_(False),
+            ).order_by(KanbanBoard.id).first()
+        if linked_board is not None:
+            session.query(KanbanBoard).filter(KanbanBoard.in_use.is_(True)).update(
+                {"in_use": False}
+            )
+            linked_board.in_use = True
+            if not getattr(project, "kanban_board_id", None):
+                project.kanban_board_id = int(linked_board.id)
         session.commit()
 
         # Clear previous project from memory (if different)

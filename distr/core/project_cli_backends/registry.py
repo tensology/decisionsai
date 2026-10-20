@@ -1068,6 +1068,7 @@ def _git_status_short(folder: str) -> list[str]:
 
 
 _READ_ONLY_SNAPSHOT_IGNORES = {
+    ".decisions",
     ".git",
     ".venv",
     "venv",
@@ -1087,8 +1088,8 @@ def _workspace_state_snapshot(folder: str) -> dict[str, tuple[int, int]]:
     Git porcelain collapses a whole new directory to ``?? directory/``. That
     misses writes inside already-untracked copied trees, so read-only planning
     and review steps also compare path, size and mtime while excluding dependency
-    and build directories. The map stays in-process and only its compact delta
-    is persisted.
+    build directories, and Decisions' own durable memory metadata. The map
+    stays in-process and only its compact delta is persisted.
     """
     snapshot: dict[str, tuple[int, int]] = {}
     if not folder or not os.path.isdir(folder):

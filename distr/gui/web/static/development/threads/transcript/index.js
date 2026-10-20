@@ -489,7 +489,8 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         if (ticketMove) return ticketMoveHtml(message, ticketMove);
         const latest = index === latestAssistantIndex;
         const content = workflowSafeAssistantContent(message.content || '');
-        return `<article class="studio-message assistant"><div class="message-avatar">AI</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest)}</div></article>`;
+        const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+        return `<article class="studio-message assistant"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest)}</div></article>`;
     }
 
     function workflowSafeAssistantContent(value) {
@@ -696,7 +697,8 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const detail = label === 'Updating' ? 'files' : label === 'Thinking' ? 'through the request' : 'on the task';
         const [currentLabel, currentDetail, currentCommand] = currentTurnAction(latest, label, detail);
         const draft = String(run.streamed_output || '').trim();
-        return `<article class="studio-message active-turn"><div class="message-body">
+        const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+        return `<article class="studio-message active-turn"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">
             ${draft ? `<div class="active-turn-draft message-markdown">${assistantMarkdown(draft)}</div>` : ''}
             ${completedTurnActionsHtml(activeEvents)}
             <div class="active-turn-summary" role="status" aria-live="polite"><div class="loading-message ${label.toLowerCase()}"><span>${currentLabel} <small>${currentDetail}</small></span></div>${currentCommand ? `<code class="active-command" title="${actions.escapeHtml(currentCommand)}">${actions.escapeHtml(currentCommand)}</code>` : ''}</div>

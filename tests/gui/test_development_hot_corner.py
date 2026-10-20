@@ -15,9 +15,11 @@ from distr.core.db.projects import Project
 from distr.core.db.workflow import DevelopmentTimeEntry, DevelopmentWorkItem
 from distr.gui.development_hot_corner import (
     DevelopmentHotCornerPanel,
+    ThreadTitleWidget,
     format_duration,
     is_top_left_corner,
     load_development_groups,
+    load_pinned_projects,
     recent_development_threads,
     weekly_entry_seconds,
 )
@@ -107,7 +109,15 @@ def test_panel_does_not_accept_focus_and_thread_click_only_selects(monkeypatch) 
     assert panel.testAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
     assert project.flags() & QtCore.Qt.ItemFlag.ItemIsSelectable
     assert panel.selected_chat_id == 42
-    assert thread.text(0).startswith("●")
+    title_widget = panel.tree.itemWidget(thread, 0)
+    assert isinstance(title_widget, ThreadTitleWidget)
+    assert thread.text(0) == ""
+    assert thread.data(0, QtCore.Qt.ItemDataRole.AccessibleTextRole) == "Hot corner drawer"
+    assert title_widget.title == "Hot corner drawer"
+    assert title_widget.active is True
+    assert thread.sizeHint(0).height() == 24
+    assert panel.tree.indentation() == 8
+    assert not panel.tree.wordWrap()
     assert project.isExpanded()
     assert thread.text(1) == "00:01:05"
     assert panel.footer.text() == "Total  00:01:30"
@@ -191,6 +201,30 @@ def test_pinned_project_ids_round_trip_through_settings(monkeypatch) -> None:
     core_utils.save_settings_to_db({"development_hot_corner_pinned_project_ids": [2, 7]})
 
     assert core_utils.load_settings_from_db()["development_hot_corner_pinned_project_ids"] == [2, 7]
+
+
+def test_load_pinned_projects_normalizes_saved_ids(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {"development_hot_corner_pinned_project_ids": [7, 2, 7]},
+    )
+
+    assert load_pinned_projects() == [2, 7]
+
+
+def test_panel_loads_pins_directly_instead_of_relying_on_startup_settings(monkeypatch) -> None:
+    app = _app()
+    monkeypatch.setattr(
+        "distr.gui.development_hot_corner.load_pinned_projects",
+        lambda: [2, 7],
+    )
+
+    panel = DevelopmentHotCornerPanel(enabled=False)
+
+    assert panel._pinned_project_ids == {2, 7}
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
 
 
 def test_recent_threads_rank_active_first_then_latest_and_show_five(monkeypatch) -> None:
@@ -329,6 +363,45 @@ def test_thread_title_opens_and_timer_controls_use_shared_actions(monkeypatch) -
     assert updates == [(42, "pause"), (42, "reset")]
     assert panel.selected_chat_id is None
     assert project.sizeHint(0).height() > 30
+
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
+def test_long_thread_titles_use_compact_marquee_widget_without_idle_bullet(monkeypatch) -> None:
+    app = _app()
+    long_title = "A very long development thread title that should remain on one compact row"
+    monkeypatch.setattr(
+        "distr.gui.development_hot_corner.load_development_groups",
+        lambda _provider: [{
+            "project_id": 9,
+            "board_key": "decisions:7",
+            "name": "Compact project",
+            "weekly_seconds": 0,
+            "threads": [{
+                "chat_id": 42,
+                "title": long_title,
+                "status": "idle",
+                "active": False,
+                "elapsed_seconds": 0,
+                "weekly_seconds": 0,
+                "time_running": False,
+            }],
+        }],
+    )
+    panel = DevelopmentHotCornerPanel(enabled=False)
+    panel._refresh_threads()
+    thread = _project_item(panel, 9).child(0)
+    title_widget = panel.tree.itemWidget(thread, 0)
+
+    assert thread.text(0) == ""
+    assert thread.data(0, QtCore.Qt.ItemDataRole.AccessibleTextRole) == long_title
+    assert isinstance(title_widget, ThreadTitleWidget)
+    assert title_widget.title == long_title
+    assert title_widget.active is False
+    assert title_widget.accessibleName() == long_title
+    assert thread.sizeHint(0).height() == 24
 
     panel.close()
     panel.deleteLater()

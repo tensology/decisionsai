@@ -229,8 +229,11 @@ class FastActionDetector:
              ActionType.TYPE_TEXT, "type_text", {"text": "__MATCH_GROUP_PRESERVE_CASE__"}, False, "done"),
             
             # === ACTION ACTIONS ===
-            # More specific patterns first - "run action X", "play action X", "execute action X"
-            (re.compile(r'\b(run|play|execute)\s+action\s+([^\n]+)', re.IGNORECASE), 
+            # More specific patterns first. Accept articles and dictation punctuation:
+            # "run action X", "run the action X", "run, action, X".
+            (re.compile(
+             r'\b(run|play|execute)(?:\s+|\s*[,;:]\s*)(?:the(?:\s+|\s*[,;:]\s*))?action(?:\s+|\s*[,;:]\s*)([^\n]+)',
+             re.IGNORECASE),
              ActionType.ACTION_PLAY, "play_action", {"text": "__ORIGINAL_TEXT__", "action_name": "__MATCH_GROUP_LAST__"}, False, "action_playback"),
             # Generic patterns - "run action", "play action", "execute action" (no extra words between verb and "action")
             # Negative lookahead prevents matching conversational phrases like "how to run this action in Python"
@@ -1229,9 +1232,14 @@ class FastActionDetector:
                         # Extract matched group - use last group (for patterns like "run action X" where we want X)
                         if match.groups():
                             # Use the last group (highest index)
-                            final_args[key] = match.group(len(match.groups())).lower()
+                            final_args[key] = (
+                                match.group(len(match.groups()))
+                                .lower()
+                                .rstrip("?.!,;:")
+                                .strip()
+                            )
                         else:
-                            final_args[key] = match.group(0).lower()
+                            final_args[key] = match.group(0).lower().rstrip("?.!,;:").strip()
                     elif value == "__MATCH_GROUP_PRESERVE_CASE__":
                         # Extract matched group — preserve original casing (for type_text/dictate)
                         if match.groups():
@@ -1628,3 +1636,12 @@ def detect_fast_action(text: str, has_recent_clipboard_context: bool = False) ->
         DetectedAction result
     """
     return get_detector().detect(text, has_recent_clipboard_context)
+
+
+def is_direct_action_playback(text: str) -> bool:
+    """Return whether text is an explicit recorded-action playback command."""
+    detected = detect_fast_action(text)
+    return (
+        detected.action_type == ActionType.ACTION_PLAY
+        and detected.confidence >= 0.9
+    )

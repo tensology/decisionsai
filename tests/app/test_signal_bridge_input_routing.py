@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import inspect
 import time
 
+import pytest
+
 from distr.app.signals import SignalBridgeMixin
 
 
@@ -95,6 +97,32 @@ class _Host(SignalBridgeMixin):
 
     def _workflow_report_run_metadata(self, _summary):
         return {}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "run action login",
+        "Run the action login",
+        "Run, action, login.",
+        "Jesus, run, action, login.",
+    ],
+)
+def test_direct_action_playback_bypasses_work_intake(monkeypatch, message):
+    intake_calls = []
+
+    class _IntakeService:
+        def ingest(self, _intake):
+            intake_calls.append(_intake)
+            return SimpleNamespace(handled=False)
+
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service",
+        lambda: _IntakeService(),
+    )
+
+    assert _Host()._route_explicit_work_intake(99, message, source="web") is False
+    assert intake_calls == []
 
 
 def test_hands_free_command_is_forwarded_once_with_restore_policy(monkeypatch):

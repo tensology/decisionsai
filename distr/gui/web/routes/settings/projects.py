@@ -1740,17 +1740,26 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Project not found")
                 project.in_use = True
 
-                # Also activate the linked board if the project has a board_id
+                # Keep local project and board scope aligned. ``board_id`` is
+                # the remote provider identifier; local boards use
+                # ``kanban_board_id`` or ``default_project_id``.
                 linked_board_name = None
-                if project.board_id:
-                    # Find the kanban board linked to this project
+                board = None
+                if project.kanban_board_id:
                     board = session.query(KanbanBoard).filter(
-                        KanbanBoard.default_project_id == project_id
+                        KanbanBoard.id == int(project.kanban_board_id),
+                        KanbanBoard.archived.is_(False),
                     ).first()
-                    if board:
-                        session.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
-                        board.in_use = True
-                        linked_board_name = board.name
+                if board is None:
+                    board = session.query(KanbanBoard).filter(
+                        KanbanBoard.default_project_id == project_id,
+                        KanbanBoard.archived.is_(False),
+                    ).order_by(KanbanBoard.id).first()
+                if board:
+                    session.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
+                    board.in_use = True
+                    project.kanban_board_id = int(board.id)
+                    linked_board_name = board.name
 
                 session.commit()
                 try:
