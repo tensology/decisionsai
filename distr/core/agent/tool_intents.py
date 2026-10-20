@@ -297,6 +297,8 @@ def forced_tool_names_for_text(text: str) -> list[str]:
     for tool_name, patterns in _RULES:
         if ticket_intent_kind in {"debug_decisions_ticket", "ticket_file", "type_text"} and tool_name == "create_ticket":
             continue
+        if tool_name == "start_project" and re.match(r"^\s*(?:did|have|has)\b", raw, re.IGNORECASE):
+            continue
         if any(re.search(pattern, raw, re.IGNORECASE) for pattern in patterns):
             forced.append(tool_name)
     return forced

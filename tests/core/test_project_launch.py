@@ -3,7 +3,11 @@ from distr.core.agent.services.llm.fast_action_detector import (
     FastActionDetector,
 )
 from distr.core.agent.tool_intents import forced_tool_names_for_text
-from distr.core.agent.tools.system.project_tools import _parse_project_lifecycle_request
+from distr.core.agent.tools.system.project_tools import (
+    OpenAndStartProjectTool,
+    StartProjectTool,
+    _parse_project_lifecycle_request,
+)
 from distr.core.project_startup_terminals import (
     ProjectTerminalActionResult,
     _get_live_project_runtime_snapshot,
@@ -80,6 +84,7 @@ def test_project_launch_flow_prefers_frontend_and_routes_natural_phrases(monkeyp
         ("launch and start project Merrypak", "Merrypak", True),
         ("start project Merrypak and launch it", "Merrypak", True),
         ("start project Merrypak, then launch it", "Merrypak", True),
+        ("I'm sorry, start project, sport track, old.", "sport track old", False),
         ("launch the project", "", True),
     ):
         assert _parse_project_lifecycle_request(text) == (expected_name, expected_launch)
@@ -88,6 +93,8 @@ def test_project_launch_flow_prefers_frontend_and_routes_natural_phrases(monkeyp
         assert detected.tool_name == "start_project"
         assert detected.tool_args == {"text": text}
         assert "start_project" in forced_tool_names_for_text(text)
+
+    assert "start_project" not in forced_tool_names_for_text("Did you start the project?")
 
     opened: list[str] = []
     monkeypatch.setattr(
@@ -142,6 +149,50 @@ def test_project_launch_reports_missing_url_as_failure(monkeypatch):
     assert result.success is False
     assert result.action == "no_url"
     assert result.message == "Project Tensology is running, but no local URL appeared in its terminals."
+
+
+def test_start_project_uses_provider_last_user_message_to_select_specific_project(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from distr.core.db import Base
+    from distr.core.db.projects import Project
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        session.add_all(
+            [
+                Project(name="Spoortrack", folder_location="/tmp/spoortrack"),
+                Project(name="Spoortrack (Old)", folder_location="/tmp/spoortrack-old"),
+            ]
+        )
+        session.commit()
+
+    opened: list[str] = []
+    monkeypatch.setattr("distr.core.db.get_session", factory)
+    monkeypatch.setattr(
+        OpenAndStartProjectTool,
+        "_run",
+        lambda self, project_name="", **kwargs: opened.append(project_name) or project_name,
+    )
+
+    result = StartProjectTool()._run(
+        last_user_message=(
+            "[Retrieved project context]\ncurrent active project details"
+            "\n\nUser request:\nPlease start project sport track old"
+        ),
+    )
+
+    assert result == "Spoortrack (Old)"
+    assert opened == ["Spoortrack (Old)"]
+    engine.dispose()
 
 
 def test_live_runtime_snapshot_reads_terminal_owner_process(monkeypatch):

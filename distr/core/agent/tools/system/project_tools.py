@@ -201,9 +201,10 @@ def _parse_project_lifecycle_request(text: str) -> tuple[str, bool]:
     raw = (text or "").strip().rstrip(".?!")
     launch = bool(re.search(r"\blaunch\b|\bopen\b.{0,40}\b(?:browser|chrome|brave)\b", raw, re.IGNORECASE))
     name = re.sub(
-        r"^\s*(?:(?:can|could|would)\s+you\s+|please\s+)?"
+        r"^\s*(?:(?:i(?:'m| am)\s+)?sorry\s*[,;:]?\s*)?"
+        r"(?:(?:can|could|would)\s+you\s+|please\s+)?"
         r"(?:start\s+and\s+launch|launch\s+and\s+start|start|launch|run|boot\s+up|initialize|open\s+and\s+start)"
-        r"\s+(?:(?:the|this|my)\s+)?project\b\s*",
+        r"\s+(?:(?:the|this|my)\s+)?project\b[\s,;:-]*",
         "",
         raw,
         flags=re.IGNORECASE,
@@ -214,6 +215,7 @@ def _parse_project_lifecycle_request(text: str) -> tuple[str, bool]:
         name,
         flags=re.IGNORECASE,
     ).strip()
+    name = re.sub(r"\s*[,;:]\s*", " ", name).strip()
     return name, launch
 
 
@@ -1740,7 +1742,9 @@ class StartProjectTool(BaseTool):
         try:
             from distr.core.agent.services.rag.project import get_active_project
 
-            search_name, launch = _parse_project_lifecycle_request(text)
+            request_text = text or str(kwargs.get("last_user_message") or "")
+            request_text = request_text.rsplit("\n\nUser request:\n", 1)[-1]
+            search_name, launch = _parse_project_lifecycle_request(request_text)
 
             # If a project name was specified, find it by fuzzy matching
             if search_name:

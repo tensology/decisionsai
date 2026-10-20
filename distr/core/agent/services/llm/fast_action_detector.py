@@ -110,7 +110,8 @@ class FastActionDetector:
         _polite = r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
         _open = r'(?:open(?:\s+up)?|show(?:\s+me)?|pull\s+up|launch|go\s+to|bring\s+up)'
         self.PROJECT_LIFECYCLE_PATTERN = re.compile(
-            _polite
+            r"^\s*(?:(?:i(?:'m| am)\s+)?sorry\s*[,;:]?\s*)?"
+            r"(?:(?:can|could|would)\s+you\s+|please\s+)?"
             + r'(?:start(?:\s+and\s+launch)?|launch(?:\s+and\s+start)?|run|boot\s+up|initialize)'
             + r'\s+(?:(?:the|this|my)\s+)?project\b(?!\s+(?:ticket|board))',
             re.IGNORECASE,
