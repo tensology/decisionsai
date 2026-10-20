@@ -16,7 +16,7 @@ from distr.core.tensology_client import TensologyApiError, configured_tensology_
 
 class TensologyWorkspaceInput(BaseModel):
     action: Literal[
-        "capabilities", "list_mail", "read_mail", "list_drafts", "save_draft", "send_mail",
+        "capabilities", "list_mail", "read_mail", "read_latest_mail", "list_drafts", "save_draft", "send_mail",
         "list_customers", "list_projects", "sync_project", "list_time_entries",
         "create_time_entry", "update_time_entry", "list_invoices", "get_invoice",
         "create_invoice", "update_invoice",
@@ -40,7 +40,8 @@ class TensologyWorkspaceTool(BaseTool):
         "entries, and invoices. Prefer this over Gmail when the user says Tensology mail or Mailshot, or when the "
         "active project is linked to Tensology. Reading and drafting are safe. Never send mail unless the user "
         "explicitly instructed sending the exact content or approved a recipient, subject, and body preview; "
-        "otherwise save a draft and ask."
+        "otherwise save a draft and ask. Use read_latest_mail for the complete body of the newest matching message; "
+        "set params.include_thread=true when the user asks for the complete conversation thread."
     )
     args_schema: type[BaseModel] = TensologyWorkspaceInput
 
@@ -79,7 +80,31 @@ class TensologyWorkspaceTool(BaseTool):
             elif action == "list_mail":
                 result = client.get("mail/messages", params)
             elif action == "read_mail":
-                result = client.get(f"mail/messages/{params['message_id']}")
+                message_id = params.pop("message_id")
+                include_thread = self._as_bool(params.pop("include_thread", False))
+                query = {"include_thread": "true"} if include_thread else None
+                result = client.get(f"mail/messages/{message_id}", query)
+            elif action == "read_latest_mail":
+                include_thread = self._as_bool(params.pop("include_thread", False))
+                params["limit"] = 1
+                params["page"] = 1
+                listing = client.get("mail/messages", params) or {}
+                emails = listing.get("emails") if isinstance(listing, dict) else None
+                if not isinstance(emails, list) or not emails:
+                    result = {"emails": [], "total": 0}
+                else:
+                    latest = emails[0] if isinstance(emails[0], dict) else {}
+                    message_id = str(
+                        latest.get("_id")
+                        or latest.get("id")
+                        or latest.get("message_id")
+                        or latest.get("messageId")
+                        or ""
+                    ).strip()
+                    if not message_id:
+                        raise ValueError("Latest mail summary did not include a message ID.")
+                    query = {"include_thread": "true"} if include_thread else None
+                    result = client.get(f"mail/messages/{message_id}", query)
             elif action == "list_drafts":
                 result = client.get("mail/drafts", params)
             elif action == "save_draft":
@@ -190,6 +215,12 @@ class TensologyWorkspaceTool(BaseTool):
 
     async def _arun(self, **kwargs) -> str:
         return self._run(**kwargs)
+
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on", "thread"}
 
     @staticmethod
     def _registered_repository(client, params: dict[str, Any]) -> dict[str, Any]:

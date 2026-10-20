@@ -173,9 +173,20 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             mail_context = f"{latest_user_text} {qnorm}".lower()
             mail_read_intent = (
                 any(token in mail_context for token in ("mail", "email", "inbox"))
-                and any(token in mail_context for token in ("check", "read", "show", "list", "new", "unread", "inbox"))
+                and any(
+                    token in mail_context
+                    for token in (
+                        "check", "read", "show", "list", "new", "unread", "inbox",
+                        "fetch", "get", "latest", "body", "thread", "conversation",
+                    )
+                )
                 and not any(token in mail_context for token in ("send", "draft", "reply", "write"))
             )
+            mail_detail_intent = any(
+                token in mail_context
+                for token in ("fetch", "get", "latest", "body", "full", "whole", "complete", "entire", "thread", "conversation")
+            )
+            mail_thread_intent = any(token in mail_context for token in ("thread", "conversation"))
 
             def _execute_mail_reads(tool_names: tuple[str, ...]) -> tuple[bool, str, bool]:
                 """Execute a read request now when a model unnecessarily asks for an active mail tool."""
@@ -185,11 +196,17 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     if tool is None:
                         results[tool_name] = "Not connected or unavailable."
                         continue
-                    arguments = (
-                        {"action": "list_mail", "params": {"folder": "inbox", "limit": 10}}
-                        if tool_name == "tensology_workspace"
-                        else {"action": "check_inbox", "params": {"query": "in:inbox", "max_results": 10}}
-                    )
+                    if tool_name == "tensology_workspace":
+                        arguments = (
+                            {
+                                "action": "read_latest_mail",
+                                "params": {"folder": "inbox", "include_thread": mail_thread_intent},
+                            }
+                            if mail_detail_intent
+                            else {"action": "list_mail", "params": {"folder": "inbox", "limit": 10}}
+                        )
+                    else:
+                        arguments = {"action": "check_inbox", "params": {"query": "in:inbox", "max_results": 10}}
                     try:
                         normalizer = getattr(self, "_normalize_tool_kwargs", None)
                         safe_arguments = normalizer(tool, arguments) if callable(normalizer) else arguments

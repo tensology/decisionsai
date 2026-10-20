@@ -2,8 +2,11 @@
 
 from types import SimpleNamespace
 
+import json
+
 from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
 from distr.core.agent.services.llm.mixins.ollama_response import OllamaResponseMixin
+from distr.core.agent.tools.integrations.tensology_workspace import TensologyWorkspaceTool
 
 
 class _CoreHarness(LLMSharedMixin):
@@ -125,6 +128,76 @@ def test_request_tool_executes_both_active_mailboxes_for_generic_read():
     assert "google_workspace" in result
     assert tensology.calls[0]["action"] == "list_mail"
     assert google.calls[0]["action"] == "check_inbox"
+
+
+def test_request_tool_reads_complete_latest_mailshot_body():
+    request_tool = SimpleNamespace(name="request_tool")
+    tensology = _MailReadTool("tensology_workspace", '{"body": "the complete body"}')
+    h = _CoreHarness()
+    h._tools = [request_tool, tensology]
+    h._tools_dict = {tool.name: tool for tool in h._tools}
+    h._messages = [{"role": "user", "content": "Fetch the whole body of my latest Mailshot email"}]
+    h.chat_manager = None
+    h.event_queue = None
+
+    h._wire_request_tool_callback()
+    success, result, injected = request_tool._on_tool_requested("Mailshot email body")
+
+    assert success is True
+    assert injected is False
+    assert "the complete body" in result
+    assert tensology.calls == [{
+        "action": "read_latest_mail",
+        "params": {"folder": "inbox", "include_thread": False},
+    }]
+
+
+def test_request_tool_reads_complete_latest_mailshot_thread():
+    request_tool = SimpleNamespace(name="request_tool")
+    tensology = _MailReadTool("tensology_workspace", '[{"body": "first"}, {"body": "second"}]')
+    h = _CoreHarness()
+    h._tools = [request_tool, tensology]
+    h._tools_dict = {tool.name: tool for tool in h._tools}
+    h._messages = [{"role": "user", "content": "Get the entire latest Mailshot thread"}]
+    h.chat_manager = None
+    h.event_queue = None
+
+    h._wire_request_tool_callback()
+    success, result, _ = request_tool._on_tool_requested("latest Mailshot thread")
+
+    assert success is True
+    assert "second" in result
+    assert tensology.calls == [{
+        "action": "read_latest_mail",
+        "params": {"folder": "inbox", "include_thread": True},
+    }]
+
+
+def test_tensology_workspace_read_latest_mail_follows_summary_id(monkeypatch):
+    calls = []
+
+    class _Client:
+        def get(self, path, params=None):
+            calls.append((path, params))
+            if path == "mail/messages":
+                return {"emails": [{"_id": "mail-2", "subject": "Latest"}], "total": 1}
+            return [{"_id": "mail-1", "body": "first"}, {"_id": "mail-2", "body": "second"}]
+
+    monkeypatch.setattr(
+        "distr.core.agent.tools.integrations.tensology_workspace.configured_tensology_client",
+        lambda source: _Client(),
+    )
+
+    result = json.loads(TensologyWorkspaceTool()._run(
+        action="read_latest_mail",
+        params={"folder": "inbox", "include_thread": True},
+    ))
+
+    assert [message["body"] for message in result] == ["first", "second"]
+    assert calls == [
+        ("mail/messages", {"folder": "inbox", "limit": 1, "page": 1}),
+        ("mail/messages/mail-2", {"include_thread": "true"}),
+    ]
 
 
 def test_get_filtered_tools_force_exposes_delegated_workflow_for_remote_email_document_handoff(monkeypatch):
