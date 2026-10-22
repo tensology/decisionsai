@@ -1,11 +1,11 @@
 ---
 name: ui-crud-discipline
-description: Apply operational CRUD-specific structure after loading the canonical global UX and UI principles. Use for admin, settings, list, table, record-editor, and notification-management interfaces.
+description: Narrow CRUD add-on to ui-ux-system. Use for admin, settings, list, table, record-editor, and notification-management interfaces after loading ui-ux-system; its people-naming, admin-scope and email rules now live in ui-ux-system/references/crud-flows.md.
 ---
 
 # UI CRUD Discipline
 
-Before CRUD work, read the current `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those global rules control shared behavior and presentation. This skill adds only operational CRUD guidance.
+Before CRUD work, read the `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), which is authoritative for shared behavior and presentation, and its `references/crud-flows.md`, which now holds the canonical people-naming, admin-scope, and email/notification rules below. This skill stays as a narrow CRUD checklist.
 
 When authoring or reviewing FRAC, use the mandatory Given / When / Then templates in `distr/seed-corpus-pack/03-done-states-frac/FRAC-TEMPLATE.md`. The feature is incomplete until every applicable criterion passes.
 
@@ -32,6 +32,6 @@ When authoring or reviewing FRAC, use the mandatory Given / When / Then template
 
 ## Completion
 
-- Verify the canonical Definition of Done - UI and every applicable FRAC criterion.
+- Verify the ui-ux-system Definition of Done - UI (section 10) and every applicable FRAC criterion.
 - Search for last-name-first ordering, email-first identity displays, exposed implementation records, and unscoped diagnostics.
 - Inspect the final desktop and mobile views after the last change.

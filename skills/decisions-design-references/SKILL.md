@@ -6,7 +6,7 @@ description: Playbook for Aceternity UI, Refero MCP, Mobbin MCP, and Godly when 
 <!-- GLOBAL_UI_UX_REFERENCE -->
 ## Global interface source
 
-Before using this skill for interface work, read the current global `ui-ux-principles` skill, especially `Design Principles`, `UX Principles`, `UI Principles`, and `Definition of Done - UI`. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # Design Reference Sources
 
