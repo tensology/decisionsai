@@ -611,6 +611,8 @@ class WorkflowTicketLoopHarness:
             },
         )
         project_id = int(project["id"])
+        project_board = self.api_request(f"/projects/{project_id}/kanban-board").get("board") or {}
+        project_board_id = int(project_board.get("id") or 0)
 
         board = self.api_request(
             "/tickets/boards",
@@ -857,6 +859,7 @@ class WorkflowTicketLoopHarness:
             "board_id": board_id,
             "board_name": board_name,
             "project_id": project_id,
+            "project_board_id": project_board_id,
             "project_name": project_name,
             "ticket_id": ticket_id,
             "ticket_title": ticket_title,
@@ -1543,7 +1546,10 @@ test('spotify remake satisfies the current ticket contract', () => {
             """import fs from 'node:fs';
 
 const state = JSON.parse(fs.readFileSync('src/app-state.json', 'utf8'));
-if (!Array.isArray(state.features) || state.features.length < 4) {
+const contract = fs.existsSync('.decisions-current-ticket.json')
+  ? JSON.parse(fs.readFileSync('.decisions-current-ticket.json', 'utf8'))
+  : { requiredFeatureCount: 0 };
+if (!Array.isArray(state.features) || state.features.length < contract.requiredFeatureCount) {
   throw new Error('Spotify remake is incomplete');
 }
 if (!state.polish?.responsive || !state.polish?.accessible || !state.polish?.secure) {
@@ -1695,6 +1701,9 @@ console.log('build-check: green');
                     "Use the existing package manager/runtime. Keep edits inside the project folder. "
                     "Do not weaken tests. Update src/app-state.json to reflect the completed feature, "
                     "including enough feature markers to satisfy .decisions-current-ticket.json. "
+                    "Create the browser entrypoint at the project-root index.html. It must expose "
+                    "a Search navigation control and a Play/Pause control using accessible labels "
+                    "or data-route-link/data-play attributes, and render without console errors. "
                     "Add real code/tests if the app structure has grown beyond the seed."
                 ),
                 "config": {
@@ -2056,6 +2065,8 @@ console.log('build-check: green');
                 terminal = self.wait_for_ticket_run_terminal(
                     workflow_id=int(fixture["workflow_id"]),
                     ticket_id=ticket_id,
+                    timeout_seconds=2100,
+                    auto_continue=True,
                 )
                 if terminal.get("status") != "completed" and self._mark_ticket_run_completed_when_green(
                     run_id=int(terminal.get("id") or run_id),
@@ -2168,12 +2179,29 @@ console.log('build-check: green');
         # Keep live-test cleanup on the same API boundary as fixture creation.
         # Direct sessions point at pytest's isolated database when this harness is
         # launched by pytest, which previously left server-side projects behind.
+        workflow_id = fixture.get("workflow_id")
+        if workflow_id:
+            try:
+                workflow = self.api_request(f"/workflows/{int(workflow_id)}")
+                for run in workflow.get("runs") or []:
+                    if str(run.get("status") or "") in {"running", "waiting"}:
+                        self.api_request(
+                            f"/workflows/{int(workflow_id)}/cancel-run/{int(run['id'])}",
+                            method="POST",
+                        )
+            except Exception:
+                pass
         for ticket in fixture.get("tickets") or []:
             self._best_effort_api_delete(f"/tickets/tickets/{int(ticket['id'])}")
-        if fixture.get("board_id"):
-            self._best_effort_api_delete(f"/tickets/boards/{int(fixture['board_id'])}")
-        if fixture.get("workflow_id"):
-            self._best_effort_api_delete(f"/workflows/{int(fixture['workflow_id'])}")
+        board_ids = {
+            int(value)
+            for value in (fixture.get("board_id"), fixture.get("project_board_id"))
+            if value
+        }
+        for board_id in sorted(board_ids):
+            self._best_effort_api_delete(f"/tickets/boards/{board_id}")
+        if workflow_id:
+            self._best_effort_api_delete(f"/workflows/{int(workflow_id)}")
         if fixture.get("project_id"):
             self._best_effort_api_delete(f"/projects/{int(fixture['project_id'])}")
         project_dir = fixture.get("project_dir")

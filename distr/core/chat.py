@@ -710,14 +710,14 @@ class ChatService:
                     checkpoint_row_id = None
 
             thread_query = text("""
-                WITH RECURSIVE chat_tree(id, parent_id, input, response, is_hidden, created_date) AS (
-                    SELECT id, parent_id, input, response, is_hidden, created_date
+                WITH RECURSIVE chat_tree(id, parent_id, input, response, is_hidden, created_date, additional_context) AS (
+                    SELECT id, parent_id, input, response, is_hidden, created_date, additional_context
                     FROM chats WHERE id = :root_id
                     UNION ALL
-                    SELECT c.id, c.parent_id, c.input, c.response, c.is_hidden, c.created_date
+                    SELECT c.id, c.parent_id, c.input, c.response, c.is_hidden, c.created_date, c.additional_context
                     FROM chats c JOIN chat_tree ct ON c.parent_id = ct.id
                 )
-                SELECT id, input, response, is_hidden FROM chat_tree ORDER BY created_date
+                SELECT id, input, response, is_hidden, additional_context FROM chat_tree ORDER BY created_date
             """)
             rows = session.execute(thread_query, {"root_id": root_id}).fetchall()
             messages = []
@@ -730,7 +730,13 @@ class ChatService:
                 if row.input:
                     messages.append({"role": "user", "content": row.input})
                 if row.response:
-                    messages.append({"role": "assistant", "content": row.response})
+                    _ctx_raw = getattr(row, "additional_context", None)
+                    if is_spoken_row_context(_ctx_raw):
+                        # Oracle notes already carry their own "Spoken aloud ... from Development thread" label.
+                        content = row.response if _json_loads_obj(_ctx_raw).get("oracle_note") else spoken_history_content(row.response)
+                        messages.append({"role": "assistant", "content": content})
+                    else:
+                        messages.append({"role": "assistant", "content": row.response})
             return messages
 
     @staticmethod
@@ -901,3 +907,58 @@ def __getattr__(name):
 
         return ChatManagerCore
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+SPOKEN_HISTORY_PREFIX = "Spoken aloud to the user (Read response): "
+SPOKEN_NOTE_PREFIX = "Spoken aloud to the user from Development thread "
+
+
+def is_spoken_row_context(raw: Any) -> bool:
+    """True for rows saved by the Read response button (additional_context.spoken)."""
+    return _json_loads_obj(raw).get("spoken") is True
+
+
+def spoken_history_content(text: str) -> str:
+    return SPOKEN_HISTORY_PREFIX + (text or "").strip()
+
+
+DUPLICATE_INPUT_WINDOW_SEC = 10.0
+
+
+def _as_naive_utc(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if getattr(value, "tzinfo", None) is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def is_duplicate_pending_input(chat_id: int, user_text: str, *, window_sec: float = DUPLICATE_INPUT_WINDOW_SEC, now: Optional[datetime] = None) -> bool:
+    """True when the thread's latest user row has the same input, was saved within
+    ``window_sec`` and is still unanswered (turn pending). Used to reject double
+    submits (held Enter, repeated clicks) without blocking a deliberate re-ask later."""
+    cleaned = (user_text or "").strip()
+    if not cleaned:
+        return False
+    with get_session() as session:
+        root_id = _thread_root_chat_id(session, int(chat_id))
+        row = session.execute(
+            text(
+                "SELECT input, response, created_date FROM chats "
+                "WHERE parent_id = :root AND input IS NOT NULL AND input != '' "
+                "ORDER BY created_date DESC, id DESC LIMIT 1"
+            ),
+            {"root": root_id},
+        ).fetchone()
+    if row is None or (row.input or "").strip() != cleaned or (row.response or "").strip():
+        return False
+    created = _as_naive_utc(row.created_date)
+    if created is None:
+        return False
+    current = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    return 0 <= (current - created).total_seconds() <= window_sec

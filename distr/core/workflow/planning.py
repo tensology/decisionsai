@@ -388,6 +388,28 @@ def _default_stuck_behavior(action_type: str) -> str:
     return "Report the blocker, evidence observed, and the exact next input needed from the user."
 
 
+def looks_like_prose_command(command: str) -> bool:
+    """True when a run_command "command" is a plain-English plan sentence.
+
+    Planner output such as "Clone the target repository ..." or "Confirm with
+    Roland and Julie ..." was being handed to /bin/sh verbatim. A real command
+    starts with an executable; prose starts with a capitalised English word
+    that is not on PATH and runs on for several words.
+    """
+    import shutil
+
+    text = (command or "").strip()
+    if not text:
+        return False
+    words = text.split()
+    first = words[0]
+    if not re.fullmatch(r"[A-Z][a-z]+", first):
+        return False
+    if shutil.which(first):
+        return False
+    return len(words) >= 3
+
+
 def _default_config(action_type: str, instruction: str, config: Dict[str, Any]) -> Dict[str, Any]:
     cfg = dict(config or {})
     if action_type == "run_command":
@@ -446,6 +468,13 @@ def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: 
         action_type = str(raw_step.get("action_type") or "agent_instruction").strip().lower()
         if action_type not in valid_action_types:
             action_type = "agent_instruction"
+        raw_config = _coerce_config(raw_step.get("config"))
+        if action_type == "run_command" and looks_like_prose_command(
+            str(raw_config.get("command") or instruction)
+        ):
+            # No concrete shell command: let the agent carry out the step.
+            action_type = "agent_instruction"
+            raw_config.pop("command", None)
         step = dict(raw_step)
         step["title"] = title or f"Step {i + 1}"
         step["instruction"] = instruction
@@ -466,7 +495,7 @@ def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: 
         step["stuck_behavior"] = str(raw_step.get("stuck_behavior") or "").strip() or _default_stuck_behavior(action_type)
         step["max_retries"] = int(raw_step.get("max_retries", _ACTION_MAX_RETRIES[action_type]) or 0)
         step["timeout_seconds"] = int(raw_step.get("timeout_seconds", _ACTION_TIMEOUT_SECONDS[action_type]) or 300)
-        step["config"] = _default_config(action_type, instruction, _coerce_config(raw_step.get("config")))
+        step["config"] = _default_config(action_type, instruction, raw_config)
         step["routing_mode"] = str(raw_step.get("routing_mode") or "static").strip() or "static"
         step["wait_for_continue"] = bool(raw_step.get("wait_for_continue", False))
         if "on_pass_goto_position" in raw_step:
@@ -518,10 +547,9 @@ def _planning_model_tiers(settings: dict) -> List[tuple]:
             (override.orchestrator_model or "").strip() or "llama3.2",
         ))
 
-    workflow_provider = (settings.get("workflow_llm_provider") or "").strip()
-    workflow_model = (settings.get("workflow_llm_model") or "").strip()
-    if workflow_provider:
-        tiers.append(("workflow", workflow_provider.lower(), workflow_model or ""))
+    from distr.core.llm_factory import resolve_complexity_llm_candidates
+    for tier_provider, tier_model in resolve_complexity_llm_candidates(settings, "medium"):
+        tiers.append(("complexity_medium", tier_provider.lower(), tier_model))
 
     coding_provider = (settings.get("coding_llm_provider") or "").strip()
     coding_model = (settings.get("coding_llm_model") or "").strip()
@@ -533,14 +561,9 @@ def _planning_model_tiers(settings: dict) -> List[tuple]:
         or (settings.get("agent_provider") or "").strip()
         or "Ollama"
     ).lower()
-    for label, model_key in (
-        ("complexity_high", "project_cli_high_model"),
-        ("complexity_medium", "project_cli_medium_model"),
-        ("complexity_low", "project_cli_low_model"),
-    ):
-        model = (settings.get(model_key) or "").strip()
-        if model and model.lower() != "auto":
-            tiers.append((label, conv_provider, model))
+    for level in ("high", "medium", "low"):
+        for tier_provider, tier_model in resolve_complexity_llm_candidates(settings, level):
+            tiers.append((f"complexity_{level}", tier_provider.lower(), tier_model))
 
     tiers.append((
         "conversational",
@@ -791,6 +814,11 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
                                 step["verification"] = verification
                             if stuck_behavior:
                                 step["stuck_behavior"] = stuck_behavior
+                            # Keep the planner's concrete config (e.g. the real
+                            # run_command "command"); dropping it made the prose
+                            # instruction become the shell command.
+                            if isinstance(item.get("config"), dict) and item["config"]:
+                                step["config"] = dict(item["config"])
                             steps.append(step)
                     elif isinstance(item, str):
                         steps.append({"title": f"Step {i + 1}", "instruction": item, "action_type": "agent_instruction"})

@@ -33,6 +33,10 @@ export function createThreadSession({ api, workflowForChat, runForWorkflow, dire
             const query = new URLSearchParams({ chat_id: String(chatId) });
             const runId = workflowRunId(run);
             if (workflow && runId) query.set('run_id', String(runId));
+            const steeringMemory = workflow && runId
+                ? await get(`/workflows/${workflow.id}/runs/${runId}/steering-memory`).catch(() => null)
+                : null;
+            if (run && steeringMemory) run = { ...run, steering_memory: steeringMemory };
             let controls = await get(`/workflows/studio/control-state?${query}`);
             if (!current()) return null;
             if (isActiveAgentRun(run) && (controls.commands || []).some((command) => command.status === 'queued')) {
@@ -46,8 +50,11 @@ export function createThreadSession({ api, workflowForChat, runForWorkflow, dire
                 currentRun: run,
                 artifacts: artifacts.items || [],
                 plans: plans.items || [],
+                steeringMemory,
                 controlState: controls,
-                threadTime: time ? timerSnapshot(time) : null
+                threadTime: time ? timerSnapshot(time) : null,
+                // Per-turn route Auto/fixed ran on, keyed by user chat_row_id (display only).
+                turnRoutes: (execution && typeof execution.turn_routes === 'object' && execution.turn_routes) || {}
             };
         } catch (error) {
             if (!current() || error.name === 'AbortError') return null;

@@ -1,11 +1,7 @@
 <!-- Skins Tab -->
-    <div class="mb-6 flex items-center justify-between gap-4 pb-4 border-b border-[#565869]">
-        <div>
-            <h2 id="skins_section_title" class="text-xl font-semibold text-white mb-1">Skins</h2>
-            <p id="skins_section_subtitle" class="text-sm text-gray-400">Select and customize your oracle-avatar skin</p>
-        </div>
+    <div class="flex items-center gap-4">
         <button type="button" id="skins_section_back"
-                class="hidden px-3 py-1.5 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
+                class="hidden mb-4 px-3 py-1.5 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
             ← Back
         </button>
     </div>
@@ -191,12 +187,6 @@
                     <span id="skins_oracle_size_value" class="text-sm text-[#ececf1] w-12 text-right">180px</span>
                 </div>
                 <div class="flex w-[76px] flex-shrink-0 justify-end">
-                    <button type="button" id="skin_detail_save"
-                            class="px-3 py-1.5 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
-                        Save
-                    </button>
-                </div>
-                <div class="flex w-[76px] flex-shrink-0 justify-end">
                     <button type="button" id="skin_detail_load"
                             class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">
                         <span id="skin_detail_load_label">Load</span>
@@ -298,6 +288,12 @@
                         </div>
                     </div>
                 </div>
+            </div>
+            <div class="mt-6 flex justify-center">
+                <button type="button" id="skin_detail_save"
+                        class="px-5 py-2 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
+                    Save
+                </button>
             </div>
         </div>
     </div>

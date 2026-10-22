@@ -84,6 +84,14 @@ def test_short_confirmations_stay_with_conversation_context(service, text):
     assert decision.handled is False
 
 
+@pytest.mark.parametrize("text", ["Hello?", "Click."])
+def test_short_conversation_and_desktop_commands_are_not_work_intake(service, text):
+    decision = service.classify(WorkIntake(source="web", user_text=text))
+
+    assert decision.action == WorkIntakeAction.ANSWER_DIRECTLY
+    assert decision.handled is False
+
+
 def test_voice_work_intake_persists_user_before_assistant(monkeypatch):
     from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
 

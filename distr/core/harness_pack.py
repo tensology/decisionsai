@@ -168,7 +168,7 @@ def _required_projection_paths(home: Path, detected: dict[str, bool]) -> list[Pa
     if detected.get("cursor"):
         paths.append(home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md")
     if detected.get("pi"):
-        paths.append(home / ".pi" / "skills" / "decisions-ecc-harness" / "SKILL.md")
+        paths.append(home / ".pi" / "agent" / "skills" / "decisions-ecc-harness" / "SKILL.md")
     if detected.get("grok"):
         paths.append(home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md")
     return paths
@@ -238,7 +238,7 @@ def _write_harness_projections(
         "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "ecc-harness-pack" / "SKILL.md",
         "claude": home / ".claude" / "skills" / "decisions-ecc-harness" / "SKILL.md",
         "cursor": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
-        "pi": home / ".pi" / "skills" / "decisions-ecc-harness" / "SKILL.md",
+        "pi": home / ".pi" / "agent" / "skills" / "decisions-ecc-harness" / "SKILL.md",
         "grok": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
     }
     for harness, path in targets.items():

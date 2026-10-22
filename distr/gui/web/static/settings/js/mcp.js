@@ -102,6 +102,8 @@
         mount.innerHTML = '';
         _rows.forEach(function (row, idx) {
             var isRemote = row.transport === 'sse';
+            // Local (stdio) commands are listed only in the "View local commands" modal.
+            if (!isRemote) return;
             var title = deriveServerName(row, idx);
             var card = document.createElement('div');
             card.className = 'relative border border-[#565869] rounded-lg p-4 bg-[#1a1f3a] space-y-3';
@@ -141,18 +143,16 @@
     }
 
     function collectPayload() {
-        var cards = document.querySelectorAll('#mcp-servers-mount > div');
+        // Built from _rows (not DOM cards) because local commands are no longer rendered inline.
         var servers = [];
         var seen = {};
-        for (var c = 0; c < cards.length; c++) {
-            var card = cards[c];
-            var idx = parseInt(card.getAttribute('data-mcp-index') || String(c), 10);
-            var row = _rows[idx] || {};
+        for (var c = 0; c < _rows.length; c++) {
+            var row = _rows[c] || {};
             var transport = row.transport === 'sse' ? 'sse' : 'stdio';
-            var commandLine = card.querySelector('[data-field="command_line"]');
-            var command = transport === 'sse' ? [] : splitCommandLine(commandLine ? commandLine.value : '');
-            var urlEl = card.querySelector('[data-field="url"]');
-            var url = urlEl ? urlEl.value.trim() : '';
+            var command = transport === 'sse' ? [] : (Array.isArray(row.command) ? row.command.slice() : []);
+            var card = document.querySelector('#mcp-servers-mount > div[data-mcp-index="' + c + '"]');
+            var urlEl = card ? card.querySelector('[data-field="url"]') : null;
+            var url = urlEl ? urlEl.value.trim() : String(row.url || '').trim();
             var nextRow = {
                 name: row.name || '',
                 enabled: row.enabled !== false,

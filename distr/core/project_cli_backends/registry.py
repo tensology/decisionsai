@@ -655,6 +655,175 @@ class _BoundedCliOutput:
         )
 
 
+# --- Development-agent tools for non-Pi harnesses (per-run stdio MCP bridge) ---
+DEV_MCP_SERVER_NAME = "decisions_dev"
+_CURSOR_DEV_MCP_ENV = "DECISIONS_CURSOR_DEV_MCP"  # default on; "off" disables the temp <folder>/.cursor/mcp.json
+
+
+def _dev_tools_enabled(task: ProjectTask) -> bool:
+    """Development turns only; never read-only, tool-less, proposal or opted-out turns."""
+    opts = task.adapter_options or {}
+    return (
+        task.origin == "development"
+        and not opts.get("disable_tools")
+        and not opts.get("read_only_expected")
+        and not opts.get("proposal_only")
+        and not opts.get("disable_dev_media_tools")
+        and not opts.get("disable_dev_agent_tools")
+    )
+
+
+def _dev_tool_env(task: ProjectTask) -> dict[str, str]:
+    """Non-secret per-run env for the dev tools (no tokens, ever)."""
+    env = {
+        "DECISIONS_DEV_AGENT_TOOLS": "1",
+        "DECISIONS_PROJECT_FOLDER": str(task.folder or ""),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[3]),
+    }
+    if task.chat_id:
+        env["DECISIONS_CHAT_ID"] = str(int(task.chat_id))
+    db_dir = os.environ.get("DECISIONS_DB_DIR")
+    if db_dir:
+        env["DECISIONS_DB_DIR"] = db_dir
+    return env
+
+
+def _dev_mcp_server_spec(task: ProjectTask) -> dict[str, Any]:
+    import sys as _sys
+
+    return {
+        "command": _sys.executable,
+        "args": ["-m", "distr.core.workflow.dev_agent_mcp"],
+        "env": _dev_tool_env(task),
+    }
+
+
+def _toml_str(value: str) -> str:
+    return json.dumps(str(value))  # JSON string escaping is valid TOML basic-string escaping
+
+
+def _codex_dev_mcp_args(task: ProjectTask) -> list[str]:
+    spec = _dev_mcp_server_spec(task)
+    key = f"mcp_servers.{DEV_MCP_SERVER_NAME}"
+    env_toml = "{" + ",".join(f"{k}={_toml_str(v)}" for k, v in spec["env"].items()) + "}"
+    args_toml = "[" + ",".join(_toml_str(a) for a in spec["args"]) + "]"
+    return [
+        "-c", f"{key}.command={_toml_str(spec['command'])}",
+        "-c", f"{key}.args={args_toml}",
+        "-c", f"{key}.env={env_toml}",
+        "-c", f'{key}.default_tools_approval_mode="approve"',
+        # Approval-gated calls wait inline for the user's click (~40 s).
+        "-c", f"{key}.tool_timeout_sec=180",
+    ]
+
+
+def _claude_dev_mcp_args(task: ProjectTask) -> list[str]:
+    config = {"mcpServers": {DEV_MCP_SERVER_NAME: {"type": "stdio", **_dev_mcp_server_spec(task)}}}
+    return [
+        "--mcp-config", json.dumps(config, separators=(",", ":")),
+        "--allowedTools", f"mcp__{DEV_MCP_SERVER_NAME}",
+    ]
+
+
+def _cursor_mcp_state_dir() -> Path:
+    d = Path(os.path.expanduser("~")) / ".decisions" / "cursor-mcp-backups"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d
+
+
+def _cursor_mcp_keys(target: Path) -> tuple[Path, Path, Path]:
+    import hashlib as _hashlib
+
+    key = _hashlib.sha256(str(target).encode()).hexdigest()[:24]
+    d = _cursor_mcp_state_dir()
+    return d / f"{key}.orig", d / f"{key}.created", d / f"{key}.lock"
+
+
+def _cursor_mcp_recover(target: Path) -> None:
+    """Undo a run that crashed before its finally block (backup outside the project)."""
+    orig, created, _lock = _cursor_mcp_keys(target)
+    if orig.exists():
+        meta = json.loads(orig.read_text())
+        target.write_bytes(bytes.fromhex(meta["data"]))
+        os.chmod(target, meta["mode"])
+        os.utime(target, ns=(meta["atime_ns"], meta["mtime_ns"]))
+        orig.unlink()
+    elif created.exists():
+        target.unlink(missing_ok=True)
+        if json.loads(created.read_text()).get("created_dir"):
+            try:
+                target.parent.rmdir()
+            except OSError:
+                pass
+        created.unlink()
+
+
+def _cursor_dev_mcp_install(task: ProjectTask) -> Optional[dict[str, Any]]:
+    """cursor-agent has no per-run MCP flag (CURSOR_CONFIG_DIR / --add-dir are ignored for
+    MCP), so for development turns we add our server to <project>/.cursor/mcp.json for the
+    run only. An existing user file is merged and restored byte-for-byte afterwards; a
+    backup outside the project allows recovery after a crash. Opt out with
+    DECISIONS_CURSOR_DEV_MCP=off."""
+    if os.environ.get(_CURSOR_DEV_MCP_ENV, "").strip().lower() in {"off", "0", "false"} or not _dev_tools_enabled(task):
+        return None
+    import fcntl as _fcntl
+
+    target = Path(task.folder) / ".cursor" / "mcp.json"
+    orig, created, lock_path = _cursor_mcp_keys(target)
+    lock = open(lock_path, "w")
+    try:
+        _fcntl.flock(lock, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        return None  # another Cursor dev run on this project holds it; never stack edits
+    try:
+        _cursor_mcp_recover(target)
+        entry = _dev_mcp_server_spec(task)
+        if target.exists():
+            raw = target.read_bytes()
+            try:
+                data = json.loads(raw or b"{}")
+            except ValueError:
+                lock.close()
+                return None  # unparseable user file: leave it alone
+            if not isinstance(data, dict):
+                lock.close()
+                return None
+            st = target.stat()
+            orig.write_text(json.dumps({"data": raw.hex(), "mode": st.st_mode & 0o7777,
+                                        "atime_ns": st.st_atime_ns, "mtime_ns": st.st_mtime_ns}))
+            os.chmod(orig, 0o600)
+            servers = data.get("mcpServers") if isinstance(data.get("mcpServers"), dict) else {}
+            merged = {**data, "mcpServers": {**servers, DEV_MCP_SERVER_NAME: entry}}
+            target.write_text(json.dumps(merged, indent=1))
+            return {"path": target, "lock": lock, "restored_from": orig}
+        created_dir = not target.parent.exists()
+        created.write_text(json.dumps({"created_dir": created_dir}))
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(json.dumps({"mcpServers": {DEV_MCP_SERVER_NAME: entry}}, indent=1))
+        return {"path": target, "lock": lock, "restored_from": None}
+    except Exception:
+        try:
+            _cursor_mcp_recover(target)
+        finally:
+            lock.close()
+        return None
+
+
+def _cursor_dev_mcp_remove(state: Optional[dict[str, Any]]) -> None:
+    if not state:
+        return
+    try:
+        _cursor_mcp_recover(Path(state["path"]))
+    except Exception:
+        pass
+    finally:
+        try:
+            state["lock"].close()
+        except Exception:
+            pass
+
+
 def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
     """Build a terminal Pi invocation that honours the resolved workflow route."""
     # JSON mode exposes model text, tool calls and errors as they happen. Text
@@ -681,6 +850,17 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         if str(task.adapter_options.get("step_role") or "").strip().lower() in {"review", "validation"}:
             read_only_tools += ",web_search,web_fetch"
         command.extend(["--tools", read_only_tools])
+    elif _dev_tools_enabled(task):
+        # Development-agent media tools (image_generate, vision_analyze,
+        # video_generate) via distr/core/workflow/dev_agent_tools.py.
+        # computer_use is intentionally not exposed (disabled scaffold).
+        import os as _os
+        import sys as _sys
+        _os.environ.setdefault("DECISIONS_PYTHON", _sys.executable)
+        command.extend([
+            "--extension",
+            str(Path(__file__).resolve().parent / "pi_extensions" / "dev_media_tools.ts"),
+        ])
     model = str(task.model or "").strip()
     provider = str(task.adapter_options.get("model_provider") or "").strip()
     if model and model != "auto":
@@ -865,6 +1045,8 @@ async def _finalize_pi_workflow_session(
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
+            # ``pi -p`` waits for stdin EOF when stdin is an open pipe/TTY.
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=task.folder,
@@ -890,9 +1072,9 @@ async def _finalize_pi_workflow_session(
                 process.terminate()
                 break
             if not raw:
-                if process.returncode is not None:
-                    break
-                continue
+                # EOF: stdout is closed, so nothing more can arrive. Looping on
+                # readline() here spun until the child was reaped.
+                break
             decoded = raw.decode(errors="replace").strip()
             if not decoded:
                 continue
@@ -919,7 +1101,12 @@ async def _finalize_pi_workflow_session(
             await asyncio.wait_for(process.wait(), timeout=2.0)
         except asyncio.TimeoutError:
             process.terminate()
-            await process.wait()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                # Never block forever on a child that ignores SIGTERM.
+                process.kill()
+                await process.wait()
     except Exception as exc:
         errors.append(str(exc))
     finally:
@@ -1337,6 +1524,9 @@ class PiBackend(ProjectCliBackend):
         try:
             process = await asyncio.create_subprocess_exec(
                 *_pi_print_command(pi_path, task),
+                # ``pi -p`` stalls until stdin EOF if stdin is inherited open.
+                stdin=asyncio.subprocess.DEVNULL,
+                env=({**os.environ, **_dev_tool_env(task)} if _dev_tools_enabled(task) else None),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=task.folder,
@@ -1765,6 +1955,8 @@ class OneShotCliBackend(ProjectCliBackend):
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=task.folder,
+                # One-shot CLIs get the instruction via argv; never inherit stdin.
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._task_subprocess_env(task),
@@ -1994,8 +2186,17 @@ class CursorBackend(OneShotCliBackend):
             "[/DECISIONS CURSOR CALLBACK]\n\n"
         )
 
+    async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
+        installed = _cursor_dev_mcp_install(task)
+        try:
+            return await super().send_task(task, on_event)
+        finally:
+            _cursor_dev_mcp_remove(installed)
+
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
         cmd = [executable] + self.command_args
+        if os.environ.get(_CURSOR_DEV_MCP_ENV, "").strip().lower() not in {"off", "0", "false"} and _dev_tools_enabled(task):
+            cmd += ["--approve-mcps"]
         if task.model and task.model != "auto":
             cmd += ["--model", task.model]
         return cmd + [self._callback_instruction(task) + task.instruction]
@@ -2306,7 +2507,9 @@ class ClaudeCodeBackend(OneShotCliBackend):
     setup_instructions = "Install Claude Code and authenticate it, then make sure the claude command is on PATH."
 
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
-        cmd = [executable] + self.command_args
+        # --mcp-config/--allowedTools are variadic: keep them before -p.
+        dev = _claude_dev_mcp_args(task) if _dev_tools_enabled(task) else []
+        cmd = [executable] + dev + self.command_args
         if task.model and task.model != "default":
             cmd += ["--model", task.model]
         return cmd + [task.instruction]
@@ -2317,7 +2520,7 @@ class CodexBackend(OneShotCliBackend):
     name = "Codex CLI"
     description = "OpenAI Codex CLI backend for project implementation tasks."
     executable_candidates = ["codex"]
-    command_args = ["exec"]
+    command_args = ["exec", "--skip-git-repo-check"]
     structured_jsonl = True
     setup_instructions = (
         "Install and authenticate Codex CLI, then make sure the codex command is on PATH."
@@ -2362,6 +2565,8 @@ class CodexBackend(OneShotCliBackend):
             "--event-type codex_prompt_submitted --status observed --message \"<what the human asked or changed>\"\n"
             "Use event_type values: codex_started, codex_prompt_submitted, user_steer, codex_waiting, codex_interrupted, "
             "codex_progress, codex_completed, codex_failed, codex_needs_input.\n"
+            "Callback reporting is best-effort observability only. DecisionsAI captures the final CLI result directly, so "
+            "an unavailable reporter or callback must not block the ticket or be listed under Blockers.\n"
             "Do not wait until the final answer if the human submits another prompt, changes direction, "
             "or adds constraints mid-run.\n"
             "[/DECISIONS CODEX CALLBACK]\n\n"
@@ -2470,6 +2675,8 @@ class CodexBackend(OneShotCliBackend):
         tier = (task.codex_service_tier or "").strip()
         if tier:
             cmd += ["-c", f'service_tier="{tier}"']
+        if _dev_tools_enabled(task):
+            cmd += _codex_dev_mcp_args(task)
         return cmd + [self._callback_instruction(task) + task.instruction]
 
 
@@ -3118,6 +3325,9 @@ async def run_project_task(
             "audit_id": audit_id,
             "backend_id": backend_id,
             "model": selected_model,
+            "model_provider": str(task.adapter_options.get("model_provider") or ""),
+            "reasoning_effort": task.codex_reasoning_effort,
+            "service_tier": task.codex_service_tier,
             "complexity": ticket_complexity,
             "origin": origin,
             "instruction": instruction,

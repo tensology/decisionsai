@@ -3403,15 +3403,33 @@ class KanbanTicketTool(BaseTool):
                     )
                 except Exception:
                     logger.debug("Could not record WhatsApp CLI failure", exc_info=True)
+                self._mark_jira_execution_failed(
+                    ticket_id_val, str(result.error or result.output or "CLI run failed"), audit_id
+                )
                 return voice_then_reference(
                     "The project CLI did not accept that run; the error detail is below.",
                     f"[{route['backend']} — {project_name}] Ticket #{ticket_id_val} failed: {result.error or result.output}",
                 )
             except Exception as exc:
+                self._mark_jira_execution_failed(ticket_id_val, f"CLI dispatch failed: {exc}", audit_id)
                 return voice_then_reference(
                     "The project CLI run failed before it could start.",
                     f"Project CLI dispatch failed: {exc}",
                 )
+
+    @staticmethod
+    def _mark_jira_execution_failed(ticket_id: Any, error: str, run_id: Any = None) -> None:
+        """Leave no Jira lifecycle stuck on 'executing' after a failed CLI run."""
+        try:
+            from distr.core.kanban.jira_work_lifecycle import mark_execution_failed
+
+            mark_execution_failed(
+                ticket_id=int(ticket_id),
+                error=error[:500],
+                run_id=int(run_id) if run_id else None,
+            )
+        except Exception:
+            logger.debug("Could not mark Jira lifecycle failed", exc_info=True)
 
     def _action_workflow_overview(self) -> str:
         """Return a concise status report of active workflow runs."""

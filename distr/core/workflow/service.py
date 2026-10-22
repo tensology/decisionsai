@@ -211,6 +211,7 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "source_contact": getattr(ticket, "source_contact", None) if ticket else None,
         "source_url": getattr(ticket, "source_url", None) if ticket else None,
         "execution_route": run_data.get("execution_route") or {},
+        "route_receipt": run_data.get("route_receipt") or {},
         "pending_route_approval": run_data.get("pending_route_approval") or {},
         "provider_free_candidates": (run_data.get("provider_free_candidates") or [])[:3],
         "provider_preflight": run_data.get("provider_preflight") or {},

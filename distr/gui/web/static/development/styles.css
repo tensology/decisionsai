@@ -1,11 +1,25 @@
-@import './shell.css';
-@import './shared/components.css';
-@import './threads/styles.css';
-@import './sidebar/styles.css';
-@import './boards/styles.css';
-@import './planning/styles.css?v=20261003-sitemap-groups';
-@import './incoming/styles.css';
-@import './automations/styles.css';
-@import './workflows/styles.css?v=20261003-workflow-scroll';
-@import './terminals/styles.css';
-@import './reports/styles.css';
+@import './shell.css?v=20261022-composer6';
+@import './shared/components.css?v=20261022-layout2';
+@import './threads/styles.css?v=20261022-composetop';
+@import './sidebar/styles.css?v=20261022-selthread';
+@import './boards/styles.css?v=20261022-layout2';
+@import './planning/styles.css?v=20261022-layout2';
+@import './incoming/styles.css?v=20261022-incomingpad';
+@import './automations/styles.css?v=20261022-calendar';
+@import './workflows/styles.css?v=20261022-btncolor';
+@import './terminals/styles.css?v=20261022-layout2';
+@import './reports/styles.css?v=20261022-layout2';
+
+/* Shared page layout (2026-10-22): every Development page uses the Reports gutter (--page-gutter from shared base.css). */
+.reports-workspace { padding: var(--page-gutter, 24px); }
+.workflow-home,
+.terminal-home-workspace,
+.plan-home,
+.scheduled-workspace-inner { box-sizing: border-box; width: 100%; max-width: var(--page-max-width, none); margin: 0; padding: var(--page-gutter, 24px); }
+.terminal-detail-shell { box-sizing: border-box; width: 100%; max-width: var(--page-max-width, none); margin: 0; padding: var(--page-gutter, 24px); }
+.development-kanban-header { padding: 0 var(--page-gutter, 24px); }
+.development-kanban-lanes,
+.development-kanban-lanes.list-view { padding: var(--page-gutter, 24px); }
+/* Kanban columns share the available width; scroll horizontally only when they no longer fit. */
+.development-kanban-lane { flex: 1 1 0; min-width: 260px; }
+.terminal-project-command { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

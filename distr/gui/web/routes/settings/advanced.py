@@ -179,9 +179,6 @@ def register_routes(router, templates):
         settings["orchestrator_validator_model"] = (settings_data.orchestrator_validator_model or "").strip()
         settings["orchestrator_correction_provider"] = (settings_data.orchestrator_correction_provider or "").strip()
         settings["orchestrator_correction_model"] = (settings_data.orchestrator_correction_model or "").strip()
-        if settings["orchestrator_provider"] or settings["orchestrator_model"]:
-            settings["workflow_llm_provider"] = settings["orchestrator_provider"]
-            settings["workflow_llm_model"] = settings["orchestrator_model"]
         save_settings_to_db(settings)
 
         return JSONResponse({"success": True, "message": "Advanced settings saved"})

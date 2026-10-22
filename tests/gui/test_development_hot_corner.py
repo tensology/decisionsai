@@ -352,6 +352,18 @@ def test_thread_title_opens_and_timer_controls_use_shared_actions(monkeypatch) -
     panel._refresh_threads()
     project = _project_item(panel, 9)
     thread = project.child(0)
+    panel.resize(360, 600)
+    panel.show()
+    app.processEvents()
+    panel._show_context_menu(panel.tree.visualItemRect(thread).center())
+    timer_actions = panel._context_menu.actions()
+    assert timer_actions[0].text() == "Timer"
+    assert timer_actions[0].isSeparator()
+    assert [action.text() for action in timer_actions[1:]] == [
+        "Stop timer",
+        "Stop and reset timer",
+    ]
+    panel._context_menu.close()
     panel._handle_item_click(thread, 0)
     panel._update_thread_time(42, "pause")
     panel._update_thread_time(42, "reset")

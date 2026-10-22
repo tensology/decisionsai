@@ -53,36 +53,22 @@ def test_scheduled_actions_remain_available_without_a_development_sidebar_entry(
     assert 'id="sidebar-automations-toggle"' not in studio
     assert 'id="sidebar-automation-add"' not in studio
     assert 'id="scheduled-workspace"' in studio
-    assert 'id="scheduled-prompt-form"' in studio
-    assert 'id="scheduled-row-menu"' in studio
+    assert 'id="scheduled-prompt-form"' not in studio  # removed on purpose 2026-10-22
+    assert 'id="scheduled-row-menu"' not in studio  # removed on purpose 2026-10-22
     assert '"/automations/static/js"' in server
     assert "create_automation_routes" in server
 
 
-def test_scheduled_task_rows_expose_a_scoped_overflow_menu():
+def test_scheduled_prompt_ui_is_removed():
+    """The scheduled-prompts UI (row menu, search, bulk delete) was removed on purpose 2026-10-22."""
     javascript = development_assets(".js")
     html = development_template()
 
-    assert "data-scheduled-menu" in javascript
-    assert "openScheduledRowMenu" in javascript
-    assert "data-scheduled-menu-action=\"run\"" in html
-    assert "data-scheduled-menu-action=\"edit\"" in html
-    assert "data-scheduled-menu-action=\"toggle\"" in html
-    assert "data-scheduled-menu-action=\"delete\"" in html
-
-
-def test_scheduled_task_search_exposes_guarded_bulk_delete():
-    javascript = development_assets(".js")
-    html = development_template()
-
-    assert 'id="scheduled-search-input"' in html
-    assert 'id="scheduled-delete-all"' in html
-    assert "Delete all automations" in html
-    assert "deleteAllScheduledAutomations" in javascript
-    assert "title: 'Delete all automations'" in javascript
-    assert "confirmLabel: 'Delete all'" in javascript
-    assert "This cannot be undone." in javascript
-    assert "api('/automations?confirm=true', { method: 'DELETE' })" in " ".join(javascript.split())
+    for marker in ('id="scheduled-row-menu"', 'data-scheduled-menu-action=', 'id="scheduled-search-input"',
+                   'id="scheduled-delete-all"', 'Delete all automations'):
+        assert marker not in html, marker
+    for marker in ("openScheduledRowMenu", "deleteAllScheduledAutomations", "title: 'Delete all automations'"):
+        assert marker not in javascript, marker
 
 
 def test_development_sidebar_exposes_minimal_placeholder_destinations():
@@ -805,7 +791,9 @@ def test_removed_cv_parser_nav_and_workflow_home_copy():
     assert "currently active" not in javascript
     assert "<h2>Running now</h2>" in javascript
     assert "${runs.length} running" in javascript
-    assert "kind: 'reusable'" in javascript
-    assert javascript.index("kind: 'reusable'") < javascript.index("kind: 'imported'") < javascript.index("kind: 'test'")
-    assert "Are you sure? Do you want to push this into a workflow?" in javascript
+    category = javascript[javascript.index("function workflowLibraryCategory("):]
+    category = category[: category.index("function sortedWorkflowLibraryRows(")]
+    assert category.count("return 'reusable';") == 2  # dev preset first, default last
+    assert category.index("return 'reusable';") < category.index("return 'test';") < category.index("return 'imported';") < category.rindex("return 'reusable';")
+    assert "Are you sure? Do you want to push this into a workflow?" not in javascript  # removed in 2c51270e
     assert ">Edit step</button>" in javascript

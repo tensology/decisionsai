@@ -42,6 +42,14 @@ def _is_available_model_entry(model) -> bool:
     return True
 
 
+def _catalog_cache_key(provider_key: str, llm_type: str) -> str:
+    """Model-catalog cache key. Pixazo's catalog is fetched per modality (image/video),
+    so it must not share one cache file across Image and Video Generation."""
+    if provider_key == "pixazo" and llm_type in {"image", "video"}:
+        return f"pixazo_{llm_type}"
+    return provider_key
+
+
 def _supports_llm_type(model, llm_type: str, provider_key: str) -> bool:
     """Return True when a catalog model is suitable for the requested LLM type."""
     if llm_type == "planning":
@@ -246,8 +254,6 @@ def register_routes(router, templates):
             "image_model": _model(settings.get("image_llm_model"), "image"),
             "video_provider": _provider(settings.get("video_llm_provider")),
             "video_model": _model(settings.get("video_llm_model"), "video"),
-            "workflow_provider": ((settings.get("workflow_llm_provider") or "").strip().lower() or ""),
-            "workflow_model": (settings.get("workflow_llm_model") or "").strip(),
             "computer_use_provider": (settings.get("computer_use_provider") or "").strip().lower() or "",
             "computer_use_model": (settings.get("computer_use_model") or "").strip(),
             "project_cli_low_backend": normalize_route_backend_id(settings.get("project_cli_low_backend") or "cursor"),
@@ -262,6 +268,13 @@ def register_routes(router, templates):
             "project_cli_medium_codex_speed": (settings.get("project_cli_medium_codex_speed") or "").strip(),
             "project_cli_high_codex_intelligence": (settings.get("project_cli_high_codex_intelligence") or "").strip(),
             "project_cli_high_codex_speed": (settings.get("project_cli_high_codex_speed") or "").strip(),
+            # Read-only here; edited in Workflows -> Complexity routing.
+            **{
+                f"project_cli_{level}_{suffix}": str(settings.get(f"project_cli_{level}_{suffix}") or "").strip()
+                for level in ("low", "medium", "high")
+                for suffix in ("model_provider", "fallback_backend", "fallback_model", "fallback_model_provider")
+            },
+            **{f"project_cli_{level}_auto": bool(settings.get(f"project_cli_{level}_auto")) for level in ("low", "medium", "high")},
             "laya_mode": get_mode(),
             "instant_dictation": settings.get("instant_dictation", True),
         })
@@ -289,8 +302,6 @@ def register_routes(router, templates):
                 (s.get("image_llm_model") or "").strip(),
                 (s.get("video_llm_provider") or "").strip().lower(),
                 (s.get("video_llm_model") or "").strip(),
-                (s.get("workflow_llm_provider") or "").strip().lower(),
-                (s.get("workflow_llm_model") or "").strip(),
                 (s.get("computer_use_provider") or "").strip().lower(),
                 (s.get("computer_use_model") or "").strip(),
                 (s.get("project_cli_low_backend") or "").strip().lower(),
@@ -355,34 +366,9 @@ def register_routes(router, templates):
         settings["image_llm_model"] = (settings_data.image_model or "").strip()
         settings["video_llm_provider"] = (settings_data.video_provider or "").strip()
         settings["video_llm_model"] = (settings_data.video_model or "").strip()
-        workflow_provider = (settings_data.workflow_provider or "").strip()
-        workflow_model = (settings_data.workflow_model or "").strip()
-        settings["workflow_llm_provider"] = workflow_provider
-        settings["workflow_llm_model"] = workflow_model
         settings["computer_use_provider"] = (settings_data.computer_use_provider or "").strip()
         settings["computer_use_model"] = (settings_data.computer_use_model or "").strip()
-        from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
-        from distr.core.project_cli_backends import normalize_route_backend_id
-        settings["project_cli_low_backend"] = normalize_route_backend_id(settings_data.project_cli_low_backend or "cursor")
-        settings["project_cli_low_model"] = (settings_data.project_cli_low_model or "auto").strip()
-        settings["project_cli_medium_backend"] = normalize_route_backend_id(settings_data.project_cli_medium_backend or "codex")
-        settings["project_cli_medium_model"] = (settings_data.project_cli_medium_model or "auto").strip()
-        settings["project_cli_high_backend"] = normalize_route_backend_id(settings_data.project_cli_high_backend or "codex")
-        settings["project_cli_high_model"] = (settings_data.project_cli_high_model or "gpt-5.3-codex").strip()
-        settings["project_cli_low_codex_intelligence"] = normalize_codex_intelligence(
-            settings_data.project_cli_low_codex_intelligence
-        )
-        settings["project_cli_low_codex_speed"] = normalize_codex_speed(settings_data.project_cli_low_codex_speed)
-        settings["project_cli_medium_codex_intelligence"] = normalize_codex_intelligence(
-            settings_data.project_cli_medium_codex_intelligence
-        )
-        settings["project_cli_medium_codex_speed"] = normalize_codex_speed(
-            settings_data.project_cli_medium_codex_speed
-        )
-        settings["project_cli_high_codex_intelligence"] = normalize_codex_intelligence(
-            settings_data.project_cli_high_codex_intelligence
-        )
-        settings["project_cli_high_codex_speed"] = normalize_codex_speed(settings_data.project_cli_high_codex_speed)
+        # Complexity routing is edited only in Workflows > Complexity routing.
         from distr.core.laya_runtime import set_mode
         set_mode(settings_data.laya_mode)
         settings["instant_dictation"] = bool(settings_data.instant_dictation)
@@ -664,7 +650,7 @@ def register_routes(router, templates):
         fetcher, auth_fingerprint = _provider_fetcher_and_fingerprint()
         if fetcher:
             models = get_or_fetch_model_catalog(
-                provider_key,
+                _catalog_cache_key(provider_key, type),
                 fetcher=fetcher,
                 auth_fingerprint=auth_fingerprint,
             )
@@ -680,7 +666,9 @@ def register_routes(router, templates):
                 return isinstance(m, dict)
 
             filtered = [m for m in models if _supports_llm_type(m, type, provider_key)]
-            if type in {"image", "planning"}:
+            # Media types are strict: never fall back to the unfiltered list
+            # (that is how image models leaked into Video Generation).
+            if type in {"image", "video", "planning"}:
                 models = filtered
             elif filtered:
                 models = filtered
@@ -785,7 +773,7 @@ def register_routes(router, templates):
         if fetcher:
             try:
                 catalog_models = get_or_fetch_model_catalog(
-                    provider_key,
+                    _catalog_cache_key(provider_key, llm_type),
                     fetcher=fetcher,
                     auth_fingerprint=auth_fingerprint,
                 )

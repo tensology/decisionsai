@@ -1,19 +1,14 @@
 <!-- LLMs Tab -->
-    <div class="mb-6 pb-4 border-b border-[#565869]">
-        <h2 class="text-xl font-semibold text-white mb-1">LLMs</h2>
-        <p class="text-sm text-gray-400">Configure LLM providers and models</p>
-    </div>
-
     <div class="llm-settings-layout">
         <div class="llm-config-tabs" role="tablist" aria-label="LLM settings groups">
             <button type="button" class="llm-config-tab is-active" data-llm-subtab="speech" role="tab" aria-selected="true">Speech to Text</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="conversational" role="tab" aria-selected="false">Conversational</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="workflow" role="tab" aria-selected="false">Development</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="coding" role="tab" aria-selected="false">Coding</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="vision" role="tab" aria-selected="false">Vision</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="computer_use" role="tab" aria-selected="false">Computer Use</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="image" role="tab" aria-selected="false">Image Generation</button>
             <button type="button" class="llm-config-tab" data-llm-subtab="video" role="tab" aria-selected="false">Video Generation</button>
-            <button type="button" class="llm-config-tab" data-llm-subtab="workflow" role="tab" aria-selected="false">Workflow</button>
         </div>
 
         <!-- Speech to Text -->
@@ -119,11 +114,6 @@
 
         <!-- Computer Use -->
         <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="computer_use">
-            <p class="mb-3 text-center text-xs text-gray-500">
-                <span class="block">Pixel-precise screen element location for desktop and browser automation.</span>
-                <span class="block">Requires Computer Use support (e.g. Claude Sonnet/Opus).</span>
-                <span class="block">Leave empty to use accessibility tree only.</span>
-            </p>
             <div class="flex items-center gap-4 llms-row">
                 <label for="computer_use_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
                 <div class="flex-1">
@@ -178,10 +168,6 @@
 
         <!-- Video generation -->
         <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="video">
-            <p class="mb-3 text-center text-xs text-gray-500">
-                <span class="block">Text/image-to-video via Pixazo.</span>
-                <span class="block">Requires Pixazo to be configured in Third Party Vendors.</span>
-            </p>
             <div class="flex items-center gap-4 llms-row">
                 <label for="video_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
                 <div class="flex-1">
@@ -206,96 +192,73 @@
 
         <!-- Workflow -->
         <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="workflow">
-            <p class="mb-3 text-center text-xs text-gray-500">
-                <span class="block">Dedicated model for workflow execution.</span>
-                <span class="block">Falls back to Coding, then Conversational, if empty.</span>
-            </p>
-            <div class="flex items-center gap-4 llms-row">
-                <label for="workflow_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
-                <div class="flex-1">
-                    <select id="workflow_provider" name="workflow_provider"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="">Inherit from Coding</option>
-                    </select>
-                </div>
-                <label for="workflow_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
-                <div class="llms-model-with-action flex min-w-0 flex-1 items-center gap-4">
-                    <select id="workflow_model" name="workflow_model"
-                            class="min-w-0 flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="">Select model...</option>
-                    </select>
-                    <button type="button" id="workflow_download" class="h-8 w-8 flex-shrink-0 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
-                        ⬇
-                    </button>
-                </div>
-            </div>
-            <div class="mt-5 rounded-lg border border-[#565869] bg-[#20264a] p-5 llm-settings-routing">
-                <h4 class="mb-1 text-center text-base font-semibold text-white">Project Ticket Routing</h4>
-                <p class="mb-4 text-center text-xs text-gray-500">Global backend and model used when tickets are sent to project implementation agents.</p>
-                <div id="project_cli_routes" class="space-y-3">
-                    {% for level, label in [("low", "Low"), ("medium", "Medium"), ("high", "High")] %}
-                    <div class="project-cli-route-row">
-                        <div class="project-cli-route-label text-sm font-medium text-[#ececf1]">{{ label }}</div>
-                        <div class="project-cli-select-wrap project-cli-select-wrap--backend">
-                            <select id="project_cli_{{ level }}_backend" class="project-cli-backend bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}" aria-label="{{ label }} CLI backend">
-                                <option value="">Loading CLI backends...</option>
-                            </select>
-                            <span id="project_cli_{{ level }}_backend_status" class="project-cli-status-dot project-cli-status-dot--idle" aria-hidden="true"></span>
-                        </div>
-                        <div class="project-cli-select-wrap">
-                            <select id="project_cli_{{ level }}_model" class="project-cli-model bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}" aria-label="{{ label }} CLI model">
-                                <option value="">Loading models...</option>
-                            </select>
-                        </div>
+            <div class="rounded-lg border border-[#565869] bg-[#20264a] p-5 llm-settings-routing">
+                <h4 class="mb-4 text-center text-base font-semibold text-white">Complexity routing</h4>
+                <div id="llms_exec_routing" class="llms-exec-routing">
+                    <div id="llms_exec_routes" class="llms-exec-routes"><p class="text-center text-sm text-gray-400">Loading...</p></div>
+                    <div class="mt-4 flex flex-col items-center gap-2">
+                        <button type="button" id="llms_exec_routing_save" class="px-4 py-1.5 rounded-md text-sm font-medium bg-[#10a37f] text-white hover:bg-[#0d8f70] disabled:opacity-40 disabled:cursor-not-allowed" disabled>Save routing</button>
+                        <p id="llms_exec_routing_status" class="min-h-4 text-center text-xs text-gray-500" aria-live="polite"></p>
                     </div>
-                    {% endfor %}
                 </div>
             </div>
+            <!-- automodel 2026-10-22: global CLI harness + model for automations -->
+            <div class="mt-4 rounded-lg border border-[#565869] bg-[#20264a] p-5 llm-settings-routing" id="automation_cli_default_card">
+                <h4 class="mb-1 text-center text-base font-semibold text-white">Automations</h4>
+                <p class="mb-4 text-center text-xs text-gray-500">Default harness and model for automations. Each automation can override this; <em>Use Complexity routing</em> keeps today's behaviour.</p>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <div class="text-sm font-medium text-[#ececf1]" style="width:64px">Default</div>
+                    <select id="automation_cli_backend" aria-label="Automation harness" style="background:#2a2b32;color:#ececf1;border:1px solid #565869;border-radius:8px;padding:6px 10px;font-size:13px;min-width:0;flex:1 1 200px">
+                        <option value="">Use Complexity routing</option>
+                    </select>
+                    <select id="automation_cli_model" aria-label="Automation model" style="background:#2a2b32;color:#ececf1;border:1px solid #565869;border-radius:8px;padding:6px 10px;font-size:13px;min-width:0;flex:1 1 200px" disabled>
+                        <option value="">&mdash;</option>
+                    </select>
+                </div>
+                <div class="mt-4 flex justify-center">
+                    <button type="button" id="automation_cli_save" class="px-4 py-1.5 rounded-md text-sm font-medium bg-[#10a37f] text-white hover:bg-[#0d8f70]" style="flex:none">Save</button>
+                </div>
+                <p id="automation_cli_status" class="mt-2 text-center text-[11px] text-gray-500" role="status"></p>
+            </div>
+            <!-- Decision engine -->
+            <section class="mt-4 rounded-lg border border-[#565869] bg-[#20264a] p-5" aria-labelledby="laya_heading">
+                <div class="flex flex-wrap items-start justify-between gap-3 border-b border-[#34364a] pb-4">
+                    <div>
+                        <h3 id="laya_heading" class="text-base font-semibold text-white">Laya decision engine</h3>
+                        <p class="mt-1 text-xs text-gray-400">Controls automatic routing and triage for Development threads. Generative work still runs on the selected coding route.</p>
+                    </div>
+                    <div id="laya_status" class="rounded-full border border-[#565869] px-3 py-1 text-xs text-gray-300" role="status">Checking...</div>
+                </div>
+
+                <fieldset class="laya-mode-cards mt-4" aria-describedby="laya_mode_help">
+                    <legend class="sr-only">Laya routing mode</legend>
+                    {% for value, title, description in [
+                        ("off", "Off", "Use the existing deterministic router."),
+                        ("auto", "Auto", "Use Laya only when its answer is confident."),
+                        ("prefer", "Prefer Laya", "Use Laya for every eligible structured decision.")
+                    ] %}
+                    <label class="laya-mode-card">
+                        <input type="radio" name="laya_mode" value="{{ value }}" class="laya-mode-card__input" {% if value == "off" %}checked{% endif %}>
+                        <span class="laya-mode-card__title">{{ title }}</span>
+                        <span class="laya-mode-card__desc">{{ description }}</span>
+                    </label>
+                    {% endfor %}
+                </fieldset>
+                <p id="laya_mode_help" class="mt-3 text-xs text-gray-500">Failures always fall back to the existing router. Laya never generates code or prose.</p>
+
+                <details class="mt-4 rounded-lg border border-[#34364a] bg-[#20264a] p-3">
+                    <summary class="cursor-pointer text-sm font-medium text-gray-200">Advanced maintenance</summary>
+                    <div class="mt-3 flex flex-wrap items-center gap-2">
+                        <button type="button" id="laya_install" class="rounded-md bg-[#10a37f] px-3 py-2 text-xs font-medium text-white hover:bg-[#0d8f70]">Install or repair</button>
+                        <button type="button" id="laya_update" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Update reviewed version</button>
+                        <button type="button" id="laya_test" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Test tools and routing</button>
+                        <button type="button" id="laya_remove" class="ml-auto rounded-md border border-[#7f1d1d] px-3 py-2 text-xs font-medium text-[#fca5a5] hover:bg-[#3f1d2e]">Remove</button>
+                    </div>
+                    <p id="laya_test_result" class="mt-3 min-h-5 text-xs text-gray-400" aria-live="polite"></p>
+                </details>
+            </section>
         </div>
 
-        <!-- Decision engine -->
-        <section class="mt-6 border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]" aria-labelledby="laya_heading">
-            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-[#34364a] pb-4">
-                <div>
-                    <h3 id="laya_heading" class="text-base font-semibold text-white">Laya decision engine</h3>
-                    <p class="mt-1 text-xs text-gray-400">Controls automatic routing and triage for Development threads. Generative work still runs on the selected coding route.</p>
-                </div>
-                <div id="laya_status" class="rounded-full border border-[#565869] px-3 py-1 text-xs text-gray-300" role="status">Checking...</div>
-            </div>
-
-            <fieldset class="mt-4 grid gap-3 md:grid-cols-3" aria-describedby="laya_mode_help">
-                <legend class="sr-only">Laya routing mode</legend>
-                {% for value, title, description in [
-                    ("off", "Off", "Use the existing deterministic router."),
-                    ("auto", "Auto", "Use Laya only when its answer is confident."),
-                    ("prefer", "Prefer Laya", "Use Laya for every eligible structured decision.")
-                ] %}
-                <label class="cursor-pointer rounded-lg border border-[#565869] bg-[#20264a] p-3 hover:border-[#7a7c8c]">
-                    <span class="flex items-center gap-2">
-                        <input type="radio" name="laya_mode" value="{{ value }}" class="accent-[#10a37f]" {% if value == "off" %}checked{% endif %}>
-                        <span class="text-sm font-medium text-white">{{ title }}</span>
-                    </span>
-                    <span class="mt-1 block pl-5 text-xs text-gray-400">{{ description }}</span>
-                </label>
-                {% endfor %}
-            </fieldset>
-            <p id="laya_mode_help" class="mt-3 text-xs text-gray-500">Failures always fall back to the existing router. Laya never generates code or prose.</p>
-
-            <details class="mt-4 rounded-lg border border-[#34364a] bg-[#20264a] p-3">
-                <summary class="cursor-pointer text-sm font-medium text-gray-200">Advanced maintenance</summary>
-                <div class="mt-3 flex flex-wrap items-center gap-2">
-                    <button type="button" id="laya_install" class="rounded-md bg-[#10a37f] px-3 py-2 text-xs font-medium text-white hover:bg-[#0d8f70]">Install or repair</button>
-                    <button type="button" id="laya_update" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Update reviewed version</button>
-                    <button type="button" id="laya_test" class="rounded-md border border-[#565869] px-3 py-2 text-xs font-medium text-white hover:border-[#7a7c8c]">Test tools and routing</button>
-                    <button type="button" id="laya_remove" class="ml-auto rounded-md border border-[#7f1d1d] px-3 py-2 text-xs font-medium text-[#fca5a5] hover:bg-[#3f1d2e]">Remove</button>
-                </div>
-                <p id="laya_test_result" class="mt-3 min-h-5 text-xs text-gray-400" aria-live="polite"></p>
-            </details>
-        </section>
 
 
         <div class="flex justify-center pt-2">

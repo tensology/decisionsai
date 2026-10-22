@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from distr.core.db import Base, Chat
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, ProjectExecutionSession
 from distr.core.db.projects import Project
-from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, DevelopmentWorkItem
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep, DevelopmentWorkItem
 from distr.core.workflow import service
 from distr.core.workflow import development_harness, dispatcher
 from distr.core.project_cli_backends import registry
@@ -248,6 +248,52 @@ def test_execution_state_persists_terminal_provider_status_to_chat_and_ticket(mo
         stored_execution = json.loads(stored_chat.params)["development"]["execution"]
         assert stored_execution["status"] == "cancelled"
         assert db.get(KanbanTicket, ticket_id).workflow_status == "cancelled"
+
+
+def test_development_execution_state_projects_terminal_workflow_run(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(development_harness, "get_session", lambda: _session(factory))
+    with factory() as db:
+        workflow = AutoWorkflow(name="Development", workflow_type="manual")
+        chat = Chat(title="Approved work", params=json.dumps({"development": {}}))
+        db.add_all([workflow, chat])
+        db.flush()
+        step = AutoWorkflowStep(workflow_id=workflow.id, position=0, name="Report")
+        db.add(step)
+        db.flush()
+        run = AutoWorkflowRun(
+            workflow_id=workflow.id,
+            chat_id=chat.id,
+            current_step_id=step.id,
+            status="completed",
+            run_data=json.dumps({
+                "execution_route": {
+                    "backend": "codex",
+                    "model_provider": "openai",
+                    "model": "gpt-5.6-luna",
+                },
+                "result_packet": {
+                    "summary": "Verified delivery.",
+                    "audit": {"final_verdict": "pass"},
+                },
+            }),
+        )
+        db.add(run)
+        db.commit()
+        chat_id = int(chat.id)
+        run_id = int(run.id)
+
+    state = development_harness.development_execution_state(chat_id)
+
+    assert state["id"] == run_id
+    assert state["direct"] is False
+    assert state["status"] == "completed"
+    assert state["current_step_name"] == "Report"
+    assert state["route_receipt"]["selected"]["backend"] == "codex"
+    assert state["route_receipt"]["selected"]["model"] == "gpt-5.6-luna"
+    assert state["verification"]["final_verdict"] == "pass"
 
 
 def test_workflow_cancel_reconciles_linked_ticket_status(monkeypatch):

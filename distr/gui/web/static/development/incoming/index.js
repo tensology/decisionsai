@@ -149,7 +149,7 @@ export function createIncoming({ context, actions, el }) {
             .slice(-100)
             .map(
                 (item) =>
-                    `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${item.text ? `<p>${actions.escapeHtml(item.text)}</p>` : ''}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div>`
+                    `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${item.text ? `<p>${actions.escapeHtml(item.text)}</p>` : ''}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div>`
             )
             .join('');
         const snapshotActions = conversation.links
@@ -198,7 +198,7 @@ export function createIncoming({ context, actions, el }) {
                     Array.isArray(item.attachments) && item.attachments.length
                         ? `<small class="incoming-gmail-attachments">${item.attachments.length} attachment${item.attachments.length === 1 ? '' : 's'}: ${actions.escapeHtml(item.attachments.map((attachment) => attachment.filename || 'Attachment').join(', '))}</small>`
                         : '';
-                return `<section class="incoming-gmail-message"><header><div><strong>${actions.escapeHtml(item.sender || 'Unknown sender')}</strong><small>${actions.escapeHtml(item.recipient ? `To ${item.recipient}` : '')}</small></div><time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></header><div class="incoming-gmail-body">${actions.escapeHtml(item.text || item.snippet || 'No message text')}</div>${attachments}</section>`;
+                return `<section class="incoming-gmail-message" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}"><header><div><strong>${actions.escapeHtml(item.sender || 'Unknown sender')}</strong><small>${actions.escapeHtml(item.recipient ? `To ${item.recipient}` : '')}</small></div><time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></header><div class="incoming-gmail-body">${actions.escapeHtml(item.text || item.snippet || 'No message text')}</div>${attachments}</section>`;
             })
             .join('');
         return `<header class="incoming-gmail-reader-header"><div><h3>${actions.escapeHtml(conversation.label || '(No subject)')}</h3><p>${actions.escapeHtml(latest.sender || 'Unknown sender')} · ${conversation.messages.length} message${conversation.messages.length === 1 ? '' : 's'}</p></div></header><div class="incoming-gmail-messages">${messages}</div><footer>${actionHtml}</footer>`;
@@ -603,9 +603,179 @@ export function createIncoming({ context, actions, el }) {
         }
     }
 
+    // Push updates: /api/ws topic "incoming" sends {type: "incoming_message", channel, message_id}. No polling.
+    const seenPushedMessages = new Set();
+    let incomingSocket = null;
+    let incomingSocketRetry = null;
+    let incomingPushTimer = null;
+    let incomingSocketDelay = 2000;
+
+    function incomingItemKey(item) {
+        return String(item?.key || `${item?.source || ''}:${item?.database_id || item?.source_message_id || item?.id || ''}`);
+    }
+
+    // req 2026-10-22: pushed messages are patched into the existing DOM (rows replaced or prepended,
+    // reader bubbles appended, de-duplicated by id). Nothing re-renders the workspace and scroll is kept.
+    const MAIL_CHANNELS = {
+        gmail: { list: 'incoming-gmail-list', reader: 'incoming-gmail-reader', attr: 'data-incoming-gmail-thread', dataKey: 'incomingGmailThread', stateKey: 'selectedGmailThreadKey' },
+        mailshot: { list: 'incoming-mailshot-list', reader: 'incoming-mailshot-reader', attr: 'data-incoming-mailshot-thread', dataKey: 'incomingMailshotThread', stateKey: 'selectedMailshotThreadKey' },
+        telegram: { list: 'incoming-telegram-list', reader: 'incoming-telegram-reader', attr: 'data-incoming-telegram-thread', dataKey: 'incomingTelegramThread', stateKey: 'selectedTelegramThreadKey' }
+    };
+
+    function htmlToNode(html) {
+        const template = document.createElement('template');
+        template.innerHTML = html.trim();
+        return template.content.firstElementChild;
+    }
+
+    function whatsappBubbleHtml(item, conversation) {
+        return `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${item.text ? `<p>${actions.escapeHtml(item.text)}</p>` : ''}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div>`;
+    }
+
+    function mailMessageHtml(item) {
+        const attachments =
+            Array.isArray(item.attachments) && item.attachments.length
+                ? `<small class="incoming-gmail-attachments">${item.attachments.length} attachment${item.attachments.length === 1 ? '' : 's'}: ${actions.escapeHtml(item.attachments.map((attachment) => attachment.filename || 'Attachment').join(', '))}</small>`
+                : '';
+        return `<section class="incoming-gmail-message" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}"><header><div><strong>${actions.escapeHtml(item.sender || 'Unknown sender')}</strong><small>${actions.escapeHtml(item.recipient ? `To ${item.recipient}` : '')}</small></div><time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></header><div class="incoming-gmail-body">${actions.escapeHtml(item.text || item.snippet || 'No message text')}</div>${attachments}</section>`;
+    }
+
+    function appendMessagesInPlace(container, items, toHtml) {
+        if (!container || !items.length) return;
+        const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+        const top = container.scrollTop;
+        items.forEach((item) => {
+            const key = incomingItemKey(item);
+            if (container.querySelector(`[data-incoming-msg="${CSS.escape(key)}"]`)) return;
+            const node = htmlToNode(toHtml(item));
+            if (node) container.appendChild(node);
+        });
+        container.scrollTop = nearBottom ? container.scrollHeight : top;
+    }
+
+    function upsertRow(list, selector, html, bind) {
+        if (!list) return;
+        const listTop = list.scrollTop;
+        const node = htmlToNode(html);
+        if (!node) return;
+        const existing = list.querySelector(selector);
+        if (existing) existing.replaceWith(node);
+        else {
+            const firstRow = list.querySelector('[data-incoming-conversation], .incoming-gmail-thread');
+            if (firstRow) firstRow.parentElement.insertBefore(node, firstRow);
+            else {
+                list.querySelectorAll('.development-empty, .incoming-reader-empty').forEach((empty) => empty.remove());
+                list.appendChild(node);
+            }
+        }
+        bind(node);
+        list.scrollTop = listTop;
+    }
+
+    function patchIncomingInPlace(fresh) {
+        const freshKeys = new Set(fresh.map(incomingItemKey));
+        const isFresh = (item) => freshKeys.has(incomingItemKey(item));
+        const oldestFirst = (items) => items.filter(isFresh).slice().reverse();
+        ['whatsapp', 'gmail', 'mailshot', 'telegram'].forEach((source) => {
+            const conversations = incomingConversations(source);
+            const count = el(`incoming-${source}-count`);
+            if (count) count.textContent = String(conversations.length);
+            conversations
+                .filter((conversation) => conversation.messages.some(isFresh))
+                .forEach((conversation) => {
+                    if (source === 'whatsapp') {
+                        upsertRow(el('incoming-list'), `[data-incoming-conversation="${CSS.escape(conversation.key)}"]`, incomingConversationRowHtml(conversation), (row) => {
+                            row.addEventListener('click', () => {
+                                state.selectedIncomingConversationKey = row.dataset.incomingConversation || '';
+                                renderIncomingWorkspace();
+                            });
+                            row.addEventListener('contextmenu', (event) => {
+                                event.preventDefault();
+                                openIncomingLinkDialog(row.dataset.incomingConversation || '');
+                            });
+                            bindIncomingActions(row);
+                        });
+                        if (conversation.key === state.selectedIncomingConversationKey) {
+                            appendMessagesInPlace(el('incoming-whatsapp-reader')?.querySelector('.incoming-whatsapp-messages'), oldestFirst(conversation.messages), (item) => whatsappBubbleHtml(item, conversation));
+                        }
+                        return;
+                    }
+                    const config = MAIL_CHANNELS[source];
+                    upsertRow(el(config.list), `[${config.attr}="${CSS.escape(conversation.key)}"]`, mailThreadButtonHtml(conversation, state[config.stateKey], config.attr), (row) => {
+                        row.addEventListener('click', () => {
+                            state[config.stateKey] = row.dataset[config.dataKey] || '';
+                            renderIncomingWorkspace();
+                        });
+                    });
+                    if (conversation.key === state[config.stateKey]) {
+                        appendMessagesInPlace(el(config.reader)?.querySelector('.incoming-gmail-messages'), oldestFirst(conversation.messages), mailMessageHtml);
+                    }
+                });
+        });
+    }
+
+    async function applyPushedIncoming() {
+        try {
+            const data = await actions.api('/workflows/studio/incoming?limit=150');
+            const known = new Set((state.incoming || []).map(incomingItemKey));
+            const seen = new Set();
+            const fresh = (data.items || []).filter((item) => {
+                const key = incomingItemKey(item);
+                if (known.has(key) || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+            if (!fresh.length) return;
+            state.incoming = [...fresh, ...(state.incoming || [])];
+            state.incomingLinks = data.links || state.incomingLinks;
+            state.incomingChannels = data.channels || state.incomingChannels;
+            state.incomingLoadedAt = Date.now();
+            if (context.workspaceMode === 'incoming') patchIncomingInPlace(fresh);
+        } catch (_error) {
+            /* Keep the current view; the next pushed message retries. */
+        }
+    }
+
+    function handleIncomingPush(message) {
+        if (message?.type !== 'incoming_message') return;
+        const id = `${message.channel || ''}:${message.message_id ?? ''}`;
+        if (message.message_id != null && seenPushedMessages.has(id)) return;
+        seenPushedMessages.add(id);
+        clearTimeout(incomingPushTimer);
+        incomingPushTimer = setTimeout(applyPushedIncoming, 250);
+    }
+
+    function connectIncomingPush() {
+        if (incomingSocket && incomingSocket.readyState <= WebSocket.OPEN) return;
+        const token = document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+        const query = new URLSearchParams();
+        if (token) query.set('internal_token', token);
+        const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws?${query}`);
+        incomingSocket = socket;
+        socket.onopen = () => {
+            incomingSocketDelay = 2000;
+            socket.send(JSON.stringify({ subscribe_topic: 'incoming' }));
+        };
+        socket.onmessage = (event) => {
+            try {
+                handleIncomingPush(JSON.parse(event.data));
+            } catch (_) {
+                /* ignore malformed frames */
+            }
+        };
+        socket.onclose = () => {
+            if (incomingSocket !== socket) return;
+            incomingSocket = null;
+            clearTimeout(incomingSocketRetry);
+            incomingSocketRetry = setTimeout(connectIncomingPush, incomingSocketDelay);
+            incomingSocketDelay = Math.min(incomingSocketDelay * 2, 60000);
+        };
+    }
+
     function refreshIncomingData(options) {
         if (state.incomingLoad) return state.incomingLoad;
         if (!options?.force && state.incomingLoadedAt && Date.now() - state.incomingLoadedAt < 15_000) return Promise.resolve();
+        connectIncomingPush();
         state.incomingLoad = (async () => {
             try {
                 const data = await actions.api('/workflows/studio/incoming?limit=150');
@@ -647,4 +817,50 @@ export function createIncoming({ context, actions, el }) {
         renderIncomingWorkspace,
         unlinkIncomingChannel
     };
+}
+
+// 2026-10-22 height: size the visible Incoming channel panel in JS so its bottom is flush with the
+// viewport bottom at any window height (height = innerHeight - panel top). Inner lists scroll internally.
+function fitIncomingPanels() {
+    const ws = document.getElementById('incoming-workspace');
+    if (!ws) return;
+    ws.querySelectorAll('.incoming-folder-panel').forEach(panel => {
+        if (panel.classList.contains('hidden') || !panel.getClientRects().length) { panel.style.removeProperty('height'); return; }
+        const top = panel.getBoundingClientRect().top;
+        // 2026-10-22 incomingpad: stop at the workspace's bottom gutter (CSS padding-bottom on
+        // .scheduled-workspace-inner) and inside the frame's bottom border, instead of the raw viewport bottom.
+        const frame = panel.parentElement;
+        const inner = frame && frame.closest('.scheduled-workspace-inner');
+        const gutter = inner ? (parseFloat(getComputedStyle(inner).paddingBottom) || 0) : 0;
+        const frameBorder = frame ? (parseFloat(getComputedStyle(frame).borderBottomWidth) || 0) : 0;
+        const limit = window.innerHeight - gutter - frameBorder;
+        let h = Math.max(0, Math.floor(limit - top));
+        panel.style.setProperty('height', `${h}px`);
+        panel.style.setProperty('flex', '0 0 auto');
+        // Trim anything (padding/border/margin of the panel or its wrappers up to the shell) still past the viewport.
+        let over = 0;
+        for (let node = panel; node && node.id !== 'studio-shell'; node = node.parentElement) {
+            const mb = parseFloat(getComputedStyle(node).marginBottom) || 0;
+            over = Math.max(over, node.getBoundingClientRect().bottom + mb - (node === panel ? limit : window.innerHeight));
+        }
+        if (over > 0.5) panel.style.setProperty('height', `${Math.max(0, h - Math.ceil(over))}px`);
+    });
+}
+let fitIncomingFrame = 0;
+function scheduleFitIncomingPanels() {
+    if (fitIncomingFrame) return;
+    fitIncomingFrame = requestAnimationFrame(() => { fitIncomingFrame = 0; fitIncomingPanels(); });
+}
+if (typeof window !== 'undefined') {
+    window.addEventListener('resize', scheduleFitIncomingPanels);
+    const startFitIncoming = () => {
+        scheduleFitIncomingPanels();
+        const ws = document.getElementById('incoming-workspace');
+        if (!ws) return;
+        new MutationObserver(scheduleFitIncomingPanels).observe(ws, { subtree: true, attributes: true, attributeFilter: ['class', 'hidden'] });
+        if (ws.parentElement) new MutationObserver(scheduleFitIncomingPanels).observe(ws.parentElement, { attributes: true, subtree: false, childList: true });
+        new MutationObserver(scheduleFitIncomingPanels).observe(ws, { attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startFitIncoming, { once: true });
+    else startFitIncoming();
 }

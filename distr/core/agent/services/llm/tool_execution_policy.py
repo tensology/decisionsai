@@ -20,7 +20,7 @@ _NO_ACTION_PATTERNS = (
 _READ_ACTION_PREFIXES = (
     "get", "list", "read", "search", "find", "query", "check", "inspect",
     "analyze", "analyse", "show", "status", "preview", "describe", "fetch",
-    "download_status", "connection_health",
+    "download_status", "connection_health", "health", "auth_status", "connection", "whoami",
 )
 
 _READ_TOOL_PREFIXES = (
@@ -39,6 +39,7 @@ _READ_ONLY_TOOLS = {
     "memory_read",
     "memory_search",
     "orchestrator_qualification",
+    "laya_submission_status",
     "screenshot_analyzer",
     "system_info",
     "terminal_overview",
@@ -163,6 +164,81 @@ def _mutation_keys(tool_name: str, arguments: dict[str, Any]) -> tuple[str, str]
     return scope, hashlib.sha256(payload).hexdigest()
 
 
+NEW_CHAT_BLOCK_REASON = (
+    "Blocked: the assistant never creates a new chat while handling an instruction. New chats come "
+    "only from the user's own 'New chat' button. Finish one-shot actions in the current chat; send "
+    "project work to the current or named project's Development thread with development_control "
+    "(send_instruction for an existing thread, create_thread for a new one)."
+)
+
+_NEW_CHAT_PAGES = {"new chat", "new conversation", "new_chat", "new-chat", "fresh chat"}
+
+
+def is_new_chat_tool_call(tool_name: str, arguments: dict[str, Any] | None = None) -> bool:
+    """True for any tool call whose effect is spawning a new Oracle chat."""
+    name = str(tool_name or "").strip().lower()
+    args = arguments if isinstance(arguments, dict) else {}
+    if name in {"new_chat", "start_new_chat", "create_chat"}:
+        return True
+    if name == "open_page":
+        page = str(args.get("page") or args.get("page_name") or "").strip().lower()
+        return page in _NEW_CHAT_PAGES
+    return False
+
+
+_IDE_WRITE_ACTIONS = {"prompt", "amend", "create", "new", "start", "send"}
+_IDE_NAMED_RE = re.compile(r"\b(?:codex|cursor|ide)\b", re.IGNORECASE)
+
+IDE_MISROUTE_REASON = (
+    "Blocked: project work goes to a DecisionsAI Development thread, not an external IDE chat. "
+    "Use development_control: send_instruction with the current or named project's thread_id "
+    "(list_threads to find it), or create_thread with that project. Use ide_thread prompt/amend only "
+    "when the user explicitly asks for Codex, Cursor or an IDE chat."
+)
+
+
+def ide_thread_misroute_reason(tool_name: str, arguments: dict[str, Any] | None, user_text: str) -> str:
+    """routee2e 2026-10-22: 'in the DecisionsAI project, add a TODO...' went to ide_thread and spawned
+    a 'Codex IDE: DecisionsAI' chat instead of Development thread 1746."""
+    if str(tool_name or "").strip().lower() != "ide_thread":
+        return ""
+    args = arguments if isinstance(arguments, dict) else {}
+    if _action_name(args) not in _IDE_WRITE_ACTIONS:
+        return ""
+    if not str(user_text or "").strip() or _IDE_NAMED_RE.search(str(user_text)):
+        return ""
+    return IDE_MISROUTE_REASON + development_redirect_hint(args, user_text)
+
+
+def development_redirect_hint(args: dict[str, Any], user_text: str) -> str:
+    """refusal2 2026-10-22: name the exact development_control call so the model retries instead
+    of telling the user 'thread controls aren't available'. Best effort, never raises."""
+    instruction = str(args.get("amendment") or args.get("instruction") or user_text or "").strip()
+    call: dict[str, Any] = {"action": "create_thread", "instruction": instruction}
+    try:
+        from distr.core.workflow.oracle_routing_rule import existing_project_thread_id, resolve_named_project
+
+        project_id = None
+        for source in (args.get("project"), user_text):
+            project_id = resolve_named_project(str(source or ""))
+            if project_id is not None:
+                break
+        if project_id is None and str(args.get("project_id") or "").isdigit():
+            project_id = int(args["project_id"])
+        thread_id = existing_project_thread_id(project_id) if project_id is not None else None
+        if thread_id:
+            call = {"action": "send_instruction", "thread_id": thread_id, "instruction": instruction}
+        elif project_id is not None:
+            call["project_id"] = project_id
+    except Exception:
+        pass
+    return (
+        " This is a redirect, not an outage: thread controls ARE available. Call development_control now with "
+        + json.dumps(call)
+        + " and do not tell the user the tools are unavailable."
+    )
+
+
 def tool_execution_block_reason(
     owner: Any,
     tool_name: str,
@@ -171,6 +247,12 @@ def tool_execution_block_reason(
 ) -> str:
     """Block forbidden mutations and successful mutation replays within one user turn."""
     args = arguments if isinstance(arguments, dict) else {}
+    # Hard guard (Paul, 2026-10-22): instructions never spawn chats, whatever the wording.
+    if is_new_chat_tool_call(tool_name, args):
+        return NEW_CHAT_BLOCK_REASON
+    ide_reason = ide_thread_misroute_reason(tool_name, args, user_text)
+    if ide_reason:
+        return ide_reason
     if not is_mutating_tool_call(tool_name, args):
         return ""
     if no_action_requested(user_text):

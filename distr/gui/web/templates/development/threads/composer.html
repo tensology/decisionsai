@@ -1,28 +1,47 @@
 <div class="composer-layer" id="development-composer-layer">
                 <form class="studio-composer" id="studio-composer">
                     <div class="composer-scope-strip">
-                        <div class="composer-picker" id="composer-board-picker"><span>Board</span><button type="button" id="composer-board-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-board-label">No board</strong><i>⌄</i></button><div class="composer-picker-menu hidden" id="composer-board-menu" role="listbox" aria-label="Ticket board"></div></div>
-                        <div class="composer-picker" id="composer-ticket-picker"><span>Ticket</span><button type="button" id="composer-ticket-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-ticket-label">No ticket</strong><i>⌄</i></button><div class="composer-picker-menu hidden" id="composer-ticket-menu" role="listbox" aria-label="Board ticket"></div></div>
+                        <div class="composer-picker" id="composer-board-picker"><span>Board</span><button type="button" id="composer-board-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-board-label">No board</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5L11.5 6"></path></svg></button><div class="composer-picker-menu hidden" id="composer-board-menu" role="listbox" aria-label="Ticket board"></div></div>
+                        <div class="composer-picker" id="composer-ticket-picker"><span>Ticket</span><button type="button" id="composer-ticket-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-ticket-label">No ticket</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5L11.5 6"></path></svg></button><div class="composer-picker-menu hidden" id="composer-ticket-menu" role="listbox" aria-label="Board ticket"></div></div>
                         <div class="composer-skill-badges hidden" id="composer-skill-badges" aria-label="Skills attached to this prompt"></div>
-                        <span class="composer-time-controls">
-                            <span class="run-elapsed" id="run-elapsed" aria-label="Thread time">00:00:00</span>
-                            <button type="button" class="time-toggle-button" id="composer-time-toggle" aria-label="Start time tracking" title="Start time tracking" disabled><span aria-hidden="true">▶</span></button>
-                        </span>
                     </div>
                     <div class="composer-context hidden" id="composer-context"></div>
-                    <textarea id="task-prompt" rows="1" placeholder="Describe what you want to build or change" aria-label="Development instruction" disabled></textarea>
+                    <div class="composer-prompt-wrap">
+                        <textarea id="task-prompt" rows="1" placeholder="Describe what you want changed" aria-label="Development instruction" disabled></textarea>
+                            <span class="composer-time-controls">
+                                <span class="run-elapsed" id="run-elapsed" aria-label="Thread time">00:00:00</span>
+                                <button type="button" class="time-toggle-button" id="composer-time-toggle" aria-label="Start time tracking" title="Start time tracking" disabled><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m6 4 6 4-6 4z"></path></svg></span></button>
+                            </span>
+                    </div>
                     <div class="composer-toolbar">
-                        <button type="button" class="tool-button add-button" id="attach-button" aria-label="Add to chat" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">+</span></button>
-                        <div class="composer-action-menu hidden" id="composer-action-menu" role="menu" aria-label="Add to development chat">
-                            <button type="button" role="menuitem" data-composer-action="files"><span aria-hidden="true">⌁</span><span><strong>Add files</strong><small>Select one or more files</small></span></button>
-                            <label class="composer-skill-search"><span aria-hidden="true">⌕</span><input id="composer-skill-search" type="search" placeholder="Search skills" aria-label="Search installed skills"></label>
-                            <div class="composer-skill-list" id="composer-skill-list" role="group" aria-label="Installed skills"></div>
+                        <button type="button" class="tool-button add-button" id="attach-button" aria-label="Add to prompt" data-tooltip="Attach files"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"></path></svg></span></button>
+                        <button type="button" class="tool-button plan-button" id="composer-plan-button" aria-label="Plan or skill" data-tooltip="Plan or skill" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M10.75 2.75l2.5 2.5-7.5 7.5H3.25v-2.5z"></path><path d="M9.25 4.25l2.5 2.5"></path></svg></span></button>
+                        <div class="composer-action-menu hidden" id="composer-action-menu" role="menu" aria-label="Plan or skill">
+                            <button type="button" role="menuitem" data-composer-action="visual"><span aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="2.75" y="3.25" width="10.5" height="9.5" rx="1.5"></rect><path d="m4.5 10 2.25-2.25 1.8 1.8L10 8l2.25 2.25M10.75 5.5h.01"></path></svg></span><span><strong>Prepare visual plan</strong><small>Sketch pages or an EOD summary and attach it</small></span></button>
+                            <button type="button" role="menuitem" data-composer-action="skills"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M6.25 2.5h3.5v2.25H12v3.5H9.75v2.25h-3.5V8.25H4v-3.5h2.25z"></path><path d="M6.25 4.75h3.5v3.5h-3.5z"></path></svg></span><span><strong>Attach skill</strong><small>Browse skills; they are matched automatically on send</small></span></button>
                         </div>
-                        <label class="permission-control" for="composer-permission-select"><span aria-hidden="true">◈</span><select id="composer-permission-select" aria-label="Development permissions"><option value="trusted">Full access</option><option value="standard">Read/write</option><option value="careful">Read only</option></select></label>
+                        <label class="permission-control" for="composer-permission-select" title="Development permissions" data-tooltip="Permissions"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 2.5 12.25 4v3.25c0 2.65-1.65 4.75-4.25 6.25-2.6-1.5-4.25-3.6-4.25-6.25V4z"></path><path d="M6.25 8 7.5 9.25 10 6.75"></path></svg></span><select id="composer-permission-select" aria-label="Development permissions"><option value="trusted">Full access</option><option value="standard">Read/write</option><option value="careful">Read only</option></select></label>
+                        <div class="composer-attachment-strip hidden" id="composer-attachment-strip" aria-label="Attached to this prompt"></div>
                         <button type="button" class="mode-button hidden" id="mode-button" aria-haspopup="dialog"><span id="mode-label">Plan</span></button>
-                        <button type="button" class="model-button" id="model-button"><span id="model-label">Auto · Medium</span><span aria-hidden="true">⌄</span></button>
-                        <button type="submit" class="send-button" id="send-button" aria-label="Send prompt" disabled>↑</button>
+                        <span class="model-auto-chip" id="model-auto-chip" hidden></span>
+                        <button type="button" class="model-button" id="model-button" aria-haspopup="dialog" data-tooltip="Choose harness, model, effort, and execution mode"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 4h10M5.5 8h5M7 12h2"></path><circle cx="6" cy="4" r="1"></circle><circle cx="9" cy="8" r="1"></circle><circle cx="8" cy="12" r="1"></circle></svg><span id="model-label">Auto · Medium</span><svg class="model-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5L11.5 6"></path></svg></button>
+                        <button type="submit" class="send-button" id="send-button" aria-label="Send prompt" data-tooltip="Send" disabled><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7"></path></svg></button>
                     </div>
                     <div class="composer-drop-overlay hidden" id="composer-drop-overlay" aria-live="polite"><strong>Drop files into this prompt</strong><span>Images and files become visible prompt context</span></div>
                 </form>
+                <dialog class="skills-browser-dialog" id="skills-browser-dialog" aria-labelledby="skills-browser-title">
+                    <header class="skills-browser-head"><div><h2 id="skills-browser-title">Skills</h2><p>Skills are matched to your prompt automatically when you send it. Browse what is installed.</p></div><button type="button" class="dialog-close" data-skills-browser-close aria-label="Close skills">&times;</button></header>
+                    <div class="skills-browser-tools"><label class="composer-skill-search"><span aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="3.75"></circle><path d="m10 10 3 3"></path></svg></span><input id="composer-skill-search" type="search" placeholder="Search skills" aria-label="Search installed skills"></label><div class="skills-browser-filters" id="skills-browser-filters" role="group" aria-label="Filter by source"></div></div>
+                    <div class="composer-skill-list skills-card-grid" id="composer-skill-list" role="group" aria-label="Installed skills"></div>
+                    <footer class="visual-plan-footer skills-browser-footer"><span id="skills-browser-count" aria-live="polite">0 selected</span><button type="button" data-skills-browser-close>Cancel</button><button type="button" id="skills-browser-add" disabled>Add</button></footer>
+                </dialog>
+                <dialog class="visual-plan-dialog" id="visual-plan-dialog" aria-labelledby="visual-plan-title">
+                    <header class="skills-browser-head"><div><h2 id="visual-plan-title">Visual plan</h2><p>Sketch pages, flows or an end-of-day summary. Done attaches it to the prompt as an image.</p></div><button type="button" class="dialog-close" data-visual-plan-close aria-label="Close visual plan">&times;</button></header>
+                    <div class="visual-plan-toolbar" role="toolbar" aria-label="Drawing tools">
+                        <button type="button" data-vp-tool="pen" aria-pressed="true">Pen</button><button type="button" data-vp-tool="rect" aria-pressed="false">Rectangle</button><button type="button" data-vp-tool="frame" aria-pressed="false">Page frame</button><button type="button" data-vp-tool="text" aria-pressed="false">Text</button><button type="button" data-vp-tool="eraser" aria-pressed="false">Eraser</button>
+                        <span class="visual-plan-sep" aria-hidden="true"></span><button type="button" data-vp-undo>Undo</button><button type="button" data-vp-clear>Clear</button>
+                    </div>
+                    <canvas id="visual-plan-canvas" width="1200" height="720" aria-label="Drawing canvas"></canvas>
+                    <footer class="visual-plan-footer"><button type="button" data-visual-plan-close>Cancel</button><button type="button" id="visual-plan-done">Done, attach image</button></footer>
+                </dialog>
             </div>

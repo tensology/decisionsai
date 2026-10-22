@@ -1030,12 +1030,20 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             pin = menu.addAction("Unpin project" if project_id in self._pinned_project_ids else "Pin project")
             pin.triggered.connect(lambda: self._toggle_project_pin(project_id))
         elif value["kind"] == "thread":
+            from distr.core.workflow.development_control import (
+                DEVELOPMENT_TIMER_MENU,
+                development_timer_menu_items,
+            )
+
             chat_id = int(value["chat_id"])
-            timer_action = "pause" if value["time_running"] else "play"
-            timer = menu.addAction("Pause timer" if value["time_running"] else "Start timer")
-            timer.triggered.connect(lambda: self._update_thread_time(chat_id, timer_action))
-            reset = menu.addAction("Reset timer")
-            reset.triggered.connect(lambda: self._update_thread_time(chat_id, "reset"))
+            menu.addSection(DEVELOPMENT_TIMER_MENU["heading"])
+            for item in development_timer_menu_items(bool(value["time_running"])):
+                action = menu.addAction(item["label"])
+                action.triggered.connect(
+                    lambda _checked=False, timer_action=item["action"]: self._update_thread_time(
+                        chat_id, timer_action
+                    )
+                )
         self._context_menu = menu
         menu.popup(self.tree.viewport().mapToGlobal(position))
 

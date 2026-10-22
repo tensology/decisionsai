@@ -155,9 +155,23 @@ def send_tensology_heartbeat() -> None:
     remote_provider = normalize_backend_id(remote_provider)
     if (provider, model) == (remote_provider, remote_model):
         return
-    settings["project_cli_medium_backend"] = remote_provider
-    settings["project_cli_medium_model"] = remote_model
-    save_settings_to_db(settings)
+    # Presence is a report, not a routing authority: only seed the local medium
+    # route from Tensology when it has never been configured locally.
+    local_backend = str(settings.get("project_cli_medium_backend") or "").strip()
+    local_model = str(settings.get("project_cli_medium_model") or "").strip().lower()
+    if local_backend and local_model not in {"", "auto"}:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "Tensology presence suggested medium route %s/%s; keeping locally configured route.",
+            remote_provider,
+            remote_model,
+        )
+        return
+    save_settings_to_db({
+        "project_cli_medium_backend": remote_provider,
+        "project_cli_medium_model": remote_model,
+    })
 
 
 def process_tensology_discussion_assessments(*, force: bool = False) -> int:
@@ -527,6 +541,8 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
             },
             "skill_ids": skill_ids,
             "use_playwright": use_playwright,
+            # The upstream ticket already carries explicit human approval.
+            "skip_human_checkpoints": True,
         },
     )
     task = response.get("task") if isinstance(response, dict) else None
@@ -566,13 +582,48 @@ def _remote_execution_status(local_status: str, execution: dict[str, Any] | None
     if status == "waiting":
         return "blocked"
     if status in {"completed", "completed_noop"}:
+        verification = execution.get("verification") if isinstance(execution.get("verification"), dict) else {}
         verified = marked_stage == "done" or bool(
             re.search(r"final verification.{0,80}(?:passed|successful|complete)", evidence, flags=re.IGNORECASE | re.DOTALL)
-        )
+        ) or str(verification.get("final_verdict") or "").strip().lower() == "pass"
         return "done" if verified else "failed"
     if status in {"failed", "cancelled"}:
         return "failed"
     return "queued"
+
+
+def _tensology_execution_receipt(execution: dict[str, Any], *, chat_id: int) -> dict[str, Any]:
+    """Return a redacted, portable proof packet for the canonical Tensology ticket."""
+    receipt = execution.get("route_receipt") if isinstance(execution.get("route_receipt"), dict) else {}
+    selected = receipt.get("selected") if isinstance(receipt.get("selected"), dict) else {}
+    actual = receipt.get("actual") if isinstance(receipt.get("actual"), dict) else {}
+    try:
+        from distr.core.workflow.studio_artifacts import list_studio_artifacts
+
+        artifacts = list_studio_artifacts(int(chat_id))
+    except Exception:
+        artifacts = []
+    return {
+        "job_id": str(execution.get("job_id") or execution.get("id") or ""),
+        "route": {
+            "complexity": str(receipt.get("complexity") or ""),
+            "decision_engine": str(receipt.get("decision_engine") or ""),
+            "selected": {key: selected.get(key) for key in ("backend", "provider", "model", "reasoning_effort", "service_tier") if selected.get(key) not in (None, "")},
+            "actual": {key: actual.get(key) for key in ("backend", "provider", "model", "runtime") if actual.get(key) not in (None, "")},
+        },
+        "artifacts": [
+            {
+                "title": str(item.get("title") or item.get("artifact_type") or "Artifact")[:160],
+                "type": str(item.get("artifact_type") or ""),
+                "status": str(item.get("status") or ""),
+                "format": str(item.get("content_format") or ""),
+            }
+            for item in artifacts[:30]
+            if isinstance(item, dict)
+        ],
+        "verification": execution.get("verification") if isinstance(execution.get("verification"), dict) else {},
+        "blocker": str(execution.get("error") or execution.get("worker_question") or "")[:500],
+    }
 
 
 def process_tensology_approved_tickets(*, force: bool = False) -> int:
@@ -636,7 +687,12 @@ def process_tensology_approved_tickets(*, force: bool = False) -> int:
                     detail = "Execution stopped without final verification evidence. Review the Development thread before retrying."
                 client.patch(
                     f"tickets/{int(ticket['id'])}/execution",
-                    {"thread_id": str(chat_id), "status": remote_status, "detail": detail},
+                    {
+                        "thread_id": str(chat_id),
+                        "status": remote_status,
+                        "detail": detail,
+                        "evidence": _tensology_execution_receipt(execution, chat_id=chat_id),
+                    },
                     idempotency_key=f"tensology-ticket-{int(ticket['id'])}-status-{remote_status}-{execution.get('job_id') or 'run'}",
                 )
         processed += 1

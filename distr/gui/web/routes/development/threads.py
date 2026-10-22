@@ -290,6 +290,8 @@ def register_routes(router, templates):
                         "skill_ids": skill_ids,
                         "routing_assessment": data.routing_assessment or {},
                     }
+                    if data.skip_human_checkpoints:
+                        run_metadata["skip_human_checkpoints"] = True
                     if data.use_playwright:
                         run_metadata["use_playwright"] = True
                     if route_mode == "manual":
@@ -391,7 +393,7 @@ def register_routes(router, templates):
 
 
     @router.post("/workflows/studio/tasks/{chat_id}/messages")
-    async def workflow_studio_message(chat_id: int, data: StudioThreadMessageRequest):
+    async def workflow_studio_message(chat_id: int, data: StudioThreadMessageRequest, wait: bool = False, timeout: Optional[float] = None):
         """Route a Development message directly to its persistent IDE harness."""
         message = str(data.message or "").strip()
         if not message:
@@ -414,18 +416,27 @@ def register_routes(router, templates):
                 autonomy_level = str(chat.autonomy_level or "full").strip().lower()
                 project_id = int(chat.project_id) if chat.project_id is not None else None
             skill_ids = filter_known_skill_ids(list(data.skill_ids or []))[:12]
+            from distr.core.chat import is_duplicate_pending_input
+
+            if await asyncio.to_thread(is_duplicate_pending_input, int(chat_id), message):
+                logger.info("Studio message ignored: identical pending input for thread %s", chat_id)
+                return JSONResponse({"success": True, "duplicate": True, "started": False, "message": "Already sent; waiting for the reply."})
             await asyncio.to_thread(
                 ChatService.add_user_message,
                 int(chat_id),
                 message,
                 metadata={"skill_ids": skill_ids} if skill_ids else None,
             )
+            from distr.core.chat_turns import latest_active_turn_id
+
+            turn_id = await asyncio.to_thread(latest_active_turn_id, int(chat_id))
             if autonomy_level == "approval":
                 return JSONResponse(
                     {
                         "success": True,
                         "execution": None,
                         "started": False,
+                        "turn_id": turn_id,
                         "message": "Instruction saved and waiting for approval.",
                     }
                 )
@@ -479,7 +490,14 @@ def register_routes(router, templates):
             from distr.gui.web.workflow_events import increment_workflow_updated
 
             increment_workflow_updated()
-            return JSONResponse({"success": True, "execution": execution, "turn": execution, "started": True})
+            response_payload = {"success": True, "execution": execution, "turn": execution, "started": True, "turn_id": turn_id}
+            if turn_id is not None:
+                from distr.gui.web.routes.api_extensions import turn_response_fields
+
+                response_payload.update(
+                    await turn_response_fields(int(chat_id), turn_id=int(turn_id), wait=bool(wait), timeout=timeout)
+                )
+            return JSONResponse(response_payload)
         except Exception as exc:
             logger.error("Studio development message failed: %s", exc, exc_info=True)
             return JSONResponse({"detail": str(exc)}, status_code=500)

@@ -11,7 +11,6 @@
         vision_provider: { type: 'vision', modelId: 'vision_model' },
         image_provider: { type: 'image', modelId: 'image_model' },
         video_provider: { type: 'video', modelId: 'video_model' },
-        workflow_provider: { type: 'workflow', modelId: 'workflow_model' },
         computer_use_provider: { type: 'computer_use', modelId: 'computer_use_model' },
         emptyStateLlmProvider: { type: 'conversational', modelId: 'emptyStateLlmModel' },
         llmProvider: { type: 'conversational', modelId: 'llmModel' },

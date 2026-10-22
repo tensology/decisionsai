@@ -118,58 +118,45 @@ def _format_size(size_bytes: int) -> str:
 
 
 def check_vision_model_support(model_name: str, provider: str) -> bool:
+    """Return True when the chat model accepts image input.
+
+    Mirrors the Development composer's modelSupportsImages() heuristic
+    (threads/composer/index.js) so the Oracle and the UI agree. Provider
+    matching is case-insensitive (service names are e.g. "OpenAI").
     """
-    Check if a model supports vision based on model name and provider.
+    import re as _re
 
-    Args:
-        model_name: Name of the model
-        provider: Provider name (OpenAI, Anthropic, OpenRouter, Groq, KiloCode)
-
-    Returns:
-        True if model supports vision, False otherwise
-    """
-    model_lower = model_name.lower()
-
-    # OpenAI vision models
-    if provider == "OpenAI":
-        return any(v in model_lower for v in ['gpt-4', 'o1', 'o3'])
-
-    # Anthropic Claude vision models (all Claude 3+ models support vision)
-    elif provider == "Anthropic":
-        return any(v in model_lower for v in ['claude-3', 'claude-opus', 'claude-sonnet', 'claude-haiku'])
-
-    # OpenRouter (depends on underlying model)
-    elif provider == "OpenRouter":
-        return any(v in model_lower for v in ['gpt-4', 'claude-3', 'vision', 'llava', 'moondream'])
-
-    # Groq vision models
-    elif provider == "Groq":
-        return any(v in model_lower for v in ['llama-3.2', 'llama-vision', 'vision'])
-
-    # KiloCode (routes to various providers)
-    elif provider == "KiloCode":
-        return any(v in model_lower for v in ['gpt-4', 'claude-3', 'vision', 'llava'])
-
-    # Google Gemini vision models
-    elif provider == "Google Gemini":
-        return any(v in model_lower for v in ['gemini', 'vision'])
-
-    # Ollama vision models
-    elif provider == "Ollama":
-        # Known vision models
-        vision_models = ['llava', 'bakllava', 'llama-vision', 'moondream', 'minicpm-v', 'vision']
+    model_lower = (model_name or "").lower()
+    provider_key = (provider or "").lower().replace(" ", "")
+    if provider_key == "ollama":
+        vision_models = ['llava', 'bakllava', 'llama-vision', 'moondream', 'minicpm-v', 'vision', 'gemma3', 'gemma-3', 'qwen2.5vl', 'qwen3-vl', 'llama4']
         if any(v in model_lower for v in vision_models):
             return True
+        non_vision_models = ['llama', 'mistral', 'phi', 'gemma', 'qwen', 'codellama', 'deepseek']
+        return not any(nv in model_lower for nv in non_vision_models)
+    if provider_key == "openai" and _re.search(r"gpt|o1|o3|o4", model_lower):
+        return True
+    if provider_key == "anthropic" and _re.search(r"claude-(3|4|opus|sonnet|haiku)", model_lower):
+        return True
+    return bool(_re.search(r"(gpt-4|gpt-5|claude-3|claude-4|gemini|gemma-3|llama-4|qwen.*vl|vision|pixtral|llava|moondream)", model_lower))
 
-        # Known non-vision models
-        non_vision_models = ['llama', 'mistral', 'phi', 'gemma', 'qwen', 'codellama']
-        is_non_vision = any(nv in model_lower for nv in non_vision_models)
 
-        # For Ollama, assume vision support unless it's a known non-vision model
-        return not is_non_vision
+def resolve_vision_model(settings: dict = None) -> Optional[Tuple[str, str]]:
+    """Return the configured (provider, model) for image description, or None.
 
-    # Unknown provider or no vision support
-    return False
+    Uses vision_llm_provider/vision_llm_model; falls back to the conversational
+    model only when that model can itself read images.
+    """
+    if settings is None:
+        from distr.core.settings import load_settings_from_db
+        settings = load_settings_from_db()
+    for prov_key, model_key in (("vision_llm_provider", "vision_llm_model"),
+                                ("conversational_llm_provider", "conversational_llm_model")):
+        provider = (settings.get(prov_key) or "").strip()
+        model = (settings.get(model_key) or "").strip()
+        if provider and model and check_vision_model_support(model, provider):
+            return provider, model
+    return None
 
 
 def get_image_path_from_context(uploaded_image_path: Optional[str] = None) -> Optional[str]:
@@ -216,29 +203,12 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
 
-    vision_provider = (
-        (settings.get('vision_llm_provider') or '').strip()
-        or (settings.get('conversational_llm_provider') or '').strip()
-        or 'OpenAI'
-    )
-    vision_model = (
-        (settings.get('vision_llm_model') or '').strip()
-        or (settings.get('conversational_llm_model') or '').strip()
-        or 'gpt-4o'
-    )
-
-    provider_key = vision_provider.lower()
-    model_lower = vision_model.lower() if vision_model else ""
-
-    # Check if the vision model actually supports vision
-    vision_capable = any(v in model_lower for v in [
-        'gpt-4', 'o1', 'o3', 'llava', 'vision', 'moondream',
-        'claude-3', 'minicpm', 'qwen3-vl', 'qwen-vl',
-    ])
-
-    if not vision_capable:
-        logger.warning(f"[Vision] No valid vision model configured: {vision_provider}/{vision_model}")
+    resolved = resolve_vision_model(settings)
+    if not resolved:
+        logger.warning("[Vision] No vision-capable model configured")
         return ""
+    vision_provider, vision_model = resolved
+    provider_key = vision_provider.lower()
 
     logger.info(f"[Vision] Analyzing image with {vision_provider}/{vision_model}")
 
@@ -248,7 +218,10 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
         logger.error(f"[Vision] Failed to encode image: {e}", exc_info=True)
         return f"[Image analysis failed: {e}]"
 
-    prompt_text = f"Please analyze this image. The user asked: {user_text}"
+    prompt_text = (
+        "Describe this image in detail: all visible text (verbatim), objects, layout, "
+        f"colors and anything relevant to the user's message. The user asked: {user_text}"
+    )
 
     # --- OpenAI-compatible providers ---
     if provider_key in ('openai', 'openrouter', 'groq', 'kilocode', 'gemini', 'nvidia'):
@@ -277,6 +250,9 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
             if base_url:
                 client_kwargs["base_url"] = base_url
 
+            # One client per call: bound it and close it so httpx connection
+            # pools are not leaked (SDK default is 600s x 2 retries).
+            client_kwargs.setdefault("timeout", 120.0)
             client = AsyncOpenAI(**client_kwargs)
             vision_messages = [
                 {"role": "system", "content": "You are a helpful assistant that analyzes images. Describe what you see in detail, including any text, objects, people, or notable elements. Be thorough but concise."},
@@ -286,10 +262,13 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
                 ]}
             ]
 
-            response = await client.chat.completions.create(
-                model=vision_model, messages=vision_messages, max_tokens=1024
-            )
-            analysis = response.choices[0].message.content.strip()
+            try:
+                response = await client.chat.completions.create(
+                    model=vision_model, messages=vision_messages, max_tokens=1024
+                )
+            finally:
+                await client.close()
+            analysis = (response.choices[0].message.content or "").strip()
             logger.info(f"[Vision] ✅ Got analysis ({len(analysis)} chars)")
             return analysis
 
@@ -303,15 +282,18 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
             import anthropic as _anthropic
 
             api_key = settings.get('anthropic_key', '')
-            client = _anthropic.AsyncAnthropic(api_key=api_key)
-            response = await client.messages.create(
-                model=vision_model,
-                max_tokens=1024,
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": prompt_text},
-                    {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": base64_image}}
-                ]}],
-            )
+            client = _anthropic.AsyncAnthropic(api_key=api_key, timeout=120.0)
+            try:
+                response = await client.messages.create(
+                    model=vision_model,
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": prompt_text},
+                        {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": base64_image}}
+                    ]}],
+                )
+            finally:
+                await client.close()
             analysis = response.content[0].text.strip()
             logger.info(f"[Vision] ✅ Got Anthropic analysis ({len(analysis)} chars)")
             return analysis

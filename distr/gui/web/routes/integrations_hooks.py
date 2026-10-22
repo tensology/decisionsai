@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -24,6 +26,24 @@ from distr.core.integrations.token_resolve import resolve_slack_signing_secret
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["integrations"])
+
+
+_SLACK_REPLAY_WINDOW_SECONDS = 300
+_seen_slack_signatures: dict[str, float] = {}
+_seen_slack_lock = threading.Lock()
+
+
+def _slack_replay_seen(signature: str) -> bool:
+    """Record a verified signature; True if it was already used within the window."""
+    now = time.time()
+    with _seen_slack_lock:
+        for k, exp in list(_seen_slack_signatures.items()):
+            if exp < now:
+                _seen_slack_signatures.pop(k, None)
+        if signature in _seen_slack_signatures:
+            return True
+        _seen_slack_signatures[signature] = now + _SLACK_REPLAY_WINDOW_SECONDS * 2
+        return False
 
 
 def _slack_signing_secret() -> str:
@@ -72,9 +92,13 @@ async def slack_events(request: Request) -> JSONResponse:
         body=body,
         timestamp_header=ts,
         signature_header=sig,
+        skew_seconds=_SLACK_REPLAY_WINDOW_SECONDS,
     ):
         logger.warning("Slack signature verification failed")
         raise HTTPException(status_code=401, detail="Invalid Slack signature")
+    if _slack_replay_seen(str(sig)):
+        logger.warning("Slack request rejected: replayed signature")
+        raise HTTPException(status_code=401, detail="Replayed Slack request")
 
     try:
         data = json.loads(body.decode("utf-8"))

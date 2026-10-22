@@ -1,5 +1,5 @@
 """Workflow execution HTTP boundary. Existing URLs remain compatible."""
-from fastapi import Request
+from fastapi import BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from typing import Optional
 import json
@@ -15,7 +15,7 @@ from ._workflow_support import _is_audit_workflow, _needs_input_context_and_spok
 def register_routes(router, templates):
     @router.get("/workflows/orchestrator-setup")
     async def get_orchestrator_setup():
-        """Return Orchestrator readiness and ticket complexity routing for workflow onboarding."""
+        """Return Orchestrator readiness and Complexity routing for workflow onboarding."""
         from distr.core.settings import load_settings_from_db
         from distr.core.orchestrator import (
             ensure_orchestrator_tables,
@@ -48,12 +48,16 @@ def register_routes(router, templates):
                 "backend": backend,
                 "model": (settings.get(f"project_cli_{level}_model") or default_model).strip(),
                 "model_provider": (settings.get(f"project_cli_{level}_model_provider") or "").strip().lower(),
+                "auto": bool(settings.get(f"project_cli_{level}_auto")),
                 "codex_intelligence": normalize_codex_intelligence(
                     settings.get(f"project_cli_{level}_codex_intelligence")
                 ),
                 "codex_speed": normalize_codex_speed(settings.get(f"project_cli_{level}_codex_speed")),
                 "fallback_backend": (settings.get(f"project_cli_{level}_fallback_backend") or "").strip().lower(),
                 "fallback_model": (settings.get(f"project_cli_{level}_fallback_model") or "").strip(),
+                "fallback_model_provider": (
+                    settings.get(f"project_cli_{level}_fallback_model_provider") or ""
+                ).strip().lower(),
             }
 
         try:
@@ -168,12 +172,25 @@ def register_routes(router, templates):
                 row = routing.get(level) or {}
                 settings[f"project_cli_{level}_backend"] = normalize_backend_id(row.get("backend") or default_backend)
                 backend_id = settings[f"project_cli_{level}_backend"]
+                if "auto" in row:
+                    settings[f"project_cli_{level}_auto"] = bool(row.get("auto"))
                 if "model_provider" in row or "provider" in row:
                     settings[f"project_cli_{level}_model_provider"] = (
                         row.get("model_provider") or row.get("provider") or ""
                     ).strip().lower()
-                fallback_backend = normalize_backend_id(row.get("fallback_backend") or "")
+                raw_fallback_backend = str(row.get("fallback_backend") or "").strip()
+                # normalize_backend_id("") returns the default backend; an empty
+                # fallback must stay empty.
+                fallback_backend = normalize_backend_id(raw_fallback_backend) if raw_fallback_backend else ""
                 fallback_model = (row.get("fallback_model") or "").strip()
+                fallback_provider = str(
+                    row.get("fallback_model_provider") or row.get("fallback_provider") or ""
+                ).strip().lower()
+                if is_ide_backend(fallback_backend):
+                    fallback_backend = ""
+                fallback_fields_sent = any(
+                    key in row for key in ("fallback_backend", "fallback_model", "fallback_model_provider", "fallback_provider")
+                )
                 if is_ide_backend(backend_id):
                     settings[f"project_cli_{level}_model"] = ""
                     settings[f"project_cli_{level}_model_provider"] = ""
@@ -183,16 +200,29 @@ def register_routes(router, templates):
                     settings[f"project_cli_{level}_fallback_model"] = (
                         fallback_model if settings[f"project_cli_{level}_fallback_backend"] else ""
                     )
+                    settings[f"project_cli_{level}_fallback_model_provider"] = (
+                        fallback_provider if settings[f"project_cli_{level}_fallback_backend"] else ""
+                    )
                     settings.pop(f"project_cli_{level}_codex_intelligence", None)
                     settings.pop(f"project_cli_{level}_codex_speed", None)
                     continue
                 settings[f"project_cli_{level}_model"] = (row.get("model") or default_model).strip()
-                if backend_id == "codex":
+                current_provider = str(settings.get(f"project_cli_{level}_model_provider") or "").strip()
+                if backend_id == "codex" and not current_provider:
                     settings[f"project_cli_{level}_model_provider"] = "openai"
-                elif backend_id == "claude_code":
+                elif backend_id == "claude_code" and not current_provider:
                     settings[f"project_cli_{level}_model_provider"] = "anthropic"
-                settings[f"project_cli_{level}_fallback_backend"] = ""
-                settings[f"project_cli_{level}_fallback_model"] = ""
+                # Non-IDE backends keep their fallback too (e.g. Pi/OpenRouter ->
+                # Pi/Kilo). Only overwrite when the client sent fallback fields,
+                # so older clients cannot silently erase a configured fallback.
+                if fallback_fields_sent:
+                    settings[f"project_cli_{level}_fallback_backend"] = fallback_backend
+                    settings[f"project_cli_{level}_fallback_model"] = (
+                        (fallback_model or "auto") if fallback_backend else ""
+                    )
+                    settings[f"project_cli_{level}_fallback_model_provider"] = (
+                        fallback_provider if fallback_backend else ""
+                    )
                 if backend_id == "codex":
                     settings[f"project_cli_{level}_codex_intelligence"] = normalize_codex_intelligence(
                         row.get("codex_intelligence") or row.get("codex_reasoning_effort")
@@ -203,13 +233,6 @@ def register_routes(router, templates):
                 else:
                     settings.pop(f"project_cli_{level}_codex_intelligence", None)
                     settings.pop(f"project_cli_{level}_codex_speed", None)
-
-        # Keep the existing workflow LLM fallback aligned with orchestrator routing
-        # so older code paths still resolve to the same brain.
-        orchestrator = models.get("orchestrator") or {}
-        if "models" in data and (orchestrator.get("provider") or orchestrator.get("model")):
-            settings["workflow_llm_provider"] = (orchestrator.get("provider") or "").strip()
-            settings["workflow_llm_model"] = (orchestrator.get("model") or "").strip()
 
         save_settings_to_db(settings)
         return JSONResponse({"success": True})
@@ -595,7 +618,12 @@ def register_routes(router, templates):
 
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/continue")
-    async def workflow_continue_run(workflow_id: int, run_id: int, request: Request):
+    async def workflow_continue_run(
+        workflow_id: int,
+        run_id: int,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ):
         """Resume a waiting workflow run.
 
         Accepts optional JSON body. Preferred field is ``input``, but callback-style
@@ -620,10 +648,23 @@ def register_routes(router, templates):
                     or ""
                 )
             optional_input = str(optional_input or "")
-            result = continue_waiting_step(run_id, optional_input)
-            if "error" in result:
-                status_code = result.get("status_code", 400)
-                return JSONResponse(_workflow_error_payload(result["error"], "continue"), status_code=status_code)
+            from distr.core.db import get_session
+            from distr.core.db.workflow import AutoWorkflowRun
+
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(
+                    AutoWorkflowRun.id == int(run_id),
+                    AutoWorkflowRun.workflow_id == int(workflow_id),
+                ).first()
+                if not run:
+                    return JSONResponse(_workflow_error_payload("Run not found", "continue"), status_code=404)
+                if run.status != "waiting":
+                    return JSONResponse(
+                        _workflow_error_payload(f"Run is not waiting (status: {run.status})", "continue"),
+                        status_code=409,
+                    )
+            background_tasks.add_task(continue_waiting_step, run_id, optional_input)
+            result = {"success": True, "action": "resume_queued", "status": "starting", "run_id": run_id}
             result.update(_workflow_feedback_message("continued", result))
             return JSONResponse(result)
         except Exception as e:
@@ -650,7 +691,12 @@ def register_routes(router, templates):
 
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/codex-events")
-    async def workflow_codex_bridge_event(workflow_id: int, run_id: int, event: CodexBridgeEventRequest):
+    async def workflow_codex_bridge_event(
+        workflow_id: int,
+        run_id: int,
+        event: CodexBridgeEventRequest,
+        background_tasks: BackgroundTasks,
+    ):
         """Record Codex IDE/plugin steering and execution events into Decisions/orchestrator.
 
         This endpoint is intentionally not limited to waiting runs. Codex may report
@@ -1026,7 +1072,8 @@ def register_routes(router, templates):
                     from distr.core.workflow.dispatcher import continue_waiting_step
 
                     resume_text = (event.output or event.message or "IDE work completed.").strip()
-                    auto_continue_result = continue_waiting_step(int(run_id), resume_text)
+                    background_tasks.add_task(continue_waiting_step, int(run_id), resume_text)
+                    auto_continue_result = {"success": True, "status": "starting"}
                 except Exception:
                     logger.debug("IDE bridge auto-continue failed", exc_info=True)
 

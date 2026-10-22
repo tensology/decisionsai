@@ -657,6 +657,24 @@ class ChatManagerCore:
         self.chat_histories[chat_id] = messages
         return messages
 
+    def _merge_spoken_rows(self, root_id: int) -> None:
+        """Add Read-response spoken rows saved by another process (the web server)
+        to this process's cached history so the next turn has them in context."""
+        try:
+            from distr.core.chat import ChatService, SPOKEN_HISTORY_PREFIX, SPOKEN_NOTE_PREFIX
+
+            cached = self.chat_histories.get(root_id)
+            if cached is None:
+                return
+            have = {str(m.get("content") or "") for m in cached if m.get("role") == "assistant"}
+            for m in ChatService.get_chat_history(root_id):
+                content = str(m.get("content") or "")
+                if m.get("role") == "assistant" and content.startswith((SPOKEN_HISTORY_PREFIX, SPOKEN_NOTE_PREFIX)) and content not in have:
+                    cached.append({"role": "assistant", "content": content})
+                    have.add(content)
+        except Exception:
+            logger.debug("Could not merge spoken rows into chat history", exc_info=True)
+
     def clear_chat_history(self, chat_id: int) -> None:
         if chat_id in self.chat_histories:
             del self.chat_histories[chat_id]
@@ -763,6 +781,8 @@ class ChatManagerCore:
 
             if root_id not in self.chat_histories:
                 self.get_chat_history(root_id)
+            else:
+                self._merge_spoken_rows(root_id)
             entry: dict[str, Any] = {"role": "user", "content": cleaned_text}
             if source_platform:
                 entry["source_platform"] = source_platform

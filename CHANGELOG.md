@@ -22,6 +22,22 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ---
 
+## [Unreleased]
+
+## [2.9.4] - 2026-10-22
+
+### The development pipelines are live (finally!)
+
+Okay, this one's big. This is a new chapter in using Decisions AI as an actual development engine. The development pipelines are live, and the dev area is now something you can genuinely trust to take a job and run with it. No babysitting, no crossed fingers. We tested it across multiple models and providers too, so it holds up no matter who's doing the work under the hood.
+
+### The Development section got a full glow-up
+
+The whole Development section has been cleaned up end to end. Incoming, workflows, planning, building and terminal management all live together now and actually feel like one thing. Work comes in, gets planned, gets built, and the terminals are right there with it. It just flows, kind of like a really clean promise chain.
+
+### All the coding tools are in the mix
+
+The coding tools and CLIs are under ongoing development testing across Pi, Claude, Codex and Cursor. Pick your favourite, or let Development pick the right one for the job. Either way, you focus on what you're building and the tools sort themselves out in the background.
+
 ## [2.9.3] - 2026-10-07
 
 ### Work lands in the right place

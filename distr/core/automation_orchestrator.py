@@ -345,6 +345,8 @@ def ensure_automation_thread(automation: dict[str, Any]) -> int:
                 config = automation.get("action_config") if isinstance(automation.get("action_config"), dict) else {}
                 provider = str(config.get("model_provider") or config.get("provider") or "").strip().lower()
                 model = str(config.get("model") or config.get("model_name") or "").strip()
+                if str(config.get("cli_route_mode") or "").strip().lower() == "inherit":
+                    provider, model = "", ""  # automodel: "Inherit global" drops legacy imported pins
                 root.provider = provider or None
                 root.model_name = model or None
                 root.route_mode = (
@@ -367,6 +369,8 @@ def ensure_automation_thread(automation: dict[str, Any]) -> int:
         config = automation.get("action_config") if isinstance(automation.get("action_config"), dict) else {}
         provider = str(config.get("model_provider") or config.get("provider") or "").strip().lower()
         model = str(config.get("model") or config.get("model_name") or "").strip()
+        if str(config.get("cli_route_mode") or "").strip().lower() == "inherit":
+            provider, model = "", ""  # automodel: "Inherit global" drops legacy imported pins
         if root is not None:
             root.provider = provider or None
             root.model_name = model or None
@@ -451,19 +455,22 @@ def _dispatch_development_automation(
     complexity = str(config.get("complexity") or "medium").strip().lower()
     if complexity not in {"low", "medium", "high"}:
         complexity = "medium"
-    route = {
-        "backend": str(config.get("backend") or "").strip().lower(),
-        "model_provider": str(config.get("model_provider") or "").strip().lower(),
-        "model": str(config.get("model") or "").strip(),
-        "fallback_backend": str(config.get("fallback_backend") or "").strip().lower(),
-        "fallback_model_provider": str(config.get("fallback_model_provider") or "").strip().lower(),
-        "fallback_model": str(config.get("fallback_model") or "").strip(),
-    }
-    route = {key: value for key, value in route.items() if value}
+    # automodel 2026-10-22: per-automation override > Settings automation default > complexity tier.
+    from distr.core.automation.model_route import resolve_automation_route
+
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        _settings = load_settings_from_db()
+    except Exception:
+        _settings = {}
+    route, route_source = resolve_automation_route(config, _settings)
+    logger.info("Automation %s CLI route from %s: %s", automation.get("id"), route_source, route or "complexity tier")
     routing_assessment = {
         "complexity": complexity,
         "operational_state": "external_untrusted" if external_attachment else "neutral",
         "route": route,
+        # Contract key stays stable; which layer picked the route is logged below.
         "source": "automation_import_configuration",
         "adaptive_model_routing": bool(config.get("adaptive_model_routing", True)),
     }

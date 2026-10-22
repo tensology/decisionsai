@@ -36,11 +36,16 @@ def register_routes(router, templates):
         skins = []
         for folder_name, config in results:
             idle_anim = config.events.get("idle")
+            idle_file = idle_anim.animation if idle_anim else None
+            preview_file = Path(idle_file).with_suffix(".webp").name if idle_file else None
+            if preview_file and not (Path(AVATARS_DIR) / folder_name / preview_file).is_file():
+                preview_file = None
             skins.append({
                 "folder_name": folder_name,
                 "name": config.name,
                 "type": config.type,
-                "idle_animation": idle_anim.animation if idle_anim else None,
+                "idle_animation": idle_file,
+                "preview_image": preview_file,
                 "idle_playback": idle_anim.playback if idle_anim else "loop",
                 "shape": config.rendering.shape,
                 "image_scale": config.rendering.image_scale,

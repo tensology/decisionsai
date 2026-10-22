@@ -93,7 +93,12 @@ def choose_development_execution_mode(
     explicit_workflow = any(marker in text for marker in _WORKFLOW_MARKERS)
     if explicit_workflow:
         signals.append("workflow_language")
-    coordination_hits = [marker for marker in _COORDINATION_MARKERS if marker in text]
+    # Match on word starts: a bare substring test counted "all" inside
+    # "install"/"small" and "test" inside "latest", inflating the scope signal.
+    coordination_hits = [
+        marker for marker in _COORDINATION_MARKERS
+        if re.search(rf"\b{re.escape(marker)}" + (r"\b" if marker == "all" else ""), text)
+    ]
     if len(coordination_hits) >= 2:
         signals.append("multi_phase_scope")
     if len(text) >= 1200:

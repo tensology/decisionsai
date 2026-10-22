@@ -97,6 +97,11 @@ def register_routes(router, templates):
 
             metadata = dict(data.metadata or {})
             metadata["skill_ids"] = filter_known_skill_ids(list(metadata.get("skill_ids") or []))[:12]
+            from distr.core.workflow.development_control import is_duplicate_instruction
+
+            if await asyncio.to_thread(is_duplicate_instruction, int(chat_id), data.content):
+                logger.info("Studio command ignored: identical pending instruction for thread %s", chat_id)
+                return JSONResponse({"status": "duplicate", "summary": "Already sent; waiting for the reply.", "next_actions": [], "artifacts": [], "delivery": {"dispatched": False, "duplicate": True}})
             command = await asyncio.to_thread(
                 enqueue_command,
                 chat_id,

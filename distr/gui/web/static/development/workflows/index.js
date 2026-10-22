@@ -97,39 +97,40 @@ export function createWorkflows({ context, actions, el }) {
         return '';
     }
 
-    function workflowCardHtml(workflow, groupKind, project) {
+    function workflowCardHtml(workflow) {
         const { run, status, active } = workflowRunState(workflow);
         const busy = Boolean(state.workflowBusy[String(workflow.id)]);
         const steps = workflowStepList(workflow);
         const stepCount = Number(workflow.step_count || workflow.steps_count || steps.length || 0);
         const action = active ? 'stop' : 'start';
         const issue = definitionIssue(workflow);
+        const currentStepIndex = (() => {
+            if (!steps.length || !run) return 0;
+            const sid = run.current_step_id ?? run.current_step?.id ?? run.step_id;
+            let idx = sid != null ? steps.findIndex((step) => String(step.id) === String(sid)) : -1;
+            if (idx < 0 && run.current_step_name) idx = steps.findIndex((step) => String(step.name || '') === String(run.current_step_name));
+            if (idx < 0 && Number.isInteger(run.current_step_index)) idx = run.current_step_index;
+            return idx >= 0 && idx < steps.length ? idx : 0;
+        })();
+        const stepRow = (label, index) =>
+            `<li class="workflow-card-step-${label.toLowerCase()}"><span class="workflow-card-index">${index + 1}</span><span class="workflow-card-step"><small>${label}</small><strong>${actions.escapeHtml(steps[index].name || `Step ${index + 1}`)}</strong></span></li>`;
         const preview = steps.length
-            ? steps
-                  .slice(0, 5)
-                  .map(
-                      (step, index) =>
-                          `<li><span>${String(index + 1).padStart(2, '0')}</span><strong>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</strong><small>${actions.escapeHtml(step.action_type || 'agent instruction')}</small></li>`
-                  )
-                  .join('')
-            : `<li class="workflow-card-empty"><span>--</span><strong>${stepCount ? `${stepCount} configured steps` : 'No steps configured'}</strong></li>`;
-        const scopeLabel =
-            groupKind === 'project'
-                ? `Project workflow · ${project?.name || 'Project'}`
-                : groupKind === 'imported'
-                  ? 'Imported workflow'
-                  : groupKind === 'test'
-                    ? 'Test workflow'
-                    : 'Reusable workflow';
+            ? `<ol class="workflow-card-steps workflow-card-current-next">${stepRow('Current', currentStepIndex)}${
+                  currentStepIndex + 1 < steps.length
+                      ? stepRow('Next', currentStepIndex + 1)
+                      : '<li class="workflow-card-step-next workflow-card-last"><span class="workflow-card-index">✓</span><span class="workflow-card-step"><small>Next</small><strong>Last step</strong></span></li>'
+              }</ol>`
+            : stepCount
+              ? '<p class="workflow-card-pending">Loading steps</p>'
+              : '<p class="workflow-card-pending">No steps yet</p>';
+        const summary = `${stepCount} step${stepCount === 1 ? '' : 's'} · ${run ? actions.statusLabel(status) : issue || 'Ready'}`;
+        const stateClass = status === 'waiting' || status === 'paused' ? 'waiting' : status === 'failed' ? 'failed' : active ? 'running' : '';
         return `<article class="workflow-card" data-workflow-card="${Number(workflow.id)}">
-            <header class="workflow-card-titlebar">
-                <button type="button" class="workflow-card-open" data-workflow-select="${Number(workflow.id)}"><span class="workflow-node-icon" aria-hidden="true"><i></i><i></i><i></i></span><strong>${actions.escapeHtml(workflow.name || 'Untitled workflow')}</strong></button>
-                <span class="workflow-card-controls"><i class="workflow-state ${status === 'waiting' || status === 'paused' ? 'waiting' : status === 'failed' ? 'failed' : active ? 'running' : ''}" role="img" aria-label="${actions.escapeHtml(actions.statusLabel(status))}" title="${actions.escapeHtml(actions.statusLabel(status))}"></i><button type="button" class="workflow-card-action ${action}" data-workflow-action="${action}" data-workflow-id="${Number(workflow.id)}" aria-label="${active ? 'Stop' : 'Start'} ${actions.escapeHtml(workflow.name || 'workflow')}" title="${actions.escapeHtml(active ? 'Stop workflow' : issue || 'Start workflow')}"${busy || (!active && issue) ? ' disabled' : ''}>${workflowActionIcon(action, busy)}</button><details class="workflow-card-menu"><summary role="button" aria-label="More actions for ${actions.escapeHtml(workflow.name || 'workflow')}">•••</summary><div><button type="button" data-workflow-menu-action="open" data-workflow-id="${Number(workflow.id)}">Open and edit</button><button type="button" data-workflow-menu-action="${action}" data-workflow-id="${Number(workflow.id)}"${!active && issue ? ' disabled' : ''}>${active ? 'Stop workflow' : 'Run workflow'}</button><button type="button" class="danger" data-workflow-menu-action="delete" data-workflow-id="${Number(workflow.id)}">Delete workflow</button></div></details></span>
+            <header class="workflow-card-head">
+                <button type="button" class="workflow-card-open" data-workflow-select="${Number(workflow.id)}"><strong>${actions.escapeHtml(workflow.name || 'Untitled workflow')}</strong><small>${actions.escapeHtml(summary)}</small></button>
+                <span class="workflow-card-controls">${stateClass ? `<i class="workflow-state ${stateClass}" role="img" aria-label="${actions.escapeHtml(actions.statusLabel(status))}" title="${actions.escapeHtml(actions.statusLabel(status))}"></i>` : ''}<span class="scheduled-row-icons"><button type="button" class="scheduled-icon-button edit" data-workflow-card-action="open" data-workflow-id="${Number(workflow.id)}" title="Edit" aria-label="Edit ${actions.escapeHtml(workflow.name || 'workflow')}"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m4 14-.5 3 3-.5L15 8l-2.5-2.5L4 14Z"/><path d="m11.5 6.5 2.5 2.5"/></svg></button><button type="button" class="scheduled-icon-button delete danger" data-workflow-card-action="delete" data-workflow-id="${Number(workflow.id)}" title="Delete" aria-label="Delete ${actions.escapeHtml(workflow.name || 'workflow')}"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 6h12M8 6V4h4v2M6 6l.8 10h6.4L14 6"/></svg></button></span></span>
             </header>
-            <button type="button" class="workflow-card-body" data-workflow-select="${Number(workflow.id)}">
-                <ol>${preview}</ol>
-            </button>
-            <footer><span>${actions.escapeHtml(scopeLabel)}</span><span>${stepCount} step${stepCount === 1 ? '' : 's'} · ${run ? actions.escapeHtml(actions.statusLabel(status)) : actions.escapeHtml(issue || 'Ready')}</span></footer>
+            ${preview ? `<button type="button" class="workflow-card-body" data-workflow-select="${Number(workflow.id)}">${preview}</button>` : ''}
         </article>`;
     }
 
@@ -146,7 +147,7 @@ export function createWorkflows({ context, actions, el }) {
         return `<section class="workflow-project-group workflow-group-${actions.escapeHtml(groupKind)}" data-workflow-project="${Number(project?.id || 0)}"><header><div><span class="workflow-project-mark" aria-hidden="true">${project ? '◆' : groupKind === 'test' ? 'T' : groupKind === 'imported' ? 'I' : '◇'}</span><div><h2>${actions.escapeHtml(name)}</h2><p>${actions.escapeHtml(help)}</p></div></div></header><div class="workflow-card-grid">${sortedWorkflowLibraryRows(
             workflows
         )
-            .map((workflow) => workflowCardHtml(workflow, groupKind, project))
+            .map((workflow) => workflowCardHtml(workflow))
             .join('')}</div></section>`;
     }
 
@@ -212,16 +213,11 @@ export function createWorkflows({ context, actions, el }) {
             return;
         }
         const workflows = filteredWorkflows();
-        const projectGroups = [];
-        const reusable = workflows.filter((workflow) => workflowLibraryCategory(workflow) === 'reusable');
-        if (reusable.length) projectGroups.push({ project: null, workflows: reusable, kind: 'reusable' });
-        const imported = workflows.filter((workflow) => workflowLibraryCategory(workflow) === 'imported');
-        if (imported.length) projectGroups.push({ project: null, workflows: imported, kind: 'imported' });
-        const tests = workflows.filter((workflow) => workflowLibraryCategory(workflow) === 'test');
-        if (tests.length) projectGroups.push({ project: null, workflows: tests, kind: 'test' });
         const activeExecutions = activeExecutionRowsHtml();
-        const groupsHtml = projectGroups.length
-            ? projectGroups.map((group) => workflowGroupHtml(group.project, group.workflows, group.kind)).join('')
+        const groupsHtml = workflows.length
+            ? `<div class="workflow-card-grid workflow-card-grid-flat">${sortedWorkflowLibraryRows(workflows)
+                  .map((workflow) => workflowCardHtml(workflow))
+                  .join('')}</div>`
             : '<div class="development-empty">No workflows yet.</div>';
         list.innerHTML = activeExecutions + groupsHtml;
         list.querySelectorAll('[data-workflow-select]').forEach((button) =>
@@ -235,15 +231,11 @@ export function createWorkflows({ context, actions, el }) {
                 else runManagedWorkflow(workflowId);
             })
         );
-        list.querySelectorAll('[data-workflow-menu-action]').forEach((button) =>
+        list.querySelectorAll('[data-workflow-card-action]').forEach((button) =>
             button.addEventListener('click', () => {
                 const workflowId = Number(button.dataset.workflowId);
-                const workflow = context.workflows.find((item) => Number(item.id) === workflowId);
-                button.closest('details')?.removeAttribute('open');
-                if (button.dataset.workflowMenuAction === 'open') selectWorkflow(workflowId);
-                else if (button.dataset.workflowMenuAction === 'delete') deleteManagedWorkflow(workflowId);
-                else if (button.dataset.workflowMenuAction === 'stop') stopManagedWorkflow(workflowId, workflowRunState(workflow).run);
-                else runManagedWorkflow(workflowId);
+                if (button.dataset.workflowCardAction === 'open') selectWorkflow(workflowId);
+                else if (button.dataset.workflowCardAction === 'delete') deleteManagedWorkflow(workflowId);
             })
         );
         list.querySelectorAll('[data-active-execution-cancel]').forEach((button) =>
@@ -845,6 +837,7 @@ export function createWorkflows({ context, actions, el }) {
                 body: { instruction }
             });
             input.value = '';
+            setWorkflowComposerOpen(false);
             await actions.refreshShell({ preserveConversation: true });
             state.selectedWorkflowId = String(workflow.id);
             await selectWorkflow(workflow.id);
@@ -994,8 +987,24 @@ export function createWorkflows({ context, actions, el }) {
             .concat(activeRows.filter((item) => Number(item.workflow_id) === Number(workflowId)).map((item) => ({ ...item, __clientReceivedAt: Date.now() })));
     }
 
+    function setWorkflowComposerOpen(open) {
+        const modal = el('workflow-add-modal');
+        if (!modal) return;
+        modal.classList.toggle('hidden', !open);
+        el('workflow-add-toggle')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) el('workflow-prompt-input')?.focus();
+    }
+
     function bindEvents() {
         el('workflow-prompt-form').addEventListener('submit', createWorkflowFromPrompt);
+        el('workflow-add-toggle')?.addEventListener('click', () => setWorkflowComposerOpen(true));
+        el('workflow-add-modal')?.addEventListener('click', (event) => {
+            if (event.target === event.currentTarget) setWorkflowComposerOpen(false);
+        });
+        el('workflow-prompt-cancel')?.addEventListener('click', () => setWorkflowComposerOpen(false));
+        el('workflow-prompt-input')?.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') setWorkflowComposerOpen(false);
+        });
         el('workflow-step-form').addEventListener('submit', saveWorkflowStep);
         el('workflow-step-provider').addEventListener('change', () => syncWorkflowStepModels(''));
     }

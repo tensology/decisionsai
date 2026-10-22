@@ -697,15 +697,13 @@ else
     echo -e "${GREEN}✓${NC} Models already installed"
 fi
 
-# Install Playwright browser (chromium only) if not already present
-PLAYWRIGHT_CHROMIUM=$("$VENV_DIR/bin/python" -c "from playwright._impl._driver import compute_driver_executable; import os; print(os.path.exists(os.path.join(os.path.dirname(compute_driver_executable()), '.local-browsers')))" 2>/dev/null || echo "False")
-if [ "$PLAYWRIGHT_CHROMIUM" != "True" ]; then
-    echo -e "${YELLOW}Installing Playwright Chromium browser...${NC}"
-    "$VENV_DIR/bin/python" -m playwright install chromium 2>/dev/null && \
-        echo -e "${GREEN}✓${NC} Playwright Chromium installed" || \
-        echo -e "${YELLOW}⚠ Playwright install failed. Run manually: python -m playwright install chromium${NC}"
+# Playwright: ONE shared browser cache; never download per-venv copies
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
+PW_MISSING=$("$VENV_DIR/bin/python" -m playwright install --dry-run chromium 2>/dev/null | awk '/Install location:/{print $3}' | while read -r d; do [ -d "$d" ] || echo "$d"; done)
+if [ -n "$PW_MISSING" ]; then
+    echo -e "${YELLOW}⚠ Shared Playwright Chromium missing ($(basename $PW_MISSING | tr '\n' ' ')). Install once: python -m playwright install chromium${NC}"
 else
-    echo -e "${GREEN}✓${NC} Playwright Chromium already installed"
+    echo -e "${GREEN}✓${NC} Using shared Playwright Chromium in $PLAYWRIGHT_BROWSERS_PATH"
 fi
 
 # Check for Ollama availability (no automatic model pulls)

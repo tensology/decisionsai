@@ -1029,6 +1029,19 @@ class StepExecutorMixin:
         cmd = config.get("command", "")
         cwd = config.get("working_directory") or self._project_cwd_for_run(run_id)
         timeout = config.get("timeout_seconds", 60)
+        from distr.core.workflow.planning import looks_like_prose_command
+
+        if looks_like_prose_command(str(cmd)):
+            # Older plans stored the English instruction as the command
+            # (runs 143/147/148). Never hand prose to /bin/sh.
+            return {
+                "output": format_tool_failure(
+                    tool_id="shell",
+                    error=f"Step command is a plain-English instruction, not a shell command: {str(cmd)[:160]}",
+                    suggestion="Change this step to an agent instruction, or set config.command to a real command.",
+                ),
+                "passed": False,
+            }
         try:
             proc = run_shell_command(cmd, timeout=timeout, cwd=cwd)
             output = (proc.stdout + proc.stderr).strip()[:2000]
@@ -1386,6 +1399,13 @@ class StepExecutorMixin:
                                 route,
                                 exc_info=True,
                             )
+                    if not approved_override and not self._step_execution_route_enabled(config_local):
+                        # A planned/stored route was resolved before the run
+                        # started. Re-check its backend now and use the
+                        # configured fallback (or the board/global complexity
+                        # route) when the CLI is unavailable. Explicit step pins
+                        # and approved overrides are applied/kept as-is.
+                        route = self._ready_route_or_fallback(route, project=project, board=board)
                     if not approved_override:
                         route = self._apply_step_harness_overrides(route, config_local)
                     routing_settings: dict[str, Any] = {}
@@ -1557,8 +1577,17 @@ class StepExecutorMixin:
                             str(item or "").lower() for item in previously_failed
                         }:
                             previously_failed.append(failed_model)
+                        # An account-wide block (bad key, no credit, balance
+                        # gate) fails every OpenRouter model the same way, so
+                        # offering another free model only loops the approval.
+                        # Use the configured fallback (e.g. Pi/Kilo) instead.
+                        account_wide_block = (
+                            provider_preflight.http_status in (401, 402)
+                            or getattr(provider_preflight, "available_credit_usd", None) is not None
+                        )
                         if (
                             str(route.get("model_provider") or "").strip().lower() == "openrouter"
+                            and not account_wide_block
                             and not _provider_rate_limited(
                                 message=str(provider_preflight.message or ""),
                                 http_status=provider_preflight.http_status,
@@ -1940,6 +1969,13 @@ class StepExecutorMixin:
                         )
                         or _ticket_requires_read_only_execution(ticket_budget_context)
                     )
+                    if read_only_contract and requested_step_role == "planning":
+                        final_instruction += (
+                            "\n\n[READ-ONLY PLANNING BOUNDARY]\n"
+                            "This planning step is intentionally read-only. Complete its named planning outputs "
+                            "without editing files. A later implementation step receives write access, so do not "
+                            "report the expected lack of write access here as a blocker."
+                        )
                     allow_transient_test_writes = bool(
                         read_only_contract
                         and _read_only_ticket_requires_test_runtime(ticket_budget_context)
@@ -2942,6 +2978,66 @@ class StepExecutorMixin:
             return {"output": f"Agent dispatch error: {e}", "passed": False}
 
     @staticmethod
+    def _ready_route_or_fallback(
+        route: dict[str, Any],
+        *,
+        project: Any = None,
+        board: Any = None,
+    ) -> dict[str, Any]:
+        """Return ``route`` if its backend is ready, else its fallback/complexity route."""
+        route = dict(route or {})
+        backend = str(route.get("backend") or "").strip()
+        if not backend:
+            return route
+        from distr.core.project_cli_backends import get_backend, normalize_backend_id
+
+        try:
+            if get_backend(backend).setup_status().ready:
+                return route
+        except Exception:
+            # Readiness could not be verified; never discard a resolved route.
+            return route
+        fallback_backend = str(route.get("fallback_backend") or "").strip()
+        if fallback_backend:
+            try:
+                fallback_ready = bool(get_backend(fallback_backend).setup_status().ready)
+            except Exception:
+                fallback_ready = False
+            if fallback_ready:
+                out = dict(route)
+                out["backend"] = normalize_backend_id(fallback_backend)
+                out["model"] = str(route.get("fallback_model") or "auto").strip() or "auto"
+                if route.get("fallback_model_provider"):
+                    out["model_provider"] = str(route["fallback_model_provider"]).strip().lower()
+                else:
+                    out.pop("model_provider", None)
+                for key in ("fallback_backend", "fallback_model", "fallback_model_provider"):
+                    out.pop(key, None)
+                out["source"] = "step_readiness_fallback"
+                out["rationale"] = f"{backend} is not available; using the configured fallback {out['backend']}."
+                return out
+        try:
+            from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
+
+            resolved = resolve_ticket_cli_route(
+                project,
+                str(route.get("complexity") or "medium"),
+                board=board,
+            )
+        except Exception:
+            return route
+        out = dict(route)
+        for key in ("model_provider", "fallback_backend", "fallback_model", "fallback_model_provider"):
+            out.pop(key, None)
+        out.update(resolved)
+        out["source"] = "step_readiness_fallback"
+        out["rationale"] = (
+            f"{backend} is not available; using the {resolved.get('complexity') or 'medium'} "
+            f"complexity route {resolved.get('backend')}."
+        )
+        return out
+
+    @staticmethod
     def _runtime_provider_fallback_route(
         route: dict[str, Any],
         config: dict[str, Any],
@@ -3007,8 +3103,15 @@ class StepExecutorMixin:
                     fallback_backend = "claude_code"
             elif current_backend != "claude_code":
                 fallback_backend = "claude_code"
-        if not fallback_backend or fallback_backend == current_backend:
+        if not fallback_backend:
             return {}
+        if fallback_backend == current_backend:
+            # Same CLI is a valid failover when it targets a different
+            # model/provider (e.g. Pi via OpenRouter -> Pi via Kilo Code).
+            same_model = fallback_model.lower() == str(route.get("model") or "auto").strip().lower()
+            same_provider = fallback_provider.lower() == str(route.get("model_provider") or "").strip().lower()
+            if not explicit_fallback or (same_model and same_provider):
+                return {}
         fallback: dict[str, Any] = {
             "backend": fallback_backend,
             "model": fallback_model,

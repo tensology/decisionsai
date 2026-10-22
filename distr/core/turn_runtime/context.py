@@ -121,7 +121,11 @@ def build_development_context(
     for item in clean_attachments:
         mime_type = str(item.get("mime_type") or "").lower()
         path = Path(str(item.get("path") or "")).expanduser()
-        if not mime_type.startswith("image/") or not path.is_file() or path.stat().st_size > 20 * 1024 * 1024:
+        # Inline only formats/sizes every provider adapter accepts (llm_factory caps
+        # at 8 MB and jpeg/png/gif/webp); others still reach the model by path.
+        if mime_type == "image/jpg":
+            mime_type = "image/jpeg"
+        if mime_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"} or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
             continue
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         image_blocks.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}})

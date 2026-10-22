@@ -37,8 +37,12 @@ PROACTIVE_TASK_EXECUTED = "proactive.task.executed"
 INTEGRATION_CONNECTED = "integration.connected"
 INTEGRATION_DISCONNECTED = "integration.disconnected"
 
+# Web UI control (select_thread tool -> sidebar selection in open tabs)
+UI_THREAD_SELECT = "ui.thread.select"
+
 ALL_EVENT_TYPES: frozenset[str] = frozenset(
     {
+        UI_THREAD_SELECT,
         CHAT_MESSAGE_RECEIVED,
         CHAT_MESSAGE_SENT,
         INITIATIVE_ACTION_PROPOSED,

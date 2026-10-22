@@ -193,6 +193,7 @@ def update_development_model_route(
     """Persist one thread's model route without mutating its reusable workflow."""
     from distr.core.project_cli_backends import normalize_backend_id
     from distr.core.workflow.development_harness import (
+        hosted_cli_model_or_auto,
         local_ollama_worker_id,
         parse_local_ollama_worker,
     )
@@ -221,6 +222,8 @@ def update_development_model_route(
         raise ValueError("Pi needs a provider and model.")
     if mode == "manual" and clean_backend in {"codex", "claude_code"} and not clean_provider:
         clean_provider = "openai" if clean_backend == "codex" else "anthropic"
+    if mode == "manual" and not local_tag:
+        clean_model = hosted_cli_model_or_auto(clean_backend, clean_provider, clean_model)
     effort = _clean(reasoning_effort).lower()
     tier = _clean(service_tier).lower()
     if effort and effort not in {"low", "medium", "high", "xhigh"}:
@@ -500,15 +503,68 @@ _EXPLICIT_CHAT = re.compile(
     re.IGNORECASE,
 )
 _IMPERATIVE_WORK = re.compile(
-    r"(?:^|please\s+|can you\s+|could you\s+|i need you to\s+)"
+    r"(?:^|please\s+|can you\s+|could you\s+|i need you to\s+|^(?:then|and then|next|also)\s+)"
     r"(build|implement|fix|edit|verify|add|create|define|refactor|write|ship|"
-    r"deploy|scratch|change|prepare|develop|patch|debug|make|run)\b",
+    r"deploy|scratch|change|prepare|develop|patch|debug|make|run|update|document|rename|remove)\b",
     re.IGNORECASE,
 )
 _WORK_WORD = re.compile(
     r"\b(build|implement|fix|edit|verify|refactor|scratch|patch|debug|deploy)\b",
     re.IGNORECASE,
 )
+# refusal fix 2026-10-22: "create a new chat in the DecisionsAI project and ask ..." must open
+# a project thread; this is checked before _EXPLICIT_CHAT so "new chat" no longer wins.
+_EXPLICIT_NEW_PROJECT_CHAT = re.compile(
+    r"\b(?:create|start|open|make|spin\s+up|begin|add)\s+(?:a\s+|an\s+)?(?:(?:new|fresh)\s+)?"
+    r"(?:chat|conversation|thread)\s+(?:to|in|for|under|on)\s+(?:the\s+)?[a-z0-9]",
+    re.IGNORECASE,
+)
+# kanbanroute 2026-10-22: ticket/board language belongs to the Kanban tools (create_ticket),
+# never to a Development thread. Only fires when tickets/board/kanban are named (or "move that
+# to done"); vague phrasings like "track this" are left alone.
+_KANBAN_REQUEST = re.compile(
+    r"\b(?:create|add|make|open|log|file|raise|list|show|move|update|close|delete|archive|assign|reopen)\s+"
+    r"(?:[\w'-]+\s+){0,4}?(?:tickets?|cards?|board|backlog)\b"
+    r"|\bwhat(?:'s|\s+is|\s+are)?\s+(?:tickets?\s+)?(?:\w+\s+){0,3}?(?:on|in)\s+(?:the\s+|my\s+)?(?:\w+\s+)?(?:board|backlog)\b"
+    r"|\bwhat\s+tickets\b"
+    r"|\bmove\s+(?:that|it|this|them)\s+to\s+(?:done|backlog|review|todo|to\s+do|in\s+progress|testing|qa)\b",
+    re.IGNORECASE,
+)
+_THREAD_WORD = re.compile(r"\bthread\b", re.IGNORECASE)
+_DEV_LEAD = re.compile(
+    r"^(?:please\s+|can you\s+|could you\s+)?(?:fix|implement|build|debug|refactor|patch|deploy|verify|work on)\b",
+    re.IGNORECASE,
+)
+
+
+def is_kanban_request(text: str) -> bool:
+    raw = _clean(text)
+    return bool(raw and _KANBAN_REQUEST.search(raw) and not _THREAD_WORD.search(raw) and not _DEV_LEAD.search(raw))
+
+
+def kanban_redirect(text: str, project_name: str = "") -> dict:
+    """Name the create_ticket call for a ticket/board request (tool name is create_ticket)."""
+    low = _clean(text).lower()
+    if re.search(r"\bmove\b", low):
+        action = "move_ticket"
+    elif re.search(r"\b(update|close|archive|assign|reopen)\b", low):
+        action = "update_ticket"
+    elif re.search(r"\bdelete\b", low):
+        action = "delete_ticket"
+    elif re.search(r"\b(open|show)\b.*\b(board|kanban)\b", low):
+        action = "open_board"
+    elif re.search(r"\b(list|what)\b", low):
+        action = "list_tickets"
+    elif re.search(r"\btickets\b|\b(two|three|four|five|several|some)\b", low):
+        action = "create_ticket_batch"
+    else:
+        action = "create_ticket"
+    call = {"tool": "create_ticket", "action": action}
+    if project_name:
+        call["project_name"] = project_name
+    return call
+
+
 _CHAT_QUESTION = re.compile(
     r"\b(what's|whats|what|who's|who|why|how's|how|when|where|tell me|explain|describe|are you|can you tell)\b",
     re.IGNORECASE,
@@ -525,6 +581,10 @@ def orchestrator_surface(text: str) -> str:
     raw = _clean(text)
     if not raw:
         return "unspecified"
+    if is_kanban_request(raw):
+        return "kanban"
+    if _EXPLICIT_NEW_PROJECT_CHAT.search(raw):
+        return "development"
     if _EXPLICIT_CHAT.search(raw):
         return "chat"
     if _EXPLICIT_DEVELOPMENT.search(raw) or _IMPERATIVE_WORK.search(raw):

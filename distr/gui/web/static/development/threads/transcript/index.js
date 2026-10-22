@@ -1,3 +1,4 @@
+import { shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
     function messageTime(timestamp) {
@@ -258,12 +259,33 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         </section>`;
     }
 
+    // Spoken rows linked to replies (spoken_source_row_id -> spoken text); set per render.
+    let spokenBySource = new Map();
+
+    function spokenTextForMessage(message) {
+        if (!message || message.chat_row_id == null) return '';
+        return spokenBySource.get(String(message.chat_row_id)) || '';
+    }
+
+    function playSpokenButtonHtml(index) {
+        const playIcon = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"></path></svg>';
+        return `<button type="button" class="read-response-button play-spoken-button" data-play-spoken="${index}" aria-label="Play spoken version" title="Play spoken version">${playIcon}</button>`;
+    }
+
     function messageActionsHtml(message, index, latestAssistant) {
         const copyIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5"></rect><path d="M3 10V4.5A1.5 1.5 0 0 1 4.5 3H10"></path></svg>';
         const forkIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5"></circle><circle cx="12" cy="5" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><path d="M4 4.5v3A4.5 4.5 0 0 0 8.5 12h2M5.5 5h5"></path></svg>';
-        return `<footer class="message-footer"><div class="message-actions" aria-label="Response actions"><button type="button" data-copy-message="${index}" aria-label="Copy response" title="Copy response to clipboard">${copyIcon}</button>${latestAssistant ? `<button type="button" data-fork-current aria-label="Fork thread" title="Continue from this transcript in a new independent thread. This does not create a Git branch.">${forkIcon}</button>` : ''}</div>${turnTimingHtml(message)}</footer>`;
+        const mouthIcon =
+            '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8c2-2.2 4-2.2 6-1.2C10 5.8 12 5.8 14 8c-1.6 2.6-3.8 3.6-6 3.6S3.6 10.6 2 8z"></path><path d="M3.5 8.2h9"></path></svg>';
+        const playButton = message.spoken
+            ? ''
+            : spokenTextForMessage(message) ? playSpokenButtonHtml(index) : '';
+        const readButton = latestAssistant && !message.spoken && !playButton
+            ? `<button type="button" class="read-response-button" data-read-response="${index}" aria-label="Read response aloud" title="Read response: speak a short spoken version and add it to this thread">${mouthIcon}</button>`
+            : playButton;
+        return `<footer class="message-footer"><div class="message-actions" aria-label="Response actions"><button type="button" data-copy-message="${index}" aria-label="Copy response" title="Copy response to clipboard">${copyIcon}</button>${readButton}${latestAssistant ? `<button type="button" data-fork-current aria-label="Fork thread" title="Continue from this transcript in a new independent thread. This does not create a Git branch.">${forkIcon}</button>` : ''}</div>${turnTimingHtml(message)}</footer>`;
     }
 
     function skillIconSvg() {
@@ -382,7 +404,81 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return String(event?.title || 'Development agent');
     }
 
+    // ---- Dev-agent approval card (tool, action, argument diff, Approve / Deny, expiry) ----
+    function approvalValue(value) {
+        if (value == null || value === '') return '—';
+        if (typeof value === 'object') return value.dateTime || value.date || JSON.stringify(value);
+        return String(value);
+    }
+    function approvalDiffHtml(details) {
+        const d = details || {};
+        const before = d.before && typeof d.before === 'object' ? d.before : null;
+        const after = d.after && typeof d.after === 'object' ? d.after : null;
+        if (before || after) {
+            const keys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})])).filter((k) => !['htmlLink', 'status'].includes(k));
+            const rows = keys.map((k) => {
+                const b = before ? approvalValue(before[k]) : '';
+                const a = after ? (k in after ? approvalValue(after[k]) : (before ? '(unchanged)' : '—')) : '(removed)';
+                const changed = before && after && k in after && b !== a;
+                return `<tr class="${changed ? 'changed' : ''}"><th>${actions.escapeHtml(k)}</th>${before ? `<td>${actions.escapeHtml(b)}</td>` : ''}${after || before ? `<td>${actions.escapeHtml(after ? a : '(will be removed)')}</td>` : ''}</tr>`;
+            }).join('');
+            const head = `<tr><th></th>${before ? '<th>Current</th>' : ''}<th>${after ? (before ? 'Proposed' : 'New') : 'After'}</th></tr>`;
+            return `<table class="dev-approval-diff">${head}${rows}</table>`;
+        }
+        const rest = Object.entries(d).filter(([k]) => !['provider', 'action'].includes(k));
+        if (!rest.length) return '';
+        return `<table class="dev-approval-diff">${rest.map(([k, v]) => `<tr><th>${actions.escapeHtml(k)}</th><td>${actions.escapeHtml(approvalValue(v))}</td></tr>`).join('')}</table>`;
+    }
+    function approvalCardHtml(req) {
+        const status = String(req.status || 'pending').toLowerCase();
+        const expires = req.expires_at ? new Date(req.expires_at) : null;
+        const expired = status === 'pending' && expires && expires.getTime() < Date.now();
+        const shown = expired ? 'expired' : status;
+        const label = { pending: 'Waiting for you', approved: 'Approved', consumed: 'Approved and done', denied: 'Denied', expired: 'Expired' }[shown] || shown;
+        const when = expires ? expires.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const buttons = shown === 'pending'
+            ? `<div class="dev-approval-actions"><button type="button" class="dev-approval-approve" data-dev-approval-action="approve" data-request-id="${actions.escapeHtml(req.request_id)}">Approve</button><button type="button" class="dev-approval-deny" data-dev-approval-action="deny" data-request-id="${actions.escapeHtml(req.request_id)}">Deny</button><small>Expires ${actions.escapeHtml(when)}</small></div>`
+            : '';
+        return `<div class="turn-activity-block dev-approval-card status-${actions.escapeHtml(shown)}" data-dev-approval="${actions.escapeHtml(req.request_id)}" role="group" aria-label="Approval request">
+            <div class="dev-approval-head"><strong>${actions.escapeHtml(`${req.tool || 'tool'} · ${req.action || ''}`)}</strong><span class="dev-approval-status">${actions.escapeHtml(label)}</span></div>
+            <p class="dev-approval-summary">${actions.escapeHtml(req.summary || '')}</p>
+            ${approvalDiffHtml(req.details)}
+            ${buttons}
+        </div>`;
+    }
+    if (!window.__decisionsDevApprovalBound) {
+        window.__decisionsDevApprovalBound = true;
+        document.addEventListener('click', async (e) => {
+            const button = e.target.closest?.('[data-dev-approval-action]');
+            if (!button) return;
+            e.preventDefault();
+            const card = button.closest('[data-dev-approval]');
+            const id = button.dataset.requestId;
+            const verb = button.dataset.devApprovalAction === 'approve' ? 'approve' : 'deny';
+            card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+            const headers = { 'Content-Type': 'application/json', 'X-Decisions-User-Action': 'click' };
+            const tok = (typeof token === 'function' ? token() : token) || document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+            if (tok) headers['X-DecisionsAI-Internal-Token'] = tok;
+            try {
+                const resp = await fetch(`/api/dev-approvals/${encodeURIComponent(id)}/${verb}`, { method: 'POST', headers, credentials: 'same-origin', body: '{}' });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && card) card.outerHTML = approvalCardHtml(data);
+                else if (card) {
+                    card.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                    const s = card.querySelector('.dev-approval-status');
+                    if (s) s.textContent = data.detail || 'Could not save your choice';
+                }
+            } catch (_) {
+                card?.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+            }
+        });
+    }
+
     function turnEventPresentation(event) {
+        const approvalRequest = event?.metadata?.approval_request;
+        if (approvalRequest && approvalRequest.request_id) {
+            return { kind: 'approval', approval: approvalRequest, running: false, failed: false, title: '', preview: '', detail: '', status: approvalRequest.status || 'pending' };
+        }
         const type = String(event?.event_type || '').toLowerCase();
         const status = String(event?.status || '').toLowerCase();
         if (type === 'turn_steered') {
@@ -402,7 +498,8 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const failed = type === 'tool_failed' || status === 'failed';
         const running = type === 'tool_started' && !failed;
         const waiting = type === 'tool_waiting' || status === 'waiting';
-        const kind = turnEventKind(event);
+        const shellFailure = isRoutineShellStep(event) && failed;
+        const kind = shellFailure ? 'commands' : turnEventKind(event);
         const command = turnCommand(event);
         const summary = String(event?.summary || event?.title || '').trim();
         let detail = String(event?.detail || '').trim();
@@ -411,10 +508,15 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         let stateLabel = waiting ? 'needs attention' : failed ? 'failed' : running ? 'running' : 'finished';
         if (kind === 'agent') {
             title = `${turnEventAgentName(event)} ${running ? 'started' : waiting ? 'needs attention' : failed ? 'failed' : 'finished'}`;
+            if (!running && !waiting) title += agentIdentitySuffix(event);
             if (String(event?.metadata?.tool_name || '').toLowerCase() === 'development_agent') preview = '';
         } else if (kind === 'tests') {
             title = running ? 'Running tests' : failed ? 'Tests failed' : 'Tests passed';
             preview = command || summary;
+        } else if (shellFailure) {
+            title = 'Command failed';
+            preview = '';
+            detail = [command, String(event?.detail || event?.summary || '').trim()].filter(Boolean).join('\n\n');
         } else if (kind === 'commands') {
             title = running ? 'Running command' : failed ? 'Command failed' : 'Ran command';
             preview = command || summary;
@@ -427,7 +529,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         } else if (kind === 'skills') {
             title = running ? 'Consulting project guide' : failed ? 'Project guide failed' : 'Project guide consulted';
         }
-        if (detail === preview || detail === command) detail = '';
+        if (!shellFailure && (detail === preview || detail === command)) detail = '';
         const files = kind === 'edits' && Array.isArray(event?.metadata?.files) ? event.metadata.files : [];
         return {
             kind,
@@ -447,11 +549,64 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return `<span class="turn-event-files">${files.map((file) => `<span class="turn-event-file"><span title="${actions.escapeHtml(file.path || '')}">${actions.escapeHtml(file.path || 'Changed file')}</span><small><b>+${Number(file.additions || 0)}</b><i>-${Number(file.deletions || 0)}</i></small></span>`).join('')}</span>`;
     }
 
+const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 'shell_command', 'run_terminal_cmd', 'terminal', 'exec', 'exec_command', 'run_command', 'command']);
+    /** Display-only: routine shell/bash tool steps are hidden from the thread readout (failures still shown collapsed). */
+    function isRoutineShellStep(event) {
+        const type = String(event?.event_type || '').toLowerCase();
+        if (!type.startsWith('tool_')) return false;
+        const name = String(event?.metadata?.tool_name || event?.tool_name || '').toLowerCase().trim();
+        return ROUTINE_SHELL_TOOLS.has(name);
+    }
+    function isFailedStep(event) {
+        return String(event?.event_type || '').toLowerCase() === 'tool_failed' || String(event?.status || '').toLowerCase() === 'failed';
+    }
+
+    const HARNESS_LABELS = { pi: 'Pi', codex: 'Codex', cursor: 'Cursor', claude_code: 'Claude Code', claude: 'Claude Code', opencode: 'OpenCode', gemini: 'Gemini CLI', aider: 'Aider' };
+    function harnessLabel(value) {
+        const key = String(value || '').trim().toLowerCase();
+        if (!key) return '';
+        return HARNESS_LABELS[key] || key.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+
+    function isWorkerLifecycleEvent(event) {
+        const metadata = event?.metadata || {};
+        const toolName = String(metadata.tool_name || event?.tool_name || '').toLowerCase();
+        return ['development_agent', 'cursor_agent'].includes(toolName) && (metadata.worker_lifecycle || String(metadata.call_id || '').startsWith('worker:'));
+    }
+
+    // One completion line per job: fold harness-worker start/end rows into the outer development-agent row.
+    function mergeWorkerLifecycleEvents(events) {
+        const list = Array.isArray(events) ? events : [];
+        const outer = list.find((event) => String(event?.metadata?.tool_name || event?.tool_name || '').toLowerCase() === 'development_agent' && !isWorkerLifecycleEvent(event));
+        if (!outer) return list;
+        const workers = list.filter(isWorkerLifecycleEvent);
+        if (!workers.length && !outer.metadata?.harness && !outer.metadata?.model) return list;
+        const worker = workers[workers.length - 1] || {};
+        const wm = worker.metadata || {};
+        const om = outer.metadata || {};
+        const merged = { ...outer, metadata: { ...om, worker_name: om.worker_name || wm.agent_name || wm.title || '', harness: om.harness || wm.harness || String(wm.call_id || '').replace(/^worker:/, ''), model: om.model || wm.model || '' } };
+        return list.filter((event) => !isWorkerLifecycleEvent(event)).map((event) => (event === outer ? merged : event));
+    }
+
+    function agentIdentitySuffix(event) {
+        const metadata = event?.metadata || {};
+        const parts = [];
+        const worker = String(metadata.worker_name || '').trim();
+        if (worker && worker !== turnEventAgentName(event)) parts.push(worker);
+        const harness = harnessLabel(metadata.harness);
+        if (harness) parts.push(`harness: ${harness}`);
+        const rawModel = String(metadata.model || '').trim();
+        if (rawModel && rawModel.toLowerCase() !== 'auto') parts.push(`model: ${shortModelName(rawModel)}`);
+        return parts.length ? ` (${parts.join(', ')})` : '';
+    }
+
     function turnEventRowsHtml(events, { includeRunning = false, active = false } = {}) {
-        return (events || [])
+        return mergeWorkerLifecycleEvents(events)
+            .filter((event) => !isRoutineShellStep(event) || isFailedStep(event))
             .map(turnEventPresentation)
             .filter((item) => item && (includeRunning || !item.running))
             .map((item) => {
+                if (item.kind === 'approval') return approvalCardHtml(item.approval);
                 const classes = `turn-activity-block turn-event-row event-${item.kind}${item.failed ? ' failed' : ''}${item.running ? ' running' : ''}${active ? ' active-turn-action' : ''}`;
                 const main = `<span class="turn-activity-icon" aria-hidden="true">${turnEventIconSvg(item.kind)}</span><span class="turn-event-copy"><strong>${actions.escapeHtml(item.title)}</strong>${item.preview && item.preview !== item.title ? `<span class="turn-event-preview${['commands', 'tests'].includes(item.kind) ? ' code' : ''}">${actions.escapeHtml(item.preview)}</span>` : ''}${turnEventFilesHtml(item.files)}</span><small class="turn-event-status">${actions.escapeHtml(item.status)}</small>`;
                 if (!item.detail) return `<div class="${classes}"><div class="turn-event-main">${main}</div></div>`;
@@ -475,7 +630,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const role = message.role || 'assistant';
         if (role === 'user') {
             const presentation = userMessagePresentation(message);
-            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}</div></article>`;
+            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}</div>${turnRouteLabelHtml(message)}</article>`;
         }
         if (role === 'tool') {
             const tool = message.tool_event || {};
@@ -487,10 +642,50 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         }
         const ticketMove = ticketMovePresentation(message);
         if (ticketMove) return ticketMoveHtml(message, ticketMove);
+        if (message.spoken) return spokenMessageHtml(message);
         const latest = index === latestAssistantIndex;
         const content = workflowSafeAssistantContent(message.content || '');
         const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
         return `<article class="studio-message assistant"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest)}</div></article>`;
+    }
+
+    // Spoken versions from the Read response button: quiet row, Copy only, never "final".
+    const TURN_HARNESS_LABELS = { pi: 'Pi', cursor: 'Cursor', codex: 'Codex', claude_code: 'Claude Code', kilocode: 'Kilo' };
+    // Small label under a sent message: which tier + harness/model Auto picked (or the fixed choice).
+    function turnRouteLabelHtml(message) {
+        const routes = context.turnRoutes || {};
+        const entry = message.chat_row_id != null ? routes[String(message.chat_row_id)] : null;
+        if (!entry || !entry.backend) return '';
+        const harness = entry.provider === 'kilocode' && entry.backend === 'pi' ? 'Kilo' : TURN_HARNESS_LABELS[entry.backend] || entry.backend;
+        const model = entry.model && entry.model.toLowerCase() !== 'auto' ? shortModelName(entry.model) : '';
+        const tier = entry.complexity ? entry.complexity[0].toUpperCase() + entry.complexity.slice(1) : '';
+        const auto = entry.route_mode !== 'manual';
+        const text = auto ? `Auto: ${[tier, harness, model].filter(Boolean).join(', ')}` : `Fixed: ${[harness, model].filter(Boolean).join(' · ')}`;
+        const full = `${auto ? 'Auto picked' : 'Fixed choice'}: ${tier ? `${tier} complexity, ` : ''}${harness}${entry.model ? ` with ${entry.model}` : ''}${entry.provider ? ` (${entry.provider})` : ''}`;
+        const skillIds = Array.isArray(entry.skill_ids) ? entry.skill_ids.filter(Boolean) : [];
+        const skillNames = skillIds.map((id) => skillDisplayName(id));
+        const skillNote = skillNames.length
+            ? ` <span class="turn-skill-note" title="${actions.escapeHtml(`${entry.skills_auto ? 'Auto-matched' : 'Selected'} skills: ${skillNames.join(', ')}`)}">· ${actions.escapeHtml(skillNames.length > 2 ? `${skillNames.slice(0, 2).join(', ')} +${skillNames.length - 2}` : skillNames.join(', '))}</span>`
+            : '';
+        return `<div class="turn-route-label${auto ? ' auto' : ' fixed'}" title="${actions.escapeHtml(full)}">${actions.escapeHtml(text)}${skillNote}</div>`;
+    }
+
+    function spokenMessageHtml(message) {
+        const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+        const rowAttr = message.chat_row_id != null ? ` data-chat-row-id="${actions.escapeHtml(String(message.chat_row_id))}"` : '';
+        return `<article class="studio-message assistant spoken-message" data-spoken-message${rowAttr}><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body"><div class="message-markdown">${assistantMarkdown(message.content || '')}</div><footer class="message-footer">${turnTimingHtml(message)}</footer></div></article>`;
+    }
+
+    // Append a spoken row in place (no full re-render) so the final reply's buttons stay put.
+    function appendSpokenMessage(message, onCopy) {
+        const list = el('message-list'); list.__lastRenderedHtml = null; // in-place edit: next full render must not be skipped
+        if (!list) return null;
+        const holder = document.createElement('div');
+        holder.innerHTML = spokenMessageHtml(Object.assign({}, message, { spoken: true }));
+        const node = holder.firstElementChild;
+        const anchor = list.querySelector('[data-workflow-runner="live"]');
+        list.insertBefore(node, anchor && anchor.parentElement === list ? anchor : null);
+        return node;
     }
 
     function workflowSafeAssistantContent(value) {
@@ -536,6 +731,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         if (type !== 'tool_started' || !['running', 'queued', 'initializing'].includes(status)) {
             return [fallbackLabel, fallbackDetail];
         }
+        if (isRoutineShellStep(latest)) return ['Running', 'commands…'];
         const toolName = String(latest?.metadata?.tool_name || latest?.tool_name || latest?.title || '').toLowerCase();
         if (/agent|reviewer|subagent/.test(toolName)) {
             const agent = turnEventAgentName(latest);
@@ -598,23 +794,39 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         );
         const title = workflow?.name || event.workflow_name || 'Workflow';
         const summary = event.summary || event.phase || statusSteps[activeIndex]?.name || `${count} steps`;
+        const stepRoutes = run?.step_routes || {};
         const nodes = statusSteps
             .map((step, index) => {
-                const angle = (360 * index) / Math.max(count, 1);
                 const status = String(step.status || 'pending').toLowerCase();
-                return `<li class="thread-workflow-node ${status}" style="--step-angle:${angle}" title="${actions.escapeHtml(step.name || `Step ${index + 1}`)}"><b>${index + 1}</b><span>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</span></li>`;
+                const route = stepRoutes[String(step.id)] || stepRoutes[step.id] || {};
+                const routeLabel = route.model || route.backend || 'Auto';
+                const detail = step.description || step.instruction || 'No step contract is available yet.';
+                return `<li class="thread-workflow-node ${status}" role="presentation"><button type="button" role="tab" aria-selected="${index === activeIndex}" data-thread-workflow-step data-step-name="${actions.escapeHtml(step.name || `Step ${index + 1}`)}" data-step-status="${actions.escapeHtml(status)}" data-step-route="${actions.escapeHtml(routeLabel)}" data-step-detail="${actions.escapeHtml(detail)}"><b>${index + 1}</b><span>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</span><small>${actions.escapeHtml(actions.statusLabel(status))}</small></button></li>`;
             })
             .join('');
+        const activeStep = statusSteps[activeIndex] || statusSteps[0] || {};
+        const activeRoute = stepRoutes[String(activeStep.id)] || stepRoutes[activeStep.id] || {};
+        const activeDetail = activeStep.description || activeStep.instruction || summary;
         return `<article class="studio-message workflow-runner" data-workflow-runner="${mode}" data-run-id="${actions.escapeHtml(String(run?.id || event.run_id || ''))}">
             <div class="thread-workflow-runner ${mode}" data-status="${actions.escapeHtml(runStatus)}" role="status" aria-live="${mode === 'live' ? 'polite' : 'off'}">
                 <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><span>${actions.escapeHtml(actions.statusLabel(runStatus))}</span></div>
-                <div class="thread-workflow-ring" style="--step-count:${count}">
-                    <svg class="thread-workflow-path" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="38"></circle></svg>
-                    <ol class="thread-workflow-nodes">${nodes}</ol>
-                    <div class="thread-workflow-core"><span>${actions.escapeHtml(mode === 'done' ? 'Done' : actions.statusLabel(runStatus))}</span><strong>${count}</strong><small>${actions.escapeHtml(summary)}</small></div>
-                </div>
+                <ol class="thread-workflow-nodes" role="tablist" aria-label="${actions.escapeHtml(title)} steps">${nodes}</ol>
+                <div class="thread-workflow-step-detail"><div><strong>${actions.escapeHtml(activeStep.name || summary)}</strong><span>${actions.escapeHtml(activeRoute.model || activeRoute.backend || 'Auto')}</span></div><p>${actions.escapeHtml(activeDetail)}</p></div>
             </div>
         </article>`;
+    }
+
+    function bindWorkflowStepRails(root) {
+        root.querySelectorAll('[data-workflow-runner]').forEach((runner) => {
+            const detail = runner.querySelector('.thread-workflow-step-detail');
+            runner.querySelectorAll('[data-thread-workflow-step]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    runner.querySelectorAll('[data-thread-workflow-step]').forEach((item) => item.setAttribute('aria-selected', String(item === button)));
+                    if (!detail) return;
+                    detail.innerHTML = `<div><strong>${actions.escapeHtml(button.dataset.stepName || 'Workflow step')}</strong><span>${actions.escapeHtml(button.dataset.stepRoute || 'Auto')}</span></div><p>${actions.escapeHtml(button.dataset.stepDetail || actions.statusLabel(button.dataset.stepStatus || 'pending'))}</p>`;
+                });
+            });
+        });
     }
 
     function liveWorkflowRunnerHtml() {
@@ -707,7 +919,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
 
     function syncDurableTurnActivity() {
         if (!context.currentChat) return;
-        const list = el('message-list');
+        const list = el('message-list'); list.__lastRenderedHtml = null; // in-place edit: next full render must not be skipped
         const current = list.querySelector('.active-turn');
         const html = durableTurnActivity(context.currentChat);
         if (!html) {
@@ -722,7 +934,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
 
     function syncLiveWorkflowRunner() {
         if (!context.currentChat) return;
-        const list = el('message-list');
+        const list = el('message-list'); list.__lastRenderedHtml = null; // in-place edit: next full render must not be skipped
         const current = list.querySelector('[data-workflow-runner="live"]');
         const html = liveWorkflowRunnerHtml();
         if (!html) {
@@ -731,11 +943,13 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         }
         if (current) {
             current.outerHTML = html;
+            bindWorkflowStepRails(list);
             return;
         }
         const active = list.querySelector('.active-turn');
         if (active) active.insertAdjacentHTML('beforebegin', html);
         else list.insertAdjacentHTML('beforeend', html);
+        bindWorkflowStepRails(list);
     }
 
     function renderConversation(chat) {
@@ -744,9 +958,21 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const messages = (chat.messages || [])
             .filter((message) => !isDevelopmentConversationNoise(message, chat))
             .slice(-140);
+        spokenBySource = new Map();
+        let previousReplyRowId = null;
+        messages.forEach((message) => {
+            if ((message.role || 'assistant') !== 'assistant') return;
+            if (!message.spoken) {
+                if (message.chat_row_id != null) previousReplyRowId = message.chat_row_id;
+                return;
+            }
+            // Older servers omit spoken_source_row_id: link to the reply just above.
+            const source = message.spoken_source_row_id ?? previousReplyRowId;
+            if (source != null && !spokenBySource.has(String(source))) spokenBySource.set(String(source), message.content || '');
+        });
         let latestAssistantIndex = -1;
         messages.forEach((message, index) => {
-            if ((message.role || 'assistant') === 'assistant' && !ticketMovePresentation(message)) latestAssistantIndex = index;
+            if ((message.role || 'assistant') === 'assistant' && !message.spoken && !ticketMovePresentation(message)) latestAssistantIndex = index;
         });
         const turnsByRow = new Map((chat.turns || []).map((turn) => [String(turn.turn_id), turn]));
         const durableActivityKeys = durableActivityDedupeKeys(chat.turns || []);
@@ -755,20 +981,28 @@ export function createThreadsTranscript({ context, actions, el, token }) {
                 .filter((message) => message.role === 'user' && message.chat_row_id != null)
                 .map((message) => [String(message.chat_row_id), userMessagePresentation(message).content])
         );
-        list.innerHTML = `${messages
+        const nextHtml = `${messages
             .map((message, index) => {
                 const rowId = message.chat_row_id == null ? '' : String(message.chat_row_id);
                 return messageHtml(message, index, latestAssistantIndex, turnsByRow.get(rowId), instructionsByRow.get(rowId) || '', durableActivityKeys, messages);
             })
             .join('')}${liveWorkflowRunnerHtml()}${durableTurnActivity(chat)}`;
+        // 2026-10-22: background polls re-render the same transcript; skip identical rebuilds so the
+        // assistant avatar <video>/<img> elements are not re-created (they visibly reset each poll).
+        if (list.__lastRenderedHtml === nextHtml && list.childElementCount && !list.classList.contains('hidden')) return;
+        list.__lastRenderedHtml = nextHtml;
+        list.innerHTML = nextHtml;
         list.classList.remove('hidden');
         actions.bindConversationActions(list, messages);
+        bindWorkflowStepRails(list);
         const conversation = el('conversation');
         window.requestAnimationFrame(() => {
             conversation.scrollTop = conversation.scrollHeight;
         });
     }
     return {
+        appendSpokenMessage,
+        playSpokenButtonHtml,
         assistantMarkdown,
         gitStatusEntries,
         messageTime,

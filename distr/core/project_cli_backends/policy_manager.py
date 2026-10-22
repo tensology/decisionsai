@@ -147,6 +147,8 @@ def _counts_as_model_health_failure(error: str) -> bool:
         "connection refused",
         "connection error",
         "not support chat",
+        "model is not supported",
+        "model is unsupported",
         "model not found",
         "free period of this model ended",
         "provider unavailable",

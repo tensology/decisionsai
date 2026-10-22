@@ -209,6 +209,26 @@ class FastActionMixin:
                 logger.warning("LLM: Could not save fast action response: %s", e)
         return None
 
+    def _fa_remember_clipboard_context(self, chat_id, text: str) -> None:
+        """Keep directly-read clipboard text available to the next model turn."""
+        if not text:
+            return
+        self._messages.append({
+            "role": "tool",
+            "name": "clipboard_action",
+            "content": f"Clipboard content read aloud:\n{text}",
+        })
+        try:
+            from distr.core.chat import ChatService
+
+            ChatService.append_assistant_notice(
+                int(chat_id),
+                f"Clipboard content read aloud:\n{text}",
+                hidden=True,
+            )
+        except Exception:
+            logger.debug("Could not persist clipboard context", exc_info=True)
+
     @staticmethod
     def _fa_screenshot_response_text(result_str: str) -> str:
         """Short voice/chat reply from screenshot_analyzer output."""
@@ -492,6 +512,7 @@ class FastActionMixin:
                     text_to_read = text_to_read.split("\n\nThis is the current clipboard content.")[0].strip()
 
             if text_to_read and text_to_read.strip():
+                self._fa_remember_clipboard_context(chat_id, text_to_read)
                 await self._fa_deliver_spoken_response(text_to_read, speakable_symbols=True)
                 self._fa_record_read_aloud_activity(
                     chat_id, "Read from clipboard", text_to_read, user_text

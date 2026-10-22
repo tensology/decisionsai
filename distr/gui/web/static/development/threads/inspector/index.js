@@ -1,5 +1,7 @@
 // Owns threads inspector rendering, interactions, and private view state.
 export function createThreadsInspector({ context, actions, el, token }) {
+    let learningLedgerRequest = null;
+    let learningLedgerMemory = null;
     function planItemHtml(step, index, currentStepId) {
         const status = String(step.status || 'pending').toLowerCase();
         const active = Number(step.id) === Number(currentStepId) || status === 'running';
@@ -11,6 +13,9 @@ export function createThreadsInspector({ context, actions, el, token }) {
         const run = context.currentRun || {};
         const outcome = run.outcome || {};
         const runRoute = run.latest_backend_handoff || {};
+        const receipt = run.route_receipt || {};
+        const selected = receipt.selected || {};
+        const actual = { ...(receipt.actual || {}), ...runRoute };
         const assessment = context.routingAssessment || {};
         const assessed = assessment.route || {};
         const auto = (context.currentChat?.route_mode || context.draft.route_mode) === 'auto';
@@ -27,16 +32,28 @@ export function createThreadsInspector({ context, actions, el, token }) {
             runRoute.runtime_id ||
             '';
         return {
-            provider: harness,
-            runtime,
-            model:
-                runRoute.model ||
+            selectedBackend: selected.backend || harness,
+            selectedProvider: selected.provider || '',
+            selectedModel:
+                selected.model ||
                 run.model ||
                 context.draft.model_name ||
                 assessed.model ||
                 context.currentChat?.model_name ||
                 'Best available',
+            actualBackend: actual.backend_id || actual.backend || '',
+            actualProvider: actual.provider || '',
+            actualModel: actual.model || '',
+            runtime: actual.runtime_id || actual.runtime || runtime,
+            complexity: receipt.complexity || assessment.complexity || 'medium',
+            decision: receipt.decision_engine || assessment.decision_engine || 'heuristic',
+            confidence: receipt.laya?.confidence,
+            reasoning: selected.reasoning_effort || receipt.configured?.reasoning_effort || '',
+            serviceTier: selected.service_tier || receipt.configured?.service_tier || '',
+            configured: receipt.configured || {},
+            layaFallback: receipt.laya?.fallback_reason || '',
             reason:
+                receipt.decision_reason ||
                 runRoute.route_rationale ||
                 runRoute.selection_reason ||
                 run.selection_reason ||
@@ -54,7 +71,7 @@ export function createThreadsInspector({ context, actions, el, token }) {
     function automationSectionHtml(chat) {
         const automation = automationForChat(chat?.id);
         if (!automation) {
-            return `<section class="inspect-section"><div class="inspect-title">Automation</div><button class="wide-button" data-create-automation="1">Automate this thread</button><button class="wide-button" data-schedule-prompt="1">Schedule this prompt</button></section>`;
+            return '';
         }
         const paused = String(automation.status || '').toLowerCase() === 'paused';
         return `<section class="inspect-section">
@@ -65,7 +82,7 @@ export function createThreadsInspector({ context, actions, el, token }) {
                 <div class="automation-actions">
                     <button class="wide-button" data-run-automation="${actions.escapeHtml(automation.id)}">Run now</button>
                     <button class="wide-button" data-toggle-automation="${actions.escapeHtml(automation.id)}" data-automation-action="${paused ? 'resume' : 'pause'}">${paused ? 'Resume' : 'Pause'}</button>
-                    <button class="wide-button" data-edit-automation="${actions.escapeHtml(automation.id)}">Edit schedule</button>
+                    <button class="wide-button" data-edit-automation="${actions.escapeHtml(automation.id)}">View in Automations</button>
                 </div>
             </div>
         </section>`;
@@ -125,16 +142,36 @@ export function createThreadsInspector({ context, actions, el, token }) {
     function inspectorWorkflowHtml() {
         const workflow = context.currentWorkflow;
         const route = currentRoute();
+        const selectedRoute = [route.selectedBackend, route.selectedProvider].filter(Boolean).join(' / ');
+        const actualRoute = [route.actualBackend, route.actualProvider].filter(Boolean).join(' / ');
         const routeRows = [
-            `<div class="surface-row">Harness<span>${actions.escapeHtml(route.provider || 'Auto')}</span></div>`,
-            route.runtime ? `<div class="surface-row">Runtime<span>${actions.escapeHtml(route.runtime)}</span></div>` : '',
-            `<div class="surface-row">Model<span>${actions.escapeHtml(route.model || 'auto')}</span></div>`
+            `<div class="surface-row">Decision<span>${actions.escapeHtml(route.decision === 'laya' ? `Laya${route.confidence == null ? '' : ` · ${Math.round(Number(route.confidence) * 100)}%`}` : 'Deterministic policy')}</span></div>`,
+            `<div class="surface-row">Complexity<span>${actions.escapeHtml(route.complexity)}</span></div>`,
+            `<div class="surface-row">Configured<span>${actions.escapeHtml(route.configured.route_mode === 'manual' ? `${route.configured.backend || route.configured.provider || 'manual'} · ${route.configured.model || 'auto'}` : 'Auto')}</span></div>`,
+            `<div class="surface-row">Selected<span>${actions.escapeHtml(`${selectedRoute || 'Auto'} · ${route.selectedModel || 'auto'}`)}</span></div>`,
+            route.actualBackend || route.actualModel ? `<div class="surface-row">Actual<span>${actions.escapeHtml(`${actualRoute || route.actualBackend || 'runtime'} · ${route.actualModel || route.selectedModel || 'auto'}`)}</span></div>` : '',
+            route.runtime ? `<div class="surface-row">Actual runtime<span>${actions.escapeHtml(route.runtime)}</span></div>` : '',
+            route.reasoning ? `<div class="surface-row">Reasoning<span>${actions.escapeHtml(`${route.reasoning}${route.serviceTier ? ` · ${route.serviceTier}` : ''}`)}</span></div>` : '',
+            route.layaFallback ? `<p class="compact-note">Laya fallback: ${actions.escapeHtml(route.layaFallback)}</p>` : '',
+            route.reason ? `<p class="compact-note">${actions.escapeHtml(route.reason)}</p>` : ''
         ].join('');
         if (!workflow)
-            return `<section class="inspect-section"><div class="inspect-title">Execution route</div><div class="surface-row">Mode<span>Direct agent</span></div>${routeRows}</section>`;
+            return `<section class="inspect-section"><div class="inspect-title">Route receipt</div><div class="surface-row">Mode<span>Direct agent</span></div>${routeRows}</section>`;
         const steps = actions.workflowStepList(workflow);
         const currentStepId = Number(context.currentRun?.current_step_id || context.currentRun?.step_id || 0);
         return `<section class="inspect-section"><div class="inspect-title">Workflow <span>${actions.escapeHtml(actions.statusLabel(context.currentRun?.status || 'ready'))}</span></div><button type="button" class="workflow-thread-link" data-open-thread-workflow="${Number(workflow.id)}"><strong>${actions.escapeHtml(workflow.name || 'Workflow')}</strong><small>${steps.length} steps · Open workflow</small></button>${routeRows}<div class="workflow-thread-steps">${steps.map((step, index) => planItemHtml(step, index, currentStepId)).join('')}</div></section>`;
+    }
+
+    function learningLedgerHtml() {
+        const memory = context.steeringMemory || context.currentRun?.steering_memory || learningLedgerMemory;
+        if (!memory) return '';
+        const corrections = Array.isArray(memory.steering_log) ? memory.steering_log : [];
+        const rules = Array.isArray(memory.learned_rules) ? memory.learned_rules : [];
+        return `<details class="inspect-disclosure learning-ledger"><summary><span>Learning ledger</span><b>${corrections.length} corrections · ${rules.length} rules</b></summary><div class="disclosure-body">
+            ${corrections.slice(0, 4).map((entry) => `<div class="evidence-card"><strong>Run correction</strong><span>${actions.escapeHtml(entry.message || entry.summary || '')}</span></div>`).join('')}
+            ${rules.slice(0, 8).map((rule) => `<div class="evidence-card"><strong>${actions.escapeHtml(rule.enabled ? 'Promoted rule' : 'Candidate')}</strong><span>${actions.escapeHtml(rule.summary || '')}</span><small>${actions.escapeHtml(rule.scope || 'board')} · ${Number(rule.evidence_count || 0)} evidence</small><button type="button" class="wide-button" data-learning-rule="${Number(rule.id)}" data-learning-enabled="${rule.enabled ? 'false' : 'true'}">${rule.enabled ? 'Roll back rule' : 'Promote rule'}</button></div>`).join('')}
+            ${!corrections.length && !rules.length ? '<div class="empty-inspector">No corrections or learning candidates have been recorded for this run.</div>' : ''}
+        </div></details>`;
     }
 
     function inspectorRunHtml() {
@@ -149,6 +186,7 @@ export function createThreadsInspector({ context, actions, el, token }) {
         return `
             ${commandQueueHtml()}
             ${inspectorWorkflowHtml()}
+            ${learningLedgerHtml()}
             ${automationSectionHtml(chat)}
             ${waiting ? `<section class="inspect-section"><div class="waiting-card"><strong>Workflow checkpoint${interaction?.telegram_linked ? ' available in web or Telegram' : ''}</strong><p>${actions.escapeHtml(run?.worker_question || run?.waiting_prompt || 'Review the pending development checkpoint.')}</p><div class="waiting-actions">${interaction ? checkpointButtons.map((action) => `<button data-interaction-token="${actions.escapeHtml(interaction.token)}" data-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(actions.actionLabel(action))}</button>`).join('') : '<button data-continue-run="1">Continue</button><button data-focus-steer="1">Add guidance</button>'}</div>${interactionActions.includes('feedback') ? `<form class="checkpoint-feedback" data-checkpoint-feedback="${actions.escapeHtml(interaction.token)}"><label>Revision guidance<textarea required placeholder="Describe what the workflow should change before continuing"></textarea></label><button type="submit">Submit revision</button></form>` : ''}</div></section>` : ''}
             <section class="inspect-section inspector-activity-section">
@@ -356,6 +394,18 @@ export function createThreadsInspector({ context, actions, el, token }) {
     }
 
     function renderInspector() {
+        const workflowId = Number(context.currentWorkflow?.id || 0);
+        const runId = Number(actions.workflowRunId?.(context.currentRun) || 0);
+        if (workflowId && runId && !context.steeringMemory && !context.currentRun?.steering_memory && !learningLedgerMemory && !learningLedgerRequest) {
+            learningLedgerRequest = actions.api(`/workflows/${workflowId}/runs/${runId}/steering-memory`)
+                .then((memory) => {
+                    learningLedgerMemory = memory;
+                    context.steeringMemory = memory;
+                    renderInspector();
+                })
+                .catch(() => null)
+                .finally(() => { learningLedgerRequest = null; });
+        }
         const changes = context.currentRun
             ? context.currentRun.changes?.files ||
               context.currentRun.git_status_after ||
@@ -397,6 +447,19 @@ export function createThreadsInspector({ context, actions, el, token }) {
             actions.setWorkspaceMode('workflows', { focus: false });
             await actions.selectWorkflow(Number(event.currentTarget.dataset.openThreadWorkflow));
         });
+        content.querySelectorAll('[data-learning-rule]').forEach((button) => button.addEventListener('click', async () => {
+            const boardId = Number((context.steeringMemory || context.currentRun?.steering_memory || learningLedgerMemory)?.board_id || 0);
+            if (!boardId) return;
+            await actions.api(`/tickets/boards/${boardId}/orchestrator-learned-rules/${Number(button.dataset.learningRule)}`, {
+                method: 'PATCH',
+                body: { enabled: button.dataset.learningEnabled === 'true' }
+            });
+            const workflowId = Number(context.currentWorkflow?.id || 0);
+            const runId = Number(actions.workflowRunId?.(context.currentRun) || context.currentRun?.id || 0);
+            learningLedgerMemory = await actions.api(`/workflows/${workflowId}/runs/${runId}/steering-memory`);
+            context.steeringMemory = learningLedgerMemory;
+            renderInspector();
+        }));
         content
             .querySelectorAll('[data-plan-transition]')
             .forEach((button) => button.addEventListener('click', () => transitionPlan(Number(button.dataset.planId), button.dataset.planTransition)));
@@ -404,8 +467,6 @@ export function createThreadsInspector({ context, actions, el, token }) {
             .querySelectorAll('[data-plan-run]')
             .forEach((button) => button.addEventListener('click', () => runApprovedPlan(Number(button.dataset.planRun))));
         content.querySelector('[data-continue-run]')?.addEventListener('click', actions.continueRun);
-        content.querySelector('[data-create-automation]')?.addEventListener('click', () => actions.openAutomationDialog(null));
-        content.querySelector('[data-schedule-prompt]')?.addEventListener('click', () => schedulePromptFromThread());
         content
             .querySelectorAll('[data-edit-automation]')
             .forEach((button) =>

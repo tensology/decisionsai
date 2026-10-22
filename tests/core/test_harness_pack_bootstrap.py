@@ -46,7 +46,7 @@ def test_harness_pack_bootstrap_projects_vendor_context_to_detected_harnesses(tm
     for relative in [
         ".claude/skills/decisions-ecc-harness/SKILL.md",
         ".cursor/skills/decisions-ecc-harness/SKILL.md",
-        ".pi/skills/decisions-ecc-harness/SKILL.md",
+        ".pi/agent/skills/decisions-ecc-harness/SKILL.md",
         "plugins/decisions-codex/skills/ecc-harness-pack/SKILL.md",
     ]:
         path = tmp_path / relative

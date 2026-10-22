@@ -741,6 +741,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         original tool cache).  This ensures retrieval actually reduces the tool
         count while preserving on-demand injections.
         """
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+        last_user_message = strip_rag_block(last_user_message)
         if not last_user_message:
             return self._tools
         try:
@@ -885,11 +888,22 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         try:
             from distr.core.mempalace.wiring import prefer_read_rag_context
 
+            from distr.core.agent.services.llm.oracle_context import (
+                RAG_HEADER, USER_REQUEST_MARKER, filter_rag_snippets,
+            )
+
             mp_ctx = prefer_read_rag_context(clean)
             if mp_ctx:
-                block = "[Retrieved project context — MemPalace]\n" + mp_ctx[:2500]
-                logger.info("MemPalace RAG inject (%d chars)", len(mp_ctx))
-                return block + "\n\nUser request:\n" + clean
+                relevant = filter_rag_snippets(clean, mp_ctx)
+                if not relevant:
+                    logger.info(
+                        "MemPalace RAG inject skipped: %d chars weakly relevant or seed_corpus_pack only",
+                        len(mp_ctx),
+                    )
+                    return clean
+                block = RAG_HEADER + "\n" + relevant[:2500]
+                logger.info("MemPalace RAG inject (%d of %d chars kept)", len(relevant), len(mp_ctx))
+                return block + USER_REQUEST_MARKER + clean
         except Exception:
             logger.debug("MemPalace RAG inject skipped", exc_info=True)
         try:
@@ -914,7 +928,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     label = str(item)
                 if label:
                     source_bits.append(str(label))
-            block = "[Retrieved project context]\n" + (answer[:2500] if answer else "(context snippets)")
+            from distr.core.agent.services.llm.oracle_context import RAG_HEADER
+
+            block = RAG_HEADER + "\n" + (answer[:2500] if answer else "(context snippets)")
             if source_bits:
                 block += "\nSources: " + ", ".join(source_bits)
             logger.info("RAG auto-query injected (%d chars, %d sources)", len(answer), len(source_bits))
@@ -1099,9 +1115,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         from distr.core.agent.services.llm.bulk_instruction import should_bypass_fast_action_detection
         if getattr(self, "_bypass_fast_actions_for_turn", False):
             return None
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
         if not self._messages:
             return None
-        last_message = self._messages[-1].get("content", "")
+        # Route on the ORIGINAL user text, never on an injected RAG block.
+        last_message = strip_rag_block(self._messages[-1].get("content", ""))
         if not isinstance(last_message, str):
             return None
         if should_bypass_fast_action_detection(last_message):
@@ -1190,6 +1209,61 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             logger.warning("Could not determine username: %s", e)
             return "User"
 
+    def _sync_spoken_notes_into_messages(self, chat_id) -> int:
+        """Append spoken rows / oracle notes saved by the web server (Read response)
+        that this LLM's in-memory context (loaded at chat switch) has not seen.
+        Called just before the new user message is appended, so they precede it."""
+        if not chat_id or not isinstance(getattr(self, "_messages", None), list):
+            return 0
+        try:
+            from distr.core.chat import ChatService, SPOKEN_HISTORY_PREFIX, SPOKEN_NOTE_PREFIX
+
+            have = {str(m.get("content") or "") for m in self._messages if isinstance(m, dict) and m.get("role") == "assistant"}
+            added = 0
+            for m in ChatService.get_chat_history(int(chat_id)):
+                content = str(m.get("content") or "")
+                if m.get("role") == "assistant" and content.startswith((SPOKEN_HISTORY_PREFIX, SPOKEN_NOTE_PREFIX)) and content not in have:
+                    self._messages.append({"role": "assistant", "content": content})
+                    have.add(content)
+                    added += 1
+            if added:
+                logger.info("LLM context: added %d spoken note(s) for chat %s", added, chat_id)
+            self._refresh_current_context_line(chat_id)
+            return added
+        except Exception:
+            logger.debug("Could not sync spoken notes into LLM context", exc_info=True)
+            return 0
+
+    def _refresh_current_context_line(self, chat_id) -> str:
+        """Keep one structured 'Current project / Development thread' line in context
+        (derived from the oracle_note rows' source_thread_id) and publish the thread
+        id so send-to-thread tools can target it."""
+        from distr.core.agent.services.llm.oracle_context import (
+            CONTEXT_LINE_PREFIX, derive_current_development_thread,
+            format_context_line, set_current_development_thread,
+        )
+
+        try:
+            from distr.core.chat_manager import _thread_root_id
+            from distr.core.db import get_session
+
+            with get_session() as session:
+                root = _thread_root_id(session, int(chat_id))
+                info = derive_current_development_thread(session, root)
+        except Exception:
+            logger.debug("Could not derive current Development thread", exc_info=True)
+            return ""
+        set_current_development_thread(info)
+        line = format_context_line(info)
+        self._messages[:] = [
+            m for m in self._messages
+            if not (isinstance(m, dict) and str(m.get("content") or "").startswith(CONTEXT_LINE_PREFIX))
+        ]
+        if line:
+            self._messages.append({"role": "assistant", "content": line})
+            logger.info("LLM context: %s", line)
+        return line
+
     def _ensure_user_message_persisted(
         self, text: str, *, skip: bool = False
     ) -> Optional[int]:
@@ -1209,6 +1283,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                         int(current_chat_id),
                         resolve_active_chat_turn_row_id(int(current_chat_id)),
                     )
+                    self._sync_spoken_notes_into_messages(current_chat_id)
                 return current_chat_id
             return None
         if not getattr(self, "chat_manager", None) or not (text or "").strip():
@@ -1222,12 +1297,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if getattr(self, "_is_telegram_request", False)
             else None
         )
+        self._sync_spoken_notes_into_messages(current_chat_id)
         chat_row_id = self.chat_manager.add_user_message(
             current_chat_id, text.strip(), source_platform=src
         )
         from distr.core.chat_manager import bind_active_chat_turn
 
         bind_active_chat_turn(int(current_chat_id), chat_row_id)
+        self._store_uploaded_image_on_row(chat_row_id)
         try:
             signal_manager.chat_message_added.emit(
                 int(current_chat_id), "user", text.strip(), chat_row_id
@@ -2113,32 +2190,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         image_path = get_image_path_from_context(uploaded_image_path)
 
         if image_path and os.path.exists(image_path):
-            logger.debug("📸 Image found: %s", image_path)
-            chat_model_vision = check_vision_model_support(self._model_name, provider_name)
-
-            if chat_model_vision:
-                try:
-                    base64_image, mime_type = convert_image_to_base64(image_path)
-                    user_message_content = self._format_vision_message(user_message_content, base64_image, mime_type)
-                    logger.debug("✅ Image embedded in message (native vision)")
-                except Exception as e:
-                    logger.error("Failed to embed image: %s", e, exc_info=True)
-                    user_message_content = augment_bulk_instruction(
-                        text,
-                        source="telegram" if is_telegram else "chat",
-                    )
-            else:
-                analysis = await analyze_image_with_vision_llm(image_path, text)
-                if analysis:
-                    user_message_content = (
-                        f"[The user uploaded an image. Here's what's in the image: {analysis}]\n\n"
-                        f"User's question: {user_message_content}"
-                    )
-                else:
-                    user_message_content = augment_bulk_instruction(
-                        text,
-                        source="telegram" if is_telegram else "chat",
-                    )
+            logger.debug("Image found: %s", image_path)
+            user_message_content = await self._image_turn_content(
+                image_path, text, user_message_content, provider_name, is_telegram
+            )
         elif image_path:
             logger.warning("Image path provided but file doesn't exist: %s", image_path)
 
@@ -2159,6 +2214,64 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             self._cancelled = False
 
         self._generation_task = asyncio.create_task(self._generate_response())
+
+    async def _image_turn_content(self, image_path, text, user_message_content, provider_name, is_telegram=False):
+        """Native image block when the chat model reads images; otherwise a vision-model description."""
+        from distr.core.agent.services.llm.image_utils import (
+            check_vision_model_support, convert_image_to_base64,
+        )
+        from distr.core.agent.services.llm.bulk_instruction import augment_bulk_instruction
+
+        if check_vision_model_support(self._model_name, provider_name):
+            try:
+                base64_image, mime_type = convert_image_to_base64(image_path)
+                logger.debug("Image embedded in message (native vision)")
+                return self._format_vision_message(user_message_content, base64_image, mime_type)
+            except Exception as e:
+                logger.error("Failed to embed image: %s", e, exc_info=True)
+                return augment_bulk_instruction(text, source="telegram" if is_telegram else "chat")
+        return await self._describe_image_for_text_model(image_path, text, user_message_content)
+
+    async def _describe_image_for_text_model(self, image_path, text, user_message_content):
+        """Selected model cannot read images: describe it with the configured vision model."""
+        from distr.core.agent.services.llm.image_utils import (
+            analyze_image_with_vision_llm, resolve_vision_model,
+        )
+
+        base = user_message_content if isinstance(user_message_content, str) else text
+        vision = resolve_vision_model()
+        if not vision:
+            return (
+                "[The user attached an image, but the selected model cannot read images and no "
+                "vision model is configured (Settings > LLMs > Vision model). Tell the user this "
+                "plainly and do not guess what the image shows.]\n\n" + base
+            )
+        analysis = await analyze_image_with_vision_llm(image_path, text)
+        if not analysis or analysis.startswith("[Image analysis failed"):
+            return (
+                f"[The user attached an image, but the vision model {vision[1]} could not describe it. "
+                "Tell the user this plainly and do not guess what the image shows.]\n\n" + base
+            )
+        return f"Image description from {vision[1]}: {analysis}\n\n{base}"
+
+    def _store_uploaded_image_on_row(self, chat_row_id):
+        """Record this turn's uploaded image on the user chat row so transcripts show it."""
+        image_path = getattr(self, "_uploaded_image_path", None)
+        if not chat_row_id or not image_path:
+            return
+        try:
+            from distr.core.db import get_session, Chat
+
+            session = get_session()
+            try:
+                row = session.get(Chat, int(chat_row_id))
+                if row is not None and not row.image:
+                    row.image = str(image_path)
+                    session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("Could not store uploaded image on chat row %s: %s", chat_row_id, e)
 
     def _format_vision_message(self, text: str, base64_image: str, mime_type: str):
         """Format a vision message. Override in subclass for provider-specific format."""

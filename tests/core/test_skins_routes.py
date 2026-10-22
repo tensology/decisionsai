@@ -53,6 +53,7 @@ def skin_dir(tmp_path):
     skin_folder.mkdir()
     (skin_folder / "skin.json").write_text(MINIMAL_SKIN_JSON, encoding="utf-8")
     (skin_folder / "idle.webm").write_bytes(b"\x1a\x45\xdf\xa3")  # fake webm
+    (skin_folder / "idle.webp").write_bytes(b"RIFF")  # authored picker thumbnail
     (skin_folder / "idle.gif").write_bytes(b"GIF89a")  # fake gif
     (skin_folder / "readme.txt").write_text("not an animation")
     return tmp_path
@@ -96,6 +97,7 @@ class TestListSkins:
         assert data["skins"][0]["folder_name"] == "test-skin"
         assert data["skins"][0]["name"] == "TestOracle"
         assert data["skins"][0]["type"] == "oracle"
+        assert data["skins"][0]["preview_image"] == "idle.webp"
         assert data["skins"][0]["chroma_key"] == [0, 255, 0]
         assert data["skins"][0]["chroma_threshold"] == 35
 

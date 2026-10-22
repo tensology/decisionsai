@@ -1,3 +1,8 @@
+---
+name: jev-task-router
+description: "Use before committing to an execution path when the task has meaningful ambiguity or risk; calls the Jev MCP tool jev_route_task."
+---
+
 # Jev Task Router
 
 Use `jev_route_task` before committing to an execution path when the task has meaningful ambiguity or risk.

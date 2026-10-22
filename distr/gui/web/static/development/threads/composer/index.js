@@ -1,4 +1,6 @@
+import { encodedVariant, displayModelName, shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 import { providerLabel as lookupProviderLabel, catalogModels as lookupCatalogModels } from '../../shared/models.js';
+import { loadInstalledHarnesses } from '../../../shared/harnesses.js?v=20261022-harnesssrc';
 // Owns threads composer rendering, interactions, and private view state.
 export function createThreadsComposer({ context, actions, el, token }) {
     const HARNESS_OPTIONS = [
@@ -9,6 +11,14 @@ export function createThreadsComposer({ context, actions, el, token }) {
         { id: 'kilocode', label: 'Kilo' }
     ];
     const BASE_HARNESS_IDS = new Set(HARNESS_OPTIONS.map((item) => item.id));
+    // harnesssrc 2026-10-22: offer only installed harnesses (shared source). Known ids stay
+    // resolvable so a saved pin to an uninstalled harness still shows its name.
+    loadInstalledHarnesses().then((installed) => {
+        if (!Array.isArray(installed) || !installed.length) return;
+        const rows = installed.map((h) => ({ id: h.id, label: (HARNESS_OPTIONS.find((o) => o.id === h.id) || {}).label || h.name }));
+        HARNESS_OPTIONS.splice(0, HARNESS_OPTIONS.length, ...rows);
+        rows.forEach((row) => BASE_HARNESS_IDS.add(row.id));
+    });
     let routePreviewTimer = null;
 
     function harnessOptions() {
@@ -93,18 +103,55 @@ export function createThreadsComposer({ context, actions, el, token }) {
             selected.toLowerCase() !== 'auto' &&
             !models.some((model) => String(model.id || model.name || model).toLowerCase() === selected.toLowerCase())
         ) {
-            models = [{ id: selected, name: selected }, ...models];
+            // A saved pin that the current catalog no longer lists stays selected and is marked unavailable (never reset to Auto).
+            models = [{ id: selected, name: selected, unavailable: true }, ...models];
         }
         const normalizedQuery = String(query || '')
             .trim()
             .toLowerCase();
-        const withoutAuto = models.filter((model) => String(model.id || model.name || model).toLowerCase() !== 'auto');
+        const withoutAuto = freeFirst(models.filter((model) => String(model.id || model.name || model).toLowerCase() !== 'auto'));
         if (!normalizedQuery) return withoutAuto;
         return withoutAuto.filter((model) => {
             const modelId = String(model.id || model.name || model);
             const name = String(model.name || model.id || model);
             return `${name} ${modelId}`.toLowerCase().includes(normalizedQuery);
         });
+    }
+
+    // Free models first, then the rest in their usual (provider) order. One plain list, nothing pinned.
+    function isFreeModel(model) {
+        if (!model || typeof model !== 'object') return /(:free|-free|\/free)$/i.test(String(model || ''));
+        if (model.free === true || model.is_free === true) return true;
+        const pricing = model.pricing || {};
+        if (pricing.prompt != null && Number(pricing.prompt) === 0 && Number(pricing.completion || 0) === 0) return true;
+        return /(:free|-free|\/free)$/i.test(String(model.id || model.name || ''));
+    }
+
+    // Local = runs on this Mac (Ollama without :cloud, MLX, LM Studio, local workers); never shown as Free.
+    function isLocalModel(model) {
+        const id = String(model?.id || model?.name || model || '').toLowerCase();
+        const provider = String(model?.provider || '').toLowerCase();
+        if (model?.local === true || model?.scope === 'local') return true;
+        if (/(^|[-_:/.\s])mlx($|[-_:/.\s])/.test(id) || provider === 'mlx' || provider === 'lmstudio' || provider === 'lm_studio') return true;
+        if (id.startsWith('local_ollama:')) return true;
+        return provider === 'ollama' && !/(:|-)cloud$/.test(id);
+    }
+
+    function costClass(model) {
+        if (isLocalModel(model)) return 'local';
+        return isFreeModel(model) ? 'free' : 'paid';
+    }
+
+    // One plain list: Free cloud models first, then Local, then Paid; usual order kept inside each group.
+    function freeFirst(models) {
+        const rank = { free: 0, local: 1, paid: 2 };
+        return models.map((model, index) => ({ model, index, rank: rank[costClass(model)] }))
+            .sort((a, b) => (a.rank === b.rank ? a.index - b.index : a.rank - b.rank))
+            .map((row) => row.model);
+    }
+
+    function costBadge(model) {
+        return { free: 'Free', local: 'Local', paid: 'Paid' }[costClass(model)];
     }
 
     function updateModelLabel() {
@@ -117,33 +164,68 @@ export function createThreadsComposer({ context, actions, el, token }) {
         const assessedHarness = knownHarnessId(autoRoute.backend);
         const complexity = String(context.routingAssessment?.complexity || '').toLowerCase();
         const autoModel = String(autoRoute.model || 'auto').replace(/:free$/i, '');
-        const manualEffort = modelOptionValues('effort').length ? ` · ${effort}` : '';
+        const manualEffort = modelOptionValues('effort').length && !encodedVariant(context.draft.model_name).effort ? ` · ${effort}` : '';
         const speed = context.draft.service_tier === 'priority' && modelOptionValues('speed').length ? ' · Fast' : '';
+        // 2026-10-22 selector: Auto and a fixed harness/model are mutually exclusive. Auto shows only
+        // "Auto"; the last automatic decision goes to the tooltip in plain words.
         let fullLabel;
+        let tooltip;
         if (mode === 'auto') {
-            if (!context.routingAssessment) {
-                fullLabel = `Auto${speed}`;
-            } else if (assessedHarness) {
-                const assessedModel = String(autoRoute.model || '').replace(/:free$/i, '');
-                fullLabel = `Auto · ${harnessLabel(assessedHarness)}${
-                    assessedModel && assessedModel.toLowerCase() !== 'auto' ? ` · ${assessedModel}` : ''
-                }${complexity ? ` · ${complexity}` : ''}${speed}`;
-            } else {
-                fullLabel = `Auto${complexity ? ` · ${complexity}` : ''}${speed}`;
-            }
+            fullLabel = `Auto${speed}`;
+            const decision = autoDecisionText();
+            tooltip = `Auto${decision ? ` · last: ${decision}` : ''}`;
         } else {
-            const pinnedModel = String(context.draft.model_name || autoModel || 'auto').replace(/:free$/i, '');
+            const pinnedModel = String(context.draft.model_name || 'auto').replace(/:free$/i, '');
             const harness = harnessLabel(selectedHarnessId() || 'pi');
             const provider =
-                selectedHarnessId() === 'pi' && context.draft.provider
-                    ? ` · ${lookupProviderLabel(context.draft.provider, context.providers)}`
-                    : '';
-            fullLabel = `${harness}${provider} · ${pinnedModel}${manualEffort}${speed}`;
+                selectedHarnessId() === 'pi' && context.draft.provider ? lookupProviderLabel(context.draft.provider, context.providers) : '';
+            const pretty = readableModel(selectedHarnessId() || 'pi', context.draft.model_name) || pinnedModel;
+            fullLabel = `${harness} · ${pretty}${speed}`;
+            tooltip = `${harness} · ${pretty}${manualEffort}${speed}`;
+        }
+        // Auto's pick for the message being typed, visible before send: "Auto: Medium, Codex gpt-x".
+        const chip = el('model-auto-chip');
+        if (chip) {
+            const route = context.routingAssessment?.route || {};
+            const tierHarness = knownHarnessId(route.backend);
+            const tierModel = String(route.model || '').replace(/:free$/i, '');
+            const tier = String(context.routingAssessment?.complexity || '');
+            const show = mode === 'auto' && Boolean(context.routingAssessment) && Boolean(tierHarness);
+            chip.hidden = !show;
+            const catalogRow = (cliModels(tierHarness) || []).find((m) => String(m.id || '').toLowerCase() === String(route.model || '').toLowerCase());
+            const shortModel = tierModel && tierModel.toLowerCase() !== 'auto' ? shortModelName(route.model, catalogRow?.name || '') : '';
+            const tierLabel = tier ? tier[0].toUpperCase() + tier.slice(1) : 'Medium';
+            chip.textContent = show ? `${tierLabel}, ${harnessLabel(tierHarness)}${shortModel ? `, ${shortModel}` : ''}` : '';
+            chip.removeAttribute('title');
+            delete chip.dataset.tooltip;
+            chip.dataset.tooltipIfTruncated = '';
         }
         el('model-label').textContent = fullLabel;
-        const reason = context.routingAssessment?.reason || '';
-        el('model-button').title = reason ? `${fullLabel}. ${reason}` : fullLabel;
+        el('model-label').title = '';
+        el('model-button').dataset.tooltip = tooltip;
+        el('model-button').setAttribute('aria-label', `Harness and model: ${fullLabel}`);
         syncRoutePreview();
+    }
+
+    // Readable model name for labels: catalog display name if known, else a prettified slug.
+    function readableModel(backend, id) {
+        const raw = String(id || '').trim();
+        if (!raw || raw.toLowerCase() === 'auto') return '';
+        const row = (cliModels(backend) || []).find((m) => String(m.id || '').toLowerCase() === raw.toLowerCase());
+        return shortModelName(raw, row?.name || '');
+    }
+
+    function autoDecisionText() {
+        const assessment = context.routingAssessment;
+        if (!assessment) return '';
+        const route = assessment.route || {};
+        const assessedHarness = knownHarnessId(route.backend);
+        const model = String(route.model || '').replace(/:free$/i, '');
+        const name = readableModel(assessedHarness, route.model || model);
+        const complexity = String(assessment.complexity || '').toLowerCase();
+        const tier = complexity ? complexity[0].toUpperCase() + complexity.slice(1) : '';
+        const pick = [assessedHarness ? harnessLabel(assessedHarness) : '', name].filter(Boolean).join(' · ');
+        return [tier, pick].filter(Boolean).join(', ');
     }
 
     function syncRoutePreview() {
@@ -155,18 +237,11 @@ export function createThreadsComposer({ context, actions, el, token }) {
         if (!automatic) return;
         const assessment = context.routingAssessment;
         if (!assessment) {
-            text.textContent = 'Type a prompt to preview harness routing.';
+            text.textContent = '';
+            preview.hidden = true;
             return;
         }
-        const route = assessment.route || {};
-        const assessedHarness = knownHarnessId(route.backend);
-        const parts = [
-            assessment.complexity || 'medium',
-            assessedHarness ? harnessLabel(assessedHarness) : 'Auto',
-            route.model || 'auto',
-            assessment.execution_mode || 'direct'
-        ];
-        text.textContent = parts.join(' · ') + (assessment.reason ? ` — ${assessment.reason}` : '');
+        text.textContent = `Would use: ${autoDecisionText()}`;
     }
 
     async function refreshRoutingAssessment(instruction, options) {
@@ -271,8 +346,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
             execution_profile: context.draft.execution_profile,
             autonomy_level: context.draft.autonomy_level,
             permission_mode: context.draft.permission_mode,
-            reasoning_effort: context.draft.reasoning_effort,
-            service_tier: context.draft.service_tier,
+            reasoning_effort: context.draft.route_mode === 'manual' && encodedVariant(context.draft.model_name).effort ? undefined : context.draft.reasoning_effort,
+            service_tier: context.draft.route_mode === 'manual' && encodedVariant(context.draft.model_name).speed ? undefined : context.draft.service_tier,
             routing_assessment: context.routingAssessment || undefined,
             attachments: attachedFilesPayload(),
             skill_ids: selectedSkillIds(),
@@ -311,6 +386,16 @@ export function createThreadsComposer({ context, actions, el, token }) {
         }
         const prompt = el('task-prompt').value.trim();
         if (!prompt) return;
+        if (context.submittingPrompt) return; // double submit (held Enter / repeat click) during routing checks
+        context.submittingPrompt = true;
+        try {
+            await sendPromptOnce(prompt);
+        } finally {
+            context.submittingPrompt = false;
+        }
+    }
+
+    async function sendPromptOnce(prompt) {
         const hasImages = context.attachments.some((item) => item.sourceLabel === 'Image' || String(item.text || '').includes('MIME type: image/'));
         if (hasImages && !modelSupportsImages()) {
             actions.toast('This pinned model is not image-capable. Choose Auto or an image-capable model before sending.', 'error');
@@ -560,25 +645,64 @@ export function createThreadsComposer({ context, actions, el, token }) {
         if (speedOptions.length && !speedOptions.includes(context.draft.service_tier)) context.draft.service_tier = speedOptions[0];
         const autoRoute = context.routingAssessment?.route || {};
         const assessedHarness = knownHarnessId(autoRoute.backend);
-        el('model-auto-value').textContent = automatic
-            ? `${assessedHarness ? harnessLabel(assessedHarness) : 'Auto'}${context.routingAssessment?.complexity ? ` · ${context.routingAssessment.complexity}` : ''}`
-            : 'Off';
+        // (Auto is now the first choice in the Harness list; no separate Auto row.)
         el('model-harness-value').textContent = automatic ? 'Auto' : harnessLabel(backend || 'pi');
         el('model-provider-value').textContent = automatic ? 'Auto' : providerLabel(context.draft.provider || harnessDefaultProvider(context.draft.backend));
         el('model-provider-row').classList.add('hidden');
         el('model-catalog-value').textContent = automatic
-            ? autoRoute.model || 'Automatic'
-            : context.draft.model_name || 'Choose model';
+            ? readableModel(assessedHarness, autoRoute.model) || 'Automatic'
+            : readableModel(backend, context.draft.model_name) || 'Choose model';
+        ['model-harness-value', 'model-provider-value', 'model-catalog-value'].forEach((id) => { el(id).removeAttribute('title'); el(id).dataset.tooltipIfTruncated = ''; });
+        if (!automatic && context.draft.model_name && cliModels(backend) && modelRowsForHarness(backend).find((m) => m.unavailable && String(m.id).toLowerCase() === String(context.draft.model_name).toLowerCase())) {
+            el('model-catalog-value').textContent = `${readableModel(backend, context.draft.model_name)} (unavailable)`;
+        }
         el('model-effort-value').textContent = optionLabel(context.draft.reasoning_effort || 'medium');
         el('model-speed-value').textContent = optionLabel(context.draft.service_tier || 'standard');
-        el('model-effort-row').classList.toggle('hidden', !effortOptions.length);
-        el('model-speed-row').classList.toggle('hidden', !speedOptions.length);
+        // 2026-10-22 selector: Auto is one top-level choice; in Auto the other rows are picked automatically.
+        // In fixed mode Model needs a harness, and Effort/Speed need a model and show only what it supports.
+        const lastPick = automatic ? autoDecisionText() : '';
+        const setRow = (rowId, valueId, { disabled, text, hint, hidden }) => {
+            const row = rowId.startsWith('[') ? document.querySelector(rowId) : el(rowId);
+            if (!row) return;
+            row.classList.toggle('hidden', Boolean(hidden));
+            row.disabled = Boolean(disabled);
+            row.classList.toggle('is-inactive', Boolean(disabled));
+            if (text != null) {
+                el(valueId).textContent = text;
+                el(valueId).removeAttribute('title');
+            }
+        };
+        const harnessRow = document.querySelector('[data-model-pane="harness"]');
+        if (automatic) {
+            const lastHarness = knownHarnessId(context.routingAssessment?.route?.backend);
+            const lastModel = String(context.routingAssessment?.route?.model || '').replace(/:free$/i, '');
+            el('model-harness-value').textContent = 'Auto';
+            el('model-harness-value').removeAttribute('title');
+            harnessRow?.classList.add('is-auto');
+            // Linear flow: in Auto only Auto | Harness are shown. Model appears once a harness is picked.
+            setRow('[data-model-pane="model"]', 'model-catalog-value', { hidden: true });
+            setRow('model-effort-row', 'model-effort-value', { hidden: true });
+            setRow('model-speed-row', 'model-speed-value', { hidden: true });
+        } else {
+            harnessRow?.classList.remove('is-auto');
+            const hasModel = Boolean(String(context.draft.model_name || '').trim());
+            setRow('[data-model-pane="model"]', 'model-catalog-value', { disabled: !backend, hidden: false });
+            if (!hasModel) {
+                setRow('model-effort-row', 'model-effort-value', { hidden: true });
+                setRow('model-speed-row', 'model-speed-value', { hidden: true });
+                if (backend) el('model-catalog-value').textContent = cliModels(backend) === null ? 'Loading models…' : 'Choose model';
+            } else {
+                const variant = encodedVariant(context.draft.model_name);
+                setRow('model-effort-row', 'model-effort-value', { disabled: false, hidden: !effortOptions.length || Boolean(variant.effort) });
+                setRow('model-speed-row', 'model-speed-value', { disabled: false, hidden: !speedOptions.length || Boolean(variant.speed) });
+            }
+        }
         updateModelLabel();
         updateModeLabel();
     }
 
     function modelChoiceHtml(label, value, selected, meta) {
-        return `<button type="button" class="model-choice${selected ? ' selected' : ''}" role="menuitemradio" aria-checked="${selected ? 'true' : 'false'}" data-model-choice="${actions.escapeHtml(value)}"><span>${actions.escapeHtml(label)}</span><small>${selected ? '✓' : actions.escapeHtml(meta || '')}</small></button>`;
+        return `<button type="button" class="model-choice${selected ? ' selected' : ''}" role="menuitemradio" aria-checked="${selected ? 'true' : 'false'}" data-model-choice="${actions.escapeHtml(value)}"><span data-tooltip-if-truncated>${actions.escapeHtml(label)}</span><small>${selected ? '✓' : actions.escapeHtml(meta || '')}</small></button>`;
     }
 
     function renderPiModelChoices(query = '') {
@@ -605,7 +729,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 const id = String(model.id || model.name || model);
                 const name = String(model.name || model.id || model);
                 return modelChoiceHtml(
-                    name,
+                    displayModelName(name),
                     id,
                     id.toLowerCase() === String(context.draft.model_name || '').toLowerCase(),
                     model.context_window ? `${Math.round(Number(model.context_window) / 1000)}k context` : ''
@@ -628,8 +752,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
                       .map((model) => {
                           const id = String(model.id || model.name || model);
                           const name = String(model.name || model.id || model);
-                          const meta = model.tier ? String(model.tier) : '';
-                          return modelChoiceHtml(name, id, id.toLowerCase() === selected, meta);
+                          const meta = model.unavailable ? 'unavailable' : costBadge(model);
+                          return modelChoiceHtml(String(name).toLowerCase() === String(id).toLowerCase() ? shortModelName(id) : displayModelName(name), id, id.toLowerCase() === selected, meta);
                       })
                       .join('')
                 : `<div class="model-menu-note">${hint || (query ? 'No matching models.' : 'No models returned for this harness.')}</div>`)
@@ -643,16 +767,16 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 'Auto',
                 'auto',
                 context.draft.route_mode !== 'manual',
-                'Route by prompt complexity'
+                'Picks a tier per message'
             );
         } else if (pane === 'harness') {
             const selectedBackend = selectedHarnessId();
-            list.innerHTML = harnessOptions().map((item) =>
+            list.innerHTML = modelChoiceHtml('Auto', 'auto', context.draft.route_mode !== 'manual', 'Picks a tier per message') + harnessOptions().map((item) =>
                 modelChoiceHtml(
                     item.label,
                     item.id,
                     context.draft.route_mode === 'manual' && item.id.toLowerCase() === selectedBackend.toLowerCase(),
-                    item.id === 'kilocode' ? 'API provider' : 'CLI harness'
+                    ''
                 )
             ).join('');
         } else if (pane === 'provider') {
@@ -692,6 +816,14 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     async function openModelPane(pane) {
+        if (pane === 'auto') {
+            // Auto is a direct choice, not a submenu.
+            if (context.draft.route_mode !== 'auto') await selectModelChoice('auto', 'auto');
+            syncModelMenu();
+            return;
+        }
+        const row = document.querySelector(`[data-model-pane="${pane}"]`);
+        if (row?.disabled) return;
         if (pane === 'provider' && (context.draft.route_mode !== 'manual' || context.draft.backend !== 'pi')) {
             pane = 'harness';
         }
@@ -738,6 +870,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
             scheduleRoutePreview();
             return;
         }
+        if (pane === 'harness' && value === 'auto') return selectModelChoice('auto', 'auto');
         if (pane === 'harness') {
             context.draft.route_mode = 'manual';
             context.routingAssessment = null;
@@ -769,8 +902,159 @@ export function createThreadsComposer({ context, actions, el, token }) {
         await persistModelRoute();
     }
 
+    // A harness picked without choosing a model is never saved; when the menu closes, show the saved route again
+    // instead of leaving a half-made pin that a later reload silently turns back into Auto.
+    function restoreSavedRoute() {
+        const chat = context.currentChat;
+        if (!chat || context.draft.route_mode !== 'manual') return;
+        const unsaved = context.draft.backend === 'pi' ? !context.draft.model_name : !context.draft.backend;
+        if (!unsaved) return;
+        context.draft.route_mode = String(chat.route_mode || 'auto');
+        context.draft.backend = chat.backend || '';
+        context.draft.provider = chat.provider || '';
+        context.draft.model_name = chat.model_name || '';
+        updateModelLabel();
+    }
+
+    function isRouteMenuOpen() {
+        return Boolean(el('model-dialog')?.open || el('complexity-dialog')?.open);
+    }
+
+    // ---- Auto complexity routing (Low / Medium / High) -------------------------------------------------
+    // Reads and saves the same global per-complexity route Auto uses (settings project_cli_{level}_*)
+    // through GET/POST /workflows/orchestrator-setup. Only `enabled` (echoed unchanged) and `routing` are sent.
+    const COMPLEXITY_LEVELS = [
+        { id: 'low', label: 'Low', hint: 'Small, quick changes' },
+        { id: 'medium', label: 'Medium', hint: 'Typical feature or fix' },
+        { id: 'high', label: 'High', hint: 'Large or risky work' }
+    ];
+    let complexitySetup = null;
+
+    function tierHarnessId(row) {
+        const backend = String(row?.backend || '').toLowerCase();
+        const provider = String(row?.model_provider || '').toLowerCase();
+        if (backend === 'kilocode' || (backend === 'pi' && provider === 'kilocode')) return 'kilocode';
+        return knownHarnessId(backend) || 'pi';
+    }
+
+    function tierModelOptionsHtml(harness, row) {
+        const loaded = cliModels(harness);
+        const saved = String(row?.model || '').trim();
+        if (loaded === null) return '<option value="">Loading models…</option>';
+        const models = freeFirst(loaded).map((model) => ({ id: String(model.id || model.name || model), name: `${displayModelName(String(model.name || model.id || model))} · ${costBadge(model)}`, provider: model.provider || '' }));
+        const options = [];
+        if (!['pi', 'kilocode'].includes(harness)) options.push({ id: 'auto', name: 'Harness default' });
+        if (saved && saved.toLowerCase() !== 'auto' && !models.some((m) => m.id.toLowerCase() === saved.toLowerCase())) {
+            options.push({ id: saved, name: `${saved} (unavailable)` });
+        }
+        options.push(...models);
+        if (!options.length) {
+            const hint = String((context.cliModelMessages || {})[harness] || '').trim();
+            return `<option value="">${actions.escapeHtml(hint || 'No models returned for this harness')}</option>`;
+        }
+        const wanted = (saved || (options[0]?.id ?? '')).toLowerCase();
+        return options
+            .map((m) => `<option value="${actions.escapeHtml(m.id)}" data-provider="${actions.escapeHtml(String(m.provider || ''))}" title="${actions.escapeHtml(m.name)}"${m.id.toLowerCase() === wanted ? ' selected' : ''}>${actions.escapeHtml(m.name)}</option>`)
+            .join('');
+    }
+
+    function renderComplexityDialog() {
+        const body = el('complexity-dialog-rows');
+        if (!complexitySetup) {
+            body.innerHTML = '<p class="complexity-note">Loading Auto settings…</p>';
+            return;
+        }
+        body.innerHTML = COMPLEXITY_LEVELS.map((level) => {
+            const row = complexitySetup.routing?.[level.id] || {};
+            const harness = tierHarnessId(row);
+            const harnessOptionsHtml = harnessOptions()
+                .map((item) => `<option value="${item.id}"${item.id === harness ? ' selected' : ''}>${actions.escapeHtml(item.label)}</option>`)
+                .join('');
+            return `<div class="complexity-row" data-complexity-level="${level.id}"><div class="complexity-row-title"><strong>${level.label}</strong><small>${level.hint}</small></div><label><span>Harness</span><select data-complexity-harness aria-label="${level.label} harness">${harnessOptionsHtml}</select></label><label><span>Model</span><select data-complexity-model aria-label="${level.label} model">${tierModelOptionsHtml(harness, row)}</select></label></div>`;
+        }).join('');
+        body.querySelectorAll('[data-complexity-level]').forEach((rowEl) => {
+            const level = rowEl.dataset.complexityLevel;
+            const modelSelect = rowEl.querySelector('[data-complexity-model]');
+            modelSelect.title = modelSelect.selectedOptions[0]?.textContent || '';
+            rowEl.querySelector('[data-complexity-harness]').addEventListener('change', async (event) => {
+                const harness = event.target.value;
+                complexitySetup.routing[level] = { ...(complexitySetup.routing[level] || {}), backend: apiBackendForHarness(harness), model_provider: harness === 'kilocode' ? 'kilocode' : '', model: '' };
+                modelSelect.innerHTML = '<option value="">Loading models…</option>';
+                await ensureCliModels(harness);
+                if (!el('complexity-dialog').open) return;
+                modelSelect.innerHTML = tierModelOptionsHtml(harness, complexitySetup.routing[level]);
+                modelSelect.title = modelSelect.selectedOptions[0]?.textContent || '';
+                if (modelSelect.value) await saveComplexityTier(level, harness, modelSelect);
+            });
+            modelSelect.addEventListener('change', async () => {
+                modelSelect.title = modelSelect.selectedOptions[0]?.textContent || '';
+                await saveComplexityTier(level, rowEl.querySelector('[data-complexity-harness]').value, modelSelect);
+            });
+        });
+    }
+
+    async function saveComplexityTier(level, harness, modelSelect) {
+        const model = modelSelect.value;
+        if (!model) return;
+        const option = modelSelect.selectedOptions[0];
+        const current = complexitySetup.routing[level] || {};
+        const provider = harness === 'kilocode' ? 'kilocode' : String(option?.dataset.provider || '').toLowerCase() || (harness === tierHarnessId(current) ? String(current.model_provider || '') : '');
+        complexitySetup.routing[level] = { ...current, backend: apiBackendForHarness(harness), model, model_provider: provider };
+        const routing = {};
+        COMPLEXITY_LEVELS.forEach(({ id }) => {
+            const row = complexitySetup.routing[id] || {};
+            routing[id] = {
+                backend: row.backend,
+                model: row.model,
+                model_provider: row.model_provider || '',
+                codex_intelligence: row.codex_intelligence || '',
+                codex_speed: row.codex_speed || ''
+            };
+        });
+        const status = el('complexity-dialog-status');
+        status.textContent = 'Saving…';
+        try {
+            await actions.api('/workflows/orchestrator-setup', { method: 'POST', body: { enabled: complexitySetup.enabled !== false, routing } });
+            status.textContent = `${level[0].toUpperCase()}${level.slice(1)} now uses ${harnessLabel(harness)} with ${model}.`;
+            context.routingAssessment = null;
+            scheduleRoutePreview();
+        } catch (error) {
+            status.textContent = `Could not save: ${error.message}`;
+        }
+    }
+
+    async function openComplexityDialog() {
+        const dialog = el('complexity-dialog');
+        if (el('model-dialog').open) el('model-dialog').close('cancel');
+        complexitySetup = null;
+        el('complexity-dialog-status').textContent = '';
+        renderComplexityDialog();
+        if (!dialog.open) dialog.showModal();
+        try {
+            const setup = await actions.api('/workflows/orchestrator-setup');
+            complexitySetup = { enabled: setup.enabled, routing: JSON.parse(JSON.stringify(setup.routing || {})) };
+            renderComplexityDialog();
+            const harnesses = [...new Set(COMPLEXITY_LEVELS.map(({ id }) => tierHarnessId(complexitySetup.routing[id])))];
+            await Promise.all(harnesses.map((h) => ensureCliModels(h)));
+            if (dialog.open) renderComplexityDialog();
+        } catch (error) {
+            el('complexity-dialog-rows').innerHTML = `<p class="complexity-note">Auto settings are unavailable: ${actions.escapeHtml(error.message || 'error')}</p>`;
+        }
+    }
+
     async function openModelDialog() {
         const dialog = el('model-dialog');
+        if (!dialog.dataset.restoreBound) {
+            dialog.dataset.restoreBound = '1';
+            dialog.addEventListener('close', restoreSavedRoute);
+            // Keep the draft visible and focused after changing the harness/model.
+            dialog.addEventListener('close', () => {
+                const input = el('task-prompt');
+                if (!input || input.disabled) return;
+                const end = input.value.length;
+                window.requestAnimationFrame(() => { input.focus({ preventScroll: true }); input.setSelectionRange(end, end); });
+            });
+        }
         if (!dialog.open) dialog.show();
         closeModelPane();
         positionModelDialog();
@@ -805,7 +1089,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
     function positionModelDialog() {
         const dialog = el('model-dialog');
         const anchor = el('model-button').getBoundingClientRect();
-        const width = Math.min(440, window.innerWidth - 24);
+        const width = Math.min(328, window.innerWidth - 24);
         dialog.style.width = `${width}px`;
         dialog.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, anchor.right - width))}px`;
         dialog.style.top = `${Math.max(12, anchor.top - dialog.offsetHeight - 8)}px`;
@@ -879,8 +1163,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
                     backend: routeMode === 'manual' ? context.draft.backend : null,
                     provider: routeMode === 'manual' ? context.draft.provider || harnessDefaultProvider(context.draft.backend) : null,
                     model_name: routeMode === 'manual' ? context.draft.model_name || 'auto' : null,
-                    reasoning_effort: modelOptionValues('effort').length ? context.draft.reasoning_effort : null,
-                    service_tier: modelOptionValues('speed').length ? context.draft.service_tier : null
+                    // A model id that already encodes effort/speed (e.g. grok-4.7-medium, *-fast) gets no separate param.
+                    reasoning_effort: modelOptionValues('effort').length && !(routeMode === 'manual' && encodedVariant(context.draft.model_name).effort) ? context.draft.reasoning_effort : null,
+                    service_tier: modelOptionValues('speed').length && !(routeMode === 'manual' && encodedVariant(context.draft.model_name).speed) ? context.draft.service_tier : null
                 };
                 const updated = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/model-route`, { method: 'PATCH', body: payload });
                 Object.assign(context.currentChat, updated);
@@ -889,7 +1174,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 actions.toast(
                     routeMode === 'auto'
                         ? 'Automatic harness routing enabled.'
-                        : `${harnessLabel(context.draft.backend)} · ${context.draft.model_name || 'auto'}`
+                        : `${harnessLabel(context.draft.backend)} · ${readableModel(context.draft.backend, context.draft.model_name) || 'auto'}`
                 );
             } catch (error) {
                 actions.toast(error.message, 'error');
@@ -938,7 +1223,102 @@ export function createThreadsComposer({ context, actions, el, token }) {
         if (index >= 0) context.attachments.splice(index, 1);
         else context.attachments.push(promptSkillAttachment(skill));
         renderAttachments();
-        renderComposerSkillMenu(el('composer-skill-search').value);
+        renderComposerSkillMenu(el('composer-skill-search')?.value);
+    }
+
+    async function prepareVisualPlan() {
+        const prompt = el('task-prompt').value.trim();
+        if (!prompt) {
+            actions.toast('Describe the screen or flow first.', 'error');
+            el('task-prompt').focus();
+            return;
+        }
+        const skill = context.skills.find((item) => String(item.id) === 'decisions-visual-plan');
+        if (skill && !selectedPromptSkill(String(skill.id))) context.attachments.push(promptSkillAttachment(skill));
+        context.usePlaywright = true;
+        if (context.currentChat) {
+            const artifact = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/artifacts`, {
+                method: 'POST',
+                body: {
+                    artifact_type: 'visual_plan',
+                    title: 'Visual plan',
+                    workflow_id: context.currentWorkflow?.id || null,
+                    run_id: actions.workflowRunId?.(context.currentRun) || null,
+                    summary: prompt,
+                    status: 'planned',
+                    metadata: { requested_formats: ['wireframe', 'mermaid', 'desktop_screenshot', 'mobile_screenshot'] }
+                }
+            });
+            context.artifacts = [...(context.artifacts || []), artifact];
+            actions.renderInspector();
+        }
+        renderAttachments();
+        syncPlaywrightSkillToggle();
+        actions.toast('Visual plan attached. Send the prompt to generate and validate it.');
+    }
+
+    // Skills browser: cards, two per row, search + source filters. Clicking a card attaches the skill and closes.
+    let skillSourceFilter = '';
+    const SOURCE_TAGS = new Set(['ecc', 'vendor', 'community', 'skills-pack', 'local', 'google-cloud', 'reference-adapted', 'external']);
+    const SKILL_SOURCE_LABELS = { local: 'Local', ecc_vendor: 'ECC', community_vendor: 'Community', 'google/skills': 'Google', 'reference-adapted': 'Adapted', external: 'External' };
+    function skillSourceLabel(source) {
+        const key = String(source || 'other');
+        return SKILL_SOURCE_LABELS[key] || key;
+    }
+
+    function renderSkillFilters() {
+        const box = el('skills-browser-filters');
+        if (!box) return;
+        const counts = new Map();
+        context.skills.forEach((skill) => counts.set(String(skill.source || 'other'), (counts.get(String(skill.source || 'other')) || 0) + 1));
+        const chips = [['', `All ${context.skills.length}`], ...[...counts.entries()].sort((x, y) => y[1] - x[1]).map(([key, n]) => [key, `${skillSourceLabel(key)} ${n}`])];
+        box.innerHTML = chips
+            .map(([key, label]) => `<button type="button" class="skills-filter-chip" data-skill-source="${actions.escapeHtml(key)}" aria-pressed="${key === skillSourceFilter}">${actions.escapeHtml(label)}</button>`)
+            .join('');
+        box.querySelectorAll('[data-skill-source]').forEach((chip) =>
+            chip.addEventListener('click', () => {
+                skillSourceFilter = chip.dataset.skillSource;
+                renderSkillFilters();
+                renderComposerSkillMenu(el('composer-skill-search')?.value);
+            })
+        );
+    }
+
+    // Pending multi-selection in the skills browser; attached on 'Add', discarded on close.
+    const MAX_PROMPT_SKILLS = 5;
+    const pendingSkills = new Set();
+    function attachedSkillCount() {
+        return context.attachments.filter((item) => item.kind === 'skill').length;
+    }
+
+    function syncSkillBrowserFooter() {
+        const count = el('skills-browser-count');
+        const add = el('skills-browser-add');
+        const full = attachedSkillCount() + pendingSkills.size >= MAX_PROMPT_SKILLS;
+        if (count) count.textContent = `${pendingSkills.size} selected${full ? ' · Max 5 skills' : ''}`;
+        if (add) add.disabled = !pendingSkills.size;
+    }
+
+    function togglePendingSkill(skillId) {
+        const id = String(skillId);
+        if (selectedPromptSkill(id)) return;
+        if (pendingSkills.has(id)) pendingSkills.delete(id);
+        else if (attachedSkillCount() + pendingSkills.size < MAX_PROMPT_SKILLS) pendingSkills.add(id);
+        renderComposerSkillMenu(el('composer-skill-search')?.value);
+    }
+
+    function addPendingSkills() {
+        [...pendingSkills].forEach((id) => {
+            if (!selectedPromptSkill(id) && attachedSkillCount() < MAX_PROMPT_SKILLS) togglePromptSkill(id);
+        });
+        closeSkillsBrowser();
+        el('task-prompt')?.focus();
+    }
+
+    function closeSkillsBrowser() {
+        pendingSkills.clear();
+        const dialog = el('skills-browser-dialog');
+        if (dialog?.open) dialog.close();
     }
 
     function renderComposerSkillMenu(query) {
@@ -947,24 +1327,166 @@ export function createThreadsComposer({ context, actions, el, token }) {
         const needle = String(query || '')
             .trim()
             .toLowerCase();
+        const full = attachedSkillCount() + pendingSkills.size >= MAX_PROMPT_SKILLS;
         const rows = context.skills
             .filter((skill) => !['browser-qa', 'decisions-playwright'].includes(String(skill.id || '').toLowerCase()))
-            .filter((skill) => !needle || `${skill.name || ''} ${skill.id || ''} ${skill.description || ''}`.toLowerCase().includes(needle));
+            .filter((skill) => !skillSourceFilter || String(skill.source || 'other') === skillSourceFilter)
+            .filter((skill) => !needle || `${skill.name || ''} ${skill.id || ''} ${skill.description || ''} ${(skill.tags || []).join(' ')}`.toLowerCase().includes(needle));
         list.innerHTML = rows.length
             ? rows
                   .map((skill) => {
                       const id = String(skill.id || '');
-                      const selected = selectedPromptSkill(id);
-                      return `<button type="button" class="composer-skill-option${selected ? ' selected' : ''}" role="menuitemcheckbox" aria-checked="${selected}" data-prompt-skill="${actions.escapeHtml(id)}"><span>${actions.escapeHtml(skill.name || id)}</span><small>${selected ? 'Added' : actions.escapeHtml(skill.description || skill.source || '')}</small></button>`;
+                      const attached = selectedPromptSkill(id);
+                      const pending = pendingSkills.has(id);
+                      const blocked = !attached && !pending && full;
+                      // Tags mostly repeat the source (ecc/vendor/community/google-cloud); show only real topic tags.
+                      const tags = (Array.isArray(skill.tags) ? skill.tags : []).filter((tag) => !SOURCE_TAGS.has(String(tag).toLowerCase())).slice(0, 3);
+                      const badge = attached ? 'Attached' : String(skill.source || 'local') === 'local' ? '' : skillSourceLabel(skill.source);
+                      return `<button type="button" class="skill-card${attached ? ' attached' : ''}${pending ? ' selected' : ''}" role="checkbox" aria-checked="${attached || pending}" ${attached || blocked ? 'disabled' : ''} data-prompt-skill="${actions.escapeHtml(id)}" aria-label="${actions.escapeHtml(skill.name || id)}"><header><span class="skill-card-check" aria-hidden="true"></span><strong>${actions.escapeHtml(skill.name || id)}</strong>${badge ? `<span class="skill-card-source">${actions.escapeHtml(badge)}</span>` : ''}</header><p>${actions.escapeHtml(skill.description || 'No description.')}</p>${tags.length ? `<footer>${tags.map((tag) => `<span>${actions.escapeHtml(tag)}</span>`).join('')}</footer>` : ''}</button>`;
                   })
                   .join('')
             : '<div class="model-menu-note">No matching skills.</div>';
-        list.querySelectorAll('[data-prompt-skill]').forEach((button) =>
-            button.addEventListener('click', (event) => {
-                event.stopPropagation();
-                togglePromptSkill(button.dataset.promptSkill);
+        list.querySelectorAll('[data-prompt-skill]').forEach((card) => card.addEventListener('click', () => togglePendingSkill(card.dataset.promptSkill)));
+        syncSkillBrowserFooter();
+    }
+
+    function openSkillsBrowser() {
+        const dialog = el('skills-browser-dialog');
+        if (!dialog) return;
+        if (!dialog.__bound) {
+            dialog.__bound = true;
+            // Delegated: X / backdrop close and discard; Escape ('cancel') does the same.
+            dialog.addEventListener('click', (event) => {
+                if (event.target === dialog || event.target.closest('[data-skills-browser-close]')) closeSkillsBrowser();
+                else if (event.target.closest('#skills-browser-add')) addPendingSkills();
+            });
+            dialog.addEventListener('cancel', (event) => {
+                event.preventDefault();
+                closeSkillsBrowser();
+            });
+        }
+        pendingSkills.clear();
+        renderSkillFilters();
+        renderComposerSkillMenu(el('composer-skill-search').value);
+        dialog.showModal();
+        el('composer-skill-search').focus();
+    }
+
+    // Visual plan sketch pad: draw, then attach the PNG through uploadFiles (origin 'visual-plan').
+    const visualPlan = { tool: 'pen', ops: [], current: null };
+    function drawVisualPlan() {
+        const canvas = el('visual-plan-canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        [...visualPlan.ops, ...(visualPlan.current ? [visualPlan.current] : [])].forEach((op) => {
+            if (op.type === 'pen' || op.type === 'eraser') {
+                ctx.strokeStyle = op.type === 'eraser' ? '#ffffff' : '#1b2140';
+                ctx.lineWidth = op.type === 'eraser' ? 22 : 3;
+                ctx.beginPath();
+                op.points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+                ctx.stroke();
+            } else if (op.type === 'rect' || op.type === 'frame') {
+                const x = Math.min(op.x, op.x2), y = Math.min(op.y, op.y2), w = Math.abs(op.x2 - op.x), h = Math.abs(op.y2 - op.y);
+                ctx.strokeStyle = op.type === 'frame' ? '#f97316' : '#1b2140';
+                ctx.lineWidth = op.type === 'frame' ? 3 : 2;
+                ctx.strokeRect(x, y, w, h);
+                if (op.type === 'frame') {
+                    ctx.fillStyle = 'rgba(249,115,22,.12)';
+                    ctx.fillRect(x, y, w, 26);
+                    ctx.fillStyle = '#c2410c';
+                    ctx.font = '600 14px -apple-system, sans-serif';
+                    ctx.fillText(op.label || 'Page', x + 8, y + 18);
+                }
+            } else if (op.type === 'text') {
+                ctx.fillStyle = '#1b2140';
+                ctx.font = '18px -apple-system, sans-serif';
+                ctx.fillText(op.text, op.x, op.y);
+            }
+        });
+    }
+
+    function visualPlanPoint(event) {
+        const canvas = el('visual-plan-canvas');
+        const rect = canvas.getBoundingClientRect();
+        return [((event.clientX - rect.left) * canvas.width) / rect.width, ((event.clientY - rect.top) * canvas.height) / rect.height];
+    }
+
+    function bindVisualPlan(dialog) {
+        const canvas = el('visual-plan-canvas');
+        dialog.querySelectorAll('[data-vp-tool]').forEach((button) =>
+            button.addEventListener('click', () => {
+                visualPlan.tool = button.dataset.vpTool;
+                dialog.querySelectorAll('[data-vp-tool]').forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
             })
         );
+        dialog.querySelector('[data-vp-undo]').addEventListener('click', () => {
+            visualPlan.ops.pop();
+            drawVisualPlan();
+        });
+        dialog.querySelector('[data-vp-clear]').addEventListener('click', () => {
+            visualPlan.ops = [];
+            drawVisualPlan();
+        });
+        dialog.addEventListener('click', (event) => {
+            if (event.target === dialog || event.target.closest('[data-visual-plan-close]')) dialog.close();
+        });
+        canvas.addEventListener('pointerdown', (event) => {
+            const [x, y] = visualPlanPoint(event);
+            const tool = visualPlan.tool;
+            if (tool === 'text') {
+                const text = window.prompt('Text');
+                if (text) visualPlan.ops.push({ type: 'text', text, x, y });
+                drawVisualPlan();
+                return;
+            }
+            canvas.setPointerCapture?.(event.pointerId);
+            visualPlan.current = tool === 'pen' || tool === 'eraser' ? { type: tool, points: [[x, y]] } : { type: tool, x, y, x2: x, y2: y };
+        });
+        canvas.addEventListener('pointermove', (event) => {
+            const op = visualPlan.current;
+            if (!op) return;
+            const [x, y] = visualPlanPoint(event);
+            if (op.points) op.points.push([x, y]);
+            else Object.assign(op, { x2: x, y2: y });
+            drawVisualPlan();
+        });
+        const finish = () => {
+            const op = visualPlan.current;
+            visualPlan.current = null;
+            if (!op) return;
+            if (op.type === 'frame') op.label = `Page ${visualPlan.ops.filter((item) => item.type === 'frame').length + 1}`;
+            visualPlan.ops.push(op);
+            drawVisualPlan();
+        };
+        canvas.addEventListener('pointerup', finish);
+        canvas.addEventListener('pointercancel', finish);
+        el('visual-plan-done').addEventListener('click', () => {
+            canvas.toBlob(async (blob) => {
+                if (!blob) return actions.toast('Could not export the sketch.', 'error');
+                const file = new File([blob], `visual-plan-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`, { type: 'image/png' });
+                dialog.close();
+                try {
+                    await uploadFiles([file], null, 'visual-plan');
+                    visualPlan.ops = [];
+                } catch (error) {
+                    actions.toast(error.message || 'Could not attach the sketch.', 'error');
+                }
+            }, 'image/png');
+        });
+    }
+
+    function openVisualPlan() {
+        const dialog = el('visual-plan-dialog');
+        if (!dialog) return;
+        if (!dialog.__bound) {
+            dialog.__bound = true;
+            bindVisualPlan(dialog);
+        }
+        drawVisualPlan();
+        dialog.showModal();
     }
 
     function addContext(item) {
@@ -990,23 +1512,23 @@ export function createThreadsComposer({ context, actions, el, token }) {
 
     function closeComposerActionMenu() {
         el('composer-action-menu').classList.add('hidden');
-        el('attach-button').setAttribute('aria-expanded', 'false');
+        el('composer-plan-button')?.setAttribute('aria-expanded', 'false');
     }
 
     function toggleComposerActionMenu() {
         const menu = el('composer-action-menu');
         const opening = menu.classList.contains('hidden');
         menu.classList.toggle('hidden', !opening);
-        el('attach-button').setAttribute('aria-expanded', String(opening));
+        el('composer-plan-button')?.setAttribute('aria-expanded', String(opening));
         if (opening) {
-            el('composer-skill-search').value = '';
-            renderComposerSkillMenu();
             window.setTimeout(() => menu.querySelector('[role="menuitem"]')?.focus(), 0);
         }
     }
 
     async function runComposerAttachmentAction(action) {
         closeComposerActionMenu();
+        if (action === 'visual') return openVisualPlan();
+        if (action === 'skills') return openSkillsBrowser();
         if (action === 'files') {
             el('context-file-input').click();
             return;
@@ -1093,7 +1615,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         return { name: String(entry?.name || file?.name || '').trim(), path };
     }
 
-    async function uploadFiles(files, input) {
+    async function uploadFiles(files, input, origin = 'picker') {
         files = Array.from(files || []);
         if (!files.length) return;
         if (input) input.disabled = true;
@@ -1132,6 +1654,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
                     mime_type: result.mime_type || file.type || 'application/octet-stream',
                     size: Number(result.size || file.size || 0),
                     sourceLabel: isImage ? 'Image' : 'File',
+                    origin,
                     preview_url: previewUrl
                 });
             }
@@ -1150,7 +1673,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     async function uploadContextFiles(event) {
-        await uploadFiles(event.target.files, event.target);
+        await uploadFiles(event.target.files, event.target, 'picker');
+        event.target.value = '';
     }
 
     async function createBoardFromDroppedFolder(dataTransfer) {
@@ -1251,7 +1775,14 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 );
                 return;
             }
-            await uploadFiles(event.dataTransfer?.files || []);
+            await uploadFiles(event.dataTransfer?.files || [], null, 'drop');
+        });
+        // Pasted screenshots/images upload through the same attachment path as drop.
+        composer.addEventListener('paste', async (event) => {
+            const files = Array.from(event.clipboardData?.files || []).filter((file) => String(file.type || '').startsWith('image/'));
+            if (!files.length) return;
+            event.preventDefault();
+            await uploadFiles(files, null, 'paste');
         });
 
         sidebar.addEventListener('dragenter', (event) => {
@@ -1459,35 +1990,65 @@ export function createThreadsComposer({ context, actions, el, token }) {
         return String(firstUser?.content || context.currentChat?.title || '').trim();
     }
 
+    function attachmentFileKind(item) {
+        const name = String(item.label || item.reference || '').toLowerCase();
+        const mime = String(item.mime_type || '').toLowerCase();
+        if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+        if (/word|officedocument|opendocument\.text|rtf/.test(mime) || /\.(docx?|odt|rtf|pages)$/.test(name)) return 'doc';
+        return 'file';
+    }
+
+    function attachmentIconSvg(kind) {
+        const page = '<path d="M4.5 2.5h4.75L12 5.25v8.25h-7.5z"></path><path d="M9.25 2.5v2.75H12"></path>';
+        if (kind === 'pdf') return `<svg viewBox="0 0 16 16" aria-hidden="true">${page}</svg><b>PDF</b>`;
+        if (kind === 'doc') return `<svg viewBox="0 0 16 16" aria-hidden="true">${page}<path d="M6.5 8h3.5M6.5 10h3.5"></path></svg><b>DOC</b>`;
+        return `<svg viewBox="0 0 16 16" aria-hidden="true">${page}</svg>`;
+    }
+
+    function attachmentTooltip(item) {
+        if (item.kind === 'skill') return `Skill: ${item.label}`;
+        const image = String(item.mime_type || '').startsWith('image/') || Boolean(item.preview_url);
+        if (item.origin === 'visual-plan') return `Visual plan: ${item.label}`;
+        const origin = item.origin === 'paste' ? 'Pasted' : item.origin === 'drop' ? 'Dropped' : '';
+        if (image) return `${origin ? `${origin} image` : 'Image'}: ${item.label}`;
+        if (item.kind === 'file') return `${origin ? `${origin} file` : 'File'}: ${item.label}`;
+        return `${item.sourceLabel || 'Context'}: ${item.label}`;
+    }
+
     function renderAttachments() {
+        // Attachments and skills render as small icons beside the access dropdown (legacy chip rows stay empty).
         const wrap = el('composer-context');
         const skillWrap = el('composer-skill-badges');
-        const regular = context.attachments.map((item, index) => ({ item, index })).filter(({ item }) => item.kind !== 'skill' && !item.hidden_chip);
-        const skills = context.attachments.map((item, index) => ({ item, index })).filter(({ item }) => item.kind === 'skill');
-        wrap.innerHTML = regular
-            .map(
-                ({ item, index }) =>
-                    `<span class="context-chip${item.kind === 'file' ? ' context-chip-file' : ''}">${item.preview_url ? `<img class="context-chip-preview" src="${actions.escapeHtml(item.preview_url)}" alt="">` : ''}<span>${actions.escapeHtml(item.label)}</span><button type="button" data-remove-attachment="${index}" aria-label="Remove ${actions.escapeHtml(item.label)}">×</button></span>`
-            )
-            .join('');
-        skillWrap.innerHTML = skills
-            .map(
-                ({ item, index }) =>
-                    `<span class="composer-skill-badge" title="${actions.escapeHtml(item.label)}" aria-label="${actions.escapeHtml(item.label)} skill">${actions.skillIconSvg()}<button type="button" data-remove-attachment="${index}" aria-label="Remove ${actions.escapeHtml(item.label)} skill">×</button></span>`
-            )
-            .join('');
-        wrap.classList.toggle('hidden', !regular.length);
-        skillWrap.classList.toggle('hidden', !skills.length);
-        [wrap, skillWrap].forEach((container) =>
-            container.querySelectorAll('[data-remove-attachment]').forEach((button) =>
+        const strip = el('composer-attachment-strip');
+        if (wrap) wrap.innerHTML = '';
+        if (skillWrap) skillWrap.innerHTML = '';
+        wrap?.classList.add('hidden');
+        skillWrap?.classList.add('hidden');
+        const visible = context.attachments.map((item, index) => ({ item, index })).filter(({ item }) => item.kind === 'skill' || !item.hidden_chip);
+        if (strip) {
+            strip.innerHTML = visible
+                .map(({ item, index }) => {
+                    const tip = attachmentTooltip(item);
+                    const body =
+                        item.kind === 'skill'
+                            ? actions.skillIconSvg()
+                            : item.preview_url
+                              ? `<img src="${actions.escapeHtml(item.preview_url)}" alt="">`
+                              : attachmentIconSvg(attachmentFileKind(item));
+                    const kindClass = item.kind === 'skill' ? ' skill' : item.preview_url ? ' image' : ` file ${attachmentFileKind(item)}`;
+                    return `<span class="composer-attachment-icon${kindClass}" data-tooltip="${actions.escapeHtml(tip)}" aria-label="${actions.escapeHtml(tip)}" role="img">${body}<button type="button" data-remove-attachment="${index}" aria-label="Remove ${actions.escapeHtml(tip)}" data-tooltip="Remove ${actions.escapeHtml(item.label)}">×</button></span>`;
+                })
+                .join('');
+            strip.classList.toggle('hidden', !visible.length);
+            strip.querySelectorAll('[data-remove-attachment]').forEach((button) =>
                 button.addEventListener('click', () => {
                     const removed = context.attachments.splice(Number(button.dataset.removeAttachment), 1)[0];
                     if (removed?.preview_url?.startsWith('blob:')) URL.revokeObjectURL(removed.preview_url);
                     renderAttachments();
                     if (el('attach-dialog').open) renderContextSource();
                 })
-            )
-        );
+            );
+        }
         syncPlaywrightSkillToggle();
         if (el('attach-dialog').open)
             el('context-count').textContent = context.attachments.length
@@ -1495,6 +2056,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 : 'Nothing selected';
     }
     return {
+        isRouteMenuOpen,
+        openComplexityDialog,
         actionLabel,
         addManualContext,
         applyRunMode,
@@ -1508,6 +2071,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         openModelDialog,
         openModelPane,
         positionModelDialog,
+        prepareVisualPlan,
         providerLabel,
         renderAttachments,
         renderComposerSkillMenu,

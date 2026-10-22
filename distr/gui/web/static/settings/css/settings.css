@@ -19,11 +19,15 @@ html {
     scroll-behavior: smooth;
 }
 
-/* Shared settings save action: bottom centered for tabs that use the main-page action */
+/* Shared settings save action: below the page content, centred (overrides base.css absolute top-right) */
 .settings-actions-float {
+    position: static;
+    top: auto;
+    right: auto;
     display: flex;
     justify-content: center;
     align-items: center;
+    gap: 0.5rem;
     margin-top: 1.5rem;
     padding-top: 0.5rem;
 }
@@ -605,8 +609,13 @@ textarea:focus-visible {
 .project-cli-route-row {
     display: grid;
     align-items: center;
-    grid-template-columns: 5rem minmax(11rem, 1fr) minmax(13rem, 1.4fr);
+    grid-template-columns: 4rem minmax(9rem, 1fr) minmax(11rem, 1.35fr) minmax(10rem, 1fr) minmax(8rem, .8fr);
     gap: 0.75rem;
+}
+
+.project-cli-codex-control:disabled {
+    cursor: not-allowed;
+    opacity: .45;
 }
 
 [data-llm-subtab] {
@@ -663,10 +672,37 @@ textarea:focus-visible {
     background: rgba(148, 163, 184, 0.8);
 }
 
+/* Read-only Complexity routing summary (Settings > LLMs > Workflow) */
+.project-cli-route-row.project-cli-route-row--readonly {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    column-gap: 0.75rem;
+    row-gap: 0.15rem;
+    align-items: baseline;
+    padding: 0.5rem 0;
+    border-top: 1px solid rgba(86, 88, 105, 0.45);
+}
+.project-cli-route-row--readonly:first-child {
+    border-top: 0;
+}
+.project-cli-route-row--readonly .project-cli-route-summary,
+.project-cli-route-row--readonly .project-cli-route-extra {
+    grid-column: 2;
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
 @media (max-width: 860px) {
     .project-cli-route-row {
         grid-template-columns: 1fr;
         align-items: start;
+    }
+    .project-cli-route-row.project-cli-route-row--readonly {
+        grid-template-columns: 1fr;
+    }
+    .project-cli-route-row--readonly .project-cli-route-summary,
+    .project-cli-route-row--readonly .project-cli-route-extra {
+        grid-column: 1;
     }
 }
 /* LLM settings: keep provider/model selectors aligned and equal-width across rows */
@@ -822,6 +858,23 @@ textarea:focus-visible {
         padding: 0.52rem 0.72rem 0.48rem;
         font-size: 0.68rem;
         white-space: nowrap;
+    }
+}
+
+@media (max-width: 640px) {
+    .llms-row,
+    .llms-row--stt {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.5rem;
+    }
+
+    .llms-row > label {
+        width: auto;
+        text-align: left;
+    }
+
+    .llms-model-with-action {
+        width: 100%;
     }
 }
 
@@ -1259,26 +1312,10 @@ textarea:focus-visible {
     gap: 24px;
 }
 
-.monk-page-copy,
 .monk-section-header > div {
     min-width: 0;
 }
 
-.monk-title-line {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-}
-
-.monk-title-line h2 {
-    margin: 0;
-    color: #f3f4f6;
-    font-size: 1.25rem;
-    font-weight: 650;
-    line-height: 1.35;
-}
-
-.monk-page-copy p,
 .monk-section-header p {
     margin: 5px 0 0;
     color: #aeb4c2;
@@ -1418,7 +1455,7 @@ textarea:focus-visible {
 .monk-button-secondary:hover { border-color: rgba(249, 115, 22, 0.7); color: #f9fafb; }
 
 .monk-section-actions {
-    justify-content: flex-end;
+    justify-content: center;
     gap: 9px;
     margin-top: 14px;
 }
@@ -1604,3 +1641,29 @@ textarea:focus-visible {
     .monk-site-row { grid-template-columns: 36px minmax(0, 1fr); }
     .monk-site-actions { grid-column: 2; justify-content: flex-start; margin-top: 7px; }
 }
+
+/* 2026-10-22 llmsrouting: editable Complexity routing (shared table from workflow_exec_routing.js) */
+.llms-exec-routes { max-width: 56rem; margin: 0 auto; text-align: center; --wf-exec-accent: #10a37f; }
+.llms-exec-routes select {
+    background-color: #1a1f3a !important; border-color: #565869 !important; color: #fff;
+    padding-left: 0.5rem; padding-right: 1.75rem; background-position: right 0.3rem center; background-size: 1.25em 1.25em;
+}
+.llms-exec-routes select:hover { border-color: #7a7c8c !important; }
+.llms-exec-routes select:focus { border-color: #10a37f !important; outline: none; }
+.llms-exec-routes select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* 2026-10-22 llmsrouting: Laya mode callout cards (one row, radio semantics) */
+.laya-mode-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; border: 0; padding: 0; min-width: 0; }
+.laya-mode-card {
+    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.25rem;
+    text-align: center; cursor: pointer; padding: 0.875rem 0.75rem; border-radius: 0.5rem;
+    border: 1px solid #565869; background: #20264a; transition: border-color .15s, background-color .15s, box-shadow .15s;
+}
+.laya-mode-card:hover { border-color: #7a7c8c; }
+.laya-mode-card__input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.laya-mode-card__title { font-size: 0.875rem; font-weight: 600; color: #fff; }
+.laya-mode-card__desc { font-size: 0.75rem; line-height: 1.35; color: #9ca3af; }
+.laya-mode-card:has(.laya-mode-card__input:checked) { border-color: #10a37f; background: rgba(16, 163, 127, 0.14); box-shadow: inset 0 0 0 1px #10a37f; }
+.laya-mode-card:has(.laya-mode-card__input:checked) .laya-mode-card__desc { color: #d1fae5; }
+.laya-mode-card:has(.laya-mode-card__input:focus-visible) { outline: 2px solid #10a37f; outline-offset: 2px; }
+.laya-mode-card:has(.laya-mode-card__input:disabled) { opacity: 0.5; cursor: not-allowed; }

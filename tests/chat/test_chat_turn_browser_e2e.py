@@ -236,6 +236,7 @@ def test_turn_panel_realtime_steer_refresh_and_terminal_recovery(page: Page, vie
         )
         _notify(page, terminal)
         expect(panel).to_contain_text("Completed", timeout=10000)
+        expect(panel.locator(".turn-step-spinner")).to_have_count(0)
         expect(page.locator("#turnStopButton")).to_be_hidden()
 
         # Refresh recovers ordered durable events and terminal state without a
@@ -244,6 +245,7 @@ def test_turn_panel_realtime_steer_refresh_and_terminal_recovery(page: Page, vie
         panel = page.locator(f"#turnPanel-{turn_id}")
         expect(panel).to_have_count(1)
         expect(panel).to_contain_text("Completed")
+        expect(panel.locator(".turn-step-spinner")).to_have_count(0)
         expect(panel.locator(f'[data-turn-event-id="{first_event_id}"]')).to_have_count(1)
         expect(page.locator("#turnStopButton")).to_be_hidden()
         overflow = page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth")

@@ -149,6 +149,7 @@ class StudioTaskCreateRequest(BaseModel):
     attachments: Optional[List[dict]] = None
     skill_ids: Optional[List[str]] = None
     use_playwright: bool = False
+    skip_human_checkpoints: bool = False
 
 
 class StudioRoutingAssessmentRequest(BaseModel):

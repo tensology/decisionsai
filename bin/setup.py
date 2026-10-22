@@ -608,30 +608,27 @@ def setup(skip_model_pull=False, install_optional=False):
 
     os.makedirs("assets/tmp", exist_ok=True)
 
-    # Install Playwright browsers (chromium only — keeps install small)
+    # Playwright: use the ONE shared browser cache (~/Library/Caches/ms-playwright).
+    # Only download if the build this pinned Playwright needs is missing there.
     print("")
-    print("Setting up Playwright (headless browser)...")
+    print("Checking shared Playwright Chromium (global cache)...")
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.expanduser("~/Library/Caches/ms-playwright"))
     try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'playwright', 'install', 'chromium'],
-            capture_output=True,
-            text=True,
-            timeout=120,
+        probe = subprocess.run(
+            [sys.executable, '-m', 'playwright', 'install', '--dry-run', 'chromium'],
+            capture_output=True, text=True, timeout=60,
         )
-        if result.returncode == 0:
-            print("✓ Playwright Chromium browser installed")
+        import re as _re
+        locs = _re.findall(r"Install location:\s*(\S+)", probe.stdout or "")
+        if locs and all(os.path.isdir(l) for l in locs):
+            print(f"✓ Shared Playwright Chromium present: {', '.join(os.path.basename(l) for l in locs)}")
         else:
-            print(f"⚠ Playwright install returned code {result.returncode}")
-            if result.stderr:
-                print(f"  {result.stderr.strip()[:200]}")
-            print("  You can install manually: python -m playwright install chromium")
+            print("⚠ Shared Playwright Chromium for this version is missing.")
+            print("  Install once into the global cache: python -m playwright install chromium")
     except FileNotFoundError:
-        print("⚠ Playwright not found. Install with: pip install playwright && playwright install chromium")
-    except subprocess.TimeoutExpired:
-        print("⚠ Playwright install timed out. Run manually: python -m playwright install chromium")
+        print("⚠ Playwright not found. Install with: pip install -r requirements.txt")
     except Exception as e:
-        print(f"⚠ Playwright setup error: {e}")
-        print("  You can install manually: python -m playwright install chromium")
+        print(f"⚠ Playwright check error: {e}")
 
     # Pre-download Kanade voice cloning models (avoids long wait on first custom voice play)
     setup_kanade_models()

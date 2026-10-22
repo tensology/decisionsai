@@ -147,7 +147,7 @@ def test_development_workflows_live_in_the_thread_not_board_or_composer():
     assert "composer-workflow" not in composer
     assert "thread-workflow-runner" in transcript
     assert "liveWorkflowRunnerHtml" in transcript
-    assert ".thread-workflow-ring" in styles
+    assert ".thread-workflow-ring" not in styles  # unused, removed 2026-10-22
     assert "linked_workflow_id=board.default_workflow_id" not in kanban
     assert "no open Development thread" in run_tool
     assert "chat_id=int(host_chat_id)" in run_tool
@@ -161,7 +161,8 @@ def test_development_model_menu_is_harness_first():
     assessment = read("distr/gui/web/routes/development/threads.py")
 
     assert 'data-model-pane="harness"' in dialog
-    assert 'data-model-pane="auto"' in dialog
+    assert 'data-model-pane="auto"' not in dialog  # Auto now lives in the Harness list
+    assert "modelChoiceHtml('Auto', 'auto', context.draft.route_mode !== 'manual', 'Picks a tier per message')" in composer
     assert 'id="model-route-preview"' in dialog
     assert 'data-model-pane="provider"' in dialog
     assert "HARNESS_OPTIONS" in composer

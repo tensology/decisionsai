@@ -369,8 +369,10 @@ class WorkflowAgent:
             candidates.append((normalized, raw_model))
 
         add(self._provider, self._model)
+        from distr.core.llm_factory import resolve_complexity_llm_candidates
+        for tier_provider, tier_model in resolve_complexity_llm_candidates(self._settings, "medium"):
+            add(tier_provider, tier_model)
         for provider_key, model_key in (
-            ("workflow_llm_provider", "workflow_llm_model"),
             ("coding_llm_provider", "coding_llm_model"),
             ("step_runner_llm_provider", "step_runner_llm_model"),
             ("conversational_llm_provider", "conversational_llm_model"),

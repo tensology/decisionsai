@@ -257,8 +257,9 @@ class TestWorkflowAgentExecute:
     def test_llm_quota_uses_configured_fallback_before_returning_error(self, mock_tools, mock_ensure):
         """Workflow-specific model failures should try configured fallback LLMs."""
         settings = {
-            "workflow_llm_provider": "OpenAI",
-            "workflow_llm_model": "gpt-5.5",
+            "project_cli_medium_backend": "pi",
+            "project_cli_medium_model_provider": "openai",
+            "project_cli_medium_model": "gpt-5.5",
             "coding_llm_provider": "Ollama",
             "coding_llm_model": "qwen3-coder",
             "conversational_llm_provider": "KiloCode",

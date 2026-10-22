@@ -106,6 +106,20 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "select_thread",
+        (
+            r"\b(select|pick|highlight|choose)\b.{0,60}\b(threads?|conversations?|chats?)\b",
+            r"\b(focus\s+on|jump\s+to|go\s+to|switch\s+to|show(?:\s+me)?)\b.{0,40}\b(latest|newest|most\s+recent|last)?\s*(?:development\s+)?threads?\b",
+        ),
+    ),
+    (
+        "open_thread",
+        (
+            r"\b(open(?:\s+up)?|pull\s+up|bring\s+up|launch)\b.{0,60}\b(threads?)\b",
+            r"\bopen\b.{0,40}\b(latest|newest|most\s+recent|last)\b.{0,20}\b(chat|conversation)\b",
+        ),
+    ),
+    (
         "open_page",
         (
             r"\b(open(?:\s+up)?|show(?:\s+me)?|pull\s+up|launch|go\s+to|bring\s+up)\b.{0,80}\b(chat|web\s*ui|web\s*interface|development(?:\s+section)?|preferences?|settings)\b",

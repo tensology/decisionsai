@@ -27,12 +27,22 @@ def advance_next_run_for_automation(row: Automation) -> None:
             base = datetime.utcnow()
             row.next_run_at = base + interval_timedelta(value, unit)
             return
-    cron = schedule_to_cron(
-        row.schedule_preset,
-        row.schedule_time,
-        row.schedule_timezone,
-        row.schedule_days,
-    )
+    if preset == "yearly":
+        # autocog: yearly lives only in schedule_config (needs the month).
+        from distr.core.automation.schedule_cron import calendar_schedule_to_cron
+        from distr.core.automation.store import schedule_dict_from_row
+
+        try:
+            cron = calendar_schedule_to_cron(schedule_dict_from_row(row))
+        except ValueError:
+            cron = None
+    else:
+        cron = schedule_to_cron(
+            row.schedule_preset,
+            row.schedule_time,
+            row.schedule_timezone,
+            row.schedule_days,
+        )
     if not cron:
         row.next_run_at = None
         return
@@ -46,4 +56,8 @@ def advance_next_run_for_automation(row: Automation) -> None:
             row.schedule_timezone,
         )
         guard += 1
-    row.next_run_at = next_run
+    # calendar: never land on an ignored occurrence.
+    from distr.core.automation.occurrences import skip_ignored
+    from distr.core.automation.store import schedule_dict_from_row
+
+    row.next_run_at = skip_ignored(next_run, schedule_dict_from_row(row))

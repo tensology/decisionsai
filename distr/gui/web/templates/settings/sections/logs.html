@@ -1,11 +1,4 @@
 <div class="logs-tab-inner min-w-0">
-    <div class="mb-4 pb-4 border-b border-[#565869]">
-        <h2 class="text-xl font-semibold text-white mb-1">Logs</h2>
-        <p class="text-sm text-gray-400 flex items-center gap-2 flex-wrap">
-            <span class="shrink-0">Log file:</span>
-            <span id="logs_path" class="text-[#7a7c8c] truncate"></span>
-        </p>
-    </div>
     <div class="logs-shell rounded-lg border border-[#565869] bg-[#0d1117] max-w-full relative">
         <button type="button" id="logs-copy-btn"
                 class="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md border border-[#565869] bg-[#1a1f3a] text-[#ececf1] transition-all duration-150 hover:border-[#f97316] hover:bg-[#f97316] hover:text-white hover:shadow-sm hover:shadow-[#f97316]/30 hover:-translate-y-0.5"
@@ -19,4 +12,8 @@
         </button>
         <pre id="logs_content" class="p-4 text-[10px] leading-relaxed text-[#c9d1d9] font-mono whitespace-pre m-0 block">Loading…</pre>
     </div>
+    <p class="logs-file-info mt-4 text-sm text-gray-400 flex items-center gap-2 flex-wrap">
+        <span class="shrink-0">Log file:</span>
+        <span id="logs_path" class="text-[#7a7c8c] truncate"></span>
+    </p>
 </div>

@@ -146,6 +146,11 @@ def dispatch_work_item(
                 if chat is None or chat.parent_id is not None:
                     raise ValueError(f"Development thread #{chat_id} was not found.")
                 existing = development_thread_metadata(chat)
+                if scope.get("project_id") is None and chat.project_id is not None:
+                    scope["project_id"] = int(chat.project_id)
+            if str(existing.get("board_provider") or "").strip().lower() not in {"", "local", "database", "decisions"}:
+                for key in ("board_provider", "board_key", "board_ticket_key", "board_ticket_title", "board_ticket_lane"):
+                    scope[key] = existing.get(key) or scope.get(key)
             mark_development_thread(
                 int(chat_id),
                 workflow_id=int(workflow_id),

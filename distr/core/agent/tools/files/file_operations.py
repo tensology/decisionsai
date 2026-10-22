@@ -117,6 +117,15 @@ class FileOperationsTool(BaseTool):
             'videos': os.path.join(home, 'Movies'),
         }
         
+        # "my downloads/routing-test-1.md", "Downloads/x.md": a spoken folder name used as
+        # the first path segment (routee2e 2026-10-22: file landed in <cwd>/my downloads/).
+        prefixed = re.match(
+            r'^\s*(?:my\s+)?(desktop|documents|downloads|pictures|music|videos)(?:\s+folder)?\s*[/\\]+(.+)$',
+            path.strip(), re.IGNORECASE,
+        )
+        if prefixed:
+            return os.path.join(folder_map[prefixed.group(1).lower()], prefixed.group(2).strip())
+
         # Check for "my X" pattern (only if path doesn't look like a full file path)
         # Don't match if path contains slashes (likely a full path) or file extensions
         is_likely_full_path = '/' in path or '\\' in path or '.' in os.path.basename(path) if '.' in path else False

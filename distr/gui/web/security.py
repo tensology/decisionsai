@@ -113,6 +113,11 @@ def require_internal_token_request(req: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def require_internal_token_dependency(request: Request) -> None:
+    """FastAPI dependency form of require_internal_token_request (per-route guard)."""
+    require_internal_token_request(request)
+
+
 def websocket_has_valid_internal_token(ws: WebSocket) -> bool:
     expected = get_internal_api_token()
     received = _websocket_token(ws)

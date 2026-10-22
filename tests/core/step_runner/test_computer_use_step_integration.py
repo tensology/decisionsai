@@ -45,7 +45,7 @@ def test_planner_preserves_computer_use_action_type_from_llm():
     fake_litellm = types.SimpleNamespace(completion=lambda **kwargs: _Response())
 
     with patch.dict(sys.modules, {"litellm": fake_litellm}), \
-         patch("distr.core.settings.load_settings_from_db", return_value={"workflow_llm_provider": "ollama", "workflow_llm_model": "qwen3:8b"}), \
+         patch("distr.core.settings.load_settings_from_db", return_value={"project_cli_medium_backend": "ollama", "project_cli_medium_model": "qwen3:8b"}), \
          patch("distr.core.llm_override.get_llm_override", return_value=None):
         steps = planning._call_llm_for_plan("Use the screen to click Submit")
 

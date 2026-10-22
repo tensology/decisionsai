@@ -775,3 +775,8 @@ textarea:focus-visible {
     background: rgba(153, 27, 27, 0.9);
     color: #ffffff;
 }
+
+/* Shared page layout (2026-10-22): the Reports page is the reference. One gutter, no max width. */
+:root { --page-gutter: 24px; --page-max-width: none; }
+.page-container { box-sizing: border-box; width: 100%; max-width: var(--page-max-width); margin: 0; padding: var(--page-gutter); }
+@media (max-width: 680px) { :root { --page-gutter: 16px; } }

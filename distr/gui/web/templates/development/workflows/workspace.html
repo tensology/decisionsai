@@ -1,9 +1,12 @@
 <section class="development-workspace workflow-workspace hidden" id="workflow-workspace" aria-label="Workflows">
                 <div class="workflow-home" id="workflow-home">
+                    <div class="workflow-home-toolbar"><button type="button" class="primary-button workflow-add-button" id="workflow-add-toggle" aria-expanded="false" aria-controls="workflow-add-modal" aria-haspopup="dialog">+ Add workflow</button></div>
+                    <div class="workflow-add-modal hidden" id="workflow-add-modal" role="dialog" aria-modal="true" aria-labelledby="workflow-add-title"><div class="workflow-add-dialog"><h2 id="workflow-add-title">Add workflow</h2>
                     <form class="development-prompt workflow-create-prompt" id="workflow-prompt-form">
                         <input id="workflow-prompt-input" type="text" autocomplete="off" placeholder="Describe the workflow, its checks, and what should happen when a step fails" aria-label="Describe a workflow">
                         <button type="submit" id="workflow-prompt-submit">Build workflow</button>
-                    </form>
+                        <button type="button" class="secondary-button" id="workflow-prompt-cancel">Cancel</button>
+                    </form></div></div>
                     <div class="workflow-project-groups" id="workflow-list" aria-live="polite"></div>
                 </div>
                 <div class="workflow-editor hidden" id="workflow-detail" aria-label="Workflow editor"></div>

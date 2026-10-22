@@ -265,8 +265,6 @@ class LLMSettings(BaseModel):
     image_model: str = ""
     video_provider: str = ""
     video_model: str = ""
-    workflow_provider: str = ""
-    workflow_model: str = ""
     computer_use_provider: str = ""
     computer_use_model: str = ""
     project_cli_low_backend: str = "cursor"

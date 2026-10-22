@@ -8,9 +8,11 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+from distr.gui.web.security import require_internal_token_dependency
 
 from distr.core.automation.store import (
     AutomationStoreError,
@@ -265,6 +267,37 @@ def create_routes() -> APIRouter:
 
         return JSONResponse({"presets": _list_presets()})
 
+    # automodel 2026-10-22: global CLI harness + model default for automations.
+    # mddtoken 2026-10-22: every model-defaults method requires the internal token.
+    @router.get("/automations/model-defaults", dependencies=[Depends(require_internal_token_dependency)])
+    async def get_automation_model_defaults():
+        from distr.core.settings import load_settings_from_db
+
+        s = load_settings_from_db()
+        return JSONResponse({
+            "backend": str(s.get("automation_cli_backend") or "").strip().lower(),
+            "model_provider": str(s.get("automation_cli_model_provider") or "").strip().lower(),
+            "model": str(s.get("automation_cli_model") or "").strip(),
+        })
+
+    @router.api_route("/automations/model-defaults", methods=["PUT", "POST", "PATCH"],
+                      dependencies=[Depends(require_internal_token_dependency)])
+    async def save_automation_model_defaults(payload: Dict[str, Any]):
+        from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+        backend = str((payload or {}).get("backend") or "").strip().lower()
+        settings = load_settings_from_db()
+        settings["automation_cli_backend"] = backend
+        settings["automation_cli_model_provider"] = str((payload or {}).get("model_provider") or "").strip().lower() if backend else ""
+        settings["automation_cli_model"] = (str((payload or {}).get("model") or "").strip() or "auto") if backend else ""
+        await asyncio.to_thread(save_settings_to_db, settings)
+        return JSONResponse({
+            "success": True,
+            "backend": settings["automation_cli_backend"],
+            "model_provider": settings["automation_cli_model_provider"],
+            "model": settings["automation_cli_model"],
+        })
+
     @router.get("/automations")
     async def list_automations_route():
         return JSONResponse({"automations": list_automations()})
@@ -440,6 +473,20 @@ def create_routes() -> APIRouter:
         except (AutomationStoreError, ValueError) as exc:
             raise _store_error(exc) from exc
         return JSONResponse({"success": True, "automation": automation})
+
+    # calendar 2026-10-22: ignore / un-ignore a single occurrence (token-protected).
+    @router.post("/automations/{automation_id}/occurrences/ignore",
+                 dependencies=[Depends(require_internal_token_dependency)])
+    async def ignore_automation_occurrence(automation_id: str, payload: Dict[str, Any]):
+        from distr.core.automation.store import set_occurrence_ignored
+
+        occurrence = str((payload or {}).get("occurrence") or "")
+        ignored = bool((payload or {}).get("ignored", True))
+        try:
+            automation = set_occurrence_ignored(automation_id, occurrence, ignored)
+        except (AutomationStoreError, ValueError) as exc:
+            raise _store_error(exc) from exc
+        return JSONResponse({"success": True, "automation": automation, "occurrence": occurrence[:16], "ignored": ignored})
 
     @router.post("/automations/{automation_id}/pause")
     async def pause_automation_route(automation_id: str):

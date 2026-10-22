@@ -196,7 +196,9 @@ def test_thread_owned_time_can_play_pause_reset_and_auto_pause(development_db):
     assert started["paused"] is False
 
     reset = control.reset_thread_time(development_db["chat_id"], seconds=95)
-    assert reset["seconds"] >= 95
+    assert reset["seconds"] == 95
+    assert reset["paused"] is True
+    assert reset["running"] is False
     assert any(entry["source"] in {"manual", "reset", "play"} for entry in reset.get("entries") or [])
     paused = control.pause_thread_time(development_db["chat_id"])
     assert paused["paused"] is True

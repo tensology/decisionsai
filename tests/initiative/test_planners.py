@@ -80,7 +80,7 @@ def test_tts_excerpt_from_markdown_strips_headers():
     assert "**" not in out
 
 
-def test_generate_planner_markdown_prefers_workflow_llm_when_configured():
+def test_generate_planner_markdown_prefers_medium_complexity_tier_when_configured():
     fake_litellm = MagicMock()
     fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
     fake_litellm.completion = MagicMock(
@@ -90,8 +90,9 @@ def test_generate_planner_markdown_prefers_workflow_llm_when_configured():
     )
     bundle = ContextBundle(current_datetime="2026-06-11T07:00:00Z")
     settings = {
-        "workflow_llm_provider": "openai",
-        "workflow_llm_model": "gpt-5",
+        "project_cli_medium_backend": "pi",
+        "project_cli_medium_model_provider": "openai",
+        "project_cli_medium_model": "gpt-5",
         "conversational_llm_provider": "openai",
         "conversational_llm_model": "gpt-5.2",
     }

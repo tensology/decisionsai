@@ -140,6 +140,17 @@ def run_scheduled_automation(
         row = session.get(model, int(identity), with_for_update=True)
         if not row or not row.schedule_enabled or not row.next_run_at or row.next_run_at > now:
             return False
+        if record_id:
+            # calendar: an occurrence ignored after next_run_at was computed is skipped, not run.
+            from distr.core.automation.occurrences import occurrence_key, skip_ignored
+            from distr.core.automation.store import schedule_dict_from_row
+
+            sched = schedule_dict_from_row(row)
+            if occurrence_key(row.next_run_at, sched.get("timezone") or None) in set(sched.get("ignored_occurrences") or []):
+                row.next_run_at = skip_ignored(row.next_run_at, sched)
+                row.modified_date = now
+                session.commit()
+                return False
         due_at = row.next_run_at
         timing_metadata = {**_scheduled_timing_metadata(due_at), "phase": "scheduled_automation", "due_at": due_at.isoformat()}
         if not record_id:

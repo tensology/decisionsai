@@ -211,18 +211,15 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def legacy_kanban_api_alias(request: Request, call_next):
-        """Deprecated: rewrite /api/kanban/* to /api/tickets/* for older clients.
-
-        Remote app and desktop UI use /api/tickets/* directly. This shim remains
-        for legacy integrations until they are updated.
-        """
+        """Retired (apiaudit 22 Oct 2026): /api/kanban/* used to be silently rewritten
+        to /api/tickets/*. It now answers 410 Gone with a pointer instead."""
         path = request.url.path
-        if path.startswith("/api/kanban"):
-            scope = request.scope
-            scope["path"] = "/api/tickets" + path[len("/api/kanban"):]
-            raw_path = scope.get("raw_path")
-            if isinstance(raw_path, (bytes, bytearray)):
-                scope["raw_path"] = scope["path"].encode("latin-1")
+        if path == "/api/kanban" or path.startswith("/api/kanban/"):
+            return JSONResponse(
+                status_code=410,
+                content={"detail": "/api/kanban/* is retired; use /api/tickets/*",
+                         "replacement": "/api/tickets" + path[len("/api/kanban"):]},
+            )
         return await call_next(request)
 
     @app.middleware("http")
@@ -254,8 +251,18 @@ def create_app() -> FastAPI:
         }
         try:
             if path.startswith("/api/"):
-                if path not in unauthenticated_local_posts and (method != "GET" or path in sensitive_settings_reads):
+                # /api/mcp* (MCP config, local commands, server-mode token) is sensitive on read too.
+                is_mcp_path = path == "/api/mcp" or path.startswith("/api/mcp/")
+                if path not in unauthenticated_local_posts and (
+                    method != "GET" or path in sensitive_settings_reads or is_mcp_path
+                ):
                     require_internal_token_request(request)
+            # Legacy Board API (mounted at /board): token required on every method,
+            # reads included (board UI XHRs get the header via the board.py shim).
+            # /hooks/slack/events is called by Slack's servers: it is verified by
+            # Slack signing secret + replay window in integrations_hooks.py instead.
+            if path.startswith("/board/api") and method != "OPTIONS":
+                require_internal_token_request(request)
             if path.startswith("/api/internal/"):
                 require_internal_token_request(request)
         except HTTPException as exc:
@@ -278,10 +285,13 @@ def create_app() -> FastAPI:
 
     def _template_context(request: Request, base_path: str) -> dict:
         # Starlette 1.0+: request is passed as first arg to TemplateResponse, not in context
+        from distr.core.workflow.development_control import DEVELOPMENT_TIMER_MENU
+
         return {
             "base_path": base_path,
             "internal_api_token": app.state.internal_api_token,
             "app_version": _app_version_label(project_root),
+            "development_timer_menu": DEVELOPMENT_TIMER_MENU,
         }
 
     @app.post("/api/harness/events")
@@ -365,6 +375,20 @@ def create_app() -> FastAPI:
         logger.error("Failed to load integration webhook routes: %s", e, exc_info=True)
 
     try:
+        from distr.gui.web.routes.api_audit import create_router as create_api_audit_router
+        app.include_router(create_api_audit_router(), prefix="/api", tags=["api"])
+    except Exception as e:
+        logger.error("Failed to load API audit routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.api_extensions import create_router as create_api_extensions_router
+        # Must precede the chat router: /chats/current would otherwise hit /chats/{chat_id}.
+        app.include_router(create_api_extensions_router(), prefix="/api", tags=["api"])
+        logger.info("API extension routes mounted at /api (turns, messages, settings, skills invoke)")
+    except Exception as e:
+        logger.error("Failed to load API extension routes: %s", e, exc_info=True)
+
+    try:
         from distr.gui.web.routes.chat import create_routes as create_chat_routes
         chat_router = create_chat_routes(chat_templates_dir, base_path="/chat")
         app.include_router(chat_router, prefix="/api", tags=["chat"])
@@ -439,6 +463,50 @@ def create_app() -> FastAPI:
         logger.info("Event SSE mounted at GET /api/events/stream")
     except Exception as e:
         logger.error("Failed to load events stream routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.laya_submissions import router as laya_submissions_router
+
+        app.include_router(laya_submissions_router)
+        logger.info("Laya submission API mounted at /api/laya/submissions")
+    except Exception as e:
+        logger.error("Failed to load Laya submission routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.selfimprove import router as selfimprove_router
+
+        app.include_router(selfimprove_router)
+        logger.info("Self-improvement approval API mounted at /api/selfimprove")
+    except Exception as e:
+        logger.error("Failed to load self-improvement routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.dev_approvals import router as dev_approvals_router
+        from distr.gui.web.routes.dev_tools_settings import router as dev_tools_settings_router
+
+        app.include_router(dev_approvals_router)
+        app.include_router(dev_tools_settings_router)
+        logger.info("Dev-agent approval API mounted at /api/dev-approvals")
+    except Exception as e:
+        logger.error("Failed to load dev-agent approval routes: %s", e, exc_info=True)
+
+    # Decisions MCP server mode (/mcp/): OFF by default; loopback + bearer only.
+    try:
+        from distr.gui.web.routes.mcp_server_http import maybe_mount_mcp_server
+
+        maybe_mount_mcp_server(app)
+    except Exception as e:
+        logger.error("Failed to mount MCP server mode: %s", e, exc_info=True)
+
+    # Single MCP hub owner (workers relay here) + MCP server-mode settings API.
+    try:
+        from distr.gui.web.routes.mcp_hub_internal import router as mcp_hub_internal_router
+        from distr.gui.web.routes.mcp_server_settings import router as mcp_server_settings_router
+
+        app.include_router(mcp_hub_internal_router)
+        app.include_router(mcp_server_settings_router)
+    except Exception as e:
+        logger.error("Failed to load MCP hub/server-mode routes: %s", e, exc_info=True)
 
     @app.get("/api/sidecar/health")
     async def api_sidecar_health():
@@ -945,13 +1013,15 @@ def create_app() -> FastAPI:
     async def tickets_redirect(request: Request):
         return RedirectResponse(url=_legacy_ticket_destination(request), status_code=302)
 
-    @app.get("/kanban/", response_class=HTMLResponse)
-    async def kanban_legacy_page_redirect(request: Request):
-        return RedirectResponse(url=_legacy_ticket_destination(request), status_code=302)
-
-    @app.get("/kanban", response_class=HTMLResponse)
-    async def kanban_legacy_redirect(request: Request):
-        return RedirectResponse(url=_legacy_ticket_destination(request), status_code=302)
+    # /kanban was retired (apiaudit 22 Oct 2026): 410 Gone with a pointer, no silent redirect.
+    @app.get("/kanban/")
+    @app.get("/kanban")
+    async def kanban_legacy_gone(request: Request):
+        return JSONResponse(
+            status_code=410,
+            content={"detail": "/kanban is retired; ticket boards live under Development",
+                     "replacement": _legacy_ticket_destination(request)},
+        )
 
     try:
         from distr.gui.web.routes.kanban import create_routes as create_kanban_routes

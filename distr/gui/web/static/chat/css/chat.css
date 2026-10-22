@@ -1746,6 +1746,8 @@
     width: 100%;
     height: 100%;
     object-position: center;
+    transform: translate(var(--assistant-image-offset-x, 0), var(--assistant-image-offset-y, 0)) scale(var(--assistant-image-scale, 1));
+    transform-origin: center;
 }
 
 .assistant-avatar-image.oracle {
@@ -2905,3 +2907,16 @@
 .chat-item[title] {
     cursor: pointer;
 }
+
+/* Oracle chat image attachments (chat-images.js) */
+.chat-attach-button { color: #8e8ea0; }
+.chat-image-tray { max-width: 768px; margin: 0 auto 8px; display: flex; gap: 8px; }
+.chat-image-tray[hidden] { display: none; }
+.chat-image-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px 4px 4px; background: #101947; border: 1px solid rgba(255,255,255,0.16); border-radius: 10px; max-width: 280px; }
+.chat-image-chip img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; display: block; }
+.chat-image-chip-name { font-size: 12px; color: #c5c5d2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-image-chip-remove { background: transparent; border: none; color: #8e8ea0; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; }
+.chat-image-chip-remove:hover { color: #ececf1; background: rgba(255,255,255,0.1); }
+.chat-shell .input-container.chat-image-dragover .input-wrapper { border-color: #f97316; border-style: dashed; }
+.chat-message-image { display: block; margin-bottom: 8px; }
+.chat-message-image img { max-width: 240px; max-height: 240px; border-radius: 8px; display: block; }

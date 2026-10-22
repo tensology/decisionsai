@@ -41,7 +41,6 @@ ALWAYS_ON_NAMES: set[str] = {
     "execute_code",
     "oracle_control",
     "mode_control",
-    "new_chat",
     "system_info",
     "memory_search",
     "memory_read",

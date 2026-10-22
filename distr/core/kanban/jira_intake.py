@@ -662,6 +662,10 @@ def start_execution_for_tickets(ticket_ids: Iterable[int]) -> dict[str, Any]:
                 logger.exception("Failed to start execution for Jira ticket %s", ticket_id)
                 errors.append(f"{ticket_id}:{exc}")
                 run_meta["error"] = str(exc)
+                try:
+                    jlife.mark_execution_failed(ticket_id=ticket_id, error=f"dispatch failed: {exc}")
+                except Exception:
+                    logger.debug("Could not mark Jira lifecycle failed", exc_info=True)
             started.append(run_meta)
     return {"started": started, "error": "; ".join(errors) if errors else None}
 

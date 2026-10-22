@@ -89,6 +89,10 @@ class PiRpcSession:
         # FIFO: one ticket write-back per completed agent turn (paired with send_prompt)
         self._ticket_writeback_queue: deque = deque()
         self._last_preflight_error: str = ""
+        # Error reported by the model on the latest agent turn ("" = none).
+        self._last_turn_error: str = ""
+        self._max_messages = 1000
+        self._stderr_tail: deque = deque(maxlen=50)
 
     @staticmethod
     def find_pi() -> Optional[str]:
@@ -181,6 +185,8 @@ class PiRpcSession:
         # Start reader thread (reads stdout line by line — JSONL protocol)
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
+        # Drain stderr: an unread PIPE fills (~64 KB) and blocks pi mid-run.
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
 
         logger.info(f"PiRpcSession started: project={self.project_id}, cwd={self.cwd}, pid={self._process.pid}, provider={self._provider}, model={self._model}")
         return True
@@ -216,6 +222,24 @@ class PiRpcSession:
             self._running = False
             self.status = "disconnected"
             logger.info(f"PiRpcSession reader ended: project={self.project_id}")
+
+    def _drain_stderr(self):
+        """Keep a short stderr tail for diagnostics without letting the pipe fill."""
+        proc = self._process
+        if not proc or not proc.stderr:
+            return
+        try:
+            for line in proc.stderr:
+                line = line.rstrip()
+                if line:
+                    self._stderr_tail.append(line[:500])
+        except Exception:
+            logger.debug("PiRpcSession stderr drain ended", exc_info=True)
+
+    def _append_message(self, message: "PiMessage") -> None:
+        self.messages.append(message)
+        if len(self.messages) > self._max_messages:
+            del self.messages[: len(self.messages) - self._max_messages]
 
     def _process_event(self, event: dict):
         """Convert structured RPC events into a clean transcript."""
@@ -256,13 +280,13 @@ class PiRpcSession:
                         b.get("text", "") for b in content if b.get("type") == "text"
                     )
                 self._add_output(f"\n>>> {content}")
-                self.messages.append(PiMessage(role="user", content=content))
+                self._append_message(PiMessage(role="user", content=content))
 
         elif event_type == "message_end":
             msg = event.get("message", {})
             role = msg.get("role", "")
             if role == "assistant" and self._current_assistant_text:
-                self.messages.append(PiMessage(role="assistant", content=self._current_assistant_text))
+                self._append_message(PiMessage(role="assistant", content=self._current_assistant_text))
                 self._current_assistant_text = ""
             elif role == "toolResult":
                 content_parts = msg.get("content", [])
@@ -274,7 +298,7 @@ class PiRpcSession:
                 elif isinstance(content_parts, str):
                     text = content_parts
                 self._add_output(f"  → {text[:500]}")
-                self.messages.append(PiMessage(
+                self._append_message(PiMessage(
                     role="tool_result",
                     tool_name=msg.get("toolName", ""),
                     tool_result=text,
@@ -297,7 +321,7 @@ class PiRpcSession:
             is_error = event.get("isError", False)
             prefix = "❌" if is_error else "✓"
             self._add_output(f"  {prefix} {text[:300]}")
-            self.messages.append(PiMessage(
+            self._append_message(PiMessage(
                 role="tool_result",
                 tool_name=event.get("toolName", ""),
                 tool_result=text[:3000],
@@ -306,20 +330,24 @@ class PiRpcSession:
 
         elif event_type == "agent_start":
             self.status = "running"
+            self._last_turn_error = ""
             self._add_output("[Agent started]")
 
         elif event_type == "agent_end":
-            self.status = "completed"
             all_msgs = event.get("messages", [])
             self._add_output("[Agent finished]")
+            self._last_turn_error = ""
             for msg in reversed(all_msgs or []):
                 if not isinstance(msg, dict) or msg.get("role") != "assistant":
                     continue
                 if msg.get("stopReason") == "error" or msg.get("errorMessage"):
                     err = (msg.get("errorMessage") or "Model error").strip()
                     self._last_preflight_error = err
+                    self._last_turn_error = err
                     self._add_output(f"[Error] {err}")
-                    break
+                break  # only the final assistant message decides the turn
+            # A model/provider error ends the turn as failed, not completed.
+            self.status = "failed" if self._last_turn_error else "completed"
             # Auto-read out overview when agent finishes
             self._auto_overview()
             self._maybe_ticket_pi_writeback()
@@ -344,6 +372,8 @@ class PiRpcSession:
 
     def _infer_pi_turn_outcome(self) -> str:
         """Infer completed vs failed for the latest agent turn (tool errors in tail)."""
+        if self._last_turn_error:
+            return "failed"
         for m in reversed(self.messages):
             if m.role == "user":
                 break

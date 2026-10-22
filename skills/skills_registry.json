@@ -62,7 +62,7 @@
   {
     "id": "agent-platform-skill-registry",
     "name": "agent-platform-skill-registry",
-    "description": ">",
+    "description": "Interact with the Gemini Enterprise Agent Platform Skill Registry to create and search for available skills. Use this skill to enable agents to register functionality or discover new capabilities.",
     "path": "agent-platform-skill-registry",
     "source": "google/skills",
     "tags": [
@@ -78,7 +78,7 @@
   {
     "id": "alloydb-basics",
     "name": "alloydb-basics",
-    "description": ">-",
+    "description": "Manages clusters, instances, and backups for AlloyDB for PostgreSQL, and integrates with AlloyDB model context protocol (MCP) tools for automated database operations.",
     "path": "alloydb-basics",
     "source": "google/skills",
     "tags": [
@@ -88,7 +88,7 @@
   {
     "id": "bigquery-basics",
     "name": "bigquery-basics",
-    "description": ">-",
+    "description": "Manages datasets, tables, and jobs in BigQuery, and integrates with BigQuery ML and Gemini for advanced data analytics and AI-driven insights. Use when you need to interact with BigQuery, run SQL queries, manage BigQuery resources, or leverage BigQuery's built-in ML capabilities. Also use when performing data analysis, ingesting data into BigQuery, or developing AI applications on BigQuery.",
     "path": "bigquery-basics",
     "source": "google/skills",
     "tags": [
@@ -122,7 +122,7 @@
   {
     "id": "cloud-run-basics",
     "name": "cloud-run-basics",
-    "description": ">-",
+    "description": "Manages Cloud Run services, jobs, and worker pools. Use when you need to deploy applications responding to HTTP requests (services), run event-triggered or scheduled tasks (jobs), or handle always-on pull-based background processing (worker pools).",
     "path": "cloud-run-basics",
     "source": "google/skills",
     "tags": [
@@ -132,7 +132,7 @@
   {
     "id": "cloud-sql-basics",
     "name": "cloud-sql-basics",
-    "description": ">-",
+    "description": "This file generates or explains Cloud SQL resources. Use this file when the user asks to create a Cloud SQL instance or database for MySQL, PostgreSQL, or SQL Server. Cloud SQL manages third-party MySQL, PostgreSQL, and SQL Server instances as resources in Cloud SQL. For example, when Cloud SQL creates an open-source MySQL instance, the resulting resource is a Cloud SQL for MySQL instance that Google Cloud manages. Cloud SQL handles backups, high availability, and secure connectivity for relational database workloads.",
     "path": "cloud-sql-basics",
     "source": "google/skills",
     "tags": [
@@ -228,7 +228,7 @@
   {
     "id": "google-cloud-networking-observability",
     "name": "google-cloud-networking-observability",
-    "description": ">-",
+    "description": "Investigates Google Cloud networking issues by analyzing logs, metrics, and diagnostics. Use when investigating VPC Flow Logs, NAT, firewall, or threat logs, querying latency and throughput metrics, or running Connectivity Tests for path diagnostics.",
     "path": "google-cloud-networking-observability",
     "source": "google/skills",
     "tags": [
@@ -268,7 +268,7 @@
   {
     "id": "google-cloud-waf-operational-excellence",
     "name": "google-cloud-waf-operational-excellence",
-    "description": ">-",
+    "description": "Generates operations-focused guidance for Google Cloud workloads based on the design principles and recommendations in the Operational Excellence pillar of the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate a workload, identify operational requirements, and provide actionable recommendations for deployment, monitoring, and incident management.",
     "path": "google-cloud-waf-operational-excellence",
     "source": "google/skills",
     "tags": [
@@ -278,7 +278,7 @@
   {
     "id": "google-cloud-waf-performance-optimization",
     "name": "google-cloud-waf-performance-optimization",
-    "description": ">-",
+    "description": "Generates performance-focused guidance for Google Cloud workloads based on the design principles and recommendations in the Performance Optimization pillar of the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate a workload, identify performance requirements, and provide actionable recommendations for resource allocation, modular design, and elasticity.",
     "path": "google-cloud-waf-performance-optimization",
     "source": "google/skills",
     "tags": [
@@ -308,7 +308,7 @@
   {
     "id": "google-cloud-waf-sustainability",
     "name": "google-cloud-waf-sustainability",
-    "description": ">-",
+    "description": "Generates sustainability-focused guidance for Google Cloud workloads based on the design principles and recommendations in the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate a workload, identify environmental impact requirements, and provide actionable recommendations to build, deploy, and manage the workload sustainably in Google Cloud.",
     "path": "google-cloud-waf-sustainability",
     "source": "google/skills",
     "tags": [

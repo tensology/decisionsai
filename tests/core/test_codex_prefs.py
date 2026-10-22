@@ -49,6 +49,7 @@ def test_codex_build_command_passes_config_overrides():
     )
     cmd = backend._build_command("codex", task)
     assert "--json" in cmd
+    assert "--skip-git-repo-check" in cmd
     assert "--sandbox" in cmd
     assert "workspace-write" in cmd
     assert "-c" in cmd
@@ -212,6 +213,7 @@ def test_codex_build_command_embeds_decisions_callback(monkeypatch):
     assert '"execution_session_id":31' in instruction
     assert "report_decisions_event.py" in instruction
     assert "codex_prompt_submitted" in instruction
+    assert "must not block the ticket or be listed under Blockers" in instruction
     assert instruction.endswith("fix tests")
 
 

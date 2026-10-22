@@ -95,8 +95,6 @@ class Settings(Base):
     conversational_llm_model = Column(String, default='ornith:9b')
     coding_llm_provider = Column(String, default='Ollama')
     coding_llm_model = Column(String, default='ornith:9b')
-    workflow_llm_provider = Column(String, default='')
-    workflow_llm_model = Column(String, default='')
     step_runner_llm_provider = Column(String, default='')
     step_runner_llm_model = Column(String, default='')
     vision_llm_provider = Column(String, default='Ollama')
@@ -129,6 +127,20 @@ class Settings(Base):
     project_cli_medium_fallback_model = Column(String, default='')
     project_cli_high_fallback_backend = Column(String, default='')
     project_cli_high_fallback_model = Column(String, default='')
+    project_cli_low_fallback_model_provider = Column(String, default='')
+    project_cli_medium_fallback_model_provider = Column(String, default='')
+    project_cli_high_fallback_model_provider = Column(String, default='')
+    # autocol 2026-10-22: per-tier Auto (tier hands model choice to Auto; saved model kept)
+    project_cli_low_auto = Column(Boolean, default=False)
+    project_cli_medium_auto = Column(Boolean, default=False)
+    project_cli_high_auto = Column(Boolean, default=False)
+    # automodel 2026-10-22: global CLI harness/model default for automations ('' = complexity routing)
+    automation_cli_backend = Column(String, default='', nullable=True)
+    automation_cli_model_provider = Column(String, default='', nullable=True)
+    automation_cli_model = Column(String, default='', nullable=True)
+    # mcpcols 2026-10-22: MCP server mode ('' relay = default on)
+    mcp_server_enabled = Column(Boolean, default=False)
+    mcp_server_relay_vendors = Column(String, default='', nullable=True)
     orchestrator_enabled = Column(Boolean, default=True)
     orchestrator_provider = Column(String, default='')
     orchestrator_model = Column(String, default='')
@@ -185,6 +197,12 @@ class Settings(Base):
     pixazo_key = Column(String, default='')
     pixazo_voice = Column(String, default='voxcpm')
     pixazo_dit_steps = Column(Integer, default=6)
+    dev_files_enabled = Column(Boolean, default=True)
+    dev_browser_enabled = Column(Boolean, default=False)
+    dev_calendar_provider = Column(String, default='auto')
+    icloud_apple_id = Column(String, default='')
+    icloud_app_password = Column(String, default='')
+    icloud_calendar_name = Column(String, default='')
     fishaudio_key = Column(String, default='')
     fishaudio_voice = Column(String, default='9a9cf47702da476aa4629e2506d4a857')
     fishaudio_tts_model = Column(String, default='s2.1-pro-free')
@@ -365,6 +383,38 @@ class ChatTurnEvent(Base):
     created_date = Column(DateTime, default=utc_now_naive, nullable=False)
     modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
     completed_date = Column(DateTime, nullable=True)
+
+class DevApprovalRequest(Base):
+    """One-shot user approval for a destructive Development-agent tool action.
+
+    Rows are written by the app process only (routes/dev_approvals.py). An
+    approval is valid only with an HMAC made from a per-boot secret that lives
+    in the app process memory, so editing this table cannot self-approve.
+    """
+
+    __tablename__ = "dev_approval_requests"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="uq_dev_approval_requests_request_id"),
+        Index("ix_dev_approval_requests_chat_status", "chat_id", "status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    request_id = Column(String(48), nullable=False)
+    chat_id = Column(Integer, nullable=True)
+    turn_id = Column(Integer, nullable=True)
+    tool = Column(String(64), nullable=False)
+    action = Column(String(64), nullable=False)
+    args_hash = Column(String(64), nullable=False)
+    summary = Column(Text, nullable=False, default="")
+    details_json = Column(Text, nullable=False, default="{}")
+    status = Column(String(16), nullable=False, default="pending")  # pending|approved|denied|consumed|expired
+    approval_id_hash = Column(String(64), nullable=True)
+    signature = Column(String(64), nullable=True)
+    event_id = Column(String(64), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_date = Column(DateTime, default=utc_now_naive, nullable=False)
+    decided_date = Column(DateTime, nullable=True)
+
 
 class ScreenPosition(Base):
     __tablename__ = 'screen_positions'
@@ -676,6 +726,12 @@ try:
                 ("pixazo_key", "VARCHAR DEFAULT ''"),
                 ("pixazo_voice", "VARCHAR DEFAULT 'voxcpm'"),
                 ("pixazo_dit_steps", "INTEGER DEFAULT 6"),
+                ("dev_files_enabled", "BOOLEAN DEFAULT 1"),
+                ("dev_browser_enabled", "BOOLEAN DEFAULT 0"),
+                ("dev_calendar_provider", "VARCHAR DEFAULT 'auto'"),
+                ("icloud_apple_id", "VARCHAR DEFAULT ''"),
+                ("icloud_app_password", "VARCHAR DEFAULT ''"),
+                ("icloud_calendar_name", "VARCHAR DEFAULT ''"),
                 ("fishaudio_enabled", "BOOLEAN DEFAULT 0"),
                 ("fishaudio_key", "VARCHAR DEFAULT ''"),
                 ("fishaudio_voice", "VARCHAR DEFAULT '9a9cf47702da476aa4629e2506d4a857'"),

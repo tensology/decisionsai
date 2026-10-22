@@ -107,9 +107,8 @@ def record_chat_workflow_event(
             chat.modified_date = utc_now_naive()
             db.commit()
 
-        # Add only meaningful workflow milestones to the visible development
-        # thread. Routine heartbeats and raw worker chatter stay in the audit
-        # ledger, so the thread remains readable and actionable.
+        # Keep workflow milestones in history for the owning agent without
+        # interrupting the user's ordinary conversation.
         visible_milestones = {
             "started": "The workflow started and is preparing the first phase.",
             "resumed": "The workflow resumed and dispatched the next phase to the selected worker.",
@@ -125,7 +124,7 @@ def record_chat_workflow_event(
                 ChatService.append_assistant_notice(
                     resolved_chat_id,
                     visible_milestones[event_type],
-                    hidden=False,
+                    hidden=True,
                 )
             except Exception:
                 logger.debug("visible workflow milestone projection failed", exc_info=True)

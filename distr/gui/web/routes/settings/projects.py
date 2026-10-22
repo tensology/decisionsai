@@ -1182,6 +1182,17 @@ def register_routes(router, templates):
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+    # harnesssrc 2026-10-22: one source for every harness dropdown (installed only, binary detection).
+    @router.get("/harnesses/installed")
+    async def get_installed_harnesses(all: bool = False):
+        from distr.core.project_cli_backends.installed import detect_harnesses
+
+        rows = await asyncio.to_thread(detect_harnesses)
+        return JSONResponse({
+            "harnesses": [r for r in rows if r["installed"]] if not all else rows,
+            "source": "binary_detection",
+        })
+
     @router.get("/projects/cli-backends")
     async def get_cli_backends():
         """Return all supported project coding CLI backends and setup state."""

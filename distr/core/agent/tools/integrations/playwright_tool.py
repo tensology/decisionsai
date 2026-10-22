@@ -552,6 +552,14 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 text=True,
                 timeout=30,
                 cwd=os.path.expanduser("~"),
+                # Always use the ONE shared browser cache, never a per-venv copy.
+                env={
+                    **os.environ,
+                    "PLAYWRIGHT_BROWSERS_PATH": os.environ.get(
+                        "PLAYWRIGHT_BROWSERS_PATH",
+                        os.path.expanduser("~/Library/Caches/ms-playwright"),
+                    ),
+                },
             )
 
             stdout = (result.stdout or "").strip()
@@ -566,9 +574,9 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 error = stderr if stderr else "(no error output)"
                 hint = ""
                 if "ModuleNotFoundError" in error and "playwright" in error:
-                    hint = "\n\nHint: Playwright is not installed. Run: pip install playwright && playwright install chromium"
+                    hint = "\n\nHint: Playwright is not installed. Run: pip install -r requirements.txt (pins playwright==1.63.0)"
                 elif "Executable doesn't exist" in error or "browserType.launch" in error:
-                    hint = "\n\nHint: Browser not installed. Run: playwright install chromium"
+                    hint = "\n\nHint: Browser not installed. Run once into the shared cache: python -m playwright install chromium"
                 return f"✗ Playwright script failed (exit code {result.returncode}).\n\nError:\n{error[-1000:]}{hint}"
 
         except subprocess.TimeoutExpired:

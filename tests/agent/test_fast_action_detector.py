@@ -50,6 +50,14 @@ def _load_detector():
 FastActionDetector, ActionType, DetectedAction = _load_detector()
 detector = FastActionDetector()
 
+
+def test_spoken_clipboard_reference_reads_clipboard_instead_of_opening_a_board():
+    result = detector.detect("It's in my club board.")
+
+    assert result.tool_name == "clipboard_action"
+    assert result.tool_args == {"action": "get"}
+    assert result.response_type == "llm_response"
+
 # ─── Test infrastructure ───
 
 @dataclass

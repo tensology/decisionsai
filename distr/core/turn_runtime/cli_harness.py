@@ -207,6 +207,11 @@ class CliHarnessTurnRuntime:
                     "title": title,
                     "agent_name": title,
                     "status": "success",
+                    # Lifecycle of the harness worker that runs inside the outer
+                    # development-agent event; consumers merge it into that row.
+                    "worker_lifecycle": True,
+                    "harness": backend,
+                    "model": str(request.route.model or ""),
                 }
                 if on_event:
                     on_event(

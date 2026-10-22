@@ -32,7 +32,6 @@ def test_shared_provider_info_control_covers_chat_and_llm_settings() -> None:
         "computer_use_provider",
         "image_provider",
         "video_provider",
-        "workflow_provider",
         "emptyStateLlmProvider",
         "llmProvider",
         "chatConfigLlmProvider",

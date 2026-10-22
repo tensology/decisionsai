@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.tensology.decisions-selfimprove-capture</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-m</string>
+    <string>distr.core.mempalace.selfimprove</string>
+    <string>capture</string>
+  </array>
+  <key>WorkingDirectory</key><string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key><string>__REPO__</string>
+    <key>PATH</key><string>__PATH__</string>
+  </dict>
+  <key>StartInterval</key><integer>600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <!-- Memory safety net. The real guard is the in-process watchdog (selfimprove/memguard.py:
+       DECISIONS_CAPTURE_MAX_RSS_MB, default 3072). launchd passes these to setrlimit; current
+       macOS does not enforce ResidentSetSize, so they are advisory. -->
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>ResidentSetSize</key><integer>3221225472</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>ResidentSetSize</key><integer>4294967296</integer>
+  </dict>
+  <key>StandardOutPath</key><string>__LOGDIR__/capture.log</string>
+  <key>StandardErrorPath</key><string>__LOGDIR__/capture.err.log</string>
+</dict>
+</plist>

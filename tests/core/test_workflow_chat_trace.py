@@ -148,3 +148,36 @@ def test_record_chat_workflow_event_preserves_agent_activity(monkeypatch):
         params = json.loads(chat.params)
 
     assert params["workflow_events"][0]["agent_activity"]["title"] == "Checked WhatsApp"
+
+
+def test_workflow_completion_notice_is_hidden_from_ordinary_chat(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextmanager
+    def patched_get_session():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    notices = []
+    monkeypatch.setattr("distr.core.db.get_session", patched_get_session)
+    monkeypatch.setattr(
+        "distr.core.chat.ChatService.append_assistant_notice",
+        lambda chat_id, text, hidden=False: notices.append((chat_id, text, hidden)),
+    )
+
+    with patched_get_session() as session:
+        chat = Chat(title="Ordinary chat")
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    record_chat_workflow_event(chat_id, "run_completed", status="completed")
+
+    assert notices == [
+        (chat_id, "The workflow completed. The ticket now contains the recorded result and audit evidence.", True)
+    ]

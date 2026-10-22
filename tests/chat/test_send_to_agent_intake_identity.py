@@ -77,10 +77,13 @@ def test_send_to_agent_emits_and_echoes_intake_identity(monkeypatch) -> None:
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == {
+    body = response.json()
+    assert {k: body[k] for k in ("sent", "intake_source_message_id")} == {
         "sent": True,
         "intake_source_message_id": "qualification:research_only:webprobe",
     }
+    # Turn correlation fields (22 Oct 2026 API): present, non-blocking without ?wait.
+    assert "turn_id" in body and "after_row_id" in body
     assert signal.calls == [
         (
             chat_id,

@@ -4,7 +4,7 @@
 
 {% block head_styles %}
 {{ super() }}
-<link rel="stylesheet" href="/static/development/styles.css?v=20261003-sitemap-groups">
+<link rel="stylesheet" href="/static/development/styles.css?v=20261022-composetop">
 <link rel="stylesheet" href="/static/vendor/xterm/xterm.min.css">
 {% endblock %}
 
@@ -18,7 +18,6 @@
         {% include 'development/sidebar/board-menu.html' %}
         {% include 'development/boards/ticket-menu.html' %}
         {% include 'development/sidebar/thread-menu.html' %}
-        {% include 'development/automations/row-menu.html' %}
 
         <main class="studio-main">
             <header class="task-header" id="development-task-header">
@@ -27,7 +26,7 @@
                     <i>/</i>
                     <strong id="header-task">No thread selected</strong>
                 </div>
-                <div class="task-state" id="task-state"><span></span><b>Ready</b></div>
+                <div class="task-state ready" id="task-state"><span></span><b>Ready</b></div>
                 <button class="header-button danger hidden" id="stop-run-button">Stop</button>
                 <button class="icon-button thread-more-button" id="thread-more-button" aria-label="Thread menu" aria-haspopup="menu" aria-expanded="false">⋯</button>
                 <div class="board-context-menu thread-header-menu hidden" id="thread-header-menu" role="menu"><button type="button" id="thread-menu-details" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l1.8 1.2"/></svg><span class="context-menu-label">Activity</span></button><button type="button" id="thread-menu-clear-context" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 5.5h8M6.5 5.5V4h3v1.5M5.5 5.5 6 13h4l.5-7.5"/></svg><span class="context-menu-label">Clear Context</span></button><button type="button" id="thread-menu-edit-time" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l2 1"/></svg><span class="context-menu-label">Edit Time</span></button></div>
@@ -80,9 +79,7 @@
 
     {% include 'development/threads/attach-dialog.html' %}
 
-    {% include 'development/automations/dialog.html' %}
 
-    {% include 'development/automations/import-dialog.html' %}
 
     {% include 'development/sidebar/board-dialog.html' %}
 
@@ -98,5 +95,5 @@
 {{ super() }}
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/shared/js/assistant_identity.js?v={{ app_version or 'dev' }}"></script>
-<script type="module" src="/static/development/app.js?v=20261003-sitemap-groups"></script>
+<script type="module" src="/static/development/app.js?v=20261022-calendar"></script>
 {% endblock %}

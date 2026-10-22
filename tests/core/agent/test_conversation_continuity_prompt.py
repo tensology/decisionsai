@@ -20,3 +20,14 @@ def test_lite_prompt_preserves_voice_note_continuity_rule():
 
     assert "Voice notes are transcribed into ordinary user messages" in prompt
     assert "Never claim the voice note is inaccessible" in prompt
+
+
+def test_full_prompt_does_not_treat_voice_name_as_agent_identity():
+    prompt = load_system_prompt_template(
+        model_name="gpt-5",
+        provider_name="openrouter",
+    )
+
+    assert "You are Decisions AI" in prompt
+    assert "presentation choice, not your identity" in prompt
+    assert 'If asked for your name, say "I am Decisions AI."' in prompt

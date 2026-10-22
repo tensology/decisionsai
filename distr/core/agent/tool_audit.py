@@ -220,7 +220,11 @@ def _looks_like_error(result: Optional[str]) -> bool:
     if not isinstance(payload, dict):
         return False
     status = str(payload.get("status") or "").lower()
-    return bool(payload.get("error")) or status in {"error", "failed", "failure"}
+    return (
+        payload.get("success") is False
+        or bool(payload.get("error"))
+        or status in {"error", "failed", "failure"}
+    )
 
 
 def classify_tool_result_status(result: Optional[str], requested_status: str = "completed") -> str:

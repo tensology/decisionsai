@@ -1,3 +1,8 @@
+---
+name: jev-completion-review
+description: "Use immediately before declaring a non-trivial objective complete; calls the Jev MCP tool jev_review_completion."
+---
+
 # Jev Completion Review
 
 Use `jev_review_completion` immediately before declaring a non-trivial objective complete.

@@ -99,8 +99,12 @@ def _project_reference_skills(base_home: Path) -> list[str]:
 
 
 def _synchronize_compatible_user_skills(base_home: Path) -> list[str]:
-    """Make valid Agent Skills available in Codex and Cursor/Grok without replacing any."""
-    from distr.core.harness_bootstrap import copy_skill_tree
+    """Make valid Agent Skills available in Codex and Cursor/Grok without replacing any.
+
+    Missing entries become symlinks to the first source found (``~/.agents/skills``
+    preferred), never real copies, so harness dirs cannot drift from the shared source.
+    """
+    from distr.core.harness_bootstrap import link_skill_tree
 
     roots = [
         base_home / ".agents" / "skills",
@@ -121,9 +125,9 @@ def _synchronize_compatible_user_skills(base_home: Path) -> list[str]:
             continue
         for skill_id, source in sources.items():
             destination = root / skill_id
-            if destination.exists():
+            if destination.exists() or destination.is_symlink():
                 continue
-            if copy_skill_tree(source, destination):
+            if link_skill_tree(source, destination):
                 written.append(str(destination))
     return written
 

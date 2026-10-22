@@ -1,3 +1,8 @@
+---
+name: jev
+description: "Use when you hit a real decision boundary and need Jev MCP to pick among jev_route_model, jev_route_task, jev_guard_tool_call, jev_check_research, jev_review_completion, or jev_decide."
+---
+
 # Jev Tool Router
 
 Use Jev at a real decision boundary where explicit options and calibrated probabilities are more useful than generated prose. Call only the tool that matches the current decision.

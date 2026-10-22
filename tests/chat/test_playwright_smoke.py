@@ -53,6 +53,10 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
                 ),
             )
             page.route(
+                "http://decisions.test/api/skins/hayley/preview/idle.webp",
+                lambda route: route.fulfill(status=200, content_type="image/webp", path=str(root / "assets/avatars/hayley/idle.webp")),
+            )
+            page.route(
                 "http://decisions.test/assets/img/llama.png",
                 lambda route: route.fulfill(status=200, content_type="image/png", path=str(root / "assets/img/llama.png")),
             )
@@ -64,7 +68,11 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
                                 selected_skin: 'oracle',
                                 skins: [{
                                     folder_name: 'oracle', name: 'Oracle', type: 'oracle',
-                                    idle_animation: 'idle.png', chroma_key: null
+                                    idle_animation: 'idle.png', image_scale: 1.55,
+                                    image_offset_x: 0, image_offset_y: 0, chroma_key: null
+                                }, {
+                                    folder_name: 'hayley', name: 'Hayley', type: 'avatar',
+                                    idle_animation: 'idle.webm', preview_image: 'idle.webp', chroma_key: [0, 255, 0]
                                 }]
                             }), {status: 200, headers: {'Content-Type': 'application/json'}});
                         }
@@ -95,8 +103,16 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
             history_avatar = page.locator("#chatMessages .message.assistant .assistant-avatar-image").first
             assert history_avatar.get_attribute("data-skin-name") == "Oracle"
             assert history_avatar.get_attribute("src").endswith("/api/skins/oracle/preview/idle.png")
+            assert history_avatar.evaluate("node => getComputedStyle(node).transform").startswith("matrix(1.55")
             assert page.locator("#chatMessages .message.user .assistant-avatar-image").count() == 0
             assert page.locator("#streamingAssistantMessage .assistant-avatar-image").count() == 1
+
+            page.evaluate("document.body.insertAdjacentHTML('beforeend', '<div id=emptyStateSkinGrid></div><div id=modalSkinGrid></div>')")
+            page.evaluate("Promise.all([loadEmptyStateSkins(), loadModalSkins()])")
+            for grid_id in ("emptyStateSkinGrid", "modalSkinGrid"):
+                hayley_card = page.locator(f"#{grid_id} [data-folder='hayley']")
+                assert hayley_card.locator("img").get_attribute("src").endswith("/api/skins/hayley/preview/idle.webp")
+                assert hayley_card.locator("video").count() == 0
 
             for width, height in ((1440, 900), (1024, 900), (390, 844)):
                 page.set_viewport_size({"width": width, "height": height})
@@ -120,6 +136,49 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
             switched_avatars = page.locator("#chatMessages .message.assistant .assistant-avatar-image.avatar")
             assert switched_avatars.count() == 2
             assert all(name == "Clippy" for name in switched_avatars.evaluate_all("nodes => nodes.map(node => node.dataset.skinName)"))
+
+            page.route(
+                "http://decisions.test/api/skins/oracle/preview/0.webm",
+                lambda route: route.fulfill(status=200, content_type="video/webm", path=str(root / "assets/avatars/oracle/0.webm")),
+            )
+            page.evaluate(
+                """async () => {
+                    window.fetch = async () => new Response(JSON.stringify({
+                        selected_skin: 'oracle',
+                        skins: [{
+                            folder_name: 'oracle', name: 'Oracle', type: 'oracle',
+                            idle_animation: '0.webm', chroma_key: null
+                        }]
+                    }), {status: 200, headers: {'Content-Type': 'application/json'}});
+                    await loadAssistantAvatarSkin(true);
+                }"""
+            )
+            animated_avatars = page.locator("#chatMessages .message.assistant video.assistant-avatar-image.oracle")
+            assert animated_avatars.count() == 2
+            assert animated_avatars.first.get_attribute("autoplay") is not None
+            assert animated_avatars.first.get_attribute("loop") is not None
+            animated_avatars.first.wait_for(state="visible")
+            page.wait_for_timeout(250)
+            assert animated_avatars.first.evaluate("video => !video.paused && video.currentTime > 0")
+
+            terminal_panel = page.evaluate(
+                """() => {
+                    const panel = createTurnPanel({
+                        turn_id: 999, status: 'completed', started_at: '2026-01-01T00:00:00Z',
+                        completed_at: '2026-01-01T00:00:05Z',
+                        events: [
+                            {event_id: 'synthesis', event_type: 'synthesis_started', status: 'running', title: 'Preparing the answer'},
+                            {event_id: 'done', event_type: 'turn_completed', status: 'completed', title: 'Answer ready'}
+                        ]
+                    });
+                    document.body.appendChild(panel);
+                    return {
+                        spinners: panel.querySelectorAll('.turn-step-spinner').length,
+                        completedMarks: panel.querySelectorAll('.turn-step-mark--complete').length
+                    };
+                }"""
+            )
+            assert terminal_panel == {"spinners": 0, "completedMarks": 1}
         finally:
             browser.close()
 

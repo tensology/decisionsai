@@ -23,7 +23,7 @@ function _setActionBusy(button, busy, busyLabel, idleLabel) {
     button.textContent = idleLabel || button.dataset.defaultLabel || button.textContent;
 }
 
-const LLM_TYPES = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+const LLM_TYPES = ['conversational', 'coding', 'vision', 'image', 'video', 'computer_use'];
 const PROJECT_CLI_LEVELS = ['low', 'medium', 'high'];
 let llmProviderStatusById = {};
 let projectCliBackendsById = {};
@@ -254,16 +254,132 @@ async function loadProjectCliRouteModels(level, backend, selectedModel) {
     }
 }
 
+// Complexity routing editor (Settings > LLMs). Reuses the Workflows > Complexity routing
+// pickers and save code from /static/shared/js/workflow_exec_routing.js, so both pages
+// read/write project_cli_{low,medium,high}_* through POST /api/workflows/orchestrator-setup.
+// The general LLMs Save never sends project_cli_* fields; only "Save routing" does.
+const llmsExecRouting = { kit: null, root: null, setup: null, baseline: null, loading: null, saving: false };
+
+function llmsExecApi(method, path, body) {
+    const opts = { method, headers: { 'Content-Type': 'application/json' }, cache: method === 'GET' ? 'no-store' : 'default' };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    return fetch('/api' + path, opts).then(async r => {
+        const text = await r.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+        if (!r.ok) throw new Error((data && typeof data.detail === 'string' && data.detail) || ('Request failed (' + r.status + ')'));
+        return data;
+    });
+}
+
+async function llmsExecModelLabeler() {
+    try {
+        const mv = await import('/static/shared/model_variant.js?v=20261022-llmsrouting');
+        return model => {
+            const id = String((model && (model.id || model.model)) || '').trim();
+            if (!id || id === 'auto') return (model && model.name) || 'Auto';
+            return mv.shortModelName(id, (model && model.name) || '');
+        };
+    } catch (e) {
+        console.warn('model_variant.js unavailable; showing catalogue names', e);
+        return null;
+    }
+}
+
+function llmsExecRowKey(row) {
+    row = row || {};
+    return JSON.stringify(['backend', 'model', 'model_provider', 'fallback_backend', 'fallback_model', 'fallback_model_provider', 'codex_intelligence', 'codex_speed', 'auto']
+        .map(k => String(row[k] == null ? '' : row[k]).trim()));
+}
+
+function llmsExecUpdateDirty() {
+    const st = llmsExecRouting;
+    const btn = document.getElementById('llms_exec_routing_save');
+    const status = document.getElementById('llms_exec_routing_status');
+    if (!st.kit || !st.root || !st.baseline) return [];
+    const now = st.kit.collectWorkflowExecRouting(st.root);
+    const changed = PROJECT_CLI_LEVELS.filter(l => llmsExecRowKey(now[l]) !== llmsExecRowKey(st.baseline[l]));
+    if (btn) btn.disabled = st.saving || changed.length === 0;
+    if (status && !st.saving) status.textContent = changed.length ? `Unsaved changes: ${changed.map(l => l[0].toUpperCase() + l.slice(1)).join(', ')}` : '';
+    return changed;
+}
+
+async function llmsExecLoad(force) {
+    const st = llmsExecRouting;
+    const root = document.getElementById('llms_exec_routing');
+    const routesEl = document.getElementById('llms_exec_routes');
+    if (!root || !routesEl || !window.WorkflowExecRoutingKit) return;
+    if (!force && st.baseline && llmsExecUpdateDirty().length) return; // keep unsaved edits
+    if (!st.kit) {
+        const labeler = await llmsExecModelLabeler();
+        st.kit = window.WorkflowExecRoutingKit.create({ api: llmsExecApi, esc: escapeHtml, modelLabel: labeler || undefined });
+        st.root = root;
+        routesEl.innerHTML = st.kit.workflowExecRouteHtml('wf-global-exec');
+        st.kit.bindWorkflowExecRoutingControls(root);
+        root.addEventListener('change', () => setTimeout(llmsExecUpdateDirty, 0));
+        const saveBtn = document.getElementById('llms_exec_routing_save');
+        if (saveBtn) saveBtn.addEventListener('click', llmsExecSave);
+    }
+    const [setup, llm, backends] = await Promise.all([
+        llmsExecApi('GET', '/workflows/orchestrator-setup'),
+        llmsExecApi('GET', '/llms').catch(() => ({})),
+        llmsExecApi('GET', '/projects/cli-backends').catch(() => ({}))
+    ]);
+    st.setup = setup || {};
+    let rows = Array.isArray(backends && backends.backends) ? backends.backends : [];
+    if (!rows.length && st.setup.backends && Array.isArray(st.setup.backends.backends)) rows = st.setup.backends.backends;
+    st.kit.updateWorkflowExecBackendSelects(root, rows);
+    await st.kit.populateWorkflowExecRouting(st.setup, llm || {}, root);
+    st.baseline = st.kit.collectWorkflowExecRouting(root);
+    llmsExecUpdateDirty();
+}
+
+async function llmsExecSave() {
+    const st = llmsExecRouting;
+    const status = document.getElementById('llms_exec_routing_status');
+    const changed = llmsExecUpdateDirty();
+    if (!changed.length) return;
+    const now = st.kit.collectWorkflowExecRouting(st.root);
+    // The endpoint rewrites every tier it receives, so unchanged tiers are sent back exactly
+    // as the server returned them (a no-op); only edited tiers carry new values.
+    const serverRouting = (st.setup && st.setup.routing) || {};
+    const routing = {};
+    PROJECT_CLI_LEVELS.forEach(level => {
+        routing[level] = changed.indexOf(level) >= 0 ? now[level] : Object.assign({}, serverRouting[level] || st.baseline[level]);
+    });
+    st.saving = true;
+    if (status) status.textContent = 'Saving...';
+    try {
+        await llmsExecApi('POST', '/workflows/orchestrator-setup', { enabled: st.setup.enabled !== false, routing });
+        st.saving = false;
+        await llmsExecLoad(true);
+        if (status) status.textContent = 'Routing saved';
+        if (typeof window.showNotification === 'function') window.showNotification('Complexity routing saved', 'success');
+    } catch (e) {
+        st.saving = false;
+        llmsExecUpdateDirty();
+        if (status) status.textContent = 'Save failed: ' + e.message;
+        if (typeof window.showNotification === 'function') window.showNotification('Failed to save routing: ' + e.message, 'error');
+    }
+}
+
 async function populateProjectCliRoutes(settings) {
-    await populateProjectCliBackends();
-    await Promise.all(PROJECT_CLI_LEVELS.map(async level => {
-        const backend = settings[`project_cli_${level}_backend`] || (level === 'low' ? 'cursor' : 'codex');
-        const model = settings[`project_cli_${level}_model`] || (level === 'high' ? 'gpt-5.3-codex' : 'auto');
-        const backendSel = document.getElementById(`project_cli_${level}_backend`);
-        if (backendSel) backendSel.value = backend;
-        await loadProjectCliRouteModels(level, backend, model);
-        updateProjectCliRouteStatus(level);
-    }));
+    try {
+        if (!llmsExecRouting.loading) llmsExecRouting.loading = llmsExecLoad(false).finally(() => { llmsExecRouting.loading = null; });
+        await llmsExecRouting.loading;
+    } catch (e) {
+        console.error('Complexity routing load failed:', e);
+        const status = document.getElementById('llms_exec_routing_status');
+        if (status) status.textContent = 'Could not load routing: ' + e.message;
+    }
+}
+
+function updateProjectCliCodexControls(level) {
+    const backend = (document.getElementById(`project_cli_${level}_backend`)?.value || '').toLowerCase();
+    document.querySelectorAll(`.project-cli-codex-control[data-level="${level}"]`).forEach(control => {
+        control.disabled = backend !== 'codex';
+        control.title = backend === 'codex' ? '' : 'Available when the Codex CLI is selected';
+    });
 }
 
 function bindProjectCliRouteControls() {
@@ -273,6 +389,7 @@ function bindProjectCliRouteControls() {
         backendSel.dataset.bound = '1';
         backendSel.addEventListener('change', function() {
             loadProjectCliRouteModels(level, this.value, 'auto');
+            updateProjectCliCodexControls(level);
             updateProjectCliRouteStatus(level);
         });
     });
@@ -461,20 +578,14 @@ async function saveLLMsSettings() {
             image_model: document.getElementById('image_model').value,
             video_provider: document.getElementById('video_provider') ? document.getElementById('video_provider').value : '',
             video_model: document.getElementById('video_model') ? document.getElementById('video_model').value : '',
-            workflow_provider: document.getElementById('workflow_provider').value,
-            workflow_model: document.getElementById('workflow_model').value,
             computer_use_provider: document.getElementById('computer_use_provider').value,
             computer_use_model: document.getElementById('computer_use_model').value,
-            project_cli_low_backend: document.getElementById('project_cli_low_backend')?.value || 'cursor',
-            project_cli_low_model: document.getElementById('project_cli_low_model')?.value || 'auto',
-            project_cli_medium_backend: document.getElementById('project_cli_medium_backend')?.value || 'codex',
-            project_cli_medium_model: document.getElementById('project_cli_medium_model')?.value || 'auto',
-            project_cli_high_backend: document.getElementById('project_cli_high_backend')?.value || 'codex',
-            project_cli_high_model: document.getElementById('project_cli_high_model')?.value || 'gpt-5.3-codex',
             laya_mode: document.querySelector('input[name="laya_mode"]:checked')?.value || 'off',
             instant_dictation: document.getElementById('instant_dictation') ? document.getElementById('instant_dictation').checked : true
         };
 
+        // Complexity routing (project_cli_*) is saved only by its own "Save routing" button.
+        Object.keys(settings).forEach(k => { if (k.indexOf('project_cli_') === 0) delete settings[k]; });
         const response = await fetch('/api/llms', {
             method: 'POST',
             headers: {
@@ -1554,3 +1665,107 @@ window.addEventListener('open-llm-benchmark', function (event) {
 });
 
 window.saveLLMsSettings = saveLLMsSettings;
+
+// automodel 2026-10-22: global CLI harness + model default for automations.
+// Reuses /api/projects/cli-backends + /api/projects/cli-models and readable names from model_variant.js.
+let automationCliModelNamer = null;
+async function automationCliNamer() {
+    if (!automationCliModelNamer) {
+        try {
+            const mod = await import('/static/shared/model_variant.js?v=20261022-automodel');
+            automationCliModelNamer = (row) => mod.shortModelName(row.id || '', mod.displayModelName(row.name || '')) || row.name || row.id;
+        } catch (_) {
+            automationCliModelNamer = (row) => row.name || row.id;
+        }
+    }
+    return automationCliModelNamer;
+}
+
+async function loadAutomationCliModels(backend, selectedModel, selectedProvider) {
+    const sel = document.getElementById('automation_cli_model');
+    if (!sel) return;
+    if (!backend) {
+        sel.innerHTML = '<option value="">&mdash;</option>';
+        sel.disabled = true;
+        return;
+    }
+    sel.innerHTML = '<option value="">Loading models...</option>';
+    sel.disabled = true;
+    let data = { models: [] };
+    try {
+        const res = await fetch(`/api/projects/cli-models?backend_id=${encodeURIComponent(backend)}`);
+        if (res.ok) data = await res.json();
+    } catch (_) { /* keep Auto only */ }
+    const nameOf = await automationCliNamer();
+    sel.innerHTML = '';
+    const auto = document.createElement('option');
+    auto.value = 'auto';
+    auto.textContent = (data.supports_model_picker === false || data.backend_kind === 'ide') ? 'Model chosen inside the IDE' : 'Auto';
+    sel.appendChild(auto);
+    (data.models || []).forEach((m) => {
+        const row = (m && typeof m === 'object') ? m : { id: String(m || ''), name: String(m || '') };
+        if (!row.id) return;
+        const opt = document.createElement('option');
+        opt.value = row.id;
+        opt.dataset.provider = String(row.provider || '').toLowerCase();
+        opt.textContent = nameOf(row) + (row.provider ? ` · ${row.provider}` : '');
+        opt.title = row.id;
+        sel.appendChild(opt);
+    });
+    if (selectedModel && !Array.prototype.some.call(sel.options, (o) => o.value === selectedModel)) {
+        const opt = document.createElement('option');
+        opt.value = selectedModel;
+        opt.dataset.provider = selectedProvider || '';
+        opt.textContent = selectedModel;
+        sel.appendChild(opt);
+    }
+    sel.value = selectedModel || 'auto';
+    sel.disabled = false;
+}
+
+async function loadAutomationCliDefault() {
+    const backendSel = document.getElementById('automation_cli_backend');
+    if (!backendSel) return;
+    try {
+        // harnesssrc: installed harnesses only, from the shared source (static/shared/harnesses.js).
+        const harnessMod = await import('/static/shared/harnesses.js?v=20261022-harnesssrc');
+        const installed = await harnessMod.loadInstalledHarnesses();
+        const res = await fetch('/api/automations/model-defaults');
+        const current = res.ok ? await res.json() : {};
+        backendSel.innerHTML = harnessMod.harnessSelectOptions(installed, current.backend || '', { leading: '<option value="">Use Complexity routing</option>', escape: escapeHtml });
+        backendSel.value = current.backend || '';
+        await loadAutomationCliModels(backendSel.value, current.model || '', current.model_provider || '');
+        if (backendSel.dataset.bound !== '1') {
+            backendSel.dataset.bound = '1';
+            backendSel.addEventListener('change', () => loadAutomationCliModels(backendSel.value, 'auto', ''));
+            document.getElementById('automation_cli_save')?.addEventListener('click', saveAutomationCliDefault);
+        }
+    } catch (e) {
+        console.error('Error loading automation CLI default:', e);
+    }
+}
+
+async function saveAutomationCliDefault() {
+    const backend = document.getElementById('automation_cli_backend')?.value || '';
+    const modelSel = document.getElementById('automation_cli_model');
+    const opt = modelSel && modelSel.selectedOptions ? modelSel.selectedOptions[0] : null;
+    const status = document.getElementById('automation_cli_status');
+    try {
+        const res = await fetch('/api/automations/model-defaults', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ backend, model: backend ? (modelSel?.value || 'auto') : '', model_provider: backend ? (opt?.dataset.provider || '') : '' }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (status) status.textContent = backend ? 'Saved. Automations without an override use this.' : 'Saved. Automations use Complexity routing.';
+        if (typeof window.showNotification === 'function') window.showNotification('Automation default saved', 'success');
+    } catch (e) {
+        if (status) status.textContent = `Could not save: ${e.message}`;
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadAutomationCliDefault);
+} else {
+    loadAutomationCliDefault();
+}

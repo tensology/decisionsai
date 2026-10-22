@@ -53,6 +53,35 @@ def _make_client():
     return TestClient(app)
 
 
+def test_continue_route_queues_worker_without_waiting_for_dispatch(monkeypatch):
+    factory = _make_factory()
+    with _session_ctx(factory) as session:
+        workflow = AutoWorkflow(name="Queued continuation", status="active")
+        session.add(workflow)
+        session.flush()
+        run = AutoWorkflowRun(workflow_id=workflow.id, status="waiting")
+        session.add(run)
+        session.flush()
+        workflow_id = workflow.id
+        run_id = run.id
+
+    def get_session():
+        return _session_ctx(factory)
+
+    continued = MagicMock(return_value={"success": True, "status": "running"})
+    monkeypatch.setattr("distr.core.db.get_session", get_session)
+    monkeypatch.setattr("distr.core.workflow.dispatcher.continue_waiting_step", continued)
+
+    response = _make_client().post(
+        f"/api/workflows/{workflow_id}/runs/{run_id}/continue",
+        json={"input": "yes, go ahead"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "starting"
+    continued.assert_called_once_with(run_id, "yes, go ahead")
+
+
 def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatch):
     factory = _make_factory()
 
@@ -248,5 +277,5 @@ def test_cursor_completed_auto_continues_waiting_ide_handoff(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["auto_continue"] == {"success": True, "status": "running"}
+    assert body["auto_continue"] == {"success": True, "status": "starting"}
     continue_waiting_step.assert_called_once_with(run_id, "Updated files and ran tests.")

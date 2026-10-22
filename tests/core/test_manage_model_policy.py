@@ -57,6 +57,7 @@ def test_auto_health_counts_only_route_readiness_failures():
     assert _counts_as_model_health_failure("429 Rate limit exceeded") is True
     assert _counts_as_model_health_failure("Provider unavailable: HTTP 503") is True
     assert _counts_as_model_health_failure("Credit balance is too low") is True
+    assert _counts_as_model_health_failure("The selected model is not supported with this account") is True
     assert _counts_as_model_health_failure(
         "404 The free period of this model ended. Please use kilo-auto/free."
     ) is True

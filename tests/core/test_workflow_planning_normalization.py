@@ -23,9 +23,28 @@ def test_normalize_plan_steps_replaces_generic_step_titles():
     assert "Open the DecisionsAI logs" in normalized[0]["verification"]
     assert normalized[0]["max_retries"] == 1
     assert normalized[1]["title"] == "Add a regression test for the stuck workflow"
+    # A plain-English sentence is never a shell command (runs 143/147/148
+    # sent "Clone the target repository ..." to /bin/sh): it becomes an
+    # agent instruction instead.
+    assert normalized[1]["action_type"] == "agent_instruction"
+    assert "command" not in normalized[1]["config"]
+
+
+def test_normalize_plan_steps_keeps_real_run_command():
+    normalized = _normalize_plan_steps(
+        [
+            {"title": "Run tests", "instruction": "Run the unit tests", "action_type": "run_command",
+             "config": {"command": "pytest -q"}},
+            {"title": "List", "instruction": "ls -la", "action_type": "run_command"},
+        ],
+        "Check the repo",
+    )
+
+    assert normalized[0]["action_type"] == "run_command"
+    assert normalized[0]["config"]["command"] == "pytest -q"
+    assert normalized[0]["timeout_seconds"] == 120
     assert normalized[1]["action_type"] == "run_command"
-    assert normalized[1]["config"]["command"] == "Add a regression test for the stuck workflow validation loop."
-    assert normalized[1]["timeout_seconds"] == 120
+    assert normalized[1]["config"]["command"] == "ls -la"
 
 
 def test_normalize_plan_steps_fills_missing_instruction_from_source():

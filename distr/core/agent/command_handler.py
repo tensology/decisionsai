@@ -1101,6 +1101,10 @@ def _cmd_dictation_hotkey_released(session, params):
 
 def _cmd_interrupt_tts(session, params):
     session.logger.info("⏹ TTS interrupted")
+    # A replay of the same text right after Stop must not be swallowed by the
+    # direct-TTS duplicate guard.
+    session._last_direct_tts_text = ''
+    session._last_direct_tts_ts = 0.0
     timing = getattr(getattr(session, "stt_service", None), "_audio_timing", None)
     if timing is not None:
         timing.mark("interruption_requested")
@@ -1231,6 +1235,56 @@ async def _direct_tts_worker(session, queue):
             queue.task_done()
 
 
+def _transport_output(session):
+    transport = getattr(session, 'transport', None)
+    if not transport:
+        return None
+    out = getattr(transport, '_output', None)
+    if out is None and hasattr(transport, 'output'):
+        try:
+            out = transport.output()
+        except Exception:
+            out = None
+    return out
+
+
+def _reset_stop_state_for_direct_tts(session, direct_tts_id: str = "") -> dict:
+    """Clear stop/interrupt flags left by a previous Stop before a NEW direct utterance.
+
+    Stop (_cmd_interrupt_tts) sets tts_service._cancelled and, while audio is
+    playing, transport._force_silence directly from the command thread. Those are
+    normally cleared by frames of the next response; if the InterruptionFrame or
+    its follow-up frames arrive late/never, the next speak_text_directly would be
+    synthesised but written as silence. Each direct utterance is a fresh, user-
+    initiated response, so it starts from a clean state. Stop during this
+    utterance still works because it sets the flags again afterwards.
+    """
+    before = {}
+    tts = getattr(session, 'tts_service', None)
+    if tts is not None:
+        before['tts_cancelled'] = bool(getattr(tts, '_cancelled', False))
+        if hasattr(tts, '_cancelled'):
+            tts._cancelled = False
+        if hasattr(tts, '_cancelled_since'):
+            tts._cancelled_since = 0.0
+        if hasattr(tts, '_text_buffer'):
+            tts._text_buffer = ""
+    out = _transport_output(session)
+    if out is not None:
+        before['transport_state'] = getattr(getattr(out, '_state', None), 'name', '')
+        before['force_silence'] = bool(getattr(out, '_force_silence', False))
+        before['pipeline_cut'] = bool(getattr(out, '_pipeline_cut', False))
+        if hasattr(out, '_force_silence'):
+            out._force_silence = False
+        if hasattr(out, '_pipeline_cut'):
+            out._pipeline_cut = False
+    if before.get('tts_cancelled') or before.get('force_silence') or before.get('pipeline_cut'):
+        session.logger.info(
+            "_cmd_speak_text_directly id=%s cleared stale stop state %s", direct_tts_id, before
+        )
+    return before
+
+
 def _cmd_speak_text_directly(session, params):
     """Speak text directly via TTS without going through LLM."""
     from .libs import TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
@@ -1295,6 +1349,7 @@ def _cmd_speak_text_directly(session, params):
                         direction = getattr(getattr(session, 'llm_service', None), '_pipeline_direction', None)
 
                     tts = session.tts_service
+                    _reset_stop_state_for_direct_tts(session, direct_tts_id)
                     await tts.process_frame(LLMFullResponseStartFrame(), direction)
                     chunks = _split_text_for_direct_tts(text)
                     for i, chunk in enumerate(chunks):

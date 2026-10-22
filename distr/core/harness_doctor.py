@@ -174,7 +174,8 @@ def _reference_skill_paths(home: Path, harness_id: str) -> list[Path]:
     if harness_id == "cursor":
         return [home / ".cursor" / "commands" / f"{skill_id}.md" for skill_id in REFERENCE_SKILLS]
     if harness_id == "pi":
-        return [home / ".pi" / "skills" / skill_id / "SKILL.md" for skill_id in REFERENCE_SKILLS]
+        # Pi reads the shared Agent Skills dir natively.
+        return [home / ".agents" / "skills" / skill_id / "SKILL.md" for skill_id in REFERENCE_SKILLS]
     if harness_id == "cline":
         return [home / ".cline" / "skills" / skill_id / "SKILL.md" for skill_id in REFERENCE_SKILLS]
     if harness_id == "gemini":
@@ -191,14 +192,14 @@ def _projection_rows(home: Path, harness_id: str, detected: dict[str, bool]) -> 
             "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "ecc-harness-pack" / "SKILL.md",
             "claude": home / ".claude" / "skills" / "decisions-ecc-harness" / "SKILL.md",
             "cursor": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
-            "pi": home / ".pi" / "skills" / "decisions-ecc-harness" / "SKILL.md",
+            "pi": home / ".pi" / "agent" / "skills" / "decisions-ecc-harness" / "SKILL.md",
             "grok": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
         },
         "competition": {
             "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "decisions-competition-harness" / "SKILL.md",
             "claude": home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md",
             "cursor": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
-            "pi": home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md",
+            "pi": home / ".pi" / "agent" / "skills" / "decisions-competition-harness" / "SKILL.md",
             "grok": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
         },
     }
@@ -344,4 +345,18 @@ def assess_harness_stack(*, home: Path | None = None, project_root: Path | None 
         "harnesses": harnesses,
         "clis": clis,
         "repair_actions": _repair_actions(packs, harnesses),
+        "skills_lint": _skills_lint_summary(base_home),
     }
+
+
+def _skills_lint_summary(home: Path) -> dict[str, Any]:
+    """Harness-agnostic skills doctor (shared ~/.agents/skills + per-harness links).
+
+    Informational: does not change ``ok``. Full report: ``python -m distr.core.skills.lint -v``.
+    """
+    try:
+        from distr.core.skills.lint import summary
+
+        return summary(home)
+    except Exception as exc:  # pragma: no cover - doctor must never crash
+        return {"error": str(exc)}

@@ -2070,6 +2070,31 @@ def test_release_hold_gate_accepts_explicit_no_blockers_followed_by_context():
     assert findings == []
 
 
+def test_final_polish_accepts_compact_non_ui_completion_manifest_headings():
+    from distr.core.workflow.router import _missing_expected_outputs
+
+    output = """Files changed: delivery-proof.txt
+Verification: cmp passed.
+Security scan: no findings.
+UI/browser: N/A, non-UI ticket.
+Ship verdict: PASS.
+completion_manifest: {\"status\":\"completed\"}
+"""
+
+    assert _missing_expected_outputs(
+        output,
+        [
+            "final_fixes",
+            "final_check_results",
+            "final_security_audit",
+            "final_browser_evidence",
+            "visual_quality_verdict",
+            "ship_verdict",
+            "completion_manifest",
+        ],
+    ) == []
+
+
 def test_host_browser_recovery_runs_exact_project_local_test_and_requires_fresh_viewports(
     tmp_path, monkeypatch
 ):

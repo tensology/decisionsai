@@ -116,6 +116,21 @@ def test_named_email_read_is_repaired_to_targeted_search_and_read():
     }
 
 
+def test_calendar_follow_up_repairs_tensology_workspace_misroute():
+    name, args = OpenAICompatibleLLMService._rewrite_tool_for_intent(
+        "tensology_workspace",
+        {
+            "action": "calendar_create_event",
+            "params": {"summary": "Opening Celebration", "start_time": "2026-11-20T18:00:00+02:00"},
+        },
+        "Yes, this year.",
+    )
+
+    assert name == "google_workspace"
+    assert args["action"] == "create_calendar_event"
+    assert args["params"]["summary"] == "Opening Celebration"
+
+
 def test_follow_up_stream_timeout_allows_long_tool_reasoning():
     assert OpenAICompatibleLLMService._FOLLOW_UP_STREAM_TIMEOUT_SEC == 60.0
 

@@ -20,7 +20,7 @@ DecisionsAI does not replace these products — it tells agents **which tool for
 | Real shipped screens + DESIGN.md tokens | **Refero MCP** — refero.design/mcp (Pro) |
 | Pattern library + flows (mobile/web) | **Mobbin MCP** — api.mobbin.com/mcp (Pro, OAuth) |
 | Visual inspiration only | **Godly** — godly.website (manual screenshots/links) |
-| ECC implementation taste | `frontend-design`, `frontend-design-direction` |
+| ECC implementation taste | `frontend-design`, `ui-ux-system` |
 
 **“10x”** — if someone lists five sites and the fifth is “10x”, it is usually slang or a misheard name, not a fifth MCP. Ask the user for the exact URL unless they confirm a product.
 

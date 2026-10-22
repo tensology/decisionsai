@@ -302,31 +302,6 @@ def register_routes(router, templates):
         })
 
 
-    @router.get("/workflows/llm-settings")
-    async def get_workflow_llm_settings():
-        """Return the workflow engine's dedicated LLM provider and model."""
-        from distr.core.settings import load_settings_from_db
-        settings = load_settings_from_db()
-        return JSONResponse({
-            "provider": settings.get("workflow_llm_provider") or "",
-            "model": settings.get("workflow_llm_model") or "",
-        })
-
-
-    @router.post("/workflows/llm-settings")
-    async def save_workflow_llm_settings(request: Request):
-        """Save the workflow engine's dedicated LLM provider and model."""
-        from distr.core.settings import load_settings_from_db, save_settings_to_db
-        data = await request.json()
-        settings = load_settings_from_db()
-        provider = (data.get("provider") or "").strip()
-        model = (data.get("model") or "").strip()
-        settings["workflow_llm_provider"] = provider
-        settings["workflow_llm_model"] = model
-        save_settings_to_db(settings)
-        return JSONResponse({"success": True})
-
-
     @router.get("/workflows/actions/catalog")
     async def get_workflow_actions_catalog():
         """Return saved Decisions Actions usable by workflow/orchestrator steps."""

@@ -1,8 +1,15 @@
 """Thin MemPalace adapter — search / add drawer / availability.
 
-Uses the real MemPalace Python API from the local reference clone:
-- ``mempalace.searcher.search_memories`` for reads
-- Chroma collection upsert (same shape as ``mcp_server.tool_add_drawer``) for writes
+Hub-first (MemPalace 3.7+ shared brain): when a ``mempalace serve`` hub owns
+the Decisions palace, every read and write goes over HTTP MCP via
+``distr.core.mempalace.hub`` and this process never opens Chroma.
+
+- Hub up: ``mempalace_search`` / ``mempalace_add_drawer`` on the hub.
+- Hub configured but down: writes are journaled (``hub-journal.jsonl``) and
+  replayed later; reads fall back to MemPalace's read-only search
+  (``DECISIONS_MEMPALACE_DIRECT_READ_FALLBACK=0`` disables that).
+- No hub ever configured on this machine: legacy in-process path
+  (``mempalace.searcher.search_memories`` + Chroma upsert).
 
 No fake store. If chromadb / mempalace are unavailable, methods return
 soft failures so legacy paths remain authoritative.
@@ -15,6 +22,9 @@ import logging
 from datetime import datetime
 from typing import Any
 
+import os
+
+from distr.core.mempalace import hub as _hub
 from distr.core.mempalace.bootstrap import last_import_error, try_import_mempalace
 from distr.core.mempalace.mapping import WING_DECISIONS
 from distr.core.mempalace.paths import default_palace_path, ensure_palace_dir
@@ -30,7 +40,30 @@ class MemPalaceAdapter:
         self._available: bool | None = None
         self._error: str | None = None
 
+    def _hub(self) -> dict | None:
+        try:
+            return _hub.discover(self.palace_path)
+        except Exception:
+            logger.debug("mempalace hub discovery failed", exc_info=True)
+            return None
+
+    def _hub_configured(self) -> bool:
+        try:
+            return _hub.hub_configured(self.palace_path)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _direct_read_fallback() -> bool:
+        raw = (os.environ.get("DECISIONS_MEMPALACE_DIRECT_READ_FALLBACK") or "1").strip().lower()
+        return raw not in {"0", "false", "no", "off"}
+
     def available(self) -> bool:
+        if self._hub() is not None:
+            return True
+        if self._hub_configured():
+            # Writes queue to the journal; reads may use the read-only fallback.
+            return True
         if self._available is not None:
             return self._available
         ok, err = try_import_mempalace()
@@ -49,6 +82,18 @@ class MemPalaceAdapter:
         self._error = None
         return True
 
+    def _import_ok(self) -> bool:
+        ok, err = try_import_mempalace()
+        if not ok:
+            self._error = err
+            return False
+        try:
+            import chromadb  # noqa: F401
+        except Exception as exc:
+            self._error = f"chromadb missing: {exc}"
+            return False
+        return True
+
     def status(self) -> dict[str, Any]:
         ok = self.available()
         err = self._error or last_import_error()
@@ -60,12 +105,27 @@ class MemPalaceAdapter:
                 "— or restart Decisions to auto-mine distr/seed-corpus-pack into "
                 "~/.decisions/mempalace/palace (wing seed_corpus_pack)."
             )
+        hub = self._hub()
+        configured = self._hub_configured()
+        if hub is not None:
+            backend = "mempalace-hub"
+        elif configured:
+            backend = "mempalace-hub-down(journal)"
+        else:
+            backend = "mempalace+chromadb" if ok else None
         return {
             "available": ok,
             "palace_path": self.palace_path,
-            "error": err,
-            "setup_message": setup,
-            "backend": "mempalace+chromadb" if ok else None,
+            "error": None if hub is not None else err,
+            "setup_message": None if (hub is not None or configured) else setup,
+            "backend": backend,
+            "hub": {
+                "configured": configured,
+                "up": hub is not None,
+                "url": hub["base_url"] if hub else None,
+                "agent_id": _hub.AGENT_ID,
+                "journal_pending": _hub.journal_pending(self.palace_path),
+            },
         }
 
     def _get_collection(self, *, create: bool):
@@ -82,12 +142,29 @@ class MemPalaceAdapter:
         room: str | None = None,
         n_results: int = 5,
     ) -> dict[str, Any]:
-        """Semantic search via MemPalace ``search_memories`` (dict return)."""
-        if not self.available():
-            return {"error": self._error or "mempalace unavailable", "results": []}
+        """Semantic search: hub ``mempalace_search``, else ``search_memories``."""
         q = (query or "").strip()
         if not q:
             return {"results": [], "query": q}
+        hub = self._hub()
+        if hub is not None:
+            args: dict[str, Any] = {"query": q, "limit": int(n_results)}
+            if wing:
+                args["wing"] = wing
+            if room:
+                args["room"] = room
+            try:
+                res = _hub.call_tool(self.palace_path, "mempalace_search", args, hub=hub)
+                res.setdefault("results", [])
+                res["via"] = "hub"
+                return res
+            except Exception as exc:
+                logger.debug("mempalace hub search failed: %s", exc)
+                hub = None
+        if self._hub_configured() and not self._direct_read_fallback():
+            return {"error": "mempalace hub down", "results": []}
+        if not self._import_ok():
+            return {"error": self._error or "mempalace unavailable", "results": []}
         try:
             from mempalace.searcher import search_memories
 
@@ -113,11 +190,40 @@ class MemPalaceAdapter:
         extra_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """File verbatim content into wing/room (idempotent drawer id)."""
-        if not self.available():
-            return {"success": False, "error": self._error or "mempalace unavailable"}
         text = (content or "").strip()
         if not text:
             return {"success": False, "error": "empty content"}
+        hub = self._hub()
+        if hub is not None or self._hub_configured():
+            # MCP add_drawer has no free-form metadata; keep the provenance in
+            # source_file so it stays searchable/filterable.
+            src = source_file or ""
+            if not src and extra_meta:
+                parts = [f"{k}={v}" for k, v in extra_meta.items() if v not in (None, "")]
+                src = "decisions://" + "&".join(parts)[:400] if parts else ""
+            args = {
+                "wing": wing,
+                "room": room,
+                "content": text,
+                "source_file": src,
+                "added_by": added_by if added_by and ":" in added_by else _hub.AGENT_ID,
+            }
+            if hub is not None:
+                try:
+                    _hub.journal_replay(self.palace_path, hub=hub)
+                    res = _hub.call_tool(self.palace_path, "mempalace_add_drawer", args, hub=hub)
+                    res.setdefault("success", True)
+                    res["via"] = "hub"
+                    return res
+                except Exception as exc:
+                    logger.debug("mempalace hub add_drawer failed, journaling: %s", exc)
+            try:
+                path = _hub.journal_append(self.palace_path, "mempalace_add_drawer", args)
+                return {"success": True, "queued": True, "journal": str(path), "via": "journal"}
+            except Exception as exc:
+                return {"success": False, "error": f"journal failed: {exc}"}
+        if not self._import_ok():
+            return {"success": False, "error": self._error or "mempalace unavailable"}
         try:
             from mempalace.config import sanitize_content, sanitize_name
 

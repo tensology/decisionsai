@@ -23,7 +23,7 @@ class DevelopmentControlInput(BaseModel):
     action: str = Field(
         default="list_threads",
         description=(
-            "Action: list_threads, get_thread, create_thread, fork_thread, "
+            "Action: list_threads, get_thread, create_thread, send_instruction, fork_thread, "
             "archive_thread, delete_thread, list_workflows, list_automations, "
             "get_automation, create_automation, update_automation, pause_automation, resume_automation, "
             "run_automation, delete_automation, import_automations, check_incoming, or list_reports."
@@ -46,6 +46,7 @@ class DevelopmentControlInput(BaseModel):
     delete_linked_ticket: bool = True
     confirm: bool = False
     confirmation_token: str = ""
+    start: bool = Field(default=True, description="create_thread: also start running the instruction (default true).")
     limit: int = Field(default=50, ge=1, le=200)
 
 
@@ -59,6 +60,9 @@ class DevelopmentControlTool(BaseTool):
         "Use kanban_ticket for boards/tickets and terminal_overview for project terminals. "
         "Never use Chat load/send endpoints for a Development thread. "
         "Create a Development thread only for an instruction that changes or produces project work. "
+        "To continue an EXISTING Development thread (e.g. 'put this in the Decisions thread'), call "
+        "send_instruction with its thread_id (use the current Development thread from the Oracle context, or list_threads). "
+        "create_thread with an instruction starts the run immediately. Never use new_chat for Development threads. "
         "Questions, stories, and status checks stay in the current chat, even when they mention a project."
     )
     args_schema: type[BaseModel] = DevelopmentControlInput
@@ -206,6 +210,7 @@ class DevelopmentControlTool(BaseTool):
         confirm: bool = False,
         confirmation_token: str = "",
         limit: int = 50,
+        start: bool = True,
         **kwargs,
     ) -> str:
         action = str(action or "list_threads").strip().lower()
@@ -217,29 +222,90 @@ class DevelopmentControlTool(BaseTool):
                 from distr.core.workflow.development_control import thread_export
 
                 return self._json(thread_export(self._require_thread_id(thread_id), redacted=True))
+            if action in ("create_thread", "send_instruction"):
+                from distr.core.workflow.development_threads import is_kanban_request, kanban_redirect
+
+                user_text = str(kwargs.get("last_user_message") or "")
+                if is_kanban_request(user_text):
+                    # kanbanroute 2026-10-22: ticket/board requests use the Kanban tools.
+                    from distr.core.workflow.oracle_routing_rule import resolve_named_project
+
+                    pname = ""
+                    try:
+                        pid = resolve_named_project(user_text)
+                        if pid is not None:
+                            from distr.core.workflow.oracle_routing_rule import _project_names
+
+                            pname = dict(_project_names()).get(pid, "")
+                    except Exception:
+                        pname = ""
+                    return self._json({
+                        "surface": "kanban",
+                        "created": False,
+                        "redirect": kanban_redirect(user_text, pname),
+                        "reason": (
+                            "This is a ticket/board request: call the create_ticket tool with the redirect "
+                            "action now (use the current project's board when no project is named). "
+                            "This is a redirect, not an outage."
+                        ),
+                    })
             if action == "create_thread":
                 from distr.core.workflow.development_threads import (
                     ensure_development_thread,
                     orchestrator_surface,
                 )
+                from distr.core.workflow.oracle_routing_rule import explicit_new_thread_request
 
                 request_text = str(instruction or title or "").strip()
-                if orchestrator_surface(request_text) == "chat":
+                # refusal fix 2026-10-22: "create a new chat in the DecisionsAI project and ask
+                # what the point of this project is" was refused because the *instruction* is a
+                # question. When the user's own message explicitly asks for a new chat/thread in a
+                # named project, honour it; the conversational guard still stops the model from
+                # spawning threads on its own initiative.
+                if orchestrator_surface(request_text) == "chat" and not explicit_new_thread_request(
+                    str(kwargs.get("last_user_message") or "")
+                ):
                     return self._json({
                         "surface": "chat",
                         "created": False,
                         "reason": (
                             "This is a conversation, not project work. "
-                            "Answer it in the current chat."
+                            "Answer the user's question fully in the current chat now; do not refuse."
                         ),
                     })
+                # Deterministic project resolution (routee2e 2026-10-22: "create a new thread in
+                # DecisionsAI" landed in project 7 because the model guessed the id). A project the
+                # user names in their own message wins over the model's project_id.
+                from distr.core.workflow.oracle_routing_rule import resolve_named_project
+
+                named_project = None
+                for source_text in (kwargs.get("last_user_message"), instruction, title):
+                    named_project = resolve_named_project(str(source_text or ""))
+                    if named_project is not None:
+                        break
+                if named_project is not None:
+                    project_id = named_project
                 created = ensure_development_thread(
                     title=str(title or "Development work").strip(),
                     project_id=project_id,
-                    starting_question=str(instruction or "").strip() or None,
+                    # When starting, the instruction becomes the first user turn via
+                    # send_instruction_to_thread; seeding it here too would make the
+                    # duplicate-input guard swallow the dispatch.
+                    starting_question=None if (start and str(instruction or "").strip()) else (str(instruction or "").strip() or None),
                     source_type="orchestrator",
                 )
-                return self._json({"surface": "development", "created": True, "thread_id": int(created)})
+                result = {"surface": "development", "created": True, "thread_id": int(created),
+                          "project_id": project_id}
+                if start and str(instruction or "").strip():
+                    from distr.core.workflow.oracle_thread_handoff import send_instruction_to_thread
+
+                    result["run"] = send_instruction_to_thread(int(created), str(instruction))
+                return self._json(result)
+            if action == "send_instruction":
+                from distr.core.workflow.oracle_thread_handoff import send_instruction_to_thread
+
+                return self._json({"surface": "development", **send_instruction_to_thread(
+                    self._require_thread_id(thread_id), str(instruction or ""))})
             if action == "fork_thread":
                 from distr.core.workflow.development_control import fork_thread
 

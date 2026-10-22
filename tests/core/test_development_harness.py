@@ -291,6 +291,9 @@ def test_direct_development_prompt_uses_ide_harness_without_workflow(tmp_path, m
         assert item.workflow_id is None
         assert execution["status"] == "completed"
         assert execution["execution_session_id"] == 91
+        assert execution["route_receipt"]["complexity"] == "medium"
+        assert execution["route_receipt"]["selected"]["backend"] == "codex"
+        assert execution["route_receipt"]["actual"]["runtime"] == "cli_harness"
         assert turn.response == "Implemented and verified the feature."
 
 
@@ -499,6 +502,10 @@ def test_large_multi_phase_thread_request_launches_owned_orchestrator(tmp_path, 
     assert captured["chat_id"] == chat_id
     assert captured["workflow_id"] == 44
     assert captured["run_metadata"]["execution_mode_decision"]["mode"] == "workflow"
+    receipt = captured["run_metadata"]["route_receipt"]
+    assert receipt["complexity"] == "high"
+    assert receipt["selected"]["backend"] == "codex"
+    assert receipt["configured"]["route_mode"] == "auto"
 
 
 def test_plan_mode_keeps_the_direct_harness_read_only(tmp_path, monkeypatch):
@@ -694,6 +701,78 @@ def test_auto_development_route_preserves_configured_free_fallback(monkeypatch):
     assert options["fallback_backend"] == "pi"
     assert options["fallback_model"] == "muse-glimmer:30b-mlx"
     assert options["fallback_model_provider"] == "ollama"
+
+
+def test_auto_codex_route_passes_complexity_reasoning_and_service_tier(monkeypatch):
+    project = SimpleNamespace(id=2, coding_backend="codex", coding_backend_model="auto")
+    monkeypatch.setattr(
+        "distr.core.kanban.ticket_policy.resolve_ticket_cli_route",
+        lambda project, complexity, board=None: {
+            "backend": "codex",
+            "model": "gpt-5.6-luna",
+            "model_provider": "openai",
+            "codex_reasoning_effort": "high",
+            "codex_service_tier": "fast",
+        },
+    )
+
+    backend, model, options, complexity = harness._route(
+        project,
+        {"model_route": {"route_mode": "auto"}},
+        {"complexity": "high"},
+    )
+
+    assert (backend, model, complexity) == ("codex", "gpt-5.6-luna", "high")
+    assert options["reasoning_effort"] == "high"
+    assert options["service_tier"] == "fast"
+
+
+def test_direct_route_receipt_records_the_executor_that_returned_after_fallback(tmp_path, monkeypatch):
+    from distr.core.turn_runtime import TurnResult
+
+    _, chat_id, _ = _database(tmp_path, monkeypatch)
+
+    async def fake_execute(request, **_kwargs):
+        return TurnResult(
+            success=True,
+            runtime_id="cli_harness",
+            backend_id="pi",
+            model="muse-glimmer:30b-mlx",
+            output="Fallback completed.",
+        )
+
+    monkeypatch.setattr("distr.core.turn_runtime.execute_turn", fake_execute)
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+        lambda backend_id, settings=None: {"status": {"ready": True}, "next_step": ""},
+    )
+
+    result = harness.dispatch_development_prompt(
+        chat_id,
+        "Explain the current implementation",
+        routing_assessment={
+            "complexity": "high",
+            "decision_engine": "laya",
+            "laya": {"mode": "auto", "used": True, "confidence": 0.88},
+            "route": {
+                "backend": "claude_code",
+                "model": "opus",
+                "model_provider": "anthropic",
+                "fallback_backend": "pi",
+                "fallback_model": "muse-glimmer:30b-mlx",
+                "fallback_model_provider": "ollama",
+            },
+        },
+        dispatch_async=False,
+    )
+
+    actual = result["route_receipt"]["actual"]
+    assert actual == {
+        "backend": "pi",
+        "provider": "ollama",
+        "model": "muse-glimmer:30b-mlx",
+        "runtime": "cli_harness",
+    }
 
 
 def test_manual_development_route_honors_pinned_harness(monkeypatch):

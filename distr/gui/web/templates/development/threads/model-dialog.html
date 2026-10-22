@@ -2,26 +2,34 @@
         <form method="dialog" id="model-form">
             <div class="model-menu-shell">
                 <div class="model-menu-main" id="model-menu-main">
-                    <button type="button" class="model-menu-row" data-model-pane="auto"><span>Auto</span><strong id="model-auto-value">Complexity route</strong><i aria-hidden="true">›</i></button>
                     <div class="model-route-preview" id="model-route-preview" hidden>
                         <small id="model-route-preview-text">Assessing…</small>
                     </div>
-                    <button type="button" class="model-menu-row" data-model-pane="harness"><span>Harness</span><strong id="model-harness-value">Auto</strong><i aria-hidden="true">›</i></button>
-                    <button type="button" class="model-menu-row" id="model-provider-row" data-model-pane="provider"><span>Provider</span><strong id="model-provider-value">Choose provider</strong><i aria-hidden="true">›</i></button>
-                    <button type="button" class="model-menu-row" data-model-pane="model"><span>Model</span><strong id="model-catalog-value">Automatic</strong><i aria-hidden="true">›</i></button>
-                    <button type="button" class="model-menu-row" id="model-effort-row" data-model-pane="effort"><span>Effort</span><strong id="model-effort-value">Medium</strong><i aria-hidden="true">›</i></button>
-                    <button type="button" class="model-menu-row" id="model-speed-row" data-model-pane="speed"><span>Speed</span><strong id="model-speed-value">Standard</strong><i aria-hidden="true">›</i></button>
+                    <button type="button" class="model-menu-row" data-model-pane="harness" data-tooltip="Agent that runs this thread"><span>Harness</span><strong id="model-harness-value">Auto</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 4.5 3.5 3.5L6 11.5"></path></svg></button>
+                    <button type="button" class="model-menu-row" id="model-provider-row" data-model-pane="provider"><span>Provider</span><strong id="model-provider-value">Choose provider</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 4.5 3.5 3.5L6 11.5"></path></svg></button>
+                    <button type="button" class="model-menu-row" data-model-pane="model"><span>Model</span><strong id="model-catalog-value">Automatic</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 4.5 3.5 3.5L6 11.5"></path></svg></button>
+                    <button type="button" class="model-menu-row" id="model-effort-row" data-model-pane="effort" data-tooltip="Reasoning depth"><span>Effort</span><strong id="model-effort-value">Medium</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 4.5 3.5 3.5L6 11.5"></path></svg></button>
+                    <button type="button" class="model-menu-row" id="model-speed-row" data-model-pane="speed" data-tooltip="Response speed"><span>Speed</span><strong id="model-speed-value">Standard</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 4.5 3.5 3.5L6 11.5"></path></svg></button>
                     <div class="prompt-mode-options" aria-label="Prompt options">
-                        <button type="button" data-prompt-mode="full" title="Work: plan, implement, test, and correct"><span aria-hidden="true">◆</span><small>Work</small></button>
-                        <button type="button" data-prompt-mode="plan" title="Plan: prepare the work without implementing it"><span aria-hidden="true">≡</span><small>Plan</small></button>
-                        <button type="button" data-prompt-mode="goal" title="Goal: keep working across development turns"><span aria-hidden="true">◎</span><small>Goal</small></button>
-                        <button type="button" id="prompt-playwright-toggle" title="Use the browser for this prompt" aria-pressed="false"><span aria-hidden="true">▣</span><small>Playwright</small></button>
+                        <button type="button" data-prompt-mode="plan" aria-label="Plan" data-tooltip="Plan only, no edits"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="12" r="1.25"></circle><circle cx="13" cy="4" r="1.25"></circle><path d="M4.25 12h2.25a2 2 0 0 0 2-2V6a2 2 0 0 1 2-2h1.25"></path></svg></button>
+                        <button type="button" data-prompt-mode="goal" aria-label="Goal" data-tooltip="Keep going until verified"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 13.5v-11M4 3h7.5L10 5.5 11.5 8H4"></path></svg></button>
+                        <button type="button" id="prompt-playwright-toggle" aria-label="Browser" data-tooltip="Use the browser for this prompt" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"></circle><path d="M2.5 8h11M8 2.5c1.5 1.5 2.25 3.3 2.25 5.5S9.5 12 8 13.5M8 2.5C6.5 4 5.75 5.8 5.75 8S6.5 12 8 13.5"></path></svg></button>
+                        <button type="button" class="complexity-settings-button" id="complexity-settings-button" aria-label="Auto settings" data-tooltip="Auto settings"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M6.9 1.75h2.2l.35 1.75 1.3.75 1.7-.6 1.1 1.9-1.35 1.2v1.5l1.35 1.2-1.1 1.9-1.7-.6-1.3.75-.35 1.75H6.9l-.35-1.75-1.3-.75-1.7.6-1.1-1.9 1.35-1.2v-1.5l-1.35-1.2 1.1-1.9 1.7.6 1.3-.75z"></path><circle cx="8" cy="8" r="2"></circle></svg></button>
                     </div>
                 </div>
                 <div class="model-submenu hidden" id="model-submenu" aria-live="polite">
-                    <header id="model-submenu-header"><button type="button" id="model-submenu-back" aria-label="Back">‹</button><strong id="model-submenu-title">Models</strong><input class="hidden" id="model-submenu-search" type="search" placeholder="Search models" aria-label="Search models" autocomplete="off"></header>
+                    <header id="model-submenu-header"><button type="button" id="model-submenu-back" aria-label="Back" title="Back"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m10 3.5-4.5 4.5 4.5 4.5"></path></svg></button><strong id="model-submenu-title">Models</strong><input class="hidden" id="model-submenu-search" type="search" placeholder="Search models" aria-label="Search models" autocomplete="off"></header>
                     <div class="model-submenu-list" id="model-submenu-list" role="menu"></div>
                 </div>
             </div>
+        </form>
+    </dialog>
+
+    <dialog class="studio-dialog complexity-dialog" id="complexity-dialog" aria-labelledby="complexity-dialog-title">
+        <form method="dialog" class="complexity-dialog-form">
+            <header><div><h2 id="complexity-dialog-title">Auto settings</h2></div><button type="button" id="complexity-dialog-close" aria-label="Close" title="Close">×</button></header>
+            <div class="complexity-dialog-rows" id="complexity-dialog-rows"></div>
+            <p class="complexity-dialog-desc">When the selector is on Auto, each message is rated Low, Medium or High complexity and runs on the harness and model picked here. Changes save immediately.</p>
+            <p class="complexity-dialog-status" id="complexity-dialog-status" aria-live="polite"></p>
         </form>
     </dialog>

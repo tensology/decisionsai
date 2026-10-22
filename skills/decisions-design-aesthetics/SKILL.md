@@ -38,7 +38,7 @@ Read ../reference/awesome-design-skills/skills/neon/SKILL.md and DESIGN.md
 | Layer | Skill |
 |-------|--------|
 | Real product references | decisions-design-references (Refero, Mobbin, Aceternity) |
-| Direction before code | decisions-ui-ideation, frontend-design-direction |
+| Direction before code | decisions-ui-ideation, ui-ux-system |
 | Aesthetic tokens | this index + bundled aesthetics |
 | Implementation | frontend-design, ponytail |
 

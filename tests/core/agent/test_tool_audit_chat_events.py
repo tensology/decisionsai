@@ -17,6 +17,7 @@ def test_tool_result_status_distinguishes_failures_and_approval_waits():
     assert classify_tool_result_status("Unsupported Tensology action: check_inbox") == "failed"
     assert classify_tool_result_status("Missing required parameter: message_id") == "failed"
     assert classify_tool_result_status('{"error": {"code": "upstream_failed"}}') == "failed"
+    assert classify_tool_result_status('{"success": false, "next_action": "clarify"}') == "failed"
     assert classify_tool_result_status("Approval required: show the message preview") == "waiting_for_user"
     assert classify_tool_result_status('{"data": {"emails": []}}') == "completed"
 

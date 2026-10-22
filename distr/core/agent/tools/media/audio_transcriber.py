@@ -309,6 +309,17 @@ class AudioTranscriberTool(BaseTool):
         try:
             audio_files_to_transcribe = []
             
+            # routee2e 2026-10-22: the model dropped the path the user typed
+            # ("transcribe this MP3: /tmp/x.mp3"); recover it from the user's message.
+            if not audio_file_path and last_user_message:
+                import re as _re
+                for _cand in _re.findall(r"(~?/[^\s'\"]+\.(?:mp3|m4a|wav|flac|ogg|opus|aac|m4b|wma))\b",
+                                         str(last_user_message), _re.IGNORECASE):
+                    _cand = os.path.expanduser(_cand)
+                    if os.path.exists(_cand):
+                        audio_file_path = _cand
+                        break
+
             # If specific path provided, use it
             if audio_file_path:
                 if not os.path.exists(audio_file_path):

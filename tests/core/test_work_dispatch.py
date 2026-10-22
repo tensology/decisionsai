@@ -1,6 +1,25 @@
 from __future__ import annotations
 
+import contextlib
+import json
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from distr.core.db import Base, Chat
+from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.workflow import AutoWorkflow, DevelopmentWorkItem
 from distr.core.workflow.work_dispatch import dispatch_work_item
+
+
+@contextlib.contextmanager
+def _session(factory):
+    db = factory()
+    try:
+        yield db
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_dispatch_prepares_thread_before_starting_run(monkeypatch):
@@ -82,3 +101,58 @@ def test_dispatch_never_starts_run_when_thread_preparation_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="thread unavailable"):
         dispatch_work_item(workflow_id=44, context="Do not run")
     assert starts == []
+
+
+def test_dispatch_preserves_external_ticket_identity_when_local_mirror_is_linked(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    provider = lambda: _session(factory)
+    with provider() as db:
+        workflow = AutoWorkflow(name="Development", workflow_type="manual")
+        board = KanbanBoard(name="Project", source="database")
+        db.add_all([workflow, board])
+        db.flush()
+        lane = KanbanLane(board_id=board.id, name="Backlog")
+        db.add(lane)
+        db.flush()
+        ticket = KanbanTicket(title="Approved", lane_id=lane.id, external_id="E2E-91-001")
+        chat = Chat(title="Approved", params=json.dumps({"development": {
+            "board_provider": "tensology",
+            "board_key": "tensology:91",
+            "board_ticket_key": "E2E-91-001",
+        }}))
+        db.add_all([ticket, chat])
+        db.flush()
+        db.add(DevelopmentWorkItem(
+            chat_id=chat.id,
+            identity_key="ticket:tensology:tensology:91:e2e-91-001",
+            board_provider="tensology",
+            board_key="tensology:91",
+            ticket_key="E2E-91-001",
+            local_ticket_id=ticket.id,
+            workflow_id=workflow.id,
+        ))
+        workflow_id, ticket_id, chat_id = workflow.id, ticket.id, chat.id
+
+    monkeypatch.setattr(
+        "distr.core.workflow.service.start_workflow_run",
+        lambda *args, **kwargs: {"run_id": 1, "status": "running"},
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.development_control.resume_thread_time",
+        lambda *args, **kwargs: {},
+    )
+    result = dispatch_work_item(
+        workflow_id=workflow_id,
+        chat_id=chat_id,
+        ticket_id=ticket_id,
+        source_type="studio_thread",
+        _session_provider=provider,
+    )
+
+    assert result["work_item_identity"] == "ticket:tensology:tensology:91:e2e-91-001"
+    with provider() as db:
+        item = db.query(DevelopmentWorkItem).filter(DevelopmentWorkItem.chat_id == chat_id).one()
+        assert item.identity_key == result["work_item_identity"]
+        assert item.board_provider == "tensology"

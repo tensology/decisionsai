@@ -43,8 +43,19 @@ def ensure_mempalace_on_path() -> Path | None:
 
 
 def try_import_mempalace() -> tuple[bool, str | None]:
-    """Attempt import after path bootstrap. Returns (ok, error_message)."""
+    """Import MemPalace, preferring the installed (PyPI) package.
+
+    The reference clone is only put on ``sys.path`` when no installed package
+    is importable, so an older clone can never shadow the venv's release.
+    """
     global _IMPORT_ERROR
+    try:
+        import mempalace  # noqa: F401
+
+        _IMPORT_ERROR = None
+        return True, None
+    except Exception:
+        pass
     ensure_mempalace_on_path()
     try:
         import mempalace  # noqa: F401

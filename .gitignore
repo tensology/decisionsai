@@ -197,3 +197,6 @@ vscode_extension/node_modules/
 
 # --- Custom voices / clones (local only) ---
 clone/
+
+*.bak-*
+/planning/

@@ -15,10 +15,15 @@ body {
 .board-container {
     display: flex;
     flex-direction: column;
+    box-sizing: border-box;
     height: 100vh;
     width: 100%;
-    padding: 20px;
+    max-width: var(--page-max-width, none);
+    margin: 0;
+    /* Shared page layout (Reports reference): 24px gutter, 16px below 680px. */
+    padding: var(--page-gutter, 24px);
 }
+@media (max-width: 680px) { .board-container { padding: var(--page-gutter, 16px); } }
 
 .board-header {
     display: flex;

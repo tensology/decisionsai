@@ -89,6 +89,21 @@ def test_free_openrouter_route_only_blocks_negative_balance(monkeypatch):
     assert report.required_buffer_usd == 0
 
 
+def test_free_openrouter_route_is_not_blocked_by_negative_balance(monkeypatch):
+    # OpenRouter serves :free models at a negative balance (observed 2026-10-22).
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.provider_preflight.urlopen",
+        _openrouter_responses(account_remaining=-0.27, key_remaining=None),
+    )
+
+    report = preflight_provider_route(
+        _route("vendor/coder:free"), settings={"openrouter_key": "k"}, complexity="medium"
+    )
+
+    assert report.ready is True
+    assert report.available_credit_usd == -0.27
+
+
 def test_openrouter_402_is_a_blocking_preflight(monkeypatch):
     def denied(*_args, **_kwargs):
         raise HTTPError("https://openrouter.ai/api/v1/key", 402, "Payment Required", {}, io.BytesIO())

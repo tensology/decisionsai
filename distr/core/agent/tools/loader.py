@@ -155,6 +155,9 @@ def _get_tool_definitions(
         ("NewChatTool", dict(chat_manager=chat_manager)),
         # Open Page (web UI navigation)
         ("OpenPageTool", dict(chat_manager=chat_manager)),
+        # Select / open a thread in the web UI sidebar (2026-10-22 selthread)
+        ("SelectThreadTool", {}),
+        ("OpenThreadTool", {}),
         # Mermaid diagram viewer
         ("ShowMermaidDiagramTool", dict(chat_manager=chat_manager)),
         # yt-dlp downloads with progress UI
@@ -186,6 +189,9 @@ def _get_tool_definitions(
         # Terminal Overview — query project terminal state
         ("TerminalOverviewTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
         ("DevelopmentControlTool", {}),
+        # Laya submissions — route text to a project thread and dispatch an agent turn
+        ("LayaSubmitTool", {}),
+        ("LayaSubmissionStatusTool", {}),
         # Document Extractor
         ("DocumentExtractorTool", {}),
         # System Information
@@ -549,6 +555,8 @@ TOOL_REGISTRY = {
     "ClearChatTool":           ("chat.clear_chat", "ClearChatTool"),
     "OracleGlobeTool":         ("chat.oracle_globe", "OracleGlobeTool"),
     "OpenPageTool":            ("chat.open_page", "OpenPageTool"),
+    "SelectThreadTool":        ("chat.select_thread", "SelectThreadTool"),
+    "OpenThreadTool":          ("chat.select_thread", "OpenThreadTool"),
     "ShowMermaidDiagramTool":  ("chat.show_mermaid_diagram", "ShowMermaidDiagramTool"),
     "YtdlpDownloadTool":       ("integrations.ytdlp_download", "YtdlpDownloadTool"),
     "TensologyWorkspaceTool":  ("integrations.tensology_workspace", "TensologyWorkspaceTool"),
@@ -606,6 +614,8 @@ TOOL_REGISTRY = {
     "RequestToolTool":         ("request_tool", "RequestToolTool"),
     "TerminalOverviewTool":     ("integrations.terminal_overview", "TerminalOverviewTool"),
     "DevelopmentControlTool":   ("integrations.development_control", "DevelopmentControlTool"),
+    "LayaSubmitTool":           ("integrations.laya_submit", "LayaSubmitTool"),
+    "LayaSubmissionStatusTool": ("integrations.laya_submit", "LayaSubmissionStatusTool"),
 }
 
 _BASE_PACKAGE = "distr.core.agent.tools"
@@ -705,6 +715,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "ClearChatTool": "Clear, wipe, or delete all messages from the current chat conversation.",
     "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
     "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. For the generic ticket board page only. To open a specific local/Jira/Trello board, use create_ticket action=open_board instead.",
+    "SelectThreadTool": "Select and highlight a thread (latest, id, or title words) in the web UI left sidebar, Development by default or Chat; opens it in the browser if no tab is open. Use for 'select the latest thread', 'select thread 1798'.",
+    "OpenThreadTool": "Open a thread page (latest, id, or title words) in the default browser, Development by default or Chat. Use for 'open my most recent thread' or when the web UI is not open.",
     "ShowMermaidDiagramTool": "Open the Mermaid diagram viewer. With mermaid_code: render that diagram. With empty mermaid_code: open the viewer (last diagram or blank editor). Use open_page page='diagram viewer' when the user only asks to open the viewer.",
     "YtdlpDownloadTool": "Download YouTube or video URLs with yt-dlp and open Download Manager for live progress, speed, and ETA. Use when user asks to download videos or save YouTube links.",
     # system/
@@ -790,6 +802,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",
     "TerminalOverviewTool": "Get the current state of a project's terminal session — last command and output. Use when the user asks about terminal activity.",
     "DevelopmentControlTool": "Inspect and manage Development threads, workflows, automations, Incoming, and Reports through explicit Development surface identifiers.",
+    "LayaSubmitTool": "Hand a request to Laya: route it to a project, select or create a Chat thread, dispatch the agent turn and stream progress.",
+    "LayaSubmissionStatusTool": "Get the status of a Laya submission by id (routed, dispatched, done, failed) with project and thread.",
     # meta/
     "BuildToolTool": "Build, validate, freeze, register, and reuse a missing deterministic capability or multi-step action sequence when existing tools cannot complete the request.",
     "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",

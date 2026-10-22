@@ -1,3 +1,8 @@
+---
+name: jev-model-router
+description: "Use when more than one available model could do the task and the choice materially affects quality, cost, or latency; calls the Jev MCP tool jev_route_model."
+---
+
 # Jev Model Router
 
 Use `jev_route_model` when more than one available model could perform the task and the choice materially affects quality, cost, or latency.

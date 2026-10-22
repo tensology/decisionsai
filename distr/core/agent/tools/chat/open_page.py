@@ -249,7 +249,9 @@ class OpenPageTool(BaseTool):
 
         # Special case: "new chat" — create a chat then open the chat page
         if page_lower in ("new chat", "new conversation"):
-            return self._handle_new_chat()
+            # Hard guard (routee2e 2026-10-22): never spawn a chat from an instruction.
+            from distr.core.agent.services.llm.tool_execution_policy import NEW_CHAT_BLOCK_REASON
+            return NEW_CHAT_BLOCK_REASON
 
         # Exact alias, then a whole-phrase match. No substring guessing.
         path = _PAGE_MAP.get(page_lower)

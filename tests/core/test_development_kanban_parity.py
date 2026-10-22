@@ -69,9 +69,12 @@ def test_legacy_ticket_pages_redirect_into_development():
     assert local.status_code == 302
     assert local.headers["location"] == "/development/boards/decisions/42/kanban/?view=list"
 
+    # /kanban is retired: 410 Gone with a pointer instead of a silent redirect.
     jira = client.get("/kanban/?source=jira&board_id=OPS")
-    assert jira.status_code == 302
-    assert jira.headers["location"] == "/development/boards/jira/OPS/kanban/"
+    assert jira.status_code == 410
+    assert jira.json()["replacement"] == "/development/boards/jira/OPS/kanban/"
+    gone = client.get("/api/kanban/boards")
+    assert gone.status_code == 410 and gone.json()["replacement"] == "/api/tickets/boards"
 
     intake = client.get("/intake/")
     assert intake.status_code == 302

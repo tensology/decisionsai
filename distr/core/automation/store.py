@@ -99,12 +99,25 @@ def normalize_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
     if kind == "weekdays":
         kind = "weekly"
         schedule = {**schedule, "kind": "weekly", "days": "1,2,3,4,5"}
-    if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly", "monthly"}:
+    if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly", "monthly", "yearly"}:
         if strict:
             raise AutomationStoreError(f"Unsupported schedule kind: {kind or 'empty'}")
         kind = "daily"
     time_value = str(schedule.get("time") or "09:00")
-    if kind in {"daily", "weekly", "monthly"}:
+    if strict and kind in {"daily", "weekly", "monthly", "yearly"} and "," not in str(schedule.get("time") or ""):
+        # (comma-separated multi-time lists keep the legacy normalizer below)
+        # autocog: strict calendar validation (time, weekdays, day of month, month).
+        from distr.core.automation.schedule_cron import ScheduleValidationError, validate_calendar_schedule
+
+        try:
+            candidate = {**schedule, "kind": kind, "time": normalize_schedule_time(str(schedule.get("time") or "09:00"))}
+            if candidate.get("days") is None:
+                candidate["days"] = "1"
+            checked = validate_calendar_schedule(candidate)
+        except (ScheduleValidationError, ValueError) as exc:
+            raise AutomationStoreError(str(exc)) from exc
+        schedule = {**schedule, **checked}
+    if kind in {"daily", "weekly", "monthly", "yearly"}:
         try:
             time_value = normalize_schedule_time(time_value, default="09:00")
         except ValueError as exc:
@@ -150,11 +163,29 @@ def normalize_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
         "interval": interval_value,
         "interval_unit": interval_unit,
         "days": str(schedule.get("days") or schedule.get("schedule_days") or "1"),
+        "month": str(schedule.get("month") or "1") if kind == "yearly" else "",
         "timezone": str(schedule.get("timezone") or ""),
+        "ignored_occurrences": _normalize_ignored(schedule.get("ignored_occurrences")),
     }
 
 
+def _normalize_ignored(values: Any) -> list[str]:
+    from distr.core.automation.occurrences import normalize_ignored
+
+    return normalize_ignored(values)
+
+
 def compute_next_run(schedule: dict[str, Any]) -> datetime | None:
+    # calendar: skip occurrences the user chose to ignore.
+    from distr.core.automation.occurrences import skip_ignored
+
+    try:
+        return skip_ignored(_compute_next_run_raw(schedule), schedule)
+    except Exception:
+        return None
+
+
+def _compute_next_run_raw(schedule: dict[str, Any]) -> datetime | None:
     try:
         from distr.core.workflow.scheduler import _next_run_from_cron, next_run_for_interval, schedule_to_cron
 
@@ -165,6 +196,10 @@ def compute_next_run(schedule: dict[str, Any]) -> datetime | None:
                 utc_now(),
                 allow_current_window=True,
             )
+        if schedule.get("kind") == "yearly":
+            from distr.core.automation.schedule_cron import calendar_schedule_to_cron
+
+            return _next_run_from_cron(calendar_schedule_to_cron(schedule), utc_now(), schedule.get("timezone"), allow_current_minute=True)
         schedule_time = schedule.get("time")
         if schedule.get("kind") == "once":
             schedule_time = schedule.get("run_at")
@@ -252,7 +287,9 @@ def serialize_automation(row: Automation) -> dict[str, Any]:
             "interval": schedule.get("interval") or 15,
             "interval_unit": schedule.get("interval_unit") or "minutes",
             "days": schedule.get("days") or "1",
+            "month": schedule.get("month") or "",
             "timezone": schedule.get("timezone") or "",
+            "ignored_occurrences": list(schedule.get("ignored_occurrences") or []),
         },
         "created_at": iso(row.created_date),
         "updated_at": iso(row.modified_date),
@@ -490,7 +527,11 @@ def update_automation(public: str | int, **fields: Any) -> dict[str, Any]:
                 setattr(db_row, column_name, int(value) if value not in (None, "") else None)
         schedule = schedule_dict_from_row(db_row)
         if "schedule" in fields and isinstance(fields["schedule"], dict):
-            schedule = normalize_schedule(fields["schedule"], strict=True)
+            incoming = dict(fields["schedule"])
+            # calendar: a schedule edit that does not mention ignores keeps the existing ones.
+            if "ignored_occurrences" not in incoming:
+                incoming["ignored_occurrences"] = schedule.get("ignored_occurrences") or []
+            schedule = normalize_schedule(incoming, strict=True)
         if "schedule" in fields or "status" in fields:
             apply_schedule_to_row(db_row, schedule)
         if db_row.automation_type == "channel_intake":
@@ -868,3 +909,29 @@ def migrate_legacy_automation_workflows() -> int:
     if migrated:
         logger.info("Migrated %d legacy automation workflow(s) to automations table", migrated)
     return migrated
+
+
+def set_occurrence_ignored(public: str | int, occurrence: str, ignored: bool) -> dict[str, Any]:
+    """calendar: ignore / un-ignore one occurrence and re-apply next_run_at."""
+    from distr.core.automation.occurrences import IGNORABLE_KINDS, valid_key, with_ignored
+
+    try:
+        key = valid_key(occurrence)
+    except ValueError as exc:
+        raise AutomationStoreError(str(exc)) from exc
+    kind, raw_id = parse_public_id(public)
+    if kind != "auto":
+        raise AutomationStoreError("Automation not found")
+    with get_session() as session:
+        db_row = session.query(Automation).filter(Automation.id == raw_id).first()
+        if not db_row:
+            raise AutomationStoreError("Automation not found")
+        schedule = schedule_dict_from_row(db_row)
+        if schedule.get("kind") not in IGNORABLE_KINDS:
+            raise AutomationStoreError("Only daily, weekly, monthly or yearly occurrences can be ignored")
+        apply_schedule_to_row(db_row, with_ignored(schedule, key, ignored))
+        db_row.modified_date = utc_now()
+        session.commit()
+        session.refresh(db_row)
+        notify_automation_data_changed()
+        return serialize_automation(db_row)

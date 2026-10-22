@@ -134,6 +134,26 @@ def mark_execution_started(*, ticket_id: int, execution_kind: str, run_id: int |
         })
 
 
+def mark_execution_failed(*, ticket_id: int, error: str, run_id: int | None = None) -> None:
+    """Move an ``executing`` lifecycle to ``execution_failed``.
+
+    Without this, a dispatch that raised or a CLI run that failed left the row
+    on 'executing' forever (no timeout or sweeper exists).
+    """
+    ensure_tables()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE jira_work_lifecycles SET status='execution_failed',
+              run_id=COALESCE(:run_id, run_id), updated_at=:now, error=:error
+            WHERE ticket_id=:ticket_id AND status='executing'
+        """), {
+            "run_id": int(run_id) if run_id else None,
+            "now": time.time(),
+            "error": (str(error or "failed").strip() or "failed")[:500],
+            "ticket_id": int(ticket_id),
+        })
+
+
 def _resolve_outbound(ticket: Any, lifecycle: dict[str, Any]) -> tuple[str, str, str]:
     channel = str(lifecycle.get("outbound_channel") or "").strip().lower()
     target = str(lifecycle.get("outbound_target") or "").strip()

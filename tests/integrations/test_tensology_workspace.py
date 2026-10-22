@@ -13,6 +13,7 @@ from distr.core.tensology_client import (
     process_tensology_approved_tickets,
     send_tensology_heartbeat,
     _remote_execution_status,
+    _tensology_execution_receipt,
 )
 from distr.gui.web.server import _tensology_heartbeat_loop
 
@@ -126,8 +127,20 @@ def test_existing_ticket_thread_syncs_completed_execution_to_done():
         }),
         patch("distr.core.tensology_client._existing_tensology_thread", return_value=42),
         patch("distr.core.workflow.development_harness.development_execution_state", return_value={
-            "status": "completed", "summary": "Tests and final verification passed.", "job_id": "job-1",
+            "status": "completed",
+            "summary": "Tests and final verification passed.",
+            "job_id": "job-1",
+            "route_receipt": {
+                "complexity": "high",
+                "decision_engine": "laya",
+                "selected": {"backend": "codex", "provider": "openai", "model": "gpt-5.6-luna", "api_key": "never-return"},
+                "actual": {"backend": "codex", "model": "gpt-5.6-luna", "runtime": "cli_harness"},
+            },
+            "verification": {"tests": 12, "visual": "desktop and mobile passed"},
         }),
+        patch("distr.core.workflow.studio_artifacts.list_studio_artifacts", return_value=[{
+            "title": "CRUD mobile screenshot", "artifact_type": "screenshot", "status": "approved", "content_format": "png", "uri": "/private/path.png",
+        }]),
     ):
         assert process_tensology_approved_tickets(force=True) == 1
 
@@ -135,6 +148,20 @@ def test_existing_ticket_thread_syncs_completed_execution_to_done():
     path, body = client.patch.call_args.args[:2]
     assert path == "tickets/17/execution"
     assert body["status"] == "done"
+    assert body["evidence"]["route"]["actual"]["model"] == "gpt-5.6-luna"
+    assert body["evidence"]["verification"]["tests"] == 12
+    assert body["evidence"]["artifacts"] == [{"title": "CRUD mobile screenshot", "type": "screenshot", "status": "approved", "format": "png"}]
+    assert "api_key" not in json.dumps(body["evidence"])
+    assert "/private/path.png" not in json.dumps(body["evidence"])
+
+
+def test_tensology_execution_receipt_is_empty_and_safe_without_optional_evidence():
+    with patch("distr.core.workflow.studio_artifacts.list_studio_artifacts", side_effect=RuntimeError("not ready")):
+        receipt = _tensology_execution_receipt({"status": "running", "error": "waiting for approval"}, chat_id=42)
+
+    assert receipt["route"] == {"complexity": "", "decision_engine": "", "selected": {}, "actual": {}}
+    assert receipt["artifacts"] == []
+    assert receipt["blocker"] == "waiting for approval"
 
 
 def test_execution_stage_markers_drive_visible_lifecycle_and_gate_done():
@@ -142,6 +169,7 @@ def test_execution_stage_markers_drive_visible_lifecycle_and_gate_done():
     assert _remote_execution_status("running", {"streamed_output": "[DECISIONS_STAGE: refinement]"}) == "refinement"
     assert _remote_execution_status("completed", {"summary": "Implementation completed."}) == "failed"
     assert _remote_execution_status("completed", {"summary": "[DECISIONS_STAGE: done]"}) == "done"
+    assert _remote_execution_status("completed", {"verification": {"final_verdict": "pass"}}) == "done"
 
 
 def test_ui_ticket_inherits_completion_and_ui_quality_skills():
@@ -210,6 +238,7 @@ def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
     assert body["ticket_id"] == 91
     assert body["skill_ids"] == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
     assert body["use_playwright"] is True
+    assert body["skip_human_checkpoints"] is True
 
 
 def test_tensology_heartbeat_reports_machine_account_and_development_defaults():
@@ -254,9 +283,33 @@ def test_tensology_heartbeat_applies_remote_development_defaults():
     ):
         send_tensology_heartbeat()
 
-    save.assert_called_once()
-    assert settings["project_cli_medium_backend"] == "cursor"
-    assert settings["project_cli_medium_model"] == "auto"
+    # An unpinned (auto) local medium route may be seeded from Tensology.
+    save.assert_called_once_with({
+        "project_cli_medium_backend": "cursor",
+        "project_cli_medium_model": "auto",
+    })
+
+
+def test_tensology_heartbeat_never_overwrites_a_pinned_local_medium_route():
+    client = MagicMock()
+    client._request.return_value = {
+        "default_provider": "cursor",
+        "default_model": "grok-4.7-medium",
+    }
+    settings = {
+        "project_cli_medium_backend": "pi",
+        "project_cli_medium_model_provider": "openrouter",
+        "project_cli_medium_model": "nvidia/nemotron-3.5-super-vl:free",
+    }
+    with (
+        patch("distr.core.tensology_client.configured_tensology_client", return_value=client),
+        patch("distr.core.settings.load_settings_from_db", return_value=settings),
+        patch("distr.core.settings.save_settings_to_db") as save,
+    ):
+        send_tensology_heartbeat()
+
+    save.assert_not_called()
+    assert settings["project_cli_medium_backend"] == "pi"
 
 
 def test_send_mail_stops_before_api_without_explicit_approval():

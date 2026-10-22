@@ -132,7 +132,7 @@ aiortc>=1.9.0
 # pathspec for .gitignore parsing in project indexing
 pathspec>=0.11.0
 pytest>=8.0.0
-pytest-playwright>=0.5.0
+pytest-playwright>=0.5.0  # uses the pinned playwright below
 hypothesis>=6.100.0
 # OCR for text-based "where is X" locate — needs Tesseract system binary installed separately.
 # Used to cross-reference text labels with detected UI elements for accurate targeting.
@@ -143,5 +143,10 @@ opencv-python>=4.8.0
 croniter>=2.0.0
 # Coqui TTS (local, VCTK multi-speaker model) — uses the maintained idiap fork
 coqui-tts>=0.27.0
-playwright
+# ONE global Playwright: pin keeps every user on Chromium build 1243 in ~/Library/Caches/ms-playwright
+playwright==1.63.0
 yt-dlp>=2024.8.0
+# iCloud calendar (CalDAV) for the Development agent calendar tool. caldav 1.x uses requests
+# (2.x+ pulls urllib3-future which shadows urllib3).
+caldav==1.6.0
+icalendar==7.3.0

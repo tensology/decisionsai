@@ -867,6 +867,11 @@ function startChatWebSocket(force) {
                     }
                     return;
                 }
+                if (msg.type === 'agent_chat_changed') {
+                    // PUT /api/chat/current switched the Oracle's chat: refresh the "In agent" marker.
+                    loadChats().catch(() => {});
+                    return;
+                }
                 if (msg.type === 'chat_updated' && msg.chat_id === currentChatId) {
                     if (streamingChatId === currentChatId && _agentStreamWaiters.has(Number(currentChatId))) {
                         // Fallback: stream_finished never fired (e.g. legacy provider). Fetch and render, then resolve.
@@ -2388,8 +2393,40 @@ function createChatItem(chat) {
         });
     }
 
+    paintLayaThreadState(div, chat.id);
     return div;
 }
+
+// Laya submissions: live thread pop-up + in-progress/failed state (events stream).
+// Never changes currentChatId / selection and never focuses the row.
+function paintLayaThreadState(row, chatId) {
+    if (!row) return;
+    const old = row.querySelector('.laya-live-state');
+    if (old) old.remove();
+    const api = window.DecisionsLayaThreads;
+    const html = api ? api.badgeHtml(chatId) : '';
+    row.classList.toggle('laya-live-active', !!(api && api.isActive(chatId)));
+    row.classList.toggle('laya-live-failed', !!(api && api.isFailed(chatId)));
+    if (!html) return;
+    const wrap = row.querySelector('.chat-item-title-wrap');
+    if (wrap) wrap.insertAdjacentHTML('afterend', html);
+    else row.insertAdjacentHTML('beforeend', html);
+}
+
+window.addEventListener('decisionsai-laya-thread', (ev) => {
+    const rec = ev && ev.detail;
+    if (!rec || !chatList || !(rec.threadId > 0)) return;
+    let row = chatList.querySelector(`.chat-item[data-chat-id="${rec.threadId}"]`);
+    if (!row && rec.created) {
+        const placeholder = chatList.querySelector(':scope > div:not(.chat-item)');
+        if (placeholder && !chatList.querySelector('.chat-item')) placeholder.remove();
+        row = createChatItem({ id: rec.threadId, title: rec.title || 'New thread' });
+        chatList.insertBefore(row, chatList.firstChild);
+        updateActiveChat();
+        requestAnimationFrame(applySidebarTitleMarquees);
+    }
+    paintLayaThreadState(row, rec.threadId);
+});
 
 function bindChatListKeyboard() {
     if (!chatList || !window.DecisionsListKeyboard) return;
@@ -2844,8 +2881,9 @@ async function loadEmptyStateSkins() {
             card.className = 'empty-state-skin-card' + (isSel ? ' selected' : '');
             card.dataset.folder = skin.folder_name;
             const idleFile = skin.idle_animation || 'idle.webm';
-            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(idleFile);
-            const ext = idleFile.split('.').pop().toLowerCase();
+            const previewFile = skin.preview_image || idleFile;
+            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(previewFile);
+            const ext = previewFile.split('.').pop().toLowerCase();
             const isOracle = skin.type === 'oracle';
             const previewWrap = document.createElement('div');
             previewWrap.className = 'empty-state-skin-preview' + (isOracle ? '' : ' avatar-preview');
@@ -2986,8 +3024,9 @@ async function loadModalSkins() {
             card.className = 'empty-state-skin-card' + (isSel ? ' selected' : '');
             card.dataset.folder = skin.folder_name;
             const idleFile = skin.idle_animation || 'idle.webm';
-            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(idleFile);
-            const ext = idleFile.split('.').pop().toLowerCase();
+            const previewFile = skin.preview_image || idleFile;
+            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(previewFile);
+            const ext = previewFile.split('.').pop().toLowerCase();
             const isOracle = skin.type === 'oracle';
             const previewWrap = document.createElement('div');
             previewWrap.className = 'empty-state-skin-preview' + (isOracle ? '' : ' avatar-preview');
@@ -3394,8 +3433,22 @@ function turnHasActiveWork(turn) {
     return Boolean(turn && !turnIsTerminal(turn) && turnHasWorkActivity(turn));
 }
 
+const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 'shell_command', 'run_terminal_cmd', 'terminal', 'exec', 'exec_command', 'run_command', 'command']);
+/** Display-only: routine shell/bash tool steps are hidden from the turn readout (failures shown as one collapsed line). */
+function isRoutineShellStep(event) {
+    const type = String(event?.event_type || '').toLowerCase();
+    if (!type.startsWith('tool_')) return false;
+    const name = String(event?.metadata?.tool_name || event?.tool_name || '').toLowerCase().trim();
+    return ROUTINE_SHELL_TOOLS.has(name);
+}
+
+function isFailedTurnStep(event) {
+    return String(event?.event_type || '').toLowerCase() === 'tool_failed' || String(event?.status || '').toLowerCase() === 'failed';
+}
+
 function turnEventPhase(event) {
     const type = String(event?.event_type || 'turn_started');
+    if (isRoutineShellStep(event) && !isFailedTurnStep(event)) return 'Running commands…';
     if (type === 'acknowledgment' || type === 'turn_started') return 'Preparing';
     if (type === 'tool_started') return event.title || 'Working';
     if (type === 'tool_completed') return 'Continuing';
@@ -3423,11 +3476,16 @@ function turnEventStatus(event) {
     return ['running', 'completed', 'failed', 'cancelled', 'skipped', 'passed'].includes(status) ? status : 'running';
 }
 
-function turnEventStepHtml(event) {
-    const status = turnEventStatus(event);
+function turnEventStepHtml(event, turnStatus = '') {
+    const rawStatus = turnEventStatus(event);
+    const terminalStatus = String(turnStatus || '').toLowerCase();
+    const status = rawStatus === 'running' && ['completed', 'failed', 'cancelled'].includes(terminalStatus)
+        ? terminalStatus
+        : rawStatus;
     const summary = String(event?.summary || '').trim();
     const detail = String(event?.detail || '').trim();
-    const title = String(event?.title || turnEventPhase(event)).trim();
+    const shellFailure = isRoutineShellStep(event) && status === 'failed';
+    const title = shellFailure ? 'Command failed' : String(event?.title || turnEventPhase(event)).trim();
     const icon = status === 'running'
         ? '<span class="turn-step-spinner" aria-hidden="true"></span>'
         : status === 'failed'
@@ -3447,7 +3505,8 @@ function createTurnPanel(turn) {
     const events = Array.isArray(turn?.events) ? turn.events : [];
     const ack = events.find(event => event.event_type === 'acknowledgment');
     const latest = events[events.length - 1] || {};
-    const visibleSteps = events.filter(event => !['turn_started', 'acknowledgment', 'turn_completed'].includes(event.event_type));
+    const visibleSteps = events.filter(event => !['turn_started', 'acknowledgment', 'turn_completed'].includes(event.event_type)
+        && (!isRoutineShellStep(event) || isFailedTurnStep(event)));
     const panel = document.createElement('section');
     panel.className = `turn-panel turn-panel--${escapeHtml(turn.status || 'running')}`;
     panel.id = `turnPanel-${Number(turn.turn_id)}`;
@@ -3467,9 +3526,9 @@ function createTurnPanel(turn) {
                 <span class="turn-panel-elapsed">${escapeHtml(turnElapsedLabel(turn.started_at, turn.completed_at))}</span>
             </div>
         </div>
-        <details class="turn-panel-details"${visibleSteps.some(event => event.status === 'failed') ? ' open' : ''}>
+        <details class="turn-panel-details"${visibleSteps.some(event => event.status === 'failed' && !isRoutineShellStep(event)) ? ' open' : ''}>
             <summary><span>${visibleSteps.length} step${visibleSteps.length === 1 ? '' : 's'}</span><span class="turn-panel-chevron" aria-hidden="true">⌄</span></summary>
-            <div class="turn-step-list">${visibleSteps.map(turnEventStepHtml).join('')}</div>
+            <div class="turn-step-list">${visibleSteps.map(event => turnEventStepHtml(event, turn.status)).join('')}</div>
         </details>
         <span class="sr-only turn-panel-announcement" aria-live="polite"></span>`;
     return panel;
@@ -3905,6 +3964,7 @@ function createMessageElement(message) {
             </div>
         </div>
     `;
+    window.DecisionsChatImages?.decorate?.(div, message);
     return div;
 }
 
@@ -4542,6 +4602,8 @@ async function sendToAgentWhenReady(message, abortSignal) {
             speak: Boolean(ttsEnabled),
             intake_source_message_id: intakeSourceMessageId
         };
+        const pendingImagePath = window.DecisionsChatImages?.pendingPath?.();
+        if (pendingImagePath) body.image_path = pendingImagePath;
         if (currentChatSettings?.provider && currentChatSettings?.model_name) {
             body.provider = currentChatSettings.provider;
             body.model_name = currentChatSettings.model_name;
@@ -4555,7 +4617,7 @@ async function sendToAgentWhenReady(message, abortSignal) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
-        if (res.ok) return;
+        if (res.ok) { window.DecisionsChatImages?.clear?.(); return; }
         const errBody = await res.text();
         const isRetryable = res.status >= 500 || /unavailable|connection|ECONNREFUSED|not available/i.test(errBody);
         if (!isRetryable || attempt === maxAttempts) {
@@ -6542,3 +6604,35 @@ function retakeChatCvRecording() {
     _resetChatCvRecUI();
     _updateChatCvSubmit();
 }
+
+// 2026-10-22 selthread: select_thread / open_thread tools push ui.thread.select over the
+// events stream. View-only selectChat (never load-in-agent), highlight + scroll, then ack.
+window.addEventListener('decisionsai-event', async (event) => {
+    const detail = (event && event.detail) || {};
+    if (detail.type !== 'ui.thread.select') return;
+    const data = detail.data || {};
+    if (data.surface !== 'chat') return;
+    const id = Number(data.thread_id);
+    if (!id) return;
+    const meta = document.querySelector('meta[name="decisionsai-internal-api-token"]');
+    fetch('/api/events/ui/ack', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-DecisionsAI-Internal-Token': (meta && meta.content) || '' },
+        body: JSON.stringify({ request_id: data.request_id })
+    }).catch(() => {});
+    try {
+        if (!document.querySelector(`.chat-item[data-chat-id="${id}"]`)) await loadChats();
+        if (currentChatId !== id) await selectChat(id);
+        else updateActiveChat();
+        const row = document.querySelector(`.chat-item[data-chat-id="${id}"]`);
+        if (row) {
+            row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            row.style.transition = 'box-shadow .4s';
+            row.style.boxShadow = 'inset 0 0 0 1px rgba(249,115,22,.75)';
+            setTimeout(() => { row.style.boxShadow = ''; }, 1600);
+        }
+        if (data.focus) window.focus();
+    } catch (err) {
+        console.warn('ui.thread.select failed', err);
+    }
+});

@@ -153,6 +153,19 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """Repair deterministic provider-status and named-email misroutes."""
         text = str(user_message or "")
         action = str((func_args or {}).get("action") or "").strip().lower()
+        if func_name == "tensology_workspace" and action in {
+            "calendar_create_event",
+            "create_calendar_event",
+            "calendar_create_events_batch",
+            "create_calendar_events_batch",
+        }:
+            repaired_args = dict(func_args or {})
+            repaired_args["action"] = (
+                "create_calendar_events_batch"
+                if "batch" in action or action.endswith("events")
+                else "create_calendar_event"
+            )
+            return "google_workspace", repaired_args
         email_topic_match = re.search(
             r"\bemail\s+(?:about|from|regarding)\s+([^,.!?]+)", text, re.IGNORECASE
         )

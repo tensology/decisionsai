@@ -110,16 +110,26 @@ DEFAULT_COMPLEXITY_ROUTES: dict[str, dict[str, str]] = {
 }
 
 
-def _global_complexity_route(level: str) -> dict[str, str]:
+def tier_auto_enabled(level: str, settings: dict[str, Any] | None) -> bool:
+    """True when the Complexity routing tier has its Auto box ticked."""
+    raw = (settings or {}).get(f"project_cli_{level}_auto")
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(raw)
+
+
+def _global_complexity_route(level: str, settings: dict[str, Any] | None = None) -> dict[str, str]:
     from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
     from distr.core.project_cli_backends import normalize_backend_id, normalize_route_backend_id
-    from distr.core.settings import load_settings_from_db
 
     defaults = DEFAULT_COMPLEXITY_ROUTES[level]
-    try:
-        settings = load_settings_from_db()
-    except Exception:
-        settings = {}
+    if settings is None:
+        from distr.core.settings import load_settings_from_db
+
+        try:
+            settings = load_settings_from_db()
+        except Exception:
+            settings = {}
     configured_backend = normalize_route_backend_id(
         settings.get(f"project_cli_{level}_backend") or defaults["backend"]
     )
@@ -128,18 +138,38 @@ def _global_complexity_route(level: str) -> dict[str, str]:
     model_provider = str(settings.get(f"project_cli_{level}_model_provider") or "").strip().lower()
     if configured_backend == "kilocode":
         model_provider = "kilocode"
+    tier_auto = tier_auto_enabled(level, settings)
+    if tier_auto:
+        # autocol 2026-10-22: Auto ticked -> the harness/Auto policy picks the model;
+        # the saved manual model/provider stay in settings but are not used.
+        model = "auto"
+        model_provider = "kilocode" if configured_backend == "kilocode" else ""
     from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
     if is_ide_backend(backend):
         model = ""
     route: dict[str, str] = {"backend": backend, "model": model}
+    if tier_auto:
+        route["tier_auto"] = "1"
     if model_provider:
         route["model_provider"] = model_provider
-    fallback_backend = normalize_backend_id(settings.get(f"project_cli_{level}_fallback_backend") or "")
+    # Only an explicitly configured fallback counts. ``normalize_backend_id("")``
+    # returns the default backend, which previously turned "no fallback" into
+    # a silent Pi/auto fallback.
+    raw_fallback_backend = str(settings.get(f"project_cli_{level}_fallback_backend") or "").strip()
+    fallback_route_backend = normalize_route_backend_id(raw_fallback_backend) if raw_fallback_backend else ""
+    fallback_backend = "pi" if fallback_route_backend == "kilocode" else (
+        normalize_backend_id(fallback_route_backend) if fallback_route_backend else ""
+    )
     fallback_model = (settings.get(f"project_cli_{level}_fallback_model") or "").strip()
+    fallback_provider = str(settings.get(f"project_cli_{level}_fallback_model_provider") or "").strip().lower()
+    if fallback_route_backend == "kilocode":
+        fallback_provider = "kilocode"
     if fallback_backend and not is_ide_backend(fallback_backend):
         route["fallback_backend"] = fallback_backend
         route["fallback_model"] = fallback_model or "auto"
+        if fallback_provider:
+            route["fallback_model_provider"] = fallback_provider
     if backend == "codex":
         route["codex_reasoning_effort"] = normalize_codex_intelligence(
             settings.get(f"project_cli_{level}_codex_intelligence")
@@ -154,13 +184,16 @@ def _apply_configured_fallback(route: dict[str, str], level: str) -> dict[str, s
     """Use the user-configured CLI fallback when the primary backend is unavailable."""
     from distr.core.project_cli_backends import get_backend, normalize_backend_id
 
-    fallback_backend = normalize_backend_id(route.get("fallback_backend") or "")
+    fallback_provider = ""
+    raw_fallback = str(route.get("fallback_backend") or "").strip()
+    fallback_backend = normalize_backend_id(raw_fallback) if raw_fallback else ""
     if not fallback_backend:
         fallback = DEFAULT_COMPLEXITY_ROUTES[level]
         fallback_backend = normalize_backend_id(fallback.get("backend") or "pi")
         fallback_model = str(fallback.get("model") or "auto").strip()
     else:
         fallback_model = str(route.get("fallback_model") or "auto").strip()
+        fallback_provider = str(route.get("fallback_model_provider") or "").strip().lower()
     try:
         if get_backend(fallback_backend).setup_status().ready:
             out = {
@@ -168,6 +201,9 @@ def _apply_configured_fallback(route: dict[str, str], level: str) -> dict[str, s
                 "backend": fallback_backend,
                 "model": fallback_model,
             }
+            if fallback_provider:
+                out["model_provider"] = fallback_provider
+            out["fallback_from_backend"] = str(route.get("backend") or "")
             if fallback_backend == "codex":
                 out["codex_reasoning_effort"] = route.get("codex_reasoning_effort", "")
                 out["codex_service_tier"] = route.get("codex_service_tier", "")
@@ -185,6 +221,8 @@ def resolve_ticket_cli_route(
     project: Any,
     complexity: str | None,
     board: Any | None = None,
+    *,
+    settings: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Return the intended backend/model for a ticket complexity.
 
@@ -194,7 +232,7 @@ def resolve_ticket_cli_route(
     from distr.core.project_cli_backends import get_backend
 
     level = normalize_ticket_complexity(complexity)
-    route = _global_complexity_route(level)
+    route = _global_complexity_route(level, settings)
 
     if board is not None:
         try:
@@ -205,23 +243,44 @@ def resolve_ticket_cli_route(
             if isinstance(board_routes, dict):
                 override = board_routes.get(level) or {}
                 if isinstance(override, dict):
-                    from distr.core.project_cli_backends import normalize_backend_id
+                    from distr.core.project_cli_backends import normalize_backend_id, normalize_route_backend_id
+                    from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
                     if override.get("backend"):
-                        route["backend"] = normalize_backend_id(override["backend"])
+                        # Same Kilo handling as the global route: "kilocode"
+                        # is Pi with the kilocode provider, not plain Pi.
+                        override_backend = normalize_route_backend_id(override["backend"])
+                        route["backend"] = "pi" if override_backend == "kilocode" else normalize_backend_id(override_backend)
+                        if override_backend == "kilocode" and not (
+                            override.get("model_provider") or override.get("provider")
+                        ):
+                            route["model_provider"] = "kilocode"
                     if override.get("model"):
                         route["model"] = str(override["model"]).strip()
                     if override.get("model_provider") or override.get("provider"):
                         route["model_provider"] = str(
                             override.get("model_provider") or override.get("provider") or ""
                         ).strip().lower()
+                    override_fallback = normalize_route_backend_id(override.get("fallback_backend") or "") if override.get("fallback_backend") else ""
+                    if override_fallback and not is_ide_backend(override_fallback):
+                        route["fallback_backend"] = "pi" if override_fallback == "kilocode" else normalize_backend_id(override_fallback)
+                        route["fallback_model"] = str(override.get("fallback_model") or "auto").strip() or "auto"
+                        route.pop("fallback_model_provider", None)
+                        if override.get("fallback_model_provider") or override.get("fallback_provider"):
+                            route["fallback_model_provider"] = str(
+                                override.get("fallback_model_provider") or override.get("fallback_provider") or ""
+                            ).strip().lower()
+                        elif override_fallback == "kilocode":
+                            route["fallback_model_provider"] = "kilocode"
                     if route.get("backend") == "codex":
                         if override.get("codex_reasoning_effort"):
                             route["codex_reasoning_effort"] = str(override["codex_reasoning_effort"]).strip()
                         if override.get("codex_service_tier"):
                             route["codex_service_tier"] = str(override["codex_service_tier"]).strip()
         except Exception:
-            pass
+            import logging
+
+            logging.getLogger(__name__).debug("Board complexity override ignored", exc_info=True)
 
     backend = route["backend"]
     model = route["model"]
@@ -231,8 +290,17 @@ def resolve_ticket_cli_route(
     except Exception:
         return _apply_configured_fallback({**route, "complexity": level}, level)
     out: dict[str, str] = {"complexity": level, "backend": backend, "model": model}
+    if route.get("tier_auto"):
+        out["tier_auto"] = "1"
     if route.get("model_provider"):
         out["model_provider"] = route["model_provider"]
+    # Pass the configured fallback through so callers (run coordination plan,
+    # step executor failover, Development harness) can use it.
+    if route.get("fallback_backend"):
+        out["fallback_backend"] = route["fallback_backend"]
+        out["fallback_model"] = route.get("fallback_model") or "auto"
+        if route.get("fallback_model_provider"):
+            out["fallback_model_provider"] = route["fallback_model_provider"]
     if backend == "codex":
         out["codex_reasoning_effort"] = route.get("codex_reasoning_effort", "")
         out["codex_service_tier"] = route.get("codex_service_tier", "")

@@ -817,6 +817,8 @@ class SignalBridgeMixin:
                         params['is_telegram'] = True
                 if opts.get('skip_user_persist'):
                     params['skip_user_persist'] = True
+                if opts.get('uploaded_image_path'):
+                    params['uploaded_image_path'] = str(opts['uploaded_image_path'])
                 if opts.get('automation_run_id') is not None:
                     params['automation_run_id'] = int(opts['automation_run_id'])
                 if opts.get('automation_name'):

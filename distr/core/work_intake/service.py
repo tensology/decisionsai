@@ -244,7 +244,7 @@ class OrchestratorIntakeService:
         # A project association supplies scope, not intent. Never turn a lone
         # verb such as "fix" into permission to create a ticket and execute
         # against that project; ask for the missing object/outcome first.
-        if len(value.split()) < 2 and not intake.attachments:
+        if len(value.split()) < 2 and _PROJECT_WORK_RE.search(value) and not intake.attachments:
             return WorkIntakeDecision(
                 WorkIntakeAction.ASK_MISSING_INFO,
                 "Request is too short to route safely",

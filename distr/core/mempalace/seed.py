@@ -178,7 +178,9 @@ def _run_mempalace_ingest(pack: Path, palace: Path, log_path: Path) -> int:
     # mine resumes (skips already-filed files) until success or no progress.
     max_attempts = 25
     last_rc = 1
-    cwd = str(reference_mempalace_root() or pack)
+    # Not the reference clone: running ``-m mempalace`` from there would shadow
+    # the installed release with the clone's older code.
+    cwd = str(pack)
     for attempt in range(1, max_attempts + 1):
         # Prefer mine-resume after first attempt even if we started with init.
         if attempt > 1:
@@ -271,6 +273,21 @@ def mine_seed_wing_sync(*, force: bool = False) -> dict[str, Any]:
             return _LAST_STATUS
 
         palace = ensure_palace_dir()
+        try:
+            from distr.core.mempalace import hub as _hub
+
+            if _hub.hub_configured(str(palace)):
+                # A hub owns this palace: never mine in-process beside it.
+                _LAST_STATUS = {
+                    "state": "done" if seed_already_mined(palace) else "deferred_hub",
+                    "skipped": True,
+                    "reason": "hub_owns_palace",
+                    "palace_path": str(palace),
+                    "wing": WING_SEED_CORPUS_PACK,
+                }
+                return _LAST_STATUS
+        except Exception:
+            logger.debug("hub check failed before seed mine", exc_info=True)
         if seed_already_mined(palace) and not force:
             _LAST_STATUS = {
                 "state": "done",

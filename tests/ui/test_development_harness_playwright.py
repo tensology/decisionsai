@@ -73,6 +73,7 @@ def _install_api(
     unified_direct_run: bool = False,
     cancelled_open_turn: bool = False,
     routing_execution_mode: str = "direct",
+    seven_step_workflow: bool = False,
 ) -> None:
     projects = [
         {"id": 7, "name": "DecisionsAI", "folder_location": "/tmp/decisions", "in_use": True, "kanban_board_id": 70, "startup_instructions": startup_instructions},
@@ -99,6 +100,15 @@ def _install_api(
         "status": run_status or ("running" if live_activity else "completed"),
         "backend_id": "codex",
         "model": "auto",
+        "route_receipt": {
+            "complexity": "high",
+            "decision_engine": "laya",
+            "decision_reason": "High complexity with visual verification signals",
+            "laya": {"mode": "auto", "used": True, "confidence": 0.91},
+            "configured": {"route_mode": "auto"},
+            "selected": {"backend": "codex", "provider": "openai", "model": "gpt-5.6-luna", "reasoning_effort": "high", "service_tier": "standard"},
+            "actual": {"backend": "codex", "provider": "openai", "model": "gpt-5.6-luna", "runtime": "cli_harness"},
+        },
         "activity": "Updating project files." if live_activity else "Implementation complete.",
         "completed_at": "2026-08-27T10:12:34Z" if not live_activity else None,
         "direct": True,
@@ -224,11 +234,22 @@ def _install_api(
             "[Skill: Accessibility]\nUse the installed skill \"accessibility\" for this turn. "
             "Read it with read_harness_skill before acting, then follow its instructions for this request."
         )
+    workflow_steps = ([
+        {"id": 1, "name": "Understand", "instruction": "Inspect the ticket and acceptance criteria", "status": "completed"},
+        {"id": 2, "name": "Prepare", "instruction": "Prepare the implementation contract", "status": "completed"},
+        {"id": 3, "name": "Build", "instruction": "Implement the requested change", "status": "running"},
+        {"id": 4, "name": "Review", "instruction": "Review the implementation independently", "status": "pending"},
+        {"id": 5, "name": "Correct", "instruction": "Correct verified defects", "status": "pending"},
+        {"id": 6, "name": "Validate", "instruction": "Run browser and visual validation", "status": "pending"},
+        {"id": 7, "name": "Report", "instruction": "Publish the evidence-backed result", "status": "pending"},
+    ] if seven_step_workflow else [
+        {"id": 1, "name": "Inspect", "instruction": "Inspect the ticket", "action_type": "agent_instruction", "config": {"skills": ["browser-qa"], "expected_outputs": ["A scoped implementation plan"]}, "status": "pending"},
+    ])
     workflow = {
         "id": 44,
         "name": "Development execution",
         "chat_id": None,
-        "steps": [{"id": 1, "name": "Inspect", "instruction": "Inspect the ticket", "action_type": "agent_instruction", "config": {"skills": ["browser-qa"], "expected_outputs": ["A scoped implementation plan"]}, "status": "pending"}],
+        "steps": workflow_steps,
         "run_settings": {"studio": {"ticket_id": 42}},
     }
     workflow_rows = [workflow]
@@ -292,7 +313,7 @@ def _install_api(
                     "name": "Oracle",
                     "type": "oracle",
                     "idle_animation": "idle.svg",
-                    "image_scale": 1,
+                    "image_scale": 1.55,
                     "image_offset_x": 0,
                     "image_offset_y": 0,
                     "chroma_key": None,
@@ -467,7 +488,13 @@ def _install_api(
         elif path == "/api/workflows/studio/tasks/17/time":
             if request.method == "PATCH":
                 body = json.loads(request.post_data or "{}")
-                thread_time.update({"seconds": body.get("seconds", 0), "accumulated_seconds": body.get("seconds", 0)})
+                thread_time.update({
+                    "seconds": body.get("seconds", 0),
+                    "accumulated_seconds": body.get("seconds", 0),
+                    "paused": True,
+                    "running": False,
+                    "started_at": None,
+                })
                 chat.update({"development_time_running": thread_time["running"], "development_time_seconds": thread_time["seconds"]})
             payload = thread_time
         elif path == "/api/workflows/studio/tasks/17/execution/changes/undo":
@@ -547,6 +574,7 @@ def _install_api(
         elif path == "/api/workflows/skills":
             payload = {"skills": [
                 {"id": "browser-qa", "name": "Browser QA", "description": "Verify browser behavior with Playwright."},
+                {"id": "decisions-visual-plan", "name": "Visual Plan", "description": "Create wireframes, diagrams, and visual evidence."},
                 {"id": "accessibility", "name": "Accessibility", "description": "Audit accessible interaction and semantics."},
                 {"id": "humanizer", "name": "Humanizer", "description": "Improve natural language output."},
             ], "count": 3}
@@ -596,6 +624,17 @@ def _install_api(
             payload = {**workflow, "id": 46, "name": "Development execution (copy)"}
         elif path == "/api/workflows/44/workspace-memory":
             payload = {"handoff_preview": "Inspect, implement, validate, and retain corrections.", "step_routing_table": [{"step_id": 1, "step_name": "Inspect", "route": "Automatic"}]}
+        elif path == "/api/workflows/44/runs/99/steering-memory":
+            payload = {
+                "success": True,
+                "run_id": 99,
+                "workflow_id": 44,
+                "board_id": 70,
+                "steering_log": [{"message": "Keep CRUD actions aligned on the right."}],
+                "learned_rules": [{"id": 501, "summary": "Keep CRUD actions aligned on the right.", "scope": "board", "evidence_count": 2, "enabled": True}],
+            }
+        elif path == "/api/tickets/boards/70/orchestrator-learned-rules/501" and request.method == "PATCH":
+            payload = {"success": True}
         elif path == "/api/workflows/45":
             payload = workflow_rows[-1]
         elif path == "/api/workflows/active-runs":
@@ -618,15 +657,36 @@ def _install_api(
                 "workflow_id": 44,
                 "chat_id": 17,
                 "status": run_status or ("running" if live_activity else "waiting"),
-                "current_step_id": 1,
+                "current_step_id": 3 if seven_step_workflow else 1,
+                "step_routes": ({
+                    "1": {"backend": "pi", "model": "nemotron-3.5-super"},
+                    "2": {"backend": "pi", "model": "nemotron-3.5-super"},
+                    "3": {"backend": "codex", "model": "gpt-5.6-luna"},
+                    "4": {"backend": "cursor", "model": "grok-4.7"},
+                    "5": {"backend": "codex", "model": "gpt-5.6-luna"},
+                    "6": {"backend": "codex", "model": "gpt-5.6-luna"},
+                    "7": {"backend": "pi", "model": "nemotron-3.5-super"},
+                } if seven_step_workflow else {}),
                 "steerable": True,
                 "execution_session_id": "terminal-42" if live_activity else None,
                 "runtime_snapshot": {"urls": [TEST_BASE_URL + "/workflows/"]} if live_activity else None,
+                "route_receipt": {
+                    "complexity": "high",
+                    "decision_engine": "laya",
+                    "decision_reason": "High complexity with visual verification signals",
+                    "laya": {"mode": "auto", "used": True, "confidence": 0.91},
+                    "configured": {"route_mode": "auto"},
+                    "selected": {"backend": "codex", "provider": "openai", "model": "gpt-5.6-luna", "reasoning_effort": "high", "service_tier": "standard"},
+                    "actual": {},
+                },
                 "ticket_id": 42,
                 "ticket_title": "DEV-42",
                 "git_status_before": [],
                 "git_status_after": ["M distr/gui/web/static/workflows/js/studio.js"] if live_activity else [],
                 "latest_backend_handoff": {
+                    "backend_id": "codex",
+                    "model": "gpt-5.6-luna",
+                    "runtime_id": "cli_harness",
                     "git_status_after": ["M distr/gui/web/static/workflows/js/studio.js"],
                 } if live_activity else {},
                 "provider_preflight": {"provider": "OpenAI", "ready": True} if live_activity else {},
@@ -679,10 +739,14 @@ def _install_api(
         elif path == "/api/tickets/boards/70/whatsapp-snapshot-ticket":
             payload = {"success": True, "id": 43, "board_id": 70, "message_count": 1, "chat_id": 17}
         elif path == "/api/workflows/studio/tasks/17/artifacts":
-            payload = {"items": [
-                {"id": 11, "title": "Unbuilt wireframe", "status": "planned", "content": "", "uri": ""},
-                {"id": 12, "title": "Implementation brief", "status": "ready", "content": "Ready brief", "metadata": {}},
-            ]}
+            if request.method == "POST":
+                body = json.loads(request.post_data or "{}")
+                payload = {"id": 13, **body}
+            else:
+                payload = {"items": [
+                    {"id": 11, "title": "Unbuilt wireframe", "status": "planned", "content": "", "uri": ""},
+                    {"id": 12, "title": "Implementation brief", "status": "ready", "content": "Ready brief", "metadata": {}},
+                ]}
         elif path == "/api/workflows/studio/tasks/17/plans":
             payload = {"items": [{
                 "id": 21,
@@ -1056,7 +1120,7 @@ def test_new_thread_wins_over_a_stale_thread_load(page: Page):
     )
     page.goto(TEST_BASE_URL + "/development/new/")
 
-    page.locator('[data-chat-id="17"]').click()
+    page.locator('[data-chat-id="17"]').first.click()
     page.locator("#new-thread-button").click()
     page.wait_for_timeout(450)
 
@@ -1651,7 +1715,7 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(URL)
     expect(page.locator("#task-prompt")).to_be_enabled()
-    expect(page.locator('[data-chat-id="17"]')).to_be_visible()
+    expect(page.locator('[data-chat-id="17"]').first).to_be_visible()
     expect(page.get_by_text("Ordinary voice chat")).to_have_count(0)
     expect(page.locator('[data-board-select="decisions:80"]')).to_be_visible()
     expect(page.locator('[data-board-select="jira:jira-1"]')).to_contain_text("Jira")
@@ -1676,12 +1740,12 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     page.screenshot(path="/private/tmp/development-harness-empty.png", full_page=True)
 
     page.locator('[data-board-toggle="decisions:70"]').click()
-    expect(page.locator('[data-chat-id="17"]')).to_be_hidden()
+    expect(page.locator('[data-chat-id="17"]').first).to_be_hidden()
     page.locator("#sidebar-plan-toggle").click()
-    expect(page.locator('[data-chat-id="17"]')).to_be_hidden()
+    expect(page.locator('[data-chat-id="17"]').first).to_be_hidden()
     expect(page.locator('[data-board-toggle="decisions:70"]')).to_have_attribute("aria-expanded", "false")
     page.locator('[data-board-toggle="decisions:70"]').click()
-    expect(page.locator('[data-chat-id="17"]')).to_be_visible()
+    expect(page.locator('[data-chat-id="17"]').first).to_be_visible()
 
     page.locator('[data-board-select="decisions:80"]').click()
     expect(page.locator("#kanban-workspace")).to_be_visible()
@@ -1728,9 +1792,9 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator("#pinned-board-tree")).to_contain_text("Jira engineering")
     expect(page.locator("#manage-boards-button")).to_have_count(0)
 
-    page.locator('[data-chat-id="17"]').click()
-    expect(page.locator('[data-chat-id="17"]')).to_have_attribute("aria-current", "page")
-    expect(page.locator('[data-chat-id="17"]').locator("xpath=..")).to_have_class(re.compile(r"\bactive\b"))
+    page.locator('[data-chat-id="17"]').first.click()
+    expect(page.locator('[data-chat-id="17"]').first).to_have_attribute("aria-current", "page")
+    expect(page.locator('[data-chat-id="17"]').first.locator("xpath=..")).to_have_class(re.compile(r"\bactive\b"))
     page.locator("#composer-permission-select").select_option("trusted")
     expect(page.locator("#composer-permission-select")).to_have_value("trusted")
     expect(page.locator('[data-thread-manage="17"]')).to_have_count(0)
@@ -1740,7 +1804,7 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator("#thread-rename-dialog")).to_be_visible()
     page.locator("#thread-rename-name").fill("Implement and verify DEV-42")
     page.get_by_role("button", name="Rename", exact=True).click()
-    expect(page.locator('[data-chat-id="17"]')).to_contain_text("Implement and verify DEV-42")
+    expect(page.locator('[data-chat-id="17"]').first).to_contain_text("Implement and verify DEV-42")
     assert ("PATCH", "/api/workflows/studio/tasks/17") in requests
 
     _open_thread_action(page, "Edit thread")
@@ -1753,7 +1817,7 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator("#thread-dialog")).not_to_be_visible()
     assert ("PATCH", "/api/workflows/studio/tasks/17/time") in requests
 
-    page.locator('[data-chat-id="17"]').click()
+    page.locator('[data-chat-id="17"]').first.click()
     expect(page.locator("#thread-more-button")).to_be_enabled()
     expect(page.locator("#task-inspector")).to_be_hidden()
     _open_details(page)
@@ -1834,26 +1898,29 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
 
     expect(page.locator("#composer-board-picker")).to_be_hidden()
     expect(page.locator("#composer-ticket-picker")).to_be_hidden()
-    page.locator("#attach-button").click()
-    expect(page.locator("#composer-action-menu")).to_be_visible()
+    # "+" opens the native file picker directly (no menu).
     with page.expect_file_chooser() as chooser_info:
-        page.locator('[data-composer-action="files"]').click()
+        page.locator("#attach-button").click()
+    expect(page.locator("#composer-action-menu")).to_be_hidden()
     chooser_info.value.set_files([
         {"name": "reference.png", "mimeType": "image/png", "buffer": b"fake-png"},
         {"name": "notes.md", "mimeType": "text/markdown", "buffer": b"notes"},
     ])
-    expect(page.locator("#composer-context")).to_contain_text("reference.png")
-    expect(page.locator("#composer-context")).to_contain_text("notes.md")
-    page.locator("#attach-button").click()
+    expect(page.locator('#composer-attachment-strip [data-tooltip="Image: reference.png"]')).to_have_count(1)
+    expect(page.locator('#composer-attachment-strip [data-tooltip="File: notes.md"]')).to_have_count(1)
+    page.locator("#composer-plan-button").click()
+    page.locator('[data-composer-action="skills"]').click()
     expect(page.locator("#composer-skill-list")).not_to_contain_text("Browser QA")
-    page.locator("#attach-button").click()
+    page.locator("#skills-browser-dialog .dialog-close").click()
+    expect(page.locator("#skills-browser-dialog")).to_be_hidden()
+    page.locator('#composer-attachment-strip [data-tooltip="Image: reference.png"]').hover()
+    page.get_by_role("button", name="Remove Image: reference.png").click()
     page.locator("#task-prompt").fill("Run the harness verification")
     page.locator("#send-button").click()
     page.wait_for_timeout(250)
     assert ("POST", "/api/workflows/studio/tasks/17/messages") in requests, requests
     assert submitted_payloads[-1]["message"] == "Run the harness verification"
-    assert [item["name"] for item in submitted_payloads[-1]["attachments"]] == ["reference.png", "notes.md"]
-    assert submitted_payloads[-1]["attachments"][0]["mime_type"] == "image/png"
+    assert [item["name"] for item in submitted_payloads[-1]["attachments"]] == ["notes.md"]
     assert submitted_payloads[-1]["use_playwright"] is False
     assert not any(path.endswith("/send-to-agent") for _, path in requests)
     expect(page.locator("#new-thread-button")).to_contain_text("New Thread")
@@ -2004,13 +2071,43 @@ def test_run_mode_and_contextual_automation_are_functional(page: Page):
     page.goto(URL)
 
     expect(page.locator("#mode-label")).to_have_text("Plan")
+    expect(page.locator("#attach-button svg")).to_have_count(1)
+    expect(page.locator("#attach-button")).to_have_attribute("data-tooltip", "Attach files")
+    expect(page.locator("#composer-plan-button")).to_have_attribute("data-tooltip", "Plan or skill")
+    expect(page.locator("#visualize-button")).to_have_count(0)
+    expect(page.locator("#send-button svg")).to_have_count(1)
+    expect(page.locator("#send-button")).to_have_css("border-radius", "50%")
+    expect(page.locator("#model-button > svg")).to_have_count(2)
+    page.locator("#task-prompt").focus()
+    page.keyboard.press("Tab")
+    expect(page.locator("#attach-button")).to_be_focused()
+    assert page.locator("#attach-button").evaluate("node => getComputedStyle(node).outlineStyle") == "solid"
     page.locator("#model-button").click()
     expect(page.locator("#model-dialog")).to_be_visible()
-    expect(page.locator("[data-prompt-mode]")).to_have_count(3)
+    model_box = page.locator("#model-dialog").bounding_box()
+    assert model_box is not None
+    assert model_box["width"] <= 328
+    assert model_box["height"] < 300
+    expect(page.locator("[data-prompt-mode]")).to_have_count(2)
+    expect(page.locator(".prompt-mode-options button small")).to_have_count(0)
+    expect(page.locator(".prompt-mode-options button > svg")).to_have_count(3)
+    expect(page.locator('[data-prompt-mode="plan"]')).to_have_attribute("data-tooltip", re.compile(r"^Plan:"))
+    expect(page.locator('[data-prompt-mode="goal"]')).to_have_attribute("data-tooltip", re.compile(r"^Goal:"))
+    expect(page.locator("#prompt-playwright-toggle")).to_have_attribute("aria-label", "Browser")
+    page.locator('[data-prompt-mode="plan"]').focus()
+    page.keyboard.press("Tab")
+    expect(page.locator('[data-prompt-mode="goal"]')).to_be_focused()
+    assert page.locator('[data-prompt-mode="goal"]').evaluate("node => getComputedStyle(node, '::after').opacity") == "1"
     expect(page.locator('[data-prompt-mode="plan"]')).to_have_attribute("aria-pressed", "true")
     expect(page.locator('[data-prompt-mode="goal"]')).to_have_attribute("aria-pressed", "false")
     expect(page.locator('[data-prompt-mode="approval"]')).to_have_count(0)
     expect(page.locator("#route-explanation")).to_have_count(0)
+    page.locator('[data-prompt-mode="plan"]').click()
+    expect(page.locator("#mode-button")).to_be_hidden()
+    expect(page.locator('[data-prompt-mode="plan"]')).to_have_attribute("aria-pressed", "false")
+    page.locator('[data-prompt-mode="plan"]').click()
+    expect(page.locator("#mode-label")).to_have_text("Plan")
+    expect(page.locator('[data-prompt-mode="plan"]')).to_have_attribute("aria-pressed", "true")
     page.locator('[data-prompt-mode="goal"]').click()
     expect(page.locator("#mode-label")).to_have_text("Goal")
     expect(page.locator('[data-prompt-mode="goal"]')).to_have_attribute("aria-pressed", "true")
@@ -2019,7 +2116,7 @@ def test_run_mode_and_contextual_automation_are_functional(page: Page):
     page.locator("#model-button").click()
     page.locator("#prompt-playwright-toggle").click()
     expect(page.locator("#prompt-playwright-toggle")).to_have_attribute("aria-pressed", "true")
-    expect(page.locator("#composer-skill-badges")).not_to_contain_text("Browser QA")
+    expect(page.locator("#composer-attachment-strip")).not_to_contain_text("Browser QA")
     expect(page.locator(".prompt-mode-options button").last).to_have_attribute("id", "prompt-playwright-toggle")
     page.screenshot(path="/private/tmp/development-prompt-modes.png", full_page=True)
     page.set_viewport_size({"width": 375, "height": 812})
@@ -2028,7 +2125,9 @@ def test_run_mode_and_contextual_automation_are_functional(page: Page):
     assert model_box is not None
     assert model_box["x"] >= 0
     assert model_box["x"] + model_box["width"] <= 375
-    expect(page.locator("[data-prompt-mode]")).to_have_count(3)
+    dimensions = page.locator("body").evaluate("body => ({body: body.scrollWidth, viewport: document.documentElement.clientWidth})")
+    assert dimensions["body"] <= dimensions["viewport"], dimensions
+    expect(page.locator("[data-prompt-mode]")).to_have_count(2)
     page.screenshot(path="/private/tmp/development-prompt-modes-mobile.png", full_page=True)
     page.set_viewport_size({"width": 1440, "height": 900})
     page.wait_for_timeout(50)
@@ -2304,7 +2403,7 @@ def test_live_agent_tool_changes_and_evidence_are_visible_without_empty_tabs(pag
     expect(page.locator(".active-turn")).not_to_contain_text("studio.js")
     expect(page.locator("#run-elapsed")).to_be_visible()
     expect(page.locator("#run-elapsed")).to_have_text(re.compile(r"\d{2}:\d{2}:\d{2}"))
-    sidebar_spinner = page.locator('[data-chat-id="17"] .task-run-state')
+    sidebar_spinner = page.locator('[data-chat-id="17"] .task-run-state').first
     expect(sidebar_spinner).to_have_count(1)
     expect(sidebar_spinner).to_have_attribute("role", "status")
     expect(sidebar_spinner).to_have_attribute("aria-label", "Working on this thread")
@@ -2332,7 +2431,7 @@ def test_live_agent_tool_changes_and_evidence_are_visible_without_empty_tabs(pag
     expect(page.locator(".active-command")).to_have_text("python -m pytest -q tests/ui/test_menu.py")
     page.locator("#sidebar-open").click()
     page.wait_for_timeout(250)
-    expect(page.locator('[data-chat-id="17"] .task-run-state')).to_be_visible()
+    expect(page.locator('[data-chat-id="17"] .task-run-state').first).to_be_visible()
     page.screenshot(path="/private/tmp/development-sidebar-spinner-mobile.png", full_page=True)
     page.locator("#sidebar-close").click()
     expect(page.locator(".active-command")).to_have_css("width", re.compile(r"\d+px"))
@@ -2367,10 +2466,21 @@ def test_direct_development_agent_is_not_misrepresented_as_a_workflow(page: Page
     expect(page.locator(".active-turn-summary")).to_have_text(re.compile(r"Working|Updating|Running"))
     _open_details(page)
     expect(page.locator("#inspector-content")).to_contain_text("Conversation")
+    expect(page.locator("#inspector-content")).to_contain_text("Route receipt")
+    expect(page.locator("#inspector-content")).to_contain_text("Laya · 91%")
+    expect(page.locator("#inspector-content")).to_contain_text("codex / openai · gpt-5.6-luna")
+    expect(page.locator("#inspector-content")).to_contain_text("cli_harness")
     expect(page.locator("#inspector-content")).to_contain_text("Running the focused test suite")
     expect(page.locator("#inspector-content")).not_to_contain_text("Inspect the ticket")
     expect(page.locator("#inspector-content")).not_to_contain_text("Workflow")
     expect(page.locator("#inspector-content")).not_to_contain_text("Terminals")
+    page.screenshot(path="/private/tmp/development-route-receipt-desktop.png", full_page=True)
+    page.set_viewport_size({"width": 375, "height": 812})
+    expect(page.locator("#inspector-content")).to_contain_text("Route receipt")
+    dimensions = page.locator("body").evaluate("body => ({body: body.scrollWidth, viewport: document.documentElement.clientWidth})")
+    assert dimensions["body"] <= dimensions["viewport"], dimensions
+    page.screenshot(path="/private/tmp/development-route-receipt-mobile.png", full_page=True)
+    page.set_viewport_size({"width": 1440, "height": 900})
     assert ("GET", "/api/workflows/44") not in requests, requests
 
     page.locator("#inspector-close").click()
@@ -2384,6 +2494,26 @@ def test_direct_development_agent_is_not_misrepresented_as_a_workflow(page: Page
     page.get_by_role("button", name="Stop agent", exact=True).click()
     assert ("POST", "/api/workflows/studio/tasks/17/execution/stop") in requests
     assert not any(method == "UNMOCKED" for method, _ in requests), requests
+
+
+def test_workflow_route_receipt_shows_decision_selection_and_actual_runtime(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, live_activity=True)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(URL)
+
+    _open_details(page)
+    inspector = page.locator("#inspector-content")
+    expect(inspector).to_contain_text("Workflow")
+    expect(inspector).to_contain_text("Laya · 91%")
+    expect(inspector).to_contain_text("codex / openai · gpt-5.6-luna")
+    expect(inspector).to_contain_text("cli_harness")
+    page.screenshot(path="/private/tmp/development-workflow-route-receipt.png", full_page=True)
+    page.set_viewport_size({"width": 375, "height": 812})
+    expect(inspector).to_contain_text("Inspect")
+    dimensions = page.locator("body").evaluate("body => ({body: body.scrollWidth, viewport: document.documentElement.clientWidth})")
+    assert dimensions["body"] <= dimensions["viewport"], dimensions
+    page.screenshot(path="/private/tmp/development-workflow-route-receipt-mobile.png", full_page=True)
 
 
 def test_completed_direct_thread_message_dispatches_without_a_workflow(page: Page):
@@ -2496,7 +2626,7 @@ def test_completed_direct_turn_refreshes_the_assistant_response(page: Page):
     page.goto(URL)
 
     expect(page.locator(".active-turn")).to_be_visible()
-    expect(page.locator('[data-chat-id="17"] .task-run-state')).to_be_visible()
+    expect(page.locator('[data-chat-id="17"] .task-run-state').first).to_be_visible()
     expect(page.locator("#message-list")).to_contain_text("Instruction completed.", timeout=9_000)
     expect(page.locator(".active-turn")).to_have_count(0)
     expect(page.locator('[data-chat-id="17"] .task-run-state')).to_have_count(0)
@@ -2645,23 +2775,26 @@ def test_compact_actions_workflows_provider_groups_and_board_linking(page: Page)
     expect(page.locator('[data-board-group="decisions:70"] .board-link-bead')).to_have_class(re.compile(r"linked"))
     expect(page.locator('[data-board-group="trello:trello-1"] .board-link-bead')).not_to_have_class(re.compile(r"linked"))
 
-    page.locator("#attach-button").click()
+    page.locator("#composer-plan-button").click()
     expect(page.locator("#composer-action-menu")).to_be_visible()
     expect(page.locator("#attach-dialog")).not_to_be_visible()
-    expect(page.locator('[data-composer-action="files"]')).to_contain_text("Add files")
+    expect(page.locator('[data-composer-action="files"]')).to_have_count(0)
+    expect(page.locator('[data-composer-action="visual"]')).to_contain_text("Prepare visual plan")
+    expect(page.locator('[data-composer-action="skills"]')).to_contain_text("Attach skill")
     expect(page.locator('[data-composer-action="context"]')).to_have_count(0)
-    expect(page.locator("#composer-skill-list [data-prompt-skill]")).to_have_count(2)
-    page.locator("#composer-skill-search").fill("access")
-    expect(page.locator("#composer-skill-list [data-prompt-skill]")).to_have_count(1)
-    expect(page.locator("#composer-skill-list")).to_contain_text("Accessibility")
-    expect(page.locator("#composer-skill-list [data-prompt-skill] > span")).to_have_css("font-size", "9px")
-    expect(page.locator("#composer-skill-list [data-prompt-skill] > span")).to_have_css("text-align", "left")
-    page.screenshot(path="/private/tmp/development-composer-skills.png", full_page=True)
     expect(page.locator('[data-composer-action="plan"]')).to_have_count(0)
     expect(page.locator('[data-composer-action="goal"]')).to_have_count(0)
     expect(page.locator('[data-composer-action="workflow"]')).to_have_count(0)
+    page.locator('[data-composer-action="skills"]').click()
+    expect(page.locator("#skills-browser-dialog")).to_be_visible()
+    expect(page.locator("#composer-skill-list [data-prompt-skill]")).to_have_count(3)
+    page.locator("#composer-skill-search").fill("access")
+    expect(page.locator("#composer-skill-list [data-prompt-skill]")).to_have_count(1)
+    expect(page.locator("#composer-skill-list")).to_contain_text("Accessibility")
+    page.screenshot(path="/private/tmp/development-composer-skills.png", full_page=True)
+    page.keyboard.press("Escape")
+    expect(page.locator("#skills-browser-dialog")).to_be_hidden()
 
-    page.locator("#attach-button").click()
     page.locator("#sidebar-workflows-toggle").click()
     expect(page.locator("#workflow-workspace")).to_be_visible()
     expect(page.locator("#workflow-list")).to_contain_text("Development execution")
@@ -2676,7 +2809,7 @@ def test_compact_actions_workflows_provider_groups_and_board_linking(page: Page)
     expect(page.get_by_role("button", name="Edit step").first).to_be_visible()
     expect(page.get_by_role("button", name="Run step")).to_be_visible()
     expect(page.get_by_role("button", name="Run workflow from this step")).to_be_visible()
-    page.get_by_role("button", name="Edit step").click()
+    page.get_by_role("button", name="Edit step").first.click()
     expect(page.locator("#workflow-step-dialog")).to_be_visible()
     page.locator("#workflow-step-name").fill("Independent review")
     page.locator("#workflow-step-dialog .workflow-step-advanced summary").click()
@@ -2754,7 +2887,7 @@ def test_workflows_three_dot_menu_routes_direct_waiting_execution(page: Page):
 
     row = page.locator('[data-active-execution="development:17:direct-91"]')
     expect(row).to_be_visible()
-    row.get_by_label("Execution actions").click()
+    row.get_by_label("What you can do with this run").click()
     expect(row.get_by_role("link", name="Open", exact=True)).to_have_attribute("href", "/development/threads/17/")
     expect(row.get_by_role("link", name="Related ticket")).to_be_visible()
     expect(row.get_by_role("link", name="Continue / Respond")).to_be_visible()
@@ -2771,16 +2904,18 @@ def test_workflows_three_dot_menu_routes_workflow_cancel(page: Page):
 
     row = page.locator('[data-active-execution="99"]')
     expect(row).to_be_visible()
-    row.get_by_label("Execution actions").click()
+    row.get_by_label("What you can do with this run").click()
     expect(row.get_by_role("link", name="Open", exact=True)).to_be_visible()
     row.get_by_role("button", name="Cancel").click()
 
     assert ("POST", "/api/workflows/44/cancel-run/99") in requests
 
 
-def test_thread_shows_circular_workflow_runner_while_run_is_active(page: Page):
+def test_thread_shows_readable_workflow_step_rail_while_run_is_active(page: Page):
     requests: list[tuple[str, str]] = []
-    _install_api(page, requests, live_activity=True)
+    page_errors: list[str] = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    _install_api(page, requests, live_activity=True, seven_step_workflow=True)
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(URL)
 
@@ -2788,9 +2923,54 @@ def test_thread_shows_circular_workflow_runner_while_run_is_active(page: Page):
     expect(page.locator("#composer-workflow-menu")).to_have_count(0)
     expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
     expect(page.locator(".thread-workflow-runner-head")).to_contain_text("Development execution")
-    expect(page.locator(".thread-workflow-node")).to_contain_text("Inspect")
-    expect(page.locator(".thread-workflow-node.running b")).to_have_text("1")
+    expect(page.locator(".thread-workflow-ring")).to_have_count(0)
+    expect(page.get_by_role("tab")).to_have_count(7)
+    expect(page.get_by_role("tab", name=re.compile("Build"))).to_have_attribute("aria-selected", "true")
+    page.screenshot(path="/private/tmp/decisions-phase3-workflow-rail-desktop.png", full_page=True)
+    page.get_by_role("tab", name=re.compile("Validate")).click()
+    expect(page.locator(".thread-workflow-step-detail")).to_contain_text("Run browser and visual validation")
+    expect(page.locator(".thread-workflow-step-detail")).to_contain_text("gpt-5.6-luna")
+    assert ("GET", "/api/workflows/44/runs/99/steering-memory") in requests, requests
+    assert not page_errors, page_errors
+    _open_details(page)
+    page.locator(".learning-ledger:visible summary").click()
+    expect(page.locator(".learning-ledger:visible")).to_contain_text("Keep CRUD actions aligned on the right.")
+    page.screenshot(path="/private/tmp/decisions-phase5-learning-ledger-desktop.png", full_page=True)
+    with page.expect_request(lambda request: request.method == "PATCH" and urlparse(request.url).path == "/api/tickets/boards/70/orchestrator-learned-rules/501"):
+        page.locator(".learning-ledger:visible").get_by_role("button", name="Roll back rule").click()
+    assert ("PATCH", "/api/tickets/boards/70/orchestrator-learned-rules/501") in requests
     expect(page.locator("#inspector-content")).to_contain_text("Open workflow")
+    page.locator("#inspector-close").click()
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.locator("#studio-sidebar").evaluate("node => node.classList.remove('open')")
+    page.wait_for_timeout(250)
+    expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
+    assert page.locator("body").evaluate("node => node.scrollWidth <= document.documentElement.clientWidth")
+    page.screenshot(path="/private/tmp/decisions-phase3-workflow-rail-mobile.png", full_page=True)
+
+
+def test_visualize_action_creates_a_versioned_visual_plan(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(URL)
+
+    page.locator("#task-prompt").fill("Draw the CRUD screen and its validation flow")
+    # Pencil -> Prepare visual plan opens the sketch pad; Done exports a PNG through the normal upload path.
+    page.locator("#composer-plan-button").click()
+    page.locator('[data-composer-action="visual"]').click()
+    expect(page.locator("#visual-plan-dialog")).to_be_visible()
+    box = page.locator("#visual-plan-canvas").bounding_box()
+    page.locator('[data-vp-tool="rect"]').click()
+    page.mouse.move(box["x"] + 40, box["y"] + 40)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 240, box["y"] + 160, steps=4)
+    page.mouse.up()
+    with page.expect_request(lambda request: request.method == "POST" and urlparse(request.url).path == "/api/workflows/studio/attachments"):
+        page.locator("#visual-plan-done").click()
+    expect(page.locator("#visual-plan-dialog")).to_be_hidden()
+    expect(page.locator('#composer-attachment-strip [data-tooltip^="Visual plan:"]')).to_have_count(1)
+    page.screenshot(path="/private/tmp/decisions-phase6-visual-workbench-desktop.png", full_page=True)
 
 
 def test_workflow_cards_and_editor_are_responsive(page: Page):
@@ -2803,6 +2983,7 @@ def test_workflow_cards_and_editor_are_responsive(page: Page):
     page.screenshot(path="/private/tmp/decisions-workflows-desktop.png", full_page=True)
     page.locator("[data-workflow-card='44'] .workflow-card-open").click()
     expect(page.locator(".workflow-step-section")).to_be_visible()
+    page.get_by_role("button", name="Loop", exact=True).click()
     expect(page.locator(".workflow-loop-map")).to_be_visible()
     expect(page.locator(".workflow-loop-node")).to_contain_text("A scoped implementation plan")
     expect(page.locator(".workflow-settings-form")).to_be_hidden()
@@ -2811,7 +2992,7 @@ def test_workflow_cards_and_editor_are_responsive(page: Page):
 
     page.get_by_role("button", name="List").click()
     expect(page.locator(".workflow-step-stack")).to_be_visible()
-    expect(page.get_by_role("button", name="Edit step")).to_be_visible()
+    expect(page.get_by_role("button", name="Edit step").first).to_be_visible()
     page.screenshot(path="/private/tmp/decisions-workflow-editor-list-desktop.png", full_page=True)
 
     page.get_by_label("What should work differently?").fill("Add a security review after implementation")
@@ -2853,10 +3034,11 @@ def test_board_actions_and_thread_owned_time_are_operable(page: Page):
     expect(page.locator("#composer-time-toggle")).to_have_attribute("aria-label", "Start time tracking")
     page.locator("#composer-time-toggle").click()
     expect(page.locator("#composer-time-toggle")).to_have_attribute("aria-label", "Pause time tracking")
-    expect(page.locator("#composer-time-toggle span")).to_have_text("■")
+    expect(page.locator("#composer-time-toggle svg rect")).to_have_count(1)
     assert ("POST", "/api/workflows/studio/tasks/17/time/play") in requests
     page.locator("#composer-time-toggle").click()
     expect(page.locator("#composer-time-toggle")).to_have_attribute("aria-label", "Start time tracking")
+    expect(page.locator("#composer-time-toggle svg path")).to_have_count(1)
     assert ("POST", "/api/workflows/studio/tasks/17/time/pause") in requests
     page.locator('[data-board-select="decisions:70"]').click(button="right")
     expect(page.locator("#board-context-terminal-toggle")).to_contain_text("Stop Terminals")
@@ -3128,7 +3310,7 @@ def test_ticket_delete_checkbox_can_preserve_the_linked_thread(page: Page):
 
     assert any(url.endswith("/api/tickets/tickets/42") for url in requested_urls)
     assert not any("delete_thread=true" in url for url in requested_urls)
-    expect(page.locator('[data-chat-id="17"]')).to_be_visible()
+    expect(page.locator('[data-chat-id="17"]').first).to_be_visible()
 
 
 def test_ticket_material_creates_a_reviewable_thread_draft_without_submitting(page: Page):
@@ -3170,9 +3352,9 @@ def test_ticket_material_creates_a_reviewable_thread_draft_without_submitting(pa
     dialog.get_by_role("button", name="Start Thread").click()
     expect(dialog).to_be_hidden()
     expect(page.locator("#task-prompt")).to_have_value("Jira visual review\n\nReview the custom composer")
-    expect(page.locator("#composer-context")).to_contain_text("composer.png")
-    expect(page.locator("#composer-context")).to_contain_text("requirements.pdf")
-    expect(page.locator("#composer-context")).to_contain_text("ticket-comments.txt")
+    expect(page.locator('#composer-attachment-strip [data-tooltip$=": composer.png"]')).to_have_count(1)
+    expect(page.locator('#composer-attachment-strip [data-tooltip$=": requirements.pdf"]')).to_have_count(1)
+    expect(page.locator('#composer-attachment-strip [data-tooltip$=": ticket-comments.txt"]')).to_have_count(1)
     expect(page.locator("#composer-ticket-label")).to_contain_text("Jira visual review")
     assert ("POST", "/api/tickets/thread-draft") in requests
     assert ("POST", "/api/workflows/studio/tasks") not in requests
@@ -3200,7 +3382,7 @@ def test_incoming_channels_automation_rules_and_step_models_are_operable(page: P
     expect(page.locator("#incoming-folder-whatsapp")).to_have_attribute("aria-selected", "true")
     expect(page.locator("#incoming-folder-gmail")).to_have_count(1)
     expect(page.locator("#incoming-folder-mailshot")).to_be_visible()
-    expect(page.get_by_role("tab", name=re.compile("Telegram", re.I))).to_have_count(0)
+    expect(page.get_by_role("tab", name=re.compile("Telegram", re.I))).to_have_count(1)
     expect(page.locator(".incoming-conversation-row")).to_have_count(2)
     expect(page.get_by_role("heading", name="WhatsApp", exact=True)).to_have_count(1)
     expect(page.locator(".incoming-source")).to_have_count(0)
@@ -3258,7 +3440,7 @@ def test_incoming_channels_automation_rules_and_step_models_are_operable(page: P
 
     page.locator("#sidebar-workflows-toggle").click()
     page.locator("[data-workflow-card='44'] .workflow-card-open").click()
-    page.get_by_role("button", name="Edit step").click()
+    page.get_by_role("button", name="Edit step").first.click()
     page.locator("#workflow-step-dialog .workflow-step-advanced summary").click()
     page.locator("#workflow-step-provider").select_option("openai")
     page.locator("#workflow-step-model").select_option("gpt-test")
@@ -3310,7 +3492,7 @@ def test_incoming_snapshot_reports_progress_before_the_server_finishes(page: Pag
     page.evaluate("window.__finishIncomingSnapshot()")
     expect(page).to_have_url(TEST_BASE_URL + "/development/threads/17/")
     expect(page.locator("#task-prompt")).to_have_value("Please implement the menu updates from this WhatsApp snapshot.")
-    expect(page.locator("#composer-context")).to_contain_text("transcript.md")
+    expect(page.locator('#composer-attachment-strip [data-tooltip$=": transcript.md"]')).to_have_count(1)
 
 
 def test_incoming_google_reconnect_starts_oauth_and_returns_to_incoming(page: Page):
@@ -3363,24 +3545,30 @@ def test_running_thread_timer_uses_server_snapshot_without_timezone_double_count
     expect(page.locator("#run-elapsed")).not_to_contain_text("02:")
 
 
-def test_sidebar_timer_toggle_and_context_reset_share_thread_time_api(page: Page):
+def test_sidebar_timer_menus_share_actions_and_reset_stops_counting(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
     page.goto(URL)
 
     expect(page.locator('[data-thread-time-id="17"]')).to_have_count(0)
     page.locator('[data-chat-id="17"]').first.click(button="right")
+    expect(page.locator("#thread-context-menu .context-menu-heading")).to_have_text("Timer")
+    expect(page.locator("#thread-context-menu .context-menu-divider")).to_be_visible()
+    expect(page.get_by_role("menuitem", name="Stop and reset timer", exact=True)).to_be_visible()
     page.get_by_role("menuitem", name="Start timer", exact=True).click()
     page.locator('[data-chat-id="17"]').first.click(button="right")
-    page.get_by_role("menuitem", name="Pause timer", exact=True).click()
+    page.get_by_role("menuitem", name="Stop timer", exact=True).click()
 
     page.locator('[data-chat-id="17"]').first.click(button="right")
-    expect(page.get_by_role("menuitem", name="Reset timer", exact=True)).to_be_visible()
+    page.get_by_role("menuitem", name="Start timer", exact=True).click()
+    page.locator('[data-chat-id="17"]').first.click(button="right")
     page.screenshot(path="/private/tmp/development-sidebar-thread-timer-menu.png", full_page=True)
-    page.get_by_role("menuitem", name="Reset timer", exact=True).click()
+    page.get_by_role("menuitem", name="Stop and reset timer", exact=True).click()
+    page.locator('[data-chat-id="17"]').first.click(button="right")
+    expect(page.get_by_role("menuitem", name="Start timer", exact=True)).to_be_visible()
     page.screenshot(path="/private/tmp/development-sidebar-thread-timer.png", full_page=True)
 
-    assert ("POST", "/api/workflows/studio/tasks/17/time/play") in requests
+    assert requests.count(("POST", "/api/workflows/studio/tasks/17/time/play")) == 2
     assert ("POST", "/api/workflows/studio/tasks/17/time/pause") in requests
     assert ("PATCH", "/api/workflows/studio/tasks/17/time") in requests
 
@@ -3416,12 +3604,15 @@ def test_prompt_skills_are_structured_icons_and_do_not_bloat_the_user_message(pa
     expect(existing_icon).to_have_count(1)
     expect(existing_icon).to_have_attribute("title", "Accessibility")
 
-    page.locator("#attach-button").click()
+    page.locator("#composer-plan-button").click()
+    page.locator('[data-composer-action="skills"]').click()
     page.locator('[data-prompt-skill="accessibility"]').click()
     page.locator('[data-prompt-skill="humanizer"]').click()
-    expect(page.locator("#composer-skill-badges .composer-skill-badge")).to_have_count(2)
-    expect(page.locator("#composer-skill-badges .composer-skill-badge > span")).to_have_count(0)
-    page.locator("#attach-button").click()
+    expect(page.locator("#skills-browser-count")).to_contain_text("2 selected")
+    page.locator("#skills-browser-add").click()
+    expect(page.locator("#skills-browser-dialog")).to_be_hidden()
+    expect(page.locator("#composer-attachment-strip .composer-attachment-icon.skill")).to_have_count(2)
+    expect(page.locator('#composer-attachment-strip [data-tooltip="Skill: Accessibility"]')).to_have_count(1)
     page.screenshot(path="/private/tmp/development-structured-skill-icons.png", full_page=True)
     page.locator("#task-prompt").fill("Use these skills and tell me what to do")
     page.locator("#send-button").click()
@@ -3563,7 +3754,7 @@ def test_plan_goal_views_and_thread_context_menu_are_operable(page: Page):
 
     expect(page.locator('[data-tab="goal"]')).to_be_hidden()
 
-    page.locator('[data-chat-id="17"]').click(button="right")
+    page.locator('[data-chat-id="17"]').first.click(button="right")
     expect(page.locator("#thread-context-menu")).to_be_visible()
     page.get_by_role("menuitem", name="Pin thread").click()
     assert ("PATCH", "/api/workflows/studio/tasks/17/controls") in requests
@@ -3630,6 +3821,7 @@ def test_assistant_results_render_as_readable_markdown(page: Page, size, tmp_pat
     avatar = page.locator(".studio-message.assistant [data-assistant-identity] .assistant-avatar-image")
     expect(avatar).to_be_visible()
     expect(avatar).to_have_attribute("data-skin-name", "Oracle")
+    assert avatar.evaluate("node => getComputedStyle(node).transform").startswith("matrix(1.55")
     expect(page.locator(".studio-message.assistant .message-avatar")).not_to_have_text("AI")
     page.screenshot(path=str(tmp_path / f"development-oracle-{size['width']}x{size['height']}.png"), full_page=True)
 
@@ -3890,8 +4082,8 @@ def test_file_drop_is_scoped_to_composer_and_renders_image_preview(page: Page):
             node.dispatchEvent(new DragEvent('drop', {bubbles: true, cancelable: true, dataTransfer: transfer}));
         }"""
     )
-    expect(page.locator("#composer-context .context-chip")).to_contain_text("reference.png")
-    expect(page.locator("#composer-context .context-chip-preview")).to_be_visible()
+    expect(page.locator('#composer-attachment-strip [data-tooltip="Dropped image: reference.png"]')).to_have_count(1)
+    expect(page.locator("#composer-attachment-strip .composer-attachment-icon.image img")).to_be_visible()
     expect(page.locator("#composer-drop-overlay")).to_be_hidden()
     page.screenshot(path="/private/tmp/development-composer-image-preview.png", full_page=True)
     assert ("POST", "/api/workflows/studio/attachments") in requests

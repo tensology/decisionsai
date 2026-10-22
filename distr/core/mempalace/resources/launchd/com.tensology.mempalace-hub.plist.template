@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.tensology.mempalace-hub</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HUB_SCRIPT__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DECISIONS_MEMPALACE_PALACE_PATH</key><string>__PALACE__</string>
+    <key>DECISIONS_MEMPALACE_PYTHON</key><string>__PYTHON__</string>
+    <key>DECISIONS_MEMPALACE_HUB_PORT</key><string>__PORT__</string>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>__LOGDIR__/hub.log</string>
+  <key>StandardErrorPath</key><string>__LOGDIR__/hub.err.log</string>
+</dict>
+</plist>

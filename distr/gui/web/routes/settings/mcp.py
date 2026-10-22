@@ -215,21 +215,60 @@ def _parse_json_from_text(text: str) -> Any:
         return json.loads(trimmed[start : end + 1])
 
 
+MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"  # sentinel; round-trips keep stored value
+
+
+def _mask_doc_dict(data: dict[str, Any]) -> dict[str, Any]:
+    out = []
+    for s in data.get("servers") or []:
+        s = dict(s)
+        for key in ("env", "headers"):
+            if isinstance(s.get(key), dict):
+                s[key] = {k: (MASK if v else v) for k, v in s[key].items()}
+        out.append(s)
+    return {"servers": out}
+
+
+def _unmask_raw(raw: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Replace MASK values with the value stored for the same server/key."""
+    by_name = {s.get("name"): s for s in current.get("servers") or []}
+    for s in raw.get("servers") or []:
+        prev = by_name.get(s.get("name")) or {}
+        for key in ("env", "headers"):
+            vals = s.get(key)
+            if not isinstance(vals, dict):
+                continue
+            stored = prev.get(key) or {}
+            for k in list(vals):
+                if vals[k] == MASK:
+                    if k in stored:
+                        vals[k] = stored[k]
+                    else:
+                        vals.pop(k)
+    return raw
+
+
 def register_routes(router, templates) -> None:
     @router.get("/mcp")
     @route_handler("load MCP config", fallback={"servers": []})
-    async def get_mcp_config():
+    async def get_mcp_config(request: Request):
         from distr.core.mcp.config import document_to_dict, load_mcp_config
 
-        doc = load_mcp_config()
-        return JSONResponse(document_to_dict(doc))
+        data = document_to_dict(load_mcp_config())
+        reveal = (request.query_params.get("reveal_env") or "").lower() in ("1", "true", "yes")
+        return JSONResponse(data if reveal else _mask_doc_dict(data))
 
     @router.post("/mcp")
     @route_handler("save MCP config")
     async def post_mcp_config(body: MCPConfigPayload):
-        from distr.core.mcp.config import parse_config_dict, save_mcp_config
+        from distr.core.mcp.config import (
+            document_to_dict,
+            load_mcp_config,
+            parse_config_dict,
+            save_mcp_config,
+        )
 
-        raw = _payload_to_raw(body)
+        raw = _unmask_raw(_payload_to_raw(body), document_to_dict(load_mcp_config()))
         doc = parse_config_dict(raw)
         if len(doc.servers) != len(raw["servers"]):
             return JSONResponse(
@@ -273,3 +312,28 @@ def register_routes(router, templates) -> None:
                 status_code=400,
             )
         return JSONResponse({"success": True, "servers": servers, "warnings": warnings})
+
+    @router.get("/mcp/local-commands")
+    @route_handler("list local MCP commands", fallback={"servers": []})
+    async def get_mcp_local_commands():
+        """stdio servers: name + full command (args included). Env never returned."""
+        from distr.core.mcp.config import load_mcp_config
+
+        rows = [
+            {"name": s.name, "enabled": s.enabled, "command": list(s.command)}
+            for s in load_mcp_config().servers
+            if s.transport == "stdio"
+        ]
+        return JSONResponse({"servers": rows})
+
+    @router.delete("/mcp/servers/{name}")
+    @route_handler("delete MCP server")
+    async def delete_mcp_server(name: str):
+        from distr.core.mcp.config import MCPConfigDocument, load_mcp_config, save_mcp_config
+
+        doc = load_mcp_config()
+        keep = tuple(s for s in doc.servers if s.name != name)
+        if len(keep) == len(doc.servers):
+            return JSONResponse({"success": False, "error": "MCP server not found"}, status_code=404)
+        save_mcp_config(MCPConfigDocument(servers=keep))
+        return JSONResponse({"success": True, "deleted": name})

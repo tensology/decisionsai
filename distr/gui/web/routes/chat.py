@@ -2,7 +2,7 @@
 API routes/endpoints for Chat web UI
 """
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
 from starlette.requests import ClientDisconnect, Request
 from pydantic import BaseModel, ConfigDict
@@ -47,6 +47,91 @@ async def broadcast_chat_event(payload: Dict[str, Any]) -> int:
     return len(conns) - len(failed)
 
 
+# Topic subscribers (e.g. "incoming") on the same /api/ws socket: send {"subscribe_topic": "incoming"}.
+_topic_ws_connections: Dict[str, Set[WebSocket]] = {}
+INCOMING_TOPIC = "incoming"
+INCOMING_MESSAGE_EVENT = "incoming_message"
+
+
+async def broadcast_topic_event(topic: str, payload: Dict[str, Any]) -> int:
+    """Broadcast an event to every socket subscribed to ``topic``."""
+    encoded = json.dumps(payload)
+    with _chat_ws_lock:
+        conns = list(_topic_ws_connections.get(topic, set()))
+    failed = []
+    for ws in conns:
+        try:
+            await ws.send_text(encoded)
+        except Exception as exc:
+            logger.debug("WebSocket topic send error: %s", exc)
+            failed.append(ws)
+    if failed:
+        with _chat_ws_lock:
+            registered = _topic_ws_connections.get(topic)
+            if registered is not None:
+                registered.difference_update(failed)
+                if not registered:
+                    _topic_ws_connections.pop(topic, None)
+    return len(conns) - len(failed)
+
+
+def publish_topic_event_threadsafe(topic: str, payload: Dict[str, Any]):
+    """Schedule a topic broadcast on the embedded server loop (no-op when it is not running)."""
+    from distr.gui.web.server import get_unified_server
+
+    server = get_unified_server()
+    loop = getattr(server, "asyncio_loop", None) if server else None
+    if not server or not server.is_running or loop is None or loop.is_closed():
+        return None
+    return asyncio.run_coroutine_threadsafe(broadcast_topic_event(topic, dict(payload)), loop)
+
+
+def _register_incoming_push_listeners() -> None:
+    """Push ``incoming_message`` after a WhatsApp or Telegram message row is committed."""
+    try:
+        from sqlalchemy import event as sa_event
+        from sqlalchemy.orm import Session as SASession
+        from distr.core.db import TelegramGroupMessage, WhatsAppMessage
+    except Exception as exc:  # pragma: no cover - optional at import time
+        logger.debug("Incoming push listeners unavailable: %s", exc)
+        return
+
+    def _queue(channel):
+        def _after_insert(_mapper, _connection, target):
+            try:
+                from sqlalchemy.orm import object_session
+
+                session = object_session(target)
+                if session is not None:
+                    session.info.setdefault("_incoming_push", []).append((channel, getattr(target, "id", None)))
+            except Exception:
+                pass
+
+        return _after_insert
+
+    sa_event.listen(WhatsAppMessage, "after_insert", _queue("whatsapp"))
+    sa_event.listen(TelegramGroupMessage, "after_insert", _queue("telegram"))
+
+    @sa_event.listens_for(SASession, "after_commit")
+    def _publish_incoming(session):
+        pending = session.info.pop("_incoming_push", None)
+        for channel, message_id in pending or []:
+            try:
+                publish_topic_event_threadsafe(
+                    INCOMING_TOPIC,
+                    {"type": INCOMING_MESSAGE_EVENT, "channel": channel, "message_id": message_id},
+                )
+            except Exception as exc:
+                logger.debug("Incoming push failed: %s", exc)
+
+    @sa_event.listens_for(SASession, "after_rollback")
+    def _drop_incoming(session):
+        session.info.pop("_incoming_push", None)
+
+
+_register_incoming_push_listeners()
+
+
 def publish_chat_event_threadsafe(payload: Dict[str, Any]):
     """Schedule a chat broadcast directly on the embedded server loop."""
     from distr.gui.web.server import get_unified_server
@@ -73,9 +158,37 @@ from distr.gui.web.security import (
     is_allowed_local_origin,
     websocket_has_valid_internal_token,
     rate_limiter,
+    require_internal_token_dependency,
 )
+from fastapi import Depends
 
 logger = logging.getLogger(__name__)
+
+
+def _latest_turn_summary(chat_id: int, limit: int = 8000) -> Dict[str, Any]:
+    """Cheap latest-turn fields for the WS ``chat_updated`` event (one indexed query)."""
+    with get_session() as session:
+        root = session.get(Chat, int(chat_id))
+        if root is None:
+            return {}
+        row = (
+            session.query(Chat)
+            .filter(Chat.parent_id == root.id)
+            .order_by(Chat.id.desc())
+            .first()
+        ) or root
+        try:
+            params = json.loads(root.params or "{}")
+        except (TypeError, ValueError):
+            params = {}
+        active = params.get("active_turn_chat_row_id") if isinstance(params, dict) else None
+        text = row.response or ""
+        return {
+            "turn_id": int(row.id),
+            "assistant_text": text[:limit],
+            "assistant_text_truncated": len(text) > limit,
+            "final": bool(text) and str(active or "") != str(row.id),
+        }
 
 
 def _reject_development_lifecycle(session, chat: Chat) -> None:
@@ -524,6 +637,12 @@ def _append_row_messages(messages: List[Dict[str, Any]], row: Any) -> None:
         skill_ids = turn_metadata.get("skill_ids") if isinstance(turn_metadata, dict) else []
         if isinstance(skill_ids, list):
             message["skills"] = [str(skill_id) for skill_id in skill_ids if str(skill_id).strip()][:12]
+        if getattr(row, "image", None):
+            from distr.core.chat_images import chat_image_url, resolve_chat_image
+
+            image_file = resolve_chat_image(row.image)
+            if image_file:
+                message["image_url"] = chat_image_url(image_file.name)
         messages.append(message)
     if row.response:
         started_at = getattr(row, "created_date", None)
@@ -539,6 +658,11 @@ def _append_row_messages(messages: List[Dict[str, Any]], row: Any) -> None:
                 "chat_row_id": row.id,
             }
         )
+        _spoken_ctx = _chat_additional_context(getattr(row, "additional_context", None))
+        if _spoken_ctx.get("spoken") is True:
+            messages[-1]["spoken"] = True
+            if _spoken_ctx.get("spoken_source_row_id") is not None:
+                messages[-1]["spoken_source_row_id"] = _spoken_ctx.get("spoken_source_row_id")
 
 
 def _thread_rows_for_compaction(session, chat_id: int):
@@ -734,6 +858,7 @@ class SendMessageRequest(ChatRequestModel):
         None  # Chat's TTS voice (e.g. Adam); persist to chat so agent says "I'm Adam" not wrong name
     )
     intake_source_message_id: Optional[str] = None
+    image_path: Optional[str] = None  # Oracle chat image attachment (from POST /chat-images)
     intake_requested_outcome: Optional[str] = None
     intake_metadata: Optional[Dict[str, Any]] = None
     origin_surface: Optional[str] = None
@@ -793,6 +918,19 @@ class ForkChatRequest(ChatRequestModel):
     provider: Optional[str] = None
     model_name: Optional[str] = None
     title: Optional[str] = None
+
+
+class ReadResponseRequest(ChatRequestModel):
+    """Spoken-style rewrite of an assistant reply (Read response button)."""
+
+    text: str
+    chat_row_id: Optional[int] = None
+
+
+class SpeakSpokenRequest(ChatRequestModel):
+    text: str
+    chat_id: Optional[int] = None  # Development thread the spoken text belongs to
+    source_row_id: Optional[int] = None  # reply the spoken text summarises
 
 
 class TTSGenerateRequest(ChatRequestModel):
@@ -858,6 +996,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                             {"type": "pong", "sent_at": msg.get("sent_at")}
                         )
                         continue
+                    topic = msg.get("subscribe_topic")
+                    if topic == INCOMING_TOPIC:
+                        with _chat_ws_lock:
+                            _topic_ws_connections.setdefault(topic, set()).add(websocket)
+                        await websocket.send_json({"type": "subscribed", "topic": topic})
+                        continue
                     cid = msg.get("subscribe")
                     if cid is not None:
                         with _chat_ws_lock:
@@ -882,6 +1026,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             pass
         finally:
             with _chat_ws_lock:
+                for _topic, _conns in list(_topic_ws_connections.items()):
+                    _conns.discard(websocket)
+                    if not _conns:
+                        _topic_ws_connections.pop(_topic, None)
                 if (
                     subscribed_chat_id is not None
                     and subscribed_chat_id in _chat_ws_connections
@@ -911,7 +1059,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             return JSONResponse({"ok": False, "disconnected": True})
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="chat_id must be an integer")
-        payload = json.dumps({"type": "chat_updated", "chat_id": chat_id})
+        event: Dict[str, Any] = {"type": "chat_updated", "chat_id": chat_id}
+        try:
+            event.update(await asyncio.to_thread(_latest_turn_summary, chat_id))
+        except Exception:
+            logger.debug("notify_chat_updated: latest turn summary unavailable", exc_info=True)
+        payload = json.dumps(event)
         with _chat_ws_lock:
             conns = list(_chat_ws_connections.get(chat_id, set()))
         for ws in conns:
@@ -2117,8 +2270,32 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("Load-in-agent failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
+    @router.post("/chat-images")
+    async def upload_chat_image(file: UploadFile = File(...)):
+        """Store one Oracle chat image (jpeg/png/gif/webp, <=8 MB, magic-byte checked)."""
+        from distr.core.chat_images import MAX_CHAT_IMAGE_BYTES, ChatImageError, REJECT_MESSAGE, store_chat_image
+
+        data = await file.read(MAX_CHAT_IMAGE_BYTES + 1)
+        if len(data) > MAX_CHAT_IMAGE_BYTES:
+            return JSONResponse({"detail": REJECT_MESSAGE}, status_code=413)
+        try:
+            stored = store_chat_image(data)
+        except ChatImageError as e:
+            return JSONResponse({"detail": str(e)}, status_code=415)
+        stored["original_name"] = Path(str(file.filename or "image")).name[:255]
+        return JSONResponse(stored)
+
+    @router.get("/chat-images/{name}")
+    async def get_chat_image(name: str):
+        from distr.core.chat_images import resolve_chat_image
+
+        path = resolve_chat_image(name)
+        if not path:
+            raise HTTPException(status_code=404, detail="Image not found")
+        return FileResponse(str(path))
+
     @router.post("/chats/{chat_id}/send-to-agent")
-    async def send_to_agent(chat_id: int, request_data: SendMessageRequest):
+    async def send_to_agent(chat_id: int, request_data: SendMessageRequest, wait: bool = False, timeout: Optional[float] = None):
         """Send the message to the agent. Persist the user message to the DB immediately so it survives refresh; then emit to agent for LLM + TTS.
         Always use this chat's provider/model from DB when not provided in request."""
         try:
@@ -2166,6 +2343,13 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             agent_message = (
                 getattr(request_data, "agent_message", None) or ""
             ).strip() or display_message
+            uploaded_image = None
+            if request_data.image_path:
+                from distr.core.chat_images import REJECT_MESSAGE, resolve_chat_image
+
+                uploaded_image = resolve_chat_image(request_data.image_path)
+                if not uploaded_image:
+                    raise HTTPException(status_code=400, detail=REJECT_MESSAGE)
             speak_val = getattr(request_data, "speak", None)
             # Default True when omitted so TTS plays; only disable when explicitly false
             speak = False if speak_val in (False, "false", "False", 0, "0") else True
@@ -2194,6 +2378,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     status_code=400,
                     detail=f"Invalid voice provider: {voice_provider}. Must be one of {valid_voice_providers}",
                 )
+            from distr.gui.web.routes.api_extensions import max_thread_row_id, turn_response_fields
+
+            after_row_id = await asyncio.to_thread(max_thread_row_id, chat_id)
             # NOTE: Do NOT load_settings_from_db/save_settings_to_db here.
             # The agent command handler already sets agent_current_chat_id when
             # processing the hot-swap.  Doing a full settings round-trip on every
@@ -2240,6 +2427,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         signal_options["origin_request_id"] = request_data.origin_request_id
                     if request_data.input_type:
                         signal_options["input_type"] = request_data.input_type
+                    if uploaded_image:
+                        signal_options["uploaded_image_path"] = str(uploaded_image)
 
                     signal_manager.web_send_to_agent_requested.emit(
                         chat_id,
@@ -2258,10 +2447,32 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             except Exception as e:
                 logger.warning("Failed to send to agent: %s", e, exc_info=True)
                 raise HTTPException(status_code=500, detail="Agent not available")
-            return JSONResponse({
+            response_payload = {
                 "sent": True,
                 "intake_source_message_id": request_data.intake_source_message_id,
-            })
+            }
+            # The agent process persists the user row asynchronously; resolve its
+            # id (turn_id) and optionally block until the reply is final.
+            try:
+                response_payload.update(
+                    await turn_response_fields(
+                        chat_id,
+                        turn_id=None,
+                        after_row_id=after_row_id,
+                        message=agent_message,
+                        wait=bool(wait),
+                        timeout=timeout,
+                    )
+                )
+            except Exception:
+                logger.debug("Send-to-agent: turn resolution failed", exc_info=True)
+                response_payload.update({"turn_id": None, "turn_pending": True, "after_row_id": after_row_id})
+            # Stateless reply handle: GET /api/chat/replies/{reply_id}?wait=N (token-gated).
+            from distr.gui.web.routes.api_audit import make_reply_id
+
+            response_payload["reply_id"] = make_reply_id(chat_id, after_row_id, agent_message)
+            response_payload["reply_url"] = f"/api/chat/replies/{response_payload['reply_id']}"
+            return JSONResponse(response_payload)
         except HTTPException:
             raise
         except Exception as e:
@@ -2402,6 +2613,75 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         except Exception as e:
             logger.error("TTS generate error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.post("/chats/{chat_id}/read-response", dependencies=[Depends(require_internal_token_dependency)])
+    async def read_response(chat_id: int, request_data: ReadResponseRequest):
+        """Rewrite an assistant reply for speech with the chat/oracle model and store it in the thread."""
+        from distr.core import read_response as rr
+
+        # Dedup: a reply that already has a spoken row returns it (no LLM call, no insert).
+        if request_data.chat_row_id is not None:
+            with get_session() as session:
+                existing = rr.find_existing_spoken(session, chat_id, request_data.chat_row_id)
+            if existing:
+                return JSONResponse({"spoken_text": existing[1], "chat_row_id": existing[0], "existing": True})
+
+        settings = load_settings_from_db()
+        try:
+            spoken, provider, model = await asyncio.to_thread(
+                rr.generate_spoken_text, request_data.text, settings
+            )
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Nothing to read")
+        except Exception as e:
+            logger.warning("Read response generation failed: %s", e)
+            raise HTTPException(status_code=502, detail="Could not prepare the spoken version")
+        with get_session() as session:
+            chat = session.query(Chat).filter(Chat.id == chat_id).first()
+            if not chat:
+                raise HTTPException(status_code=404, detail="Chat not found")
+            # Race guard: another click may have stored one while the model ran.
+            existing = rr.find_existing_spoken(session, chat_id, request_data.chat_row_id)
+            if existing:
+                return JSONResponse({"spoken_text": existing[1], "chat_row_id": existing[0], "provider": provider, "model": model, "existing": True})
+            row_id = rr.store_spoken_message(
+                session, chat_id, spoken,
+                source_row_id=request_data.chat_row_id, provider=provider, model=model,
+            )
+        return JSONResponse({"spoken_text": spoken, "chat_row_id": row_id, "provider": provider, "model": model})
+
+    @router.post("/chats/speak-spoken", dependencies=[Depends(require_internal_token_dependency)])
+    async def speak_spoken(request_data: SpeakSpokenRequest, request: Request):
+        """User-clicked playback of a spoken response via the oracle's speak_text_directly path.
+
+        Guarded on its own (not only by the /api middleware): localhost + internal token.
+        """
+        from distr.core import read_response as rr
+        from distr.gui.web.security import require_internal_token_request
+
+        if not request.client or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+            raise HTTPException(status_code=403, detail="Only localhost may trigger speech")
+        require_internal_token_request(request)
+
+        try:
+            ok = rr.speak_spoken_text(request_data.text)
+        except Exception as e:
+            logger.warning("Speak spoken response failed: %s", e)
+            ok = False
+        note_id = None
+        if ok and request_data.chat_id is not None:
+            # Oracle context note: mirror into the oracle's current chat (read-only lookup,
+            # never changes routing). Deduplicated per source thread + reply.
+            try:
+                current = ChatService.get_current_chat_id()
+                with get_session() as session:
+                    note_id = rr.add_oracle_context_note(
+                        session, request_data.chat_id, request_data.text,
+                        source_row_id=request_data.source_row_id, current_chat_id=current,
+                    )
+            except Exception as e:
+                logger.warning("Oracle context note failed: %s", e)
+        return JSONResponse({"ok": bool(ok), "oracle_note_row_id": note_id})
 
     @router.get("/models")
     async def get_models():

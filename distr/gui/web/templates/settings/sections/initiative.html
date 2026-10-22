@@ -1,11 +1,4 @@
-<div class="mb-6 flex items-start justify-between gap-4 pb-4 border-b border-[#565869]">
-    <div>
-        <h2 class="text-xl font-semibold text-white mb-1">Initiative</h2>
-        <p class="text-sm text-gray-400">
-            <span class="block">Choose how proactive the agent should be across your day.</span>
-            <span class="block mt-1 text-gray-500">Daily plans → Automations. Initiative cycle → one gated action from work scan / LLM.</span>
-        </p>
-    </div>
+<div class="mb-6 flex items-start justify-end gap-4">
     <div id="initiative-health" class="shrink-0" role="status">
         <div id="initiative-health-badge" class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-gray-300">
             <span id="initiative-health-dot" class="inline-block h-2.5 w-2.5 rounded-full bg-gray-500 shrink-0" title=""></span>
@@ -72,7 +65,6 @@
             <div class="text-sm font-medium text-white mb-1">Advanced source and safety controls</div>
             <div class="text-xs text-gray-400">Permissions that define where Initiative can look, act, and when it must ask first.</div>
         </div>
-        <button type="button" id="initiative-inline-save" class="shrink-0 px-4 py-2 rounded-md bg-[#f97316] hover:bg-[#ea580c] text-white text-sm font-medium transition-colors">Save</button>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
         <label class="settings-toggle"><input type="checkbox" id="initiative_allow_telegram" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Telegram conversations</span></label>
@@ -89,5 +81,8 @@
         <label class="settings-toggle"><input type="checkbox" id="initiative_ask_external_comms" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Ask before external sends</span></label>
         <label class="settings-toggle"><input type="checkbox" id="initiative_ask_file_changes" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Ask before file changes</span></label>
         <label class="settings-toggle"><input type="checkbox" id="initiative_ask_sensitive" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Ask before sensitive actions</span></label>
+    </div>
+    <div class="mt-4 flex justify-center">
+        <button type="button" id="initiative-inline-save" class="px-4 py-2 rounded-md bg-[#f97316] hover:bg-[#ea580c] text-white text-sm font-medium transition-colors">Save</button>
     </div>
 </div>

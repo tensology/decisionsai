@@ -23,6 +23,39 @@ from distr.core.workflow.development_threads import development_thread_metadata,
 COMMAND_STATUSES = {"queued", "delivered", "completed", "cancelled", "failed"}
 # Reject syncing absurd thread totals into tickets (e.g. cancelled workflow ghosts).
 MAX_TICKET_TIME_SYNC_SECONDS = 12 * 60 * 60
+DEVELOPMENT_TIMER_MENU = {
+    "heading": "Timer",
+    "items": (
+        {
+            "key": "toggle",
+            "element_id": "thread-context-toggle-time",
+            "running_label": "Stop timer",
+            "stopped_label": "Start timer",
+            "running_action": "pause",
+            "stopped_action": "play",
+        },
+        {
+            "key": "reset",
+            "element_id": "thread-context-reset-time",
+            "running_label": "Stop and reset timer",
+            "stopped_label": "Stop and reset timer",
+            "running_action": "reset",
+            "stopped_action": "reset",
+        },
+    ),
+}
+
+
+def development_timer_menu_items(running: bool) -> list[dict[str, str]]:
+    state = "running" if running else "stopped"
+    return [
+        {
+            "key": str(item["key"]),
+            "label": str(item[f"{state}_label"]),
+            "action": str(item[f"{state}_action"]),
+        }
+        for item in DEVELOPMENT_TIMER_MENU["items"]
+    ]
 
 
 def _require_development_root(db, chat_id: int) -> Chat:
@@ -68,6 +101,36 @@ def list_commands(chat_id: int, *, include_terminal: bool = True, limit: int = 5
             query = query.filter(DevelopmentCommand.status.in_(["queued", "delivered"]))
         rows = query.order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc()).limit(max(1, min(limit, 200))).all()
         return [_command_payload(row) for row in rows]
+
+
+def is_duplicate_instruction(chat_id: int, content: str, *, window_sec: float | None = None) -> bool:
+    """Identical instruction already pending for this thread within a few seconds:
+    either the latest unanswered user row, or a queued command just created."""
+    from datetime import datetime, timezone
+
+    from distr.core.chat import DUPLICATE_INPUT_WINDOW_SEC, _as_naive_utc, is_duplicate_pending_input
+
+    window = DUPLICATE_INPUT_WINDOW_SEC if window_sec is None else float(window_sec)
+    cleaned = str(content or "").strip()
+    if not cleaned:
+        return False
+    if is_duplicate_pending_input(int(chat_id), cleaned, window_sec=window):
+        return True
+    instruction = redact_text(cleaned, limit=12000, preserve_paths=True)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with get_session() as db:
+        rows = (
+            db.query(DevelopmentCommand)
+            .filter(DevelopmentCommand.chat_id == int(chat_id), DevelopmentCommand.status == "queued")
+            .order_by(DevelopmentCommand.id.desc())
+            .limit(5)
+            .all()
+        )
+        for row in rows:
+            created = _as_naive_utc(row.created_at)
+            if (row.content or "").strip() == (instruction or "").strip() and created is not None and 0 <= (now - created).total_seconds() <= window:
+                return True
+    return False
 
 
 def enqueue_command(
@@ -412,7 +475,8 @@ def reset_thread_time(chat_id: int, *, seconds: int = 0) -> dict[str, Any]:
             )
         )
         item.time_accumulated_seconds = clean
-        item.time_started_at = now if not item.time_paused else None
+        item.time_started_at = None
+        item.time_paused = True
         item.time_last_activity_at = now
         payload = _thread_time_payload(item, now)
         payload["entries"] = _list_time_entries_for_item(db, int(chat_id))

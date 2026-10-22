@@ -700,7 +700,16 @@
 
     function populateBackendSelect(sel, backends, active) {
         if (!sel) return;
-        sel.innerHTML = backends.map(function(b) {
+        // harnesssrc 2026-10-22: installed harnesses only, from the shared source.
+        var H = window.DecisionsHarnesses;
+        if (H) {
+            H.loadInstalledHarnesses().then(function(installed) {
+                sel.innerHTML = H.harnessSelectOptions(installed, active, { escape: escapeAttr });
+                sel.value = H.normalize(active);
+            });
+            return;
+        }
+        sel.innerHTML = backends.filter(function(b) { return b.installed !== false || b.id === active; }).map(function(b) {
             return "<option value=\"" + escapeAttr(b.id) + "\">" + escapeAttr(b.name) + "</option>";
         }).join("");
         sel.value = active;
@@ -731,9 +740,9 @@
                     pill.className = "text-xs px-2 py-1 rounded border " + (activeItem && activeItem.ready ? "border-green-500/40 text-green-300 bg-green-500/10" : "border-amber-400/40 text-amber-200 bg-amber-500/10");
                 }
                 if (list) {
-                    list.innerHTML = backends.map(function(b) {
+                    list.innerHTML = backends.filter(function(b) { return b.installed !== false || b.active; }).map(function(b) {
                         var activeBadge = b.active ? "<span class=\"text-[10px] px-1.5 py-0.5 rounded bg-[#f97316]/20 text-[#fdba74]\">Active</span>" : "";
-                        var stateLabel = b.ready ? "Ready" : (b.setup_required ? "Setup required" : (b.state || "Unavailable"));
+                        var stateLabel = b.ready ? "Ready" : (b.installed === false ? "Not installed" : (b.state || "Unavailable"));
                         var setup = b.ready ? "" : "<div class=\"mt-1 text-[11px] text-gray-400 leading-snug\">" + escapeAttr(b.setup_instructions || b.message || "") + "</div>";
                         return "<div class=\"rounded border p-2 text-xs " + backendStateClasses(b.state, b.active) + "\">" +
                             "<div class=\"flex items-center justify-between gap-2\"><span class=\"font-medium text-white\">" + escapeAttr(b.name) + "</span>" + activeBadge + "</div>" +

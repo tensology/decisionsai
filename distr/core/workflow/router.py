@@ -77,14 +77,14 @@ _EXPECTED_OUTPUT_ALIASES = {
     "visual_claim_verdicts": ("visual claim verdict", "ui assessment"),
     "check_results": ("tests run", "checks run"),
     "security_audit": ("security",),
-    "final_fixes": ("final fixes", "self corrections", "self-corrections"),
-    "final_check_results": ("tests run", "checks run", "test results"),
-    "final_security_audit": ("security", "security audit"),
+    "final_fixes": ("final fixes", "self corrections", "self-corrections", "files changed"),
+    "final_check_results": ("tests run", "checks run", "test results", "verification"),
+    "final_security_audit": ("security", "security audit", "security scan"),
     # Standard coding-agent reports use these human headings. For a non-UI
     # ticket, an explicit UI assessment of N/A is still the required evidence;
     # demanding a second snake_case field caused valid audits to loop forever.
-    "final_browser_evidence": ("browser evidence", "ui assessment"),
-    "visual_quality_verdict": ("visual quality verdict", "ui assessment"),
+    "final_browser_evidence": ("browser evidence", "ui assessment", "ui browser"),
+    "visual_quality_verdict": ("visual quality verdict", "ui assessment", "ui browser"),
 }
 
 

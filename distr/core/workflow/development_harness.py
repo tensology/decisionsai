@@ -58,6 +58,26 @@ def local_ollama_worker_id(model: str) -> str:
     return f"{LOCAL_OLLAMA_WORKER_PREFIX}{tag}" if tag else ""
 
 
+_LOCAL_MODEL_PROVIDERS = {"ollama", "lmstudio", "lm_studio", "llamacpp", "llama_cpp"}
+
+
+def hosted_cli_model_or_auto(backend: str, provider: str, model: str) -> str:
+    """Drop a local/Ollama model id that cannot run on a hosted CLI backend.
+
+    Codex and Claude Code talk to OpenAI/Anthropic; a stale local pin such as
+    ``qwen3.8:27b`` (Ollama ``name:tag``) with provider ``openai`` can never
+    start (run 150). Fall back to the CLI's own ``auto`` model instead.
+    """
+    clean_model = str(model or "").strip()
+    if str(backend or "").strip().lower() not in {"codex", "claude_code"}:
+        return clean_model
+    if str(provider or "").strip().lower() in _LOCAL_MODEL_PROVIDERS:
+        return clean_model
+    if ":" in clean_model and "/" not in clean_model:
+        return "auto"
+    return clean_model
+
+
 def parse_local_ollama_worker(backend: str | None) -> str | None:
     """Return the Ollama model tag for a local-worker harness id, else None."""
     raw = str(backend or "").strip()
@@ -646,6 +666,71 @@ def _notify() -> None:
         pass
 
 
+TURN_ROUTE_LIMIT = 200
+
+
+def _turn_route_entry(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Compact, display-only record of the route a single user turn ran on."""
+    selected = receipt.get("selected") if isinstance(receipt.get("selected"), dict) else {}
+    configured = receipt.get("configured") if isinstance(receipt.get("configured"), dict) else {}
+    return {
+        "route_mode": str(configured.get("route_mode") or "auto").strip().lower(),
+        "complexity": str(receipt.get("complexity") or "").strip().lower(),
+        "backend": str(selected.get("backend") or "").strip().lower(),
+        "provider": str(selected.get("provider") or "").strip().lower(),
+        "model": str(selected.get("model") or "").strip(),
+        "skill_ids": [str(item) for item in (receipt.get("turn_skill_ids") or []) if str(item).strip()][:12],
+        "skills_auto": bool(receipt.get("turn_skills_auto")),
+        "recorded_at": utc_now_naive().isoformat(),
+    }
+
+
+def _remember_turn_route(db, chat_id: int, development: dict[str, Any], receipt: Any) -> None:
+    """Store the route on development.turn_routes keyed by the latest user row (child Chat with input).
+
+    Display-only: routing never reads this. Called inside an open session before commit.
+    """
+    if not isinstance(receipt, dict) or not isinstance(receipt.get("selected"), dict):
+        return
+    user_row = (
+        db.query(Chat)
+        .filter(Chat.parent_id == int(chat_id), Chat.input.isnot(None))
+        .order_by(Chat.id.desc())
+        .first()
+    )
+    if user_row is None:
+        return
+    routes = dict(development.get("turn_routes") or {})
+    key = str(int(user_row.id))
+    if key in routes:
+        return  # first decision for a turn wins; later execution updates must not rewrite history
+    routes[key] = _turn_route_entry(receipt)
+    if len(routes) > TURN_ROUTE_LIMIT:
+        for old in sorted(routes, key=lambda value: int(value) if str(value).isdigit() else 0)[: len(routes) - TURN_ROUTE_LIMIT]:
+            routes.pop(old, None)
+    development["turn_routes"] = routes
+
+
+def record_turn_route(chat_id: int, receipt: dict[str, Any]) -> None:
+    """Persist the per-turn route for paths that do not go through _update_execution (workflow dispatch)."""
+    try:
+        with get_session() as db:
+            root = db.get(Chat, int(chat_id))
+            if root is None or root.parent_id is not None:
+                return
+            params = _chat_params(root.params)
+            development = dict(params.get("development") or {})
+            before = dict(development.get("turn_routes") or {})
+            _remember_turn_route(db, int(chat_id), development, receipt)
+            if development.get("turn_routes", {}) == before:
+                return
+            params["development"] = development
+            root.params = json.dumps(params, ensure_ascii=False, default=str)
+            db.commit()
+    except Exception:
+        logger.debug("Could not record the per-turn route for chat %s", chat_id, exc_info=True)
+
+
 def _update_execution(chat_id: int, *, job_id: str | None = None, **changes: Any) -> dict[str, Any]:
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
@@ -668,6 +753,11 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, **changes: Any
         execution.update({key: value for key, value in changes.items() if value is not None})
         if job_id:
             execution["job_id"] = job_id
+        if changes.get("route_receipt") is not None:
+            try:
+                _remember_turn_route(db, int(chat_id), development, changes.get("route_receipt"))
+            except Exception:
+                logger.debug("Could not record the per-turn route for chat %s", chat_id, exc_info=True)
         development["execution"] = execution
         params["development"] = development
         root.params = json.dumps(params, ensure_ascii=False, default=str)
@@ -714,11 +804,53 @@ def _append_streamed_output(chat_id: int, *, job_id: str, delta: str) -> str:
 
 def development_execution_state(chat_id: int) -> dict[str, Any]:
     terminal_reconciliation: dict[str, Any] | None = None
+    workflow_execution: dict[str, Any] | None = None
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
         if root is None or root.parent_id is not None:
             raise LookupError("Development thread not found.")
         execution = dict(development_thread_metadata(root).get("execution") or {})
+        turn_routes = dict(development_thread_metadata(root).get("turn_routes") or {})
+        if not execution:
+            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
+
+            run = (
+                db.query(AutoWorkflowRun)
+                .filter(AutoWorkflowRun.chat_id == int(chat_id))
+                .order_by(AutoWorkflowRun.id.desc())
+                .first()
+            )
+            if run is not None:
+                run_data = _json(run.run_data)
+                step = db.get(AutoWorkflowStep, int(run.current_step_id)) if run.current_step_id else None
+                result_packet = run_data.get("result_packet") if isinstance(run_data.get("result_packet"), dict) else {}
+                audit = result_packet.get("audit") if isinstance(result_packet.get("audit"), dict) else {}
+                route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
+                route_receipt = run_data.get("route_receipt") if isinstance(run_data.get("route_receipt"), dict) else {}
+                if not route_receipt and route:
+                    selected = {
+                        "backend": route.get("backend"),
+                        "provider": route.get("model_provider") or route.get("provider"),
+                        "model": route.get("model"),
+                        "reasoning_effort": route.get("codex_reasoning_effort") or route.get("reasoning_effort"),
+                        "service_tier": route.get("codex_service_tier") or route.get("service_tier") or route.get("tier"),
+                    }
+                    route_receipt = {"selected": {key: value for key, value in selected.items() if value not in (None, "")}}
+                workflow_execution = {
+                    "id": int(run.id),
+                    "direct": False,
+                    "workflow_id": int(run.workflow_id),
+                    "status": str(run.status or "queued"),
+                    "current_step_id": int(run.current_step_id) if run.current_step_id else None,
+                    "current_step_name": str(step.name or "") if step is not None else "",
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                    "waiting_kind": str(run_data.get("waiting_kind") or ""),
+                    "summary": str(result_packet.get("summary") or ""),
+                    "verification": audit,
+                    "output_packet": result_packet,
+                    "route_receipt": route_receipt,
+                }
         persisted_status = str(execution.get("status") or "").lower()
         session_id = execution.get("execution_session_id")
         if session_id:
@@ -749,6 +881,9 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                         "error": row.error or execution.get("error") or "",
                         "activity_status": row_status,
                     }
+    if workflow_execution is not None:
+        workflow_execution["turn_routes"] = turn_routes
+        return workflow_execution
     if terminal_reconciliation is not None:
         execution = _update_execution(
             int(chat_id),
@@ -778,6 +913,7 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
             )
     execution["direct"] = True
     execution["id"] = execution.get("execution_session_id") or execution.get("job_id")
+    execution["turn_routes"] = turn_routes
     return execution
 
 
@@ -897,6 +1033,7 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
                     provider = "ollama"
         if provider:
             adapter_options["model_provider"] = provider
+        model = hosted_cli_model_or_auto(pinned_backend, provider, model) or "auto"
         return pinned_backend, model, adapter_options, complexity
 
     assessed = assessment.get("route") if isinstance(assessment.get("route"), dict) else {}
@@ -952,11 +1089,65 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
         if fallback_provider:
             adapter_options["fallback_model_provider"] = fallback_provider
     if backend == "codex":
-        for key in ("codex_reasoning_effort", "codex_service_tier"):
-            value = assessed.get(key) or resolved.get(key)
-            if value:
-                adapter_options[key] = value
+        reasoning = assessed.get("codex_reasoning_effort") or resolved.get("codex_reasoning_effort")
+        service_tier = assessed.get("codex_service_tier") or resolved.get("codex_service_tier")
+        if reasoning:
+            adapter_options["reasoning_effort"] = reasoning
+        if service_tier:
+            adapter_options["service_tier"] = service_tier
     return backend, model, adapter_options, complexity
+
+
+def _route_receipt(
+    metadata: dict[str, Any],
+    assessment: dict[str, Any],
+    *,
+    backend: str,
+    model: str,
+    adapter_options: dict[str, Any],
+    complexity: str,
+    actual: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Capture requested, selected, and actual routing without changing routing policy."""
+    model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
+    laya = assessment.get("laya") if isinstance(assessment.get("laya"), dict) else {}
+    route_mode = str(model_route.get("route_mode") or "auto").strip().lower()
+    provider = str(adapter_options.get("model_provider") or "").strip().lower()
+    selected = {
+        "backend": str(backend or "").strip().lower(),
+        "provider": provider,
+        "model": str(model or "auto").strip() or "auto",
+        "reasoning_effort": str(adapter_options.get("reasoning_effort") or "medium"),
+        "service_tier": str(adapter_options.get("service_tier") or "standard"),
+        "source": "manual_pin" if route_mode == "manual" else str(assessment.get("decision_engine") or "policy"),
+    }
+    fallback = {
+        "backend": str(adapter_options.get("fallback_backend") or "").strip().lower(),
+        "provider": str(adapter_options.get("fallback_model_provider") or "").strip().lower(),
+        "model": str(adapter_options.get("fallback_model") or "").strip(),
+    }
+    return {
+        "complexity": complexity,
+        "decision_engine": str(assessment.get("decision_engine") or "heuristic"),
+        "decision_reason": str(assessment.get("reason") or ""),
+        "laya": {
+            "mode": str(laya.get("mode") or "off"),
+            "used": bool(laya.get("used")),
+            "confidence": laya.get("confidence"),
+            "fallback_reason": str(laya.get("fallback_reason") or ""),
+        },
+        "configured": {
+            "route_mode": route_mode,
+            "backend": str(model_route.get("backend") or "").strip().lower(),
+            "provider": str(model_route.get("provider") or "").strip().lower(),
+            "model": str(model_route.get("model_name") or "").strip(),
+            "reasoning_effort": str(model_route.get("reasoning_effort") or "medium"),
+            "service_tier": str(model_route.get("service_tier") or "standard"),
+        },
+        "selected": selected,
+        "actual": dict(actual or {}),
+        "fallback": fallback if fallback["backend"] or fallback["model"] else {},
+    }
 
 
 def _metadata_with_runtime_identity(
@@ -1226,10 +1417,26 @@ async def _run_execution(
     if autonomy_level == "plan":
         adapter_options["read_only_expected"] = True
     native_tool_events: dict[str, str] = {}
+    worker_identity: dict[str, str] = {}
 
     def on_event(event: TurnEvent) -> None:
         summary = str(event.summary or "Working")[:1000]
         call_id = str(event.details.get("call_id") or "")
+        merged_worker = (
+            bool(tool_event_id)
+            and bool(event.details.get("worker_lifecycle"))
+            and event.tool_name in {"development_agent", "cursor_agent"}
+        )
+        if merged_worker:
+            # The harness worker start/end duplicates the outer development-agent
+            # row; fold its identity into that row instead of a second line.
+            worker_identity.update(
+                {
+                    "worker_name": str(event.details.get("agent_name") or ""),
+                    "harness": str(event.details.get("harness") or backend),
+                    "model": str(event.details.get("model") or model or ""),
+                }
+            )
         if event.output_delta:
             _append_streamed_output(chat_id, job_id=job_id, delta=event.output_delta)
         _update_execution(
@@ -1241,7 +1448,9 @@ async def _run_execution(
             activity=summary,
             activity_status=event.status.value,
         )
-        if event.kind.value == "tool_started" and event.tool_name:
+        if merged_worker:
+            pass
+        elif event.kind.value == "tool_started" and event.tool_name:
             native_event_id, _, _ = start_tool(
                 int(chat_id),
                 event.tool_name,
@@ -1372,6 +1581,15 @@ async def _run_execution(
             board_id=board_id,
             turn_id=turn_id,
             runtime_id=runtime_id,
+            route_receipt=_route_receipt(
+                metadata,
+                assessment,
+                backend=backend,
+                model=model,
+                adapter_options=adapter_options,
+                complexity=complexity,
+                actual={"runtime": runtime_id},
+            ),
         )
         local_preset = str((adapter_options or {}).get("local_harness_preset") or "").strip()
         local_tag = parse_local_ollama_worker(local_preset) or (
@@ -1497,6 +1715,13 @@ async def _run_execution(
             summary=response,
             noop=noop,
         )
+        actual_provider = str(adapter_options.get("model_provider") or "").strip().lower()
+        if (
+            str(result.backend_id or "").strip().lower() == str(adapter_options.get("fallback_backend") or "").strip().lower()
+            and str(result.model or "").strip() == str(adapter_options.get("fallback_model") or "").strip()
+        ):
+            actual_provider = str(adapter_options.get("fallback_model_provider") or actual_provider).strip().lower()
+        actual_backend = str(result.backend_id or backend).strip().lower()
         _write_response(chat_id, turn_id, response)
         _update_execution(
             chat_id,
@@ -1514,9 +1739,42 @@ async def _run_execution(
             git_status_after=_git_status_snapshot(str(project.folder_location or "")),
             changes=changes,
             outcome=outcome,
+            route_receipt=_route_receipt(
+                metadata,
+                assessment,
+                backend=backend,
+                model=model,
+                adapter_options=adapter_options,
+                complexity=complexity,
+                actual={
+                    "backend": actual_backend,
+                    "provider": actual_provider,
+                    "model": str(result.model or model),
+                    "runtime": str(result.runtime_id or runtime_id),
+                    **(
+                        {
+                            "reasoning_effort": str(adapter_options.get("reasoning_effort") or "medium"),
+                            "service_tier": str(adapter_options.get("service_tier") or "standard"),
+                        }
+                        if actual_backend == "codex"
+                        else {}
+                    ),
+                },
+            ),
         )
         if tool_event_id:
-            finish_tool(tool_event_id, success=success, summary=response[:1000], detail=error)
+            finish_tool(
+                tool_event_id,
+                success=success,
+                summary=response[:1000],
+                detail=error,
+                metadata={
+                    "agent_name": "Development agent",
+                    "worker_name": worker_identity.get("worker_name", ""),
+                    "harness": actual_backend or worker_identity.get("harness", ""),
+                    "model": str(result.model or worker_identity.get("model") or model or ""),
+                },
+            )
         if success:
             complete_turn(chat_id, turn_id=turn_id, display_text=response)
         else:
@@ -1848,12 +2106,21 @@ def dispatch_development_prompt(
             and local_sel is None
         ):
             pinned_backend = "pi"
+        routed_backend, routed_model, routed_options, routed_complexity = _route(project, metadata, assessment)
         run_metadata = {
             "routing_assessment": assessment,
             "execution_mode_decision": execution_mode,
             "skill_ids": list(skill_ids or []),
             "use_playwright": bool(use_playwright),
             "model_route": model_route,
+            "route_receipt": _route_receipt(
+                metadata,
+                assessment,
+                backend=routed_backend,
+                model=routed_model,
+                adapter_options=routed_options,
+                complexity=routed_complexity,
+            ),
         }
         if pinned_backend in CLI_BACKENDS or local_sel is not None:
             run_metadata["execution_route"] = {
@@ -1871,6 +2138,7 @@ def dispatch_development_prompt(
                 "source": "thread_model_route",
                 "local_harness_preset": local_sel["local_harness_preset"] if local_sel else "",
             }
+        record_turn_route(int(chat_id), run_metadata["route_receipt"])
         result = dispatch_work_item(
             workflow_id=int(workflow_id),
             chat_id=int(chat_id),
@@ -1894,25 +2162,35 @@ def dispatch_development_prompt(
         [*(attachments or []), *persistent_attachments],
         project_folder=str(project.folder_location or ""),
     )
-    from distr.core.skills.catalog import filter_known_skill_ids, infer_skills_for_ticket
+    # Skills are auto-matched from the original prompt at submit; any failure means "no skill", never a blocked turn.
+    explicit_skill_ids: list[str] = []
+    turn_skill_ids: list[str] = []
+    skill_recommendation = ""
+    try:
+        from distr.core.skills.catalog import filter_known_skill_ids, infer_skills_for_ticket
 
-    turn_skill_ids = filter_known_skill_ids(list(skill_ids or []))[:12]
-    if not turn_skill_ids:
-        # Fill gaps: route skills inferred from the ticket/prompt into CLI harness context.
-        inferred = infer_skills_for_ticket(
-            "\n".join(part for part in (clean, str((metadata or {}).get("ticket_title") or "")) if part),
-            limit=5,
+        explicit_skill_ids = filter_known_skill_ids(list(skill_ids or []))[:12]
+        turn_skill_ids = list(explicit_skill_ids)
+        if not turn_skill_ids:
+            # Fill gaps: route skills inferred from the ticket/prompt into CLI harness context.
+            inferred = infer_skills_for_ticket(
+                "\n".join(part for part in (clean, str((metadata or {}).get("ticket_title") or "")) if part),
+                limit=5,
+            )
+            turn_skill_ids = filter_known_skill_ids(list(inferred or []))[:12]
+        from distr.core.capabilities_pack import recommend_design_skills
+
+        recommended, skill_recommendation = recommend_design_skills(
+            "\n".join(part for part in (clean, str((metadata or {}).get("ticket_title") or "")) if part)
         )
-        turn_skill_ids = filter_known_skill_ids(list(inferred or []))[:12]
-    from distr.core.capabilities_pack import recommend_design_skills
-
-    recommended, skill_recommendation = recommend_design_skills(
-        "\n".join(part for part in (clean, str((metadata or {}).get("ticket_title") or "")) if part)
-    )
-    for skill_id in filter_known_skill_ids(recommended):
-        if skill_id not in turn_skill_ids and len(turn_skill_ids) < 12:
-            turn_skill_ids.append(skill_id)
-    backend, model, _, _ = _route(project, metadata, assessment)
+        for skill_id in filter_known_skill_ids(recommended):
+            if skill_id not in turn_skill_ids and len(turn_skill_ids) < 12:
+                turn_skill_ids.append(skill_id)
+    except Exception:
+        logger.debug("Skill auto-match failed for chat %s; continuing without skills", chat_id, exc_info=True)
+        turn_skill_ids = list(explicit_skill_ids)
+        skill_recommendation = ""
+    backend, model, adapter_options, complexity = _route(project, metadata, assessment)
     git_status_before = _git_status_snapshot(str(project.folder_location or ""))
     git_untracked_before = _git_untracked_fingerprints(
         str(project.folder_location or ""),
@@ -1935,6 +2213,18 @@ def dispatch_development_prompt(
         runtime_id="cli_harness",
         git_status_before=git_status_before,
         git_untracked_before=git_untracked_before,
+        route_receipt={
+            **_route_receipt(
+                metadata,
+                assessment,
+                backend=backend,
+                model=model,
+                adapter_options=adapter_options,
+                complexity=complexity,
+            ),
+            "turn_skill_ids": list(turn_skill_ids),
+            "turn_skills_auto": not explicit_skill_ids,
+        },
     )
     tool_event_id, _, _ = start_tool(
         int(chat_id),

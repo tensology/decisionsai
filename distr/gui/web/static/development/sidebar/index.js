@@ -224,7 +224,11 @@ export function createSidebar({ context, actions, el }) {
         state.contextThreadId = Number(chatId);
         const menu = el('thread-context-menu');
         el('thread-context-pin').querySelector('.context-menu-label').textContent = chat.pinned ? 'Unpin thread' : 'Pin thread';
-        el('thread-context-toggle-time').querySelector('.context-menu-label').textContent = chat.development_time_running ? 'Pause timer' : 'Start timer';
+        menu.querySelectorAll('[data-timer-menu-item]').forEach((button) => {
+            const stateName = chat.development_time_running ? 'running' : 'stopped';
+            button.querySelector('.context-menu-label').textContent = button.dataset[`${stateName}Label`];
+            button.dataset.timerAction = button.dataset[`${stateName}Action`];
+        });
         el('thread-context-archive').querySelector('.context-menu-label').textContent = chat.archived ? 'Restore thread' : 'Archive thread';
         menu.classList.remove('hidden');
         menu.style.left = `${Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8)}px`;
@@ -607,15 +611,13 @@ export function createSidebar({ context, actions, el }) {
             closeThreadContextMenu();
             if (chatId) actions.openThreadDialog(chatId);
         });
-        el('thread-context-toggle-time').addEventListener('click', () => {
-            const chatId = state.contextThreadId;
-            closeThreadContextMenu();
-            if (chatId) actions.toggleThreadTimer(chatId);
-        });
-        el('thread-context-reset-time').addEventListener('click', () => {
-            const chatId = state.contextThreadId;
-            closeThreadContextMenu();
-            if (chatId) actions.resetThreadTimer(chatId);
+        el('thread-context-menu').querySelectorAll('[data-timer-menu-item]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const chatId = state.contextThreadId;
+                const timerAction = button.dataset.timerAction;
+                closeThreadContextMenu();
+                if (chatId && timerAction) actions.updateThreadTimer(chatId, timerAction);
+            });
         });
         el('thread-context-terminal-toggle').addEventListener('click', toggleThreadContextTerminals);
         el('thread-context-archive').addEventListener('click', contextArchiveThread);

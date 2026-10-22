@@ -160,7 +160,7 @@ def _required_projection_paths(home: Path, detected: dict[str, bool]) -> list[Pa
         paths.append(home / ".cursor" / "skills" / "ponytail" / "SKILL.md")
         paths.append(home / ".cursor" / "skills" / "fallow" / "SKILL.md")
     if detected.get("pi"):
-        paths.append(home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md")
+        paths.append(home / ".pi" / "agent" / "skills" / "decisions-competition-harness" / "SKILL.md")
     if detected.get("grok"):
         paths.append(home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md")
     return paths
@@ -182,13 +182,10 @@ def _state_is_current(home: Path, fingerprint: str, detected: dict[str, bool]) -
 
 
 def _copy_skill_tree(src: Path, dest: Path) -> bool:
-    if not src.is_dir():
-        return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest)
-    return True
+    """Deprecated: kept for callers; delegates to the symlink-safe copy."""
+    from distr.core.harness_bootstrap import copy_skill_tree
+
+    return copy_skill_tree(src, dest)
 
 
 def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
@@ -219,13 +216,7 @@ def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
                 skill_targets[f"cursor:{skill_dir.name}"] = base / skill_dir.name
         skill_targets["cursor:fallow"] = base / "fallow"
         skill_targets["cursor:decisions-competition-harness"] = base / "decisions-competition-harness"
-    if detected.get("pi"):
-        base = home / ".pi" / "skills"
-        for skill_dir in sorted(ponytail_src.iterdir()) if ponytail_src.is_dir() else []:
-            if skill_dir.is_dir():
-                skill_targets[f"pi:{skill_dir.name}"] = base / skill_dir.name
-        skill_targets["pi:fallow"] = base / "fallow"
-        skill_targets["pi:decisions-competition-harness"] = base / "decisions-competition-harness"
+    # Pi reads ~/.agents/skills natively; ponytail/fallow reach it via the shared dir below.
     if detected.get("grok") and not detected.get("cursor"):
         base = home / ".cursor" / "skills"
         for skill_dir in sorted(ponytail_src.iterdir()) if ponytail_src.is_dir() else []:
@@ -234,12 +225,31 @@ def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
         skill_targets["grok:fallow"] = base / "fallow"
         skill_targets["grok:decisions-competition-harness"] = base / "decisions-competition-harness"
 
+    from distr.core.harness_bootstrap import (
+        copy_skill_tree,
+        link_skill_tree,
+        publish_shared_skill,
+        skill_archive_root,
+    )
+
+    archive_root = skill_archive_root(home)
+    published: set[str] = set()
     for key, dest in skill_targets.items():
         harness, name = key.split(":", 1)
         if name == "decisions-competition-harness":
             continue
         src = ponytail_src / name if name.startswith("ponytail") else fallow_src / name
-        if _copy_skill_tree(src, dest):
+        if not src.is_dir():
+            continue
+        canonical, changed = publish_shared_skill(home, name, src, archive_root=archive_root)
+        if changed and name not in published:
+            written.append(str(canonical))
+        published.add(name)
+        if harness == "codex":  # plugin packaging needs real files
+            ok = copy_skill_tree(canonical, dest)
+        else:
+            ok = link_skill_tree(canonical, dest, archive_root=archive_root)
+        if ok:
             written.append(str(dest))
 
     registry_path = _registry_cache_path(home)
@@ -247,7 +257,7 @@ def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
         "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "decisions-competition-harness" / "SKILL.md",
         "claude": home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md",
         "cursor": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
-        "pi": home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md",
+        "pi": home / ".pi" / "agent" / "skills" / "decisions-competition-harness" / "SKILL.md",
         "grok": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
     }
     for harness, path in projection_targets.items():

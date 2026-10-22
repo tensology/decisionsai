@@ -1,6 +1,7 @@
+import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261022-tips2';
 import { createReports } from './reports/index.js';
 import { createThreadLiveUpdates } from './threads/live.js';
-import { createThreadSession } from './threads/session.js';
+import { createThreadSession } from './threads/session.js?v=20261022-composer6';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
@@ -8,21 +9,21 @@ import { createPlanning } from './planning/index.js?v=20261003-sitemap-groups';
 
 import { createSidebar } from './sidebar/index.js?v=20261003-sidebar-cleanup';
 
-import { createAutomations } from './automations/index.js?v=20260916-menus-icons';
+import { createAutomations } from './automations/index.js?v=20261022-calendar';
 
-import { createIncoming } from './incoming/index.js';
+import { createIncoming } from './incoming/index.js?v=20261022-incomingpad';
 
-import { createWorkflows } from './workflows/index.js?v=20261003-workflows';
+import { createWorkflows } from './workflows/index.js?v=20261022-btncolor';
 
 import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
 import { createTerminals } from './terminals/index.js';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20260906-1';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261022-height3';
 
-import { createThreadsComposer } from './threads/composer/index.js?v=20261003-workflow-confirm';
+import { createThreadsComposer } from './threads/composer/index.js?v=20261022-harnesssrc';
 
-import { createThreadsInspector } from './threads/inspector/index.js?v=20260906-1';
+import { createThreadsInspector } from './threads/inspector/index.js?v=20261022-autoui';
 
 // Composition root: shared catalog and thread context, feature interfaces, navigation.
 
@@ -47,8 +48,10 @@ const state = {
     currentChat: null,
     currentWorkflow: null,
     currentRun: null,
+    steeringMemory: null,
     chatLoadToken: 0,
     threadTime: null,
+    turnRoutes: {},
     controlState: { channels: {}, interactions: [], commands: [], controls: {} },
     currentTab: 'run',
     selectedProjectId: null,
@@ -335,6 +338,7 @@ function isProcessingAgentRun(run) {
 }
 
 function threadIsProcessing(chat) {
+    if (window.DecisionsLayaThreads?.isActive(chat?.id)) return true;
     const isCurrent = Number(state.currentChat?.id) === Number(chat?.id);
     if (isCurrent && state.busy) return true;
     const run = (isCurrent && state.currentRun) || directExecutionForChat(chat);
@@ -355,7 +359,8 @@ function threadRowContentHtml(chat, pinned = false) {
     const spinner = threadIsProcessing(chat)
         ? '<span class="task-run-state" role="status" aria-label="Working on this thread" title="Working on this thread"></span>'
         : '';
-    return `<span class="task-title">${pin}${title}</span>${spinner}`;
+    const layaFailed = !spinner && window.DecisionsLayaThreads?.isFailed(chat?.id) ? window.DecisionsLayaThreads.badgeHtml(chat.id) : '';
+    return `<span class="task-title">${pin}${title}</span>${spinner}${layaFailed}`;
 }
 
 function statusLabel(status) {
@@ -392,7 +397,9 @@ function updateElapsedTime() {
     if (!toggle) return;
     const running = Boolean(state.threadTime && !state.threadTime.paused);
     toggle.disabled = !state.currentChat;
-    toggle.querySelector('span').textContent = running ? '■' : '▶';
+    toggle.querySelector('span').innerHTML = running
+        ? '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"></rect></svg>'
+        : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 6 4-6 4z"></path></svg>';
     toggle.setAttribute('aria-label', running ? 'Pause time tracking' : 'Start time tracking');
     toggle.title = running ? 'Pause time tracking' : 'Start time tracking';
     toggle.setAttribute('aria-pressed', running ? 'true' : 'false');
@@ -844,7 +851,7 @@ async function updateThreadTime(action) {
         el('time-play-button').disabled = !state.threadTime.paused;
         el('time-pause-button').disabled = state.threadTime.paused;
         updateElapsedTime();
-        toast(action === 'reset' ? 'Thread time reset.' : action === 'play' ? 'Time logging resumed.' : 'Time logging paused.');
+        toast(action === 'reset' ? 'Thread timer stopped and reset.' : action === 'play' ? 'Time logging resumed.' : 'Thread timer stopped.');
     } catch (error) {
         toast(error.message || 'Could not update thread time.', 'error');
     }
@@ -867,7 +874,7 @@ async function updateSidebarThreadTime(chatId, action = null) {
             updateElapsedTime();
         }
         sidebar.renderSidebar();
-        toast(command === 'reset' ? 'Thread time reset.' : command === 'play' ? 'Time logging resumed.' : 'Time logging paused.');
+        toast(command === 'reset' ? 'Thread timer stopped and reset.' : command === 'play' ? 'Time logging resumed.' : 'Thread timer stopped.');
     } catch (error) {
         toast(error.message || 'Could not update thread time.', 'error');
     }
@@ -1174,7 +1181,6 @@ async function performShellRefresh(options) {
         sidebar.renderSidebar();
         if (['automations', 'automation_rules'].includes(state.workspaceMode)) automations.renderScheduledWorkspace();
         if (state.workspaceMode === 'workflows') workflows.renderWorkflowWorkspace();
-        if (state.workspaceMode === 'incoming') incoming.renderIncomingWorkspace();
         if (state.workspaceMode === 'terminals') terminals.renderTerminalWorkspace();
         if (state.workspaceMode === 'plan') planning.syncCatalog(state.boards, state.projects);
         if (state.currentChat && state.workspaceMode === 'chat') {
@@ -1202,12 +1208,7 @@ async function performShellRefresh(options) {
                 await loadChat(state.currentChat.id, { quiet: true });
             }
         }
-        const route = developmentRoute();
-        const incomingRoute =
-            state.workspaceMode === 'incoming' ||
-            (route.kind === 'workspace' && route.mode === 'incoming') ||
-            (route.kind === 'board' && route.view === 'incoming');
-        if (incomingRoute) await incoming.refreshIncomingData({ force: true });
+        // Incoming is not refreshed by the shell poll; it loads on open and receives pushed messages over /api/ws.
         return chatsData;
     } catch (error) {
         toast(error.message || 'Could not load Development threads.', 'error');
@@ -1296,6 +1297,13 @@ function bindConversationActions(list, messages) {
         })
     );
     list.querySelector('[data-fork-current]')?.addEventListener('click', forkCurrentThread);
+    list.querySelectorAll('[data-read-response]').forEach((button) =>
+        button.addEventListener('click', () => readResponse(button, messages[Number(button.dataset.readResponse)], messages))
+    );
+    list.querySelectorAll('[data-play-spoken]').forEach((button) => {
+        const source = messages[Number(button.dataset.playSpoken)];
+        bindPlaySpoken(button, spokenTextFor(messages, source), source?.chat_row_id ?? null);
+    });
     list.querySelector('[data-turn-review]')?.addEventListener('click', reviewTurnChanges);
     list.querySelector('[data-turn-undo]')?.addEventListener('click', undoTurnChanges);
     list.querySelector('[data-turn-changes-toggle]')?.addEventListener('click', (event) => {
@@ -1306,6 +1314,89 @@ function bindConversationActions(list, messages) {
         button.setAttribute('aria-expanded', String(!expanded));
         content?.classList.toggle('hidden', expanded);
     });
+}
+
+/** Playback hook for the 'Read response' button. Uses the oracle's existing
+ * speak_text_directly path (approved by Paul for this button only). */
+async function playSpokenResponse(text, context = {}) {
+    const spoken = String(text || '').trim();
+    if (!spoken) return false;
+    try {
+        const body = { text: spoken, chat_id: context.chatId ?? state.currentChat?.id ?? null, source_row_id: context.sourceRowId ?? null };
+        const result = await api('/chats/speak-spoken', { method: 'POST', body });
+        return Boolean(result?.ok);
+    } catch (error) {
+        console.warn('Spoken playback failed', error);
+        return false;
+    }
+}
+
+function spokenTextFor(messages, message) {
+    const rowId = message?.chat_row_id;
+    if (rowId == null) return '';
+    const list = messages || [];
+    const linked = list.find((item) => item.spoken && String(item.spoken_source_row_id) === String(rowId));
+    if (linked) return linked.content || '';
+    const start = list.indexOf(message);
+    for (let i = start + 1; start >= 0 && i < list.length; i += 1) {
+        const item = list[i];
+        if ((item.role || 'assistant') !== 'assistant') continue;
+        if (!item.spoken) break;
+        if (item.spoken_source_row_id == null) return item.content || '';
+    }
+    return '';
+}
+
+// Play replays the saved spoken text only: no new summary, no new row.
+function bindPlaySpoken(button, text, sourceRowId = null) {
+    button.addEventListener('click', async () => {
+        if (button.classList.contains('is-loading')) return;
+        button.classList.add('is-loading');
+        button.setAttribute('aria-busy', 'true');
+        try {
+            await playSpokenResponse(text, { sourceRowId });
+        } finally {
+            button.classList.remove('is-loading');
+            button.removeAttribute('aria-busy');
+        }
+    });
+}
+
+async function readResponse(button, message) {
+    const chatId = state.currentChat?.id;
+    const text = String(message?.content || '').trim();
+    if (!chatId || !text || button.disabled) return;
+    button.disabled = true;
+    button.classList.add('is-loading');
+    button.setAttribute('aria-busy', 'true');
+    try {
+        const result = await api(`/chats/${chatId}/read-response`, {
+            method: 'POST',
+            body: { text, chat_row_id: message.chat_row_id ?? null }
+        });
+        const spoken = String(result?.spoken_text || '').trim();
+        if (spoken && state.currentChat?.id === chatId) {
+            if (!result?.existing) {
+                const spokenMessage = { role: 'assistant', content: spoken, spoken: true, chat_row_id: result?.chat_row_id ?? null, spoken_source_row_id: message.chat_row_id ?? null, timestamp: new Date().toISOString() };
+                if (Array.isArray(state.currentChat.messages)) state.currentChat.messages.push(spokenMessage);
+                threads_transcript.appendSpokenMessage(spokenMessage, (value) => copyText(value, 'Spoken response copied.'));
+            }
+            // Swap Read for Play in place on the same reply (no re-render).
+            const holder = document.createElement('div');
+            holder.innerHTML = threads_transcript.playSpokenButtonHtml(button.dataset.readResponse);
+            const play = holder.firstElementChild;
+            bindPlaySpoken(play, spoken, message.chat_row_id ?? null);
+            button.replaceWith(play);
+        }
+        await playSpokenResponse(spoken, { chatId, sourceRowId: message.chat_row_id ?? null });
+    } catch (error) {
+        console.warn('Read response failed', error);
+        toast('Could not read this response.', 'error');
+    } finally {
+        button.disabled = false;
+        button.classList.remove('is-loading');
+        button.removeAttribute('aria-busy');
+    }
 }
 
 async function loadChat(chatId, options) {
@@ -1328,10 +1419,13 @@ async function loadChat(chatId, options) {
         state.selectedProjectId = chat.project_id || null;
         state.selectedBoardKey = chat.development_board_key || boardForProject(chat.project_id)?.key || state.selectedBoardKey || '';
         state.draft.title = chat.title || '';
-        state.draft.route_mode = chat.route_mode || 'auto';
-        state.draft.provider = chat.provider || '';
-        state.draft.model_name = chat.model_name || '';
-        state.draft.backend = chat.backend || '';
+        // 2026-10-22 selector: a background reload must not overwrite a route the user is choosing right now.
+        if (!(options?.quiet && threads_composer.isRouteMenuOpen())) {
+            state.draft.route_mode = chat.route_mode || 'auto';
+            state.draft.provider = chat.provider || '';
+            state.draft.model_name = chat.model_name || '';
+            state.draft.backend = chat.backend || '';
+        }
         if (state.draft.route_mode === 'manual' && !['pi', 'cursor', 'codex', 'claude_code'].includes(String(state.draft.backend || '').toLowerCase())) {
             state.draft.backend = 'pi';
         }
@@ -1676,10 +1770,12 @@ function closeDrawers() {
     el('drawer-backdrop').classList.add('hidden');
 }
 
+installTooltipPortal();
+
 function resizePrompt() {
     const input = el('task-prompt');
     input.style.height = 'auto';
-    input.style.height = `${Math.min(180, Math.max(55, input.scrollHeight))}px`;
+    input.style.height = `${Math.min(180, Math.max(48, input.scrollHeight))}px`;
 }
 
 function syncComposerAvailability() {
@@ -1842,7 +1938,8 @@ async function init() {
         .catch(() => {});
     state.elapsedTimer = window.setInterval(updateElapsedTime, 1000);
     state.polling = window.setInterval(() => {
-        if (document.visibilityState !== 'visible' || state.busy) return;
+        // req 2026-10-22: Incoming never polls; it is updated only by /api/ws pushes.
+        if (document.visibilityState !== 'visible' || state.busy || state.workspaceMode === 'incoming') return;
         refreshShell({ preserveConversation: true, background: true });
     }, 6000);
 }
@@ -1873,6 +1970,7 @@ function bindEvents() {
     el('task-prompt').addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
+            if (event.repeat || event.isComposing) return;
             el('studio-composer').requestSubmit();
         }
     });
@@ -1882,18 +1980,24 @@ function bindEvents() {
         .forEach((button) => button.addEventListener('click', () => threads_composer.openModelPane(button.dataset.modelPane)));
     document
         .querySelectorAll('[data-prompt-mode]')
-        .forEach((button) => button.addEventListener('click', () => threads_composer.setRunMode(button.dataset.promptMode)));
+        .forEach((button) => button.addEventListener('click', () => threads_composer.setRunMode(
+            button.dataset.promptMode === 'plan' && button.getAttribute('aria-pressed') === 'true' ? 'full' : button.dataset.promptMode
+        )));
     el('prompt-playwright-toggle').addEventListener('click', threads_composer.togglePromptPlaywright);
     el('model-submenu-back').addEventListener('click', threads_composer.closeModelPane);
+    el('complexity-settings-button').addEventListener('click', (event) => { event.stopPropagation(); threads_composer.openComplexityDialog(); });
+    el('complexity-dialog-close').addEventListener('click', () => el('complexity-dialog').close());
     el('model-submenu-search').addEventListener('input', (event) => threads_composer.renderModelPaneChoices('model', event.target.value));
     el('mode-button').addEventListener('click', threads_composer.openModeDialog);
     el('mode-form').addEventListener('submit', threads_composer.applyRunMode);
     el('model-form').addEventListener('submit', (event) => event.preventDefault());
-    el('attach-button').addEventListener('click', threads_composer.toggleComposerActionMenu);
+    // '+' opens the native file picker directly (no menu); files go through uploadFiles with source 'picker'.
+    el('attach-button').addEventListener('click', () => el('context-file-input').click());
+    el('composer-plan-button').addEventListener('click', threads_composer.toggleComposerActionMenu);
     el('composer-action-menu')
         .querySelectorAll('[data-composer-action]')
         .forEach((button) => button.addEventListener('click', () => threads_composer.runComposerAttachmentAction(button.dataset.composerAction)));
-    el('composer-skill-search').addEventListener('input', (event) => threads_composer.renderComposerSkillMenu(event.target.value));
+    el('composer-skill-search')?.addEventListener('input', (event) => threads_composer.renderComposerSkillMenu(event.target.value));
     document.querySelectorAll('[data-context-source]').forEach((button) =>
         button.addEventListener('click', () => {
             state.contextSource = button.dataset.contextSource;
@@ -1951,7 +2055,7 @@ function bindEvents() {
     document.addEventListener('click', (event) => {
         if (!event.target.closest('.composer-picker')) closePickerMenus();
         if (!event.target.closest('#scheduled-import-picker')) automations.closeAutomationImportMenu();
-        if (!event.target.closest('#composer-action-menu') && !event.target.closest('#attach-button')) threads_composer.closeComposerActionMenu();
+        if (!event.target.closest('#composer-action-menu') && !event.target.closest('#composer-plan-button')) threads_composer.closeComposerActionMenu();
         if (!event.target.closest('#thread-header-menu') && !event.target.closest('#thread-more-button')) closeThreadHeaderMenu();
         if (el('model-dialog').open && !event.target.closest('#model-dialog') && !event.target.closest('#model-button')) el('model-dialog').close('cancel');
     });
@@ -2031,8 +2135,7 @@ const sidebar = createSidebar({
         startNewDevelopmentFromSidebar: (...args) => startNewDevelopmentFromSidebar(...args),
         systemFileManagerLabel: (...args) => systemFileManagerLabel(...args),
         threadRowContentHtml: (...args) => threadRowContentHtml(...args),
-        toggleThreadTimer: (...args) => updateSidebarThreadTime(...args),
-        resetThreadTimer: (chatId) => updateSidebarThreadTime(chatId, 'reset'),
+        updateThreadTimer: (...args) => updateSidebarThreadTime(...args),
         toast: (...args) => toast(...args),
         unlinkIncomingChannel: (...args) => incoming.unlinkIncomingChannel(...args),
         waitForRouteReady: (...args) => waitForRouteReady(...args)
@@ -2053,6 +2156,9 @@ const automations = createAutomations({
         },
         get boards() {
             return state.boards;
+        },
+        get projects() {
+            return state.projects;
         },
         get chats() {
             return state.chats;
@@ -2078,6 +2184,7 @@ const automations = createAutomations({
         ensureProviderCatalogs: (...args) => ensureProviderCatalogs(...args),
         escapeHtml: (...args) => escapeHtml(...args),
         formatDateTime: (...args) => formatDateTime(...args),
+        setWorkspaceMode: (...args) => setWorkspaceMode(...args),
         loadChat: (...args) => loadChat(...args),
         providerLabel: (...args) => providerLabel(args[0], state.providers),
         refreshShell: (...args) => refreshShell(...args),
@@ -2272,6 +2379,9 @@ const terminals = createTerminals({
 
 const threads_transcript = createThreadsTranscript({
     context: {
+        get turnRoutes() {
+            return state.turnRoutes || {};
+        },
         get currentChat() {
             return state.currentChat;
         },
@@ -2570,3 +2680,54 @@ boards.bindEvents();
 terminals.bindEvents();
 
 init();
+
+// Laya submissions: repaint thread rows (spinner / failed mark) from the events stream.
+// Development lists only development threads; Laya never targets those, so rows are
+// only updated when already listed here. Selection and focus are never touched.
+window.addEventListener('decisionsai-laya-thread', (event) => {
+    const id = Number(event?.detail?.threadId);
+    if (!id || !state.chats.some((chat) => Number(chat.id) === id)) return;
+    sidebar.renderSidebar();
+});
+
+// 2026-10-22 selthread: select_thread / open_thread tools push ui.thread.select over the
+// events stream. Select + highlight + scroll the row, then ack so the tool knows a tab saw it.
+// View-only: loadChat here never touches the Oracle's live chat.
+function ackUiEvent(requestId) {
+    if (!requestId) return;
+    const token = document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+    fetch('/api/events/ui/ack', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-DecisionsAI-Internal-Token': token },
+        body: JSON.stringify({ request_id: requestId })
+    }).catch(() => {});
+}
+window.addEventListener('decisionsai-event', async (event) => {
+    const detail = event?.detail || {};
+    if (detail.type !== 'ui.thread.select') return;
+    const data = detail.data || {};
+    if (data.surface !== 'development') return;
+    const id = Number(data.thread_id);
+    if (!id) return;
+    ackUiEvent(data.request_id);
+    try {
+        if (!state.chats.some((chat) => Number(chat.id) === id)) {
+            const rows = await api('/chats?surface=development');
+            const dev = (rows?.chats || []).filter((chat) => chat.development);
+            state.chats = dev.filter((chat) => !chat.archived);
+            state.archivedChats = dev.filter((chat) => chat.archived);
+        }
+        if (Number(state.currentChat?.id) !== id) await loadChat(id);
+        else sidebar.renderSidebar();
+        const row = document.querySelector(`.task-row[data-chat-id="${id}"]`);
+        const wrap = row?.closest('.task-row-wrap');
+        if (wrap) {
+            wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            wrap.classList.add('ui-select-flash');
+            setTimeout(() => wrap.classList.remove('ui-select-flash'), 1600);
+        }
+        if (data.focus) window.focus();
+    } catch (err) {
+        console.warn('ui.thread.select failed', err);
+    }
+});

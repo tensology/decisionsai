@@ -333,11 +333,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     logger.error("Failed to include image: %s", e, exc_info=True)
                     self._messages.append({"role": "user", "content": user_text_for_model})
             else:
-                analysis = await analyze_image_with_vision_llm(image_path, text)
-                if analysis:
-                    self._messages.append({"role": "user", "content": f"[Image analysis: {analysis}]\n\nUser's question: {user_text_for_model}"})
-                else:
-                    self._messages.append({"role": "user", "content": user_text_for_model})
+                described = await self._describe_image_for_text_model(image_path, text, user_text_for_model)
+                self._messages.append({"role": "user", "content": described})
         elif image_path:
             self._messages.append({"role": "user", "content": user_text_for_model})
         else:

@@ -125,10 +125,16 @@ class PiAgentTool(BaseTool):
                 ["pi", "-p", "--append-system-prompt", system_prompt_for_pi,
                  enriched_instruction],
                 capture_output=True, text=True, timeout=600,
+                stdin=subprocess.DEVNULL,
                 cwd=folder,
             )
             output = (result.stdout + result.stderr).strip()[:3000]
-            status = "completed" if result.returncode == 0 else "failed"
+            from distr.core.agent.tools.integrations.unified_cli import pi_oneshot_error
+
+            error = pi_oneshot_error(result.returncode, output)
+            status = "failed" if error else "completed"
+            if error and not output:
+                output = f"Pi failed: {error}"
         except subprocess.TimeoutExpired:
             output = "Pi timed out after 10 minutes"
             status = "failed"
@@ -146,6 +152,8 @@ class PiAgentTool(BaseTool):
 
         if not output:
             return f"[Pi — {resolved_name}] Completed with no output."
+        if status == "failed" and not output.startswith("Pi "):
+            output = f"Failed: {output}"
 
         if len(output) > 1500:
             return f"[Pi — {resolved_name}]\n{output[:1500]}...\n\n(output truncated)"

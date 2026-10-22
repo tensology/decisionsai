@@ -1,4 +1,4 @@
-"""Normalization for Codex CLI preferences used in ticket complexity routing."""
+"""Normalization for Codex CLI preferences used in Complexity routing."""
 
 from __future__ import annotations
 

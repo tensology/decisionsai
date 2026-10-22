@@ -1,3 +1,8 @@
+---
+name: jev-research-guard
+description: "Use after evidence is in hand and before presenting one precise claim as established; calls the Jev MCP tool jev_check_research."
+---
+
 # Jev Research Guard
 
 Use `jev_check_research` after collecting evidence and before presenting a material claim as established.

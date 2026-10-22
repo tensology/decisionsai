@@ -37,20 +37,74 @@ def _canonical_id(value: str) -> str:
     return text.strip("-")
 
 
+_BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d?$")
+
+
+def _fallback_frontmatter(block: str) -> dict:
+    """Minimal YAML-subset parser used only if PyYAML is unavailable or fails.
+
+    Handles ``key: value``, quoted values, block scalars (``|``, ``>``, ``>-`` ...)
+    and indented plain continuation lines. Nested mappings are skipped.
+    """
+    data: dict = {}
+    lines = block.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^([A-Za-z0-9_-]+):(?:\s+(.*))?$", line)
+        if not m:
+            i += 1
+            continue
+        key, raw = m.group(1), (m.group(2) or "").strip()
+        i += 1
+        cont: list[str] = []
+        while i < len(lines) and (lines[i].startswith((" ", "\t")) or not lines[i].strip()):
+            cont.append(lines[i])
+            i += 1
+        if _BLOCK_SCALAR.match(raw):
+            parts = [c.strip() for c in cont]
+            if raw.startswith("|"):
+                value = "\n".join(parts).strip()
+            else:
+                value = " ".join(p for p in parts if p).strip()
+        elif raw:
+            value = " ".join([raw] + [c.strip() for c in cont if c.strip()])
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+        else:
+            value = " ".join(c.strip() for c in cont if c.strip() and ":" not in c.strip()[:40]) if cont else ""
+            if cont and any(re.match(r"^\s+[A-Za-z0-9_-]+:", c) for c in cont):
+                value = ""  # nested mapping; not needed here
+        data[key.lower()] = value
+    return data
+
+
+def parse_frontmatter(text: str) -> dict | None:
+    """Return the SKILL.md frontmatter mapping, or None when absent/unterminated."""
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 3)
+    if end == -1:
+        return None
+    block = text[3:end].lstrip("\r\n")
+    try:
+        import yaml  # PyYAML is in requirements
+
+        data = yaml.safe_load(block)
+        if isinstance(data, dict):
+            return {str(k).lower(): v for k, v in data.items()}
+    except Exception:
+        pass
+    return _fallback_frontmatter(block)
+
+
 def _frontmatter_fields(text: str, fallback: str) -> tuple[str, str]:
-    name = fallback
-    description = ""
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            for line in text[3:end].splitlines():
-                stripped = line.strip()
-                lower = stripped.lower()
-                if lower.startswith("name:"):
-                    name = stripped.split(":", 1)[1].strip().strip('"').strip("'") or fallback
-                elif lower.startswith("description:"):
-                    description = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-    return name, description
+    data = parse_frontmatter(text) or {}
+    name = data.get("name")
+    name = str(name).strip() if name not in (None, "") else fallback
+    description = data.get("description")
+    description = " ".join(str(description).split()) if description not in (None, "") else ""
+    return name or fallback, description
 
 
 def _skill_md(skill_dir: Path) -> Path | None:

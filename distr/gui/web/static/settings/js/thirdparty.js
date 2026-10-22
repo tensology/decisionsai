@@ -154,7 +154,8 @@ const PROVIDERS = [
         docsUrl: 'https://www.jevai.org/agent/keys',
         helper: 'Create a personal key, validate it here, and save it to connect the Jev MCP to new chats.',
         infoHtml: 'Create a personal key at <a href="https://www.jevai.org/agent/keys" target="_blank" rel="noopener">jevai.org/agent/keys</a>. Decisions stores it encrypted, registers <code>https://www.jevai.org/api/mcp</code>, and exposes the six <code>jev_*</code> routing and review tools to new chats.',
-        color: 'from-violet-400/25 to-cyan-500/10'
+        color: 'from-violet-400/25 to-cyan-500/10',
+        iconPath: '/assets/img/providers/jev.png'
     },
     {
         id: 'pixazo',
@@ -368,7 +369,8 @@ function thirdPartyIconSvg(provider, sizeClass) {
     if (path) {
         return '<img src="' + escapeThirdPartyHtml(path) + '" alt="' + escapeThirdPartyHtml(provider.name || '') + ' logo" class="' + size + ' rounded-lg object-contain">';
     }
-    return '<span class="' + size + ' inline-flex items-center justify-center text-xs font-semibold">' + escapeThirdPartyHtml((provider.name || '?').slice(0, 2).toUpperCase()) + '</span>';
+    // Fallback monogram sits on the white logo tile, so force dark text (it used to inherit the page's light text and vanish).
+    return '<span class="' + size + ' inline-flex items-center justify-center text-sm font-bold text-slate-800" style="color:#1e293b">' + escapeThirdPartyHtml((provider.name || '?').slice(0, 2).toUpperCase()) + '</span>';
 }
 
 function thirdPartyConnectIsConnected(providerId) {
@@ -464,40 +466,27 @@ function resetThirdPartyMobilePolling() {
 }
 
 function updateThirdPartyHeader() {
+    // Header (icon + vendor name + Back) is only shown inside a vendor detail view;
+    // the list view stays header-free.
+    const headerEl = document.getElementById('thirdparty_section_header');
     const titleEl = document.getElementById('thirdparty_section_title');
-    const subtitleEl = document.getElementById('thirdparty_section_subtitle');
-    const backBtn = document.getElementById('thirdparty_section_back');
     const iconEl = document.getElementById('thirdparty_section_icon');
     const provider = currentThirdPartyProvider();
     const connectProvider = currentThirdPartyConnectProvider();
-    if (!titleEl || !subtitleEl || !backBtn || !iconEl) return;
-    if (activeThirdPartySubtab === 'api_keys' && thirdPartyDetailOpen && provider) {
-        titleEl.textContent = provider.name;
-        subtitleEl.innerHTML = thirdPartySentenceLinesHtml(provider.blurb);
-        backBtn.classList.remove('hidden');
-        iconEl.innerHTML = thirdPartyIconSvg(provider, 'h-10 w-10');
-        iconEl.classList.remove('hidden');
-        iconEl.classList.add('flex');
-    } else if (activeThirdPartySubtab === 'connect' && thirdPartyConnectDetailOpen && connectProvider) {
-        titleEl.textContent = connectProvider.name;
-        subtitleEl.innerHTML = thirdPartySentenceLinesHtml(connectProvider.blurb);
-        backBtn.classList.remove('hidden');
-        iconEl.innerHTML = thirdPartyIconSvg(connectProvider, 'h-10 w-10');
-        iconEl.classList.remove('hidden');
-        iconEl.classList.add('flex');
+    if (!headerEl) return;
+    let active = null;
+    if (activeThirdPartySubtab === 'api_keys' && thirdPartyDetailOpen && provider) active = provider;
+    else if (activeThirdPartySubtab === 'connect' && thirdPartyConnectDetailOpen && connectProvider) active = connectProvider;
+    if (active) {
+        if (titleEl) titleEl.textContent = active.name;
+        if (iconEl) iconEl.innerHTML = thirdPartyIconSvg(active, 'h-10 w-10');
+        headerEl.classList.remove('hidden');
+        headerEl.classList.add('flex');
     } else {
-        titleEl.textContent = 'Third Party Vendors';
-        if (activeThirdPartySubtab === 'connect') {
-            subtitleEl.innerHTML = thirdPartySentenceLinesHtml('Connect external vendors and work accounts directly from this section.');
-        } else if (activeThirdPartySubtab === 'mcp') {
-            subtitleEl.innerHTML = thirdPartySentenceLinesHtml('Configure MCP servers alongside the vendors and tools they support.');
-        } else {
-            subtitleEl.innerHTML = thirdPartySentenceLinesHtml('Manage vendor API keys, connected accounts, and MCP servers from one place.');
-        }
-        backBtn.classList.add('hidden');
-        iconEl.innerHTML = '';
-        iconEl.classList.add('hidden');
-        iconEl.classList.remove('flex');
+        if (titleEl) titleEl.textContent = '';
+        if (iconEl) iconEl.innerHTML = '';
+        headerEl.classList.add('hidden');
+        headerEl.classList.remove('flex');
     }
 }
 

@@ -71,6 +71,7 @@
 .plan-message-avatar { display: grid; width: 24px; height: 24px; overflow: hidden; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, .05); }
 .plan-message-avatar .assistant-avatar-image,
 .plan-message-avatar .assistant-avatar-fallback { display: block; width: 100%; height: 100%; object-fit: cover; }
+.plan-message-avatar .assistant-avatar-image { transform: translate(var(--assistant-image-offset-x, 0), var(--assistant-image-offset-y, 0)) scale(var(--assistant-image-scale, 1)); transform-origin: center; }
 .plan-message-avatar .assistant-avatar-image.avatar { padding: 2px; object-fit: contain; }
 .plan-message-avatar .assistant-avatar-fallback { background: rgba(232, 137, 50, .18); }
 .plan-message-content, .plan-document { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--studio-text); }

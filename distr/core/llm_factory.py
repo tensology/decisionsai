@@ -80,6 +80,58 @@ def infer_provider_from_model(provider: str, model_name: str) -> str:
     return norm
 
 
+_TIER_LLM_PROVIDERS = {
+    "ollama", "openai", "anthropic", "groq", "openrouter", "kilocode",
+    "gemini", "google gemini", "nvidia",
+}
+COMPLEXITY_LEVELS = ("low", "medium", "high")
+
+
+def complexity_route_to_llm(backend: Any, provider: Any, model: Any) -> Optional[Tuple[str, str]]:
+    """Map one Complexity routing route (harness + provider + model) to a plain LLM call.
+
+    Complexity routing routes are CLI harness routes (Pi, Cursor, Codex, ...). When a
+    workflow step needs a direct LLM call we reuse the route's provider/model:
+      1. model empty or "auto"                 -> not mappable (harness picks its own model)
+      2. model_provider is a known LLM provider -> (that provider, model)
+      3. harness id is itself an LLM provider   -> (harness, model)   e.g. ollama, kilocode
+      4. model ends with ":cloud", or Pi with a bare "name:tag" -> Ollama
+      5. Pi with an "org/model" id              -> OpenRouter
+      otherwise (Cursor/Codex/Claude CLI own models) -> not mappable.
+    """
+    m = str(model or "").strip()
+    if not m or m.lower() == "auto":
+        return None
+    prov = str(provider or "").strip().lower()
+    be = str(backend or "").strip().lower()
+    if prov in _TIER_LLM_PROVIDERS:
+        return normalize_provider(prov), m
+    if be in _TIER_LLM_PROVIDERS:
+        return normalize_provider(be), m
+    if m.lower().endswith(":cloud") or (be == "pi" and ":" in m and "/" not in m):
+        return "Ollama", m
+    if be == "pi" and "/" in m:
+        return "OpenRouter", m
+    return None
+
+
+def resolve_complexity_llm_candidates(settings: Dict[str, Any], level: str = "medium") -> List[Tuple[str, str]]:
+    """Return mappable (provider, model) pairs for a Complexity routing tier: primary, then fallback."""
+    lvl = str(level or "medium").strip().lower()
+    if lvl not in COMPLEXITY_LEVELS:
+        lvl = "medium"
+    out: List[Tuple[str, str]] = []
+    for prefix in (f"project_cli_{lvl}", f"project_cli_{lvl}_fallback"):
+        pair = complexity_route_to_llm(
+            settings.get(f"{prefix}_backend"),
+            "" if (prefix == f"project_cli_{lvl}" and settings.get(f"project_cli_{lvl}_auto")) else settings.get(f"{prefix}_model_provider"),
+            "auto" if (prefix == f"project_cli_{lvl}" and settings.get(f"project_cli_{lvl}_auto")) else settings.get(f"{prefix}_model"),
+        )
+        if pair and pair not in out:
+            out.append(pair)
+    return out
+
+
 def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     """Determine (provider, model) from a settings dict with fallback chain.
 
@@ -87,8 +139,8 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     those take precedence over global settings.
 
     Fallback order:
-      provider: workflow_llm_provider -> coding_llm_provider -> conversational_llm_provider -> agent_provider -> llm_provider -> "Ollama"
-      model:    workflow_llm_model   -> coding_llm_model   -> conversational_llm_model   -> agent_model   -> llm_model   -> ""
+      provider: Complexity routing Medium tier (then its fallback) -> coding_llm_provider -> conversational_llm_provider -> agent_provider -> llm_provider -> "Ollama"
+      model:    Medium tier model                                 -> coding_llm_model   -> conversational_llm_model   -> agent_model   -> llm_model   -> ""
     """
     from distr.core.llm_override import get_llm_override
 
@@ -97,15 +149,10 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     if override and override.orchestrator_provider:
         return normalize_provider(override.orchestrator_provider), (override.orchestrator_model or "")
 
-    # Workflow dedicated LLM
-    workflow_provider = (
-        (settings.get("workflow_llm_provider") or "").strip()
-    )
-    workflow_model = (
-        (settings.get("workflow_llm_model") or "").strip()
-    )
-    if workflow_provider:
-        return normalize_provider(workflow_provider), workflow_model
+    # Workflow brain: Complexity routing Medium tier (primary, then fallback)
+    tier_candidates = resolve_complexity_llm_candidates(settings, "medium")
+    if tier_candidates:
+        return tier_candidates[0]
 
     provider = (
         (settings.get("coding_llm_provider") or "").strip()
@@ -127,7 +174,7 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
 def resolve_llm_candidates(settings: Dict[str, Any]) -> List[Tuple[str, str]]:
     """Return provider/model pairs for retryable lightweight LLM calls.
 
-    Matches WorkflowAgent resolution: workflow LLM when configured, otherwise
+    Matches WorkflowAgent resolution: Complexity routing Medium tier (+ fallback) when mappable, otherwise
     coding (Settings → Workflow → "Inherit from Coding"), conversational, then
     legacy agent keys, then a local Ollama fallback.
     """
@@ -152,9 +199,8 @@ def resolve_llm_candidates(settings: Dict[str, Any]) -> List[Tuple[str, str]]:
     if override and override.orchestrator_provider:
         add(override.orchestrator_provider, override.orchestrator_model or "")
 
-    workflow_provider = (settings.get("workflow_llm_provider") or "").strip()
-    if workflow_provider:
-        add(workflow_provider, settings.get("workflow_llm_model") or "")
+    for tier_provider, tier_model in resolve_complexity_llm_candidates(settings, "medium"):
+        add(tier_provider, tier_model)
 
     coding_provider = (settings.get("coding_llm_provider") or "").strip()
     if coding_provider:

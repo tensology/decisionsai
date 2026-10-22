@@ -1,3 +1,8 @@
+---
+name: jev-tool-guard
+description: "Use immediately before a consequential tool call that can mutate state, spend money, expose data, publish, deploy, or be hard to reverse; calls the Jev MCP tool jev_guard_tool_call."
+---
+
 # Jev Tool Guard
 
 Use `jev_guard_tool_call` immediately before a consequential tool invocation. Do not use it to bypass an approval already required by the user, platform, or policy.

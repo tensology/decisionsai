@@ -139,6 +139,62 @@ def _body_excerpt(skill_file: Path, *, limit: int = 220) -> str:
     return text[:limit].strip()
 
 
+_PLACEHOLDER_DESCRIPTIONS = {"", ">", "|", ">-", "|-", ">+", "|+"}
+
+
+def _is_placeholder_description(value: Any) -> bool:
+    return str(value or "").strip() in _PLACEHOLDER_DESCRIPTIONS
+
+
+def _frontmatter_description(skill_file: Path | None) -> str:
+    if not skill_file:
+        return ""
+    from distr.core.skills.registry import _frontmatter_fields
+
+    try:
+        text = skill_file.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    _name, description = _frontmatter_fields(text, skill_file.parent.name)
+    return description or _body_excerpt(skill_file)
+
+
+def _unregistered_local_rows(existing_ids: set[str]) -> list[dict[str, Any]]:
+    """Rows for skills/<id>/SKILL.md folders missing from skills_registry.json."""
+    from distr.core.skills.registry import _frontmatter_fields
+
+    rows: list[dict[str, Any]] = []
+    if not _SKILLS_DIR.is_dir():
+        return rows
+    for skill_dir in sorted(_SKILLS_DIR.iterdir(), key=lambda p: p.name.lower()):
+        if not skill_dir.is_dir() or skill_dir.name.startswith((".", "_")):
+            continue
+        key = _canonical_id(skill_dir.name)
+        if not key or key in existing_ids:
+            continue
+        skill_file = _skill_file(skill_dir)
+        if not skill_file:
+            continue
+        try:
+            text = skill_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        name, description = _frontmatter_fields(text, skill_dir.name)
+        rows.append(
+            {
+                "id": skill_dir.name,
+                "name": name or skill_dir.name,
+                "description": description or _body_excerpt(skill_file),
+                "path": skill_dir.name,
+                "source": "local",
+                "editable": True,
+                "tags": ["local"],
+            }
+        )
+        existing_ids.add(key)
+    return rows
+
+
 def _local_row_directory(row: dict[str, Any]) -> Path:
     raw_path = str(row.get("path") or row.get("id") or "").strip()
     path = Path(raw_path)
@@ -327,8 +383,15 @@ def load_registry() -> tuple[dict[str, Any], ...]:
             row = dict(item)
             row.setdefault("source", "local")
             row.setdefault("editable", True)
+            if _is_placeholder_description(row.get("description")):
+                fresh = _frontmatter_description(_skill_file(_local_row_directory(row)))
+                if fresh:
+                    row["description"] = fresh
             rows.append(row)
             existing_ids.add(_canonical_id(skill_id))
+    # The skills/ directory is the source of truth; skills_registry.json is a
+    # metadata overlay (tags, curated descriptions). Unlisted folders still load.
+    rows.extend(_unregistered_local_rows(existing_ids))
 
     scan = _registry_scan()
     rows.extend(_community_pack_rows(existing_ids))

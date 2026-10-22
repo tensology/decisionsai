@@ -37,6 +37,10 @@ def run_pre_create_migrations():
     except Exception as e:
         logger.warning(f"Could not run pre-create migrations: {e}")
     
+    # Retired 2026-10-22: workflow steps resolve their LLM from Complexity routing
+    # tiers. Startup-only (init_db), before create_all; no-op once dropped.
+    _drop_settings_columns(engine, ("workflow_llm_provider", "workflow_llm_model"))
+
     logger.info("Pre-create migrations completed")
 
 def run_migrations():
@@ -792,8 +796,6 @@ def run_migrations():
 
     # Handle database migration for workflow/legacy workflow LLM columns
     for _col, _default in [
-        ("workflow_llm_provider", "''"),
-        ("workflow_llm_model", "''"),
         ("step_runner_llm_provider", "''"),
         ("step_runner_llm_model", "''"),
     ]:
@@ -1678,6 +1680,9 @@ def run_migrations():
         ("project_cli_medium_fallback_model", "VARCHAR DEFAULT ''"),
         ("project_cli_high_fallback_backend", "VARCHAR DEFAULT ''"),
         ("project_cli_high_fallback_model", "VARCHAR DEFAULT ''"),
+        ("project_cli_low_fallback_model_provider", "VARCHAR DEFAULT ''"),
+        ("project_cli_medium_fallback_model_provider", "VARCHAR DEFAULT ''"),
+        ("project_cli_high_fallback_model_provider", "VARCHAR DEFAULT ''"),
     ]
     try:
         with engine.connect() as conn:
@@ -1691,6 +1696,57 @@ def run_migrations():
                         logger.debug(f"Could not add {col} to settings: {e}")
     except Exception as e:
         logger.debug(f"CLI fallback settings migration: {e}")
+
+    # autocol 2026-10-22: per-tier Auto flags for Complexity routing (additive, idempotent)
+    try:
+        with engine.connect() as conn:
+            for col in ("project_cli_low_auto", "project_cli_medium_auto", "project_cli_high_auto"):
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col} BOOLEAN DEFAULT 0"))
+                    conn.commit()
+                    logger.info(f"Added {col} column to settings table")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.debug(f"Could not add {col} to settings: {e}")
+    except Exception as e:
+        logger.debug(f"Complexity tier Auto migration: {e}")
+
+    # automodel 2026-10-22: global automation CLI route (additive, nullable, idempotent)
+    _automation_cli_columns = [
+        ("automation_cli_backend", "VARCHAR DEFAULT ''"),
+        ("automation_cli_model_provider", "VARCHAR DEFAULT ''"),
+        ("automation_cli_model", "VARCHAR DEFAULT ''"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for col, col_def in _automation_cli_columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col} {col_def}"))
+                    conn.commit()
+                    logger.info(f"Added {col} column to settings table")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.debug(f"Could not add {col} to settings: {e}")
+    except Exception as e:
+        logger.debug(f"Automation CLI route settings migration: {e}")
+
+    # mcpcols 2026-10-22: MCP server mode settings (additive, idempotent)
+    _mcp_server_columns = [
+        ("mcp_server_enabled", "BOOLEAN DEFAULT 0"),
+        ("mcp_server_relay_vendors", "VARCHAR DEFAULT ''"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for col, col_def in _mcp_server_columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col} {col_def}"))
+                    conn.commit()
+                    logger.info(f"Added {col} column to settings table")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.debug(f"Could not add {col} to settings: {e}")
+    except Exception as e:
+        logger.debug(f"MCP server mode settings migration: {e}")
 
     # Add color column to kanban_boards table
     try:
@@ -2700,3 +2756,33 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
                     logger.info("Added %s column to settings table", col)
                 except Exception as e:
                     logger.warning("Could not add %s column: %s", col, e)
+
+
+
+
+def _drop_settings_columns(engine, columns) -> None:
+    """Idempotently drop columns from the settings table (SQLite >= 3.35 DROP COLUMN, else rebuild)."""
+    import sqlite3 as _sqlite3
+    try:
+        with engine.connect() as conn:
+            existing = [row[1] for row in conn.execute(text("PRAGMA table_info(settings)")).fetchall()]
+            to_drop = [c for c in columns if c in existing]
+            if not to_drop:
+                return
+            if _sqlite3.sqlite_version_info >= (3, 35, 0):
+                for col in to_drop:
+                    conn.execute(text(f'ALTER TABLE settings DROP COLUMN "{col}"'))
+            else:
+                # Old SQLite: rebuild from the ORM model (which no longer has the columns).
+                keep = [c for c in existing if c not in to_drop]
+                conn.execute(text("ALTER TABLE settings RENAME TO settings__old"))
+                from distr.core.db import Settings as _SettingsModel
+                _SettingsModel.__table__.create(bind=conn)
+                new_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(settings)")).fetchall()}
+                shared = ", ".join(f'"{c}"' for c in keep if c in new_cols)
+                conn.execute(text(f"INSERT INTO settings ({shared}) SELECT {shared} FROM settings__old"))
+                conn.execute(text("DROP TABLE settings__old"))
+            conn.commit()
+            logger.info("Dropped retired settings columns: %s", ", ".join(to_drop))
+    except Exception as e:
+        logger.warning("Could not drop retired settings columns %s: %s", columns, e)

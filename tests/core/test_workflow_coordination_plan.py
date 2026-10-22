@@ -122,6 +122,36 @@ def test_coordination_plan_allocates_the_whole_workflow_without_mutating_it(monk
     assert role_routes["implementation"]["model"] == "ornith:35b"
 
 
+def test_coordination_plan_preserves_explicit_scoped_step_routes():
+    workflow = _workflow(adaptive=False, name="Custom")
+    workflow.run_settings = "{}"
+    workflow.steps[0].config = json.dumps({
+        "step_role": "implementation",
+        "execution_route": {
+            "enabled": True,
+            "mode": "scoped",
+            "scoped_model_key": "pi:ollama:auto",
+            "route_snapshot": {"backend_id": "pi", "provider": "ollama", "model": "auto", "name": "Pi Auto"},
+        },
+    })
+    workflow.steps[1].config = json.dumps({
+        "step_role": "review",
+        "execution_route": {
+            "enabled": True,
+            "mode": "scoped",
+            "scoped_model_key": "codex:openai:gpt-5.6-luna",
+            "route_snapshot": {"backend_id": "codex", "provider": "openai", "model": "gpt-5.6-luna", "name": "Codex Luna"},
+        },
+    })
+
+    plan = build_run_coordination_plan(workflow, {}, settings={})
+
+    assert plan["assignments"]["11"]["primary_route"]["backend"] == "pi"
+    assert plan["assignments"]["11"]["primary_route"]["source"] == "step_execution_route"
+    assert plan["assignments"]["12"]["primary_route"]["backend"] == "codex"
+    assert plan["assignments"]["12"]["primary_route"]["model"] == "gpt-5.6-luna"
+
+
 def test_coordination_plan_honors_manual_thread_route_for_primary_steps(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.model_policy.apply_auto_step_role_policy",

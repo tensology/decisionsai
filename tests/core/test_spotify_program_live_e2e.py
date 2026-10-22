@@ -64,12 +64,20 @@ def test_live_fixture_cleanup_uses_server_api_and_removes_disposable_folder(
     project_dir = tmp_path / "spotify-remake-e2e-codex-cleanup"
     project_dir.mkdir()
     calls: list[str] = []
+    api_calls: list[tuple[str, str]] = []
+
+    def request(path: str, *, method: str = "GET", **_kwargs: object) -> dict[str, object]:
+        api_calls.append((method, path))
+        return {"runs": [{"id": 12, "status": "running"}, {"id": 13, "status": "completed"}]}
+
+    monkeypatch.setattr(harness, "api_request", request)
     monkeypatch.setattr(harness, "_best_effort_api_delete", calls.append)
 
     harness.cleanup_live_spotify_fixture(
         {
             "tickets": [{"id": 7}, {"id": 8}],
             "board_id": 9,
+            "project_board_id": 6,
             "workflow_id": 10,
             "project_id": 11,
             "project_dir": str(project_dir),
@@ -80,9 +88,14 @@ def test_live_fixture_cleanup_uses_server_api_and_removes_disposable_folder(
     assert calls == [
         "/tickets/tickets/7",
         "/tickets/tickets/8",
+        "/tickets/boards/6",
         "/tickets/boards/9",
         "/workflows/10",
         "/projects/11",
+    ]
+    assert api_calls == [
+        ("GET", "/workflows/10"),
+        ("POST", "/workflows/10/cancel-run/12"),
     ]
     assert not project_dir.exists()
 

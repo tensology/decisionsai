@@ -102,7 +102,7 @@ class FastActionDetector:
         """Pre-compile regex patterns for fast matching."""
         # Context indicators
         self.THIS_PATTERN = re.compile(r'\b(this|that|these|those|it)\b', re.IGNORECASE)
-        self.CLIPBOARD_PATTERN = re.compile(r'\b(clipboard|clip board|copied|clipped)\b', re.IGNORECASE)
+        self.CLIPBOARD_PATTERN = re.compile(r'\b(clipboard|clip board|club board|copied|clipped)\b', re.IGNORECASE)
         self.SELECTION_PATTERN = re.compile(r'\b(selected|selection|highlighted|text)\b', re.IGNORECASE)
         
         # Spoken "bring up" is an open verb, not a generic app-focus.
@@ -119,6 +119,9 @@ class FastActionDetector:
 
         # Action patterns - ordered by specificity (most specific first)
         self.action_patterns = [
+            # Common speech-to-text rendering of "It's in my clipboard".
+            (re.compile(r"\b(?:it|that|this)(?:'s|\s+is)?\s+in\s+(?:my|the)\s+(?:clip\s*board|club\s+board)\b", re.IGNORECASE),
+             ActionType.CLIPBOARD_GET, "clipboard_action", {"action": "get"}, False, "llm_response"),
             # === DECISIONSAI INTERNAL SURFACES ===
             (re.compile(
                 _polite + _open +
@@ -1085,7 +1088,15 @@ class FastActionDetector:
         # COMPOUND SENTENCE CHECK: If the text contains multiple sentences/clauses
         # and mixes conversational content with commands, route to LLM so it can
         # handle both parts (e.g. "What's your favorite color? And also take a screenshot")
-        if self._is_compound_with_conversation(text_lower):
+        # Bug 2026-10-22: long instructions that hand work to a Development thread
+        # ("put it in the decisions thread ... create an MD file in my downloads")
+        # fast-matched file_operations(list downloads). Let the LLM route them.
+        try:
+            from distr.core.workflow.oracle_thread_handoff import mentions_development_thread
+            _dev_thread = mentions_development_thread(text)
+        except Exception:
+            _dev_thread = False
+        if _dev_thread or self._is_compound_with_conversation(text_lower):
             logger.info(f"FastActionDetector: Compound sentence with conversational content, routing to LLM: '{text[:80]}'")
             return DetectedAction(
                 action_type=ActionType.UNKNOWN,

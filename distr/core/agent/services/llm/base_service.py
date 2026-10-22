@@ -183,9 +183,11 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         Shared across all providers.
         """
         from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
         if not self._messages:
             return None
-        last_message = self._messages[-1].get("content", "")
+        last_message = strip_rag_block(self._messages[-1].get("content", ""))
         if not isinstance(last_message, str):
             return None
         # Skip if we already processed this exact message as a fast action

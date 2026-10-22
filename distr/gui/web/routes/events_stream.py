@@ -104,3 +104,59 @@ async def events_stream(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------- select_thread (2026-10-22)
+# The select_thread / open_thread tools POST here; open Chat/Development tabs receive
+# ui.thread.select over the SSE stream above, select + highlight the row, and POST an ack.
+_pending_acks: dict[str, int] = {}
+_ack_lock = threading.Lock()
+
+
+@router.post("/ui/select-thread")
+async def ui_select_thread(request: Request) -> dict[str, Any]:
+    require_internal_token_request(request)
+    import uuid
+
+    from distr.core.events.types import UI_THREAD_SELECT
+
+    body = await request.json()
+    surface = "chat" if str(body.get("surface") or "").lower() == "chat" else "development"
+    try:
+        thread_id = int(body.get("thread_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="thread_id must be an integer")
+    timeout = min(max(float(body.get("timeout") or 1.5), 0.2), 3.0)
+    request_id = uuid.uuid4().hex
+    with _ack_lock:
+        _pending_acks[request_id] = 0
+    try:
+        get_event_bus().publish(UI_THREAD_SELECT, {
+            "request_id": request_id, "surface": surface, "thread_id": thread_id,
+            "title": str(body.get("title") or "")[:200], "focus": bool(body.get("focus")),
+        })
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.1)
+            with _ack_lock:
+                if _pending_acks.get(request_id):
+                    break
+        await asyncio.sleep(0.15)  # let other tabs ack too
+        with _ack_lock:
+            acked = _pending_acks.get(request_id, 0)
+    finally:
+        with _ack_lock:
+            _pending_acks.pop(request_id, None)
+    return {"ok": True, "request_id": request_id, "acked": acked, "surface": surface, "thread_id": thread_id}
+
+
+@router.post("/ui/ack")
+async def ui_ack(request: Request) -> dict[str, Any]:
+    require_internal_token_request(request)
+    body = await request.json()
+    rid = str(body.get("request_id") or "")
+    with _ack_lock:
+        if rid in _pending_acks:
+            _pending_acks[rid] += 1
+            return {"ok": True}
+    return {"ok": False}

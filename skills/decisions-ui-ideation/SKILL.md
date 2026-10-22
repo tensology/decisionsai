@@ -43,7 +43,7 @@ Produce a short artifact (comment in ticket, `DESIGN.md` snippet, or result pack
 - **Tokens**: font pairing, 3–5 colors as CSS variables, spacing rhythm.
 - **Motion**: none / subtle / one hero moment (match Aceternity only if motion fits).
 
-Pair with `frontend-design` or `frontend-design-direction` for implementation rules.
+Pair with `frontend-design` or `ui-ux-system` for implementation rules.
 
 ## 4. Then implement
 

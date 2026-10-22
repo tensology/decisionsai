@@ -35,6 +35,7 @@ def test_clipboard_tts_speaks_cleaned_text_but_records_exact_clipboard_text():
         def __init__(self):
             self.spoken = []
             self.read_records = []
+            self._messages = []
             self._is_telegram_request = False
 
         async def _fa_push_tts(self, text):
@@ -53,3 +54,8 @@ def test_clipboard_tts_speaks_cleaned_text_but_records_exact_clipboard_text():
     assert harness.read_records == [
         (707, "Read from clipboard", "[Paul] | @design & ops {urgent}", "read from clipboard")
     ]
+    assert harness._messages[-1] == {
+        "role": "tool",
+        "name": "clipboard_action",
+        "content": "Clipboard content read aloud:\n[Paul] | @design & ops {urgent}",
+    }

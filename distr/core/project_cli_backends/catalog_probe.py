@@ -212,13 +212,36 @@ def anthropic_models(settings: dict) -> tuple[list[dict], str, str]:
     return dedupe_model_entries(aliases + models), "anthropic-api", ""
 
 
+CODEX_NOT_FOUND_MESSAGE = "Codex CLI not found. Install it with: npm i -g @openai/codex"
+
+
+def resolve_codex_binary() -> str | None:
+    """Find the codex CLI even when the server's PATH lacks Homebrew/npm global bins."""
+    import os
+    import shutil
+
+    found = shutil.which("codex")
+    if found:
+        return found
+    for folder in ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.npm-global/bin")):
+        candidate = os.path.join(folder, "codex")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def codex_models(settings: dict | None = None) -> tuple[list[dict], str, str]:
     del settings
     message = "Could not load the Codex session model catalog."
     process = None
     try:
+        codex_binary = resolve_codex_binary()
+        if not codex_binary:
+            raise FileNotFoundError(CODEX_NOT_FOUND_MESSAGE)
         process = subprocess.Popen(
-            ["codex", "app-server", "--listen", "stdio://"],
+            [codex_binary, "app-server", "--listen", "stdio://"],
+            # The npm codex shim needs node next to it; keep its folder on PATH for the child.
+            env={**os.environ, "PATH": os.pathsep.join([os.path.dirname(codex_binary), os.environ.get("PATH", "")])},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -290,7 +313,7 @@ def codex_models(settings: dict | None = None) -> tuple[list[dict], str, str]:
         if models:
             return dedupe_model_entries(models), "codex-app-server", ""
     except Exception as exc:
-        message = f"Could not load the Codex session model catalog: {exc}"
+        message = CODEX_NOT_FOUND_MESSAGE if isinstance(exc, FileNotFoundError) else f"Could not load the Codex session model catalog: {exc}"
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

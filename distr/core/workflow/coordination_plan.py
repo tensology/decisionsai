@@ -163,6 +163,50 @@ def _configured_vision_review_route(settings: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _board_for_run(run_data: dict[str, Any]) -> Any | None:
+    """Best-effort board lookup for a run (board_id, else via ticket_id)."""
+    board_id = run_data.get("board_id")
+    ticket_id = run_data.get("ticket_id")
+    try:
+        if board_id is None and ticket_id is not None:
+            from distr.core.orchestrator import resolve_board_id_for_ticket
+
+            board_id = resolve_board_id_for_ticket(int(ticket_id))
+        if board_id is None:
+            return None
+        from distr.core.db import get_session
+        from distr.core.db.kanban import KanbanBoard
+
+        with get_session() as db:
+            board = db.query(KanbanBoard).filter(KanbanBoard.id == int(board_id)).first()
+            if board is not None:
+                db.expunge(board)
+            return board
+    except Exception:
+        return None
+
+
+def _resolved_complexity_route(
+    complexity: str,
+    run_data: dict[str, Any],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve the configured complexity route (board override, readiness, fallback).
+
+    Returns {} when no complexity route is configured in ``settings`` and the
+    run has no board, so plans built from bare settings keep their old shape.
+    """
+    board = _board_for_run(run_data)
+    if board is None and not str(settings.get(f"project_cli_{complexity}_backend") or "").strip():
+        return {}
+    try:
+        from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
+
+        return dict(resolve_ticket_cli_route(None, complexity, board=board, settings=settings))
+    except Exception:
+        return {}
+
+
 def build_run_coordination_plan(
     workflow: Any,
     run_data: dict[str, Any],
@@ -224,15 +268,35 @@ def build_run_coordination_plan(
         or settings.get("project_cli_medium_backend")
         or "pi"
     ).strip() or "pi"
+    resolved_complexity_route = _resolved_complexity_route(complexity, run_data, settings)
+    if resolved_complexity_route:
+        # Board override, readiness fallback, provider and configured fallback
+        # all come from the same resolver the ticket/orchestrator path uses.
+        configured_backend = str(resolved_complexity_route.get("backend") or configured_backend).strip() or "pi"
     if not str(base_route.get("backend") or "").strip():
         base_route["backend"] = configured_backend
+        if resolved_complexity_route:
+            for key in ("model_provider", "fallback_backend", "fallback_model", "fallback_model_provider"):
+                if resolved_complexity_route.get(key) and not base_route.get(key):
+                    base_route[key] = resolved_complexity_route[key]
+            model = str(resolved_complexity_route.get("model") or "").strip()
+            if model and (
+                not str(base_route.get("model") or "").strip()
+                or str(base_route.get("model")).strip().lower() == "auto"
+            ):
+                base_route["model"] = model
     if not str(base_route.get("model") or "").strip() or str(base_route.get("model")).strip().lower() == "auto":
-        base_route["model"] = (
-            str(
-                settings.get(f"project_cli_{complexity}_model")
+        configured_model = (
+            str(resolved_complexity_route.get("model") or "auto")
+            if resolved_complexity_route
+            else str(
+                ("auto" if settings.get(f"project_cli_{complexity}_auto") else settings.get(f"project_cli_{complexity}_model"))
                 or settings.get("project_cli_medium_model")
                 or "auto"
-            ).strip()
+            )
+        ).strip()
+        base_route["model"] = (
+            configured_model
             if str(base_route.get("backend") or "").strip().lower() == configured_backend.lower()
             else "auto"
         ) or "auto"
@@ -251,20 +315,41 @@ def build_run_coordination_plan(
         role = _step_role(step, config)
         seeded = dict(base_route)
         seeded.setdefault("complexity", complexity)
-        primary = seeded if manual_thread_route else apply_auto_step_role_policy(
-            seeded,
-            workflow=workflow,
-            config=config,
-            settings=settings,
-            step_role=role,
-            prior_role_routes=role_routes,
+        execution_route = _dict(config.get("execution_route"))
+        snapshot = _dict(execution_route.get("route_snapshot"))
+        model_policy = _dict(config.get("model_policy"))
+        scoped_route = bool(
+            str(model_policy.get("mode") or "").strip().lower() != "auto"
+            and not model_policy.get("auto_route_models")
+            and execution_route.get("enabled")
+            and execution_route.get("mode") == "scoped"
+            and execution_route.get("scoped_model_key")
+            and snapshot
         )
+        if scoped_route and not manual_thread_route:
+            primary = {
+                **seeded,
+                "backend": snapshot.get("backend_id") or seeded.get("backend") or "pi",
+                "model_provider": snapshot.get("provider") or seeded.get("model_provider") or "",
+                "model": snapshot.get("model") or seeded.get("model") or "auto",
+                "source": "step_execution_route",
+                "rationale": f"Workflow step selected scoped route {snapshot.get('name') or snapshot.get('model') or 'route'}.",
+            }
+        else:
+            primary = seeded if manual_thread_route else apply_auto_step_role_policy(
+                seeded,
+                workflow=workflow,
+                config=config,
+                settings=settings,
+                step_role=role,
+                prior_role_routes=role_routes,
+            )
         if role == "review" and visual_evidence_required:
             vision_route = _configured_vision_review_route(settings)
             if vision_route:
                 vision_route.setdefault("complexity", complexity)
                 primary = vision_route
-        primary["source"] = "run_coordination_plan"
+        primary.setdefault("source", "run_coordination_plan")
         if role == "review" and primary.get("evidence_capabilities") == ["vision"]:
             primary["source"] = "run_coordination_visual_evidence"
         primary["step_role"] = role

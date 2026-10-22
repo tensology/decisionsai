@@ -102,7 +102,7 @@ def load_system_prompt_template(
             return template
         else:
             logger.warning(f"System prompt template not found at {template_path}, using fallback")
-            fallback = """You are {agent_name}, a helpful VOICE assistant that can control {username}'s computer and answer questions through voice conversation.
+            fallback = """You are Decisions AI, a helpful VOICE assistant that can control {username}'s computer and answer questions through voice conversation. Your configured voice is named {agent_name}; it is not your identity or a real person you should impersonate.
 
 You are speaking with {username} (the logged-in user on this system).
 
@@ -113,7 +113,7 @@ IMPORTANT: You are a VOICE assistant. You speak to {username}, and {username} sp
             return fallback
     except Exception as e:
         logger.error(f"Error loading system prompt template: {e}", exc_info=True)
-        return """You are {agent_name}, a helpful VOICE assistant that can control {username}'s computer and answer questions through voice conversation.
+        return """You are Decisions AI, a helpful VOICE assistant that can control {username}'s computer and answer questions through voice conversation. Your configured voice is named {agent_name}; it is not your identity or a real person you should impersonate.
 
 You are speaking with {username} (the logged-in user on this system).
 

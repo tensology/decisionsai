@@ -53,6 +53,29 @@ class ColumnReorder(BaseModel):
     new_position: int
 
 
+def _inject_internal_token_shim(html_content: str, token: str) -> str:
+    """Board JS uses XMLHttpRequest (not the base.html fetch wrapper); add the
+    internal token to same-origin XHRs so the guarded /board/api/* writes work."""
+    if not token:
+        return html_content
+    import json as _json
+
+    shim = (
+        "<script>(function(){var t=" + _json.dumps(token) + ";"
+        "window.DECISIONSAI_INTERNAL_API_TOKEN=window.DECISIONSAI_INTERNAL_API_TOKEN||t;"
+        "var o=XMLHttpRequest.prototype.open,h=XMLHttpRequest.prototype.send;"
+        "XMLHttpRequest.prototype.open=function(m,u){var same=true;"
+        "try{same=new URL(u,window.location.origin).origin===window.location.origin;}catch(e){}"
+        "this.__daiSame=same;return o.apply(this,arguments);};"
+        "XMLHttpRequest.prototype.send=function(){"
+        "if(this.__daiSame){try{this.setRequestHeader('X-DecisionsAI-Internal-Token',t);}catch(e){}}"
+        "return h.apply(this,arguments);};})();</script>"
+    )
+    if "</head>" in html_content:
+        return html_content.replace("</head>", shim + "\n</head>", 1)
+    return shim + html_content
+
+
 def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
     """
     Create and configure API routes
@@ -109,7 +132,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 </html>"""
 
     @router.get("/", response_class=HTMLResponse)
-    async def root():
+    async def root(request: Request):
         """Serve the main Board HTML page"""
         try:
             html_path = templates_dir / "index.html"
@@ -136,7 +159,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         .loading {{ color: #ececf1; padding: 20px; }}
     </style>'''
             )
-            return html_content
+            return _inject_internal_token_shim(html_content, getattr(request.app.state, "internal_api_token", "") or "")
         except Exception as e:
             logger.error(f"Failed to read board HTML: {e}")
             return "<html><body><h1>Error loading board page</h1></body></html>"

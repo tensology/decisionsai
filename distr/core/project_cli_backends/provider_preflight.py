@@ -424,7 +424,10 @@ def _openrouter_preflight(
 
     free_route = model.strip().lower() == "openrouter/free" or model.strip().lower().endswith(":free")
     minimum = 0.0 if free_route else required
-    if remaining < minimum:
+    # ``:free`` models are served regardless of balance (verified 2026-10-22:
+    # HTTP 200 from a :free model at a -$0.27 balance). A negative balance only
+    # matters for paid routes, so it must not block a free one.
+    if not free_route and remaining < minimum:
         return ProviderPreflight(
             provider, model, "blocked", False,
             (
