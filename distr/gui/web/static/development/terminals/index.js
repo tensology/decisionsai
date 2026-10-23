@@ -1,3 +1,9 @@
+export function terminalProjectActionIcon(action, busy) {
+    if (busy) return '<svg class="terminal-action-spinner" aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"></circle></svg>';
+    if (action === 'stop') return '<svg aria-hidden="true" viewBox="0 0 20 20"><rect x="6" y="6" width="8" height="8" rx="1.5"></rect></svg>';
+    return '<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 5.5v9l7-4.5z"></path></svg>';
+}
+
 // Owns terminals rendering, interactions, and private view state.
 export function createTerminals({ context, actions, el, token }) {
     const state = {
@@ -50,12 +56,6 @@ export function createTerminals({ context, actions, el, token }) {
         const megabytes = value / (1024 * 1024);
         if (megabytes < 1024) return `Memory ${megabytes < 10 ? megabytes.toFixed(1) : Math.round(megabytes)} MB`;
         return `Memory ${(megabytes / 1024).toFixed(1)} GB`;
-    }
-
-    function terminalProjectActionIcon(action, busy) {
-        if (busy) return '<svg class="terminal-action-spinner" aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"></circle></svg>';
-        if (action === 'stop') return '<svg aria-hidden="true" viewBox="0 0 20 20"><rect x="6" y="6" width="8" height="8" rx="1.5"></rect></svg>';
-        return '<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 5.5v9l7-4.5z"></path></svg>';
     }
 
     function syncTerminalCommandLines() {
@@ -399,6 +399,7 @@ export function createTerminals({ context, actions, el, token }) {
                 },
                 shouldRun ? 900 : 250
             );
+            return true;
         } catch (error) {
             actions.toast(error.message || `Could not ${shouldRun ? 'start' : 'stop'} the project terminals.`, 'error');
             paintTerminalProjectCard(projectId);
@@ -410,6 +411,7 @@ export function createTerminals({ context, actions, el, token }) {
                 }
                 if (context.workspaceMode === 'terminals_home') paintTerminalProjectCard(projectId);
             }, 250);
+            return false;
         } finally {
             if (button?.isConnected && button.classList.contains('busy')) paintTerminalProjectCard(projectId);
         }
@@ -890,6 +892,7 @@ export function createTerminals({ context, actions, el, token }) {
         primeTerminalSelection,
         renderTerminalWorkspace,
         renderTerminalsHome,
+        setTerminalProjectRunning,
         startTerminalPolling,
         leave
     };

@@ -34,27 +34,38 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 TENSOLOGY_HEARTBEAT_SECONDS = 1
+# Tensology marks the machine offline after 120s without presence.
+TENSOLOGY_PRESENCE_SECONDS = 30
 
 
 async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_SECONDS):
-    """Refresh Tensology's authenticated connection status while DecisionsAI runs."""
+    """Presence, discussion work and local ticket state mirroring while DecisionsAI runs.
+
+    Approved tickets are no longer polled here: they are pushed over the outbound
+    websocket in ``distr.core.tensology_stream`` (see ``_tensology_ticket_stream``).
+    """
     import asyncio
+    import time as _time
 
     from distr.core.tensology_client import (
         TensologyApiError,
         process_tensology_discussion_context,
         process_tensology_discussion_assessments,
-        process_tensology_approved_tickets,
         send_tensology_heartbeat,
+        sync_tensology_execution_states,
     )
 
+    last_presence = float("-inf")
     while True:
-        operations = (
-            ("presence", send_tensology_heartbeat),
+        operations = []
+        if _time.monotonic() - last_presence >= TENSOLOGY_PRESENCE_SECONDS:
+            last_presence = _time.monotonic()
+            operations.append(("presence", send_tensology_heartbeat))
+        operations += [
             ("discussion assessments", process_tensology_discussion_assessments),
             ("discussion context", process_tensology_discussion_context),
-            ("approved tickets", process_tensology_approved_tickets),
-        )
+            ("ticket state sync", sync_tensology_execution_states),
+        ]
         for label, operation in operations:
             try:
                 await asyncio.to_thread(operation)
@@ -1125,6 +1136,12 @@ def create_app() -> FastAPI:
 
         app.state.tensology_heartbeat_task = asyncio.create_task(
             _tensology_heartbeat_loop()
+        )
+        from distr.core.tensology_stream import run_tensology_ticket_stream
+
+        # Pushed ticket events over an outbound websocket (replaces the ticket poll).
+        app.state.tensology_ticket_stream_task = asyncio.create_task(
+            run_tensology_ticket_stream()
         )
 
     @app.on_event("startup")

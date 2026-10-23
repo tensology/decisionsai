@@ -1,4 +1,4 @@
-import { bindWorkflowStepNumbers, nextWorkflowLoopId, readWorkflowViewMode, workflowLoopHtml, workflowStepDataAttrs, workflowStepNumbersHtml, workflowViewSwitchHtml, writeWorkflowViewMode } from '../../shared/workflow-loop.js?v=20261022-threadring2';
+import { bindWorkflowStepNumbers, nextWorkflowLoopId, workflowLoopHtml, workflowStepDataAttrs, workflowStepNumbersHtml, workflowViewSwitchHtml } from '../../shared/workflow-loop.js?v=20261022-threadring2';
 import { shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
@@ -819,18 +819,37 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         );
         const title = workflow?.name || event.workflow_name || 'Workflow';
         const stepRoutes = run?.step_routes || {};
+        const routeDataFor = (step) => stepRoutes[String(step.id)] || stepRoutes[step.id] || {};
         const routeFor = (step) => {
-            const route = stepRoutes[String(step.id)] || stepRoutes[step.id] || {};
-            return route.model || route.backend || step.model || '';
+            const route = routeDataFor(step);
+            return [route.backend || route.backend_id, route.model || step.model].filter(Boolean).join(' · ');
         };
         const activeStepId = statusSteps[activeIndex]?.id;
+        const activityFor = (step) => {
+            if (String(step.id) !== String(activeStepId)) return {};
+            const recent = Array.isArray(run?.recent_activity) ? run.recent_activity : [];
+            return recent.find((item) => !item.step_id || String(item.step_id) === String(step.id)) || run?.last_activity || {};
+        };
+        const activityText = (activity) => {
+            const type = String(activity?.event_type || '').replaceAll('_', ' ');
+            const message = String(activity?.message || '').trim();
+            if (message === 'thinking_delta') return 'The model is reasoning and streaming its response.';
+            if (message === 'turn_start') return 'The worker started a new reasoning turn.';
+            if (message === 'turn_end') return 'The worker completed a reasoning turn.';
+            if (message === 'tool_execution_update') return 'A tool execution update was received.';
+            return message || (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}.` : 'No feedback has been recorded for this step yet.');
+        };
         const outputFor = (step) => {
             const own = step.output || step.last_output || step.result || '';
             if (own) return String(own);
             return String(step.id) === String(activeStepId) ? String(event.summary || run?.last_output || run?.summary || '') : '';
         };
-        const stepButtonAttrs = (step, index) =>
-            workflowStepDataAttrs(step, index, { escapeHtml: actions.escapeHtml, route: routeFor(step), output: outputFor(step), selected: index === activeIndex });
+        const stepButtonAttrs = (step, index) => {
+            const route = routeDataFor(step);
+            const activity = activityFor(step);
+            const reason = route.rationale || route.reason || activity.selection_reason || '';
+            return `${workflowStepDataAttrs(step, index, { escapeHtml: actions.escapeHtml, route: routeFor(step), output: outputFor(step), selected: index === activeIndex })} data-step-position="${index + 1} of ${count}" data-step-backend="${actions.escapeHtml(route.backend || route.backend_id || activity.backend || '')}" data-step-model="${actions.escapeHtml(route.model || step.model || activity.model || '')}" data-step-complexity="${actions.escapeHtml(route.complexity || activity.complexity || '')}" data-step-source="${actions.escapeHtml(route.source || '')}" data-step-reason="${actions.escapeHtml(reason)}" data-step-feedback="${actions.escapeHtml(activityText(activity))}" data-step-feedback-at="${actions.escapeHtml(messageTime(activity.at))}"`;
+        };
         const numbers = workflowStepNumbersHtml(statusSteps, {
             activeStepId,
             idPrefix: nextWorkflowLoopId(`thread-wf-steps-${String(run?.id || event.run_id || 'x')}-${mode}`),
@@ -839,7 +858,33 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             outputFor,
             ariaLabel: `${title} steps`
         });
-        const viewMode = readWorkflowViewMode();
+        const runId = String(run?.id || event.run_id || '');
+        const interaction = (context.controlState?.interactions || []).find((item) => String(item.run_id || '') === runId) || null;
+        const interactionActions = Array.isArray(interaction?.allowed_actions) ? interaction.allowed_actions : [];
+        const actionable = interactionActions.filter((action) => action !== 'feedback');
+        const approval = run?.pending_route_approval || {};
+        const waitingPrompt = interaction?.kind === 'provider_preflight' && (approval.name || approval.model)
+            ? `Use ${approval.name || approval.model} for this step and continue the workflow.`
+            : run?.worker_question || run?.waiting_prompt || 'Review the pending checkpoint before the workflow continues.';
+        const checkpoint = ['waiting', 'paused'].includes(runStatus)
+            ? `<section class="thread-workflow-checkpoint" aria-label="Workflow approval required">
+                <div><strong>Approval required</strong><p>${actions.escapeHtml(waitingPrompt)}</p></div>
+                ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(index === 0 && action !== 'stop' ? 'Approve and continue' : actions.actionLabel(action))}</button>`).join('')}</div>` : ''}
+            </section>`
+            : '';
+        const currentStep = statusSteps[activeIndex];
+        const currentRoute = routeDataFor(currentStep);
+        const currentActivity = activityFor(currentStep);
+        const currentReason = currentRoute.rationale || currentRoute.reason || currentActivity.selection_reason || '';
+        const currentRouteLabel = routeFor(currentStep) || 'Route not recorded';
+        const currentMeta = [currentRoute.complexity ? `${currentRoute.complexity} complexity` : '', currentRoute.source ? currentRoute.source.replaceAll('_', ' ') : ''].filter(Boolean);
+        const feedback = `<section class="thread-workflow-feedback" data-thread-workflow-feedback aria-live="polite">
+            <div class="thread-workflow-feedback-head"><div><span>Step ${activeIndex + 1} of ${count}</span><strong>${actions.escapeHtml(currentStep?.name || 'Current step')}</strong></div><em class="workflow-step-pill ${actions.escapeHtml(currentStep?.status || 'pending')}">${actions.escapeHtml(actions.statusLabel(currentStep?.status || 'pending'))}</em></div>
+            <div class="thread-workflow-route"><strong>${actions.escapeHtml(currentRouteLabel)}</strong>${currentMeta.length ? `<span>${actions.escapeHtml(currentMeta.join(' · '))}</span>` : ''}</div>
+            ${currentReason ? `<p>${actions.escapeHtml(currentReason)}</p>` : ''}
+            <div class="thread-workflow-live-feedback"><span class="thread-status-dot"></span><div><strong>Live feedback</strong><p>${actions.escapeHtml(activityText(currentActivity))}</p></div>${currentActivity.at ? `<time datetime="${actions.escapeHtml(currentActivity.at)}">${actions.escapeHtml(messageTime(currentActivity.at))}</time>` : ''}</div>
+        </section>`;
+        const viewMode = 'loop';
         const ringPrefix = nextWorkflowLoopId(`thread-wf-${String(run?.id || event.run_id || 'x')}-${mode}`);
         const ring = workflowLoopHtml(statusSteps, {
             compact: true,
@@ -847,7 +892,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             idPrefix: ringPrefix,
             escapeHtml: actions.escapeHtml,
             statusLabel: actions.statusLabel,
-            coreLabel: actions.statusLabel(runStatus),
+            coreLabel: interaction ? 'Approval' : actions.statusLabel(runStatus),
             coreCaption: count === 1 ? 'step' : 'steps',
             mapRole: 'tablist',
             ariaLabel: `${title} step loop`,
@@ -855,25 +900,66 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             buttonAttrs: stepButtonAttrs
         });
         return `<article class="studio-message workflow-runner" data-workflow-runner="${mode}" data-run-id="${actions.escapeHtml(String(run?.id || event.run_id || ''))}">
-            <div class="thread-workflow-runner ${mode}" data-view="${viewMode}" data-status="${actions.escapeHtml(runStatus)}" role="status" aria-live="${mode === 'live' ? 'polite' : 'off'}">
-                <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><div class="thread-workflow-runner-tools">${workflowViewSwitchHtml(viewMode, { attr: 'data-thread-workflow-view', className: 'workflow-view-switch thread-workflow-view-switch' })}<span>${actions.escapeHtml(actions.statusLabel(runStatus))}</span></div></div>
+            <div class="thread-workflow-runner ${mode}" data-view="${viewMode}" data-status="${actions.escapeHtml(runStatus)}" role="region" aria-label="${actions.escapeHtml(title)} workflow" aria-live="${mode === 'live' ? 'polite' : 'off'}">
+                <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><div class="thread-workflow-runner-tools"><span class="thread-workflow-status-badge ${actions.escapeHtml(runStatus)}">${actions.escapeHtml(interaction ? 'Approval required' : actions.statusLabel(runStatus))}</span>${workflowViewSwitchHtml(viewMode, { attr: 'data-thread-workflow-view', className: 'workflow-view-switch thread-workflow-view-switch' })}</div></div>
+                ${checkpoint}
                 <div class="thread-workflow-ring">${ring}</div>
                 <div class="thread-workflow-steps">${numbers}</div>
+                ${feedback}
             </div>
         </article>`;
+    }
+
+    function openWorkflowStepDialog(button) {
+        const dialog = el('thread-workflow-step-dialog');
+        if (!dialog) return;
+        if (dialog.dataset.backdropBound !== '1') {
+            dialog.dataset.backdropBound = '1';
+            dialog.addEventListener('click', (event) => {
+                if (event.target === dialog) dialog.close('cancel');
+            });
+        }
+        el('thread-workflow-step-position').textContent = `Step ${button.dataset.stepPosition || ''}`.trim();
+        el('thread-workflow-step-title').textContent = button.dataset.stepName || 'Workflow step';
+        const meta = [
+            button.dataset.stepStatus ? actions.statusLabel(button.dataset.stepStatus) : '',
+            button.dataset.stepBackend,
+            button.dataset.stepModel,
+            button.dataset.stepComplexity ? `${button.dataset.stepComplexity} complexity` : '',
+            button.dataset.stepSource ? button.dataset.stepSource.replaceAll('_', ' ') : ''
+        ].filter(Boolean);
+        el('thread-workflow-step-meta').innerHTML = meta.map((item) => `<span>${actions.escapeHtml(item)}</span>`).join('');
+        el('thread-workflow-step-reason').textContent = button.dataset.stepReason || 'No model selection reason was recorded for this step.';
+        el('thread-workflow-step-instructions').textContent = button.dataset.stepDetail || 'No step instructions are available.';
+        const feedback = [button.dataset.stepFeedback, button.dataset.stepOutput].filter(Boolean).join('\n\n');
+        el('thread-workflow-step-feedback').textContent = feedback || 'No feedback has been recorded for this step yet.';
+        dialog.showModal();
+        dialog.querySelector('form')?.scrollTo(0, 0);
     }
 
     function bindWorkflowStepRails(root) {
         root.querySelectorAll('[data-workflow-runner]').forEach((runner) => {
             runner.querySelectorAll('[data-thread-workflow-view]').forEach((toggle) => {
                 toggle.addEventListener('click', () => {
-                    const next = writeWorkflowViewMode(toggle.dataset.threadWorkflowView);
-                    // Apply to every runner card on the page so the shared preference stays consistent.
+                    const next = toggle.dataset.threadWorkflowView === 'list' ? 'list' : 'loop';
                     document.querySelectorAll('.thread-workflow-runner').forEach((card) => card.setAttribute('data-view', next));
                     document.querySelectorAll('[data-thread-workflow-view]').forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.threadWorkflowView === next)));
                 });
             });
+            runner.querySelectorAll('[data-workflow-interaction-action]').forEach((button) => {
+                button.addEventListener('click', async () => {
+                    const label = button.textContent;
+                    button.disabled = true;
+                    button.textContent = button.dataset.workflowInteractionAction === 'stop' ? 'Stopping...' : 'Approving...';
+                    await actions.resolveInteraction(button.dataset.workflowInteractionToken, button.dataset.workflowInteractionAction);
+                    if (button.isConnected) {
+                        button.disabled = false;
+                        button.textContent = label;
+                    }
+                });
+            });
             bindWorkflowStepNumbers(runner, { escapeHtml: actions.escapeHtml });
+            runner.querySelectorAll('[data-wf-step]').forEach((button) => button.addEventListener('click', () => openWorkflowStepDialog(button)));
         });
     }
 
@@ -1044,9 +1130,19 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         actions.bindConversationActions(list, messages);
         bindWorkflowStepRails(list);
         const conversation = el('conversation');
-        window.requestAnimationFrame(() => {
-            conversation.scrollTop = conversation.scrollHeight;
-        });
+        const runner = list.querySelector('[data-workflow-runner="live"]');
+        const runId = runner?.dataset.runId || '';
+        if (runId && list.dataset.workflowFocusRunId !== runId) {
+            list.dataset.workflowFocusRunId = runId;
+            window.setTimeout(() => {
+                if (!runner.isConnected) return;
+                conversation.scrollTop += runner.getBoundingClientRect().top - conversation.getBoundingClientRect().top - 8;
+            }, 80);
+        } else if (!runner) {
+            window.requestAnimationFrame(() => {
+                conversation.scrollTop = conversation.scrollHeight;
+            });
+        }
     }
     return {
         appendSpokenMessage,

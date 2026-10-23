@@ -929,6 +929,12 @@ class StepExecutorMixin:
         from distr.core.project_cli_backends import normalize_backend_id
 
         merged = dict(route or {})
+        from distr.core.project_cli_backends.model_policy import is_thread_route
+
+        if is_thread_route(merged) and not config.get("route_locked"):
+            # fix2: workflow steps never pin their own model over the
+            # inherited thread composer route.
+            return merged
         execution_route = config.get("execution_route") if isinstance(config.get("execution_route"), dict) else {}
         snapshot = execution_route.get("route_snapshot") if isinstance(execution_route.get("route_snapshot"), dict) else {}
         model_policy = config.get("model_policy") if isinstance(config.get("model_policy"), dict) else {}
@@ -1297,6 +1303,28 @@ class StepExecutorMixin:
                     stored_step_routes = stored_step_routes if isinstance(stored_step_routes, dict) else {}
                     stored_step_route = stored_step_routes.get(str(step_data.get("id")))
                     stored_step_route = stored_step_route if isinstance(stored_step_route, dict) else {}
+                    from distr.core.project_cli_backends.model_policy import (
+                        thread_route_from_run_data as _thread_route_from_run_data,
+                    )
+
+                    run_thread_route = _thread_route_from_run_data(run_data_local)
+                    if run_thread_route and not config_local.get("route_locked"):
+                        # fix2: a stored step route only survives if it is the
+                        # thread route or an explicit vision/review exception.
+                        if stored_step_route and not (
+                            stored_step_route.get("source") == "thread_model_route"
+                            or stored_step_route.get("vision_required")
+                            or "vision" in str(stored_step_route.get("source") or "")
+                        ):
+                            stored_step_route = {}
+                        if not stored_step_route:
+                            stored_step_route = {
+                                **run_thread_route,
+                                "complexity": str(
+                                    _dict_or_empty(run_data_local.get("execution_route")).get("complexity")
+                                    or "medium"
+                                ),
+                            }
                     if stored_step_route:
                         route = dict(stored_step_route)
                         route.setdefault("source", "active_step_route")
@@ -1332,7 +1360,9 @@ class StepExecutorMixin:
                                         approved_override.get("rationale") or ""
                                     ).strip()
                                     route["requires_approval"] = False
-                                elif self._step_execution_route_enabled(config_local):
+                                elif self._step_execution_route_enabled(config_local) and not (
+                                    run_thread_route and not config_local.get("route_locked")
+                                ):
                                     route = self._apply_step_harness_overrides({}, config_local)
                                     route["complexity"] = str(
                                         route.get("complexity")
@@ -1411,6 +1441,21 @@ class StepExecutorMixin:
                     routing_settings: dict[str, Any] = {}
                     try:
                         from distr.core.project_cli_backends.model_policy import (
+                            route_disallows_free_preference,
+                        )
+
+                        # Manual thread routes and Tensology-approved tickets
+                        # run on their configured route; recovery offers the
+                        # configured paid fallback before any free model.
+                        if route_disallows_free_preference(
+                            route, config=config_local, run_data=run_data_local
+                        ):
+                            route = dict(route)
+                            route["paid_first"] = True
+                    except Exception:
+                        logger.debug("send_to_project_cli: paid-first detection failed", exc_info=True)
+                    try:
+                        from distr.core.project_cli_backends.model_policy import (
                             apply_auto_step_role_policy,
                             apply_workflow_model_policy,
                         )
@@ -1445,6 +1490,20 @@ class StepExecutorMixin:
                             )
                     except Exception:
                         logger.debug("send_to_project_cli: model policy resolution failed", exc_info=True)
+                    if not approved_override:
+                        try:
+                            from distr.core.project_cli_backends.model_policy import (
+                                apply_step_model_tier,
+                            )
+
+                            # parallel: light steps carrying config.model_tier run on the
+                            # configured tier model in the inherited route family; heavy
+                            # steps keep the thread route. Paid-first guard still follows.
+                            route = apply_step_model_tier(
+                                route, config=config_local, settings=routing_settings or None
+                            )
+                        except Exception:
+                            logger.debug("send_to_project_cli: step model tier failed", exc_info=True)
                     try:
                         from distr.core.work_intake.execution_policy import (
                             apply_approved_provider_replacements_to_route,
@@ -1454,6 +1513,11 @@ class StepExecutorMixin:
                             route,
                             run_data_local.get("approved_provider_replacements") or [],
                         )
+                        from distr.core.project_cli_backends.model_policy import enforce_paid_route
+
+                        # fix2: free models stay blocked on paid-first runs,
+                        # whatever policy/replacement produced them.
+                        route = enforce_paid_route(route, run_data=run_data_local, config=config_local)
                         if run_row:
                             run_data_local["execution_route"] = route
                             run_row.run_data = json.dumps(run_data_local)
@@ -1463,6 +1527,22 @@ class StepExecutorMixin:
                             "send_to_project_cli: approved provider replacement could not be applied",
                             exc_info=True,
                         )
+                    try:
+                        # Preflight must validate exactly the provider/model Pi
+                        # will run; a vendor-prefix provider (``deepseek`` for
+                        # ``deepseek/...``) passed OpenRouter checks but failed
+                        # in Pi with "No API key found".
+                        from distr.core.project_cli_backends.timing import normalize_pi_route_provider
+
+                        normalized_route = normalize_pi_route_provider(route)
+                        if normalized_route is not route:
+                            route = normalized_route
+                            if run_row:
+                                run_data_local["execution_route"] = route
+                                run_row.run_data = json.dumps(run_data_local)
+                                db.commit()
+                    except Exception:
+                        logger.debug("send_to_project_cli: pi provider normalization failed", exc_info=True)
                     try:
                         from distr.core.project_cli_backends.provider_preflight import preflight_provider_route
 
@@ -1528,6 +1608,7 @@ class StepExecutorMixin:
                         and provider_preflight.ready is True
                         and str(route.get("model_provider") or "").strip().lower() == "openrouter"
                         and str(route.get("model") or "").strip().lower().endswith(":free")
+                        and not bool(route.get("paid_first"))
                     ):
                         # A readiness probe is only a point-in-time check. Keep
                         # the current ranked free catalogue on the route so an
@@ -1613,6 +1694,10 @@ class StepExecutorMixin:
                             except Exception:
                                 logger.warning("Could not fetch ranked OpenRouter free candidates", exc_info=True)
                         fallback = self._runtime_provider_fallback_route(route, config_local)
+                        if fallback and bool(route.get("paid_first")):
+                            # Pinned/Tensology routes: the configured paid
+                            # fallback comes before any free model.
+                            free_candidates = []
                         proposed = dict((free_candidates[0] if free_candidates else None) or fallback or route)
                         proposed["provider_preflight_override"] = not bool(fallback)
                         if free_candidates:
@@ -1986,6 +2071,13 @@ class StepExecutorMixin:
                         selected_model: str,
                         selected_provider: str = "",
                     ) -> HarnessContext:
+                        if str(selected_backend or "").strip().lower() == "pi":
+                            from distr.core.project_cli_backends.timing import resolve_pi_model_provider
+
+                            selected_provider = (
+                                resolve_pi_model_provider(selected_model, selected_provider)
+                                or selected_provider
+                            )
                         return HarnessContext(
                             project=project,
                             instruction=final_instruction,
@@ -2013,6 +2105,7 @@ class StepExecutorMixin:
                                         or config.get("timeout_seconds")
                                     ),
                                     "provider_preflight_override": route.get("provider_preflight_override"),
+                                    "route_selection_reason": _route_selection_reason_safe(route),
                                     "read_only_expected": read_only_contract,
                                     "allow_transient_test_writes": allow_transient_test_writes,
                                     "disable_tools": bool(config.get("disable_tools")),
@@ -2119,6 +2212,7 @@ class StepExecutorMixin:
                         free_retry_candidates = (
                             list(free_retry_candidates)
                             if isinstance(free_retry_candidates, list)
+                            and not bool(route.get("paid_first"))
                             else []
                         )
                         # A local-first Auto route can fail after readiness too.
@@ -2135,6 +2229,7 @@ class StepExecutorMixin:
                         if (
                             not free_retry_candidates
                             and config_local.get("allow_provider_failover", True) is not False
+                            and not bool(route.get("paid_first"))
                         ):
                             try:
                                 from distr.core.project_cli_backends.policy_manager import (
@@ -4545,3 +4640,16 @@ IMPORTANT: norm_x and norm_y are 0.0–1.0 fractions of screen width/height.\
         if attachment_paths:
             out = f"{out}\n\nAttachments:\n" + "\n".join(f"- {p}" for p in attachment_paths)
         return out[:8000]
+
+
+def _dict_or_empty(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _route_selection_reason_safe(route):
+    try:
+        from distr.core.project_cli_backends.model_policy import route_selection_reason
+
+        return route_selection_reason(route)
+    except Exception:
+        return None

@@ -98,10 +98,9 @@ def test_static_markup_and_js():
     html = (WEB / "templates/development/index.html").read_text()
     js = (WEB / "static/development/app.js").read_text()
     css = (WEB / "static/development/threads/styles.css").read_text()
-    assert 'id="thread-terminal-button"' in html and "scheduled-icon-button" in html
-    assert 'class="tt-play"' in html and 'class="tt-stop"' in html and 'class="tt-frame"' in html
+    assert 'class="terminal-project-action start thread-terminal-button hidden"' in html
     assert html.index('id="thread-more-button"') < html.index('id="thread-terminal-button"')
-    assert "app.js?v=20261022-threadring2" in html
-    for needle in ("/terminal/status", "/terminal/${action}", "Start terminal", "Stop terminal", "toggleThreadTerminal"):
+    assert 'src="/static/development/app.js?v=' in html
+    for needle in ("/terminal/status", "setTerminalProjectRunning", "Start terminal", "Stop terminal", "toggleThreadTerminal"):
         assert needle in js
     assert ".thread-terminal-button" in css

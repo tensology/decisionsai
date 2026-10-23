@@ -75,12 +75,17 @@
 
 .thread-status-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: var(--studio-accent); }
 
-.studio-message.workflow-runner { margin: 2px 0 8px; }
+.studio-message.workflow-runner {
+    width: 100%;
+    margin: 2px 0 8px;
+}
+
+[data-workflow-runner="live"] { margin-bottom: 168px; }
 
 .thread-workflow-runner {
     display: grid;
     gap: 10px;
-    width: min(100%, 760px);
+    width: 100%;
     margin: 0 auto;
     padding: 12px 14px 16px;
     border: 1px solid rgba(255,255,255,.08);
@@ -108,14 +113,85 @@
     white-space: nowrap;
 }
 
-.thread-workflow-runner-head span {
+.thread-workflow-status-badge {
     flex: 0 0 auto;
+    padding: 4px 8px;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 999px;
+    background: rgba(255,255,255,.04);
     color: var(--studio-muted);
     font-size: 9px;
     font-weight: 700;
     letter-spacing: .06em;
     text-transform: uppercase;
 }
+
+.thread-workflow-status-badge.running { border-color: rgba(34,197,94,.42); background: rgba(34,197,94,.1); color: #8fdfad; }
+.thread-workflow-status-badge.waiting, .thread-workflow-status-badge.paused { border-color: rgba(245,158,11,.46); background: rgba(245,158,11,.09); color: #f6d58a; }
+.thread-workflow-status-badge.failed { border-color: rgba(239,68,68,.42); background: rgba(239,68,68,.09); color: #f3a0a7; }
+
+.thread-workflow-feedback {
+    display: grid;
+    gap: 9px;
+    padding: 12px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 10px;
+    background: rgba(7,12,25,.58);
+}
+
+.thread-workflow-feedback-head, .thread-workflow-route, .thread-workflow-live-feedback { display: flex; align-items: center; gap: 10px; }
+.thread-workflow-feedback-head { justify-content: space-between; }
+.thread-workflow-feedback-head > div { display: grid; min-width: 0; gap: 2px; }
+.thread-workflow-feedback-head span { color: var(--studio-dim); font-size: 9px; text-transform: uppercase; }
+.thread-workflow-feedback-head strong { overflow: hidden; color: var(--studio-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.thread-workflow-route { flex-wrap: wrap; }
+.thread-workflow-route strong { color: #cfd6e6; font: 10px/1.4 var(--studio-mono); }
+.thread-workflow-route span { color: var(--studio-dim); font-size: 9px; text-transform: capitalize; }
+.thread-workflow-feedback > p { margin: -2px 0 0; color: var(--studio-muted); font-size: 10px; line-height: 1.45; }
+.thread-workflow-live-feedback { align-items: flex-start; padding-top: 9px; border-top: 1px solid rgba(255,255,255,.07); }
+.thread-workflow-live-feedback .thread-status-dot { margin-top: 5px; background: var(--studio-green); box-shadow: 0 0 0 4px rgba(34,197,94,.08); }
+.thread-workflow-live-feedback > div { min-width: 0; flex: 1; }
+.thread-workflow-live-feedback strong { color: var(--studio-text); font-size: 10px; }
+.thread-workflow-live-feedback p { margin: 2px 0 0; color: var(--studio-muted); font-size: 10px; line-height: 1.45; }
+.thread-workflow-live-feedback time { color: var(--studio-dim); font: 9px/1.4 var(--studio-mono); }
+
+.studio-dialog.thread-workflow-step-dialog { width: min(680px, calc(100vw - 24px)); }
+.thread-workflow-step-modal-body { display: grid; gap: 12px; padding: 14px 16px 2px; }
+.thread-workflow-step-modal-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.thread-workflow-step-modal-meta span { padding: 4px 7px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; background: rgba(255,255,255,.04); color: #cfd6e6; font-size: 10px; text-transform: capitalize; }
+.thread-workflow-step-modal-body section { padding: 11px 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; background: #111936; }
+.thread-workflow-step-modal-body h3 { margin: 0 0 5px; color: var(--studio-dim); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
+.thread-workflow-step-modal-body p, #thread-workflow-step-feedback { margin: 0; color: var(--studio-text); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+#thread-workflow-step-feedback { max-height: min(30vh, 240px); overflow: auto; font-family: var(--studio-mono); }
+
+.thread-workflow-checkpoint {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 11px 12px;
+    border: 1px solid rgba(245, 158, 11, .48);
+    border-radius: 10px;
+    background: rgba(245, 158, 11, .08);
+}
+
+.thread-workflow-checkpoint > div:first-child { min-width: 0; }
+.thread-workflow-checkpoint strong { color: #f6d58a; font-size: 12px; }
+.thread-workflow-checkpoint p { margin: 3px 0 0; color: var(--studio-text); font-size: 11px; line-height: 1.45; }
+.thread-workflow-checkpoint-actions { display: flex; flex: 0 0 auto; gap: 7px; }
+.thread-workflow-checkpoint-action {
+    min-height: 34px;
+    padding: 0 11px;
+    border: 1px solid #465474;
+    border-radius: 8px;
+    background: #17213d;
+    color: var(--studio-text);
+    font-size: 11px;
+    font-weight: 650;
+}
+.thread-workflow-checkpoint-action.primary { border-color: var(--studio-green); background: var(--studio-green); color: #08130d; }
+.thread-workflow-checkpoint-action.danger { border-color: rgba(208, 100, 108, .6); color: #f3a0a7; }
+.thread-workflow-checkpoint-action:disabled { opacity: .65; cursor: wait; }
 
 .thread-workflow-nodes {
     display: flex;
@@ -481,6 +557,17 @@
 
 .composer-scope-strip { position: relative; z-index: 3; display: flex; align-items: center; gap: 8px; min-height: 29px; padding: 4px 10px 0; }
 
+.composer-guidance-target { display: flex; min-width: 0; align-items: center; gap: 5px; color: var(--studio-dim); font-size: 8px; }
+.composer-guidance-target select { height: 26px; padding: 0 18px 0 4px; border: 0; border-radius: 6px; outline: 0; background: rgba(255,255,255,.045); color: var(--studio-text); font-size: 10px; }
+.composer-guidance-target select:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 1px; }
+.composer-guidance-target select option { background: #151d49; color: var(--studio-text); }
+
+.queue-section .command-card { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.queue-section .command-actions { justify-content: flex-end; margin-left: auto; }
+.queue-section .command-actions button { display: inline-grid; width: 28px; min-height: 28px; padding: 0; place-items: center; }
+.queue-section .command-actions svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
+.queue-section .command-actions button:disabled { opacity: .35; cursor: not-allowed; }
+
 .composer-skill-badges { display: flex; min-width: 0; align-items: center; gap: 5px; overflow-x: auto; scrollbar-width: none; }
 
 .composer-skill-badge { position: relative; display: inline-grid; flex: 0 0 auto; width: 24px; height: 24px; place-items: center; border: 1px solid rgba(255,122,26,.38); border-radius: 6px; background: rgba(255,122,26,.1); color: var(--studio-accent); }
@@ -811,6 +898,7 @@
     .composer-layer { padding: 30px 10px 9px; }
     .composer-scope-strip { overflow-x: auto; }
     .composer-scope-strip:has(.composer-picker-menu:not(.hidden)) { overflow: visible; }
+    .composer-guidance-target select { min-height: 44px; }
     .composer-picker > button { width: 118px; }
     .composer-toolbar { display: flex; gap: 3px; }
     .composer-time-controls { position: sticky; right: 0; padding-left: 8px; background: #151d49; }
@@ -1016,39 +1104,30 @@
 
 /* Thread terminal start/stop button (far right of thread header) */
 .thread-terminal-button { margin-left: 6px; flex: 0 0 auto; }
-/* Icons + look come from the terminal panel: .terminal-tool-button.terminal-bulk-action (.primary = start, .danger = stop). */
-.thread-terminal-button .tt-stop { display: none; }
-.thread-terminal-button[data-running="true"] .tt-play { display: none; }
-.thread-terminal-button[data-running="true"] .tt-stop { display: inline; }
-.thread-terminal-button[aria-busy="true"], .thread-terminal-button:disabled { opacity: .55; cursor: progress; }
-/* Single custom tooltip, BELOW the button; position:fixed (coords set on hover in app.js) escapes header overflow clipping. */
-.thread-terminal-button[data-tooltip]::after {
-    position: fixed;
-    z-index: 10000;
-    top: var(--tt-top, 48px);
-    bottom: auto;
-    left: var(--tt-left, 50%);
-    right: auto;
-    max-width: calc(100vw - 16px);
-    white-space: nowrap;
-    transform: translate(-50%, -3px);
-}
-.thread-terminal-button[data-tooltip]:focus-visible::after { transform: translate(-50%, 0); }
-@media (hover: hover) { .thread-terminal-button[data-tooltip]:hover::after { transform: translate(-50%, 0); } }
 
 /* Compact workflow Loop ring in the thread runner card (shared markup: shared/workflow-loop.js). */
 .thread-workflow-runner-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
 .thread-workflow-view-switch { padding: 2px; border-radius: 7px; }
 .thread-workflow-view-switch button { min-height: 22px; gap: 4px; padding: 0 7px; font-size: 9px; }
 .thread-workflow-view-switch svg { width: 12px; height: 12px; }
-.thread-workflow-runner[data-view="loop"] .thread-workflow-nodes { display: none; }
+.thread-workflow-runner[data-view="loop"] .thread-workflow-steps { display: none; }
 .thread-workflow-runner[data-view="list"] .thread-workflow-ring { display: none; }
+.thread-workflow-steps .workflow-step-panel strong { font-size: 12px; }
+.thread-workflow-steps .workflow-step-panel > div > span,
+.thread-workflow-steps .workflow-step-pill { font-size: 10px; }
+.thread-workflow-steps .workflow-step-panel p { font-size: 11px; line-height: 1.5; }
+.thread-workflow-steps .workflow-step-panel > p:not(.workflow-step-output) {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+}
 .thread-workflow-ring .workflow-loop-viewport.compact { min-height: 0; overflow: hidden; border-radius: 10px; }
 .thread-workflow-ring .workflow-loop-map.compact {
     width: 100%;
     min-width: 0;
-    height: clamp(300px, 42vw, 360px);
-    min-height: 300px;
+    height: clamp(260px, 32vh, 360px);
+    min-height: 260px;
     border: 1px solid rgba(255,255,255,.06);
     border-radius: 10px;
     background:
@@ -1097,6 +1176,22 @@
 .thread-workflow-ring .workflow-loop-node > button[aria-selected="true"] { outline: 1px solid rgba(240,122,44,.7); outline-offset: 1px; }
 .thread-workflow-ring .workflow-loop-map.dense .workflow-loop-node { width: clamp(84px, 17%, 112px); }
 @media (max-width: 720px) {
+    .thread-workflow-checkpoint { align-items: stretch; flex-direction: column; }
+    .thread-workflow-checkpoint-actions { width: 100%; }
+    .thread-workflow-checkpoint-action { min-height: 44px; flex: 1; }
     .thread-workflow-ring .workflow-loop-node { top: var(--loop-mobile-y); left: var(--loop-mobile-x); width: 92px; }
     .thread-workflow-ring .workflow-loop-path { inset: 9% 14%; width: 72%; }
+}
+@media (max-width: 520px) {
+    .queue-section .command-actions button { width: 44px; min-height: 44px; }
+    .thread-workflow-runner-head { align-items: stretch; flex-direction: column; }
+    .thread-workflow-runner-head strong { white-space: normal; }
+    .thread-workflow-runner-tools { justify-content: space-between; }
+    .thread-workflow-ring .workflow-loop-map.compact { height: 210px; min-height: 210px; }
+    .thread-workflow-ring .workflow-loop-node { width: 76px; }
+    .thread-workflow-ring .workflow-loop-node > button { gap: 4px; padding: 5px; }
+    .thread-workflow-ring .workflow-loop-node > button > strong { font-size: 9px; }
+    .thread-workflow-feedback-head { align-items: flex-start; }
+    .thread-workflow-live-feedback { flex-wrap: wrap; }
+    .thread-workflow-live-feedback time { margin-left: 15px; }
 }

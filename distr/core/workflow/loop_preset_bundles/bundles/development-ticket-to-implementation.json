@@ -7,7 +7,7 @@
   "category": "Engineering",
   "archetype": "incremental_ship",
   "description": "Ingest a ticket as the delivery plan, confirm its execution contract, implement with scoped CLI harness iteration, capture evidence, correct defects, and close the development slice with compact memory.",
-  "kickoff": "Start the \"Development\" loop.\nGoal: one linked ticket is implemented on the linked project with CLI harness iteration\nMax iterations: 6\nExit when: the ticket execution contract and complete affected-surface inventory are confirmed, every coverage-ledger item is verified or explicitly approved as excluded, negative-space and end-to-end checks pass, an independent completion audit passes, and the ticket has a valid completion manifest and compact result packet.\nStep 1: Load the ticket, board, project, workflow memory, AGENTS.md/context files, linked files/media, and acceptance criteria before changing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "kickoff": "Start the \"Development\" loop.\nGoal: one linked ticket is implemented on the linked project with CLI harness iteration\nMax iterations: 6\nExit when: the ticket execution contract and complete affected-surface inventory are confirmed, every coverage-ledger item is verified or explicitly approved as excluded, negative-space and end-to-end checks pass, an independent completion audit passes, development and production deployments have separate recorded approvals and fresh verification evidence, the ticket is handed to QA, and the ticket has a valid completion manifest and compact result packet.\nStep 1: Load the ticket, board, project, workflow memory, AGENTS.md/context files, linked files/media, and acceptance criteria before changing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
   "loop_contract": {
     "name": "Development",
     "goal": "linked ticket slice implemented from its confirmed execution contract with harness evidence",
@@ -35,6 +35,7 @@
   ],
   "run_settings": {
     "execution_mode": "sequential",
+    "human_checkpoints": true,
     "concurrency_scope": "project",
     "max_parallel_tickets": 1,
     "branch_per_ticket": true,
@@ -77,6 +78,7 @@
       "validation_prompt": "A context packet exists with ticket scope, non-goals, project route, linked files/media status, memory status, unknowns, and CLI/model route.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
+      "require_approval": false,
       "other_tool": "Ticket context, board, project repository, workspace memory, and linked attachments",
       "action_type": "send_to_project_cli",
       "timeout_seconds": 600,
@@ -114,7 +116,8 @@
           "route_recommendation",
           "ui_design_read_if_applicable"
         ],
-        "output_token_budget": 2500
+        "output_token_budget": 2500,
+        "model_tier": "medium"
       }
     },
     {
@@ -141,6 +144,7 @@
       "validation_prompt": "A compact execution contract exists in the run handoff, treats the ticket as the plan, confirms dependencies and reusable artifacts, and includes expected files, checks, evidence, rollback, and skip rules without creating plan.md.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
+      "require_approval": false,
       "other_tool": "Ticket description, dependencies, acceptance criteria, and prior ticket artifacts",
       "action_type": "send_to_project_cli",
       "timeout_seconds": 600,
@@ -171,7 +175,8 @@
           "copy_manifest_if_applicable",
           "ui_acceptance_contract_if_applicable"
         ],
-        "output_token_budget": 2500
+        "output_token_budget": 2500,
+        "model_tier": "medium"
       }
     },
     {
@@ -198,6 +203,7 @@
       "validation_prompt": "The planned slice is implemented, project commands were detected from repo files, checks ran or have exact blockers, and changed files are reported.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
+      "require_approval": false,
       "action_type": "send_to_project_cli",
       "timeout_seconds": 1800,
       "config": {
@@ -258,6 +264,7 @@
       "validation_prompt": "Independent review reports no unresolved ticket-blocking findings, repository checks relevant to this ticket pass, acceptance criteria are covered, and UI evidence exists or is explicitly N/A with reason. Wider project-release findings remain visible but do not change the ticket verdict unless causally related.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
+      "require_approval": false,
       "action_type": "send_to_project_cli",
       "timeout_seconds": 1200,
       "config": {
@@ -318,6 +325,7 @@
       "validation_prompt": "All known defects are corrected or explicitly blocked/skipped with evidence, rerun results are recorded, and the next loop action is explicit.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
+      "require_approval": false,
       "action_type": "send_to_project_cli",
       "timeout_seconds": 1200,
       "config": {
@@ -369,6 +377,7 @@
       "validation_prompt": "Final polish resolves release blockers, project and browser checks pass, and the ship verdict maps evidence to every acceptance criterion.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
+      "require_approval": false,
       "action_type": "send_to_project_cli",
       "timeout_seconds": 1800,
       "config": {
@@ -405,8 +414,226 @@
       "on_fail_goto_position": 4
     },
     {
+      "name": "Prepare development deployment approval",
+      "instruction": "Freeze the independently verified release before any deployment. Remove or explicitly inventory generated workflow artifacts, confirm the real diff matches the completion manifest, create the release commit, and push that exact commit only when the ticket authorizes release delivery. Resolve the development target, deploy command, health check, smoke journey, and rollback command from maintained project configuration. Never invent a target or command. Return a compact approval packet containing the exact commit, files changed, test and browser evidence, development target, deploy command, health check, and rollback command. If any field is missing, fail without deploying. This step prepares evidence only and must not change a runtime environment.",
+      "skills": [
+        "completion-protocol",
+        "verification-loop",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "cli",
+        "shell"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not deploy in this step\n- Never infer deployment targets, commands, credentials, health checks, or rollback behavior\n- Approval evidence must describe the exact immutable commit and current verified checks",
+      "failure_checklist": [
+        "Release commit or changed-file inventory does not match the completion manifest",
+        "Development target, deploy command, health check, smoke journey, or rollback command is missing",
+        "Approval packet omits current test or browser evidence",
+        "A runtime environment was changed before approval"
+      ],
+      "validation_prompt": "A complete development deployment approval packet exists for one exact verified commit and no deployment has occurred.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": true,
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "config": {
+        "execution_scope": "release",
+        "step_role": "release",
+        "read_only_runtime": true,
+        "model_policy": {
+          "auto_route_models": true
+        },
+        "required_context": [
+          "completion_manifest",
+          "final_check_results",
+          "final_browser_evidence",
+          "changed_files"
+        ],
+        "expected_outputs": [
+          "release_commit",
+          "changed_files",
+          "test_evidence",
+          "browser_evidence",
+          "development_target",
+          "development_deploy_command",
+          "development_health_check",
+          "development_smoke_journey",
+          "development_rollback_command"
+        ],
+        "output_token_budget": 2000
+      },
+      "on_fail_goto_position": 4
+    },
+    {
+      "name": "Deploy approved commit to development",
+      "instruction": "Deploy only the exact commit approved in the preceding decision to the configured development target. Verify the target before execution, run the maintained deploy command, start or restart only the configured development service, then run the configured health check and smoke journey. If the commit, target, command, approval, or environment state differs from the approval packet, stop without deploying. On any failed health or smoke check, run the configured rollback command and report both the failure and rollback evidence. Never touch production in this step.",
+      "skills": [
+        "verification-loop",
+        "systematic-debugging",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "cli",
+        "shell",
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Execute only the exact approved commit, target, and commands\n- Fail closed when approval evidence or maintained deployment configuration is absent\n- Roll back on failed development health or smoke verification\n- Never access the production target in this step",
+      "failure_checklist": [
+        "Deployment ran without the recorded human approval",
+        "Deployed commit or target differs from the approval packet",
+        "Development health check or smoke journey is missing or failed",
+        "A failed deployment was not rolled back with evidence"
+      ],
+      "validation_prompt": "The approved commit is running on development, configured health and smoke checks pass, and rollback evidence exists for any failed attempt.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 1200,
+      "config": {
+        "execution_scope": "deployment",
+        "step_role": "deployment",
+        "environment": "development",
+        "model_policy": {
+          "auto_route_models": true
+        },
+        "required_context": [
+          "release_commit",
+          "development_target",
+          "development_deploy_command",
+          "development_health_check",
+          "development_smoke_journey",
+          "development_rollback_command",
+          "approval_response"
+        ],
+        "expected_outputs": [
+          "deployed_commit",
+          "development_deploy_evidence",
+          "development_health_evidence",
+          "development_smoke_evidence",
+          "rollback_evidence_if_failed"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Prepare production promotion approval",
+      "instruction": "Prepare a separate production promotion decision after development verification passes. Read the exact deployed commit and fresh development health and smoke evidence. Resolve the production target, deploy command, health check, critical production journey, and rollback command from maintained project configuration. Inspect the production working state without changing it and stop if there are unprotected production edits or target drift. Return a compact approval packet with the exact commit, files changed, test results, development evidence, production target, production deploy command, production health check, rollback command, and any production drift. This step must not deploy.",
+      "skills": [
+        "completion-protocol",
+        "verification-loop",
+        "requesting-code-review"
+      ],
+      "tools": [
+        "cli",
+        "shell"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not deploy in this step\n- Preserve production-owned edits and stop on unexplained drift\n- Never infer production commands, credentials, targets, health checks, or rollback behavior",
+      "failure_checklist": [
+        "Development health or smoke evidence is absent or stale",
+        "Production target, deploy command, health check, critical journey, or rollback command is missing",
+        "Production drift or edits were ignored",
+        "A production runtime change occurred before approval"
+      ],
+      "validation_prompt": "A separate production promotion approval packet exists for the development-verified commit, production state is protected, and no production deployment has occurred.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": true,
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "config": {
+        "execution_scope": "release",
+        "step_role": "release",
+        "read_only_runtime": true,
+        "model_policy": {
+          "auto_route_models": true
+        },
+        "required_context": [
+          "deployed_commit",
+          "development_health_evidence",
+          "development_smoke_evidence",
+          "changed_files",
+          "test_evidence"
+        ],
+        "expected_outputs": [
+          "release_commit",
+          "changed_files",
+          "test_evidence",
+          "development_health_evidence",
+          "development_smoke_evidence",
+          "production_target",
+          "production_deploy_command",
+          "production_health_check",
+          "production_smoke_journey",
+          "production_rollback_command",
+          "production_drift"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Deploy approved commit to production",
+      "instruction": "Deploy only the exact commit approved in the production promotion decision to the configured production target. Recheck that the target and production state still match the approval packet, preserve production-owned content and edits, run the maintained deploy command, then execute the configured health check and critical production journey. Stop before mutation if approval delivery was not acknowledged or any target, commit, command, or drift evidence changed. On failed health or journey verification, execute the configured rollback command and verify the rollback. Never mark the ticket complete; move it to QA with deployment evidence so final completion remains a human action.",
+      "skills": [
+        "verification-loop",
+        "systematic-debugging",
+        "finishing-a-development-branch",
+        "browser-qa"
+      ],
+      "tools": [
+        "cli",
+        "shell",
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Execute only the exact separately approved production commit, target, and commands\n- Preserve production-owned content and stop on drift\n- Roll back on failed production health or journey verification\n- Move the ticket to QA; only a human may mark QA complete",
+      "failure_checklist": [
+        "Production deployment ran without the separate recorded approval",
+        "Deployed commit, target, or command differs from the approval packet",
+        "Production health check or critical journey is missing or failed",
+        "A failed production deployment was not rolled back and verified",
+        "The workflow marked QA complete without a human action"
+      ],
+      "validation_prompt": "The separately approved commit is verified in production, rollback is verified for any failed attempt, and the ticket is in QA rather than Complete.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 1200,
+      "config": {
+        "execution_scope": "deployment",
+        "step_role": "deployment",
+        "environment": "production",
+        "model_policy": {
+          "auto_route_models": true
+        },
+        "required_context": [
+          "release_commit",
+          "production_target",
+          "production_deploy_command",
+          "production_health_check",
+          "production_smoke_journey",
+          "production_rollback_command",
+          "production_drift",
+          "approval_response"
+        ],
+        "expected_outputs": [
+          "deployed_commit",
+          "production_deploy_evidence",
+          "production_health_evidence",
+          "production_smoke_evidence",
+          "rollback_evidence_if_failed",
+          "qa_handoff"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
       "name": "Report, update ticket, and compact memory",
-      "instruction": "Return a compact result packet for the system to persist on the ticket: summary, files changed, commands run, browser evidence or N/A reason, remaining risks, blockers, and next actions. Treat the accepted implementation, review, and final polish results in the handoff as authoritative; this is a reporting transformation, not another validation pass. Do not re-open evidence, run project tools, or create/edit report or handoff files in the project. Write only durable memory deltas: project commands, conventions, paths, decisions, failed approaches, root causes, corrections, and learned rules. Do not paste full transcripts into memory. Return the exact named fields ticket_result_packet, compact_memory_delta, failed_attempts, and lessons in the response. Keep the user-facing summary natural and omit internal ticket/run/step IDs and dates unless the user explicitly asks for them.",
+      "instruction": "Return a compact result packet for the system to persist on the ticket: summary, files changed, commands run, browser evidence or N/A reason, development and production deployment evidence, rollback evidence if applicable, QA handoff, remaining risks, blockers, and next actions. Treat the accepted implementation, review, final polish, and deployment results in the handoff as authoritative; this is a reporting transformation, not another validation pass. Do not re-open evidence, run project tools, or create/edit report or handoff files in the project. Write only durable memory deltas: project commands, conventions, paths, decisions, failed approaches, root causes, corrections, and learned rules. Do not paste full transcripts into memory. Return the exact named fields ticket_result_packet, compact_memory_delta, failed_attempts, and lessons in the response. Keep the user-facing summary natural and omit internal ticket/run/step IDs and dates unless the user explicitly asks for them.",
       "skills": [
         "internal-comms",
         "finishing-a-development-branch"
@@ -425,6 +652,7 @@
       "validation_prompt": "Ticket contains summary, evidence, commands, changed files, risks/blockers, next actions, and compact memory deltas for future runs.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
+      "require_approval": false,
       "other_tool": "Ticket update, result packet, and compact workspace memory",
       "action_type": "send_to_project_cli",
       "timeout_seconds": 600,
@@ -439,6 +667,9 @@
           "final_changed_files",
           "command_log",
           "evidence",
+          "development_deploy_evidence",
+          "production_deploy_evidence",
+          "qa_handoff",
           "memory_delta"
         ],
         "expected_outputs": [
@@ -447,7 +678,8 @@
           "failed_attempts",
           "lessons"
         ],
-        "output_token_budget": 800
+        "output_token_budget": 800,
+        "model_tier": "medium"
       },
       "on_fail_goto_position": 4,
       "validation_pass_action": "end_loop",

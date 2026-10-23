@@ -226,6 +226,7 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 "validation_type": validation_type,
                 "validation_prompt": validation_prompt,
                 "wait_for_continue": bool(raw.get("wait_for_continue", False)),
+                "require_approval": bool(raw.get("require_approval", False)),
                 "routing_mode": str(raw.get("routing_mode") or "static"),
                 "config": cfg,
                 "timeout_seconds": int(cfg.get("timeout_seconds") or raw.get("timeout_seconds") or 300),

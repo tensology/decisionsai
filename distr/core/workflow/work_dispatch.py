@@ -225,6 +225,38 @@ def dispatch_work_item(
             else {}
         )
         metadata["execution_route"] = {**assessed_route, **current_route}
+    # fix2: an explicit thread composer route (manual) is the higher-level
+    # selection. It beats inherited relaunch routes, complexity routes and
+    # every workflow step pin; steps inherit it via run_data["thread_route"].
+    try:
+        from distr.core.workflow.development_threads import thread_execution_route
+
+        thread_route = thread_execution_route(int(chat_id), _session_provider=_session_provider)
+    except Exception:
+        thread_route = {}
+    if thread_route:
+        previous_route = (
+            dict(metadata.get("execution_route") or {})
+            if isinstance(metadata.get("execution_route"), dict)
+            else {}
+        )
+        merged_route = dict(thread_route)
+        complexity = previous_route.get("complexity") or routing_assessment.get("complexity")
+        if complexity:
+            merged_route["complexity"] = str(complexity)
+        for key in ("fallback_backend", "fallback_model", "fallback_model_provider"):
+            if previous_route.get(key) and not str(previous_route.get(key)).endswith(":free"):
+                merged_route[key] = previous_route[key]
+        if previous_route and (
+            previous_route.get("backend"), previous_route.get("model")
+        ) != (merged_route.get("backend"), merged_route.get("model")):
+            merged_route["replaced_route"] = {
+                key: previous_route.get(key)
+                for key in ("backend", "model", "model_provider", "source")
+            }
+        metadata["execution_route"] = merged_route
+        metadata["thread_route"] = dict(thread_route)
+        metadata.pop("step_routes", None)
     metadata.update({
         "chat_id": int(chat_id),
         "studio": True,

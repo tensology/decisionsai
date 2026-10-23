@@ -40,6 +40,64 @@ from distr.gui.web.kanban_events import increment_kanban_updated
 logger = logging.getLogger(__name__)
 
 
+_GATE_FAILED_STATUSES = frozenset({"failed"})
+
+
+def failing_gate_steps(
+    db,
+    *,
+    run_id: Optional[int],
+    workflow_id: Optional[int],
+    exclude_step_ids: Optional[set] = None,
+) -> List[AutoWorkflowStep]:
+    """Return gate steps whose *latest* result in this run is ``failed``.
+
+    A gate step is any step whose fail edge routes to a different step
+    (independent review, ship audit, ...). Self-retry steps are not gates.
+    Generic: derived from the workflow graph, never from step names/ids.
+    Returns ``[]`` on any lookup problem so it can never break routing.
+    """
+    if not run_id or not workflow_id:
+        return []
+    excluded = {int(x) for x in (exclude_step_ids or set())}
+    try:
+        steps = (
+            db.query(AutoWorkflowStep)
+            .filter(AutoWorkflowStep.workflow_id == int(workflow_id))
+            .all()
+        )
+        gates: Dict[int, AutoWorkflowStep] = {}
+        for item in list(steps or []):
+            fail_goto = getattr(item, "on_fail_goto", None)
+            if not isinstance(fail_goto, int) or isinstance(fail_goto, bool):
+                continue
+            if fail_goto in (-1, int(item.id)) or int(item.id) in excluded:
+                continue
+            gates[int(item.id)] = item
+        if not gates:
+            return []
+        rows = (
+            db.query(AutoWorkflowStepResult)
+            .filter(
+                AutoWorkflowStepResult.run_id == int(run_id),
+                AutoWorkflowStepResult.step_id.in_(list(gates)),
+            )
+            .order_by(AutoWorkflowStepResult.id.asc())
+            .all()
+        )
+        latest: Dict[int, str] = {}
+        for row in list(rows or []):
+            latest[int(row.step_id)] = str(getattr(row, "status", "") or "").strip().lower()
+        return [
+            gates[sid]
+            for sid, status in latest.items()
+            if status in _GATE_FAILED_STATUSES and sid in gates
+        ]
+    except Exception:
+        logger.debug("Could not evaluate gate results for run %s", run_id, exc_info=True)
+        return []
+
+
 def _apply_approved_provider_replacements(
     routes: dict[str, Any],
     replacements: list[dict[str, Any]],
@@ -132,6 +190,13 @@ def _missing_expected_outputs(result: str, expected_outputs: list[Any]) -> list[
     return missing
 
 
+_COMPLETION_GAP_CUE_RE = re.compile(
+    r"(?i)\b(?:missing|not\s+(?:yet\s+)?(?:done|implemented|covered|handled|fixed|tested|verified|met|addressed)|"
+    r"todo|unresolved|outstanding|pending|incomplete|lacks?|lacking|without|absent|broken|fail(?:s|ed|ing)?|"
+    r"error|bug|regression|uncovered|untested|unhandled|gaps?\s+remain|still\s+need)\b"
+)
+
+
 def _release_hold_findings(result: str, step_config: dict[str, Any]) -> list[str]:
     """Reject a final audit that names its fields but says the work cannot ship.
 
@@ -146,15 +211,35 @@ def _release_hold_findings(result: str, step_config: dict[str, Any]) -> list[str
     }:
         return []
     text = str(result or "")
-    plain = re.sub(r"[*_`]+", "", text)
+    # Keep snake_case field names readable (``ship_verdict`` -> ``ship verdict``)
+    # instead of deleting the underscore, which made ``ship_verdict:
+    # needs_input`` unmatchable and let a blocked review pass.
+    plain = re.sub(r"(?<=[A-Za-z0-9])_(?=[A-Za-z0-9])", " ", text)
+    plain = re.sub(r"[*_`]+", "", plain)
     findings: list[str] = []
     verdict = re.search(
-        r"(?im)\bship\s+verdict\s*(?::|-|\bis\b)?\s*"
-        r"(hold|blocked|failed?|no[ -]?go|not\s+ready)\b",
+        r"(?im)\bship\s*verdict\s*(?::|-|\bis\b)?\s*"
+        r"(hold|blocked|failed?|no[ -]?go|not\s+ready|needs?[ -]?input|needs?[ -]?work|"
+        r"needs?[ -]?changes|incomplete|partial)\b",
         plain,
     )
     if verdict:
         findings.append(f"Final ship verdict is {verdict.group(1).upper()}.")
+    for match in re.finditer(r"(?im)^\s*(?:[-*]\s*)?completion\s+gaps\s*:\s*(.*)$", plain):
+        gaps = match.group(1).strip()
+        if not gaps:
+            following = plain[match.end():].lstrip("\n").splitlines()
+            gaps = following[0].strip(" -*\t") if following else ""
+        if not gaps or re.match(
+            r"(?i)^(?:none|n\s*/?\s*a|no\s+(?:completion\s+)?gaps?|not\s+applicable|\[\s*\])\s*(?:[.;—-]|$)",
+            gaps,
+        ):
+            continue
+        # Only a value that actually describes missing/failed work is a gap;
+        # "completion_gaps: all criteria covered" must not block a release.
+        if not _COMPLETION_GAP_CUE_RE.search(gaps):
+            continue
+        findings.append(f"Review reports completion gaps: {gaps[:300]}")
     terminal = re.search(
         r"(?im)^\s*status\s*:\s*(needs[_ -]?input|blocked|failed?|incomplete)\b",
         plain,
@@ -1592,6 +1677,35 @@ class StepRouter:
                 max_iterations,
                 step.id,
             )
+            # Exhausting the loop while a gate (review / ship audit) is still
+            # failing is NOT a success path: do not jump to the report step and
+            # let its pass mark the run completed. Stop without sign-off.
+            failing_gates = failing_gate_steps(
+                db,
+                run_id=getattr(run, "id", None),
+                workflow_id=step.workflow_id,
+                exclude_step_ids={int(step.id)},
+            )
+            if not verified_passed or failing_gates:
+                gate_names = [g.name or f"Step {g.id}" for g in failing_gates]
+                if not verified_passed and (step.name or f"Step {step.id}") not in gate_names:
+                    gate_names.insert(0, step.name or f"Step {step.id}")
+                run_data["loop_exhausted"] = {
+                    "iteration": iteration,
+                    "max_iterations": int(max_iterations),
+                    "at_step_id": int(step.id),
+                    "failing_gate_step_ids": [int(g.id) for g in failing_gates],
+                    "failing_gates": gate_names,
+                }
+                run_data["forced_terminal_status"] = "failed"
+                run_data["terminal_warning"] = (
+                    f"Iteration limit ({int(max_iterations)}) reached while "
+                    f"{', '.join(repr(n) for n in gate_names) or 'a gate'} had not passed; "
+                    "the run stopped without sign-off and the report step was not treated as success."
+                )
+                run.run_data = json.dumps(run_data)
+                db.flush()
+                return -1
             report_step = (
                 db.query(AutoWorkflowStep)
                 .filter(AutoWorkflowStep.workflow_id == step.workflow_id)
@@ -1947,8 +2061,11 @@ class StepRouter:
                     outbound_question = build_operator_waiting_message(
                         workflow_name=str(latest_data.get("workflow_name") or "Workflow"),
                         ticket_title=str(latest_data.get("ticket_title") or ""),
-                        step_name=str(latest_data.get("step_name") or "the current phase"),
+                        step_name=str(latest_data.get("step_name") or step_name or "the current phase"),
                         waiting_kind=latest_kind,
+                        question=question,
+                        chat_id=latest_data.get("chat_id"),
+                        run_id=run_id,
                     )
                     notify_ticket_workflow_progress(
                         run_id=run_id,
@@ -2117,13 +2234,24 @@ class StepRouter:
         status: str = "completed",
         warning: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Mark run as completed and return end_run decision."""
-        run.status = status
-        run.completed_at = utc_now_naive()
+        """Mark run as terminal and return end_run decision.
+
+        A run is only ``completed`` when nothing forced a non-success terminal
+        status (e.g. loop exhausted while a review/ship-audit gate failed).
+        """
         try:
             run_data = json.loads(run.run_data or "{}") or {}
         except Exception:
             run_data = {}
+        if not isinstance(run_data, dict):
+            run_data = {}
+        forced = str(run_data.get("forced_terminal_status") or "").strip().lower()
+        if forced and str(status or "").lower() == "completed":
+            status = forced
+            if not warning and run_data.get("terminal_warning"):
+                warning = str(run_data.get("terminal_warning"))
+        run.status = status
+        run.completed_at = utc_now_naive()
         try:
             from distr.core.workflow.blueprint_adherence import update_drift_metrics
 

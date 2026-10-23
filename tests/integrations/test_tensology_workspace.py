@@ -39,6 +39,7 @@ def test_tensology_heartbeat_authenticates_once_before_waiting():
         patch("distr.core.tensology_client.process_tensology_discussion_assessments") as assessments,
         patch("distr.core.tensology_client.process_tensology_discussion_context") as context,
         patch("distr.core.tensology_client.process_tensology_approved_tickets") as tickets,
+        patch("distr.core.tensology_client.sync_tensology_execution_states") as state_sync,
         patch("asyncio.sleep", side_effect=asyncio.CancelledError),
     ):
         try:
@@ -49,10 +50,12 @@ def test_tensology_heartbeat_authenticates_once_before_waiting():
     heartbeat.assert_called_once_with()
     assessments.assert_called_once_with()
     context.assert_called_once_with()
-    tickets.assert_called_once_with()
+    # Tickets arrive by websocket push now; the loop only mirrors local state.
+    tickets.assert_not_called()
+    state_sync.assert_called_once_with()
 
 
-def test_tensology_ticket_poll_still_runs_when_an_unrelated_operation_fails():
+def test_tensology_state_sync_still_runs_when_an_unrelated_operation_fails():
     with (
         patch(
             "distr.core.tensology_client.send_tensology_heartbeat",
@@ -61,6 +64,7 @@ def test_tensology_ticket_poll_still_runs_when_an_unrelated_operation_fails():
         patch("distr.core.tensology_client.process_tensology_discussion_assessments") as assessments,
         patch("distr.core.tensology_client.process_tensology_discussion_context") as context,
         patch("distr.core.tensology_client.process_tensology_approved_tickets") as tickets,
+        patch("distr.core.tensology_client.sync_tensology_execution_states") as state_sync,
         patch("asyncio.sleep", side_effect=asyncio.CancelledError),
     ):
         try:
@@ -71,7 +75,9 @@ def test_tensology_ticket_poll_still_runs_when_an_unrelated_operation_fails():
     heartbeat.assert_called_once_with()
     assessments.assert_called_once_with()
     context.assert_called_once_with()
-    tickets.assert_called_once_with()
+    # Tickets arrive by websocket push now; the loop only mirrors local state.
+    tickets.assert_not_called()
+    state_sync.assert_called_once_with()
 
 
 def test_approved_ticket_creates_visible_project_thread_and_claims_remote_ticket():

@@ -124,6 +124,8 @@ def test_active_runs_expose_latest_worker_activity_and_heartbeat():
             run_id=run_id,
             route_backend="codex",
             selected_model="gpt-5-codex",
+            selection_reason="High complexity requires visual verification",
+            complexity="high",
             status="running",
         )
         session.add(execution)
@@ -139,6 +141,9 @@ def test_active_runs_expose_latest_worker_activity_and_heartbeat():
     run = next(item for item in get_active_runs(workflow_id=workflow_id) if item["id"] == run_id)
 
     assert run["last_activity"]["event_type"] == "heartbeat"
+    assert run["recent_activity"][0]["event_type"] == "heartbeat"
+    assert run["recent_activity"][0]["complexity"] == "high"
+    assert run["recent_activity"][0]["selection_reason"] == "High complexity requires visual verification"
     assert run["last_heartbeat"]["message"] == "Codex CLI is still running (20s)"
     assert run["last_heartbeat"]["backend"] == "codex"
     assert run["heartbeat_age_seconds"] is not None

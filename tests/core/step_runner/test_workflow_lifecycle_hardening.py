@@ -93,6 +93,7 @@ def test_workflow_run_context_guard_rejects_removed_context():
 
 def test_finalize_terminal_run_persists_receipt_for_completed_failed_and_cancelled(monkeypatch):
     factory = _make_factory()
+    start_queued_instruction = MagicMock()
 
     def get_session():
         return _session_ctx(factory)
@@ -101,6 +102,10 @@ def test_finalize_terminal_run_persists_receipt_for_completed_failed_and_cancell
     monkeypatch.setattr(
         "distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge.on_workflow_completed",
         MagicMock(),
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.development_harness._start_next_queued_instruction",
+        start_queued_instruction,
     )
 
     run_ids = {}
@@ -120,6 +125,7 @@ def test_finalize_terminal_run_persists_receipt_for_completed_failed_and_cancell
             db.flush()
             run = AutoWorkflowRun(
                 workflow_id=workflow.id,
+                chat_id=17,
                 status=status,
                 current_step_id=step.id,
                 run_data=json.dumps(
@@ -155,6 +161,8 @@ def test_finalize_terminal_run_persists_receipt_for_completed_failed_and_cancell
             assert receipt["step_count"] == 1
             assert receipt["project_id"] == 123
             assert receipt["has_completion_evidence"] is True
+    assert start_queued_instruction.call_count == 3
+    start_queued_instruction.assert_called_with(17)
 
 
 class _FakeExecutor(StepExecutorMixin):

@@ -153,6 +153,14 @@ class WorkflowAgentBridge:
         if not step_lines:
             return f"{status_line}\nNo steps were recorded."
 
+        # fix2: retries of one step produce identical lines; show each once.
+        counts: dict[str, int] = {}
+        for line in step_lines:
+            counts[line] = counts.get(line, 0) + 1
+        step_lines = [
+            line if count == 1 else f"{line} (repeated {count}\u00d7)"
+            for line, count in counts.items()
+        ]
         return f"{status_line}\n" + "\n".join(step_lines)
 
     @staticmethod
@@ -179,8 +187,24 @@ class WorkflowAgentBridge:
         if status in ("completed", "passed", "success"):
             return f"{backend} completed the implementation handoff."
         if status:
+            reason = WorkflowAgentBridge._project_cli_failure_reason(clean)
+            if reason:
+                return f"{backend} reported status: {status} \u2014 {reason}"
             return f"{backend} reported status: {status}."
         return f"{backend} started the implementation handoff."
+
+    @staticmethod
+    def _project_cli_failure_reason(clean: str) -> str:
+        """Extract the human reason after the ``Status:`` header (fix2)."""
+        parts = re.split(r"(?i)\bStatus:\s*[A-Za-z0-9_-]+\s*", clean, maxsplit=1)
+        reason = parts[1] if len(parts) > 1 else ""
+        reason = re.sub(r"(?i)^\s*Tool '[^']+' failed:\s*", "", reason)
+        reason = re.split(r"(?i)\s*Try next:", reason)[0].strip()
+        if not reason:
+            return ""
+        if re.search(r"(?i)\b401\b|unauthori[sz]ed|invalid (?:api )?key|invalid jwt", reason):
+            reason += " (the model provider rejected its API credentials; fix that provider key or use another route)"
+        return reason[:400] + ("..." if len(reason) > 400 else "")
 
     @staticmethod
     def _summarize_test_result(clean: str) -> str:

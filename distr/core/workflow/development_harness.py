@@ -2030,9 +2030,19 @@ def dispatch_development_prompt(
         raise ValueError("Use the Plan conversation for planning edits. Plan threads cannot dispatch application code changes.")
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
-        autonomy_level = str(autonomy_override or root.autonomy_level or "full").strip().lower()
-    if autonomy_level not in {"full", "plan", "approval"}:
-        raise ValueError("Unsupported Development autonomy level.")
+        raw_autonomy = autonomy_override or root.autonomy_level or "full"
+    from distr.core.workflow.development_threads import normalize_autonomy_level
+
+    autonomy_level = normalize_autonomy_level(raw_autonomy)
+    if autonomy_level is None:
+        raise ValueError(
+            f"Unsupported Development autonomy level {str(raw_autonomy)!r}; "
+            "expected full, goal, plan or approval."
+        )
+    if autonomy_level == "goal":
+        # Goal threads (Tensology approvals, composer "Goal") dispatch exactly
+        # like full autonomy; goal tracking lives in development_control.
+        autonomy_level = "full"
     from distr.core.chat_turns import latest_active_turn_id, start_tool
 
     turn_id = latest_active_turn_id(int(chat_id))
@@ -2058,6 +2068,22 @@ def dispatch_development_prompt(
 
         existing_workflow_id = int(metadata.get("workflow_id") or 0) or None
         workflow_id = existing_workflow_id
+        relaunch_inherit: dict[str, Any] = {}
+        if existing_workflow_id is not None:
+            from distr.core.workflow.relaunch_guard import relaunch_decision
+
+            relaunch = relaunch_decision(int(chat_id), int(existing_workflow_id), clean)
+            if not relaunch.get("allow", True):
+                ChatService.append_assistant_notice(int(chat_id), str(relaunch.get("notice") or ""))
+                return {
+                    "direct": False,
+                    "execution_mode": "workflow",
+                    "started": False,
+                    "requires_resume": True,
+                    "previous_run_id": relaunch.get("previous_run_id"),
+                    "message": str(relaunch.get("notice") or ""),
+                }
+            relaunch_inherit = dict(relaunch.get("inherit") or {})
         if workflow_id is None:
             try:
                 planned_id = plan_workflow(clean, chat_id=int(chat_id), name=None)
@@ -2123,6 +2149,8 @@ def dispatch_development_prompt(
             ),
         }
         if pinned_backend in CLI_BACKENDS or local_sel is not None:
+            from distr.core.project_cli_backends.timing import resolve_pi_model_provider
+
             run_metadata["execution_route"] = {
                 "backend": (local_sel["backend"] if local_sel else pinned_backend),
                 "model": (
@@ -2133,11 +2161,24 @@ def dispatch_development_prompt(
                 "model_provider": (
                     str(local_sel["provider"])
                     if local_sel
-                    else str(model_route.get("provider") or "")
+                    else (
+                        resolve_pi_model_provider(
+                            str(model_route.get("model_name") or ""),
+                            str(model_route.get("provider") or ""),
+                        )
+                        if pinned_backend == "pi"
+                        else str(model_route.get("provider") or "")
+                    )
                 ),
                 "source": "thread_model_route",
+                "route_mode": str(model_route.get("route_mode") or "manual").strip().lower() or "manual",
                 "local_harness_preset": local_sel["local_harness_preset"] if local_sel else "",
             }
+        for inherited_key in ("model_route", "execution_route"):
+            # An explicit resume keeps the stopped run's pinned route instead
+            # of letting Auto pick a (possibly free) model for the relaunch.
+            if inherited_key in relaunch_inherit and not run_metadata.get(inherited_key):
+                run_metadata[inherited_key] = relaunch_inherit[inherited_key]
         record_turn_route(int(chat_id), run_metadata["route_receipt"])
         result = dispatch_work_item(
             workflow_id=int(workflow_id),

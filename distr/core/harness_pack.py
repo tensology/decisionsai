@@ -130,7 +130,7 @@ def _projection_text(*, harness: str, registry_path: Path, manifest_path: Path) 
     vendor_path = ECC_VENDOR_DIR.relative_to(PROJECT_ROOT)
     return f"""---
 name: decisions-ecc-harness
-description: Use when DecisionsAI, Hermes, Codex, Claude, Cursor, or Pi needs the bundled ECC harness pack: vendored skills, agents, commands, rules, hooks, MCP conventions, and cross-harness operator guidance.
+description: 'Use when DecisionsAI, Hermes, Codex, Claude, Cursor, or Pi needs the bundled ECC harness pack: vendored skills, agents, commands, rules, hooks, MCP conventions, and cross-harness operator guidance.'
 ---
 
 # DecisionsAI ECC Harness Pack

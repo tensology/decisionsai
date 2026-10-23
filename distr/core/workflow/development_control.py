@@ -290,7 +290,9 @@ def update_thread_controls(chat_id: int, **updates: Any) -> dict[str, Any]:
             else:
                 metadata["workflow_id"] = int(workflow_id)
         if updates.get("autonomy_level") is not None:
-            autonomy = str(updates["autonomy_level"] or "full").strip().lower()
+            from distr.core.workflow.development_threads import normalize_autonomy_level
+
+            autonomy = normalize_autonomy_level(updates["autonomy_level"])
             if autonomy not in {"full", "approval", "plan", "goal"}:
                 raise ValueError("Unknown autonomy level.")
             chat.autonomy_level = autonomy

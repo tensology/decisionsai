@@ -3,6 +3,15 @@
 
 set -u
 
+# Apple Silicon: LaunchServices starts this script-only bundle under Rosetta
+# (x86_64). That arch preference is inherited down the process tree, so Pi's
+# /bin/sh children run git/xcrun as x86_64 and fail with "unable to load
+# libxcrun ... need 'x86_64'". Re-exec natively once before anything else.
+if [ "$(/usr/sbin/sysctl -in sysctl.proc_translated 2>/dev/null)" = "1" ] && [ -z "${DECISIONS_ARM64_REEXEC:-}" ]; then
+    export DECISIONS_ARM64_REEXEC=1
+    exec /usr/bin/arch -arm64 /bin/bash "$0" "$@"
+fi
+
 APP_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_ROOT="$(cd "$APP_ROOT/.." && pwd)"
 LOG_DIR="$HOME/.decisions/logs"

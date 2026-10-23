@@ -120,6 +120,14 @@ def apply_loop_bundle(
             merged_input = json.loads(wf.workflow_input or "{}") or {}
         except Exception:
             merged_input = {}
+        if apply_mode == "replace":
+            # Replacing a definition must not inherit smoke-test switches from
+            # a previous preset: a leftover ``spotify-e2e-dev`` slug /
+            # ``e2e_smoke`` flag makes every real run skip validation gates and
+            # ``skip_human_checkpoints`` silently removes approvals.
+            for stale_key in ("slug", "e2e_smoke", "skip_human_checkpoints"):
+                if stale_key not in loop_contract:
+                    merged_input.pop(stale_key, None)
         merged_input.update({k: v for k, v in loop_contract.items() if v not in (None, "", [])})
         merged_input["loop_contract"] = loop_contract
         merged_input["preset_name"] = validated.get("name")

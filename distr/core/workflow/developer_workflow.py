@@ -7,10 +7,11 @@ from typing import Any
 
 DEVELOPER_WORKFLOW_NAME = "Development"
 DEVELOPER_WORKFLOW_SLUG = "development-ticket-to-implementation"
-DEVELOPER_WORKFLOW_VERSION = 15
+DEVELOPER_WORKFLOW_VERSION = 16
 
 DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "execution_mode": "sequential",
+    "human_checkpoints": True,
     "concurrency_scope": "project",
     "max_parallel_tickets": 1,
     "branch_per_ticket": True,

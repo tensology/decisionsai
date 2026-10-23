@@ -390,9 +390,16 @@ def test_loop_iteration_routing_respects_max_iterations(tmp_path):
                         with patch.object(router, "_enter_wait_state", return_value={"action": "waiting"}):
                             decision = router.route(gate_id, "still failing", False, run_id, skip_wait=True)
 
-    assert decision.get("action") == "next_step"
-    assert decision.get("step_id") == report_id
+    # Gatefix 2026-10-23 (Jackcat run 162): exhausting the loop while the gate is
+    # still failing must NOT jump to the report step and complete the run; the run
+    # ends without sign-off and is marked failed.
+    assert decision.get("action") == "end_run"
+    assert decision.get("step_id") != report_id
 
     with get_session() as session:
-        run_data = json.loads(session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).one().run_data)
+        run_row = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).one()
+        run_data = json.loads(run_row.run_data)
+        run_status = run_row.status
     assert run_data.get("loop_iteration") == 2
+    assert run_data.get("forced_terminal_status") == "failed"
+    assert run_status == "failed"

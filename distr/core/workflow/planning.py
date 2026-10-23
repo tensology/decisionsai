@@ -772,6 +772,7 @@ def _persist_planned_steps(
             timeout_seconds=s.get("timeout_seconds", 300),
             routing_mode=s.get("routing_mode") or "static",
             wait_for_continue=bool(s.get("wait_for_continue", False)),
+            require_approval=bool(s.get("require_approval", False)),
         )
         if s.get("stuck_behavior"):
             step.description = f"Stuck behavior: {s['stuck_behavior']}"

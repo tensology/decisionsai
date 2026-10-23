@@ -189,13 +189,17 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
     planned = plan_steps_from_bundle(bundle)
     assert planned["success"] is True
     steps = planned["steps"]
-    assert len(steps) == 7
+    assert len(steps) == 11
     assert steps[0]["title"] == "Understand ticket and acceptance criteria"
     assert steps[1]["title"] == "Confirm ticket execution contract"
     assert steps[2]["title"] == "Implement the planned change"
     assert steps[3]["title"] == "Independently review and validate the change"
     assert steps[4]["title"] == "Correct defects found by validation"
     assert steps[5]["title"] == "Final production polish and ship audit"
+    assert steps[6]["title"] == "Prepare development deployment approval"
+    assert steps[7]["title"] == "Deploy approved commit to development"
+    assert steps[8]["title"] == "Prepare production promotion approval"
+    assert steps[9]["title"] == "Deploy approved commit to production"
     assert steps[-1]["title"] == "Report, update ticket, and compact memory"
     assert "not another validation pass" in steps[-1]["instruction"]
     assert "Do not create or edit project files during reporting" in steps[-1]["config"]["guardrail"]
@@ -212,8 +216,20 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
         "review",
         "implementation",
         "final_polish",
+        "release",
+        "deployment",
+        "release",
+        "deployment",
         "reporting",
     ]
+    assert steps[6]["require_approval"] is True
+    assert steps[8]["require_approval"] is True
+    assert steps[7]["require_approval"] is False
+    assert steps[9]["require_approval"] is False
+    assert steps[7]["config"]["environment"] == "development"
+    assert steps[9]["config"]["environment"] == "production"
+    assert "rollback" in steps[7]["instruction"].lower()
+    assert "qa" in steps[9]["instruction"].lower()
     assert "execution contract" in (planned["loop_contract"].get("exit_when") or "")
     assert "plan.md" not in (planned["loop_contract"].get("exit_when") or "")
     assert steps[1]["config"]["expected_outputs"][0] == "execution_contract"
@@ -334,17 +350,19 @@ def test_consolidation_leaves_one_development_workflow_and_preserves_history(
 
     assert result["workflow_id"] == canonical_id
     assert result["historical_workflow_id"] is not None
-    assert result["step_count"] == 7
+    assert result["step_count"] == 11
     assert obsolete_id in result["archived_workflow_ids"]
     with db_factory() as db:
         canonical = db.query(AutoWorkflow).filter(AutoWorkflow.id == canonical_id).one()
         assert canonical.name == "Development"
         assert canonical.status == "active"
-        assert len(canonical.steps) == 7
+        assert len(canonical.steps) == 11
         settings = json.loads(canonical.run_settings or "{}")
         assert settings["memory_enabled"] is True
+        assert settings["human_checkpoints"] is True
         assert settings["capture_failures_and_lessons"] is True
-        assert settings["canonical_workflow_version"] == 15
+        assert settings["canonical_workflow_version"] == 16
+        assert settings["human_checkpoints"] is True
         assert settings["ui_local_first"] is True
         assert settings["hosted_ui_escalation_after_failures"] == 2
         history = db.query(AutoWorkflow).filter(
@@ -397,9 +415,9 @@ def test_canonical_resolution_upgrades_only_development_and_preserves_history(db
 
     with db_factory() as db:
         current = db.get(AutoWorkflow, development_id)
-        assert len(current.steps) == 7
+        assert len(current.steps) == 11
         settings = json.loads(current.run_settings)
-        assert settings["canonical_workflow_version"] == 15
+        assert settings["canonical_workflow_version"] == 16
         assert settings["ui_local_first"] is True
         assert db.get(AutoWorkflow, unrelated_id).status == "active"
         history = db.query(AutoWorkflow).filter(

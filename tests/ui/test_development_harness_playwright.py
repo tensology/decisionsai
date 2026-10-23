@@ -42,6 +42,7 @@ def _install_api(
     complete_after_refresh: bool = False,
     complete_after_cancel: bool = False,
     current_board_linked: bool = False,
+    external_source_board_linked: bool = False,
     direct_execution: bool = False,
     assistant_markdown: bool = False,
     completed_activity: bool = False,
@@ -74,6 +75,7 @@ def _install_api(
     cancelled_open_turn: bool = False,
     routing_execution_mode: str = "direct",
     seven_step_workflow: bool = False,
+    provider_preflight_interaction: bool = False,
 ) -> None:
     projects = [
         {"id": 7, "name": "DecisionsAI", "folder_location": "/tmp/decisions", "in_use": True, "kanban_board_id": 70, "startup_instructions": startup_instructions},
@@ -144,7 +146,7 @@ def _install_api(
         "development_time_running": running_timer,
         "development_time_seconds": 5 if running_timer else 125,
         "development_ticket_id": 42,
-        "development_board_key": "decisions:70" if current_board_linked else None,
+        "development_board_key": "tensology:77" if external_source_board_linked else "decisions:70" if current_board_linked else None,
         "development_board_ticket_key": "decisions:42" if current_board_linked else None,
         "development_board_ticket_title": "DEV-42" if current_board_linked else None,
         "pinned": False,
@@ -363,6 +365,14 @@ def _install_api(
                     "8": {"running": False, "startup_count": 0, "shell_count": 0, "sessions": []},
                 }
             }
+        elif path == "/api/threads/17/terminal/status":
+            payload = {"thread_id": 17, "project_id": 7, "running": bool(startup_sessions)}
+        elif path == "/api/threads/17/terminal/start" and request.method == "POST":
+            startup_sessions[:] = [{"process_id": "term-1", "pid": 101, "command": "npm run dev", "cwd": "/tmp/decisions", "purpose": "startup"}]
+            payload = {"success": True, "thread_id": 17, "project_id": 7, "running": True}
+        elif path == "/api/threads/17/terminal/stop" and request.method == "POST":
+            startup_sessions.clear()
+            payload = {"success": True, "thread_id": 17, "project_id": 7, "running": False}
         elif path == "/api/tickets/boards":
             if request.method == "POST":
                 payload = {"success": True, "id": 90, "project_id": 9}
@@ -633,6 +643,9 @@ def _install_api(
                 "steering_log": [{"message": "Keep CRUD actions aligned on the right."}],
                 "learned_rules": [{"id": 501, "summary": "Keep CRUD actions aligned on the right.", "scope": "board", "evidence_count": 2, "enabled": True}],
             }
+        elif path == "/api/workflows/44/runs/99/steer" and request.method == "POST":
+            body = json.loads(request.post_data or "{}")
+            payload = {"success": True, "delivered": False, "method": "queued", "steer": {"message": body.get("message")}}
         elif path == "/api/tickets/boards/70/orchestrator-learned-rules/501" and request.method == "PATCH":
             payload = {"success": True}
         elif path == "/api/workflows/45":
@@ -661,7 +674,7 @@ def _install_api(
                 "step_routes": ({
                     "1": {"backend": "pi", "model": "nemotron-3.5-super"},
                     "2": {"backend": "pi", "model": "nemotron-3.5-super"},
-                    "3": {"backend": "codex", "model": "gpt-5.6-luna"},
+                    "3": {"backend": "pi", "model": "nvidia/nemotron-3.5-lightning:free", "complexity": "medium", "source": "approved_provider_replacement", "step_role": "implementation", "rationale": "Whole-workflow preflight allocated this implementation step before execution began."},
                     "4": {"backend": "cursor", "model": "grok-4.7"},
                     "5": {"backend": "codex", "model": "gpt-5.6-luna"},
                     "6": {"backend": "codex", "model": "gpt-5.6-luna"},
@@ -669,6 +682,8 @@ def _install_api(
                 } if seven_step_workflow else {}),
                 "steerable": True,
                 "execution_session_id": "terminal-42" if live_activity else None,
+                "last_activity": ({"event_type": "message_update", "status": "running", "message": "thinking_delta", "at": "2026-08-27T10:12:30Z", "backend": "pi", "model": "nvidia/nemotron-3.5-lightning:free", "complexity": "medium", "step_id": 3} if live_activity else {}),
+                "recent_activity": ([{"event_type": "message_update", "status": "running", "message": "thinking_delta", "at": "2026-08-27T10:12:30Z", "backend": "pi", "model": "nvidia/nemotron-3.5-lightning:free", "complexity": "medium", "step_id": 3}] if live_activity else []),
                 "runtime_snapshot": {"urls": [TEST_BASE_URL + "/workflows/"]} if live_activity else None,
                 "route_receipt": {
                     "complexity": "high",
@@ -679,6 +694,10 @@ def _install_api(
                     "selected": {"backend": "codex", "provider": "openai", "model": "gpt-5.6-luna", "reasoning_effort": "high", "service_tier": "standard"},
                     "actual": {},
                 },
+                "pending_route_approval": ({
+                    "model": "nvidia/nemotron-3.5-lightning:free",
+                    "name": "NVIDIA: Nemotron 3.5 Lightning (free)",
+                } if provider_preflight_interaction else {}),
                 "ticket_id": 42,
                 "ticket_title": "DEV-42",
                 "git_status_before": [],
@@ -769,8 +788,8 @@ def _install_api(
                 "interactions": ([{
                     "token": "abc123",
                     "run_id": 99,
-                    "kind": "approval",
-                    "allowed_actions": ["approve", "stop", "feedback"],
+                    "kind": "provider_preflight" if provider_preflight_interaction else "approval",
+                    "allowed_actions": ["model_0", "stop"] if provider_preflight_interaction else ["approve", "stop", "feedback"],
                     "telegram_linked": True,
                 }] if pending_interaction else []),
             }
@@ -779,6 +798,8 @@ def _install_api(
             command = {"id": 61, "source": body.get("source", "web"), "content": body.get("content"), "status": "queued"}
             queued_commands[:] = [command]
             payload = {"status": "queued", "summary": "Instruction queued safely until a worker can accept it.", "artifacts": [command]}
+        elif path == "/api/workflows/studio/tasks" and request.method == "POST":
+            payload = {"task": {"id": 88, "title": "Queued request"}, "started": True, "message": "Thread created."}
         elif path == "/api/workflows/studio/tasks/17/commands/dispatch":
             payload = {"status": "queued", "summary": "Instruction is safely queued until a worker can accept it.", "artifacts": queued_commands}
         elif path == "/api/workflows/studio/commands/61" and request.method == "PATCH":
@@ -1082,6 +1103,16 @@ def test_board_linked_thread_appears_in_board_and_recent(page: Page):
     expect(page.locator('[data-chat-id="19"]')).to_have_count(2)
     expect(page.locator('[data-board-group="decisions:70"] [data-chat-id="19"]')).to_be_visible()
     expect(page.locator('#recent-task-group [data-chat-id="19"]')).to_be_visible()
+
+
+def test_external_ticket_thread_appears_under_its_local_project_board(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, external_source_board_linked=True)
+    page.goto(URL)
+
+    group = page.locator('[data-board-group="decisions:70"]')
+    expect(group.locator('[data-chat-id="17"]')).to_be_visible()
+    expect(group.locator('.project-row')).to_have_class(re.compile(r"\bactive\b"))
 
 
 def test_recent_show_more_opens_full_recent_development_view(page: Page):
@@ -2014,6 +2045,34 @@ def test_web_and_telegram_share_the_pending_run_control(page: Page):
     assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
 
 
+def test_waiting_workflow_defaults_to_loop_and_exposes_approval(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, pending_interaction=True, provider_preflight_interaction=True)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.add_init_script("localStorage.setItem('decisions.workflowViewMode', 'list')")
+    page.goto(URL)
+
+    runner = page.locator('[data-workflow-runner="live"] .thread-workflow-runner')
+    expect(runner).to_have_attribute("data-view", "loop")
+    expect(runner.locator(".thread-workflow-ring")).to_be_visible()
+    expect(runner.locator(".thread-workflow-steps")).to_be_hidden()
+    checkpoint = runner.locator(".thread-workflow-checkpoint")
+    expect(checkpoint).to_contain_text("Approval required")
+    expect(checkpoint).to_contain_text("NVIDIA: Nemotron 3.5 Lightning (free)")
+    for width, height in ((390, 844), (768, 1024), (1280, 800), (1440, 900)):
+        page.set_viewport_size({"width": width, "height": height})
+        if width < 640:
+            page.locator("#sidebar-close").click(force=True)
+            page.wait_for_timeout(250)
+        expect(checkpoint).to_be_visible()
+        expect(checkpoint.get_by_role("button", name="Approve and continue", exact=True)).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.screenshot(path=f"/private/tmp/decisions-workflow-approval-{width}.png", full_page=False)
+    checkpoint.get_by_role("button", name="Approve and continue", exact=True).click()
+
+    assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
+
+
 def test_pending_checkpoint_requires_explicit_revision_and_blocks_normal_send(page: Page):
     requests: list[tuple[str, str]] = []
     submitted_payloads: list[dict] = []
@@ -2750,17 +2809,82 @@ def test_active_run_keeps_internal_diagnostics_out_and_supports_durable_guidance
     page.screenshot(path="/private/tmp/development-harness-control-plane.png", full_page=True)
 
     page.locator("#inspector-close").click()
+    expect(page.locator("#composer-guidance-target")).to_be_visible()
+    expect(page.locator("#composer-guidance-scope")).to_have_value("workflow")
+    page.locator("#task-prompt").fill("Limit the workflow change to navigation")
+    page.locator("#send-button").click()
+    expect(page.get_by_text("Workflow guidance queued for the next step.", exact=True)).to_be_visible()
+    assert ("POST", "/api/workflows/44/runs/99/steer") in requests
+
+    page.locator("#composer-guidance-scope").select_option("thread")
     page.locator("#task-prompt").fill("Keep the existing navigation and retest mobile")
     page.locator("#send-button").click()
     _open_details(page)
     expect(page.get_by_text("Queued guidance", exact=False)).to_be_visible()
     expect(page.get_by_text("Keep the existing navigation and retest mobile", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Edit", exact=True).click()
+    page.get_by_role("button", name="Edit queued request", exact=True).click()
     expect(page.locator("#task-prompt")).to_have_value("Keep the existing navigation and retest mobile")
     page.locator("#task-prompt").fill("Keep navigation, retest mobile and tablet")
     page.locator("#send-button").click()
     assert ("POST", "/api/workflows/studio/tasks/17/commands") in requests
     assert ("PATCH", "/api/workflows/studio/commands/61") in requests
+
+    _open_details(page)
+    page.get_by_role("button", name="Steer queued request into active workflow").click()
+    expect(page.get_by_text("Queued request moved into the active workflow.", exact=True)).to_be_visible()
+    assert requests.count(("POST", "/api/workflows/44/runs/99/steer")) == 2
+    assert requests.count(("PATCH", "/api/workflows/studio/commands/61")) == 2
+
+
+def test_queued_request_can_start_as_new_thread_and_local_ticket(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, live_activity=True, current_board_linked=True)
+    page.goto(URL)
+
+    page.locator("#composer-guidance-scope").select_option("thread")
+    page.locator("#task-prompt").fill("Handle this as a separate ticket")
+    page.locator("#send-button").click()
+    _open_details(page)
+    action = page.get_by_role("button", name="Start queued request in a new thread and ticket")
+    expect(action).to_be_visible()
+    page.screenshot(path="/private/tmp/development-queue-actions-desktop.png", full_page=False)
+    page.set_viewport_size({"width": 390, "height": 844})
+    expect(action).to_be_visible()
+    assert page.locator("#task-inspector").evaluate("node => node.scrollWidth <= node.clientWidth")
+    page.screenshot(path="/private/tmp/development-queue-actions-mobile.png", full_page=False)
+    action.click()
+
+    expect(page.get_by_text("Queued request started in a new thread and ticket.", exact=True)).to_be_visible()
+    assert ("POST", "/api/workflows/studio/tasks") in requests
+    assert ("PATCH", "/api/workflows/studio/commands/61") in requests
+
+
+def test_checkpoint_disables_workflow_steering_but_keeps_thread_queue_available(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, pending_interaction=True)
+    page.goto(URL)
+
+    expect(page.locator("#composer-guidance-target")).to_be_visible()
+    expect(page.locator('#composer-guidance-scope option[value="workflow"]')).to_have_attribute("disabled", "")
+    expect(page.locator("#composer-guidance-scope")).to_have_value("thread")
+    page.locator("#task-prompt").fill("After approval, keep this change within the current ticket")
+    page.locator("#send-button").click()
+
+    assert ("POST", "/api/workflows/studio/tasks/17/commands") in requests
+    assert ("POST", "/api/workflows/44/runs/99/steer") not in requests
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_active_workflow_guidance_selector_is_responsive(page: Page, width: int):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, live_activity=True)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(URL)
+
+    expect(page.locator("#composer-guidance-target")).to_be_visible()
+    expect(page.locator("#composer-guidance-scope")).to_have_value("workflow")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=f"/private/tmp/development-steering-{width}.png", full_page=True)
 
 
 def test_compact_actions_workflows_provider_groups_and_board_linking(page: Page):
@@ -2923,13 +3047,44 @@ def test_thread_shows_readable_workflow_step_rail_while_run_is_active(page: Page
     expect(page.locator("#composer-workflow-menu")).to_have_count(0)
     expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
     expect(page.locator(".thread-workflow-runner-head")).to_contain_text("Development execution")
-    expect(page.locator(".thread-workflow-ring")).to_have_count(0)
-    expect(page.get_by_role("tab")).to_have_count(7)
-    expect(page.get_by_role("tab", name=re.compile("Build"))).to_have_attribute("aria-selected", "true")
+    expect(page.locator(".thread-workflow-runner")).to_have_attribute("data-view", "loop")
+    expect(page.locator(".thread-workflow-status-badge")).to_contain_text("Implementing")
+    expect(page.locator(".thread-workflow-ring")).to_be_visible()
+    expect(page.locator(".thread-workflow-steps")).to_be_hidden()
+    feedback = page.locator(".thread-workflow-feedback")
+    expect(feedback).to_contain_text("Build")
+    expect(feedback).to_contain_text("nvidia/nemotron-3.5-lightning:free")
+    expect(feedback).to_contain_text("medium complexity")
+    expect(feedback).to_contain_text("approved provider replacement")
+    expect(feedback).to_contain_text("The model is reasoning and streaming its response.")
+    status_box = page.locator(".thread-workflow-status-badge").bounding_box()
+    switch_box = page.locator(".thread-workflow-view-switch").bounding_box()
+    assert status_box and switch_box and status_box["x"] < switch_box["x"]
+    loop_box = page.locator('[data-workflow-runner="live"]').bounding_box()
+    transcript_box = page.locator(".conversation-inner").bounding_box()
+    assert loop_box and transcript_box
+    assert abs(loop_box["x"] - transcript_box["x"]) <= 1
+    assert abs(loop_box["width"] - transcript_box["width"]) <= 1
+    page.locator(".thread-workflow-ring").get_by_role("tab", name=re.compile("Build")).click()
+    dialog = page.locator("#thread-workflow-step-dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text("Why this model")
+    expect(dialog).to_contain_text("Whole-workflow preflight allocated this implementation step")
+    expect(dialog).to_contain_text("nvidia/nemotron-3.5-lightning:free")
+    expect(dialog).to_contain_text("The model is reasoning and streaming its response.")
+    dialog.get_by_role("button", name="Done").click()
+    page.locator('[data-thread-workflow-view="list"]').click()
+    expect(page.locator(".thread-workflow-steps")).to_be_visible()
+    expect(page.locator(".thread-workflow-steps").get_by_role("tab")).to_have_count(7)
+    expect(page.locator(".thread-workflow-steps").get_by_role("tab", name=re.compile("Build"))).to_have_attribute("aria-selected", "true")
     page.screenshot(path="/private/tmp/decisions-phase3-workflow-rail-desktop.png", full_page=True)
-    page.get_by_role("tab", name=re.compile("Validate")).click()
-    expect(page.locator(".thread-workflow-step-detail")).to_contain_text("Run browser and visual validation")
-    expect(page.locator(".thread-workflow-step-detail")).to_contain_text("gpt-5.6-luna")
+    page.locator(".thread-workflow-steps").get_by_role("tab", name=re.compile("Validate")).click()
+    expect(page.locator(".thread-workflow-steps .workflow-step-panel")).to_contain_text("Run browser and visual validation")
+    expect(page.locator(".thread-workflow-steps .workflow-step-panel")).to_contain_text("gpt-5.6-luna")
+    expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text("Validate")
+    expect(dialog).to_contain_text("Run browser and visual validation")
+    dialog.get_by_role("button", name="Done").click()
     assert ("GET", "/api/workflows/44/runs/99/steering-memory") in requests, requests
     assert not page_errors, page_errors
     _open_details(page)
@@ -2941,12 +3096,22 @@ def test_thread_shows_readable_workflow_step_rail_while_run_is_active(page: Page
     assert ("PATCH", "/api/tickets/boards/70/orchestrator-learned-rules/501") in requests
     expect(page.locator("#inspector-content")).to_contain_text("Open workflow")
     page.locator("#inspector-close").click()
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.locator("#studio-sidebar").evaluate("node => node.classList.remove('open')")
-    page.wait_for_timeout(250)
-    expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
-    assert page.locator("body").evaluate("node => node.scrollWidth <= document.documentElement.clientWidth")
-    page.screenshot(path="/private/tmp/decisions-phase3-workflow-rail-mobile.png", full_page=True)
+    for width, height in ((390, 844), (768, 1024), (1280, 800), (1440, 900)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.goto(URL)
+        expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
+        page.wait_for_timeout(200)
+        runner_y = page.locator('[data-workflow-runner="live"]').bounding_box()["y"]
+        conversation_y = page.locator("#conversation").bounding_box()["y"]
+        assert conversation_y <= runner_y <= conversation_y + 20
+        assert page.locator("body").evaluate("node => node.scrollWidth <= document.documentElement.clientWidth")
+        page.locator('[data-thread-workflow-view="loop"]').click()
+        page.screenshot(path=f"/private/tmp/decisions-workflow-runner-{width}.png", full_page=False)
+        page.locator(".thread-workflow-ring").get_by_role("tab", name=re.compile("Build")).click()
+        expect(dialog).to_be_visible()
+        assert dialog.evaluate("node => node.scrollWidth <= node.clientWidth")
+        page.screenshot(path=f"/private/tmp/decisions-workflow-watch-{width}.png", full_page=False)
+        dialog.get_by_role("button", name="Done").click()
 
 
 def test_visualize_action_creates_a_versioned_visual_plan(page: Page):
@@ -3193,6 +3358,55 @@ def test_thread_context_toggles_its_project_terminals(page: Page, terminal_sessi
     toggle.click()
 
     assert ("POST", f"/api/projects/7/startup-terminals/{action}") in requests
+
+
+@pytest.mark.parametrize(("width", "height"), [(390, 844), (768, 1024), (1280, 800), (1440, 900)])
+def test_thread_header_hides_terminal_control_without_commands_or_a_running_session(page: Page, width: int, height: int):
+    _install_api(page, [], terminal_session=False, startup_instructions="\n# no startup commands")
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(URL)
+
+    expect(page.locator("#thread-terminal-button")).to_be_hidden()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=f"/private/tmp/development-thread-terminal-hidden-{width}.png", full_page=False)
+
+
+@pytest.mark.parametrize(("width", "height"), [(390, 844), (768, 1024), (1280, 800), (1440, 900)])
+def test_thread_header_terminal_control_matches_the_real_terminal_state(page: Page, width: int, height: int):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, terminal_session=False, startup_instructions="npm run dev")
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(URL)
+
+    button = page.locator("#thread-terminal-button")
+    expect(button).to_be_visible()
+    expect(button).to_have_attribute("aria-label", "Start terminal")
+    expect(button).to_have_class(re.compile(r"\bterminal-project-action\b.*\bstart\b"))
+    expect(button.locator("path")).to_have_count(1)
+    page.screenshot(path=f"/private/tmp/development-thread-terminal-start-{width}.png", full_page=False)
+    button.click()
+    expect(button).to_have_attribute("aria-label", "Stop terminal")
+    expect(button).to_have_class(re.compile(r"\bterminal-project-action\b.*\bstop\b"))
+    assert ("POST", "/api/projects/7/startup-terminals/start") in requests
+    page.screenshot(path=f"/private/tmp/development-thread-terminal-started-{width}.png", full_page=False)
+
+
+@pytest.mark.parametrize(("width", "height"), [(390, 844), (768, 1024), (1280, 800), (1440, 900)])
+def test_thread_header_keeps_stop_control_for_a_running_terminal_without_commands(page: Page, width: int, height: int):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, terminal_session=True, startup_instructions="")
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(URL)
+
+    button = page.locator("#thread-terminal-button")
+    expect(button).to_be_visible()
+    expect(button).to_have_attribute("aria-label", "Stop terminal")
+    expect(button).to_have_class(re.compile(r"\bterminal-project-action\b.*\bstop\b"))
+    expect(button.locator("rect")).to_have_count(1)
+    page.screenshot(path=f"/private/tmp/development-thread-terminal-stop-{width}.png", full_page=False)
+    button.click()
+    expect(button).to_be_hidden()
+    assert ("POST", "/api/projects/7/startup-terminals/stop") in requests
 
 
 def test_external_kanban_moves_use_cache_and_refresh_only_on_request(page: Page):

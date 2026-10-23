@@ -1003,3 +1003,68 @@ def find_unpromoted_project_threads(*, since: str = "2026-10-01") -> list[int]:
             .all()
         )
         return [int(c.id) for c in rows if not is_development_thread(db, c)]
+
+
+# --- fix2 (2026-10-23): autonomy normalisation + thread route inheritance ---
+_AUTONOMY_ALIASES = {
+    "full": "full", "work": "full", "auto": "full", "trusted": "full",
+    "read_write": "full", "read-write": "full", "read/write": "full", "readwrite": "full",
+    "goal": "goal",
+    "plan": "plan", "planning": "plan",
+    "approval": "approval", "approve": "approval", "ask": "approval",
+}
+
+
+def normalize_autonomy_level(value: Any, default: str = "full") -> str | None:
+    """Map UI/API autonomy spellings onto full|goal|plan|approval (None if unknown)."""
+    clean = str(value if value is not None else "").strip().lower()
+    if not clean:
+        return default
+    return _AUTONOMY_ALIASES.get(clean.replace(" ", "_"))
+
+
+def execution_route_from_model_route(model_route: Any) -> dict[str, Any]:
+    """Build the run execution route for a thread composer *manual* selection."""
+    route = model_route if isinstance(model_route, dict) else {}
+    if str(route.get("route_mode") or "").strip().lower() != "manual":
+        return {}
+    backend = str(route.get("backend") or "").strip().lower()
+    if not backend:
+        return {}
+    model = str(route.get("model_name") or route.get("model") or "").strip() or "auto"
+    provider = str(route.get("provider") or route.get("model_provider") or "").strip()
+    if backend == "pi" and model != "auto":
+        try:
+            from distr.core.project_cli_backends.timing import resolve_pi_model_provider
+
+            provider = resolve_pi_model_provider(model, provider) or provider
+        except Exception:
+            pass
+    result: dict[str, Any] = {
+        "backend": backend,
+        "model": model,
+        "model_provider": provider,
+        "route_mode": "manual",
+        "source": "thread_model_route",
+        "rationale": f"Inherited the thread composer route {backend} / {provider or 'default'} / {model}.",
+    }
+    effort = str(route.get("reasoning_effort") or "").strip()
+    if effort and backend == "codex":
+        result["codex_reasoning_effort"] = effort
+    return result
+
+
+def thread_execution_route(chat_id: int | None, *, _session_provider=None) -> dict[str, Any]:
+    """Return the manual composer route of a Development thread, or {}."""
+    if chat_id is None:
+        return {}
+    from distr.core.db import get_session
+
+    with (_session_provider or get_session)() as db:
+        chat = db.get(Chat, int(chat_id))
+        if chat is None:
+            return {}
+        if chat.parent_id is not None:
+            chat = db.get(Chat, int(chat.parent_id)) or chat
+        metadata = development_thread_metadata(chat)
+    return execution_route_from_model_route(metadata.get("model_route"))

@@ -357,6 +357,10 @@ export function createThreadsComposer({ context, actions, el, token }) {
             method: 'POST',
             body: payload
         });
+        if (!result?.task?.id) {
+            // fix2: never navigate to a thread id the server did not return.
+            throw new Error(result?.detail || 'The thread could not be created.');
+        }
         context.attachments = [];
         context.usePlaywright = false;
         renderAttachments();
@@ -376,11 +380,60 @@ export function createThreadsComposer({ context, actions, el, token }) {
         return String(context.routingAssessment?.execution_mode || '') === 'workflow';
     }
 
+    function activeWorkflowRun() {
+        return Boolean(context.currentWorkflow && actions.isActiveAgentRun(context.currentRun) && !context.currentRun?.direct);
+    }
+
+    function workflowSteeringAvailable() {
+        return activeWorkflowRun() && context.currentRun?.steerable !== false && !(context.controlState.interactions || []).length;
+    }
+
+    function syncGuidanceScope() {
+        const control = el('composer-guidance-target');
+        const select = el('composer-guidance-scope');
+        if (!control || !select) return;
+        const active = activeWorkflowRun();
+        control.classList.toggle('hidden', !active);
+        if (!active) {
+            context.guidanceRunId = null;
+            if (!context.editingCommandId) el('task-prompt').placeholder = 'Describe what you want changed';
+            return;
+        }
+        const runId = String(actions.workflowRunId(context.currentRun) || '');
+        const canSteer = workflowSteeringAvailable();
+        select.querySelector('option[value="workflow"]').disabled = !canSteer;
+        if (context.guidanceRunId !== runId) {
+            context.guidanceRunId = runId;
+            context.guidanceScope = canSteer ? 'workflow' : 'thread';
+        } else if (!canSteer && context.guidanceScope === 'workflow') {
+            context.guidanceScope = 'thread';
+        }
+        select.value = context.guidanceScope || 'workflow';
+        select.title = canSteer
+            ? 'Steer this workflow now, or queue a new instruction for the whole thread.'
+            : 'Workflow steering is unavailable at this checkpoint. Thread guidance will run after the workflow.';
+        el('task-prompt').placeholder = select.value === 'workflow'
+            ? 'Steer the active workflow'
+            : 'Queue guidance for the thread';
+    }
+
+    function changeGuidanceScope(event) {
+        context.guidanceScope = event.target.value === 'thread' ? 'thread' : 'workflow';
+        syncGuidanceScope();
+        el('task-prompt')?.focus();
+    }
+
     async function sendPrompt(event) {
         event.preventDefault();
         if (context.busy || !context.ready || context.routeLoading) return;
         const route = actions.developmentRoute();
         if (route.kind === 'thread' && Number(context.currentChat?.id || 0) !== Number(route.chatId)) {
+            if (actions.developmentChatById && !actions.developmentChatById(route.chatId)) {
+                // fix2: the URL points at a thread that does not exist.
+                actions.startNewDevelopment({ replace: true });
+                actions.toast('That thread no longer exists. Your message stays in the composer for a new thread.', 'error');
+                return;
+            }
             actions.toast('This thread is still loading. Try again in a moment.', 'error');
             return;
         }
@@ -401,14 +454,14 @@ export function createThreadsComposer({ context, actions, el, token }) {
             actions.toast('This pinned model is not image-capable. Choose Auto or an image-capable model before sending.', 'error');
             return;
         }
-        if (!context.editingCommandId) {
+        if (!context.editingCommandId && !activeWorkflowRun()) {
             try {
                 await refreshRoutingAssessment(prompt, { force: true });
             } catch (_) {
                 context.routingAssessment = null;
             }
         }
-        if ((context.controlState.interactions || []).length) {
+        if ((context.controlState.interactions || []).length && context.guidanceScope !== 'thread') {
             actions.toast('This workflow is waiting for a checkpoint decision. Open Details to approve, revise, or stop it.', 'error');
             actions.openInspector();
             return;
@@ -443,6 +496,13 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 await actions.refreshShell({ preserveConversation: true });
             } else if (!context.currentChat) {
                 await createTask(fullPrompt);
+            } else if (activeWorkflowRun() && context.guidanceScope === 'workflow') {
+                const result = await actions.api(`/workflows/${context.currentWorkflow.id}/runs/${actions.workflowRunId(context.currentRun)}/steer`, {
+                    method: 'POST',
+                    body: { message: fullPrompt }
+                });
+                actions.toast(result.delivered ? 'Workflow guidance delivered to the current step.' : 'Workflow guidance queued for the next step.');
+                await actions.refreshShell({ preserveConversation: true });
             } else if (actions.isActiveAgentRun(context.currentRun)) {
                 const result = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/commands`, {
                     method: 'POST',
@@ -518,6 +578,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     function actionLabel(action) {
+        const modelChoice = String(action || '').match(/^model_(\d+)$/i);
+        if (modelChoice) return Number(modelChoice[1]) === 0 ? 'Approve and continue' : `Use option ${Number(modelChoice[1]) + 1}`;
         const labels = {
             approve: 'Approve',
             continue: 'Continue',
@@ -2063,6 +2125,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         applyRunMode,
         bindComposerDrop,
         catalogModels,
+        changeGuidanceScope,
         closeComposerActionMenu,
         closeModelPane,
         continueRun,
@@ -2084,6 +2147,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         scheduleRoutePreview,
         startWorkflow,
         stopRun,
+        syncGuidanceScope,
         toggleComposerActionMenu,
         togglePromptPlaywright,
         updateModeLabel,

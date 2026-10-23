@@ -219,6 +219,11 @@ def build_run_coordination_plan(
     settings = dict(settings or {})
     workflow_settings = _dict(getattr(workflow, "run_settings", None))
     base_route = _dict(run_data.get("execution_route"))
+    _thread_route = _dict(run_data.get("thread_route"))
+    if _thread_route.get("backend"):
+        # fix2: the inherited thread composer route is authoritative for the
+        # whole run even if execution_route was overwritten by an earlier step.
+        base_route = {**base_route, **_thread_route}
     manual_thread_route = (
         str(base_route.get("route_mode") or "").strip().lower() == "manual"
         and str(base_route.get("source") or "").strip().lower() == "thread_model_route"
@@ -344,6 +349,11 @@ def build_run_coordination_plan(
                 step_role=role,
                 prior_role_routes=role_routes,
             )
+        if manual_thread_route:
+            # parallel: per-step tier hint for light steps (same route family).
+            from distr.core.project_cli_backends.model_policy import apply_step_model_tier
+
+            primary = apply_step_model_tier(primary, config=config, settings=settings or None)
         if role == "review" and visual_evidence_required:
             vision_route = _configured_vision_review_route(settings)
             if vision_route:
@@ -732,7 +742,18 @@ def consume_step_replan(
     reason = "Cleared deferred replan marker after confirming the current allocation."
 
     free_local = {"free", "local", "ornith", "ollama", "local_model", "free_model"}
-    if preference in free_local:
+    _thread_route = _dict(run_data.get("thread_route"))
+    if _thread_route.get("backend") and preference not in {"codex", "cursor", "claude_code"}:
+        # fix2: free/local replans never displace an inherited thread route.
+        new_route = {
+            **previous,
+            **_thread_route,
+            "complexity": complexity,
+            "source": "thread_model_route",
+            "route_mode": "manual",
+        }
+        reason = "Deferred replan kept the inherited thread composer route."
+    elif preference in free_local:
         try:
             from distr.core.project_cli_backends.model_policy import _free_eligible_model
 

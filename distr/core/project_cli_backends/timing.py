@@ -46,6 +46,73 @@ def is_local_model_route(*, backend_id: str, model: str, provider: str = "") -> 
     )
 
 
+# Pi providers that accept OpenRouter-style ``vendor/model`` identifiers as
+# their own catalogue ids. A namespaced id under any other provider means the
+# provider was derived from the model's vendor prefix (``deepseek/...`` ->
+# ``deepseek``), which Pi then rejects with "No API key found for deepseek"
+# even though readiness was verified against OpenRouter.
+PI_NAMESPACED_MODEL_PROVIDERS = frozenset({
+    "openrouter", "kilocode", "opencode", "opencode-go", "vercel-ai-gateway",
+    "groq", "huggingface", "together", "fireworks", "cerebras", "nvidia",
+    "github-copilot", "amazon-bedrock", "ollama", "local", "lmstudio",
+})
+# First-party vendor providers whose own Pi catalogues use bare ids
+# (``gpt-5``, ``deepseek-chat``), never ``vendor/model``.
+_PI_DIRECT_VENDOR_PROVIDERS = frozenset({
+    "openai", "anthropic", "deepseek", "google", "gemini", "mistral", "mistralai",
+    "xai", "x-ai", "moonshotai", "moonshot", "qwen", "minimax", "tencent",
+    "z-ai", "zai", "meta-llama", "pi",
+})
+
+
+def resolve_pi_model_provider(model: str, configured: str = "") -> str:
+    """Return the Pi ``--provider`` that can actually run ``model``.
+
+    The configured route provider wins when it can serve namespaced ids.
+    OpenRouter-style ``vendor/model`` names default to ``openrouter`` instead
+    of the vendor prefix. Bare ids (local/Ollama or first-party catalogues)
+    keep the configured provider unchanged.
+    """
+    model_id = str(model or "").strip()
+    provider = str(configured or "").strip().lower()
+    if "/" not in model_id:
+        return provider
+    vendor = model_id.split("/", 1)[0].strip().lower()
+    if provider in PI_NAMESPACED_MODEL_PROVIDERS:
+        return provider
+    if not provider or provider == vendor or provider in _PI_DIRECT_VENDOR_PROVIDERS:
+        return "openrouter"
+    return provider
+
+
+def normalize_pi_route_provider(route: dict[str, Any]) -> dict[str, Any]:
+    """Make a Pi route's provider match what preflight and execution will use."""
+    if not isinstance(route, dict):
+        return route
+    if str(route.get("backend") or "pi").strip().lower() != "pi":
+        return route
+    model = str(route.get("model") or "").strip()
+    if not model or model.lower() == "auto":
+        return route
+    resolved = resolve_pi_model_provider(model, str(route.get("model_provider") or ""))
+    if resolved and resolved != str(route.get("model_provider") or "").strip().lower():
+        route = dict(route)
+        route["model_provider"] = resolved
+    fallback_model = str(route.get("fallback_model") or "").strip()
+    if (
+        fallback_model
+        and str(route.get("fallback_backend") or "").strip().lower() == "pi"
+        and fallback_model.lower() != "auto"
+    ):
+        fallback_provider = resolve_pi_model_provider(
+            fallback_model, str(route.get("fallback_model_provider") or "")
+        )
+        if fallback_provider and fallback_provider != str(route.get("fallback_model_provider") or "").strip().lower():
+            route = dict(route)
+            route["fallback_model_provider"] = fallback_provider
+    return route
+
+
 def ollama_model_loaded(model: str, *, timeout_seconds: float = 0.6) -> bool | None:
     """Return Ollama residency when available; ``None`` means unknown."""
     model_id = str(model or "").strip().lower()

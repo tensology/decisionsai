@@ -70,19 +70,114 @@ def _ticket_subject(ticket_title: str, fallback: str = "the ticket") -> str:
     return clean or fallback
 
 
+_WAITING_REPLY_OPTIONS = {
+    "provider_preflight": ("approve", "stop"),
+    "route_approval": ("approve", "stop"),
+    "step_review": ("approve", "stop"),
+    "run_briefing": ("go ahead", "stop"),
+    "pre_execution_approval": ("approve", "stop"),
+    "verification_review": ("looks good", "describe what is wrong"),
+    "deploy_assist": ("production", "development"),
+}
+
+
+def _operator_question_excerpt(question: str, *, max_chars: int = 420) -> str:
+    """Return the actual question without tracebacks, paths, or secrets-like tokens."""
+    text = str(question or "")
+    text = re.sub(r"\[WAITING FOR INPUT\]", "", text, flags=re.I)
+    text = re.split(r"(?i)traceback \(most recent call last\)", text, maxsplit=1)[0]
+    text = re.sub(r"(?i)\b(?:sk|or|pk|rk)-[a-z0-9_\-]{12,}\b", "[redacted]", text)
+    text = re.sub(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+", r"\1=[redacted]", text)
+    text = re.sub(r"(?<!\w)(?:~?/|[A-Za-z]:\\)[^\s,;]+/([^\s/,;]+)", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_chars:
+        text = text[: max_chars - 1].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+    return text
+
+
+def workflow_thread_url(chat_id: Any) -> str:
+    try:
+        chat = int(chat_id)
+    except (TypeError, ValueError):
+        return ""
+    if chat <= 0:
+        return ""
+    return f"http://127.0.0.1:8765/development/threads/{chat}/"
+
+
+def _operator_reply_footer(
+    *,
+    waiting_kind: str,
+    options: Optional[list[str]] = None,
+    chat_id: Any = None,
+    run_id: Any = None,
+) -> str:
+    kind = (waiting_kind or "").strip().lower()
+    choices = [str(item).strip() for item in (options or []) if str(item or "").strip()]
+    if not choices:
+        choices = list(_WAITING_REPLY_OPTIONS.get(kind, ("continue", "retry", "skip", "stop")))
+    parts = ["Options: " + ", ".join(f"'{item}'" for item in choices[:6]) + "."]
+    where = []
+    url = workflow_thread_url(chat_id)
+    if url:
+        where.append(f"Decisions thread #{int(chat_id)} ({url})")
+    try:
+        if run_id is not None and int(run_id) > 0:
+            where.append(f"run #{int(run_id)}")
+    except (TypeError, ValueError):
+        pass
+    reply = "Reply here with one of the options"
+    if where:
+        reply += ", or answer in " + " / ".join(where)
+    parts.append(reply + ".")
+    return " ".join(parts)
+
+
 def build_operator_waiting_message(
     *,
     workflow_name: str,
     ticket_title: str,
     step_name: str = "",
     waiting_kind: str = "",
+    question: str = "",
+    options: Optional[list[str]] = None,
+    chat_id: Any = None,
+    run_id: Any = None,
 ) -> str:
-    """Return a safe outbound status without provider, model, or traceback text.
+    """Return an actionable outbound status: what is asked, options, where to reply.
 
-    Technical diagnostics remain in the Decisions activity feed. Telegram is an
-    operator surface, so it should explain the action needed in plain language
-    and never repeat stale route or fallback claims.
+    Raw tracebacks, paths, and credential-like tokens are stripped. When
+    ``question`` is empty the message falls back to the generic plain-language
+    status (kept for callers that have no stored question).
     """
+    base = _build_operator_waiting_status(
+        workflow_name=workflow_name,
+        ticket_title=ticket_title,
+        step_name=step_name,
+        waiting_kind=waiting_kind,
+    )
+    excerpt = _operator_question_excerpt(question)
+    if not excerpt and chat_id is None and run_id is None and not options:
+        return base
+    pieces = [base]
+    if excerpt:
+        pieces.append(f"Question: {excerpt}")
+    pieces.append(
+        _operator_reply_footer(
+            waiting_kind=waiting_kind, options=options, chat_id=chat_id, run_id=run_id
+        )
+    )
+    return "\n".join(pieces)
+
+
+def _build_operator_waiting_status(
+    *,
+    workflow_name: str,
+    ticket_title: str,
+    step_name: str = "",
+    waiting_kind: str = "",
+) -> str:
+    """Plain-language status without provider, model, or traceback text."""
     subject = _ticket_subject(ticket_title, _ticket_subject(workflow_name))
     phase = _ticket_subject(step_name, "the current phase")
     kind = (waiting_kind or "").strip().lower()

@@ -412,11 +412,9 @@ export function createSidebar({ context, actions, el }) {
     }
 
     function boardGroupHtml(board) {
-        const ownsProjectChats = board.project_id && actions.boardForProject(board.project_id)?.key === board.key;
         const chats = context.chats.filter((chat) => {
             if (chat.pinned) return false;
-            if (chat.development_board_key) return actions.boardByKey(chat.development_board_key)?.key === board.key;
-            return ownsProjectChats && Number(chat.project_id) === Number(board.project_id);
+            return threadBoard(chat)?.key === board.key;
         });
         const hasTasks = chats.length > 0;
         const collapsed = hasTasks && state.collapsedBoardKeys.has(board.key);

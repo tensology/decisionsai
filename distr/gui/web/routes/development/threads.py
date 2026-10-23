@@ -160,14 +160,20 @@ def register_routes(router, templates):
         if not prompt:
             return JSONResponse({"detail": "A task prompt is required."}, status_code=422)
         route_mode = str(data.route_mode or "auto").strip().lower()
-        autonomy_level = str(data.autonomy_level or "full").strip().lower()
+        from distr.core.workflow.development_threads import normalize_autonomy_level
+
+        autonomy_level = normalize_autonomy_level(data.autonomy_level) or str(data.autonomy_level or "").strip().lower()
         execution_profile = str(data.execution_profile or "code").strip().lower()
         if route_mode not in {"auto", "manual"}:
             return JSONResponse({"detail": "route_mode must be auto or manual"}, status_code=422)
         if autonomy_level not in {"full", "approval", "plan", "goal"}:
-            return JSONResponse({"detail": "Unknown autonomy level"}, status_code=422)
+            return JSONResponse(
+                {"detail": f"Unknown autonomy level {autonomy_level!r}; expected full, goal, plan or approval."},
+                status_code=422,
+            )
         if execution_profile not in {"code", "design", "research", "operations"}:
             return JSONResponse({"detail": "Unknown execution profile"}, status_code=422)
+        chat_id = None
         try:
             from distr.core.skills.catalog import filter_known_skill_ids
             from distr.core.chat import ChatService
@@ -295,6 +301,12 @@ def register_routes(router, templates):
                     if data.use_playwright:
                         run_metadata["use_playwright"] = True
                     if route_mode == "manual":
+                        if str(data.backend or "").strip().lower() == "pi":
+                            from distr.core.project_cli_backends.timing import resolve_pi_model_provider
+
+                            # The chat/settings provider (e.g. OpenAI for Luna)
+                            # is not a Pi provider for ``vendor/model`` ids.
+                            provider = resolve_pi_model_provider(model_name, provider) or provider
                         run_metadata["model_route"] = {
                             "route_mode": "manual",
                             "backend": str(data.backend or "").strip(),
@@ -389,7 +401,23 @@ def register_routes(router, templates):
             )
         except Exception as e:
             logger.error("Studio task creation failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
+            if chat_id is not None:
+                # Never leave a half-created thread behind: the UI would
+                # otherwise navigate to (or list) a thread with no run.
+                try:
+                    from distr.core.db import Chat, get_session
+
+                    with get_session() as db:
+                        orphan = db.get(Chat, int(chat_id))
+                        if orphan is not None:
+                            orphan.is_archived = True
+                            db.commit()
+                except Exception:
+                    logger.warning("Could not archive orphan Development thread %s", chat_id, exc_info=True)
+            return JSONResponse(
+                {"detail": f"The thread could not be started: {e}", "task": None},
+                status_code=422 if isinstance(e, ValueError) else 500,
+            )
 
 
     @router.post("/workflows/studio/tasks/{chat_id}/messages")
@@ -443,8 +471,36 @@ def register_routes(router, templates):
 
             workflow_id = int(metadata.get("workflow_id") or 0) or None
             if workflow_id is not None:
+                from distr.core.workflow.relaunch_guard import relaunch_decision
                 from distr.core.workflow.work_dispatch import dispatch_work_item
 
+                relaunch = await asyncio.to_thread(relaunch_decision, int(chat_id), workflow_id, message)
+                if not relaunch.get("allow", True):
+                    await asyncio.to_thread(
+                        ChatService.append_assistant_notice,
+                        int(chat_id),
+                        str(relaunch.get("notice") or ""),
+                    )
+                    return JSONResponse(
+                        {
+                            "success": True,
+                            "execution": None,
+                            "started": False,
+                            "turn_id": turn_id,
+                            "requires_resume": True,
+                            "previous_run_id": relaunch.get("previous_run_id"),
+                            "message": str(relaunch.get("notice") or ""),
+                        }
+                    )
+                run_metadata = dict(relaunch.get("inherit") or {})
+                if skill_ids:
+                    run_metadata["skill_ids"] = skill_ids
+                if data.routing_assessment:
+                    run_metadata["routing_assessment"] = data.routing_assessment
+                run_metadata.setdefault("skill_ids", skill_ids)
+                run_metadata.setdefault("routing_assessment", {})
+                if relaunch.get("previous_run_id"):
+                    run_metadata["resumed_from_run_id"] = relaunch["previous_run_id"]
                 execution = await asyncio.to_thread(
                     dispatch_work_item,
                     workflow_id=workflow_id,
@@ -453,7 +509,7 @@ def register_routes(router, templates):
                     project_id=project_id,
                     ticket_id=metadata.get("ticket_id"),
                     source_type="studio_thread",
-                    run_metadata={"skill_ids": skill_ids, "routing_assessment": data.routing_assessment or {}},
+                    run_metadata=run_metadata,
                     dispatch_async=True,
                 )
             else:

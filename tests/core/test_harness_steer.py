@@ -12,6 +12,7 @@ import distr.core.db.workflow  # noqa: F401
 from distr.core.db import Base
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
 from distr.core.project_cli_backends.harness import is_steerable_backend, steer_harness
+from distr.core.workflow.coordination_plan import render_coordination_map
 from distr.core.workflow.service import apply_run_harness_steer, _run_is_steerable
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -104,6 +105,9 @@ def test_apply_run_harness_steer_persists_queue(tmp_path, monkeypatch):
     assert data["coordination_plan"]["assignments"]["10"]["steering_constraints"] == [
         "Stop refactoring unrelated files"
     ]
+    assert "Human steer: Stop refactoring unrelated files" in render_coordination_map(
+        data["coordination_plan"], current_step_id=10
+    )
     session.close()
 
 

@@ -1408,6 +1408,9 @@ def apply_run_provider_model_selection(
             ticket_title=str(data.get("ticket_title") or ""),
             step_name=str(data.get("step_name") or "the current phase"),
             waiting_kind="provider_preflight",
+            question=question,
+            chat_id=data.get("chat_id"),
+            run_id=run_id,
         )
 
         notify_ticket_workflow_progress(
@@ -1888,6 +1891,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
         recent_tools_by_run: Dict[int, List[str]] = {}
         recent_context_by_run: Dict[int, List[str]] = {}
         latest_activity_by_run: Dict[int, Dict[str, Any]] = {}
+        recent_activity_by_run: Dict[int, List[Dict[str, Any]]] = {}
         latest_heartbeat_by_run: Dict[int, Dict[str, Any]] = {}
         latest_heartbeat_at_by_run: Dict[int, Any] = {}
         if run_ids:
@@ -1936,12 +1940,19 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                     continue
                 activity = {
                     "event_type": event_row.event_type or "event",
+                    "status": event_row.status or "",
                     "message": event_row.message or "",
                     "at": event_row.created_at.isoformat() if event_row.created_at else None,
                     "backend": session_row.route_backend or "",
                     "model": session_row.selected_model or "",
+                    "complexity": session_row.complexity or "",
+                    "selection_reason": session_row.selection_reason or "",
+                    "step_id": session_row.step_id,
                 }
                 latest_activity_by_run.setdefault(rid, activity)
+                activity_bucket = recent_activity_by_run.setdefault(rid, [])
+                if len(activity_bucket) < 8:
+                    activity_bucket.append(activity)
                 if event_row.event_type == "heartbeat":
                     latest_heartbeat_by_run.setdefault(rid, activity)
                     latest_heartbeat_at_by_run.setdefault(rid, event_row.created_at)
@@ -1994,6 +2005,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "recent_step_tools": recent_tools_by_run.get(int(r.id), []),
                 "recent_step_context": recent_context_by_run.get(int(r.id), []),
                 "last_activity": latest_activity_by_run.get(int(r.id), {}),
+                "recent_activity": recent_activity_by_run.get(int(r.id), []),
                 "last_heartbeat": heartbeat,
                 "heartbeat_age_seconds": heartbeat_age_seconds,
                 "activity_state": activity_state,

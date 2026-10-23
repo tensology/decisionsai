@@ -2403,7 +2403,11 @@ class InitiativeService:
                                 return
                     elif status == "waiting":
                         key = f"workflow:{run.id}:waiting"
-                        if self._notice_allowed(key):
+                        # Re-notify every ~20 minutes while a run is still
+                        # waiting on a human; a single vague ping let a paused
+                        # ticket stall for hours.
+                        repeat_s = float(getattr(self, "_workflow_waiting_renotify_s", 1200.0))
+                        if self._notice_allowed(key, repeat_after_s=repeat_s if repeat_s > 0 else None):
                             run_data = self._packet(run.run_data)
                             waiting_kind = str(run_data.get("waiting_kind") or "")
                             step_name = ""
@@ -2432,13 +2436,40 @@ class InitiativeService:
                                 step_name=step_name,
                                 waiting_kind=waiting_kind,
                             )
+                            try:
+                                from distr.core.kanban.ticket_workflow_engagement import (
+                                    _operator_question_excerpt,
+                                    _operator_reply_footer,
+                                )
+
+                                waiting_question = _operator_question_excerpt(
+                                    str(
+                                        run_data.get("provider_preflight_prompt")
+                                        or run_data.get("waiting_prompt")
+                                        or ""
+                                    )
+                                )
+                                if waiting_question:
+                                    nudge_text = (
+                                        f"{nudge_text}\nQuestion: {waiting_question}\n"
+                                        + _operator_reply_footer(
+                                            waiting_kind=waiting_kind,
+                                            chat_id=run_data.get("chat_id"),
+                                            run_id=run.id,
+                                        )
+                                    )
+                            except Exception:
+                                logger.debug("InitiativeService: waiting question enrich failed", exc_info=True)
+                            reminder_bucket = (
+                                int(time.time() // repeat_s) if repeat_s > 0 else 0
+                            )
                             self._send_telegram_if_allowed(
                                 nudge_text,
                                 settings,
                                 kind="workflow_waiting",
                                 subject_type="workflow_run",
                                 subject_id=str(run.id),
-                                state_fingerprint=f"{waiting_kind}:{run.started_at}",
+                                state_fingerprint=f"{waiting_kind}:{run.started_at}:{reminder_bucket}",
                                 requires_response=True,
                                 voice_body=nudge_voice,
                             )

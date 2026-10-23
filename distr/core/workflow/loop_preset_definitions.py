@@ -99,6 +99,7 @@ def _step(
     validation_fail_action: str = "",
     action_type: str = "",
     wait_for_continue: bool = False,
+    require_approval: bool = False,
     command: str = "",
     timeout_seconds: int | None = None,
     max_retries: int = 0,
@@ -115,6 +116,7 @@ def _step(
         "validation_prompt": validation_prompt or f"Step '{name}' completed with evidence.",
         "validation_type": validation_type,
         "wait_for_continue": wait_for_continue,
+        "require_approval": require_approval,
     }
     if other_tool:
         out["other_tool"] = other_tool
@@ -267,7 +269,7 @@ _DEVELOPMENT_KICKOFF = _kickoff(
     DEVELOPER_WORKFLOW_NAME,
     """Goal: one linked ticket is implemented on the linked project with CLI harness iteration
 Max iterations: 6
-Exit when: the ticket execution contract and complete affected-surface inventory are confirmed, every coverage-ledger item is verified or explicitly approved as excluded, negative-space and end-to-end checks pass, an independent completion audit passes, and the ticket has a valid completion manifest and compact result packet.
+Exit when: the ticket execution contract and complete affected-surface inventory are confirmed, every coverage-ledger item is verified or explicitly approved as excluded, negative-space and end-to-end checks pass, an independent completion audit passes, development and production deployments have separate recorded approvals and fresh verification evidence, the ticket is handed to QA, and the ticket has a valid completion manifest and compact result packet.
 Step 1: Load the ticket, board, project, workflow memory, AGENTS.md/context files, linked files/media, and acceptance criteria before changing code.
 """
     + SELF_PACE_FOOTER
@@ -540,10 +542,152 @@ _DEVELOPMENT_STEPS = [
         },
     ),
     _step(
+        "Prepare development deployment approval",
+        "Freeze the independently verified release before any deployment. Remove or explicitly inventory generated workflow artifacts, "
+        "confirm the real diff matches the completion manifest, create the release commit, and push that exact commit only when the ticket "
+        "authorizes release delivery. Resolve the development target, deploy command, health check, smoke journey, and rollback command from "
+        "maintained project configuration. Never invent a target or command. Return a compact approval packet containing the exact commit, "
+        "files changed, test and browser evidence, development target, deploy command, health check, and rollback command. If any field is "
+        "missing, fail without deploying. This step prepares evidence only and must not change a runtime environment.",
+        skills=["completion-protocol", "verification-loop", "finishing-a-development-branch"],
+        tools=["cli", "shell"],
+        action_type="send_to_project_cli",
+        timeout_seconds=900,
+        require_approval=True,
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Do not deploy in this step",
+            "- Never infer deployment targets, commands, credentials, health checks, or rollback behavior",
+            "- Approval evidence must describe the exact immutable commit and current verified checks",
+        ),
+        failure_checklist=[
+            "Release commit or changed-file inventory does not match the completion manifest",
+            "Development target, deploy command, health check, smoke journey, or rollback command is missing",
+            "Approval packet omits current test or browser evidence",
+            "A runtime environment was changed before approval",
+        ],
+        validation_prompt="A complete development deployment approval packet exists for one exact verified commit and no deployment has occurred.",
+        on_fail_goto_position=4,
+        config={
+            "execution_scope": "release",
+            "step_role": "release",
+            "read_only_runtime": True,
+            "model_policy": {"auto_route_models": True},
+            "required_context": ["completion_manifest", "final_check_results", "final_browser_evidence", "changed_files"],
+            "expected_outputs": ["release_commit", "changed_files", "test_evidence", "browser_evidence", "development_target", "development_deploy_command", "development_health_check", "development_smoke_journey", "development_rollback_command"],
+        },
+    ),
+    _step(
+        "Deploy approved commit to development",
+        "Deploy only the exact commit approved in the preceding decision to the configured development target. Verify the target before "
+        "execution, run the maintained deploy command, start or restart only the configured development service, then run the configured "
+        "health check and smoke journey. If the commit, target, command, approval, or environment state differs from the approval packet, "
+        "stop without deploying. On any failed health or smoke check, run the configured rollback command and report both the failure and "
+        "rollback evidence. Never touch production in this step.",
+        skills=["verification-loop", "systematic-debugging", "finishing-a-development-branch"],
+        tools=["cli", "shell", "playwright", "browser_use"],
+        action_type="send_to_project_cli",
+        timeout_seconds=1200,
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Execute only the exact approved commit, target, and commands",
+            "- Fail closed when approval evidence or maintained deployment configuration is absent",
+            "- Roll back on failed development health or smoke verification",
+            "- Never access the production target in this step",
+        ),
+        failure_checklist=[
+            "Deployment ran without the recorded human approval",
+            "Deployed commit or target differs from the approval packet",
+            "Development health check or smoke journey is missing or failed",
+            "A failed deployment was not rolled back with evidence",
+        ],
+        validation_prompt="The approved commit is running on development, configured health and smoke checks pass, and rollback evidence exists for any failed attempt.",
+        config={
+            "execution_scope": "deployment",
+            "step_role": "deployment",
+            "environment": "development",
+            "model_policy": {"auto_route_models": True},
+            "required_context": ["release_commit", "development_target", "development_deploy_command", "development_health_check", "development_smoke_journey", "development_rollback_command", "approval_response"],
+            "expected_outputs": ["deployed_commit", "development_deploy_evidence", "development_health_evidence", "development_smoke_evidence", "rollback_evidence_if_failed"],
+        },
+    ),
+    _step(
+        "Prepare production promotion approval",
+        "Prepare a separate production promotion decision after development verification passes. Read the exact deployed commit and fresh "
+        "development health and smoke evidence. Resolve the production target, deploy command, health check, critical production journey, "
+        "and rollback command from maintained project configuration. Inspect the production working state without changing it and stop if "
+        "there are unprotected production edits or target drift. Return a compact approval packet with the exact commit, files changed, test "
+        "results, development evidence, production target, production deploy command, production health check, rollback command, and any "
+        "production drift. This step must not deploy.",
+        skills=["completion-protocol", "verification-loop", "requesting-code-review"],
+        tools=["cli", "shell"],
+        action_type="send_to_project_cli",
+        timeout_seconds=900,
+        require_approval=True,
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Do not deploy in this step",
+            "- Preserve production-owned edits and stop on unexplained drift",
+            "- Never infer production commands, credentials, targets, health checks, or rollback behavior",
+        ),
+        failure_checklist=[
+            "Development health or smoke evidence is absent or stale",
+            "Production target, deploy command, health check, critical journey, or rollback command is missing",
+            "Production drift or edits were ignored",
+            "A production runtime change occurred before approval",
+        ],
+        validation_prompt="A separate production promotion approval packet exists for the development-verified commit, production state is protected, and no production deployment has occurred.",
+        config={
+            "execution_scope": "release",
+            "step_role": "release",
+            "read_only_runtime": True,
+            "model_policy": {"auto_route_models": True},
+            "required_context": ["deployed_commit", "development_health_evidence", "development_smoke_evidence", "changed_files", "test_evidence"],
+            "expected_outputs": ["release_commit", "changed_files", "test_evidence", "development_health_evidence", "development_smoke_evidence", "production_target", "production_deploy_command", "production_health_check", "production_smoke_journey", "production_rollback_command", "production_drift"],
+        },
+    ),
+    _step(
+        "Deploy approved commit to production",
+        "Deploy only the exact commit approved in the production promotion decision to the configured production target. Recheck that the "
+        "target and production state still match the approval packet, preserve production-owned content and edits, run the maintained deploy "
+        "command, then execute the configured health check and critical production journey. Stop before mutation if approval delivery was not "
+        "acknowledged or any target, commit, command, or drift evidence changed. On failed health or journey verification, execute the configured "
+        "rollback command and verify the rollback. Never mark the ticket complete; move it to QA with deployment evidence so final completion "
+        "remains a human action.",
+        skills=["verification-loop", "systematic-debugging", "finishing-a-development-branch", "browser-qa"],
+        tools=["cli", "shell", "playwright", "browser_use"],
+        action_type="send_to_project_cli",
+        timeout_seconds=1200,
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Execute only the exact separately approved production commit, target, and commands",
+            "- Preserve production-owned content and stop on drift",
+            "- Roll back on failed production health or journey verification",
+            "- Move the ticket to QA; only a human may mark QA complete",
+        ),
+        failure_checklist=[
+            "Production deployment ran without the separate recorded approval",
+            "Deployed commit, target, or command differs from the approval packet",
+            "Production health check or critical journey is missing or failed",
+            "A failed production deployment was not rolled back and verified",
+            "The workflow marked QA complete without a human action",
+        ],
+        validation_prompt="The separately approved commit is verified in production, rollback is verified for any failed attempt, and the ticket is in QA rather than Complete.",
+        config={
+            "execution_scope": "deployment",
+            "step_role": "deployment",
+            "environment": "production",
+            "model_policy": {"auto_route_models": True},
+            "required_context": ["release_commit", "production_target", "production_deploy_command", "production_health_check", "production_smoke_journey", "production_rollback_command", "production_drift", "approval_response"],
+            "expected_outputs": ["deployed_commit", "production_deploy_evidence", "production_health_evidence", "production_smoke_evidence", "rollback_evidence_if_failed", "qa_handoff"],
+        },
+    ),
+    _step(
         "Report, update ticket, and compact memory",
         "Return a compact result packet for the system to persist on the ticket: summary, files changed, commands run, browser "
-        "evidence or N/A reason, remaining risks, blockers, and next actions. Treat the accepted implementation, review, and final "
-        "polish results in the handoff as authoritative; this is a reporting transformation, not another validation pass. Do not "
+        "evidence or N/A reason, development and production deployment evidence, rollback evidence if applicable, QA handoff, "
+        "remaining risks, blockers, and next actions. Treat the accepted implementation, review, final polish, and deployment results "
+        "in the handoff as authoritative; this is a reporting transformation, not another validation pass. Do not "
         "re-open evidence, run project tools, or create/edit report or handoff files in the project. Write only durable memory "
         "deltas: project commands, conventions, paths, decisions, failed approaches, root causes, corrections, and learned rules. "
         "Do not paste full transcripts into memory. Return the exact named fields ticket_result_packet, compact_memory_delta, "
@@ -576,7 +720,7 @@ _DEVELOPMENT_STEPS = [
             "step_role": "reporting",
             "read_only": True,
             "model_policy": {"auto_route_models": True},
-            "required_context": ["final_changed_files", "command_log", "evidence", "memory_delta"],
+            "required_context": ["final_changed_files", "command_log", "evidence", "development_deploy_evidence", "production_deploy_evidence", "qa_handoff", "memory_delta"],
             "expected_outputs": [
                 "ticket_result_packet",
                 "compact_memory_delta",

@@ -314,6 +314,11 @@ def _finalize_result_packet_for_terminal_run(
         audit["final_verdict"] = "pass"
     elif status_label in ("failed", "cancelled") and audit.get("final_verdict") in (None, "", "cannot_determine"):
         audit["final_verdict"] = "needs_changes"
+    elif status_label == "failed" and str(audit.get("final_verdict") or "").strip().lower() == "pass":
+        # A failed run (e.g. gates did not pass) must not carry a "pass" verdict
+        # left behind by a later report step.
+        audit["final_verdict"] = "needs_changes"
+        audit["rationale"] = "Run did not complete: a required gate did not pass."
     audit.setdefault("rationale", "Workflow terminal status mapped to canonical result packet.")
     updated["audit"] = audit
     return updated
@@ -1086,6 +1091,13 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
 
     if status == "completed":
         _maybe_auto_start_next_queued_ticket(run_id, workflow_id)
+    if chat_id:
+        try:
+            from distr.core.workflow.development_harness import _start_next_queued_instruction
+
+            _start_next_queued_instruction(int(chat_id))
+        except Exception:
+            logger.exception("Could not start queued Development instruction after workflow run %d", run_id)
 
 
 def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
@@ -2897,6 +2909,24 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         forced_terminal_status = str(run_data.get("forced_terminal_status") or "").strip().lower()
         if forced_terminal_status and status == "completed":
             status = forced_terminal_status
+        if status == "completed" and workflow_id:
+            # Completion must reflect the gates: a run whose latest
+            # review/ship-audit result failed cannot be "completed" just
+            # because a later (report) step passed.
+            from distr.core.workflow.router import failing_gate_steps
+
+            failing_gates = failing_gate_steps(db, run_id=run_id, workflow_id=workflow_id)
+            if failing_gates:
+                status = "failed"
+                gate_names = [g.name or f"Step {g.id}" for g in failing_gates]
+                run_data["completion_blocked_by_gates"] = [int(g.id) for g in failing_gates]
+                if not run_data.get("terminal_warning"):
+                    run_data["terminal_warning"] = (
+                        "Completion blocked: latest result failed for "
+                        + ", ".join(repr(n) for n in gate_names)
+                        + "; the run stopped without sign-off."
+                    )
+                run.run_data = json.dumps(run_data)
         if packet:
             packet = _finalize_result_packet_for_terminal_run(
                 packet,

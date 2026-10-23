@@ -60,6 +60,10 @@ def test_development_covers_plan_build_independent_review_correction_and_memory(
             "Independently review and validate the change",
             "Correct defects found by validation",
             "Final production polish and ship audit",
+            "Prepare development deployment approval",
+            "Deploy approved commit to development",
+            "Prepare production promotion approval",
+            "Deploy approved commit to production",
             "Report, update ticket, and compact memory",
         ]
         configs = [json.loads(step.config or "{}") for step in steps]
@@ -72,6 +76,10 @@ def test_development_covers_plan_build_independent_review_correction_and_memory(
         assert configs[1]["expected_outputs"][0] == "execution_contract"
         assert "do not create plan.md" in (steps[1].instruction or "").lower()
         assert configs[-1]["expected_outputs"][-2:] == ["failed_attempts", "lessons"]
+        assert steps[6].require_approval is True
+        assert steps[8].require_approval is True
+        assert configs[7]["environment"] == "development"
+        assert configs[9]["environment"] == "production"
         assert steps[3].on_pass_goto == steps[5].id
         assert steps[3].on_fail_goto == steps[4].id
         assert steps[4].on_pass_goto == steps[3].id

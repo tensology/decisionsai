@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import threading
 import time
 from pathlib import Path
 from dataclasses import dataclass
@@ -18,10 +19,21 @@ _LAST_DISCUSSION_POLL = 0.0
 _LAST_CONTEXT_POLL = 0.0
 _LAST_TICKET_POLL = 0.0
 DISCUSSION_POLL_SECONDS = 30
-TICKET_POLL_SECONDS = 3  # active cadence (kept for callers/tests that import it)
+TICKET_POLL_SECONDS = 3  # legacy constant; tickets now arrive by push (distr.core.tensology_stream)
 TICKET_POLL_ACTIVE_SECONDS = 3
 TICKET_POLL_IDLE_SECONDS = 15
 _TICKET_POLL_INTERVAL = TICKET_POLL_IDLE_SECONDS
+_LAST_STATE_SYNC = 0.0
+STATE_SYNC_SECONDS = 3  # local-only thread state check; Tensology is called only on change
+TENSOLOGY_LIVE_TICKET_STATUSES = (
+    "awaiting_setup,awaiting_decisions,queued,development,testing,refinement,retesting,verification,blocked"
+)
+TENSOLOGY_LIVE_TICKET_STATUS_SET = frozenset(TENSOLOGY_LIVE_TICKET_STATUSES.split(","))
+_TENSOLOGY_TICKETS: dict[int, dict[str, Any]] = {}
+_TENSOLOGY_TICKETS_LOCK = threading.Lock()
+_TICKET_PROCESS_LOCK = threading.Lock()
+ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic", ".tif", ".tiff"})
 # Sentinel used when reporting a routing block before any thread exists. PATCH
 # updates status without claiming, so a later real thread can still POST-claim.
 ROUTE_BLOCKED_THREAD_ID = "decisions-route-blocked"
@@ -88,6 +100,51 @@ class TensologyClient:
         if error:
             raise TensologyApiError(error.get("message", "Tensology request failed"), code=error.get("code", "request_failed"))
         return envelope.get("data")
+
+    def download(self, location: str, destination: Path, *, max_bytes: int = ATTACHMENT_MAX_BYTES) -> int:
+        """Download a ticket attachment. The API key is only ever sent to the Tensology host."""
+        base = urllib.parse.urlsplit(self.base_url)
+        if location.startswith(("http://", "https://")):
+            url = location
+        elif location.startswith("/"):
+            url = f"{self.base_url.rstrip('/')}{location}"
+        else:
+            url = f"{self.base_url.rstrip('/')}/api/integrations/v1/{location.lstrip('/')}"
+        target = urllib.parse.urlsplit(url)
+        headers = {"Accept": "*/*", "X-Request-ID": str(uuid.uuid4()), "X-Tensology-Source": self.source}
+        if target.netloc.lower().removeprefix("www.") == base.netloc.lower().removeprefix("www."):
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        destination = Path(destination)
+        partial = destination.with_name(destination.name + ".part")
+        request = urllib.request.Request(url, method="GET", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                declared = response.headers.get("Content-Length") if getattr(response, "headers", None) else None
+                if declared and str(declared).isdigit() and int(declared) > max_bytes:
+                    raise TensologyApiError(f"Attachment is larger than {max_bytes} bytes.", code="attachment_too_large")
+                total = 0
+                with open(partial, "wb") as handle:
+                    while True:
+                        chunk = response.read(65536)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise TensologyApiError(f"Attachment is larger than {max_bytes} bytes.", code="attachment_too_large")
+                        handle.write(chunk)
+            if total == 0:
+                raise TensologyApiError("Attachment download was empty.", code="attachment_empty")
+            partial.replace(destination)
+            return total
+        except urllib.error.HTTPError as exc:
+            raise TensologyApiError(f"Attachment download failed: HTTP {exc.code}", status=exc.code, code="attachment_http_error") from exc
+        except TensologyApiError:
+            raise
+        except Exception as exc:
+            raise TensologyApiError(f"Attachment download failed: {exc}", code="attachment_unavailable") from exc
+        finally:
+            if partial.exists():
+                partial.unlink()
 
     def get(self, path: str, query: dict[str, Any] | None = None) -> Any:
         return self._request("GET", path, query=query)
@@ -436,14 +493,16 @@ def _create_tensology_project(client: TensologyClient, ticket: dict[str, Any]) -
     """Create or repair the local project from the Tensology repository path and the high route."""
     from distr.core.db import get_session
     from distr.core.db.projects import Project
-    from distr.core.project_cli_backends.timing import is_local_model_route
+    from distr.core.project_cli_backends.timing import is_local_model_route, resolve_pi_model_provider
 
     name = str(ticket.get("project_name") or "").strip()
     folder = _ticket_repository_folder(client, ticket)
     if not name or folder is None:
         return None
     backend, model = _settings_high_route()
-    provider = model.split("/", 1)[0].lower() if backend.lower() == "pi" and "/" in model else backend
+    # Pi runs OpenRouter-style ``vendor/model`` ids through OpenRouter, not
+    # through a provider named after the vendor prefix.
+    provider = resolve_pi_model_provider(model) if backend.lower() == "pi" and "/" in model else backend
     if not backend or not model or is_local_model_route(backend_id=backend, model=model, provider=provider):
         return None
     with get_session() as db:
@@ -473,7 +532,7 @@ class TensologyRouteError(TensologyApiError):
 
 def _tensology_project_route(project: dict[str, Any]) -> dict[str, str]:
     """Return the project's configured route or raise; local/free models (pi/ollama) are refused."""
-    from distr.core.project_cli_backends.timing import is_local_model_route
+    from distr.core.project_cli_backends.timing import is_local_model_route, resolve_pi_model_provider
 
     backend = str(project.get("coding_backend") or "").strip().lower()
     model = str(project.get("coding_backend_model") or "").strip()
@@ -484,7 +543,12 @@ def _tensology_project_route(project: dict[str, Any]) -> dict[str, str]:
             "DecisionsAI project before this ticket can run.",
             code="route_not_configured",
         )
-    provider = model.split("/", 1)[0].lower() if backend == "pi" and "/" in model else backend
+    configured_provider = str(project.get("coding_backend_provider") or project.get("model_provider") or "").strip()
+    provider = (
+        resolve_pi_model_provider(model, configured_provider)
+        if backend == "pi" and "/" in model
+        else (configured_provider.lower() or backend)
+    )
     if is_local_model_route(backend_id=backend, model=model, provider=provider):
         raise TensologyRouteError(
             f"'{name}' is routed to a local free model ({backend}/{model}), which is not allowed for "
@@ -519,7 +583,88 @@ def _local_api_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
 
-def _execution_prompt(ticket: dict[str, Any], complexity: str) -> str:
+_OPS_INCIDENT_RE = re.compile(
+    r"(?:\b(?:http|status|error)\s*(?:code\s*)?50[0234]\b"
+    r"|\b50[0234]\s+(?:internal\s+server\s+error|bad\s+gateway|service\s+unavailable|gateway\s+time-?out)"
+    r"|\binternal\s+server\s+error\b"
+    r"|\bconnection\s+refused\b|\bconnectionrefusederror\b|\becconnrefused\b"
+    r"|\bservice\s+(?:is\s+)?(?:down|unavailable|unreachable|not\s+responding)\b"
+    r"|\bsite\s+(?:is\s+)?down\b|\boutage\b"
+    r"|\b(?:redis|postgres(?:ql)?|mysql|database|db|cache|celery|rabbitmq)\b[^.\n]{0,60}"
+    r"\b(?:refused|unavailable|down|timed?\s*out|connection\s+error|not\s+reachable)\b"
+    r"|\boperationalerror\b|\bdjango\b[^.\n]{0,40}\berror\s+email\b)",
+    re.IGNORECASE,
+)
+
+
+def _ticket_text(ticket: dict[str, Any]) -> str:
+    tasks = ticket.get("tasks") if isinstance(ticket.get("tasks"), list) else []
+    criteria = ticket.get("success_criteria") if isinstance(ticket.get("success_criteria"), list) else []
+    return "\n".join(
+        str(value or "")
+        for value in (
+            ticket.get("title"),
+            ticket.get("description"),
+            ticket.get("implementation_plan"),
+            *tasks,
+            *criteria,
+        )
+    )
+
+
+def _is_ops_incident(ticket: dict[str, Any]) -> bool:
+    """Runtime/ops incidents (500s, service down, connection refused)."""
+    return bool(_OPS_INCIDENT_RE.search(_ticket_text(ticket)))
+
+
+def _repo_default_branch(folder: str | Path | None) -> str:
+    """Detect the repository's default branch instead of assuming ``main``."""
+    import subprocess
+
+    path = Path(str(folder or "")).expanduser()
+    if not str(folder or "").strip() or not path.is_dir():
+        return "main"
+
+    def git(*args: str) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(path), *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            return ""
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    remote_head = git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if remote_head:
+        return remote_head.split("/", 1)[-1] or "main"
+    for candidate in ("main", "master"):
+        if git("rev-parse", "--verify", "--quiet", f"refs/heads/{candidate}"):
+            return candidate
+    return git("branch", "--show-current") or "main"
+
+
+_OPS_INCIDENT_PROFILE = (
+    "\n\nIncident profile: investigate-and-report. This ticket reports a runtime/ops incident "
+    "(server error, service down, or connection refused). Investigate first: reproduce or read the "
+    "error evidence, then decide whether the root cause is infrastructure/configuration (a service "
+    "or dependency down, credentials, environment) or a code defect. Do not change code for an "
+    "infrastructure cause. Only make a small, targeted code fix when the evidence shows a code defect "
+    "(for example missing error handling around an unavailable dependency). Playwright, screenshots, "
+    "and visual/UI gates do not apply; mark them N/A. Finish with a human report: root cause, evidence, "
+    "impact, what was changed (if anything), and the recommended human action."
+)
+
+
+def _execution_prompt(
+    ticket: dict[str, Any],
+    complexity: str,
+    *,
+    default_branch: str = "main",
+    ops_incident: bool | None = None,
+) -> str:
     tasks = ticket.get("tasks") if isinstance(ticket.get("tasks"), list) else []
     criteria = ticket.get("success_criteria") if isinstance(ticket.get("success_criteria"), list) else []
     task_lines = "\n".join(f"- {str(item)}" for item in tasks if str(item).strip()) or "- Derive implementation tasks from the approved scope."
@@ -534,6 +679,7 @@ def _execution_prompt(ticket: dict[str, Any], complexity: str) -> str:
         "attachments": attachments,
         "discussion": discussion,
         "discussion_truncated": bool(ticket.get("discussion_truncated")),
+        "local_image_paths": ticket.get("local_image_paths") if isinstance(ticket.get("local_image_paths"), list) else [],
     }, ensure_ascii=False, indent=2, default=str)
     return (
         f"Execute approved Tensology ticket {ticket.get('reference')}: {ticket.get('title')}\n\n"
@@ -550,8 +696,10 @@ def _execution_prompt(ticket: dict[str, Any], complexity: str) -> str:
         "[DECISIONS_STAGE: retesting], [DECISIONS_STAGE: verification], or [DECISIONS_STAGE: done]. "
         "Run the repository's required tests and build. Do not emit the done marker "
         "until the final verification passes. If blocked, stop and report the concrete blocker. Preserve unrelated "
-        "working-tree changes and work on main. Record material changes, failed checks, corrections, phase evidence, "
+        f"working-tree changes and work on {default_branch or 'main'} (the repository's default branch). "
+        "Record material changes, failed checks, corrections, phase evidence, "
         "and reusable lessons in the workflow run and project memory so later work does not repeat the same mistake."
+        + (_OPS_INCIDENT_PROFILE if (_is_ops_incident(ticket) if ops_incident is None else ops_incident) else "")
     )
 
 
@@ -576,7 +724,9 @@ def _execution_skill_ids(ticket: dict[str, Any]) -> tuple[list[str], bool]:
         "notification", "settings", "admin", "list view", "record editor",
     )
     normalized = f" {text} "
-    ui_bearing = any(term in normalized for term in ui_terms)
+    # Ops incidents (500 / service down) are investigate-and-report work: the
+    # word "page" or "admin" in an error email must not force Playwright gates.
+    ui_bearing = any(term in normalized for term in ui_terms) and not _is_ops_incident(ticket)
     skills = ["completion-protocol"]
     if ui_bearing:
         skills.extend(["ui-ux-principles", "ui-crud-discipline"])
@@ -648,6 +798,7 @@ def _ensure_tensology_kanban_ticket(
                 "source": ticket.get("source") if isinstance(ticket.get("source"), dict) else {},
                 "attachments": ticket.get("attachments") if isinstance(ticket.get("attachments"), list) else [],
                 "discussion": ticket.get("discussion") if isinstance(ticket.get("discussion"), list) else [],
+                "local_image_paths": ticket.get("local_image_paths") if isinstance(ticket.get("local_image_paths"), list) else [],
                 "implementation_plan": ticket.get("implementation_plan") or "",
                 "tasks": tasks,
                 "acceptance_criteria": criteria,
@@ -694,7 +845,13 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
     )
     # Raises TensologyRouteError before anything is created when the route is unset or local.
     route = _tensology_project_route(project)
-    prompt = _execution_prompt(ticket, complexity)
+    ops_incident = _is_ops_incident(ticket)
+    prompt = _execution_prompt(
+        ticket,
+        complexity,
+        default_branch=_repo_default_branch(project.get("folder_location")),
+        ops_incident=ops_incident,
+    )
     workflow_id = get_or_create_development_workflow()
     mirrored_ticket_id = _ensure_tensology_kanban_ticket(ticket, project, workflow_id)
     skill_ids, use_playwright = _execution_skill_ids(ticket)
@@ -724,6 +881,7 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
                 "complexity": complexity,
                 "source": "tensology_approval",
                 "reason": f"Approved ticket classified as {complexity}; routed by the project's default route.",
+                **({"incident_profile": "investigate_and_report"} if ops_incident else {}),
             },
             "skill_ids": skill_ids,
             "use_playwright": use_playwright,
@@ -856,84 +1014,283 @@ def _report_tensology_unmatched_project(client: TensologyClient, ticket: dict[st
     )
 
 
+def _remember_tensology_tickets(tickets: list[Any], *, replace: bool = False) -> None:
+    """Keep the last known Tensology projection of live tickets for local state sync."""
+    with _TENSOLOGY_TICKETS_LOCK:
+        if replace:
+            _TENSOLOGY_TICKETS.clear()
+        for ticket in tickets:
+            if not isinstance(ticket, dict) or ticket.get("id") in (None, ""):
+                continue
+            try:
+                ticket_id = int(ticket["id"])
+            except (TypeError, ValueError):
+                continue
+            if str(ticket.get("execution_status") or "") in TENSOLOGY_LIVE_TICKET_STATUS_SET:
+                _TENSOLOGY_TICKETS[ticket_id] = dict(ticket)
+            else:
+                _TENSOLOGY_TICKETS.pop(ticket_id, None)
+
+
+def _safe_attachment_part(value: Any, fallback: str = "unknown") -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip(".-")[:120] or fallback
+
+
+def _is_image_attachment(item: dict[str, Any]) -> bool:
+    mime = str(item.get("type") or item.get("mime_type") or item.get("content_type") or "").lower()
+    if mime.startswith("image/"):
+        return True
+    name = str(item.get("name") or item.get("filename") or item.get("url") or "")
+    return Path(urllib.parse.urlsplit(name).path).suffix.lower() in IMAGE_EXTENSIONS
+
+
+def _tensology_attachment_root(project: dict[str, Any], ticket: dict[str, Any]) -> Path:
+    """Same layout as Development thread ticket attachments (kanban._ticket_thread_attachment_root)."""
+    scope = str(int(project["id"])) if project.get("id") not in (None, "") else "inbox"
+    root = (
+        Path.home() / ".decisions" / "workspaces" / "projects" / scope / "attachments" / "tickets"
+        / "tensology"
+        / _safe_attachment_part(ticket.get("project_id"))
+        / _safe_attachment_part(ticket.get("reference") or ticket.get("id"))
+    )
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return root
+
+
+def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    """Download image attachments (ticket + discussion) and record their local paths.
+
+    Failures (404, too large, unreachable) are logged and recorded on the attachment as
+    ``download_error``; they never block ticket processing.
+    """
+    import copy
+    import logging
+
+    log = logging.getLogger(__name__)
+    ticket = copy.deepcopy(ticket)
+    groups: list[list[Any]] = []
+    if isinstance(ticket.get("attachments"), list):
+        groups.append(ticket["attachments"])
+    for message in ticket.get("discussion") or []:
+        if isinstance(message, dict) and isinstance(message.get("attachments"), list):
+            groups.append(message["attachments"])
+    images = [item for group in groups for item in group if isinstance(item, dict) and _is_image_attachment(item)]
+    if not images:
+        ticket["local_image_paths"] = []
+        return ticket
+    root = _tensology_attachment_root(project, ticket)
+    used: set[str] = set()
+    local_paths: list[str] = []
+    for item in images:
+        raw_name = str(item.get("name") or item.get("filename") or Path(urllib.parse.urlsplit(str(item.get("url") or "")).path).name or "image")
+        name = _safe_attachment_part(Path(raw_name).name, "image")
+        stem, suffix, counter = Path(name).stem, Path(name).suffix, 1
+        while name in used:
+            counter += 1
+            name = f"{stem}-{counter}{suffix}"
+        used.add(name)
+        destination = root / name
+        if destination.is_file() and destination.stat().st_size > 0:
+            item["local_path"] = str(destination)
+            item["download_status"] = "cached"
+            local_paths.append(str(destination))
+            continue
+        locations: list[str] = []
+        for key in ("api_path", "absolute_url", "url"):
+            value = str(item.get(key) or "").strip()
+            if value and value not in locations:
+                locations.append(value)
+        errors: list[str] = []
+        for location in locations:
+            try:
+                size = client.download(location, destination)
+            except TensologyApiError as exc:
+                errors.append(str(exc))
+                continue
+            item["local_path"] = str(destination)
+            item["download_status"] = "downloaded"
+            item["size"] = size
+            local_paths.append(str(destination))
+            log.info("Tensology ticket %s image downloaded: %s (%s bytes)", ticket.get("reference"), destination, size)
+            break
+        else:
+            item["download_error"] = "; ".join(errors) or "No downloadable URL on the attachment."
+            log.warning("Tensology ticket %s image %r not downloaded: %s", ticket.get("reference"), raw_name, item["download_error"])
+    ticket["local_image_paths"] = local_paths
+    return ticket
+
+
+def _sync_tensology_ticket_state(client: TensologyClient, ticket: dict[str, Any], chat_id: int) -> bool:
+    """Mirror the local Development thread state to Tensology; network only when it changed."""
+    from distr.core.workflow.development_harness import development_execution_state
+
+    execution = development_execution_state(chat_id)
+    remote_status = _remote_execution_status(str(execution.get("status") or ""), execution)
+    if remote_status == str(ticket.get("execution_status") or ""):
+        return False
+    detail = str(execution.get("summary") or execution.get("error") or "")[:500]
+    if remote_status == "failed" and str(execution.get("status") or "").lower() in {"completed", "completed_noop"}:
+        detail = "Execution stopped without final verification evidence. Review the Development thread before retrying."
+    updated = client.patch(
+        f"tickets/{int(ticket['id'])}/execution",
+        {
+            "thread_id": str(chat_id),
+            "status": remote_status,
+            "detail": detail,
+            "evidence": _tensology_execution_receipt(execution, chat_id=chat_id),
+        },
+        idempotency_key=f"tensology-ticket-{int(ticket['id'])}-status-{remote_status}-{execution.get('job_id') or 'run'}",
+    )
+    _remember_tensology_tickets([updated if isinstance(updated, dict) else {**ticket, "execution_status": remote_status}])
+    return True
+
+
+def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -> bool:
+    """Handle one ticket waiting on DecisionsAI: project, kanban ticket, thread, state mirror.
+
+    Shared by the catch-up fetch and pushed ticket events so both behave identically.
+    Returns True when the ticket is live in a Development thread.
+    """
+    project = _resolve_tensology_project(ticket)
+    if project is None:
+        project = _create_tensology_project(client, ticket)
+    if project is None:
+        _report_tensology_unmatched_project(client, ticket)
+        return False
+    chat_id = _existing_tensology_thread(ticket)
+    route = {
+        "complexity": str(ticket.get("execution_complexity") or ""),
+        "backend": str(ticket.get("decisions_backend") or ""),
+        "provider": str(ticket.get("decisions_provider") or ""),
+        "model": str(ticket.get("decisions_model") or ""),
+    }
+    if chat_id is None:
+        try:
+            ticket = _localize_tensology_attachments(client, ticket, project)
+        except Exception as exc:  # never block a ticket on its images
+            import logging
+
+            logging.getLogger(__name__).warning("Tensology ticket %s images skipped: %s", ticket.get("reference"), exc)
+        try:
+            chat_id, route = _create_tensology_thread(ticket, project)
+        except TensologyRouteError as exc:
+            _report_tensology_route_block(client, ticket, project, exc)
+            return False
+
+    thread_url = f"http://127.0.0.1:8765/development/threads/{chat_id}/"
+    if str(ticket.get("decisions_thread_id") or "") != str(chat_id):
+        claimed = client.post(
+            f"tickets/{int(ticket['id'])}/execution",
+            {
+                "thread_id": str(chat_id),
+                "decisions_project_id": str(project["id"]),
+                "thread_url": thread_url,
+                "status": "development",
+                "detail": "Development thread created and execution started.",
+                **route,
+            },
+            idempotency_key=f"tensology-ticket-{int(ticket['id'])}-thread-{chat_id}",
+        )
+        _remember_tensology_tickets([
+            claimed if isinstance(claimed, dict)
+            else {**ticket, "decisions_thread_id": str(chat_id), "execution_status": "development"}
+        ])
+    else:
+        _sync_tensology_ticket_state(client, ticket, chat_id)
+    return True
+
+
+def _fetch_and_process_tensology_tickets(ticket_ids: list[int] | None = None) -> int:
+    """Fetch full ticket payloads from GET /api/integrations/v1/tickets and process them."""
+    global _TICKET_POLL_INTERVAL
+    with _TICKET_PROCESS_LOCK:
+        _TICKET_POLL_INTERVAL = TICKET_POLL_IDLE_SECONDS
+        client = configured_tensology_client(source="decisionsai-ticket-runner")
+        query: dict[str, Any] = {"execution_status": TENSOLOGY_LIVE_TICKET_STATUSES}
+        wanted: set[int] = set()
+        if ticket_ids:
+            wanted = {int(item) for item in ticket_ids}
+            query["id"] = ",".join(str(item) for item in sorted(wanted))
+        tickets = client.get("tickets", query=query)
+        if not isinstance(tickets, list):
+            return 0
+        if wanted:
+            # Older servers ignore ?id=; only handle the tickets the event named.
+            tickets = [item for item in tickets if isinstance(item, dict) and _safe_int(item.get("id")) in wanted]
+            _remember_tensology_tickets(tickets)
+        else:
+            tickets = tickets[:20]
+            _remember_tensology_tickets(tickets, replace=True)
+        processed = 0
+        for ticket in tickets:
+            if not isinstance(ticket, dict):
+                continue
+            if _process_tensology_ticket(client, ticket):
+                processed += 1
+        if processed:
+            _TICKET_POLL_INTERVAL = TICKET_POLL_ACTIVE_SECONDS
+        return processed
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def process_tensology_ticket_events(ticket_ids: list[int]) -> int:
+    """Handle pushed ``decisions_ticket`` events: fetch those tickets' full payloads, then process."""
+    ids = [item for item in (_safe_int(value) for value in ticket_ids or []) if item is not None]
+    if not ids:
+        return process_tensology_approved_tickets(force=True)
+    return _fetch_and_process_tensology_tickets(ids)
+
+
 def process_tensology_approved_tickets(*, force: bool = False) -> int:
-    """Create/reuse visible Development threads and mirror their execution state."""
-    global _LAST_TICKET_POLL, _TICKET_POLL_INTERVAL
+    """Catch-up fetch: create/reuse Development threads for every ticket waiting on DecisionsAI.
+
+    Tickets arrive by push over the outbound Tensology websocket
+    (``distr.core.tensology_stream``); this full fetch is no longer polled. It runs when
+    the stream connects or reconnects so tickets sent while DecisionsAI was offline are
+    not lost. Per-ticket handling and idempotency are shared with pushed events.
+    """
+    global _LAST_TICKET_POLL
     now = time.monotonic()
     if not force and now - _LAST_TICKET_POLL < _TICKET_POLL_INTERVAL:
         return 0
     _LAST_TICKET_POLL = now
-    # Idle cadence until this poll proves there is work; a failed request also stays idle.
-    _TICKET_POLL_INTERVAL = TICKET_POLL_IDLE_SECONDS
-    client = configured_tensology_client(source="decisionsai-ticket-runner")
-    tickets = client.get(
-        "tickets",
-        query={
-            "execution_status": "awaiting_setup,awaiting_decisions,queued,development,testing,refinement,retesting,verification,blocked"
-        },
-    )
-    if not isinstance(tickets, list):
+    return _fetch_and_process_tensology_tickets(None)
+
+
+def sync_tensology_execution_states(*, force: bool = False) -> int:
+    """Local-only mirror of Development thread state for tickets already claimed by a thread.
+
+    Replaces the state-sync half of the old poll: it reads local thread state every few
+    seconds and only calls Tensology (PATCH) when a ticket's status actually changed.
+    """
+    global _LAST_STATE_SYNC
+    now = time.monotonic()
+    if not force and now - _LAST_STATE_SYNC < STATE_SYNC_SECONDS:
         return 0
-
-    processed = 0
-    for ticket in tickets[:20]:
-        if not isinstance(ticket, dict):
-            continue
-        project = _resolve_tensology_project(ticket)
-        if project is None:
-            project = _create_tensology_project(client, ticket)
-        if project is None:
-            _report_tensology_unmatched_project(client, ticket)
-            continue
-        chat_id = _existing_tensology_thread(ticket)
-        route = {
-            "complexity": str(ticket.get("execution_complexity") or ""),
-            "backend": str(ticket.get("decisions_backend") or ""),
-            "provider": str(ticket.get("decisions_provider") or ""),
-            "model": str(ticket.get("decisions_model") or ""),
-        }
-        if chat_id is None:
-            try:
-                chat_id, route = _create_tensology_thread(ticket, project)
-            except TensologyRouteError as exc:
-                _report_tensology_route_block(client, ticket, project, exc)
+    _LAST_STATE_SYNC = now
+    with _TENSOLOGY_TICKETS_LOCK:
+        known = [dict(ticket) for ticket in _TENSOLOGY_TICKETS.values()]
+    claimed = [ticket for ticket in known if str(ticket.get("decisions_thread_id") or "").strip()]
+    if not claimed:
+        return 0
+    if not _TICKET_PROCESS_LOCK.acquire(blocking=False):
+        return 0  # a fetch is running and mirrors state itself
+    try:
+        client = None
+        changed = 0
+        for ticket in claimed:
+            chat_id = _existing_tensology_thread(ticket)
+            if chat_id is None or str(ticket.get("decisions_thread_id") or "") != str(chat_id):
                 continue
-
-        thread_url = f"http://127.0.0.1:8765/development/threads/{chat_id}/"
-        if str(ticket.get("decisions_thread_id") or "") != str(chat_id):
-            client.post(
-                f"tickets/{int(ticket['id'])}/execution",
-                {
-                    "thread_id": str(chat_id),
-                    "decisions_project_id": str(project["id"]),
-                    "thread_url": thread_url,
-                    "status": "development",
-                    "detail": "Development thread created and execution started.",
-                    **route,
-                },
-                idempotency_key=f"tensology-ticket-{int(ticket['id'])}-thread-{chat_id}",
-            )
-        else:
-            from distr.core.workflow.development_harness import development_execution_state
-
-            execution = development_execution_state(chat_id)
-            remote_status = _remote_execution_status(str(execution.get("status") or ""), execution)
-            if remote_status != str(ticket.get("execution_status") or ""):
-                detail = str(execution.get("summary") or execution.get("error") or "")[:500]
-                if remote_status == "failed" and str(execution.get("status") or "").lower() in {"completed", "completed_noop"}:
-                    detail = "Execution stopped without final verification evidence. Review the Development thread before retrying."
-                client.patch(
-                    f"tickets/{int(ticket['id'])}/execution",
-                    {
-                        "thread_id": str(chat_id),
-                        "status": remote_status,
-                        "detail": detail,
-                        "evidence": _tensology_execution_receipt(execution, chat_id=chat_id),
-                    },
-                    idempotency_key=f"tensology-ticket-{int(ticket['id'])}-status-{remote_status}-{execution.get('job_id') or 'run'}",
-                )
-        processed += 1
-    if processed:
-        # Live tickets (created or syncing threads) poll fast; blocked/unmatched ones stay idle.
-        _TICKET_POLL_INTERVAL = TICKET_POLL_ACTIVE_SECONDS
-    return processed
+            client = client or configured_tensology_client(source="decisionsai-ticket-runner")
+            if _sync_tensology_ticket_state(client, ticket, chat_id):
+                changed += 1
+        return changed
+    finally:
+        _TICKET_PROCESS_LOCK.release()

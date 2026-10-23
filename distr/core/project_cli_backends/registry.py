@@ -976,6 +976,7 @@ async def _finalize_pi_workflow_session(
     pi_path: str,
     task: ProjectTask,
     on_event: Optional[EventCallback],
+    prior_error: str = "",
 ) -> tuple[str, list[str]]:
     """Ask the same Pi session for its terminal report with tools disabled.
 
@@ -998,6 +999,17 @@ async def _finalize_pi_workflow_session(
         "If the implementation was not actually completed, choose Status: failed "
         "or Status: needs_input and state the precise blocker; never claim success."
     )
+    if "completion_manifest" in {item.lower() for item in expected_outputs}:
+        instruction += (
+            "\nThe completion_manifest label must be ONE line of JSON: completion_manifest: "
+            '{"objective": "...", "inventory": [{"id": "...", "status": "verified|excluded|blocked", '
+            '"evidence": ["..."]}], "negative_space_checks": [{"passed": true, "evidence": "..."}], '
+            '"journeys": [{"verified": true, "evidence": "..."}], "exclusions": [], "blockers": [], '
+            '"independent_audit": {"passed": true, "reviewed_against_original": true, "findings": []}, '
+            '"verdict": "complete|incomplete"}. Use verdict incomplete with blockers when work remains.'
+        )
+    if str(prior_error or "").strip():
+        instruction += "\nThe previous report was rejected: " + str(prior_error).strip()[:600]
     if expected_outputs:
         instruction += "\nExpected output labels:\n" + "\n".join(
             f"{item}: <concise value>" for item in expected_outputs
@@ -1134,6 +1146,85 @@ async def _finalize_pi_workflow_session(
     return final_output, errors
 
 
+_STATUS_SYNONYMS = {
+    "completed": "completed", "complete": "completed", "done": "completed", "success": "completed",
+    "successful": "completed", "succeeded": "completed", "passed": "completed", "pass": "completed", "ok": "completed",
+    "failed": "failed", "fail": "failed", "failure": "failed", "error": "failed", "errored": "failed",
+    "needs_input": "needs_input", "needs input": "needs_input", "needs-input": "needs_input",
+    "needsinput": "needs_input", "blocked": "needs_input", "input_required": "needs_input",
+}
+
+
+_SANDBOX_RESULT_INSTRUCTION = (
+    "Sandbox note: this Codex sandbox blocks localhost networking, so the "
+    "DecisionsAI callback above may be unreachable. If it fails, skip it: your "
+    "final message is captured directly from this process's output. Do not "
+    "retry the callback and do not report it as a blocker. End with your "
+    "workflow report ('Status: completed|failed|needs_input' plus the requested fields).\n\n"
+)
+
+_CALLBACK_BLOCKER_RE = re.compile(
+    r"(?i)(callback|decisionsai|decisions_callback|127\.0\.0\.1|localhost)[^\n]{0,160}"
+    r"(unreachable|not reachable|operation not permitted|connection refused|failed|blocked|sandbox)"
+    r"|(unreachable|operation not permitted|connection refused)[^\n]{0,160}(callback|127\.0\.0\.1|localhost)"
+)
+
+
+def _strip_sandbox_callback_blockers(text: str) -> str:
+    """Drop sandbox callback-reachability noise from a Codex report (item A)."""
+    kept = []
+    for line in str(text or "").splitlines():
+        if _CALLBACK_BLOCKER_RE.search(line) and len(line) < 400:
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+class _StatusMatch:
+    def __init__(self, status: str):
+        self._status = status
+
+    def group(self, _index: int = 0) -> str:
+        return self._status
+
+
+def _extract_report_status(text: str):
+    """Find the worker's terminal status tolerantly (fix2, item B).
+
+    Accepts case variants, markdown (bold/italics/backticks/headings/list
+    bullets/tables), ``Status -``/``Status =`` separators, JSON objects (plain
+    or fenced) with a ``status`` key, and common synonyms. The *last* status
+    wins so quoted instructions earlier in the output do not count.
+    """
+    found: list[str] = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        cleaned = re.sub(r"[*_`]", "", line)
+        cleaned = re.sub(r"^[\s#>+\-]+", "", cleaned).strip()
+        table = re.match(r"(?i)^\|\s*status\s*\|\s*([A-Za-z_ -]+?)\s*\|", cleaned)
+        if table:
+            candidate = table.group(1)
+        else:
+            plain = re.match(r"(?i)^(?:final\s+|workflow\s+|task\s+)?status\s*[:=\-\u2013\u2014]\s*([A-Za-z_ -]+)", cleaned)
+            if not plain:
+                continue
+            candidate = plain.group(1)
+        key = re.sub(r"\s+", " ", candidate.strip().lower()).strip(" .-")
+        for option in (key, key.split(" ")[0], " ".join(key.split(" ")[:2])):
+            if option in _STATUS_SYNONYMS:
+                found.append(_STATUS_SYNONYMS[option])
+                break
+    for blob in re.findall(r"\{[^{}]*\"status\"\s*:\s*\"([^\"]+)\"[^{}]*\}", str(text or ""), flags=re.I):
+        key = blob.strip().lower()
+        if key in _STATUS_SYNONYMS:
+            found.append(_STATUS_SYNONYMS[key])
+    if not found:
+        return None
+    return _StatusMatch(found[-1])
+
+
 def _workflow_report_error(
     output: str,
     worker_name: str,
@@ -1164,7 +1255,17 @@ def _workflow_report_error(
         if result.complete:
             return ""
         details = "; ".join(result.errors) or "manifest verdict is incomplete"
-        return f"{worker_name} returned an invalid completion manifest: {details}."
+        if result.valid and not result.complete:
+            return (
+                f"{worker_name} reported an incomplete completion manifest: {details}. "
+                "Retry this step after the remaining blockers are corrected, or reply 'retry' to re-run it."
+            )
+        return (
+            f"{worker_name} returned an invalid completion manifest: {details}. "
+            "Reply 'retry' to re-run this step; the worker must end with a one-line "
+            "'completion_manifest: {...}' JSON object (objective, inventory, negative_space_checks, "
+            "journeys, independent_audit, verdict)."
+        )
 
     def has_named_output(name: str) -> bool:
         expected = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
@@ -1185,15 +1286,7 @@ def _workflow_report_error(
                 return True
         return False
 
-    match = re.search(
-        r"(?im)^\s*(?:\*\*)?Status(?:\*\*)?\s*:\s*(?:\*\*)?\s*(completed|failed|needs_input)\b",
-        text,
-    )
-    if not match:
-        match = re.search(
-            r"(?im)^\s*\|\s*(?:\*\*)?Status(?:\*\*)?\s*\|\s*`?(completed|failed|needs_input)\b`?\s*\|",
-            text,
-        )
+    match = _extract_report_status(text)
     if not match:
         lowered = text.lower()
         unresolved = re.search(
@@ -1208,7 +1301,8 @@ def _workflow_report_error(
             return completion_manifest_error()
         return (
             f"{worker_name} returned text without the required 'Status: completed' workflow report; "
-            "the result remains unverified."
+            "the result remains unverified. The final message must contain a line "
+            "'Status: completed' (or failed / needs_input), or JSON {\"status\": \"completed\"}."
         )
     status = match.group(1).lower()
     if status != "completed":
@@ -1221,6 +1315,29 @@ def _workflow_report_error(
             + "."
         )
     return completion_manifest_error()
+
+
+def _describe_exit(worker: str, returncode: Any) -> str:
+    """Explain signal exits instead of a bare negative code (fix2, item C)."""
+    try:
+        code = int(returncode)
+    except (TypeError, ValueError):
+        return f"{worker} exited with code {returncode}."
+    if code < 0 or code in (130, 137, 143):
+        import signal as _signal
+
+        signum = -code if code < 0 else code - 128
+        try:
+            name = _signal.Signals(signum).name
+        except Exception:
+            name = f"signal {signum}"
+        hint = {
+            "SIGINT": "an interrupt (Ctrl-C or a process-group SIGINT) from outside the worker; DecisionsAI's own timeout/cancel use SIGTERM",
+            "SIGTERM": "a stop request (DecisionsAI cancel/timeout, a restart, or the OS)",
+            "SIGKILL": "a forced kill (memory pressure or a hard stop)",
+        }.get(name, "an external signal")
+        return f"{worker} was terminated by {name} (exit code {code}): {hint}."
+    return f"{worker} exited with code {code}."
 
 
 def _pi_workflow_report_error(
@@ -1531,6 +1648,11 @@ class PiBackend(ProjectCliBackend):
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=task.folder,
                 limit=PI_JSONL_STREAM_LIMIT,
+                # fix2 (item C): own process group, so a terminal Ctrl-C / SIGINT
+                # aimed at DecisionsAI's group no longer kills Pi mid-turn
+                # (the historic "exit code -2"). Timeout/cancel paths still
+                # signal this process directly.
+                start_new_session=True,
             )
             _register_oneshot_process(
                 task.project_id,
@@ -1753,6 +1875,7 @@ class PiBackend(ProjectCliBackend):
                 pi_path=pi_path,
                 task=task,
                 on_event=on_event,
+                prior_error=str(report_error or ""),
             )
             if finalized_output:
                 output = finalized_output
@@ -1798,7 +1921,7 @@ class PiBackend(ProjectCliBackend):
         elif model_errors and not ignored_transient_errors:
             error = _preferred_model_error(model_errors)
         elif returncode != 0 and not terminal_event_ok:
-            error = f"Pi exited with code {returncode}."
+            error = _describe_exit("Pi", returncode)
         else:
             error = report_error
         ok = (
@@ -2604,10 +2727,10 @@ class CodexBackend(OneShotCliBackend):
             if message:
                 assistant_messages.append(message)
         if assistant_messages:
-            return _compact_cli_output(assistant_messages[-1], limit=12_000)
+            return _compact_cli_output(_strip_sandbox_callback_blockers(assistant_messages[-1]), limit=12_000)
         matches = list(re.finditer(r"(?im)^\s*(?:\*\*)?Status(?:\*\*)?\s*:\s*", text))
         if matches:
-            return _compact_cli_output(text[matches[-1].start():], limit=12_000)
+            return _compact_cli_output(_strip_sandbox_callback_blockers(text[matches[-1].start():]), limit=12_000)
         return super()._result_output(text)
 
     def _usage_from_output(self, output: str) -> dict[str, Any]:
@@ -2677,6 +2800,12 @@ class CodexBackend(OneShotCliBackend):
             cmd += ["-c", f'service_tier="{tier}"']
         if _dev_tools_enabled(task):
             cmd += _codex_dev_mcp_args(task)
+        if sandbox in {"read-only", "workspace-write"}:
+            # fix2 (item A): the Codex sandbox blocks loopback networking, so
+            # asking the worker to call DecisionsAI only produced false
+            # "callback unreachable" blockers. The final message is captured
+            # from stdout; tell the worker that instead of widening the sandbox.
+            return cmd + [self._callback_instruction(task) + _SANDBOX_RESULT_INSTRUCTION + task.instruction]
         return cmd + [self._callback_instruction(task) + task.instruction]
 
 
@@ -3267,6 +3396,11 @@ async def run_project_task(
         selection_reason += "; project model setting"
     else:
         selection_reason += "; backend default model"
+    routed_reason = str((adapter_options or {}).get("route_selection_reason") or "").strip()
+    if routed_reason:
+        # fix2: record *why* the workflow chose this route (e.g. the inherited
+        # thread composer route), not just that it was passed explicitly.
+        selection_reason = routed_reason
     git_status_before = _git_status_short(task.folder)
     read_only_expected = bool(task.adapter_options.get("read_only_expected"))
     mutation_expected = bool(task.adapter_options.get("mutation_expected"))

@@ -6,6 +6,73 @@ import json
 from typing import Any
 
 
+def _drop_retired_openrouter_free_models(models: list[dict]) -> list[dict]:
+    """Remove OpenRouter ``:free`` ids the live catalogue no longer lists.
+
+    Pi's local catalogue can lag OpenRouter (``openai/gpt-oss-120b:free`` was
+    withdrawn but still offered). When the live catalogue is unavailable the
+    list is returned unchanged rather than guessing.
+    """
+    try:
+        from distr.core.project_cli_backends.provider_preflight import openrouter_catalogue_ids
+
+        live = openrouter_catalogue_ids()
+    except Exception:
+        live = None
+    if not live:
+        return models
+    kept = []
+    for model in models:
+        model_id = str(model.get("id") or model.get("model") or "").strip()
+        provider = str(model.get("provider") or model.get("model_provider") or "").strip().lower()
+        if (
+            provider == "openrouter"
+            and model_id.lower().endswith(":free")
+            and model_id not in live
+        ):
+            continue
+        kept.append(model)
+    return kept
+
+
+def route_disallows_free_preference(
+    route: dict[str, Any] | None,
+    *,
+    config: dict[str, Any] | None = None,
+    run_data: dict[str, Any] | None = None,
+) -> bool:
+    """Return True for routes where free/local models must not be preferred.
+
+    Manually pinned thread routes, locked routes, and Tensology-approved
+    tickets run on the configured (paid) route; recovery must offer that
+    route's configured paid fallback before any free candidate.
+    """
+    route = route or {}
+    config = config or {}
+    run_data = run_data or {}
+    if (
+        bool(config.get("route_locked"))
+        or bool(route.get("route_locked"))
+        or bool(route.get("paid_first"))
+    ):
+        return True
+    if str(route.get("route_mode") or "").strip().lower() == "manual":
+        return True
+    if str(route.get("source") or "").strip().lower() == "thread_model_route":
+        return True
+    model_route = run_data.get("model_route") if isinstance(run_data.get("model_route"), dict) else {}
+    if str(model_route.get("route_mode") or "").strip().lower() == "manual":
+        return True
+    assessment = run_data.get("routing_assessment")
+    if not isinstance(assessment, dict):
+        assessment = route.get("routing_assessment") if isinstance(route.get("routing_assessment"), dict) else {}
+    if str(assessment.get("source") or "").strip().lower() == "tensology_approval":
+        return True
+    if str(run_data.get("board_provider") or "").strip().lower() == "tensology":
+        return True
+    return False
+
+
 def _free_eligible_model(
     settings: dict | None = None,
     *,
@@ -32,7 +99,7 @@ def _free_eligible_model(
         or bool(model.get("local"))
         or str(model.get("id") or model.get("model") or "").strip().lower().endswith(":free")
     ]
-    models = free_or_local
+    models = _drop_retired_openrouter_free_models(free_or_local)
     if avoid_proven_limited and models:
         try:
             from distr.core.qualification import (
@@ -267,6 +334,11 @@ def apply_auto_step_role_policy(
     # flag must keep their configured board/project route.
     if not bool(policy.get("auto_route_models", False)) or bool(cfg.get("route_locked")):
         return merged
+    # Manual/Tensology-approved routes are pinned: never swap them for a
+    # free/local role model.
+    if route_disallows_free_preference(merged, config=cfg):
+        merged["policy_source"] = f"{str(merged.get('source') or 'manual_route')}_locked_preserved"
+        return merged
 
     # A failed completion contract is evidence. When a prior attempt has
     # already escalated this step, preserve that recorded route on the workflow
@@ -435,6 +507,11 @@ def apply_workflow_model_policy(
     """
     merged = dict(route or {})
     cfg = config or {}
+    if is_thread_route(merged) and not cfg.get("route_locked"):
+        # fix2: the thread composer route is a higher-level selection; step
+        # pins and workflow free/local policies never replace it.
+        merged["policy_source"] = "thread_model_route_inherited"
+        return merged
     explicit_backend = bool(str(cfg.get("backend_id") or "").strip())
     explicit_model = bool(str(cfg.get("model") or "").strip() and str(cfg.get("model")).strip() != "auto")
     if explicit_backend and explicit_model:
@@ -445,6 +522,13 @@ def apply_workflow_model_policy(
         merged["model"] = str(merged.get("model") or "auto").strip() or "auto"
         source = str(merged.get("source") or "step_backend").strip().lower()
         merged["policy_source"] = f"{source}_native_auto_preserved"
+        return merged
+
+    if route_disallows_free_preference(merged, config=cfg):
+        # Free-first workflow defaults (``prefer_free_local``) do not apply to
+        # manually pinned or Tensology-approved routes.
+        merged["model"] = str(merged.get("model") or "auto").strip() or "auto"
+        merged["policy_source"] = f"{str(merged.get('source') or 'manual_route')}_locked_preserved"
         return merged
 
     policy = _workflow_run_settings(workflow)
@@ -506,3 +590,246 @@ def apply_workflow_model_policy(
         merged["policy_source"] = selected["source"]
         merged["policy_reason"] = selected.get("reason") or ""
     return merged
+
+
+# --- fix2 (2026-10-23): thread route precedence + free-model guard ---
+_FREE_PROVIDERS = {"ollama", "lmstudio", "lm_studio", "local", "llamacpp", "llama_cpp"}
+
+
+def is_thread_route(route: Any) -> bool:
+    route = route if isinstance(route, dict) else {}
+    return (
+        str(route.get("source") or "").strip().lower() == "thread_model_route"
+        and str(route.get("route_mode") or "").strip().lower() == "manual"
+        and bool(str(route.get("backend") or "").strip())
+    )
+
+
+def thread_route_from_run_data(run_data: Any) -> dict[str, Any]:
+    """The run's inherited thread composer route (stable across steps)."""
+    data = run_data if isinstance(run_data, dict) else {}
+    stored = data.get("thread_route")
+    if is_thread_route(stored):
+        return dict(stored)
+    try:
+        from distr.core.workflow.development_threads import execution_route_from_model_route
+
+        return execution_route_from_model_route(data.get("model_route"))
+    except Exception:
+        return {}
+
+
+def route_is_free_model(route: Any) -> bool:
+    route = route if isinstance(route, dict) else {}
+    model = str(route.get("model") or "").strip().lower()
+    if not model or model in {"auto", "default"}:
+        return False
+    if model.endswith(":free"):
+        return True
+    if route.get("free") is True or route.get("is_free") is True:
+        return True
+    provider = str(route.get("model_provider") or route.get("provider") or "").strip().lower()
+    backend = str(route.get("backend") or "").strip().lower()
+    if provider in _FREE_PROVIDERS or backend in {"ollama", "local"}:
+        return True
+    sources = " ".join(str(route.get(k) or "") for k in ("source", "policy_source")).lower()
+    return "free_local" in sources or "free_model" in sources
+
+
+def _configured_complexity_route(complexity: str, settings: dict | None) -> dict[str, Any]:
+    if settings is None:
+        try:
+            from distr.core.settings import load_settings_from_db
+
+            settings = dict(load_settings_from_db() or {})
+        except Exception:
+            settings = {}
+    level = str(complexity or "medium").strip().lower() or "medium"
+    for prefix in ("", "fallback_"):
+        backend = str(settings.get(f"project_cli_{level}_{prefix}backend") or "").strip().lower()
+        model = str(settings.get(f"project_cli_{level}_{prefix}model") or "").strip()
+        provider = str(
+            settings.get(f"project_cli_{level}_{prefix}model_provider")
+            or settings.get(f"project_cli_{level}_{prefix}provider")
+            or ""
+        ).strip()
+        candidate = {"backend": backend, "model": model or "auto", "model_provider": provider}
+        if backend and not route_is_free_model(candidate):
+            return candidate
+    return {}
+
+
+def enforce_paid_route(
+    route: dict[str, Any],
+    *,
+    run_data: dict | None = None,
+    config: dict | None = None,
+    settings: dict | None = None,
+) -> dict[str, Any]:
+    """Block free/local models on paid-first runs (thread routes, Tensology tickets).
+
+    Replacement precedence: the inherited thread route, then the configured
+    complexity route (primary, then its fallback). Returns the route unchanged
+    when nothing paid is available so the caller's preflight reports it.
+    """
+    merged = dict(route or {})
+    if not route_is_free_model(merged):
+        return merged
+    thread_route = thread_route_from_run_data(run_data)
+    if not thread_route and not route_disallows_free_preference(merged, config=config, run_data=run_data):
+        return merged
+    complexity = str(merged.get("complexity") or "medium")
+    replacement = thread_route or _configured_complexity_route(complexity, settings)
+    if not replacement:
+        return merged
+    blocked = f"{merged.get('backend')}/{merged.get('model_provider') or ''}/{merged.get('model')}"
+    result = {**merged, **replacement}
+    for key in ("free", "is_free", "local", "local_harness_preset"):
+        result.pop(key, None)
+    result["complexity"] = complexity
+    result["paid_first"] = True
+    result["blocked_free_route"] = blocked
+    if thread_route:
+        result["source"] = "thread_model_route"
+        result["route_mode"] = "manual"
+    else:
+        result["source"] = "configured_complexity_route"
+    result["policy_source"] = "paid_first_free_model_blocked"
+    result["rationale"] = f"Paid-first: blocked free model {blocked}; using {result['backend']}/{result.get('model_provider') or ''}/{result['model']}."
+    return result
+
+
+def route_selection_reason(route: Any) -> str:
+    route = route if isinstance(route, dict) else {}
+    ident = f"{route.get('backend') or '?'} / {route.get('model_provider') or 'default'} / {route.get('model') or 'auto'}"
+    source = str(route.get("source") or "").strip().lower()
+    prefix = ""
+    if route.get("blocked_free_route"):
+        prefix = f"blocked free model {route['blocked_free_route']}; "
+    if route.get("model_tier_applied"):
+        return f"{prefix}{route.get('model_tier')} tier model {ident} for a light step (inherited {route.get('inherited_route')})"
+    if source == "thread_model_route":
+        return f"{prefix}inherited thread route {ident} (thread_model_route)"
+    if source == "configured_complexity_route":
+        return f"{prefix}configured {route.get('complexity') or 'medium'} complexity route {ident}"
+    return f"{prefix}workflow route {ident} ({source or 'unspecified'})"
+
+
+# --- parallel (2026-10-23): per-step model tier hint ---------------------
+# A deliberate, narrow exception to "steps inherit the thread model": light
+# steps (understand / contract / report) may carry ``config.model_tier`` and
+# run on the configured tier route model, in the SAME backend/provider family
+# as the inherited route.  Heavy steps omit the hint (or use "inherit") and
+# keep the thread model.  Tier models come from the existing
+# project_cli_{low,medium,high}_* route settings; nothing is hardcoded here.
+STEP_MODEL_TIERS = ("low", "medium", "high")
+_STEP_TIER_ALIASES = {"fast": "medium", "light": "medium", "cheap": "low", "strong": "high"}
+_TIER_RANK = {"low": 0, "medium": 1, "high": 2}
+_LIGHT_MODEL_MARKERS = ("flash", "mini", "lite", "nano", "haiku", "-fast", "lightning")
+
+
+def step_model_tier(config: Any) -> str:
+    """Return the step's requested tier (low/medium/high) or "" for inherit."""
+    cfg = config if isinstance(config, dict) else {}
+    raw = str(cfg.get("model_tier") or "").strip().lower()
+    raw = _STEP_TIER_ALIASES.get(raw, raw)
+    return raw if raw in STEP_MODEL_TIERS else ""
+
+
+def _tier_settings(settings: dict | None) -> dict:
+    if settings:
+        return settings
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        return dict(load_settings_from_db() or {})
+    except Exception:
+        return {}
+
+
+def _model_tier_rank(model: str, settings: dict) -> int | None:
+    """Rank a model by the configured tier routes (primary first, then fallback)."""
+    clean = str(model or "").strip().lower()
+    if not clean or clean == "auto":
+        return None
+    for prefix in ("", "fallback_"):
+        for level in STEP_MODEL_TIERS:
+            configured = str(settings.get(f"project_cli_{level}_{prefix}model") or "").strip().lower()
+            if configured and configured == clean:
+                return _TIER_RANK[level]
+    return None
+
+
+def apply_step_model_tier(
+    route: dict[str, Any],
+    *,
+    config: dict[str, Any] | None = None,
+    settings: dict | None = None,
+) -> dict[str, Any]:
+    """Downgrade a light step to its configured tier model within the route family.
+
+    Never upgrades: if the inherited model already ranks at or below the
+    requested tier (or looks like a flash/mini model) the route is unchanged.
+    Free/local tier models are never selected (paid-first guard).  The
+    inherited route is kept as the fallback so a failing fast model escalates
+    back to the thread model.
+    """
+    merged = dict(route or {})
+    cfg = config if isinstance(config, dict) else {}
+    tier = step_model_tier(cfg)
+    if not tier or cfg.get("route_locked"):
+        return merged
+    settings = _tier_settings(settings)
+    level_backend = str(settings.get(f"project_cli_{tier}_backend") or "").strip().lower()
+    level_model = str(settings.get(f"project_cli_{tier}_model") or "").strip()
+    level_provider = str(
+        settings.get(f"project_cli_{tier}_model_provider")
+        or settings.get(f"project_cli_{tier}_provider")
+        or ""
+    ).strip()
+    tier_route = {"backend": level_backend, "model": level_model or "auto", "model_provider": level_provider}
+
+    def _skip(reason: str) -> dict[str, Any]:
+        merged["model_tier"] = tier
+        merged["model_tier_skipped"] = reason
+        return merged
+
+    if not level_backend or not level_model or level_model.lower() == "auto":
+        return _skip("tier_route_not_configured")
+    if route_is_free_model(tier_route):
+        return _skip("tier_model_is_free")
+    current_backend = str(merged.get("backend") or "").strip().lower()
+    current_provider = str(merged.get("model_provider") or "").strip().lower()
+    current_model = str(merged.get("model") or "").strip()
+    if current_backend and current_backend != level_backend:
+        return _skip("tier_backend_differs_from_route_family")
+    if current_provider and level_provider and current_provider != level_provider.lower():
+        return _skip("tier_provider_differs_from_route_family")
+    if current_model.lower() == level_model.lower():
+        return _skip("already_on_tier_model")
+    current_rank = _model_tier_rank(current_model, settings)
+    if current_rank is not None and current_rank <= _TIER_RANK[tier]:
+        return _skip("inherited_model_already_at_or_below_tier")
+    if current_rank is None and any(m in current_model.lower() for m in _LIGHT_MODEL_MARKERS):
+        return _skip("inherited_model_already_light")
+    if current_model.lower() in {"", "auto"}:
+        return _skip("inherited_model_unresolved")
+
+    inherited = f"{merged.get('backend') or '?'}/{merged.get('model_provider') or ''}/{current_model}"
+    result = dict(merged)
+    result["backend"] = level_backend or current_backend
+    result["model"] = level_model
+    result["model_provider"] = level_provider or merged.get("model_provider") or ""
+    result["fallback_backend"] = merged.get("backend") or level_backend
+    result["fallback_model"] = current_model
+    result["fallback_model_provider"] = merged.get("model_provider") or ""
+    result["model_tier"] = tier
+    result["model_tier_applied"] = True
+    result["inherited_route"] = inherited
+    result.pop("model_tier_skipped", None)
+    result["policy_source"] = "step_model_tier"
+    result["rationale"] = (
+        f"Light step uses the {tier} tier model {level_model} in the inherited route family; "
+        f"falls back to the inherited {inherited}."
+    )
+    return result

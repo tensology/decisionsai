@@ -205,6 +205,8 @@ def workflow_patch_stack(factory, tmp_path):
         patch("distr.core.workflow.router.increment_workflow_updated", MagicMock()),
         patch("distr.core.workflow.router.increment_kanban_updated", MagicMock()),
         patch("distr.core.workflow.router.record_workflow_chat_event", MagicMock()),
+        patch("distr.core.workflow.router.StepRouter._notify_main_agent", MagicMock()),
+        patch("distr.core.workflow.router.StepRouter._emit_waiting_for_feedback", MagicMock()),
         patch("distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()),
         patch("distr.gui.web.workflow_events.increment_workflow_updated", MagicMock()),
         patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()),
@@ -553,6 +555,7 @@ def start_preset_run(
                     "project_name": "Matrix Demo Project",
                     "project_folder": str(tmp_path),
                     "ticket_title": title or f"Run {preset_slug}",
+                    "skip_human_checkpoints": True,
                 },
             )
             assert "error" not in result, result

@@ -445,6 +445,153 @@ def _openrouter_preflight(
     )
 
 
+_OPENROUTER_CATALOGUE_CACHE: dict[str, Any] = {"at": 0.0, "ids": None}
+_PI_CATALOGUE_CACHE: dict[str, Any] = {"at": 0.0, "pairs": None}
+_PI_LOCAL_PROVIDERS = frozenset({"ollama", "local", "lmstudio"})
+_OPENROUTER_ROUTER_MODELS = frozenset({"auto", "openrouter/auto", "openrouter/free"})
+
+
+def _catalogue_checks_enabled() -> bool:
+    """Live catalogue checks are off inside unrelated pytest runs.
+
+    Many workflow tests use fictional model ids with unmocked network/CLI
+    access; they must not start failing because a real catalogue lacks them.
+    Tests for these checks opt in via ``DECISIONS_PREFLIGHT_CATALOGUE_CHECKS``.
+    """
+    import os
+
+    if os.environ.get("DECISIONS_PREFLIGHT_CATALOGUE_CHECKS", "").strip() == "1":
+        return True
+    return not os.environ.get("PYTEST_CURRENT_TEST")
+
+
+def openrouter_catalogue_ids(
+    *, timeout_seconds: float = 5.0, max_age_seconds: float = 600.0,
+) -> set[str] | None:
+    """Return OpenRouter's current model ids, or ``None`` when unknown.
+
+    Used to drop dead ids (for example a ``:free`` variant OpenRouter has
+    retired) before they are offered or dispatched. Failure is never treated
+    as "absent": callers keep their previous behaviour when this is ``None``.
+    """
+    import time
+
+    if not _catalogue_checks_enabled():
+        return None
+    now = time.time()
+    cached = _OPENROUTER_CATALOGUE_CACHE.get("ids")
+    if (
+        cached is not None
+        and _OPENROUTER_CATALOGUE_CACHE.get("opener") is urlopen
+        and now - float(_OPENROUTER_CATALOGUE_CACHE.get("at") or 0) < max_age_seconds
+    ):
+        return set(cached)
+    try:
+        request = Request(_OPENROUTER_MODELS_URL, headers={"Accept": "application/json"})
+        with urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return None
+    ids = {
+        str(row.get("id") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    if not ids:
+        return None
+    _OPENROUTER_CATALOGUE_CACHE["ids"] = set(ids)
+    _OPENROUTER_CATALOGUE_CACHE["at"] = now
+    _OPENROUTER_CATALOGUE_CACHE["opener"] = urlopen
+    return ids
+
+
+def openrouter_model_listed(model: str, *, timeout_seconds: float = 5.0) -> bool | None:
+    """``False`` only when the live catalogue was read and lacks ``model``."""
+    model_id = str(model or "").strip()
+    if not model_id or model_id.lower() in _OPENROUTER_ROUTER_MODELS:
+        return None
+    ids = openrouter_catalogue_ids(timeout_seconds=timeout_seconds)
+    if ids is None:
+        return None
+    return model_id in ids
+
+
+def pi_catalogue_pairs(*, max_age_seconds: float = 300.0) -> set[tuple[str, str]] | None:
+    """Exact ``(provider, model)`` pairs Pi can run (models with credentials).
+
+    Local CLI inspection only: no model call, and auth diagnostics are never
+    read or echoed. ``None`` means Pi is missing or the listing failed.
+    """
+    import os
+    import shutil
+    import subprocess
+    import time
+
+    if not _catalogue_checks_enabled():
+        return None
+    now = time.time()
+    pi_path = shutil.which("pi")
+    if not pi_path:
+        return None
+    cached = _PI_CATALOGUE_CACHE.get("pairs")
+    if (
+        cached is not None
+        and _PI_CATALOGUE_CACHE.get("path") == pi_path
+        and now - float(_PI_CATALOGUE_CACHE.get("at") or 0) < max_age_seconds
+    ):
+        return set(cached)
+    try:
+        result = subprocess.run(
+            [pi_path, "--list-models"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=dict(os.environ),
+        )
+    except Exception:
+        return None
+    if result.returncode != 0 or len(result.stdout or "") > 4_000_000:
+        return None
+    pairs = {
+        (parts[0].strip().lower(), parts[1].strip())
+        for parts in (line.split() for line in (result.stdout or "").splitlines())
+        if len(parts) >= 2
+    }
+    if not pairs:
+        return None
+    _PI_CATALOGUE_CACHE["pairs"] = set(pairs)
+    _PI_CATALOGUE_CACHE["at"] = now
+    _PI_CATALOGUE_CACHE["path"] = pi_path
+    return pairs
+
+
+def _pi_exact_route_preflight(provider: str, model: str) -> ProviderPreflight | None:
+    """Block a Pi route whose exact provider/model Pi cannot run."""
+    if not model or model.lower() == "auto" or provider in _PI_LOCAL_PROVIDERS:
+        return None
+    pairs = pi_catalogue_pairs()
+    if pairs is None:
+        return None
+    if (provider, model) in pairs:
+        return None
+    hint = ""
+    if "/" in model and ("openrouter", model) in pairs:
+        hint = f" Pi can run it as openrouter/{model}."
+    return ProviderPreflight(
+        provider,
+        model,
+        "provider_unavailable",
+        False,
+        (
+            f"Pi has no credentials or catalogue entry for provider '{provider}' with model '{model}'."
+            f"{hint} Choose the route's configured provider or another model."
+        ),
+    )
+
+
 def preflight_provider_route(
     route: dict[str, Any], *, settings: dict[str, Any] | None = None,
     complexity: str = "medium", timeout_seconds: float = 3.0,
@@ -481,6 +628,11 @@ def preflight_provider_route(
 
     if not provider:
         return ProviderPreflight("", model, "not_required", True, "No metered API provider is selected.")
+    backend = str(route.get("backend") or "").strip().lower()
+    if backend == "pi" and provider != "openrouter":
+        exact = _pi_exact_route_preflight(provider, model)
+        if exact is not None:
+            return record(exact, required_capabilities or ["text"])
     if provider == "openrouter":
         if settings is None:
             from distr.core.settings import load_settings_from_db
@@ -498,6 +650,17 @@ def preflight_provider_route(
         if financial.ready is False:
             record(financial, required_capabilities)
             return financial
+        if openrouter_model_listed(model, timeout_seconds=timeout_seconds) is False:
+            # Credit/key checks prove account access only; a retired id (e.g.
+            # a withdrawn ``:free`` variant) would still fail at dispatch.
+            return record(ProviderPreflight(
+                provider,
+                model,
+                "model_unavailable",
+                False,
+                f"OpenRouter no longer lists '{model}'. Choose another model or the configured paid fallback.",
+                http_status=404,
+            ), required_capabilities or ["text"])
         capability = _openrouter_capability_preflight(
             model=model,
             required_capabilities=required_capabilities,

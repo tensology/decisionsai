@@ -3,7 +3,10 @@ from pathlib import Path
 
 WEB = Path(__file__).resolve().parents[1] / "distr" / "gui" / "web"
 DEV = WEB / "static" / "development"
-BUST = "v=20261022-threadring2"
+SHARED_BUST = "v=20261022-threadring2"
+WATCH_BUST = "v=20261023-workflowwatch1"
+STEERING_BUST = "v=20261023-steering1"
+APP_BUST = "v=20261023-terminal-parity1"
 
 
 def test_shared_module_exists_and_exports():
@@ -17,7 +20,7 @@ def test_shared_module_exists_and_exports():
 def test_both_pages_use_shared_module():
     for rel in ("workflows/index.js", "threads/transcript/index.js"):
         src = (DEV / rel).read_text()
-        assert f"shared/workflow-loop.js?{BUST}" in src
+        assert f"shared/workflow-loop.js?{SHARED_BUST}" in src
         assert "workflowViewSwitchHtml(" in src
 
 
@@ -29,7 +32,7 @@ def test_thread_card_toggle_markup():
     assert "workflowStepNumbersHtml(" in src and "bindWorkflowStepNumbers(" in src
     assert 'class="thread-workflow-nodes"' not in src  # flat strip replaced
     css = (DEV / "threads" / "styles.css").read_text()
-    assert '.thread-workflow-runner[data-view="loop"] .thread-workflow-nodes' in css
+    assert '.thread-workflow-runner[data-view="loop"] .thread-workflow-steps' in css
     assert ".workflow-loop-node.current" in css
 
 
@@ -40,11 +43,11 @@ def test_workflows_defaults_to_loop():
 
 
 def test_cache_busters_bumped():
-    assert f"threads/styles.css?{BUST}" in (DEV / "styles.css").read_text()
+    assert f"threads/styles.css?{STEERING_BUST}" in (DEV / "styles.css").read_text()
     app = (DEV / "app.js").read_text()
-    assert f"workflows/index.js?{BUST}" in app and f"threads/transcript/index.js?{BUST}" in app
+    assert f"workflows/index.js?{SHARED_BUST}" in app and f"threads/transcript/index.js?{WATCH_BUST}" in app
     html = (WEB / "templates" / "development" / "index.html").read_text()
-    assert f"development/styles.css?{BUST}" in html and f"development/app.js?{BUST}" in html
+    assert f"development/styles.css?{STEERING_BUST}" in html and f"development/app.js?{APP_BUST}" in html
 
 
 def test_numbered_steps_shared_and_keyboard():

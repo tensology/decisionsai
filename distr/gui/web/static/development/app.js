@@ -17,13 +17,13 @@ import { createWorkflows } from './workflows/index.js?v=20261022-threadring2';
 
 import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
-import { createTerminals } from './terminals/index.js';
+import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261023-terminal-parity1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261022-threadring2';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261023-workflowwatch1';
 
-import { createThreadsComposer } from './threads/composer/index.js?v=20261022-harnesssrc';
+import { createThreadsComposer } from './threads/composer/index.js?v=20261023-steering1';
 
-import { createThreadsInspector } from './threads/inspector/index.js?v=20261022-autoui';
+import { createThreadsInspector } from './threads/inspector/index.js?v=20261023-queueactions1';
 
 // Composition root: shared catalog and thread context, feature interfaces, navigation.
 
@@ -48,6 +48,8 @@ const state = {
     currentChat: null,
     currentWorkflow: null,
     currentRun: null,
+    guidanceRunId: null,
+    guidanceScope: 'workflow',
     steeringMemory: null,
     chatLoadToken: 0,
     threadTime: null,
@@ -457,21 +459,30 @@ function syncHeader() {
 
 // Thread terminal button: reflects the real PTY state of the thread's project
 // startup terminals via GET /api/threads/{id}/terminal/status.
-const threadTerminal = { chatId: null, running: false, pending: false, timer: null, seq: 0 };
+const threadTerminal = { chatId: null, canStart: false, running: false, pending: false, timer: null, seq: 0 };
+
+function hasStartupTerminalCommands(projectId) {
+    return String(projectById(projectId)?.startup_instructions || '')
+        .split('\n')
+        .some((line) => line.trim() && !line.trim().startsWith('#'));
+}
 
 function renderThreadTerminalButton() {
     const button = el('thread-terminal-button');
     if (!button) return;
     const label = threadTerminal.pending
-        ? (threadTerminal.running ? 'Starting terminal…' : 'Stopping terminal…')
+        ? (threadTerminal.running ? 'Starting terminals' : 'Stopping terminals')
         : (threadTerminal.running ? 'Stop terminal' : 'Start terminal');
+    const action = threadTerminal.running ? 'stop' : 'start';
     button.dataset.running = String(threadTerminal.running);
-    button.classList.toggle('danger', threadTerminal.running);
-    button.classList.toggle('primary', !threadTerminal.running);
+    button.classList.toggle('stop', threadTerminal.running);
+    button.classList.toggle('start', !threadTerminal.running);
     button.setAttribute('aria-label', label);
-    button.dataset.tooltip = label;
+    button.title = label;
+    button.innerHTML = terminalProjectActionIcon(action, threadTerminal.pending);
     button.disabled = threadTerminal.pending;
     button.setAttribute('aria-busy', String(threadTerminal.pending));
+    button.classList.toggle('hidden', !threadTerminal.chatId || (!threadTerminal.running && !threadTerminal.canStart));
 }
 
 async function refreshThreadTerminalStatus() {
@@ -491,8 +502,11 @@ function syncThreadTerminalButton() {
     if (!button) return;
     const chat = state.currentChat;
     const chatId = chat?.id && chat?.project_id ? Number(chat.id) : null;
-    button.classList.toggle('hidden', !chatId);
-    if (chatId === threadTerminal.chatId) return;
+    threadTerminal.canStart = Boolean(chatId && hasStartupTerminalCommands(chat.project_id));
+    if (chatId === threadTerminal.chatId) {
+        renderThreadTerminalButton();
+        return;
+    }
     threadTerminal.chatId = chatId;
     threadTerminal.running = false;
     threadTerminal.seq++;
@@ -507,18 +521,21 @@ function syncThreadTerminalButton() {
 async function toggleThreadTerminal() {
     const chatId = threadTerminal.chatId;
     if (!chatId || threadTerminal.pending) return;
+    const projectId = Number(state.currentChat?.project_id || 0);
+    if (!projectId) return;
     const previous = threadTerminal.running;
-    const action = previous ? 'stop' : 'start';
     threadTerminal.pending = true;
     threadTerminal.running = !previous; // optimistic
     threadTerminal.seq++;
     renderThreadTerminalButton();
     try {
-        const data = await api(`/threads/${chatId}/terminal/${action}`, { method: 'POST' });
-        if (chatId === threadTerminal.chatId) threadTerminal.running = Boolean(data.running);
+        const changed = await terminals.setTerminalProjectRunning(projectId, !previous);
+        if (!changed && chatId === threadTerminal.chatId) threadTerminal.running = previous;
+        threadTerminal.pending = false;
+        await refreshThreadTerminalStatus();
     } catch (error) {
         if (chatId === threadTerminal.chatId) threadTerminal.running = previous; // revert
-        console.warn(`Thread terminal ${action} failed:`, error?.message || error);
+        console.warn(`Thread terminal ${previous ? 'stop' : 'start'} failed:`, error?.message || error);
     } finally {
         threadTerminal.pending = false;
         renderThreadTerminalButton();
@@ -1488,7 +1505,7 @@ async function loadChat(chatId, options) {
         state.draft.project_id = chat.project_id || null;
         state.draft.workflow_id = Number(state.currentWorkflow?.id || chat.development_workflow_id || 0) || null;
         state.selectedProjectId = chat.project_id || null;
-        state.selectedBoardKey = chat.development_board_key || boardForProject(chat.project_id)?.key || state.selectedBoardKey || '';
+        state.selectedBoardKey = (boardByKey(chat.development_board_key) || boardForProject(chat.project_id))?.key || state.selectedBoardKey || '';
         state.draft.title = chat.title || '';
         // 2026-10-22 selector: a background reload must not overwrite a route the user is choosing right now.
         if (!(options?.quiet && threads_composer.isRouteMenuOpen())) {
@@ -1506,6 +1523,7 @@ async function loadChat(chatId, options) {
         state.draft.autonomy_level = chat.autonomy_level || 'full';
         threads_composer.updateModelLabel();
         threads_composer.updateModeLabel();
+        threads_composer.syncGuidanceScope();
         syncHeader();
         sidebar.renderSidebar();
         threads_transcript.renderConversation(chat);
@@ -1541,6 +1559,8 @@ function showEmptyTask(options) {
     state.currentChat = null;
     state.currentWorkflow = null;
     state.currentRun = null;
+    state.guidanceRunId = null;
+    state.guidanceScope = 'workflow';
     state.threadTime = null;
     state.plans = [];
     state.artifacts = [];
@@ -1563,6 +1583,12 @@ function showEmptyTask(options) {
 }
 
 function startNewDevelopment(options) {
+    // fix2: a new thread must not inherit the last viewed thread's autonomy
+    // (e.g. a Tensology "goal" thread).
+    if (state.currentChat && state.draft) {
+        state.draft.autonomy_level = 'full';
+        threads_composer.updateModeLabel?.();
+    }
     state.boardScopedDraft = false;
     state.attachments = [];
     state.draft.ticket_id = null;
@@ -1925,7 +1951,11 @@ async function restoreDevelopmentLocation(options) {
         if (route.kind === 'thread') {
             const thread = developmentChatById(route.chatId);
             if (!thread) {
-                await restoreDevelopmentHome({ fromHistory: options?.fromHistory });
+                // fix2: a missing thread id (failed create, archived/deleted
+                // thread) resets to a fresh composer instead of leaving the
+                // URL on a thread the UI can never load.
+                startNewDevelopment({ updateUrl: false });
+                setDevelopmentLocation('/development/new/', { replace: true });
                 return;
             }
             await loadChat(thread.id, { quiet: true, updateUrl: false });
@@ -2032,6 +2062,7 @@ function bindEvents() {
     el('composer-board-button').addEventListener('click', () => togglePicker('composer-board-button', 'composer-board-menu'));
     el('composer-ticket-button').addEventListener('click', () => togglePicker('composer-ticket-button', 'composer-ticket-menu'));
     el('composer-permission-select').addEventListener('change', changeComposerPermission);
+    el('composer-guidance-scope').addEventListener('change', threads_composer.changeGuidanceScope);
     el('composer-time-toggle').addEventListener('click', () => updateThreadTime(state.threadTime && !state.threadTime.paused ? 'pause' : 'play'));
     el('studio-composer').addEventListener('submit', threads_composer.sendPrompt);
     el('task-prompt').addEventListener('input', () => {
@@ -2086,16 +2117,6 @@ function bindEvents() {
     el('artifact-approve').addEventListener('click', () => threads_inspector.reviewArtifact('approved'));
     el('artifact-request-changes').addEventListener('click', () => threads_inspector.reviewArtifact('changes_requested'));
     el('stop-run-button').addEventListener('click', threads_composer.stopRun);
-    const placeThreadTerminalTooltip = (event) => {
-        const button = event.currentTarget;
-        const rect = button.getBoundingClientRect();
-        const half = 60; // keep the nowrap label inside the viewport
-        const center = Math.min(Math.max(rect.left + rect.width / 2, half + 8), window.innerWidth - half - 8);
-        button.style.setProperty('--tt-left', `${center}px`);
-        button.style.setProperty('--tt-top', `${rect.bottom + 7}px`);
-    };
-    el('thread-terminal-button')?.addEventListener('mouseenter', placeThreadTerminalTooltip);
-    el('thread-terminal-button')?.addEventListener('focus', placeThreadTerminalTooltip);
     el('thread-terminal-button')?.addEventListener('click', (event) => {
         event.stopPropagation();
         toggleThreadTerminal();
@@ -2477,6 +2498,9 @@ const threads_transcript = createThreadsTranscript({
         get currentWorkflow() {
             return state.currentWorkflow;
         },
+        get controlState() {
+            return state.controlState;
+        },
         get skills() {
             return state.skills;
         },
@@ -2489,6 +2513,8 @@ const threads_transcript = createThreadsTranscript({
         escapeHtml: (...args) => escapeHtml(...args),
         formatSeconds: (...args) => formatSeconds(...args),
         isActiveAgentRun: (...args) => isActiveAgentRun(...args),
+        actionLabel: (...args) => threads_composer.actionLabel(...args),
+        resolveInteraction: (...args) => threads_composer.resolveInteraction(...args),
         statusLabel: (...args) => statusLabel(...args),
         workflowRunId: (...args) => workflowRunId(...args),
         workflowStepList: (...args) => workflows.workflowStepList(...args)
@@ -2534,6 +2560,18 @@ const threads_composer = createThreadsComposer({
         },
         get currentWorkflow() {
             return state.currentWorkflow;
+        },
+        get guidanceRunId() {
+            return state.guidanceRunId;
+        },
+        set guidanceRunId(value) {
+            state.guidanceRunId = value;
+        },
+        get guidanceScope() {
+            return state.guidanceScope;
+        },
+        set guidanceScope(value) {
+            state.guidanceScope = value;
         },
         get draft() {
             return state.draft;
@@ -2622,6 +2660,8 @@ const threads_composer = createThreadsComposer({
         boardByKey: (...args) => boardByKey(...args),
         confirmAction: (...args) => confirmAction(...args),
         developmentRoute: (...args) => developmentRoute(...args),
+        developmentChatById: (...args) => developmentChatById(...args),
+        startNewDevelopment: (...args) => startNewDevelopment(...args),
         escapeHtml: (...args) => escapeHtml(...args),
         isActiveAgentRun: (...args) => isActiveAgentRun(...args),
         loadChat: (...args) => loadChat(...args),
@@ -2719,6 +2759,7 @@ const threads_inspector = createThreadsInspector({
     actions: {
         actionLabel: (...args) => threads_composer.actionLabel(...args),
         api: (...args) => api(...args),
+        boardForProject: (...args) => boardForProject(...args),
         closeInspector: (...args) => closeInspector(...args),
         continueRun: (...args) => threads_composer.continueRun(...args),
         copyText: (...args) => copyText(...args),
@@ -2734,12 +2775,17 @@ const threads_inspector = createThreadsInspector({
         runAutomation: (...args) => automations.runAutomation(...args),
         safeArtifactUri: (...args) => safeArtifactUri(...args),
         selectWorkflow: (...args) => workflows.selectWorkflow(...args),
+        setGuidanceScope: (value) => {
+            state.guidanceScope = value === 'thread' ? 'thread' : 'workflow';
+            threads_composer.syncGuidanceScope();
+        },
         setWorkspaceMode: (...args) => setWorkspaceMode(...args),
         startWorkflow: (...args) => threads_composer.startWorkflow(...args),
         statusLabel: (...args) => statusLabel(...args),
         toast: (...args) => toast(...args),
         toggleAutomation: (...args) => automations.toggleAutomation(...args),
         undoTurnChanges: (...args) => undoTurnChanges(...args),
+        workflowRunId: (...args) => workflowRunId(...args),
         workflowStepList: (...args) => workflows.workflowStepList(...args)
     },
     el,
