@@ -203,8 +203,12 @@ def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
         "tasks": ["Implement the form", "Run browser tests"],
         "success_criteria": ["Desktop and mobile evidence passes"],
         "execution_complexity": "auto",
+        "project_domain": "settings.example.com",
+        "source": {"channel": "whatsapp", "conversation_id": "relay-thread"},
+        "attachments": [{"name": "brief.pdf", "url": "/media/brief.pdf"}],
+        "discussion": [{"author_name": "Requester", "content": "Keep the compact layout.", "attachments": []}],
     }
-    project = {"id": 11, "name": "Local Model Smoke"}
+    project = {"id": 11, "name": "Local Model Smoke", "coding_backend": "cursor", "coding_backend_model": "grok-4.7-medium"}
     local_response = {"task": {"id": 42}}
 
     with (
@@ -216,10 +220,6 @@ def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
         patch(
             "distr.core.kanban.ticket_policy.resolve_ticket_complexity",
             return_value="medium",
-        ),
-        patch(
-            "distr.core.kanban.ticket_policy.resolve_ticket_cli_route",
-            return_value={"backend": "cursor", "model": "grok-4.7-medium"},
         ),
         patch("distr.core.tensology_client._local_api_post", return_value=local_response) as post,
     ):
@@ -238,7 +238,12 @@ def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
     assert body["ticket_id"] == 91
     assert body["skill_ids"] == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
     assert body["use_playwright"] is True
-    assert body["skip_human_checkpoints"] is True
+    assert '"channel": "whatsapp"' in body["prompt"]
+    assert '"name": "brief.pdf"' in body["prompt"]
+    assert "Keep the compact layout." in body["prompt"]
+    # Tensology approval no longer bypasses human gates; route comes from the project.
+    assert body["skip_human_checkpoints"] is False
+    assert (body["backend"], body["provider"], body["model_name"]) == ("cursor", "cursor", "grok-4.7-medium")
 
 
 def test_tensology_heartbeat_reports_machine_account_and_development_defaults():
@@ -522,3 +527,49 @@ def test_discussion_context_poller_uses_signed_search_and_posts_bounded_evidence
     body = client.post.call_args.args[1]
     assert body["status"] == "complete"
     assert body["evidence"][0]["path"] == "webhooks/verify.py"
+
+
+def _unmatched_ticket(**extra):
+    ticket = {
+        "id": 1149, "project_id": 178, "project_name": "Jackcat", "reference": "PROJ-178-001",
+        "execution_status": "awaiting_decisions", "execution_status_detail": "",
+        "decisions_thread_id": "", "decisions_project_id": "", "repository_ready": True,
+    }
+    ticket.update(extra)
+    return ticket
+
+
+def test_unmatched_project_warns_and_reports_blocked(caplog):
+    import logging
+    client = MagicMock()
+    client.get.return_value = [_unmatched_ticket()]
+    with (
+        caplog.at_level(logging.WARNING, logger="distr.core.tensology_client"),
+        patch("distr.core.tensology_client.configured_tensology_client", return_value=client),
+        patch("distr.core.tensology_client._resolve_tensology_project", return_value=None),
+        patch("distr.core.tensology_client._create_tensology_thread") as create,
+    ):
+        process_tensology_approved_tickets(force=True)
+    create.assert_not_called()
+    client.post.assert_not_called()
+    client.patch.assert_called_once()
+    path, body = client.patch.call_args.args[:2]
+    assert path == "tickets/1149/execution"
+    assert body["status"] == "blocked" and "Jackcat" in body["detail"]
+    assert any("PROJ-178-001" in r.getMessage() for r in caplog.records)
+
+
+def test_unmatched_project_block_is_reported_once():
+    from distr.core.tensology_client import _report_tensology_unmatched_project
+    client = MagicMock()
+    _report_tensology_unmatched_project(client, _unmatched_ticket())
+    detail = client.patch.call_args.args[1]["detail"]
+    client.reset_mock()
+    _report_tensology_unmatched_project(client, _unmatched_ticket(execution_status="blocked", execution_status_detail=detail))
+    _report_tensology_unmatched_project(client, _unmatched_ticket(decisions_thread_id="55"))
+    client.patch.assert_not_called()
+
+
+def test_claimed_ticket_thread_is_reused_never_recreated():
+    from distr.core.tensology_client import _existing_tensology_thread
+    assert _existing_tensology_thread(_unmatched_ticket(decisions_thread_id="77")) == 77

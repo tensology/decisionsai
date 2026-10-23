@@ -1,0 +1,619 @@
+--- static/development/workflows/index.js.bak-20261022-wfui	2026-10-22 20:16:13
++++ static/development/workflows/index.js	2026-10-22 20:27:40
+@@ -1,4 +1,4 @@
+-import { bindWorkflowStepNumbers, readWorkflowViewMode, workflowLoopHtml as sharedWorkflowLoopHtml, workflowStepNumbersHtml, workflowViewSwitchHtml, writeWorkflowViewMode } from '../shared/workflow-loop.js?v=20261022-threadring2';
++import { bindWorkflowStepNumbers, workflowStepDataAttrs, readWorkflowViewMode, workflowLoopHtml as sharedWorkflowLoopHtml, workflowStepNumbersHtml, workflowViewSwitchHtml, writeWorkflowViewMode } from '../shared/workflow-loop.js?v=20261022-wfui';
+ // Owns workflows rendering, interactions, and private view state.
+ export function createWorkflows({ context, actions, el }) {
+     const state = {
+@@ -7,7 +7,12 @@
+         workflowRuns: {},
+         workflowBusy: {},
+         workflowDetailsLoading: new Set(),
+-        workflowMemory: {}
++        workflowMemory: {},
++        inlineStepId: 0,
++        selectedStepIndex: 0,
++        drawerAnimate: false,
++        settingsOpen: false,
++        workflowDetailSteps: {}
+     };
+     function filteredWorkflows() {
+         return context.workflows.slice();
+@@ -264,6 +269,7 @@
+             const detail = await actions.api(`/workflows/${Number(workflowId)}`);
+             const index = context.workflows.findIndex((item) => Number(item.id) === Number(workflowId));
+             if (index >= 0) context.workflows[index] = detail;
++            if (detail && Array.isArray(detail.steps)) state.workflowDetailSteps[String(workflowId)] = detail.steps;
+             if (!state.workflowRuns[String(workflowId)]) {
+                 const history = await actions.api(`/workflows/${Number(workflowId)}/runs?limit=10`);
+                 state.workflowRuns[String(workflowId)] = Array.isArray(history) ? history : history.runs || [];
+@@ -298,7 +304,8 @@
+             edit: '<path d="m4 14-.5 3 3-.5L15 8l-2.5-2.5L4 14Z"></path><path d="m11.5 6.5 2.5 2.5"></path>',
+             duplicate: '<rect x="7" y="7" width="9" height="9" rx="1.5"></rect><path d="M13 7V4H4v9h3"></path>',
+             continue: '<path d="M4 6v5h9"></path><path d="m10 8 3 3-3 3"></path>',
+-            delete: '<path d="m6 6 8 8M14 6l-8 8"></path>'
++            delete: '<path d="m6 6 8 8M14 6l-8 8"></path>',
++            settings: '<circle cx="10" cy="10" r="2.6"></circle><path d="M10 2.5v2.2M10 15.3v2.2M2.5 10h2.2M15.3 10h2.2M4.7 4.7l1.6 1.6M13.7 13.7l1.6 1.6M4.7 15.3l1.6-1.6M13.7 6.3l1.6-1.6"></path>'
+         };
+         return `<svg aria-hidden="true" viewBox="0 0 20 20">${paths[name] || ''}</svg>`;
+     }
+@@ -309,9 +316,12 @@
+             idPrefix: `workflow-loop-${Number(state.selectedWorkflowId || 0)}`,
+             escapeHtml: actions.escapeHtml,
+             statusLabel: actions.statusLabel,
+-            coreLabel: active ? 'Running' : issue || (count ? 'Ready' : 'Add a step'),
++            mode: 'design',
++            selectedStepId: steps[selectedStepIndex(steps)]?.id,
++            coreLabel: count ? `Step ${selectedStepIndex(steps) + 1}` : 'Add a step',
++            coreCaption: 'selected',
+             emptyHtml: '<div class="workflow-empty-steps">No steps yet. Add one manually or describe the loop you want above.</div>',
+-            buttonAttrs: (step, index) => `data-workflow-step-edit="${Number(step.id)}" aria-label="Edit step ${index + 1}: ${actions.escapeHtml(step.name || `Step ${index + 1}`)}"`,
++            buttonAttrs: (step, index) => `${workflowStepDataAttrs(step, index, { escapeHtml: actions.escapeHtml, selected: index === selectedStepIndex(steps) })} data-workflow-step-id="${Number(step.id)}" aria-label="Edit step ${index + 1}: ${actions.escapeHtml(step.name || `Step ${index + 1}`)}"`,
+             nodeExtraHtml: (step) => {
+                 const skills = workflowStepSkills(step).slice(0, 2);
+                 const outcome = workflowStepOutcome(step);
+@@ -320,11 +330,37 @@
+         });
+     }
+ 
+-    function workflowStepNumbersSectionHtml(workflow, steps) {
++    function selectedStepIndex(steps) {
++        const index = Number(state.selectedStepIndex || 0);
++        return index >= 0 && index < steps.length ? index : 0;
++    }
++
++    // Selected-step block: title, description, then status at the bottom (CSS orders the pill last).
++    function workflowSelectedStepBlockHtml(workflow, steps) {
+         if (!steps.length) return '';
+-        const activeStep = steps.find((step) => ['running', 'waiting', 'failed'].includes(String(step.status || '').toLowerCase()));
++        const step = steps[selectedStepIndex(steps)];
++        const esc = actions.escapeHtml;
++        const config = workflowStepConfig(step);
++        const gate = step.require_approval || step.wait_for_continue ? 'Yes' : 'No';
++        const skills = workflowStepSkills(step);
++        const model = config.model ? `Pinned: ${config.model}` : 'Inherit';
++        return `<section class="workflow-selected-step"><strong>${esc(step.name || `Step ${selectedStepIndex(steps) + 1}`)}</strong><p>${esc(step.description || step.instruction || 'No description yet.')}</p><dl class="workflow-step-design"><div><dt>Gate after step</dt><dd>${gate}</dd></div><div><dt>Skill</dt><dd>${esc(skills.join(', ') || 'None')}</dd></div><div><dt>Model</dt><dd>${esc(model)}</dd></div></dl></section>`;
++    }
++
++    // Slide-out step panel (no modal): selected-step block + instruction/skill/outcome editor.
++    function workflowStepDrawerHtml(workflow, steps) {
++        if (!state.inlineStepId || !steps.some((item) => Number(item.id) === Number(state.inlineStepId))) return '';
++        const entering = state.drawerAnimate ? ' entering' : '';
++        state.drawerAnimate = false;
++        return `<aside class="workflow-step-drawer${entering}" aria-label="Step details"><header><span>Step ${selectedStepIndex(steps) + 1}</span><button type="button" class="workflow-icon-action" data-workflow-drawer-close aria-label="Close step panel" data-wf-tip="Close panel">${workflowEditorIcon('delete')}</button></header>${workflowSelectedStepBlockHtml(workflow, steps)}${workflowInlineStepEditorHtml(workflow, steps)}</aside>`;
++    }
++
++    function workflowStepNumbersSectionHtml(workflow, steps) {
++        if (!steps.length) return '';
+         const html = workflowStepNumbersHtml(steps, {
+-            activeStepId: activeStep?.id,
++            selectedStepId: steps[selectedStepIndex(steps)]?.id,
++            mode: 'design',
++            panel: false,
+             idPrefix: `workflow-steps-${Number(workflow.id || 0)}`,
+             escapeHtml: actions.escapeHtml,
+             routeFor: (step) => {
+@@ -354,7 +390,7 @@
+                     .join(' · ');
+                 const outcome = workflowStepOutcome(step);
+                 const skills = workflowStepSkills(step);
+-                return `<article class="workflow-editor-step" data-workflow-step="${Number(step.id)}" draggable="true"><span class="workflow-step-handle" title="Drag to reorder" aria-hidden="true"></span><span class="workflow-step-number">${String(index + 1).padStart(2, '0')}</span><div class="workflow-step-copy"><strong>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</strong><p>${actions.escapeHtml(step.instruction || step.action_type || '')}</p><div class="workflow-step-support">${outcome ? `<span><b>Outcome</b>${actions.escapeHtml(outcome)}</span>` : ''}${skills.length ? `<span><b>Skills</b>${actions.escapeHtml(skills.join(', '))}</span>` : ''}</div>${routing ? `<small>${actions.escapeHtml(routing)}</small>` : ''}</div><em class="workflow-step-status ${actions.escapeHtml(stepStatus)}">${actions.escapeHtml(actions.statusLabel(stepStatus))}</em><div class="workflow-step-tools">${activeStep ? `<button type="button" class="workflow-icon-action stop" data-workflow-step-stop="${Number(step.id)}" aria-label="Stop step" title="Stop step">${workflowActionIcon('stop')}</button>` : `<button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="up" aria-label="Move step up" title="Move step up"${index === 0 ? ' disabled' : ''}>${workflowEditorIcon('up')}</button><button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="down" aria-label="Move step down" title="Move step down"${index === steps.length - 1 ? ' disabled' : ''}>${workflowEditorIcon('down')}</button><button type="button" data-workflow-step-edit="${Number(step.id)}">Edit step</button><button type="button" class="workflow-icon-action" data-workflow-step-edit="${Number(step.id)}" aria-label="Edit step" title="Edit step">${workflowEditorIcon('edit')}</button><button type="button" class="workflow-icon-action" data-workflow-step-duplicate="${Number(step.id)}" aria-label="Duplicate step" title="Duplicate step">${workflowEditorIcon('duplicate')}</button><button type="button" class="workflow-icon-action start" data-workflow-step-run="${Number(step.id)}" aria-label="Run step" title="Run step">${workflowActionIcon('start')}</button><button type="button" class="workflow-icon-action" data-workflow-step-continue="${Number(step.id)}" aria-label="Run workflow from this step" title="Run from here">${workflowEditorIcon('continue')}</button><button type="button" class="workflow-icon-action danger" data-workflow-step-delete="${Number(step.id)}" aria-label="Delete step" title="Delete step">${workflowEditorIcon('delete')}</button>`}</div></article>`;
++                return `<article class="workflow-editor-step" data-workflow-step="${Number(step.id)}" data-workflow-step-row="${Number(step.id)}"><span class="workflow-step-number">${String(index + 1).padStart(2, '0')}</span><div class="workflow-step-copy"><strong>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</strong><p class="workflow-step-desc">${actions.escapeHtml(step.description || step.instruction || '')}</p><div class="workflow-step-support">${outcome ? `<span><b>Outcome</b>${actions.escapeHtml(outcome)}</span>` : ''}${skills.length ? `<span><b>Skills</b>${actions.escapeHtml(skills.join(', '))}</span>` : ''}</div>${routing ? `<small>${actions.escapeHtml(routing)}</small>` : ''}</div><div class="workflow-step-tools"><button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="up" aria-label="Move step up" data-wf-tip="Move step up"${index === 0 ? ' disabled' : ''}>${workflowEditorIcon('up')}</button><button type="button" class="workflow-icon-action" data-workflow-step-move="${Number(step.id)}" data-direction="down" aria-label="Move step down" data-wf-tip="Move step down"${index === steps.length - 1 ? ' disabled' : ''}>${workflowEditorIcon('down')}</button><button type="button" class="workflow-icon-action" data-workflow-step-edit="${Number(step.id)}" aria-label="Edit step" data-wf-tip="Edit step">${workflowEditorIcon('edit')}</button><button type="button" class="workflow-icon-action" data-workflow-step-duplicate="${Number(step.id)}" aria-label="Duplicate step" data-wf-tip="Duplicate step">${workflowEditorIcon('duplicate')}</button><button type="button" class="workflow-icon-action danger" data-workflow-step-delete="${Number(step.id)}" aria-label="Delete step" data-wf-tip="Delete step">${workflowEditorIcon('delete')}</button></div></article>`;
+             })
+             .join('');
+     }
+@@ -367,25 +403,23 @@
+             detail.innerHTML = '';
+             return;
+         }
+-        const steps = workflowStepList(workflow);
++        // Catalog refreshes can replace detailed steps with summary steps; fill them back from the last detail load.
++        const detailSteps = new Map((state.workflowDetailSteps[String(workflow.id)] || []).map((item) => [Number(item.id), item]));
++        const steps = workflowStepList(workflow).map((item) => ({ ...item, ...(detailSteps.get(Number(item.id)) || {}) }));
+         const { run, status, active } = workflowRunState(workflow);
+         const busy = Boolean(state.workflowBusy[String(workflow.id)]);
+         const metadata = workflowInputObject(workflow);
+         const projectId = workflowProjectId(workflow);
+         const memory = state.workflowMemory[String(workflow.id)] || null;
+         const viewMode = state.workflowViewMode === 'list' ? 'list' : 'loop';
+-        detail.innerHTML = `<header class="workflow-editor-header"><nav><button type="button" class="workflow-editor-back" aria-label="Back to workflows"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M12.5 4.5 7 10l5.5 5.5"></path></svg><span>Workflows</span></button><i>/</i><strong>${actions.escapeHtml(workflow.name || 'Workflow')}</strong></nav><div class="workflow-editor-actions"><button type="button" class="workflow-icon-action" data-workflow-duplicate aria-label="Duplicate workflow" title="Duplicate workflow">${workflowEditorIcon('duplicate')}</button><button type="button" class="workflow-run-button ${active ? 'stop' : 'start'}" data-workflow-detail-action="${active ? 'stop' : 'start'}" title="${actions.escapeHtml(definitionIssue(workflow) || 'Run workflow')}"${busy || (!active && definitionIssue(workflow)) ? ' disabled' : ''}>${workflowActionIcon(active ? 'stop' : 'start', busy)}<span>${active ? 'Stop run' : 'Run workflow'}</span></button></div></header>
+-            <div class="workflow-editor-scroll"><div class="workflow-builder-layout"><section class="workflow-step-section"><header class="workflow-canvas-header"><div class="workflow-change-copy"><h1>${actions.escapeHtml(workflow.name || 'Workflow')}</h1><p>${actions.escapeHtml(workflow.description || 'Shape the steps, skills, and outcomes that make this workflow useful.')}</p></div><div class="workflow-step-header-actions">${workflowViewSwitchHtml(viewMode)}<button type="button" class="secondary-button" data-workflow-add-step>Add step</button></div></header><div class="workflow-canvas-meta"><span><i class="workflow-state ${status === 'waiting' || status === 'paused' ? 'waiting' : status === 'failed' ? 'failed' : active ? 'running' : ''}"></i>${actions.escapeHtml(run ? actions.statusLabel(status) : definitionIssue(workflow) || 'Ready')}</span><strong>${steps.length} step${steps.length === 1 ? '' : 's'}</strong><small>Click a step to edit its instruction, skills, and outcome.</small></div><div class="workflow-step-stage" data-view="${viewMode}">${viewMode === 'loop' ? workflowLoopHtml(steps, active, definitionIssue(workflow)) : `<div class="workflow-step-stack">${workflowStepListHtml(steps)}</div>`}</div>${workflowStepNumbersSectionHtml(workflow, steps)}</section>
+-            <aside class="workflow-editor-rail"><section class="workflow-change-panel"><header><h2>Change this workflow</h2><p>Describe what should change. You can review the regenerated steps before running them.</p></header><form data-workflow-revise><label for="workflow-change-instruction">What should work differently?</label><textarea id="workflow-change-instruction" rows="7" placeholder="For example: add a security review after implementation, then route failures back to the build step."></textarea><div class="workflow-change-suggestions"><button type="button" data-workflow-suggestion="Add an independent review step before completion">Add a review step</button><button type="button" data-workflow-suggestion="Strengthen every step with a clear, testable outcome">Clarify outcomes</button></div><button type="submit" class="primary-button">Update workflow</button><small>This changes the step sequence, not the workflow settings.</small></form></section>
+-            <details class="workflow-advanced-section"><summary><span><strong>Workflow settings</strong><small>Name, objective, and run configuration</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><form class="workflow-settings-form"><div class="workflow-settings-grid"><label>Name<input data-workflow-name value="${actions.escapeHtml(workflow.name || '')}" required></label><label>Project<select data-workflow-project><option value="">Shared workflow</option>${context.projects.map((project) => `<option value="${Number(project.id)}"${Number(project.id) === projectId ? ' selected' : ''}>${actions.escapeHtml(project.name || 'Untitled project')}</option>`).join('')}</select></label></div><label>Description<textarea data-workflow-description rows="3">${actions.escapeHtml(workflow.description || '')}</textarea></label><label>Workflow objective and input<textarea data-workflow-objective rows="4">${actions.escapeHtml(metadata.objective || metadata.instruction || (typeof workflow.workflow_input === 'string' && !Object.keys(metadata).length ? workflow.workflow_input : ''))}</textarea></label><label>Context and memory rules<textarea data-workflow-context rows="4" placeholder="What should every step remember, preserve, and learn?">${actions.escapeHtml(typeof workflow.context_rules === 'string' ? workflow.context_rules : JSON.stringify(workflow.context_rules || '', null, 2).replace(/^"|"$/g, ''))}</textarea></label><details class="workflow-technical-settings"><summary>Advanced run settings</summary><label>Run settings<textarea data-workflow-run-settings rows="6" placeholder='{"max_parallel": 1}'>${actions.escapeHtml(JSON.stringify(workflow.run_settings || {}, null, 2))}</textarea></label></details><div class="workflow-settings-actions"><button type="submit" class="primary-button">Save settings</button><button type="button" class="danger-text-button" data-workflow-delete>Delete workflow</button></div></form></details>
+-            <details class="workflow-advanced-section workflow-memory-section"><summary><span><strong>Memory and runs</strong><small>Handoffs and learned context</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><div class="workflow-memory-panel"><button type="button" class="secondary-button" data-workflow-load-memory>${memory ? 'Refresh memory' : 'Load memory'}</button><div class="workflow-memory-content">${memory ? workflowMemoryHtml(memory) : '<p>Load the workflow memory to inspect handoffs, routing, and learned context.</p>'}</div></div></details></aside></div></div>`;
++        detail.innerHTML = `<header class="workflow-editor-header"><nav><button type="button" class="workflow-editor-back" aria-label="Back to workflows"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M12.5 4.5 7 10l5.5 5.5"></path></svg><span>Workflows</span></button><i>/</i><strong>${actions.escapeHtml(workflow.name || 'Workflow')}</strong>${viewMode === 'loop' ? `<span class="workflow-step-count">${steps.length} step${steps.length === 1 ? '' : 's'}</span>` : ''}</nav><div class="workflow-editor-actions"><button type="button" class="workflow-icon-action" data-workflow-duplicate aria-label="Duplicate workflow" data-wf-tip="Duplicate workflow">${workflowEditorIcon('duplicate')}</button><button type="button" class="workflow-icon-action" data-workflow-settings-open aria-label="Workflow settings" data-wf-tip="Workflow settings">${workflowEditorIcon('settings')}</button></div></header>
++            <div class="workflow-editor-scroll"><div class="workflow-builder-layout"><section class="workflow-step-section"><div class="workflow-canvas-meta"><div class="workflow-step-header-actions">${workflowViewSwitchHtml(viewMode)}<button type="button" class="primary-button" data-workflow-add-step>Add step</button></div>${viewMode === 'loop' ? workflowStepNumbersSectionHtml(workflow, steps) : ''}</div><div class="workflow-step-stage" data-view="${viewMode}">${viewMode === 'loop' ? workflowLoopHtml(steps, active, definitionIssue(workflow)) : `<div class="workflow-step-stack">${workflowStepListHtml(steps)}</div>`}</div>${workflowStepDrawerHtml(workflow, steps)}</section>
++            <aside class="workflow-editor-rail"><section class="workflow-change-panel"><header><h2>Change this workflow</h2><p>Describe what should change. You can review the regenerated steps before running them.</p></header><form data-workflow-revise><label for="workflow-change-instruction">What should work differently?</label><textarea id="workflow-change-instruction" rows="7" placeholder="For example: add a security review after implementation, then route failures back to the build step."></textarea><div class="workflow-change-suggestions"><button type="button" data-workflow-suggestion="Add an independent review step before completion">Add a review step</button><button type="button" data-workflow-suggestion="Strengthen every step with a clear, testable outcome">Clarify outcomes</button></div><button type="submit" class="primary-button">Update workflow</button><small>This changes the step sequence, not the workflow settings.</small></form></section></aside></div></div><dialog class="studio-dialog workflow-settings-modal" data-workflow-settings-modal aria-label="Workflow settings"><header class="workflow-settings-modal-header"><strong>Workflow settings</strong><button type="button" class="workflow-icon-action" data-workflow-settings-close aria-label="Close workflow settings" data-wf-tip="Close">${workflowEditorIcon('delete')}</button></header><details class="workflow-advanced-section"><summary><span><strong>Workflow settings</strong><small>Name, objective, and run configuration</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><form class="workflow-settings-form"><div class="workflow-settings-grid"><label>Name<input data-workflow-name value="${actions.escapeHtml(workflow.name || '')}" required></label><label>Project<select data-workflow-project><option value="">Shared workflow</option>${context.projects.map((project) => `<option value="${Number(project.id)}"${Number(project.id) === projectId ? ' selected' : ''}>${actions.escapeHtml(project.name || 'Untitled project')}</option>`).join('')}</select></label></div><label>Description<textarea data-workflow-description rows="3">${actions.escapeHtml(workflow.description || '')}</textarea></label><label>Workflow objective and input<textarea data-workflow-objective rows="4">${actions.escapeHtml(metadata.objective || metadata.instruction || (typeof workflow.workflow_input === 'string' && !Object.keys(metadata).length ? workflow.workflow_input : ''))}</textarea></label><label>Context and memory rules<textarea data-workflow-context rows="4" placeholder="What should every step remember, preserve, and learn?">${actions.escapeHtml(typeof workflow.context_rules === 'string' ? workflow.context_rules : JSON.stringify(workflow.context_rules || '', null, 2).replace(/^"|"$/g, ''))}</textarea></label><details class="workflow-technical-settings"><summary>Advanced run settings</summary><label>Run settings<textarea data-workflow-run-settings rows="6" placeholder='{"max_parallel": 1}'>${actions.escapeHtml(JSON.stringify(workflow.run_settings || {}, null, 2))}</textarea></label></details><div class="workflow-settings-actions"><button type="submit" class="primary-button">Save settings</button><button type="button" class="danger-text-button" data-workflow-delete>Delete workflow</button></div></form></details>
++            <details class="workflow-advanced-section workflow-memory-section"><summary><span><strong>Memory</strong><small>Handoffs and learned context</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><div class="workflow-memory-panel"><button type="button" class="secondary-button" data-workflow-load-memory>${memory ? 'Refresh memory' : 'Load memory'}</button><div class="workflow-memory-content">${memory ? workflowMemoryHtml(memory) : '<p>Load the workflow memory to inspect handoffs, routing, and learned context.</p>'}</div></div></details></dialog>`;
+         detail.querySelector('.workflow-editor-back').addEventListener('click', () => {
+             state.selectedWorkflowId = '';
+             renderWorkflowWorkspace();
+         });
+-        detail
+-            .querySelector('[data-workflow-detail-action]')
+-            .addEventListener('click', () => (active ? stopManagedWorkflow(Number(workflow.id), run) : runManagedWorkflow(Number(workflow.id))));
+         detail.querySelector('[data-workflow-duplicate]').addEventListener('click', () => duplicateManagedWorkflow(Number(workflow.id)));
+         detail.querySelector('[data-workflow-revise]').addEventListener('submit', (event) => reviseWorkflowFromPrompt(event, Number(workflow.id)));
+         detail.querySelectorAll('[data-workflow-suggestion]').forEach((button) =>
+@@ -401,14 +435,31 @@
+                 renderWorkflowDetail();
+             })
+         );
+-        bindWorkflowStepNumbers(detail.querySelector('.workflow-step-numbers-host'), { escapeHtml: actions.escapeHtml });
++        const stepSection = detail.querySelector('.workflow-step-section');
++        // Clicking a step (ring node or centre number) selects it and opens the slide-out panel.
++        stepSection?.addEventListener('click', (event) => {
++            const button = event.target.closest('[data-wf-step]');
++            if (!button) return;
++            event.stopPropagation();
++            openInlineStepEditor(Number(steps[Number(button.dataset.stepIndex)]?.id));
++        }, true);
++        bindWorkflowStepNumbers(stepSection, { escapeHtml: actions.escapeHtml });
++        const settingsModal = detail.querySelector('[data-workflow-settings-modal]');
++        detail.querySelector('[data-workflow-settings-open]').addEventListener('click', () => {
++            state.settingsOpen = true;
++            settingsModal.showModal();
++        });
++        settingsModal.querySelector('[data-workflow-settings-close]').addEventListener('click', () => settingsModal.close());
++        settingsModal.addEventListener('close', () => (state.settingsOpen = false));
++        if (state.settingsOpen && !settingsModal.open) settingsModal.showModal();
+         detail.querySelector('.workflow-settings-form').addEventListener('submit', (event) => saveWorkflowSettings(event, Number(workflow.id)));
+         detail.querySelector('[data-workflow-delete]').addEventListener('click', () => deleteManagedWorkflow(Number(workflow.id)));
+-        detail.querySelector('[data-workflow-add-step]').addEventListener('click', () => openWorkflowStepDialog(Number(workflow.id), 0));
++        detail.querySelector('[data-workflow-add-step]').addEventListener('click', () => addInlineWorkflowStep(Number(workflow.id)));
++        bindInlineStepEditor(detail, Number(workflow.id));
+         detail.querySelector('[data-workflow-load-memory]').addEventListener('click', () => loadWorkflowMemory(Number(workflow.id)));
+         detail
+             .querySelectorAll('[data-workflow-step-edit]')
+-            .forEach((button) => button.addEventListener('click', () => openWorkflowStepDialog(Number(workflow.id), Number(button.dataset.workflowStepEdit))));
++            .forEach((button) => button.addEventListener('click', () => openInlineStepEditor(Number(button.dataset.workflowStepEdit))));
+         detail
+             .querySelectorAll('[data-workflow-step-move]')
+             .forEach((button) =>
+@@ -422,16 +473,12 @@
+         detail
+             .querySelectorAll('[data-workflow-step-delete]')
+             .forEach((button) => button.addEventListener('click', () => deleteWorkflowStep(Number(workflow.id), Number(button.dataset.workflowStepDelete))));
+-        detail
+-            .querySelectorAll('[data-workflow-step-run]')
+-            .forEach((button) => button.addEventListener('click', () => executeWorkflowStep(Number(workflow.id), Number(button.dataset.workflowStepRun))));
+-        detail
+-            .querySelectorAll('[data-workflow-step-continue]')
+-            .forEach((button) => button.addEventListener('click', () => runWorkflowFromStep(Number(workflow.id), Number(button.dataset.workflowStepContinue))));
+-        detail
+-            .querySelectorAll('[data-workflow-step-stop]')
+-            .forEach((button) => button.addEventListener('click', () => stopWorkflowStep(Number(workflow.id), Number(button.dataset.workflowStepStop))));
+-        bindWorkflowStepReorder(detail, Number(workflow.id));
++        detail.querySelectorAll('[data-workflow-step-row]').forEach((row) =>
++            row.addEventListener('click', (event) => {
++                if (event.target.closest('button')) return;
++                openInlineStepEditor(Number(row.dataset.workflowStepRow));
++            })
++        );
+         const loopViewport = detail.querySelector('.workflow-loop-viewport');
+         if (loopViewport)
+             window.requestAnimationFrame(() => {
+@@ -502,39 +549,6 @@
+         } catch (error) {
+             actions.toast(error.message || 'Could not duplicate the workflow.', 'error');
+         }
+-    }
+-
+-    function bindWorkflowStepReorder(container, workflowId) {
+-        let draggedId = 0;
+-        container.querySelectorAll('.workflow-editor-step').forEach((row) => {
+-            row.addEventListener('dragstart', () => {
+-                draggedId = Number(row.dataset.workflowStep);
+-                row.classList.add('dragging');
+-            });
+-            row.addEventListener('dragend', () => {
+-                row.classList.remove('dragging');
+-                draggedId = 0;
+-            });
+-            row.addEventListener('dragover', (event) => event.preventDefault());
+-            row.addEventListener('drop', async (event) => {
+-                event.preventDefault();
+-                const targetId = Number(row.dataset.workflowStep);
+-                if (!draggedId || draggedId === targetId) return;
+-                const ids = workflowStepList(context.workflows.find((item) => Number(item.id) === workflowId)).map((step) => Number(step.id));
+-                const from = ids.indexOf(draggedId);
+-                const to = ids.indexOf(targetId);
+-                ids.splice(to, 0, ids.splice(from, 1)[0]);
+-                try {
+-                    await actions.api(`/workflows/${workflowId}/steps/reorder`, {
+-                        method: 'PATCH',
+-                        body: { step_ids: ids }
+-                    });
+-                    await selectWorkflow(workflowId);
+-                } catch (error) {
+-                    actions.toast(error.message || 'Could not reorder workflow steps.', 'error');
+-                }
+-            });
+-        });
+     }
+ 
+     async function moveWorkflowStep(workflowId, stepId, direction) {
+@@ -1000,7 +1014,147 @@
+         if (open) el('workflow-prompt-input')?.focus();
+     }
+ 
++    // Inline step editor (instruction, skills, outcome) saved through PATCH /workflows/:id/steps/:stepId.
++    function workflowInlineStepEditorHtml(workflow, steps) {
++        const stepId = Number(state.inlineStepId || 0);
++        const index = steps.findIndex((item) => Number(item.id) === stepId);
++        if (index < 0) return '';
++        const step = steps[index];
++        const esc = actions.escapeHtml;
++        return `<form class="workflow-inline-step-editor" data-workflow-inline-step="${stepId}"><header><strong>Edit step</strong></header><label>Instruction<textarea data-inline-instruction rows="3">${esc(step.instruction || '')}</textarea></label><label>Skills<input data-inline-skills value="${esc(workflowStepSkills(step).join(', '))}" placeholder="Comma-separated skills"></label><label>Outcome<textarea data-inline-outcome rows="2">${esc((workflowStepConfig(step).expected_outputs || []).join('\n'))}</textarea></label><div class="workflow-inline-step-actions"><button type="button" class="secondary-button" data-inline-cancel>Cancel</button><button type="submit" class="primary-button">Save step</button></div></form>`;
++    }
++
++    function openInlineStepEditor(stepId) {
++        const workflow = context.workflows.find((item) => String(item.id) === String(state.selectedWorkflowId));
++        const index = workflowStepList(workflow).findIndex((item) => Number(item.id) === Number(stepId));
++        if (index >= 0) state.selectedStepIndex = index;
++        state.drawerAnimate = !state.inlineStepId && Boolean(stepId);
++        state.inlineStepId = Number(stepId) || 0;
++        renderWorkflowDetail();
++        if (state.inlineStepId) refreshWorkflowDetailForEditor(workflow?.id);
++    }
++
++    // The list payload can carry summary steps; load the full workflow (GET /workflows/:id) so the editor shows real values.
++    async function refreshWorkflowDetailForEditor(workflowId) {
++        if (!workflowId) return null;
++        try {
++            const fresh = await actions.api(`/workflows/${Number(workflowId)}`);
++            const index = context.workflows.findIndex((item) => Number(item.id) === Number(workflowId));
++            if (index >= 0 && fresh && Array.isArray(fresh.steps)) context.workflows[index] = fresh;
++            if (fresh && Array.isArray(fresh.steps)) state.workflowDetailSteps[String(workflowId)] = fresh.steps;
++            if (state.inlineStepId && !el('workflow-detail')?.querySelector('.workflow-inline-step-editor :focus')) renderWorkflowDetail();
++            return fresh;
++        } catch (_) {
++            return null;
++        }
++    }
++
++    function closeStepDrawer() {
++        const drawer = el('workflow-detail')?.querySelector('.workflow-step-drawer');
++        if (!drawer) return openInlineStepEditor(0);
++        drawer.classList.add('leaving');
++        drawer.addEventListener('animationend', () => openInlineStepEditor(0), { once: true });
++    }
++
++    function bindInlineStepEditor(detail, workflowId) {
++        const form = detail.querySelector('[data-workflow-inline-step]');
++        if (!form) return;
++        form.querySelector('[data-inline-cancel]').addEventListener('click', closeStepDrawer);
++        detail.querySelector('[data-workflow-drawer-close]')?.addEventListener('click', closeStepDrawer);
++        form.addEventListener('submit', async (event) => {
++            event.preventDefault();
++            const stepId = Number(form.dataset.workflowInlineStep);
++            // Merge into the freshly loaded step so unrelated config keys are never dropped.
++            const workflow = (await refreshWorkflowDetailForEditor(workflowId)) || context.workflows.find((item) => Number(item.id) === workflowId);
++            const step = (state.workflowDetailSteps[String(workflowId)] || []).find((item) => Number(item.id) === stepId);
++            if (!step || !step.config) return actions.toast('Could not load this step; nothing was saved.', 'error');
++            const split = (value) => value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
++            const config = workflowStepConfig(step);
++            config.skills = split(form.querySelector('[data-inline-skills]').value);
++            config.expected_outputs = split(form.querySelector('[data-inline-outcome]').value);
++            try {
++                await actions.api(`/workflows/${workflowId}/steps/${stepId}`, {
++                    method: 'PATCH',
++                    body: { instruction: form.querySelector('[data-inline-instruction]').value.trim(), config }
++                });
++                state.inlineStepId = 0;
++                actions.toast('Workflow step updated.');
++                await selectWorkflow(workflowId);
++            } catch (error) {
++                actions.toast(error.message || 'Could not update the workflow step.', 'error');
++            }
++        });
++    }
++
++    // Add step: POST /workflows/:id/steps, then open the new step in the inline editor.
++    async function addInlineWorkflowStep(workflowId) {
++        const workflow = context.workflows.find((item) => Number(item.id) === workflowId);
++        if (!workflow) return;
++        const position = workflowStepList(workflow).length;
++        try {
++            const created = await actions.api(`/workflows/${workflowId}/steps`, {
++                method: 'POST',
++                body: { name: `Step ${position + 1}`, action_type: 'agent_instruction', instruction: '', position, config: {} }
++            });
++            const createdSteps = workflowStepList(created);
++            state.inlineStepId = Number(createdSteps[createdSteps.length - 1]?.id || 0);
++            actions.toast('Workflow step added.');
++            await selectWorkflow(workflowId);
++        } catch (error) {
++            actions.toast(error.message || 'Could not add the workflow step.', 'error');
++        }
++    }
++
++    // One fixed-position tooltip for the workflows area: native titles move to data-wf-tip so only one tip shows.
++    function installWorkflowTooltips() {
++        if (document.__wfTips) return;
++        document.__wfTips = true;
++        let tip = null;
++        let owner = null;
++        const hide = () => {
++            tip?.remove();
++            tip = null;
++            owner = null;
++        };
++        const inScope = (node) => node.closest('#workflow-home, #workflow-list, #workflow-detail');
++        document.addEventListener('pointerover', (event) => {
++            const target = event.target instanceof Element ? event.target.closest('[title], [data-wf-tip]') : null;
++            if (!target || !inScope(target) || target === owner) return;
++            if (target.hasAttribute('title')) {
++                if (!target.hasAttribute('data-wf-tip')) target.setAttribute('data-wf-tip', target.getAttribute('title'));
++                target.removeAttribute('title');
++            }
++            hide();
++            const text = target.getAttribute('data-wf-tip') || '';
++            if (!text) return;
++            owner = target;
++            tip = document.createElement('div');
++            tip.className = 'workflow-tooltip-portal';
++            tip.setAttribute('role', 'tooltip');
++            tip.textContent = text;
++            document.body.appendChild(tip);
++            const rect = target.getBoundingClientRect();
++            const box = tip.getBoundingClientRect();
++            const margin = 8;
++            let left = rect.left + rect.width / 2 - box.width / 2;
++            let top = rect.top - box.height - 6;
++            left = Math.max(margin, Math.min(left, window.innerWidth - box.width - margin));
++            if (top < margin) top = rect.bottom + 6;
++            top = Math.min(top, window.innerHeight - box.height - margin);
++            tip.style.left = `${Math.round(left)}px`;
++            tip.style.top = `${Math.round(top)}px`;
++        });
++        document.addEventListener('pointerout', (event) => {
++            if (!owner) return;
++            if (event.relatedTarget instanceof Node && owner.contains(event.relatedTarget)) return;
++            hide();
++        });
++        ['pointerdown', 'scroll', 'keydown'].forEach((name) => document.addEventListener(name, hide, true));
++        window.addEventListener('blur', hide);
++    }
++
+     function bindEvents() {
++        installWorkflowTooltips();
+         el('workflow-prompt-form').addEventListener('submit', createWorkflowFromPrompt);
+         el('workflow-add-toggle')?.addEventListener('click', () => setWorkflowComposerOpen(true));
+         el('workflow-add-modal')?.addEventListener('click', (event) => {
+--- static/development/workflows/styles.css.bak-20261022-wfui	2026-10-22 20:16:13
++++ static/development/workflows/styles.css	2026-10-22 20:29:33
+@@ -102,8 +102,6 @@
+ .workflow-step-section header p, .workflow-memory-section header p { margin: 4px 0 0; color: var(--studio-dim); font-size: 8px; }
+ .workflow-step-stack { display: grid; gap: 6px; }
+ .workflow-editor-step { display: grid; min-width: 0; grid-template-columns: 18px 24px minmax(0, 1fr) auto auto; align-items: center; gap: 9px; min-height: 64px; padding: 8px; border: 1px solid var(--studio-line-soft); border-radius: 7px; background: #0d1426; }
+-.workflow-editor-step.dragging { border-color: var(--studio-accent); opacity: .55; }
+-.workflow-step-handle { color: var(--studio-dim); cursor: grab; font-size: 11px; letter-spacing: -2px; }
+ .workflow-step-number { color: var(--studio-dim); font: 7px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+ .workflow-step-copy { min-width: 0; }
+ .workflow-step-copy strong { display: block; color: var(--studio-text); font-size: 9px; }
+@@ -181,7 +179,6 @@
+ .workflow-loop-map.dense .workflow-loop-node > button > small, .workflow-loop-map.dense .workflow-loop-skills { display: none; }
+ .workflow-step-stack { gap: 8px; }
+ .workflow-editor-step { min-height: 82px; padding: 10px 11px; border-radius: 9px; background: #0b1225; }
+-.workflow-step-handle { width: 10px; height: 22px; cursor: grab; background-image: radial-gradient(circle, #657290 1px, transparent 1.5px); background-position: 0 0; background-size: 5px 6px; }
+ .workflow-step-copy strong { font-size: 11px; }
+ .workflow-step-copy p { margin-top: 4px; font-size: 9px; }
+ .workflow-step-support { display: flex; min-width: 0; gap: 16px; margin-top: 6px; }
+@@ -451,7 +448,6 @@
+ .workflow-step-copy p { margin-top: 4px; color: #9ca7bd; font-size: 9px; }
+ .workflow-step-support span { color: #a9b3c8; }
+ .workflow-step-support b { color: #7583a2; }
+-.workflow-step-handle { opacity: .65; }
+ .workflow-editor-rail {
+     display: grid;
+     min-width: 0;
+@@ -524,24 +520,6 @@
+ .workflow-advanced-section > summary { min-height: 52px; padding: 0 14px; }
+ .workflow-advanced-section > summary strong { font-size: 10px; }
+ .workflow-advanced-section > summary small { font-size: 8px; }
+-.workflow-run-button {
+-    display: flex;
+-    min-height: 32px;
+-    align-items: center;
+-    gap: 7px;
+-    padding: 0 11px;
+-    border: 1px solid #455171;
+-    border-radius: 7px;
+-    background: #18213b;
+-    color: #e8ecf5;
+-    font-size: 9px;
+-    font-weight: 650;
+-}
+-.workflow-run-button:hover { border-color: #617092; background: #202b49; }
+-.workflow-run-button.start svg { color: #55bd7e; }
+-.workflow-run-button.stop svg { color: #dd6c74; }
+-.workflow-run-button svg { width: 15px; height: 15px; }
+-.workflow-run-button:disabled { cursor: wait; opacity: .62; }
+ @media (max-width: 1120px) {
+     .workflow-builder-layout { grid-template-columns: 1fr; }
+     .workflow-editor-rail { grid-template-columns: minmax(0, 1.15fr) minmax(240px, .85fr); }
+@@ -569,8 +547,6 @@
+     .workflow-loop-node > button > small { -webkit-line-clamp: 1; }
+     .workflow-loop-skills { display: none; }
+     .workflow-editor-step { grid-template-columns: 12px 22px minmax(0, 1fr) auto; }
+-    .workflow-run-button span { display: none; }
+-    .workflow-run-button { width: 32px; padding: 0; justify-content: center; }
+ }
+ .workflow-revise-form { display: grid; gap: 7px; margin: 12px 0; }
+ .workflow-revise-form label { display: grid; gap: 5px; color: var(--studio-muted); font-size: 8px; }
+@@ -605,3 +581,49 @@
+ .workflow-editor-scroll { padding: 24px 24px 36px; }
+ .workflow-builder-layout, .workflow-change-panel, .workflow-step-section, .workflow-advanced-section, .workflow-settings-form, .workflow-memory-section, .workflow-create-prompt, .workflow-toolbar { max-width: none; }
+ @media (max-width: 680px) { .workflow-home { padding: 16px 16px 48px 16px; } .workflow-editor-scroll { padding: 16px; } }
++
++/* wfui 20261022: toolbar row = step count | numbered steps (centre) | Loop/List + Add step */
++.workflow-canvas-meta > strong { order: 0; padding-left: 0; border-left: 0; }
++.workflow-canvas-meta > .workflow-step-numbers-host { order: 1; display: flex; flex: 1 1 auto; min-width: 0; justify-content: center; margin: 0; }
++.workflow-canvas-meta > .workflow-step-numbers-host > .workflow-step-numbers > ol { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
++.workflow-canvas-meta > .workflow-step-header-actions { order: 2; }
++/* Selected-step block: title, description, status last */
++.workflow-selected-step { display: flex; align-items: flex-start; gap: 10px; margin: 12px 20px 0; }
++.workflow-selected-step > .workflow-step-panel { display: flex; flex: 1 1 auto; min-width: 0; flex-direction: column; gap: 6px; }
++.workflow-selected-step > .workflow-step-panel > div { display: contents; }
++.workflow-selected-step .workflow-step-pill { order: 9; align-self: flex-start; }
++/* Inline step editor */
++.workflow-inline-step-editor { display: grid; gap: 8px; margin: 12px 20px 0; padding: 12px; border: 1px solid #303b5d; border-radius: 8px; background: #0c1329; }
++.workflow-inline-step-editor label { display: grid; gap: 4px; color: #9aa6c2; font-size: 11px; }
++.workflow-inline-step-actions { display: flex; justify-content: flex-end; gap: 8px; }
++/* Single fixed tooltip for the workflows area (never clipped by containers) */
++.workflow-tooltip-portal { position: fixed; z-index: 2147483000; max-width: min(320px, calc(100vw - 16px)); padding: 5px 8px; border: 1px solid #3a4668; border-radius: 6px; background: #151d36; color: #eef2fb; font-size: 12px; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
++/* List rows: number | title + description | tools (no drag handle) */
++.workflow-editor-step { grid-template-columns: 24px minmax(0, 1fr) auto; cursor: pointer; }
++.workflow-editor-step .workflow-step-desc { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: #7f8ba8; }
++/* Ring: design canvas, highlight the selected step only */
++.workflow-loop-node.selected > button { border-color: var(--studio-accent, #6f8cff); box-shadow: 0 0 0 2px rgba(111,140,255,.35); }
++/* Slide-out step panel */
++.workflow-step-drawer { position: fixed; top: 56px; right: 0; bottom: 0; z-index: 60; display: flex; width: min(380px, 92vw); flex-direction: column; gap: 10px; padding: 14px; overflow-y: auto; border-left: 1px solid #303b5d; background: #0b1124; box-shadow: -12px 0 28px rgba(0,0,0,.4); }
++.workflow-step-drawer.entering { animation: wf-drawer-in .22s ease-out; }
++.workflow-step-drawer.leaving { animation: wf-drawer-out .18s ease-in forwards; }
++@keyframes wf-drawer-in { from { transform: translateX(100%); } to { transform: none; } }
++@keyframes wf-drawer-out { from { transform: none; } to { transform: translateX(100%); } }
++.workflow-step-drawer > header { display: flex; align-items: center; justify-content: space-between; color: #9aa6c2; font-size: 11px; }
++.workflow-step-drawer .workflow-selected-step { flex-direction: column; gap: 6px; margin: 0; }
++.workflow-step-drawer .workflow-selected-step p { margin: 0; color: #9aa6c2; font-size: 12px; }
++.workflow-step-design { display: grid; gap: 4px; margin: 6px 0 0; padding-top: 8px; border-top: 1px solid #1d2745; font-size: 11px; }
++.workflow-step-design > div { display: flex; justify-content: space-between; gap: 8px; }
++.workflow-step-design dt { color: #7f8ba8; }
++.workflow-step-design dd { margin: 0; color: #dbe1ef; text-align: right; overflow-wrap: anywhere; }
++.workflow-step-drawer .workflow-inline-step-editor { margin: 0; }
++/* Cog modal */
++.studio-dialog.workflow-settings-modal { width: min(720px, calc(100vw - 24px)); max-height: calc(100vh - 48px); overflow-y: auto; }
++.workflow-settings-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
++/* Step count in the breadcrumb banner */
++.workflow-editor-header nav .workflow-step-count { margin-left: 8px; color: #7f8ba8; font-size: 11px; font-weight: 600; }
++/* Toolbar row: numbers centred on the row, Loop/List + Add step at the right */
++.workflow-canvas-meta { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
++.workflow-canvas-meta > .workflow-step-numbers-host { grid-column: 2; grid-row: 1; }
++.workflow-canvas-meta > .workflow-step-header-actions { grid-column: 3; grid-row: 1; justify-self: end; }
++.workflow-editor-step .workflow-step-desc { white-space: normal; text-overflow: clip; }
+--- static/development/shared/workflow-loop.js.bak-20261022-wfui	2026-10-22 20:18:53
++++ static/development/shared/workflow-loop.js	2026-10-22 20:21:12
+@@ -35,7 +35,7 @@
+ }
+ 
+ /**
+- * options: { compact, activeStepId, idPrefix, escapeHtml, statusLabel, coreLabel, coreCaption,
++ * options: { mode ('design' hides status pills + runtime highlight; adds .selected for selectedStepId), compact, activeStepId, idPrefix, escapeHtml, statusLabel, coreLabel, coreCaption,
+  *            emptyHtml, ariaLabel, mapRole, buttonAttrs(step, index), nodeExtraHtml(step, index) }
+  */
+ export function workflowLoopHtml(steps, options = {}) {
+@@ -55,16 +55,18 @@
+             const y = 50 + 37 * Math.sin(angle);
+             const mobileX = 50 + 24 * Math.cos(angle);
+             const mobileY = 50 + 38 * Math.sin(angle);
+-            const status = String(step.status || 'pending').toLowerCase();
++            const design = options.mode === 'design';
++            const status = design ? 'design' : String(step.status || 'pending').toLowerCase();
+             const name = step.name || `Step ${index + 1}`;
+-            const current = activeId !== null && String(step.id) === activeId;
++            const current = !design && activeId !== null && String(step.id) === activeId;
++            const selected = options.selectedStepId != null && String(step.id) === String(options.selectedStepId);
+             const attrs = options.buttonAttrs ? options.buttonAttrs(step, index) : '';
+             const extra = !compact && options.nodeExtraHtml ? options.nodeExtraHtml(step, index) : '';
+             const inner = compact
+                 ? `<b>${String(index + 1).padStart(2, '0')}</b><strong>${esc(name)}</strong>`
+-                : `<span class="workflow-loop-node-top"><b>${String(index + 1).padStart(2, '0')}</b><i>${esc(statusLabel(status))}</i></span><strong>${esc(name)}</strong>${extra}`;
+-            return `<article class="workflow-loop-node ${esc(status)}${current ? ' current' : ''}" role="${compact ? 'presentation' : 'listitem'}" style="--loop-x:${x.toFixed(2)}%;--loop-y:${y.toFixed(2)}%;--loop-mobile-x:${mobileX.toFixed(2)}%;--loop-mobile-y:${mobileY.toFixed(2)}%">
+-                <button type="button" ${attrs} title="${esc(`${index + 1}. ${name} — ${statusLabel(status)}`)}">${inner}</button>
++                : `<span class="workflow-loop-node-top"><b>${String(index + 1).padStart(2, '0')}</b>${design ? '' : `<i>${esc(statusLabel(status))}</i>`}</span><strong>${esc(name)}</strong>${extra}`;
++            return `<article class="workflow-loop-node ${esc(status)}${current ? ' current' : ''}${selected ? ' selected' : ''}" role="${compact ? 'presentation' : 'listitem'}" style="--loop-x:${x.toFixed(2)}%;--loop-y:${y.toFixed(2)}%;--loop-mobile-x:${mobileX.toFixed(2)}%;--loop-mobile-y:${mobileY.toFixed(2)}%">
++                <button type="button" ${attrs} title="${esc(design ? `${index + 1}. ${name}` : `${index + 1}. ${name} — ${statusLabel(status)}`)}">${inner}</button>
+             </article>`;
+         })
+         .join('');
+@@ -104,20 +106,22 @@
+ 
+ /**
+  * steps: [{id, name, status, description|instruction}]
+- * options: { activeStepId, idPrefix, escapeHtml, routeFor(step), outputFor(step), ariaLabel, panel (bool, default true) }
++ * options: { activeStepId, selectedStepId, idPrefix, escapeHtml, routeFor(step), outputFor(step), ariaLabel, panel (bool, default true) }
+  */
+ export function workflowStepNumbersHtml(steps, options = {}) {
+     const esc = options.escapeHtml || fallbackEscape;
+     const list = Array.isArray(steps) ? steps : [];
+     if (!list.length) return '';
+     const activeId = options.activeStepId == null || options.activeStepId === '' ? null : String(options.activeStepId);
+-    let activeIndex = activeId === null ? -1 : list.findIndex((step) => String(step.id) === activeId);
++    const pickId = options.selectedStepId == null || options.selectedStepId === '' ? activeId : String(options.selectedStepId);
++    let activeIndex = pickId === null ? -1 : list.findIndex((step) => String(step.id) === pickId);
+     if (activeIndex < 0) activeIndex = 0;
+     const prefix = String(options.idPrefix || 'workflow-steps').replace(/[^a-zA-Z0-9_-]/g, '-');
+     const buttons = list
+         .map((step, index) => {
+-            const status = String(step.status || 'pending').toLowerCase();
+-            const current = activeId !== null && String(step.id) === activeId;
++            const design = options.mode === 'design';
++            const status = design ? 'design' : String(step.status || 'pending').toLowerCase();
++            const current = !design && activeId !== null && String(step.id) === activeId;
+             const attrs = workflowStepDataAttrs(step, index, {
+                 escapeHtml: esc,
+                 route: options.routeFor ? options.routeFor(step) : '',
+--- static/development/app.js.bak-20261022-wfui	2026-10-22 20:16:13
++++ static/development/app.js	2026-10-22 20:24:10
+@@ -13,13 +13,13 @@
+ 
+ import { createIncoming } from './incoming/index.js?v=20261022-incomingpad';
+ 
+-import { createWorkflows } from './workflows/index.js?v=20261022-threadring2';
++import { createWorkflows } from './workflows/index.js?v=20261022-wfui';
+ 
+ import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
+ 
+ import { createTerminals } from './terminals/index.js';
+ 
+-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261022-threadring2';
++import { createThreadsTranscript } from './threads/transcript/index.js?v=20261022-wfui';
+ 
+ import { createThreadsComposer } from './threads/composer/index.js?v=20261022-harnesssrc';
+ 
+--- static/development/styles.css.bak-20261022-wfui	2026-10-22 20:16:13
++++ static/development/styles.css	2026-10-22 20:24:10
+@@ -1,12 +1,12 @@
+ @import './shell.css?v=20261022-composer6';
+-@import './shared/components.css?v=20261022-threadring2';
+-@import './threads/styles.css?v=20261022-threadring2';
++@import './shared/components.css?v=20261022-wfui';
++@import './threads/styles.css?v=20261022-wfui';
+ @import './sidebar/styles.css?v=20261022-selthread';
+ @import './boards/styles.css?v=20261022-layout2';
+ @import './planning/styles.css?v=20261022-layout2';
+ @import './incoming/styles.css?v=20261022-incomingpad';
+ @import './automations/styles.css?v=20261022-calendar';
+-@import './workflows/styles.css?v=20261022-threadring2';
++@import './workflows/styles.css?v=20261022-wfui';
+ @import './terminals/styles.css?v=20261022-layout2';
+ @import './reports/styles.css?v=20261022-layout2';
+ 
+--- templates/development/index.html.bak-20261022-wfui	2026-10-22 20:24:04
++++ templates/development/index.html	2026-10-22 20:24:10
+@@ -4,7 +4,7 @@
+ 
+ {% block head_styles %}
+ {{ super() }}
+-<link rel="stylesheet" href="/static/development/styles.css?v=20261022-threadring2">
++<link rel="stylesheet" href="/static/development/styles.css?v=20261022-wfui">
+ <link rel="stylesheet" href="/static/vendor/xterm/xterm.min.css">
+ {% endblock %}
+ 
+@@ -96,5 +96,5 @@
+ {{ super() }}
+ <script src="/static/vendor/xterm/xterm.js"></script>
+ <script src="/static/shared/js/assistant_identity.js?v={{ app_version or 'dev' }}"></script>
+-<script type="module" src="/static/development/app.js?v=20261022-threadring2"></script>
++<script type="module" src="/static/development/app.js?v=20261022-wfui"></script>
+ {% endblock %}
+--- static/development/threads/transcript/index.js.bak-20261022-wfui	2026-10-22 20:24:04
++++ static/development/threads/transcript/index.js	2026-10-22 20:24:10
+@@ -1,4 +1,4 @@
+-import { bindWorkflowStepNumbers, nextWorkflowLoopId, readWorkflowViewMode, workflowLoopHtml, workflowStepDataAttrs, workflowStepNumbersHtml, workflowViewSwitchHtml, writeWorkflowViewMode } from '../../shared/workflow-loop.js?v=20261022-threadring2';
++import { bindWorkflowStepNumbers, nextWorkflowLoopId, readWorkflowViewMode, workflowLoopHtml, workflowStepDataAttrs, workflowStepNumbersHtml, workflowViewSwitchHtml, writeWorkflowViewMode } from '../../shared/workflow-loop.js?v=20261022-wfui';
+ import { shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
+ // Owns threads transcript rendering, interactions, and private view state.
+ export function createThreadsTranscript({ context, actions, el, token }) {

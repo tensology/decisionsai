@@ -772,30 +772,67 @@ export function createIncoming({ context, actions, el }) {
         };
     }
 
+    // 2026-10-22 resync: latest-wins loader. A forced refresh supersedes an in-flight one; stale responses are dropped.
+    let incomingLoadSeq = 0;
+    function setResyncBusy(busy) {
+        const button = el('incoming-resync');
+        if (!button) return;
+        button.disabled = busy;
+        button.classList.toggle('loading', busy);
+        button.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
     function refreshIncomingData(options) {
-        if (state.incomingLoad) return state.incomingLoad;
+        if (state.incomingLoad && !options?.force) return state.incomingLoad;
         if (!options?.force && state.incomingLoadedAt && Date.now() - state.incomingLoadedAt < 15_000) return Promise.resolve();
         connectIncomingPush();
-        state.incomingLoad = (async () => {
+        const seq = ++incomingLoadSeq;
+        setResyncBusy(true);
+        const load = (async () => {
+            let data = null;
+            let failed = false;
             try {
-                const data = await actions.api('/workflows/studio/incoming?limit=150');
-                state.incoming = data.items || [];
-                state.incomingLinks = data.links || [];
-                state.incomingChannels = data.channels || {};
-                state.incomingError = '';
+                data = await actions.api(`/workflows/studio/incoming?limit=150&_=${Date.now()}`, { cache: 'no-store' });
             } catch (_error) {
+                failed = true;
+            }
+            if (seq !== incomingLoadSeq) return;
+            if (failed) {
                 state.incoming = [];
                 state.incomingLinks = [];
                 state.incomingChannels = {};
                 state.incomingError = 'Incoming is temporarily unavailable. Restart DecisionsAI and try again.';
-            } finally {
-                state.incomingLoadedAt = Date.now();
-                state.incomingLoad = null;
+            } else {
+                state.incoming = data.items || [];
+                state.incomingLinks = data.links || [];
+                state.incomingChannels = data.channels || {};
+                state.incomingError = '';
             }
+            state.incomingLoadedAt = Date.now();
+            state.incomingLoad = null;
+            setResyncBusy(false);
             actions.renderSidebar();
             if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
         })();
-        return state.incomingLoad;
+        state.incomingLoad = load;
+        return load;
+    }
+
+    // 2026-10-22 resync: auto-refresh every 90s while Incoming is visible, and on tab focus/visibility.
+    const INCOMING_AUTO_REFRESH_MS = 90_000;
+    function incomingVisible() {
+        return context.workspaceMode === 'incoming' && document.visibilityState === 'visible';
+    }
+    function startIncomingAutoRefresh() {
+        setInterval(() => {
+            if (incomingVisible() && !state.incomingLoad) refreshIncomingData({ force: true });
+        }, INCOMING_AUTO_REFRESH_MS);
+        const onReturn = () => {
+            if (incomingVisible() && !state.incomingLoad && (!state.incomingLoadedAt || Date.now() - state.incomingLoadedAt > 5_000)) {
+                refreshIncomingData({ force: true });
+            }
+        };
+        document.addEventListener('visibilitychange', onReturn);
+        window.addEventListener('focus', onReturn);
     }
 
     function bindEvents() {
@@ -805,6 +842,8 @@ export function createIncoming({ context, actions, el }) {
                 renderIncomingWorkspace();
             })
         );
+        el('incoming-resync')?.addEventListener('click', () => refreshIncomingData({ force: true }));
+        startIncomingAutoRefresh();
         el('incoming-link-form').addEventListener('submit', (event) => {
             event.preventDefault();
             linkIncomingConversation();

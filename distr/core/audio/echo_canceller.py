@@ -27,7 +27,7 @@ from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
 logger = logging.getLogger(__name__)
 
 # Default speaker→mic path hint when settings leave aec_reference_delay_ms at 0.
-DEFAULT_AEC_STREAM_DELAY_MS = 40.0
+DEFAULT_AEC_STREAM_DELAY_MS = 95.0
 
 
 class ReferenceBuffer:

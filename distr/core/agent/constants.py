@@ -232,6 +232,18 @@ VAD_BARGEIN_FLOOR_MIN = 0.02
 VAD_BARGEIN_FLOOR_MAX = 0.06
 VAD_BARGEIN_CONSECUTIVE_MIN = 6
 VAD_BARGEIN_CONSECUTIVE_MAX = 14
+# Hands-free (continuous) mode only: speaker echo must not start a user turn.
+# PTT / dictation keep VAD_START_SECS and the slider confidence unchanged.
+# Offline harness (tests/audio/test_handsfree_vad_echo_e2e.py): raising these to
+# confidence>=0.7 / start_secs=0.25 removed no extra echo false-starts but added
+# 0.6-2.0 s barge-in latency, so hands-free keeps the slider confidence and
+# VAD_START_SECS; min_volume is now explicit. Echo is handled by the STT gate.
+HANDS_FREE_VAD_CONFIDENCE_MIN = 0.6
+HANDS_FREE_VAD_START_SECS = VAD_START_SECS
+HANDS_FREE_VAD_MIN_VOLUME = 0.6
+# Barge-in echo gate (hands-free, TTS playing): mean AEC-residual RMS over the
+# last N 20 ms frames must clear the adaptive echo-floor threshold.
+HANDS_FREE_BARGEIN_RESIDUAL_FRAMES = 5
 
 # --- STT Defaults ---
 # Batch (PTT): OpenAI recommends gpt-transcribe. Live (hands-free): gpt-live-transcribe.

@@ -115,7 +115,7 @@ class AgentSession:
             'output_sample_rate': 44100,  # Stable playback rate; transport resamples TTS to this
             # Speaker/driver/acoustic delay for WebRTC AEC3 (ReferenceBuffer
             # pull + AudioProcessor.stream_delay_ms). 0/unset resolves to 40ms.
-            'aec_reference_delay_ms': 40.0,
+            'aec_reference_delay_ms': 95.0,
             'input_device': None,  # None = system default
             'output_device': None  # None = system default
         },
@@ -1615,7 +1615,9 @@ class AgentSession:
                 vad_threshold = self.settings.get('vad_threshold', VAD_DEFAULT_THRESHOLD)
                 confidence = max(VAD_CONFIDENCE_MIN, min(VAD_CONFIDENCE_MAX, vad_threshold / 100.0))
                 if VADParams:
-                    params = VADParams(start_secs=VAD_START_SECS, confidence=confidence)
+                    from distr.core.agent.vad_params import build_vad_params
+                    params = build_vad_params(vad_threshold, hands_free=self.is_hands_free)
+                    confidence = params.confidence
                     self.vad_analyzer.set_params(params)
                 else:
                     self.vad_analyzer.set_params(start_secs=VAD_START_SECS, confidence=confidence)
@@ -1700,7 +1702,7 @@ class AgentSession:
             sample_rate=audio_config['output_sample_rate'],
         )
         aec_delay_ms = resolve_aec_reference_delay_ms(
-            audio_config.get('aec_reference_delay_ms', 40.0)
+            audio_config.get('aec_reference_delay_ms', 95.0)
         )
 
         def _persist_aec_delay(delay_ms: float) -> None:

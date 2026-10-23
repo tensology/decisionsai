@@ -946,3 +946,60 @@ def repair_development_ownership_integrity(*, _session_provider=None) -> dict[st
                     counts["chat_pointers_cleared"] += 1
         db.commit()
     return counts
+
+
+# thread1836 2026-10-22: agent-created project threads (Laya submit) were plain chats with no
+# DevelopmentWorkItem/params, so /chats?surface=development (sidebar project group, Recent,
+# board) never listed them. These helpers give such threads the same metadata + local board
+# ticket a UI-created thread gets.
+def project_board_key(project_id: int | None, *, _session_provider=None) -> str | None:
+    """Return "decisions:<board id>" for the project's active local board, if any."""
+    if project_id is None:
+        return None
+    from distr.core.db.kanban import KanbanBoard
+
+    with (_session_provider or get_session)() as db:
+        board = (
+            db.query(KanbanBoard)
+            .filter(KanbanBoard.default_project_id == int(project_id), KanbanBoard.archived == False)  # noqa: E712
+            .order_by(KanbanBoard.id.asc())
+            .first()
+        )
+        return f"decisions:{int(board.id)}" if board is not None else None
+
+
+def promote_project_thread_to_development(chat_id: int, *, source_type: str = "laya") -> dict[str, Any]:
+    """Idempotently make a root project chat a Development thread with a board ticket."""
+    with get_session() as db:
+        root = db.get(Chat, int(chat_id))
+        if root is None or root.parent_id is not None or root.project_id is None:
+            return {"chat_id": int(chat_id), "changed": False, "reason": "not a root project chat"}
+        project_id = int(root.project_id)
+        title = root.title
+        already = is_development_thread(db, root)
+        has_ticket = development_thread_metadata(root).get("ticket_id") is not None
+    if already and has_ticket:
+        return {"chat_id": int(chat_id), "changed": False, "reason": "already a development thread"}
+    if not already:
+        mark_development_thread(int(chat_id), source_type=source_type)
+    board_key = project_board_key(project_id)
+    binding: dict[str, Any] = {}
+    if board_key:
+        binding = rebind_development_thread(
+            int(chat_id), project_id=project_id, board_key=board_key, board_provider="local",
+            board_ticket_title=title,
+        )
+    return {"chat_id": int(chat_id), "changed": True, "board_key": board_key, "ticket_id": binding.get("ticket_id")}
+
+
+def find_unpromoted_project_threads(*, since: str = "2026-10-01") -> list[int]:
+    """Root, visible, unarchived project chats created since `since` with no Development record."""
+    with get_session() as db:
+        rows = (
+            db.query(Chat)
+            .filter(Chat.parent_id == None, Chat.project_id != None, Chat.is_archived == False,  # noqa: E711,E712
+                    Chat.is_hidden == False, Chat.created_date >= since)  # noqa: E712
+            .order_by(Chat.id.asc())
+            .all()
+        )
+        return [int(c.id) for c in rows if not is_development_thread(db, c)]

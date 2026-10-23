@@ -20,6 +20,7 @@ from distr.core.agent.constants import (
     VAD_BARGEIN_FLOOR_MAX,
     VAD_BARGEIN_CONSECUTIVE_MIN,
     VAD_BARGEIN_CONSECUTIVE_MAX,
+    HANDS_FREE_BARGEIN_RESIDUAL_FRAMES,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,8 @@ class BaseSTTService(STTService):
         self._echo_floor_multiplier: float = 1.8  # threshold = floor * this (wider margin to avoid false barge-in)
         self._echo_floor_min: float = 0.04  # absolute minimum threshold (echo residual is rarely below this)
         self._echo_floor_samples: int = 0  # how many samples contributed
+        # Hands-free echo gate: recent post-AEC mic RMS (20 ms frames).
+        self._recent_residual_rms: deque = deque(maxlen=HANDS_FREE_BARGEIN_RESIDUAL_FRAMES)
 
         # Legacy consecutive-chunk counters retained for set_vad_threshold()
         # compatibility / metrics; the energy deaf-gate no longer uses them.
@@ -751,6 +754,27 @@ class BaseSTTService(STTService):
         """
         return True
 
+    def _hands_free_echo_gate_active(self) -> bool:
+        """Echo gate applies only to hands-free (not dictation/PTT) while TTS plays."""
+        return (
+            self._is_hands_free
+            and not self._is_dictating
+            and not self._ptt_active
+            and self._is_tts_playing()
+        )
+
+    def _residual_clears_echo_floor(self) -> bool:
+        """True when sustained post-AEC mic energy is above the echo floor.
+
+        Leaked speaker echo after AEC sits around 0.01-0.05 RMS; a person
+        talking over TTS produces a residual well above that. Uses the mean of
+        the last few frames so one echo spike cannot open the gate.
+        """
+        hist = self._recent_residual_rms
+        if len(hist) < hist.maxlen:
+            return False
+        return (sum(hist) / len(hist)) >= self._get_adaptive_threshold()
+
     async def _check_pending_bargein(self, audio_bytes, direction):
         """Complete a deferred barge-in if a SpeakingStartedFrame was held.
 
@@ -761,16 +785,23 @@ class BaseSTTService(STTService):
             try:
                 chunk_f32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 erms = float(np.sqrt(np.mean(chunk_f32 ** 2)))
-                self._update_echo_floor(erms)
+                self._recent_residual_rms.append(erms)
+                if not self._pending_bargein_check:
+                    self._update_echo_floor(erms)
             except Exception:
                 pass
 
         if not self._pending_bargein_check:
             return
 
-        if not self._is_tts_playing() or self._ptt_active:
+        if self._ptt_active:
             self._pending_bargein_check = False
             self._bargein_consecutive_count = 0
+            return
+
+        if self._is_hands_free and not self._is_dictating and not self._residual_clears_echo_floor():
+            # Keep the VAD start pending until real speech clears the echo floor
+            # or SpeakingStoppedFrame cancels it.
             return
 
         if not (self._is_hands_free or self._is_dictating):
@@ -868,6 +899,19 @@ class BaseSTTService(STTService):
 
         if not (self._is_hands_free or self._is_dictating):
             return True  # neither mode active — swallow
+
+        # Hands-free only: while TTS plays, a VAD start whose post-AEC energy
+        # does not clear the adaptive echo floor is treated as echo. Defer it;
+        # _check_pending_bargein confirms once sustained energy clears.
+        if self._hands_free_echo_gate_active() and not self._residual_clears_echo_floor():
+            self._pending_bargein_check = True
+            hist = list(self._recent_residual_rms)
+            logger.debug(
+                "STT: Hands-free VAD start deferred as likely echo (residual=%.3f thr=%.3f)",
+                (sum(hist) / len(hist)) if hist else 0.0,
+                self._get_adaptive_threshold(),
+            )
+            return True
 
         # Turn-taking: WebRTC AEC cleans the mic path; Pipecat VAD + native
         # interruptions are the authority. No energy deaf-gate here.

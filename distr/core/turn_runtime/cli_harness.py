@@ -54,6 +54,51 @@ class CliHarnessTurnRuntime:
         return files
 
     @staticmethod
+    def _mcp_summary(item: dict[str, Any], title: str) -> str:
+        """Readable summary for MCP results: what was called, its text, and any screenshots."""
+        args = item.get("arguments")
+        if isinstance(args, str):
+            try:
+                import json as _json
+                args = _json.loads(args)
+            except Exception:
+                args = {"input": args}
+        intent = ""
+        if isinstance(args, dict):
+            for key in ("description", "purpose", "action", "url", "query", "code", "command", "input"):
+                val = args.get(key)
+                if isinstance(val, str) and val.strip():
+                    intent = val.strip().splitlines()[0][:200]
+                    break
+        result = item.get("result")
+        if isinstance(result, dict) and "structured_content" in result and not result.get("content"):
+            result = result.get("structured_content")
+        content = result.get("content") if isinstance(result, dict) else result
+        texts: list[str] = []
+        images = 0
+        if isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                kind = str(part.get("type") or "").lower()
+                if kind == "image":
+                    images += 1
+                elif kind == "text" and str(part.get("text") or "").strip():
+                    texts.append(str(part["text"]).strip())
+        elif isinstance(content, str):
+            texts.append(content.strip())
+        lines = [f"{title}: {intent}" if intent else title]
+        if images:
+            lines.append(f"Captured {images} screenshot{'s' if images != 1 else ''}.")
+        if texts:
+            lines.append(" ".join(texts)[:700])
+        error = item.get("error")
+        if error:
+            msg = error.get("message") if isinstance(error, dict) else error
+            lines.append(f"Error: {msg}")
+        return "\n".join(lines)
+
+    @staticmethod
     def _item_tool(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
         item_type = str(item.get("type") or "").strip().lower()
         details: dict[str, Any] = {
@@ -72,7 +117,10 @@ class CliHarnessTurnRuntime:
             tool = str(item.get("tool") or item.get("name") or "mcp_tool")
             server = str(item.get("server") or "").strip()
             details["server"] = server
-            return tool, tool.replace("_", " ").title(), details
+            label = tool.replace("_", " ").title()
+            if server:
+                label = f"{server.replace('_', ' ').title()} · {label}"
+            return tool, label, details
         if "agent" in item_type or "collab" in item_type:
             name = str(item.get("agent_name") or item.get("name") or "Code reviewer")
             details["agent_name"] = name
@@ -160,7 +208,11 @@ class CliHarnessTurnRuntime:
                             ),
                         }
                     )
-                    item_summary = str(
+                    item_summary = (
+                        self._mcp_summary(item, title)[:1000]
+                        if item_type in {"mcp_tool_call", "tool_call"} and not item.get("summary")
+                        else None
+                    ) or str(
                         item.get("summary")
                         or item.get("aggregated_output")
                         or item.get("result")

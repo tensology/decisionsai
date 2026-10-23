@@ -31,3 +31,32 @@
     .development-toolbar .development-create-focus { width: 100%; margin-left: 0; }
 }
 .development-empty { padding: 56px 8px; color: var(--studio-muted); text-align: center; font-size: 11px; }
+/* Numbered workflow step strip + reveal panel (shared/workflow-loop.js). */
+.workflow-step-numbers { display: grid; gap: 8px; }
+.workflow-step-numbers > ol { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.workflow-step-number-item > button {
+    display: grid; min-width: 28px; height: 28px; padding: 0 7px; place-items: center;
+    border: 1px solid #3a4768; border-radius: 7px; background: #111a31; color: #c9d2e6;
+    font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer;
+    transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.workflow-step-number-item > button:hover { border-color: #f07a2c; background: #16203a; }
+.workflow-step-number-item > button:focus-visible { outline: 2px solid #f07a2c; outline-offset: 2px; }
+.workflow-step-number-item > button[aria-selected="true"] { background: #202a4c; color: #fff; border-color: #8492b3; }
+.workflow-step-number-item.done > button { border-color: #4faa75; color: #8fd9ad; }
+.workflow-step-number-item.waiting > button, .workflow-step-number-item.paused > button { border-color: #f59e0b; color: #f6d58a; }
+.workflow-step-number-item.failed > button { border-color: #d0646c; color: #f3a0a7; }
+.workflow-step-number-item.current > button { border-color: #4faa75; box-shadow: 0 0 0 1px rgba(79,170,117,.45), 0 0 14px rgba(79,170,117,.4); }
+.workflow-step-panel { padding: 9px 10px; border: 1px solid rgba(255,255,255,.07); border-radius: 8px; background: rgba(7,12,25,.42); }
+.workflow-step-panel > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.workflow-step-panel strong { overflow: hidden; color: #f2f4f9; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-step-panel > div > span { margin-left: auto; flex: 0 0 auto; color: #4faa75; font-size: 8px; }
+.workflow-step-pill { flex: 0 0 auto; padding: 1px 6px; border: 1px solid #3a4768; border-radius: 999px; color: #a2acc2; font-size: 8px; font-style: normal; }
+.workflow-step-pill.done { border-color: #4faa75; color: #8fd9ad; }
+.workflow-step-pill.running { border-color: #4faa75; color: #b9f0cf; }
+.workflow-step-pill.waiting, .workflow-step-pill.paused { border-color: #f59e0b; color: #f6d58a; }
+.workflow-step-pill.failed { border-color: #d0646c; color: #f3a0a7; }
+.workflow-step-panel p { margin: 5px 0 0; color: #a2acc2; font-size: 9px; line-height: 1.4; }
+.workflow-step-panel .workflow-step-output { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: #c9d2e6; }
+.workflow-step-panel .workflow-step-output b { display: block; color: #7f8baa; font-size: 7px; text-transform: uppercase; }
+.workflow-step-numbers-host { margin-top: 12px; }

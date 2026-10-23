@@ -495,7 +495,11 @@ export function createSidebar({ context, actions, el }) {
             window.setTimeout(() => el('scheduled-prompt-input')?.focus(), 0);
         });
         el('sidebar-workflows-toggle').addEventListener('click', () => actions.setWorkspaceMode('workflows'));
-        el('sidebar-workflow-add').addEventListener('click', () => actions.setWorkspaceMode('workflows'));
+        el('sidebar-workflow-add').addEventListener('click', () => {
+            actions.setWorkspaceMode('workflows');
+            if (typeof actions.openWorkflowComposer === 'function') actions.openWorkflowComposer();
+            else el('workflow-add-toggle')?.click();
+        });
         el('sidebar-terminals-toggle').addEventListener('click', () => actions.setWorkspaceMode('terminals_home'));
         el('sidebar-reports-toggle').addEventListener('click', () => actions.setWorkspaceMode('reports'));
         el('board-context-pin').addEventListener('click', () => {

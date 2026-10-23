@@ -329,6 +329,13 @@ def select_or_create_thread(
     )
     session.add(chat)
     session.commit()
+    if route.project_id is not None:
+        # thread1836 2026-10-22: a new thread in a project is Development work; give it the same
+        # metadata + board ticket a UI-created thread gets so the sidebar/Recent/board list it.
+        from distr.core.workflow.development_threads import promote_project_thread_to_development
+
+        promote_project_thread_to_development(int(chat.id), source_type="laya")
+        return int(chat.id), True, "new development thread"
     return int(chat.id), True, "new thread"
 
 
@@ -336,6 +343,19 @@ def select_or_create_thread(
 
 def _default_dispatch(sub: Submission) -> None:
     from distr.core.signals import signal_manager
+
+    if sub.thread_created and sub.project_id is not None:
+        # thread1836: new project threads are Development threads; run them the Development way.
+        from distr.core.db import get_session
+        from distr.core.workflow.development_threads import is_development_thread
+
+        with get_session() as db:
+            dev = is_development_thread(db, int(sub.thread_id))
+        if dev:
+            from distr.core.workflow.oracle_thread_handoff import send_instruction_to_thread
+
+            send_instruction_to_thread(int(sub.thread_id), sub.text)
+            return
 
     signal_manager.web_send_to_agent_requested.emit(
         int(sub.thread_id), sub.text, False, None, None,

@@ -18,7 +18,13 @@ _LAST_DISCUSSION_POLL = 0.0
 _LAST_CONTEXT_POLL = 0.0
 _LAST_TICKET_POLL = 0.0
 DISCUSSION_POLL_SECONDS = 30
-TICKET_POLL_SECONDS = 3
+TICKET_POLL_SECONDS = 3  # active cadence (kept for callers/tests that import it)
+TICKET_POLL_ACTIVE_SECONDS = 3
+TICKET_POLL_IDLE_SECONDS = 15
+_TICKET_POLL_INTERVAL = TICKET_POLL_IDLE_SECONDS
+# Sentinel used when reporting a routing block before any thread exists. PATCH
+# updates status without claiming, so a later real thread can still POST-claim.
+ROUTE_BLOCKED_THREAD_ID = "decisions-route-blocked"
 
 
 class TensologyApiError(RuntimeError):
@@ -292,9 +298,13 @@ def _tensology_thread_identity(ticket: dict[str, Any]) -> str:
 
 
 def _existing_tensology_thread(ticket: dict[str, Any]) -> int | None:
+    """Dedupe by Tensology ticket: a thread already claimed for this ticket is never recreated."""
     from distr.core.db import get_session
     from distr.core.db.workflow import DevelopmentWorkItem
 
+    claimed = str(ticket.get("decisions_thread_id") or "").strip()
+    if claimed.isdigit():
+        return int(claimed)
     identity = _tensology_thread_identity(ticket)
     if not identity:
         return None
@@ -306,12 +316,18 @@ def _existing_tensology_thread(ticket: dict[str, Any]) -> int | None:
 
 
 def _resolve_tensology_project(ticket: dict[str, Any]):
+    """Match the local project by ``decisions_project_id`` first, then by exact (case-insensitive) name."""
     from distr.core.db import get_session
     from distr.core.db.projects import Project
 
+    raw_id = str(ticket.get("decisions_project_id") or "").strip()
     name = str(ticket.get("project_name") or "").strip()
     with get_session() as db:
-        project = db.query(Project).filter(Project.name.ilike(name)).first() if name else None
+        project = None
+        if raw_id.isdigit():
+            project = db.get(Project, int(raw_id))
+        if project is None and name:
+            project = db.query(Project).filter(Project.name.ilike(name)).first()
         if project is None:
             return None
         snapshot = {
@@ -319,11 +335,163 @@ def _resolve_tensology_project(ticket: dict[str, Any]):
             "name": project.name,
             "folder_location": project.folder_location or "",
             "start_time_tracker": bool(project.start_time_tracker),
+            "coding_backend": str(getattr(project, "coding_backend", "") or "").strip(),
+            "coding_backend_model": str(getattr(project, "coding_backend_model", "") or "").strip(),
         }
     folder = Path(snapshot["folder_location"]).expanduser() if snapshot["folder_location"] else None
     if not folder or not folder.is_dir():
         return None
     return snapshot
+
+
+def _usable_repository_folder(raw_path: str, search_roots: list[Path] | None = None) -> Path | None:
+    """Use the registered path when it exists here, otherwise the same folder name beside other local projects."""
+    folder = Path(raw_path).expanduser()
+    if folder.is_dir():
+        return folder
+    name = folder.name
+    if not name or name in {".", ".."}:
+        return None
+    roots = _local_project_roots() if search_roots is None else search_roots
+    matches: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for pattern in (name, f"*/{name}"):
+            for candidate in root.glob(pattern):
+                if not candidate.is_dir() or "OLD" in candidate.parts or candidate in matches:
+                    continue
+                matches.append(candidate)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _local_project_roots() -> list[Path]:
+    """Parents of project folders already on this machine."""
+    from distr.core.db import get_session
+    from distr.core.db.projects import Project
+
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    with get_session() as db:
+        locations = db.query(Project.folder_location).all()
+    for (location,) in locations:
+        if not location:
+            continue
+        parent = Path(location).expanduser().parent
+        if parent in seen or not parent.is_dir():
+            continue
+        seen.add(parent)
+        roots.append(parent)
+    return roots
+
+
+def _ticket_repository_folder(client: TensologyClient, ticket: dict[str, Any]) -> Path | None:
+    """Return the repository directory on this machine, including when the registered path has moved."""
+    raw_project_id = str(ticket.get("project_id") or "").strip()
+    if not raw_project_id.isdigit():
+        return None
+    try:
+        repositories = client.get("repositories", query={"project_id": int(raw_project_id)})
+    except Exception:
+        repositories = []
+    if not isinstance(repositories, list):
+        repositories = []
+    for repository in repositories:
+        if not isinstance(repository, dict):
+            continue
+        raw_path = str(repository.get("local_path_hint") or "").strip()
+        if not raw_path:
+            continue
+        folder = _usable_repository_folder(raw_path)
+        if folder is not None:
+            return folder
+    for domain in (ticket.get("project_dev_domain"), ticket.get("project_domain")):
+        domain = str(domain or "").strip().lower().removeprefix("https://").removeprefix("http://").strip("/")
+        if not domain:
+            continue
+        for candidate in (domain, domain if domain.startswith("www.") else f"www.{domain}"):
+            folder = _usable_repository_folder(candidate)
+            if folder is not None:
+                return folder
+    return None
+
+
+def _settings_high_route() -> tuple[str, str]:
+    """Return the hosted high coding route from Decisions settings."""
+    from distr.core.db import Settings, get_session
+
+    with get_session() as db:
+        row = db.query(Settings).first()
+        if row is None:
+            return "", ""
+        return (
+            str(row.project_cli_high_backend or "").strip(),
+            str(row.project_cli_high_model or "").strip(),
+        )
+
+
+def _create_tensology_project(client: TensologyClient, ticket: dict[str, Any]) -> dict[str, Any] | None:
+    """Create or repair the local project from the Tensology repository path and the high route."""
+    from distr.core.db import get_session
+    from distr.core.db.projects import Project
+    from distr.core.project_cli_backends.timing import is_local_model_route
+
+    name = str(ticket.get("project_name") or "").strip()
+    folder = _ticket_repository_folder(client, ticket)
+    if not name or folder is None:
+        return None
+    backend, model = _settings_high_route()
+    provider = model.split("/", 1)[0].lower() if backend.lower() == "pi" and "/" in model else backend
+    if not backend or not model or is_local_model_route(backend_id=backend, model=model, provider=provider):
+        return None
+    with get_session() as db:
+        project = db.query(Project).filter(Project.name.ilike(name)).first()
+        if project is None:
+            db.add(Project(
+                name=name,
+                folder_location=str(folder),
+                coding_backend=backend,
+                coding_backend_model=model,
+                start_time_tracker=True,
+                in_use=False,
+            ))
+        else:
+            current = Path(project.folder_location or "").expanduser()
+            if current.is_dir():
+                return None
+            project.folder_location = str(folder)
+            project.coding_backend = backend
+            project.coding_backend_model = model
+    return _resolve_tensology_project(ticket)
+
+
+class TensologyRouteError(TensologyApiError):
+    """The project has no usable (non-local) route; never fall back to a local free model."""
+
+
+def _tensology_project_route(project: dict[str, Any]) -> dict[str, str]:
+    """Return the project's configured route or raise; local/free models (pi/ollama) are refused."""
+    from distr.core.project_cli_backends.timing import is_local_model_route
+
+    backend = str(project.get("coding_backend") or "").strip().lower()
+    model = str(project.get("coding_backend_model") or "").strip()
+    name = str(project.get("name") or "project")
+    if not backend or not model:
+        raise TensologyRouteError(
+            f"No default coding route is configured for '{name}'. Set a non-local backend and model on the "
+            "DecisionsAI project before this ticket can run.",
+            code="route_not_configured",
+        )
+    provider = model.split("/", 1)[0].lower() if backend == "pi" and "/" in model else backend
+    if is_local_model_route(backend_id=backend, model=model, provider=provider):
+        raise TensologyRouteError(
+            f"'{name}' is routed to a local free model ({backend}/{model}), which is not allowed for "
+            "Tensology tickets. Choose a hosted backend/model for this project.",
+            code="route_not_allowed",
+        )
+    return {"backend": backend, "provider": provider, "model": model}
 
 
 def _local_api_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -356,6 +524,17 @@ def _execution_prompt(ticket: dict[str, Any], complexity: str) -> str:
     criteria = ticket.get("success_criteria") if isinstance(ticket.get("success_criteria"), list) else []
     task_lines = "\n".join(f"- {str(item)}" for item in tasks if str(item).strip()) or "- Derive implementation tasks from the approved scope."
     criteria_lines = "\n".join(f"- {str(item)}" for item in criteria if str(item).strip()) or "- The approved request is implemented and verified without unrelated changes."
+    source = ticket.get("source") if isinstance(ticket.get("source"), dict) else {}
+    attachments = ticket.get("attachments") if isinstance(ticket.get("attachments"), list) else []
+    discussion = ticket.get("discussion") if isinstance(ticket.get("discussion"), list) else []
+    delivery_context = json.dumps({
+        "project_domain": ticket.get("project_domain") or "",
+        "project_dev_domain": ticket.get("project_dev_domain") or "",
+        "source": source,
+        "attachments": attachments,
+        "discussion": discussion,
+        "discussion_truncated": bool(ticket.get("discussion_truncated")),
+    }, ensure_ascii=False, indent=2, default=str)
     return (
         f"Execute approved Tensology ticket {ticket.get('reference')}: {ticket.get('title')}\n\n"
         f"Complexity: {complexity}.\n"
@@ -363,6 +542,7 @@ def _execution_prompt(ticket: dict[str, Any], complexity: str) -> str:
         f"Approved implementation plan:\n{ticket.get('implementation_plan') or 'Use the repository evidence and approved scope.'}\n\n"
         f"Tasks:\n{task_lines}\n\n"
         f"Acceptance criteria:\n{criteria_lines}\n\n"
+        f"Source, discussion, and attachment context:\n{delivery_context}\n\n"
         "Treat this as one explicit goal. Follow these observable gates in order: Development, Testing, "
         "Polish or refinement only when evidence shows it is needed, Retesting when refinement changed behavior, "
         "Final verification, then Done. At the start of each gate, emit exactly one line in the form "
@@ -463,6 +643,11 @@ def _ensure_tensology_kanban_ticket(
                 "provider": "tensology",
                 "project_id": ticket.get("project_id"),
                 "reference": reference,
+                "project_domain": ticket.get("project_domain") or "",
+                "project_dev_domain": ticket.get("project_dev_domain") or "",
+                "source": ticket.get("source") if isinstance(ticket.get("source"), dict) else {},
+                "attachments": ticket.get("attachments") if isinstance(ticket.get("attachments"), list) else [],
+                "discussion": ticket.get("discussion") if isinstance(ticket.get("discussion"), list) else [],
                 "implementation_plan": ticket.get("implementation_plan") or "",
                 "tasks": tasks,
                 "acceptance_criteria": criteria,
@@ -497,7 +682,7 @@ def _ensure_tensology_kanban_ticket(
 
 
 def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) -> tuple[int, dict[str, str]]:
-    from distr.core.kanban.ticket_policy import resolve_ticket_cli_route, resolve_ticket_complexity
+    from distr.core.kanban.ticket_policy import resolve_ticket_complexity
     from distr.core.workflow.developer_workflow import get_or_create_development_workflow
 
     tasks = ticket.get("tasks") if isinstance(ticket.get("tasks"), list) else []
@@ -507,7 +692,8 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
         requested=str(ticket.get("execution_complexity") or "auto"),
         todo_count=len(tasks),
     )
-    route = resolve_ticket_cli_route(None, complexity, board=None)
+    # Raises TensologyRouteError before anything is created when the route is unset or local.
+    route = _tensology_project_route(project)
     prompt = _execution_prompt(ticket, complexity)
     workflow_id = get_or_create_development_workflow()
     mirrored_ticket_id = _ensure_tensology_kanban_ticket(ticket, project, workflow_id)
@@ -529,32 +715,27 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
             "execution_profile": "code",
             "autonomy_level": "goal",
             "permission_mode": "standard",
-            "backend": route.get("backend") or "pi",
-            "provider": route.get("model_provider") or route.get("backend") or "ollama",
-            "model_name": route.get("model") or "auto",
-            "reasoning_effort": route.get("codex_reasoning_effort") or ("xhigh" if complexity == "high" else "high" if complexity == "medium" else "medium"),
-            "service_tier": route.get("codex_service_tier") or "standard",
+            "backend": route["backend"],
+            "provider": route["provider"],
+            "model_name": route["model"],
+            "reasoning_effort": "xhigh" if complexity == "high" else "high" if complexity == "medium" else "medium",
+            "service_tier": "standard",
             "routing_assessment": {
                 "complexity": complexity,
                 "source": "tensology_approval",
-                "reason": f"Approved ticket classified as {complexity} before execution.",
+                "reason": f"Approved ticket classified as {complexity}; routed by the project's default route.",
             },
             "skill_ids": skill_ids,
             "use_playwright": use_playwright,
-            # The upstream ticket already carries explicit human approval.
-            "skip_human_checkpoints": True,
+            # Approval upstream authorises the work, not every gate: keep human checkpoints on.
+            "skip_human_checkpoints": False,
         },
     )
     task = response.get("task") if isinstance(response, dict) else None
     chat_id = int((task or {}).get("id") or 0)
     if not chat_id:
         raise TensologyApiError("DecisionsAI did not return a Development thread id.", code="thread_missing")
-    return chat_id, {
-        "complexity": complexity,
-        "backend": str(route.get("backend") or "pi"),
-        "provider": str(route.get("model_provider") or route.get("backend") or ""),
-        "model": str(route.get("model") or "auto"),
-    }
+    return chat_id, {"complexity": complexity, **route}
 
 
 def _execution_text(execution: dict[str, Any]) -> str:
@@ -626,13 +807,64 @@ def _tensology_execution_receipt(execution: dict[str, Any], *, chat_id: int) -> 
     }
 
 
+def _report_tensology_route_block(client: TensologyClient, ticket: dict[str, Any], project: dict[str, Any], exc: Exception) -> None:
+    """Tell Tensology the ticket is blocked on routing (once per distinct reason); never run locally."""
+    import logging
+
+    detail = f"DecisionsAI did not start: {exc}"[:500]
+    logging.getLogger(__name__).error(
+        "Tensology ticket %s blocked on routing for project %s: %s", ticket.get("reference") or ticket.get("id"), project.get("id"), exc
+    )
+    if str(ticket.get("execution_status") or "") == "blocked" and str(ticket.get("execution_status_detail") or "") == detail:
+        return
+    client.patch(
+        f"tickets/{int(ticket['id'])}/execution",
+        {
+            "thread_id": str(ticket.get("decisions_thread_id") or ROUTE_BLOCKED_THREAD_ID),
+            "status": "blocked",
+            "detail": detail,
+        },
+        idempotency_key=f"tensology-ticket-{int(ticket['id'])}-route-blocked-{getattr(exc, 'code', 'route')}",
+    )
+
+
+UNMATCHED_PROJECT_CODE = "project_not_matched"
+
+
+def _report_tensology_unmatched_project(client: TensologyClient, ticket: dict[str, Any]) -> None:
+    """No local project (or its folder is missing): warn and tell Tensology the ticket is blocked, once."""
+    import logging
+
+    name = str(ticket.get("project_name") or "").strip() or f"project {ticket.get('project_id')}"
+    raw_id = str(ticket.get("decisions_project_id") or "").strip()
+    detail = (
+        f"DecisionsAI did not start: no local DecisionsAI project matches '{name}'"
+        + (f" (decisions_project_id {raw_id})" if raw_id else "")
+        + " or its folder is missing. Create/link the project in DecisionsAI with an existing folder."
+    )[:500]
+    logging.getLogger(__name__).warning(
+        "Tensology ticket %s skipped: %s", ticket.get("reference") or ticket.get("id"), detail
+    )
+    if str(ticket.get("decisions_thread_id") or "").strip():
+        return  # Already claimed by a thread; never overwrite its projection.
+    if str(ticket.get("execution_status") or "") == "blocked" and str(ticket.get("execution_status_detail") or "") == detail:
+        return
+    client.patch(
+        f"tickets/{int(ticket['id'])}/execution",
+        {"thread_id": ROUTE_BLOCKED_THREAD_ID, "status": "blocked", "detail": detail},
+        idempotency_key=f"tensology-ticket-{int(ticket['id'])}-route-blocked-{UNMATCHED_PROJECT_CODE}",
+    )
+
+
 def process_tensology_approved_tickets(*, force: bool = False) -> int:
     """Create/reuse visible Development threads and mirror their execution state."""
-    global _LAST_TICKET_POLL
+    global _LAST_TICKET_POLL, _TICKET_POLL_INTERVAL
     now = time.monotonic()
-    if not force and now - _LAST_TICKET_POLL < TICKET_POLL_SECONDS:
+    if not force and now - _LAST_TICKET_POLL < _TICKET_POLL_INTERVAL:
         return 0
     _LAST_TICKET_POLL = now
+    # Idle cadence until this poll proves there is work; a failed request also stays idle.
+    _TICKET_POLL_INTERVAL = TICKET_POLL_IDLE_SECONDS
     client = configured_tensology_client(source="decisionsai-ticket-runner")
     tickets = client.get(
         "tickets",
@@ -647,10 +879,11 @@ def process_tensology_approved_tickets(*, force: bool = False) -> int:
     for ticket in tickets[:20]:
         if not isinstance(ticket, dict):
             continue
-        if not ticket.get("repository_ready"):
-            continue
         project = _resolve_tensology_project(ticket)
         if project is None:
+            project = _create_tensology_project(client, ticket)
+        if project is None:
+            _report_tensology_unmatched_project(client, ticket)
             continue
         chat_id = _existing_tensology_thread(ticket)
         route = {
@@ -660,7 +893,11 @@ def process_tensology_approved_tickets(*, force: bool = False) -> int:
             "model": str(ticket.get("decisions_model") or ""),
         }
         if chat_id is None:
-            chat_id, route = _create_tensology_thread(ticket, project)
+            try:
+                chat_id, route = _create_tensology_thread(ticket, project)
+            except TensologyRouteError as exc:
+                _report_tensology_route_block(client, ticket, project, exc)
+                continue
 
         thread_url = f"http://127.0.0.1:8765/development/threads/{chat_id}/"
         if str(ticket.get("decisions_thread_id") or "") != str(chat_id):
@@ -696,4 +933,7 @@ def process_tensology_approved_tickets(*, force: bool = False) -> int:
                     idempotency_key=f"tensology-ticket-{int(ticket['id'])}-status-{remote_status}-{execution.get('job_id') or 'run'}",
                 )
         processed += 1
+    if processed:
+        # Live tickets (created or syncing threads) poll fast; blocked/unmatched ones stay idle.
+        _TICKET_POLL_INTERVAL = TICKET_POLL_ACTIVE_SECONDS
     return processed

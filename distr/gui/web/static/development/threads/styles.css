@@ -1013,3 +1013,90 @@
 .composer-scope-strip:not(:has(> :not(.hidden))) { display: none; }
 .composer-scope-strip:not(:has(> :not(.hidden))) ~ .composer-prompt-wrap #task-prompt { min-height: 77px; padding-right: 120px; }
 .composer-scope-strip:not(:has(> :not(.hidden))) ~ .composer-prompt-wrap .composer-time-controls { top: 6px; }
+
+/* Thread terminal start/stop button (far right of thread header) */
+.thread-terminal-button { margin-left: 6px; flex: 0 0 auto; }
+/* Icons + look come from the terminal panel: .terminal-tool-button.terminal-bulk-action (.primary = start, .danger = stop). */
+.thread-terminal-button .tt-stop { display: none; }
+.thread-terminal-button[data-running="true"] .tt-play { display: none; }
+.thread-terminal-button[data-running="true"] .tt-stop { display: inline; }
+.thread-terminal-button[aria-busy="true"], .thread-terminal-button:disabled { opacity: .55; cursor: progress; }
+/* Single custom tooltip, BELOW the button; position:fixed (coords set on hover in app.js) escapes header overflow clipping. */
+.thread-terminal-button[data-tooltip]::after {
+    position: fixed;
+    z-index: 10000;
+    top: var(--tt-top, 48px);
+    bottom: auto;
+    left: var(--tt-left, 50%);
+    right: auto;
+    max-width: calc(100vw - 16px);
+    white-space: nowrap;
+    transform: translate(-50%, -3px);
+}
+.thread-terminal-button[data-tooltip]:focus-visible::after { transform: translate(-50%, 0); }
+@media (hover: hover) { .thread-terminal-button[data-tooltip]:hover::after { transform: translate(-50%, 0); } }
+
+/* Compact workflow Loop ring in the thread runner card (shared markup: shared/workflow-loop.js). */
+.thread-workflow-runner-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.thread-workflow-view-switch { padding: 2px; border-radius: 7px; }
+.thread-workflow-view-switch button { min-height: 22px; gap: 4px; padding: 0 7px; font-size: 9px; }
+.thread-workflow-view-switch svg { width: 12px; height: 12px; }
+.thread-workflow-runner[data-view="loop"] .thread-workflow-nodes { display: none; }
+.thread-workflow-runner[data-view="list"] .thread-workflow-ring { display: none; }
+.thread-workflow-ring .workflow-loop-viewport.compact { min-height: 0; overflow: hidden; border-radius: 10px; }
+.thread-workflow-ring .workflow-loop-map.compact {
+    width: 100%;
+    min-width: 0;
+    height: clamp(300px, 42vw, 360px);
+    min-height: 300px;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 10px;
+    background:
+        linear-gradient(rgba(105, 119, 159, .04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(105, 119, 159, .04) 1px, transparent 1px),
+        radial-gradient(circle at 50% 50%, rgba(35, 50, 91, .36), transparent 38%),
+        #080e1d;
+    background-size: 22px 22px, 22px 22px, auto, auto;
+}
+.thread-workflow-ring .workflow-loop-path { inset: 9% 8%; width: 84%; height: 82%; }
+.thread-workflow-ring .workflow-loop-core { width: 88px; height: 88px; }
+.thread-workflow-ring .workflow-loop-core strong { font-size: 24px; }
+.thread-workflow-ring .workflow-loop-core span { max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-workflow-ring .workflow-loop-node { width: clamp(96px, 20%, 132px); }
+.thread-workflow-ring .workflow-loop-node > button {
+    display: flex;
+    min-height: 0;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 8px;
+}
+.thread-workflow-ring .workflow-loop-node > button > b {
+    display: grid;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    place-items: center;
+    border: 1px solid #465474;
+    border-radius: 5px;
+    color: #d2d9e9;
+    font-size: 8px;
+    font-variant-numeric: tabular-nums;
+}
+.thread-workflow-ring .workflow-loop-node > button > strong { min-width: 0; font-size: 10px; }
+.thread-workflow-ring .workflow-loop-node.done > button > b { border-color: #4faa75; color: #8fd9ad; background: rgba(79,170,117,.12); }
+.thread-workflow-ring .workflow-loop-node.waiting > button > b { border-color: #f59e0b; color: #f6d58a; }
+.thread-workflow-ring .workflow-loop-node.failed > button > b { border-color: var(--studio-red); color: #f3a0a7; }
+.thread-workflow-ring .workflow-loop-node.current > button {
+    border-color: var(--studio-green);
+    background: #142238;
+    box-shadow: 0 0 0 1px rgba(79,170,117,.45), 0 0 18px rgba(79,170,117,.38);
+}
+.thread-workflow-ring .workflow-loop-node.current.waiting > button { border-color: #f59e0b; box-shadow: 0 0 0 1px rgba(245,158,11,.4), 0 0 18px rgba(245,158,11,.32); }
+.thread-workflow-ring .workflow-loop-node.current.failed > button { border-color: var(--studio-red); box-shadow: 0 0 0 1px rgba(208,100,108,.45), 0 0 18px rgba(208,100,108,.34); }
+.thread-workflow-ring .workflow-loop-node > button[aria-selected="true"] { outline: 1px solid rgba(240,122,44,.7); outline-offset: 1px; }
+.thread-workflow-ring .workflow-loop-map.dense .workflow-loop-node { width: clamp(84px, 17%, 112px); }
+@media (max-width: 720px) {
+    .thread-workflow-ring .workflow-loop-node { top: var(--loop-mobile-y); left: var(--loop-mobile-x); width: 92px; }
+    .thread-workflow-ring .workflow-loop-path { inset: 9% 14%; width: 72%; }
+}

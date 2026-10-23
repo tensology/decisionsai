@@ -173,3 +173,10 @@
 .terminal-command-summary h2 { font-size: 10px; }
 .channel-link-list > p { font-size: 9px; }
 #incoming-workspace .incoming-whatsapp-reader-header > button { font-size: 17px; }
+
+/* 2026-10-22 resync: compact Resync button under the folder tabs. */
+.incoming-folder-tabs button.incoming-resync { min-height: 30px; margin-top: 6px; border-right-color: transparent; border-radius: 8px; grid-template-columns: 18px minmax(0, 1fr); }
+.incoming-folder-tabs button.incoming-resync:disabled { cursor: progress; opacity: .7; }
+.incoming-folder-tabs button.incoming-resync.loading > span { display: inline-block; animation: incoming-resync-spin .8s linear infinite; }
+@keyframes incoming-resync-spin { to { transform: rotate(360deg); } }
+@media (max-width: 980px) { .incoming-folder-tabs button.incoming-resync { flex: 0 0 auto; margin-top: 0; border-radius: 8px; } }

@@ -1,3 +1,4 @@
+import { bindWorkflowStepNumbers, nextWorkflowLoopId, readWorkflowViewMode, workflowLoopHtml, workflowStepDataAttrs, workflowStepNumbersHtml, workflowViewSwitchHtml, writeWorkflowViewMode } from '../../shared/workflow-loop.js?v=20261022-threadring2';
 import { shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
@@ -600,11 +601,34 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         return parts.length ? ` (${parts.join(', ')})` : '';
     }
 
+    /** Display-only: fold consecutive identical status rows (same kind, title, state) into one row with a count. */
+    function collapseRepeatedEventItems(acc, item) {
+        const prev = acc[acc.length - 1];
+        const same = prev && item.kind !== 'approval' && prev.kind === item.kind && prev.baseTitle === item.title
+            && prev.status === item.status && !item.failed && !prev.failed && !item.detail && !prev.detail;
+        if (!same) {
+            acc.push({ ...item, baseTitle: item.title, repeat: 1, files: [...(item.files || [])] });
+            return acc;
+        }
+        prev.repeat += 1;
+        prev.title = `${prev.baseTitle} ×${prev.repeat}`;
+        if (item.preview) prev.preview = item.preview;
+        (item.files || []).forEach((file) => {
+            const hit = prev.files.find((f) => f.path === file.path);
+            if (hit) {
+                hit.additions = Number(hit.additions || 0) + Number(file.additions || 0);
+                hit.deletions = Number(hit.deletions || 0) + Number(file.deletions || 0);
+            } else prev.files.push({ ...file });
+        });
+        return acc;
+    }
+
     function turnEventRowsHtml(events, { includeRunning = false, active = false } = {}) {
         return mergeWorkerLifecycleEvents(events)
             .filter((event) => !isRoutineShellStep(event) || isFailedStep(event))
             .map(turnEventPresentation)
             .filter((item) => item && (includeRunning || !item.running))
+            .reduce(collapseRepeatedEventItems, [])
             .map((item) => {
                 if (item.kind === 'approval') return approvalCardHtml(item.approval);
                 const classes = `turn-activity-block turn-event-row event-${item.kind}${item.failed ? ' failed' : ''}${item.running ? ' running' : ''}${active ? ' active-turn-action' : ''}`;
@@ -630,7 +654,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const role = message.role || 'assistant';
         if (role === 'user') {
             const presentation = userMessagePresentation(message);
-            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}</div>${turnRouteLabelHtml(message)}</article>`;
+            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}</div></article>`;
         }
         if (role === 'tool') {
             const tool = message.tool_event || {};
@@ -653,6 +677,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
     const TURN_HARNESS_LABELS = { pi: 'Pi', cursor: 'Cursor', codex: 'Codex', claude_code: 'Claude Code', kilocode: 'Kilo' };
     // Small label under a sent message: which tier + harness/model Auto picked (or the fixed choice).
     function turnRouteLabelHtml(message) {
+        // 2026-10-22 uiclean: label no longer rendered under user bubbles (overlapped next row as stray "Fixed: Codex" text).
         const routes = context.turnRoutes || {};
         const entry = message.chat_row_id != null ? routes[String(message.chat_row_id)] : null;
         if (!entry || !entry.backend) return '';
@@ -793,39 +818,62 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             statusSteps.findIndex((step) => ['running', 'waiting', 'failed'].includes(String(step.status || '').toLowerCase()))
         );
         const title = workflow?.name || event.workflow_name || 'Workflow';
-        const summary = event.summary || event.phase || statusSteps[activeIndex]?.name || `${count} steps`;
         const stepRoutes = run?.step_routes || {};
-        const nodes = statusSteps
-            .map((step, index) => {
-                const status = String(step.status || 'pending').toLowerCase();
-                const route = stepRoutes[String(step.id)] || stepRoutes[step.id] || {};
-                const routeLabel = route.model || route.backend || 'Auto';
-                const detail = step.description || step.instruction || 'No step contract is available yet.';
-                return `<li class="thread-workflow-node ${status}" role="presentation"><button type="button" role="tab" aria-selected="${index === activeIndex}" data-thread-workflow-step data-step-name="${actions.escapeHtml(step.name || `Step ${index + 1}`)}" data-step-status="${actions.escapeHtml(status)}" data-step-route="${actions.escapeHtml(routeLabel)}" data-step-detail="${actions.escapeHtml(detail)}"><b>${index + 1}</b><span>${actions.escapeHtml(step.name || `Step ${index + 1}`)}</span><small>${actions.escapeHtml(actions.statusLabel(status))}</small></button></li>`;
-            })
-            .join('');
-        const activeStep = statusSteps[activeIndex] || statusSteps[0] || {};
-        const activeRoute = stepRoutes[String(activeStep.id)] || stepRoutes[activeStep.id] || {};
-        const activeDetail = activeStep.description || activeStep.instruction || summary;
+        const routeFor = (step) => {
+            const route = stepRoutes[String(step.id)] || stepRoutes[step.id] || {};
+            return route.model || route.backend || step.model || '';
+        };
+        const activeStepId = statusSteps[activeIndex]?.id;
+        const outputFor = (step) => {
+            const own = step.output || step.last_output || step.result || '';
+            if (own) return String(own);
+            return String(step.id) === String(activeStepId) ? String(event.summary || run?.last_output || run?.summary || '') : '';
+        };
+        const stepButtonAttrs = (step, index) =>
+            workflowStepDataAttrs(step, index, { escapeHtml: actions.escapeHtml, route: routeFor(step), output: outputFor(step), selected: index === activeIndex });
+        const numbers = workflowStepNumbersHtml(statusSteps, {
+            activeStepId,
+            idPrefix: nextWorkflowLoopId(`thread-wf-steps-${String(run?.id || event.run_id || 'x')}-${mode}`),
+            escapeHtml: actions.escapeHtml,
+            routeFor,
+            outputFor,
+            ariaLabel: `${title} steps`
+        });
+        const viewMode = readWorkflowViewMode();
+        const ringPrefix = nextWorkflowLoopId(`thread-wf-${String(run?.id || event.run_id || 'x')}-${mode}`);
+        const ring = workflowLoopHtml(statusSteps, {
+            compact: true,
+            activeStepId: statusSteps[activeIndex]?.id,
+            idPrefix: ringPrefix,
+            escapeHtml: actions.escapeHtml,
+            statusLabel: actions.statusLabel,
+            coreLabel: actions.statusLabel(runStatus),
+            coreCaption: count === 1 ? 'step' : 'steps',
+            mapRole: 'tablist',
+            ariaLabel: `${title} step loop`,
+            emptyHtml: '',
+            buttonAttrs: stepButtonAttrs
+        });
         return `<article class="studio-message workflow-runner" data-workflow-runner="${mode}" data-run-id="${actions.escapeHtml(String(run?.id || event.run_id || ''))}">
-            <div class="thread-workflow-runner ${mode}" data-status="${actions.escapeHtml(runStatus)}" role="status" aria-live="${mode === 'live' ? 'polite' : 'off'}">
-                <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><span>${actions.escapeHtml(actions.statusLabel(runStatus))}</span></div>
-                <ol class="thread-workflow-nodes" role="tablist" aria-label="${actions.escapeHtml(title)} steps">${nodes}</ol>
-                <div class="thread-workflow-step-detail"><div><strong>${actions.escapeHtml(activeStep.name || summary)}</strong><span>${actions.escapeHtml(activeRoute.model || activeRoute.backend || 'Auto')}</span></div><p>${actions.escapeHtml(activeDetail)}</p></div>
+            <div class="thread-workflow-runner ${mode}" data-view="${viewMode}" data-status="${actions.escapeHtml(runStatus)}" role="status" aria-live="${mode === 'live' ? 'polite' : 'off'}">
+                <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><div class="thread-workflow-runner-tools">${workflowViewSwitchHtml(viewMode, { attr: 'data-thread-workflow-view', className: 'workflow-view-switch thread-workflow-view-switch' })}<span>${actions.escapeHtml(actions.statusLabel(runStatus))}</span></div></div>
+                <div class="thread-workflow-ring">${ring}</div>
+                <div class="thread-workflow-steps">${numbers}</div>
             </div>
         </article>`;
     }
 
     function bindWorkflowStepRails(root) {
         root.querySelectorAll('[data-workflow-runner]').forEach((runner) => {
-            const detail = runner.querySelector('.thread-workflow-step-detail');
-            runner.querySelectorAll('[data-thread-workflow-step]').forEach((button) => {
-                button.addEventListener('click', () => {
-                    runner.querySelectorAll('[data-thread-workflow-step]').forEach((item) => item.setAttribute('aria-selected', String(item === button)));
-                    if (!detail) return;
-                    detail.innerHTML = `<div><strong>${actions.escapeHtml(button.dataset.stepName || 'Workflow step')}</strong><span>${actions.escapeHtml(button.dataset.stepRoute || 'Auto')}</span></div><p>${actions.escapeHtml(button.dataset.stepDetail || actions.statusLabel(button.dataset.stepStatus || 'pending'))}</p>`;
+            runner.querySelectorAll('[data-thread-workflow-view]').forEach((toggle) => {
+                toggle.addEventListener('click', () => {
+                    const next = writeWorkflowViewMode(toggle.dataset.threadWorkflowView);
+                    // Apply to every runner card on the page so the shared preference stays consistent.
+                    document.querySelectorAll('.thread-workflow-runner').forEach((card) => card.setAttribute('data-view', next));
+                    document.querySelectorAll('[data-thread-workflow-view]').forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.threadWorkflowView === next)));
                 });
             });
+            bindWorkflowStepNumbers(runner, { escapeHtml: actions.escapeHtml });
         });
     }
 

@@ -894,3 +894,47 @@ def register_routes(router, templates):
 
         return JSONResponse({"summary": summary, "empty": False, "buffer_lines": len(messages)})
 
+
+    # ── Thread terminal control (Development thread header button) ──────────
+    # A thread's terminal is its project's startup-terminal set; these routes
+    # reuse start/stop_project_startup_terminals and the shared PTY registry.
+    @router.get("/threads/{thread_id}/terminal/status")
+    async def get_thread_terminal_status(thread_id: int):
+        """Read-only: {thread_id, project_id, running, pid, session_id, started_at}."""
+        from distr.core.terminals.thread_terminal import thread_terminal_status
+        try:
+            return JSONResponse(await asyncio.to_thread(thread_terminal_status, thread_id))
+        except LookupError as e:
+            return JSONResponse({"detail": str(e)}, status_code=404)
+
+    @router.get("/projects/{project_id}/thread-terminals")
+    async def list_project_thread_terminals_api(project_id: int):
+        """Read-only: terminal state shared by every thread in a project."""
+        from distr.core.terminals.thread_terminal import list_project_thread_terminals
+        return JSONResponse(await asyncio.to_thread(list_project_thread_terminals, project_id))
+
+    async def _thread_terminal_action(thread_id: int, action: str):
+        from distr.core.terminals.thread_terminal import resolve_thread_project_id, status_for_project
+        try:
+            project_id = await asyncio.to_thread(resolve_thread_project_id, thread_id)
+        except LookupError as e:
+            return JSONResponse({"detail": str(e)}, status_code=404)
+        if not project_id:
+            return JSONResponse({"detail": "Thread has no project; nothing to start."}, status_code=400)
+        if action == "start":
+            from distr.core.project_startup_terminals import start_project_startup_terminals_async
+            result = await start_project_startup_terminals_async(project_id, announce=False)
+        else:
+            from distr.core.project_startup_terminals import stop_project_startup_terminals
+            result = await asyncio.to_thread(stop_project_startup_terminals, project_id, announce=False)
+        status = await asyncio.to_thread(status_for_project, project_id, thread_id)
+        payload = dict(status, success=bool(result.success), action=result.action, message=result.message)
+        return JSONResponse(payload, status_code=200 if result.success else 400)
+
+    @router.post("/threads/{thread_id}/terminal/start")
+    async def start_thread_terminal(thread_id: int):
+        return await _thread_terminal_action(thread_id, "start")
+
+    @router.post("/threads/{thread_id}/terminal/stop")
+    async def stop_thread_terminal(thread_id: int):
+        return await _thread_terminal_action(thread_id, "stop")

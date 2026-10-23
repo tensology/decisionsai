@@ -458,6 +458,10 @@ def _cmd_set_elevenlabs_voice_settings(session, params):
 def _cmd_set_vad_threshold(session, params):
     threshold = params.get('threshold', 50)
     confidence = max(VAD_CONFIDENCE_MIN, min(VAD_CONFIDENCE_MAX, threshold / 100.0))
+    try:
+        session.settings['vad_threshold'] = threshold
+    except Exception:
+        pass
     session.logger.debug(f"Setting VAD threshold to {threshold}% (confidence: {confidence:.2f})")
 
     if hasattr(session, 'stt_service') and session.stt_service and hasattr(session.stt_service, 'set_vad_threshold'):
@@ -471,7 +475,12 @@ def _cmd_set_vad_threshold(session, params):
             from .libs import VADParams
             if VADParams is not None:
                 try:
-                    vad_params = VADParams(confidence=confidence)
+                    # Keep start_secs/min_volume (VADParams(confidence) alone
+                    # silently reset start_secs to Pipecat's default).
+                    from .vad_params import build_vad_params
+                    vad_params = build_vad_params(
+                        threshold, hands_free=bool(getattr(session, 'is_hands_free', False))
+                    )
                     session.vad_analyzer.set_params(vad_params)
                     session.logger.debug("VAD analyzer params updated (using VADParams)")
                 except Exception as e:
@@ -581,6 +590,19 @@ def _cmd_set_listening(session, params):
     _sync_audio_input_power(session, "set_listening")
 
 
+def _apply_mode_vad_params(session):
+    """Re-apply VADParams for the current mode (hands-free vs PTT)."""
+    vad = getattr(session, 'vad_analyzer', None)
+    if not vad:
+        return
+    try:
+        from .vad_params import build_vad_params
+        threshold = (getattr(session, 'settings', None) or {}).get('vad_threshold', 50)
+        vad.set_params(build_vad_params(threshold, hands_free=bool(session.is_hands_free)))
+    except Exception as e:
+        session.logger.warning(f"Failed to re-apply VAD params for mode change: {e}")
+
+
 def _cmd_set_hands_free(session, params):
     enabled = params.get('enabled', False)
     clear_pending_restore = bool(params.get('clear_pending_restore', False))
@@ -600,6 +622,7 @@ def _cmd_set_hands_free(session, params):
         session.tts_service.set_hands_free(enabled)
     if getattr(session, 's2s_service', None) and hasattr(session.s2s_service, 'set_hands_free'):
         session.s2s_service.set_hands_free(enabled)
+    _apply_mode_vad_params(session)
     _sync_audio_input_power(session, "set_hands_free")
     session.logger.debug("All services updated - audio input power synced to active voice mode")
 

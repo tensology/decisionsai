@@ -7,19 +7,19 @@ import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
 import { createPlanning } from './planning/index.js?v=20261003-sitemap-groups';
 
-import { createSidebar } from './sidebar/index.js?v=20261003-sidebar-cleanup';
+import { createSidebar } from './sidebar/index.js?v=20261024-sidebar-wfadd';
 
-import { createAutomations } from './automations/index.js?v=20261022-calendar';
+import { createAutomations } from './automations/index.js?v=20261022-uiclean';
 
 import { createIncoming } from './incoming/index.js?v=20261022-incomingpad';
 
-import { createWorkflows } from './workflows/index.js?v=20261022-btncolor';
+import { createWorkflows } from './workflows/index.js?v=20261022-threadring2';
 
 import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
 import { createTerminals } from './terminals/index.js';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261022-height3';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261022-threadring2';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261022-harnesssrc';
 
@@ -451,7 +451,78 @@ function syncHeader() {
     setTaskState(['completed', 'cancelled'].includes(runStatus) ? 'ready' : runStatus);
     el('thread-more-button').classList.toggle('hidden', !chat);
     el('task-state').classList.toggle('hidden', !chat);
+    syncThreadTerminalButton();
     syncProjectSelect();
+}
+
+// Thread terminal button: reflects the real PTY state of the thread's project
+// startup terminals via GET /api/threads/{id}/terminal/status.
+const threadTerminal = { chatId: null, running: false, pending: false, timer: null, seq: 0 };
+
+function renderThreadTerminalButton() {
+    const button = el('thread-terminal-button');
+    if (!button) return;
+    const label = threadTerminal.pending
+        ? (threadTerminal.running ? 'Starting terminal…' : 'Stopping terminal…')
+        : (threadTerminal.running ? 'Stop terminal' : 'Start terminal');
+    button.dataset.running = String(threadTerminal.running);
+    button.classList.toggle('danger', threadTerminal.running);
+    button.classList.toggle('primary', !threadTerminal.running);
+    button.setAttribute('aria-label', label);
+    button.dataset.tooltip = label;
+    button.disabled = threadTerminal.pending;
+    button.setAttribute('aria-busy', String(threadTerminal.pending));
+}
+
+async function refreshThreadTerminalStatus() {
+    const chatId = threadTerminal.chatId;
+    if (!chatId || threadTerminal.pending || document.hidden) return;
+    const seq = ++threadTerminal.seq;
+    try {
+        const data = await api(`/threads/${chatId}/terminal/status`);
+        if (seq !== threadTerminal.seq || chatId !== threadTerminal.chatId || threadTerminal.pending) return;
+        threadTerminal.running = Boolean(data.running);
+        renderThreadTerminalButton();
+    } catch (_) { /* keep last known state */ }
+}
+
+function syncThreadTerminalButton() {
+    const button = el('thread-terminal-button');
+    if (!button) return;
+    const chat = state.currentChat;
+    const chatId = chat?.id && chat?.project_id ? Number(chat.id) : null;
+    button.classList.toggle('hidden', !chatId);
+    if (chatId === threadTerminal.chatId) return;
+    threadTerminal.chatId = chatId;
+    threadTerminal.running = false;
+    threadTerminal.seq++;
+    renderThreadTerminalButton();
+    clearInterval(threadTerminal.timer);
+    threadTerminal.timer = null;
+    if (!chatId) return;
+    refreshThreadTerminalStatus();
+    threadTerminal.timer = setInterval(refreshThreadTerminalStatus, 5000);
+}
+
+async function toggleThreadTerminal() {
+    const chatId = threadTerminal.chatId;
+    if (!chatId || threadTerminal.pending) return;
+    const previous = threadTerminal.running;
+    const action = previous ? 'stop' : 'start';
+    threadTerminal.pending = true;
+    threadTerminal.running = !previous; // optimistic
+    threadTerminal.seq++;
+    renderThreadTerminalButton();
+    try {
+        const data = await api(`/threads/${chatId}/terminal/${action}`, { method: 'POST' });
+        if (chatId === threadTerminal.chatId) threadTerminal.running = Boolean(data.running);
+    } catch (error) {
+        if (chatId === threadTerminal.chatId) threadTerminal.running = previous; // revert
+        console.warn(`Thread terminal ${action} failed:`, error?.message || error);
+    } finally {
+        threadTerminal.pending = false;
+        renderThreadTerminalButton();
+    }
 }
 
 function projectOptions(selected) {
@@ -2015,6 +2086,20 @@ function bindEvents() {
     el('artifact-approve').addEventListener('click', () => threads_inspector.reviewArtifact('approved'));
     el('artifact-request-changes').addEventListener('click', () => threads_inspector.reviewArtifact('changes_requested'));
     el('stop-run-button').addEventListener('click', threads_composer.stopRun);
+    const placeThreadTerminalTooltip = (event) => {
+        const button = event.currentTarget;
+        const rect = button.getBoundingClientRect();
+        const half = 60; // keep the nowrap label inside the viewport
+        const center = Math.min(Math.max(rect.left + rect.width / 2, half + 8), window.innerWidth - half - 8);
+        button.style.setProperty('--tt-left', `${center}px`);
+        button.style.setProperty('--tt-top', `${rect.bottom + 7}px`);
+    };
+    el('thread-terminal-button')?.addEventListener('mouseenter', placeThreadTerminalTooltip);
+    el('thread-terminal-button')?.addEventListener('focus', placeThreadTerminalTooltip);
+    el('thread-terminal-button')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleThreadTerminal();
+    });
     el('thread-more-button').addEventListener('click', (event) => {
         event.stopPropagation();
         toggleThreadHeaderMenu();
@@ -2122,6 +2207,7 @@ const sidebar = createSidebar({
         },
         openRenameThreadDialog: (...args) => openRenameThreadDialog(...args),
         openSidebar: (...args) => openSidebar(...args),
+        openWorkflowComposer: (...args) => workflows.openWorkflowComposer(...args),
         openThreadDialog: (...args) => openThreadDialog(...args),
         paintTerminalProjectGrid: (...args) => terminals.paintTerminalProjectGrid(...args),
         projectById: (...args) => projectById(...args),

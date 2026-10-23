@@ -602,7 +602,7 @@ export function createAutomations({ context, actions, el }) {
         const ignored = timed && isIgnored(automation, dayKey, event.time);
         const occ = timed ? ` data-cal-occ-day="${esc(dayKey)}" data-cal-occ-time="${esc(event.time)}" data-cal-draggable="1"` : '';
         const tip = `${event.label} · ${name}${ignored ? ' (ignored — this run is skipped)' : ''} — ${whatItDoes(automation, 200)}`;
-        return `<button type="button" class="scheduled-calendar-event${paused ? ' paused' : ''}${compact ? ' compact' : ''}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${style ? ' cal-tg-event' : ''}"${style ? ` style="${style}"` : ''}${occ} data-scheduled-calendar-event="${esc(automation.id)}" title="${esc(tip)}"><time>${esc(event.label)}</time><span class="cal-title"><span class="cal-title-inner">${esc(name)}</span></span></button>`;
+        return `<button type="button" class="scheduled-calendar-event${paused ? ' paused' : ''}${compact ? ' compact' : ''}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${style ? ' cal-tg-event' : ''}"${style ? ` style="${style}"` : ''}${occ} data-scheduled-calendar-event="${esc(automation.id)}" title="${esc(tip)}">${style ? "" : `<time>${esc(event.label)}</time>`}<span class="cal-title"><span class="cal-title-inner">${esc(name)}</span></span></button>`;
     }
 
     function dayCellClass(date, events, anchorMonth) {
