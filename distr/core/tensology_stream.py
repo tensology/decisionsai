@@ -10,6 +10,12 @@ existing ``GET /api/integrations/v1/tickets`` API and the shared per-ticket proc
 Replaces the 3s/15s ticket poll. A full catch-up fetch runs on every (re)connect, and
 at most once per OFFLINE_CATCHUP_SECONDS while the stream cannot connect, so tickets
 sent while DecisionsAI was offline (or before the relay is deployed) are not lost.
+
+Pause: the ``tensology_push_paused`` setting (or the DECISIONS_TENSOLOGY_PUSH_PAUSED env
+override) stops the ticket push only: no connect, no catch-up fetch, no ticket handling
+and no ticket PATCHes. It is re-read live, so an open connection closes within
+PAUSE_CHECK_SECONDS. Presence, discussions and Mailshot intake (``tensology_enabled``)
+are unaffected.
 """
 from __future__ import annotations
 
@@ -17,6 +23,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import random
 import time
 import urllib.parse
@@ -34,6 +41,9 @@ STABLE_CONNECTION_SECONDS = 30.0
 OFFLINE_CATCHUP_SECONDS = 60.0
 NOT_CONFIGURED_RETRY_SECONDS = 30.0
 EVENT_DEBOUNCE_SECONDS = 0.25
+PAUSE_CHECK_SECONDS = 5.0
+PUSH_PAUSED_ENV = "DECISIONS_TENSOLOGY_PUSH_PAUSED"
+_TRUTHY = {"1", "true", "yes", "on"}
 
 STREAM_STATE: dict[str, Any] = {
     "connected": False,
@@ -53,6 +63,39 @@ def tensology_stream_url(settings: dict[str, Any]) -> str:
     base = urllib.parse.urlsplit(str(settings.get("tensology_url") or "https://www.tensology.com").strip())
     scheme = "ws" if base.scheme == "http" else "wss"
     return urllib.parse.urlunsplit((scheme, base.netloc, STREAM_PATH, "", ""))
+
+
+def tensology_push_paused(settings: dict[str, Any] | None = None) -> bool:
+    """True when the Tensology ticket push is paused (env override wins over the setting)."""
+    raw = os.environ.get(PUSH_PAUSED_ENV)
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in _TRUTHY
+    if settings is None:
+        try:
+            from distr.core.settings import load_settings_from_db
+
+            settings = load_settings_from_db() or {}
+        except Exception:
+            return False
+    value = settings.get("tensology_push_paused")
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY
+    return bool(value)
+
+
+async def _close_when_paused(websocket: Any, paused: Callable[[], bool]) -> None:
+    """Close an open stream as soon as the push is paused (checked every PAUSE_CHECK_SECONDS)."""
+    while True:
+        await asyncio.sleep(PAUSE_CHECK_SECONDS)
+        try:
+            is_paused = await asyncio.to_thread(paused)
+        except Exception:
+            continue
+        if is_paused:
+            logger.info("Tensology ticket stream paused (tensology_push_paused); closing connection")
+            STREAM_STATE["last_error"] = "paused"
+            await websocket.close()
+            return
 
 
 def _stream_config() -> tuple[str, str] | None:
@@ -160,6 +203,7 @@ async def run_tensology_ticket_stream(
     catch_up: Callable[[], Awaitable[Any]] | None = None,
     handle_events: Callable[[list[int]], Awaitable[Any]] | None = None,
     config: Callable[[], tuple[str, str] | None] | None = None,
+    paused: Callable[[], bool] | None = None,
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
     max_attempts: int | None = None,
@@ -169,12 +213,32 @@ async def run_tensology_ticket_stream(
     catch_up = catch_up or _default_catch_up
     handle_events = handle_events or _default_handle_events
     config = config or _stream_config
+    paused = paused or tensology_push_paused
+
+    async def _is_paused() -> bool:
+        try:
+            return bool(await asyncio.to_thread(paused))
+        except Exception as exc:
+            logger.debug("Tensology ticket stream pause check failed: %s", exc)
+            return False
+
     backoff = 0.0
+    pause_logged = False
     last_catch_up = float("-inf")
     last_logged_error = ""
     attempts = 0
     while max_attempts is None or attempts < max_attempts:
         attempts += 1
+        if await _is_paused():
+            STREAM_STATE.update(connected=False, last_error="paused")
+            if not pause_logged:
+                logger.info("Tensology ticket stream paused (tensology_push_paused); not connecting")
+                pause_logged = True
+            await sleep(NOT_CONFIGURED_RETRY_SECONDS)
+            continue
+        if pause_logged:
+            logger.info("Tensology ticket stream resumed (tensology_push_paused off)")
+            pause_logged = False
         try:
             cfg = await asyncio.to_thread(config)
         except Exception as exc:
@@ -194,6 +258,7 @@ async def run_tensology_ticket_stream(
                 logger.info("Tensology ticket stream connected: %s", url)
                 dispatcher = TicketEventDispatcher(catch_up, handle_events)
                 worker = asyncio.create_task(dispatcher.run())
+                pause_watch = asyncio.create_task(_close_when_paused(websocket, paused))
                 try:
                     # Catch up on anything sent while DecisionsAI was offline.
                     last_catch_up = clock()
@@ -216,9 +281,10 @@ async def run_tensology_ticket_stream(
                     # Let an event that arrived just before a clean close finish.
                     await asyncio.sleep(EVENT_DEBOUNCE_SECONDS + 0.05)
                 finally:
-                    worker.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await worker
+                    for task in (pause_watch, worker):
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await task
         except asyncio.CancelledError:
             STREAM_STATE["connected"] = False
             raise
@@ -235,7 +301,7 @@ async def run_tensology_ticket_stream(
                 backoff = 0.0
         backoff = next_backoff(backoff)
         STREAM_STATE["reconnects"] = int(STREAM_STATE.get("reconnects") or 0) + 1
-        if clock() - last_catch_up >= OFFLINE_CATCHUP_SECONDS:
+        if clock() - last_catch_up >= OFFLINE_CATCHUP_SECONDS and not await _is_paused():
             # Offline fallback: one catch-up per minute at most while push is down.
             last_catch_up = clock()
             try:

@@ -2218,6 +2218,7 @@ def run_migrations():
         ("tensology_enabled", "BOOLEAN", "0"),
         ("tensology_url", "VARCHAR", "'https://www.tensology.com'"),
         ("tensology_key", "VARCHAR", "''"),
+        ("tensology_push_paused", "BOOLEAN", "0"),
     ]:
         try:
             with Session() as s:

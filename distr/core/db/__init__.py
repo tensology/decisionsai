@@ -316,6 +316,8 @@ class Settings(Base):
     tensology_enabled = Column(Boolean, default=False)
     tensology_url = Column(String, default='https://www.tensology.com')
     tensology_key = Column(String, default='')
+    # Pauses only the Tensology websocket ticket push (not Mailshot intake).
+    tensology_push_paused = Column(Boolean, default=False)
 
 
 class Chat(Base):
@@ -763,6 +765,7 @@ try:
                 ("tensology_enabled", "BOOLEAN DEFAULT 0"),
                 ("tensology_url", "VARCHAR DEFAULT 'https://www.tensology.com'"),
                 ("tensology_key", "VARCHAR DEFAULT ''"),
+                ("tensology_push_paused", "BOOLEAN DEFAULT 0"),
                 # Monk Mode
                 ("monk_mode_enabled", "BOOLEAN DEFAULT 0"),
                 ("monk_sites", "TEXT DEFAULT '[]'"),

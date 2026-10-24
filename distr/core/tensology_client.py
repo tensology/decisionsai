@@ -1239,8 +1239,23 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+def _ticket_push_paused() -> bool:
+    """Honour ``tensology_push_paused``: no ticket fetch/claim/PATCH while the push is paused."""
+    try:
+        from distr.core.tensology_stream import tensology_push_paused
+
+        return tensology_push_paused()
+    except Exception:
+        return False
+
+
 def process_tensology_ticket_events(ticket_ids: list[int]) -> int:
     """Handle pushed ``decisions_ticket`` events: fetch those tickets' full payloads, then process."""
+    if _ticket_push_paused():
+        import logging
+
+        logging.getLogger(__name__).info("Tensology ticket push paused; ignoring pushed tickets %s", ticket_ids)
+        return 0
     ids = [item for item in (_safe_int(value) for value in ticket_ids or []) if item is not None]
     if not ids:
         return process_tensology_approved_tickets(force=True)
@@ -1258,6 +1273,11 @@ def process_tensology_approved_tickets(*, force: bool = False) -> int:
     global _LAST_TICKET_POLL
     now = time.monotonic()
     if not force and now - _LAST_TICKET_POLL < _TICKET_POLL_INTERVAL:
+        return 0
+    if _ticket_push_paused():
+        import logging
+
+        logging.getLogger(__name__).info("Tensology ticket push paused; skipping ticket catch-up fetch")
         return 0
     _LAST_TICKET_POLL = now
     return _fetch_and_process_tensology_tickets(None)
@@ -1279,6 +1299,8 @@ def sync_tensology_execution_states(*, force: bool = False) -> int:
     claimed = [ticket for ticket in known if str(ticket.get("decisions_thread_id") or "").strip()]
     if not claimed:
         return 0
+    if _ticket_push_paused():
+        return 0  # paused: no ticket status PATCHes to Tensology
     if not _TICKET_PROCESS_LOCK.acquire(blocking=False):
         return 0  # a fetch is running and mirrors state itself
     try:

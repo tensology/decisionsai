@@ -17,6 +17,7 @@ from distr.core.tensology_client import TensologyApiError, TensologyClient
 @pytest.fixture(autouse=True)
 def _fast(monkeypatch):
     monkeypatch.setattr(stream, "EVENT_DEBOUNCE_SECONDS", 0)
+    monkeypatch.delenv(stream.PUSH_PAUSED_ENV, raising=False)
     with tc._TENSOLOGY_TICKETS_LOCK:
         tc._TENSOLOGY_TICKETS.clear()
     yield
@@ -160,6 +161,91 @@ def test_not_configured_waits_without_connecting():
         connect=_connector([], seen), config=lambda: None, sleep=sleep, max_attempts=2,
     ))
     assert seen == [] and sleeps == [stream.NOT_CONFIGURED_RETRY_SECONDS] * 2
+
+
+# ── pause (tensology_push_paused) ───────────────────────────────────────────
+
+def test_push_paused_env_override_wins_over_setting(monkeypatch):
+    assert stream.tensology_push_paused({"tensology_push_paused": True}) is True
+    assert stream.tensology_push_paused({"tensology_push_paused": 0}) is False
+    assert stream.tensology_push_paused({}) is False
+    monkeypatch.setenv(stream.PUSH_PAUSED_ENV, "1")
+    assert stream.tensology_push_paused({"tensology_push_paused": False}) is True
+    monkeypatch.setenv(stream.PUSH_PAUSED_ENV, "0")
+    assert stream.tensology_push_paused({"tensology_push_paused": True}) is False
+
+
+def test_paused_never_connects_or_catches_up():
+    seen, catch_ups, sleeps = [], [], []
+
+    async def catch_up():
+        catch_ups.append(1)
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    asyncio.run(stream.run_tensology_ticket_stream(
+        connect=_connector([FakeSocket([])], seen), catch_up=catch_up,
+        config=lambda: ("wss://t/ws/decisions", "k"), paused=lambda: True, sleep=sleep, max_attempts=2,
+    ))
+    assert seen == [] and catch_ups == []
+    assert sleeps == [stream.NOT_CONFIGURED_RETRY_SECONDS] * 2
+    assert stream.STREAM_STATE["last_error"] == "paused"
+
+
+class ClosableSocket(FakeSocket):
+    def __init__(self):
+        super().__init__([])
+        self.closed = asyncio.Event()
+
+    async def close(self):
+        self.closed.set()
+
+    async def _iter(self):
+        await self.closed.wait()
+        return
+        yield  # pragma: no cover
+
+
+def test_pausing_live_closes_open_stream_without_offline_catch_up(monkeypatch):
+    monkeypatch.setattr(stream, "PAUSE_CHECK_SECONDS", 0.01)
+    state = {"paused": False}
+    seen, catch_ups, events = [], [], []
+
+    async def catch_up():
+        catch_ups.append(1)
+        state["paused"] = True  # operator pauses after the stream connected
+
+    async def handle(ids):
+        events.append(ids)
+
+    async def sleep(delay):
+        pass
+
+    async def scenario():
+        socket = ClosableSocket()
+        await asyncio.wait_for(stream.run_tensology_ticket_stream(
+            connect=_connector([socket], seen), catch_up=catch_up, handle_events=handle,
+            config=lambda: ("wss://t/ws/decisions", "k"), paused=lambda: state["paused"],
+            sleep=sleep, max_attempts=1,
+        ), timeout=5)
+        return socket
+
+    socket = asyncio.run(scenario())
+    assert socket.closed.is_set()
+    assert catch_ups == [1]  # connect catch-up only; no offline catch-up once paused
+    assert events == []
+    assert stream.STREAM_STATE["connected"] is False
+
+
+def test_paused_client_skips_ticket_fetch_and_state_patches(monkeypatch):
+    monkeypatch.setenv(stream.PUSH_PAUSED_ENV, "1")
+    tc._remember_tensology_tickets([_ticket(execution_status="development", decisions_thread_id="42")])
+    with patch("distr.core.tensology_client.configured_tensology_client") as configured:
+        assert tc.process_tensology_approved_tickets(force=True) == 0
+        assert tc.process_tensology_ticket_events([17]) == 0
+        assert tc.sync_tensology_execution_states(force=True) == 0
+    configured.assert_not_called()
 
 
 # ── fetch after event ───────────────────────────────────────────────────────

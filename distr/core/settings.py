@@ -89,6 +89,7 @@ DEFAULT_SETTINGS = {
     'fishaudio_tts_model': 's2.1-pro-free',
     'jev_enabled': False,
     'jev_key': '',
+    'tensology_push_paused': False,
     'ollama_enabled': True,
     'ollama_url': 'http://localhost:11434/',
     'accepted_eula': False,
