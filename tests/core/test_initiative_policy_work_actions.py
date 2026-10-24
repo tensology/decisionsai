@@ -106,3 +106,51 @@ def test_initiative_boundaries_available_for_scheduler_cycle():
     assert boundaries["initiative_allow_workflow_start"] is True
     assert boundaries["initiative_ask_external_comms"] is False
     assert boundaries["initiative_ask_file_changes"] is True
+
+
+def _scan_bundle(*proposals):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(work_scan={"proposals": list(proposals)})
+
+
+def test_work_scan_skips_recent_duplicate_and_picks_next_candidate():
+    stale = {
+        "action_type": "workflow_start",
+        "description": "Ticket #230 looks ready to execute",
+        "payload": {"ticket_ids": [230], "board_id": 13},
+    }
+    triage = {
+        "action_type": "message_triage",
+        "description": "1 WhatsApp message arrived",
+        "payload": {"source": "whatsapp", "message_ids": [1]},
+    }
+    settings = {"initiative_allow_workflow_start": True}
+    service = InitiativeService.__new__(InitiativeService)
+    from collections import deque
+
+    service._recent_proposals = deque()
+    service._proposal_cooldown_s = 7200.0
+
+    first = InitiativeService._proposal_from_work_scan(
+        _scan_bundle(stale, triage), settings, "operate", is_duplicate=service._is_duplicate_proposal
+    )
+    assert first.action_type == "workflow_start"
+    service._record_proposal(first)
+
+    second = InitiativeService._proposal_from_work_scan(
+        _scan_bundle(stale, triage), settings, "operate", is_duplicate=service._is_duplicate_proposal
+    )
+    assert second.action_type == "message_triage"
+
+
+def test_work_scan_returns_top_candidate_when_everything_is_duplicate():
+    stale = {"action_type": "workflow_start", "description": "Ticket #230", "payload": {"ticket_ids": [230]}}
+    settings = {"initiative_allow_workflow_start": True}
+    action = InitiativeService._proposal_from_work_scan(
+        _scan_bundle(stale), settings, "operate", is_duplicate=lambda _a: True
+    )
+    assert action.action_type == "workflow_start"
+    assert InitiativeService._proposal_from_work_scan(_scan_bundle(stale), settings, "operate").payload == {
+        "ticket_ids": [230]
+    }

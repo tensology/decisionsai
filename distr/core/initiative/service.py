@@ -722,7 +722,12 @@ class InitiativeService:
         )
 
     @staticmethod
-    def _proposal_from_work_scan(bundle, settings: dict, level: str) -> ProposedAction | None:
+    def _proposal_from_work_scan(
+        bundle,
+        settings: dict,
+        level: str,
+        is_duplicate=None,
+    ) -> ProposedAction | None:
         if level == "observe":
             return None
         scan = getattr(bundle, "work_scan", {}) or {}
@@ -763,22 +768,37 @@ class InitiativeService:
         ]
         if not candidates:
             return None
-        chosen = sorted(candidates, key=lambda p: priority.get(p.get("action_type"), 99))[0]
-        action_type = chosen.get("action_type") or "suggestion"
-        payload = chosen.get("payload") if isinstance(chosen.get("payload"), dict) else {}
-        description = chosen.get("description") or "Initiative found actionable work."
-        if level == "assist" and action_type not in (
-            "message_triage", "board_triage", "email_triage", "jira_intake"
-        ):
-            action_type = "board_triage"
-            payload = {**payload, "proposed_action_type": chosen.get("action_type")}
-        return ProposedAction(
-            action_type=action_type,
-            description=description,
-            payload=payload,
-            draft=chosen.get("draft") or description,
-            telegram_message=chosen.get("telegram_message") or description,
-        )
+        ordered = sorted(candidates, key=lambda p: priority.get(p.get("action_type"), 99))
+        actions = []
+        for chosen in ordered:
+            action_type = chosen.get("action_type") or "suggestion"
+            payload = chosen.get("payload") if isinstance(chosen.get("payload"), dict) else {}
+            description = chosen.get("description") or "Initiative found actionable work."
+            if level == "assist" and action_type not in (
+                "message_triage", "board_triage", "email_triage", "jira_intake"
+            ):
+                action_type = "board_triage"
+                payload = {**payload, "proposed_action_type": chosen.get("action_type")}
+            action = ProposedAction(
+                action_type=action_type,
+                description=description,
+                payload=payload,
+                draft=chosen.get("draft") or description,
+                telegram_message=chosen.get("telegram_message") or description,
+            )
+            # A proposal still inside its dedup cooldown would only be skipped
+            # again; fall through to the next candidate so one stale item
+            # cannot starve lower-priority work such as WhatsApp intake.
+            if is_duplicate is not None and is_duplicate(action):
+                actions.append(action)
+                continue
+            if actions:
+                logger.info(
+                    "InitiativeService: skipped %d recently proposed work-scan item(s); chose %s",
+                    len(actions), action.action_type,
+                )
+            return action
+        return actions[0] if actions else None
 
     # ------------------------------------------------------------------
     # Main cycle
@@ -823,7 +843,10 @@ class InitiativeService:
 
             action = self._proposal_from_handoff_resume(bundle, level)
             if action is None:
-                action = self._proposal_from_work_scan(bundle, settings, level)
+                self._prune_expired_proposals()
+                action = self._proposal_from_work_scan(
+                    bundle, settings, level, is_duplicate=self._is_duplicate_proposal
+                )
             if action is None:
                 # Call LLM
                 try:

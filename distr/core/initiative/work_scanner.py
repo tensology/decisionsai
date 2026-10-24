@@ -8,6 +8,7 @@ proposal is surfaced, queued for approval, or executed.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from copy import deepcopy
@@ -274,6 +275,7 @@ def _scan_local_boards(scan: dict[str, Any], settings: dict[str, Any]) -> None:
             board_row = {
                 "id": board.id,
                 "name": board.name or "",
+                "description": board.description or "",
                 "source": board.source or "database",
                 "source_lane": "Current",
                 "done_lane": "QA / Assess",
@@ -380,7 +382,29 @@ def _ticket_row(ticket: Any, lane_name: str, board: Any) -> dict[str, Any]:
     }
 
 
+# Workflow statuses that mean a ticket is not runnable right now: either a run
+# is in flight, or the ticket already reached a terminal state. Re-proposing a
+# cancelled/completed ticket every cycle starves the rest of the work scan.
+_NON_RUNNABLE_WORKFLOW_STATUSES = frozenset({
+    "running", "waiting",
+    "cancelled", "canceled", "completed", "complete", "done", "succeeded", "success",
+})
+_SMOKE_FIXTURE_MARKER = "[dai-smoke-loop-fixture]"
+_SMOKE_BOARD_RE = re.compile(r"\bsmoke\b", re.IGNORECASE)
+
+
+def _is_smoke_fixture_board(board: dict[str, Any]) -> bool:
+    """True for smoke/test fixture boards that initiative must not act on."""
+    name = str(board.get("name") or "")
+    description = str(board.get("description") or "")
+    if _SMOKE_FIXTURE_MARKER in name or _SMOKE_FIXTURE_MARKER in description:
+        return True
+    return bool(_SMOKE_BOARD_RE.search(name))
+
+
 def _add_board_proposals(scan: dict[str, Any], board: dict[str, Any]) -> None:
+    if _is_smoke_fixture_board(board):
+        return
     lanes = board.get("lanes") or []
     lane_by_name = {str(l.get("name") or "").strip().lower(): l for l in lanes}
     backlog = lane_by_name.get("backlog")
@@ -409,7 +433,7 @@ def _add_board_proposals(scan: dict[str, Any], board: dict[str, Any]) -> None:
     source_lane = current or backlog
     for ticket in (source_lane or {}).get("tickets", []):
         status = (ticket.get("workflow_status") or "").lower()
-        if status in {"running", "waiting"}:
+        if status in _NON_RUNNABLE_WORKFLOW_STATUSES:
             continue
         if ticket.get("send_to_cli") and ticket.get("linked_project_id"):
             runnable.append(("project_cli_task", ticket))
