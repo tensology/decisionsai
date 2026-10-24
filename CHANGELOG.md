@@ -24,6 +24,15 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ## [Unreleased]
 
+### Added
+- Shared local memory hub: MemPalace pinned to 3.11.0, with one loopback-only `mempalace serve` LaunchAgent (port 8766, token 0600). Decisions' memory adapter now goes through the hub over MCP/HTTP, with a local journal fallback, and never opens Chroma while the hub is up.
+- `distr.core.mempalace.installer` (install/uninstall/status) and the first-run bootstrap (`firstrun.maybe_bootstrap`). `installer/install.sh` runs it by default.
+- Harness wiring for Claude Code, Codex, Cursor, Kilo (stdio forwarder) and Pi (skill). It applies only to installed harnesses, backs up configs, is idempotent and removable.
+- Frustration capture (Laya with regex fallback, redaction on by default) and a nightly review every second night that queues proposals for approval and never applies them automatically. Reviewer order: codex, then claude, then Decisions LLM (OpenRouter `minimax/minimax-m3.1-flash`, then free `thinkingmachines/inkling-small:free`).
+- Off switches: the `frustration_capture` setting, `DECISIONS_FRUSTRATION_CAPTURE`, `DECISIONS_MEMPALACE_HUB` and `DECISIONS_MEMPALACE_HARNESS_WIRING`.
+### Changed
+- The MemPalace bootstrap prefers the installed package over the reference clone. Seed mining is skipped while the hub owns the palace.
+
 ## [2.9.4] - 2026-10-22
 
 ### The development pipelines are live (finally!)
