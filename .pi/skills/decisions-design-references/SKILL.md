@@ -3,6 +3,11 @@ name: decisions-design-references
 description: Playbook for Aceternity UI, Refero MCP, Mobbin MCP, and Godly when building or polishing web UI — what each source is for and how agents should use it.
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Design Reference Sources
 
 DecisionsAI does not replace these products — it tells agents **which tool for which job** and how to wire MCPs.
@@ -15,7 +20,7 @@ DecisionsAI does not replace these products — it tells agents **which tool for
 | Real shipped screens + DESIGN.md tokens | **Refero MCP** — refero.design/mcp (Pro) |
 | Pattern library + flows (mobile/web) | **Mobbin MCP** — api.mobbin.com/mcp (Pro, OAuth) |
 | Visual inspiration only | **Godly** — godly.website (manual screenshots/links) |
-| ECC implementation taste | `frontend-design`, `frontend-design-direction` |
+| ECC implementation taste | `frontend-design`, `ui-ux-system` |
 
 **“10x”** — if someone lists five sites and the fifth is “10x”, it is usually slang or a misheard name, not a fifth MCP. Ask the user for the exact URL unless they confirm a product.
 

@@ -1,7 +1,9 @@
 ---
 name: redesign-existing-projects
-description: Upgrades existing websites and apps to premium quality. Audits current design, identifies generic AI patterns, and applies high-end design standards without breaking functionality. Works with any CSS framework or vanilla CSS.
+description: "Upgrades existing marketing websites (landing, marketing and portfolio pages) to premium quality: audits the design, removes generic AI patterns, keeps functionality. Use for marketing-site redesigns only. For app/dashboard/product UI defer to ui-ux-system."
 ---
+
+> **Scope (22 Oct 2026):** Persuade/marketing or explicit-use only. For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
 
 # Redesign Skill
 

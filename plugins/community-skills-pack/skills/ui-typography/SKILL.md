@@ -1,17 +1,14 @@
 ---
 name: ui-typography
-description: >
-  Professional typography rules for UI design, web applications, software interfaces, and all screen-based
-  text. Enforces timeless typographic correctness that LLMs consistently get wrong: proper quote marks,
-  dashes, spacing, hierarchy, and layout. ENFORCEMENT MODE: When generating ANY HTML, CSS, React, JSX,
-  or UI code containing visible text, auto-apply every rule in this skill silently — do not ask, do not
-  explain, just produce correct typography. AUDIT MODE: When reviewing or improving existing interfaces or
-  legacy code, flag violations and provide fixes. Trigger on: any HTML/CSS/React artifact creation, "build
-  a landing page", "create a component", "design a UI", "fix the typography", "make this look professional",
-  "review this layout", web design, presentation design, dashboard creation, document generation, or any
-  task producing visible text for humans. Even if the user doesn't mention typography, apply these rules
-  whenever generating UI output.
+description: "Typography rules for screen text: quote marks, dashes, entities, spacing, hierarchy and layout. Use when writing or reviewing visible UI text, fixing typography, or when ui-typography is named; in audits, flag violations with fixes. Em dashes follow ui-ux-system section 8a. For app/dashboard/product UI defer to ui-ux-system."
 ---
+
+> **Scope (22 Oct 2026):** For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # UI Typography Skill
 
@@ -27,8 +24,9 @@ skill valuable, consider supporting his work directly.
 These are **permanent rules** — not trends, not opinions. They come from centuries of typographic practice,
 validated by how the human eye reads. They do not go out of style.
 
-**ENFORCEMENT (default):** When generating ANY UI with visible text, apply every rule automatically. Use
-correct HTML entities, proper CSS. Do not ask permission. Do not explain. Just produce correct typography.
+**APPLY (when this skill is loaded):** When writing UI with visible text, apply these rules with correct
+HTML entities and CSS, and mention notable typography fixes in your summary. Dashes follow `ui-ux-system`
+section 8a: no em dashes in agent-written UI copy; en dashes for ranges; keep supplied copy as written.
 
 **AUDIT:** When reviewing existing code or design, identify violations and provide before/after fixes.
 
@@ -93,7 +91,7 @@ processes the escape. The bug only affects JSX text content between tags.
 |-----------|------|-----|
 | - (hyphen) | `-` | Compound words (cost-effective), line breaks |
 | – (en dash) | `&ndash;` | Ranges (1–10), connections (Sarbanes–Oxley Act) |
-| — (em dash) | `&mdash;` | Sentence breaks—like this |
+| — (em dash) | `&mdash;` | Only in user-supplied copy; agent-written UI copy uses commas, colons or parentheses (ui-ux-system 8a) |
 
 Never approximate with `--` or `---`. If you open with "from", pair with "to" not en dash. Hyphen for
 compound names (marriage); en dash for joint authorship. Em dash typically flush; add `&thinsp;` if crushed.
@@ -102,7 +100,7 @@ No slash where en dash belongs. Hyphenate phrasal adjectives (five-dollar bills)
 ### Ellipses — One Character
 
 Use `&hellip;` (…), not three periods. Spaces before and after; use `&nbsp;` on the text-adjacent side.
-For interrupted dialogue, prefer em dash over ellipsis.
+For interrupted dialogue in supplied copy, keep the author's punctuation; agent-written UI copy avoids em dashes (ui-ux-system 8a).
 
 ### Math and Measurement
 

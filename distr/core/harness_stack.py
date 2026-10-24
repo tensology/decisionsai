@@ -74,6 +74,7 @@ def _project_reference_skills(base_home: Path) -> list[str]:
         "codebase-design",
         "domain-modeling",
         "architecture-deepening-review",
+        "ui-ux-system",
         "ui-ux-principles",
         "ui-crud-discipline",
         "completion-protocol",

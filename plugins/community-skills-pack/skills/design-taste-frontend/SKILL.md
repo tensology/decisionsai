@@ -1,7 +1,14 @@
 ---
 name: design-taste-frontend
-description: Anti-slop frontend skill for landing pages, portfolios, and redesigns. The agent reads the brief, infers the right design direction, and ships interfaces that do not look templated. Real design systems when applicable, audit-first on redesigns, strict pre-flight check.
+description: "Anti-slop frontend skill for landing pages, portfolios, and marketing-site redesigns on an explicit brief: reads the brief, picks a design direction, strict pre-flight check. Not for dashboards, tables or multi-step product UI. For app/dashboard/product UI defer to ui-ux-system."
 ---
+
+> **Scope (22 Oct 2026):** Persuade/marketing or explicit-use only. For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # tasteskill: Anti-Slop Frontend Skill
 

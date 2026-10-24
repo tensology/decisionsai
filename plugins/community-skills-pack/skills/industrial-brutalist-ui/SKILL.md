@@ -1,7 +1,14 @@
 ---
 name: industrial-brutalist-ui
-description: Raw mechanical interfaces fusing Swiss typographic print with military terminal aesthetics. Rigid grids, extreme type scale contrast, utilitarian color, analog degradation effects. For data-heavy dashboards, portfolios, or editorial sites that need to feel like declassified blueprints.
+description: "Raw mechanical interfaces fusing Swiss typographic print with military terminal aesthetics: rigid grids, extreme type scale contrast, utilitarian color, analog degradation effects. Use only when this look is explicitly requested, for portfolios or editorial sites. For app/dashboard/product UI defer to ui-ux-system."
 ---
+
+> **Scope (22 Oct 2026):** Persuade/marketing or explicit-use only. For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # SKILL: Industrial Brutalism & Tactical Telemetry UI
 

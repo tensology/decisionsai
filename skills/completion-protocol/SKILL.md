@@ -44,9 +44,9 @@ Exercise complete user journeys across the affected boundaries. Then perform a s
 
 The reviewer must inspect fresh outputs or runtime state. Self-authored claims, stale screenshots, changed-file lists, and successful build commands are not substitutes for outcome evidence.
 
-## Completion manifest
+## Completion summary
 
-Before reporting completion, produce the one-line JSON `completion_manifest` defined in [references/manifest.md](references/manifest.md). A `complete` verdict is valid only when:
+Before reporting completion, produce the concise, human-readable Markdown completion summary defined in [references/manifest.md](references/manifest.md). Never output raw JSON unless the user explicitly requests a machine-readable manifest. A `Complete` verdict is valid only when:
 
 - every inventory item is verified or explicitly approved as excluded;
 - no blockers remain;
@@ -54,7 +54,7 @@ Before reporting completion, produce the one-line JSON `completion_manifest` def
 - every required end-to-end journey is verified;
 - the independent audit passes with no unresolved findings.
 
-If any condition is unmet, use verdict `incomplete` and state exactly what remains. Never use `done`, `finished`, `complete`, `polished`, or `verified` as a softer substitute.
+If any condition is unmet, use verdict `Incomplete` and state exactly what remains. Never use `done`, `finished`, `complete`, `polished`, or `verified` as a softer substitute.
 
 ## Learning from corrections
 

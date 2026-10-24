@@ -5,6 +5,11 @@ argument-hint: "[target|url] [--selector <css>] [--wait-for <css>] [--deep]"
 allowed-tools: Read, Glob, Grep, Bash, Skill, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__press_key, mcp__chrome-devtools__click, mcp__chrome-devtools__hover, mcp__chrome-devtools__fill, mcp__chrome-devtools__fill_form, mcp__chrome-devtools__resize_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__new_page, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__wait_for, mcp__plugin_accesslint_accesslint__explain_rule
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 This is the semi-automated manual tier of a WCAG assessment: the checks that need interaction (keyboard, focus, state changes, reflow) or human review (focus visibility, error recovery, reading order), which a static rule engine can't decide. Work against the running page; use source only to map a finding to `file:line`. Locate and assess — don't fix (that's `accesslint:accessibility-fix`). The automated tier is `accesslint:accessibility-scan`; `accesslint:accessibility-audit` runs both under WCAG-EM.
 
 The shared rules — severity, the no-proxy boundary, high-risk patterns, conformance, grounding — are in [`../shared/methodology.md`](../shared/methodology.md). Read it when a call needs judgment. The rules that always apply are below.

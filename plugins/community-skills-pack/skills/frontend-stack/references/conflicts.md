@@ -31,15 +31,14 @@ the stack applies. Rulings follow the precedence ladder in `../SKILL.md`.
 
 - **taste** `design-taste-frontend` discourages Inter as a default (allowed on
   request or for neutral / accessibility-first briefs).
-  `high-end-visual-design` bans Inter, Roboto, Arial, Open Sans and Helvetica
-  outright.
+  `high-end-visual-design` (archived 22 Oct 2026) banned Inter, Roboto, Arial,
+  Open Sans and Helvetica outright.
 - **frontend-design** asks for distinctive type chosen for the subject.
 - **UI UX Pro Max** font-pairing search can return Inter-based pairings.
 - **Ruling:** brand / existing system first. For a fresh project, avoid Inter as
   an unconsidered default, but it is fine when the user asks, when the product
   is dense and neutral (admin, data tools), or when the project already uses
-  it. The outright ban in `high-end-visual-design` only applies when that preset
-  was explicitly chosen.
+  it.
 
 ## Purple and gradients
 
@@ -63,8 +62,8 @@ the stack applies. Rulings follow the precedence ladder in `../SKILL.md`.
 
 - Its own header: "Landing pages, portfolios, and redesigns. Not dashboards,
   not data tables, not multi-step product UI."
-- **Ruling:** binding. For product UI the lead is `frontend-design` with UI UX
-  Pro Max's UX guidelines, and Impeccable `harden` at the end.
+- **Ruling:** binding. For product (Operate) UI the lead is `ui-ux-system`;
+  `frontend-design` and the taste skills lead only explicit Persuade briefs.
 
 ## Component libraries
 
@@ -82,15 +81,17 @@ the stack applies. Rulings follow the precedence ladder in `../SKILL.md`.
 
 - **taste** bans the em dash (`—`) anywhere on the page, calling it the top "AI
   tell".
-- Nobody else has a rule.
-- **Ruling:** apply it to UI copy the stack writes. Do not rewrite copy the user
-  supplied.
+- `ui-ux-system` (the UI authority) owns the ruling.
+- **Ruling:** settled by `ui-ux-system` section 8a: no em dashes in UI copy,
+  rationale or labels the agent writes; do not rewrite copy the user supplied;
+  en dashes for numeric ranges are fine. `ui-typography`'s entity table
+  documents the character but does not override this ruling.
 
 ## Review before shipping
 
 - **Impeccable** `audit` / `critique` / `polish`, **Emil** `review-animations`,
   **taste** pre-flight checklist and **frontend-design**'s anti-template list
   all review the same page from different angles.
-- **Ruling:** do not run all of them. Impeccable `audit` always; Emil's review
-  when the diff touches motion; taste's checklist only on marketing pages it
-  led.
+- **Ruling:** do not run all of them. `ui-ux-system` section 10 always;
+  Emil's review when the diff touches motion; Impeccable `audit`/`critique`
+  only when asked; taste's checklist only on marketing pages it led.

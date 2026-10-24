@@ -1,7 +1,14 @@
 ---
 name: stitch-design-taste
-description: Semantic Design System Skill for Google Stitch. Generates agent-friendly DESIGN.md files that enforce premium, anti-generic UI standards — strict typography, calibrated color, asymmetric layouts, perpetual micro-motion, and hardware-accelerated performance.
+description: "Generates Google Stitch DESIGN.md files (written to DESIGN.stitch.md unless told otherwise) on explicit request only. For app/dashboard/product UI defer to ui-ux-system."
 ---
+
+> **Scope (22 Oct 2026):** Persuade/marketing or explicit-use only. For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # Stitch Design Taste — Semantic Design System Skill
 

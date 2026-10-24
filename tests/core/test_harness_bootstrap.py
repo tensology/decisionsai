@@ -39,20 +39,28 @@ def test_reference_skill_projection_includes_ui_crud_discipline(tmp_path: Path, 
     assert str(skill.parent) in written
     assert str(command) in written
     crud_text = skill.read_text(encoding="utf-8")
-    assert "`UX Principles`" in crud_text
-    assert "`UI Principles`" in crud_text
-    assert "`Definition of Done - UI`" in crud_text
+    assert "ui-ux-system" in crud_text
+    assert "Definition of Done - UI" in crud_text
 
+    # ui-ux-system is the single interface authority and is projected as a skill.
+    system = tmp_path / ".codex" / "skills" / "ui-ux-system" / "SKILL.md"
+    system_command = tmp_path / ".codex" / "commands" / "ui-ux-system.md"
+    assert str(system.parent) in written
+    assert str(system_command) in written
+    system_text = system.read_text(encoding="utf-8")
+    assert "single UI/UX authority" in system_text
+    assert "Definition of Done - UI" in system_text
+    assert "references/taste-log.md" in system_text
+
+    # ui-ux-principles stays only as a redirect to ui-ux-system.
     principles = tmp_path / ".codex" / "skills" / "ui-ux-principles" / "SKILL.md"
     principles_command = tmp_path / ".codex" / "commands" / "ui-ux-principles.md"
     assert str(principles.parent) in written
     assert str(principles_command) in written
     text = principles.read_text(encoding="utf-8")
-    assert "## UX Principles" in text
-    assert "## UI Principles" in text
-    assert "## Taste Memory" in text
-    assert "## Definition of Done - UI" in text
-    assert "## Changelog" in text
+    assert "Redirect only" in text
+    assert "ui-ux-system" in text
+    assert "## UX Principles" not in text
 
     completion = tmp_path / ".codex" / "skills" / "completion-protocol" / "SKILL.md"
     completion_command = tmp_path / ".codex" / "commands" / "completion-protocol.md"
@@ -61,22 +69,34 @@ def test_reference_skill_projection_includes_ui_crud_discipline(tmp_path: Path, 
     completion_text = completion.read_text(encoding="utf-8")
     assert "## Coverage ledger" in completion_text
     assert "## Negative-space audit" in completion_text
-    assert "completion_manifest" in completion_text
+    assert "## Completion summary" in completion_text
 
 
-def test_global_interface_principles_have_separate_sources_and_learning_log():
+def test_ui_ux_system_is_the_single_interface_authority():
     from distr.core import harness_stack
 
-    source = harness_stack.PROJECT_ROOT / "skills" / "ui-ux-principles" / "SKILL.md"
-    text = source.read_text(encoding="utf-8")
+    root = harness_stack.PROJECT_ROOT / "skills"
 
-    assert text.count("## UX Principles") == 1
-    assert text.count("## UI Principles") == 1
-    assert "Titles, actions, information, and helper copy are not duplicated." in text
-    assert "Removing any element would remove a function or necessary meaning." in text
-    assert "The screen has one job, one title" in text
-    assert "When the same correction appears two or three times" in text
-    assert text.count("| 2026-10-14 |") >= 4
+    system_text = (root / "ui-ux-system" / "SKILL.md").read_text(encoding="utf-8")
+    assert "single UI/UX authority" in system_text
+    assert "## Order of authority" in system_text.replace("## 0. Order of authority", "## Order of authority")
+    assert "Paul's rules" in system_text
+    assert "Definition of Done - UI" in system_text
+    assert "references/taste-log.md" in system_text
+
+    # The learning log lives with the authority, not with the redirect.
+    log = root / "ui-ux-system" / "references" / "taste-log.md"
+    assert log.is_file()
+    log_lines = [line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("20")]
+    assert len(log_lines) >= 100
+
+    # ui-ux-principles is a redirect only: no parallel rule set.
+    principles = (root / "ui-ux-principles" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Redirect only" in principles
+    assert "ui-ux-system" in principles
+    assert "## UX Principles" not in principles
+    assert "## UI Principles" not in principles
+    assert not (root / "ui-ux-principles" / "taste-log.md").exists()
 
 
 def test_interface_builder_and_tester_reference_global_principles():

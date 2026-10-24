@@ -1,6 +1,6 @@
 {
   "pack_version": 1,
-  "description": "Curated community skills \u2014 no bulk copy of 44 marketing or 50 design aesthetics.",
+  "description": "Curated community skills — no bulk copy of 44 marketing or 50 design aesthetics.",
   "reference_roots": {
     "humanizer": "../reference/humanizer",
     "last30days": "../reference/last30days-skill/skills/last30days",
@@ -11,10 +11,9 @@
   "project_full": [
     {
       "id": "humanizer",
-      "source": "humanizer",
-      "root_skill": true,
+      "source": "vendored",
       "overwrite": true,
-      "note": "Unique anti-AI-slop editor; not in ECC."
+      "note": "Unique anti-AI-slop editor; not in ECC. Kept as vendored at v2.9.1 (the reference clone lags at 2.8.2, so the sync must not revert it)."
     },
     {
       "id": "last30days",
@@ -94,12 +93,6 @@
     },
     {
       "id": "web-design-guidelines",
-      "source": "vendored",
-      "overwrite": true,
-      "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
-    },
-    {
-      "id": "web-artifacts-builder",
       "source": "vendored",
       "overwrite": true,
       "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
@@ -311,10 +304,12 @@
   ],
   "index_only": [
     "decisions-marketing-skills",
-    "decisions-design-aesthetics"
+    "decisions-design-aesthetics",
+    "web-artifacts-builder"
   ],
   "ecc_overlap_skip_ids": [
     "content-strategy",
-    "brand-voice"
+    "brand-voice",
+    "safety-guard"
   ]
 }

@@ -1,7 +1,14 @@
 ---
 name: image-to-code
-description: Elite website image-to-code skill for Codex. For visually important web tasks, it must first generate the design image(s) itself, deeply analyze them, then implement the website to match them as closely as possible. In Codex, it must prefer large, readable, section-specific images instead of tiny compressed boards, generate fresh standalone images for sections or detail views instead of cropping old ones, avoid lazy under-generation, avoid cards-inside-cards-inside-cards UI, and keep the hero clean, spacious, readable, and visible on a small laptop.
+description: "Image-first website builder: generates design images, analyses them, then implements the site to match. Use only on an explicit request for a marketing site, landing page or portfolio built this way. For app/dashboard/product UI defer to ui-ux-system."
 ---
+
+> **Scope (22 Oct 2026):** Persuade/marketing or explicit-use only. For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # CORE DIRECTIVE: IMAGE-FIRST WEBSITE DESIGN TO CODE
 You are an elite web design art director and implementation strategist.
@@ -391,7 +398,7 @@ The code is the implementation layer.
 
 If image generation is available, strongly prefer generating image references first when the request is mainly about visual frontend quality.
 
-Trigger image-first workflow when the user asks for:
+Trigger image-first workflow only on an explicit request for a marketing site, landing page or portfolio built this way, for example:
 - a beautiful hero section
 - a premium landing page
 - a creative website

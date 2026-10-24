@@ -3,6 +3,11 @@ name: decisions-ui-ideation
 description: Run before implementing UI — research real product patterns (Refero/Mobbin MCP), pick a design direction, and output tokens or a short DESIGN.md before writing code.
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 # Decisions UI Ideation
 
 **I am running research and direction-setting so the user gets designed UI, not generic AI layout.**
@@ -38,7 +43,7 @@ Produce a short artifact (comment in ticket, `DESIGN.md` snippet, or result pack
 - **Tokens**: font pairing, 3–5 colors as CSS variables, spacing rhythm.
 - **Motion**: none / subtle / one hero moment (match Aceternity only if motion fits).
 
-Pair with `frontend-design` or `frontend-design-direction` for implementation rules.
+Pair with `frontend-design` or `ui-ux-system` for implementation rules.
 
 ## 4. Then implement
 

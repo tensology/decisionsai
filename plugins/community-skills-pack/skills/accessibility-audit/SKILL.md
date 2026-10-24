@@ -5,6 +5,11 @@ argument-hint: "[target|url] [--level AA|AAA] [--selector <css>]"
 allowed-tools: Read, Glob, Grep, Bash, Skill, Task, mcp__plugin_accesslint_accesslint__list_rules, mcp__plugin_accesslint_accesslint__explain_rule
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 This is a full WCAG 2.2 accessibility audit using WCAG-EM. It defines scope, samples representative pages and flows, runs both evaluation tiers, and produces one conformance report:
 
 - Automated tier: `accesslint:accessibility-scan` (the rule engine).

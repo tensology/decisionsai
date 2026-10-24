@@ -5,6 +5,11 @@ argument-hint: "[target|url|report]"
 allowed-tools: Read, Edit, Write, Glob, Grep, Bash, Skill, Task, mcp__plugin_accesslint_accesslint__audit_html, mcp__plugin_accesslint_accesslint__audit_live, mcp__plugin_accesslint_accesslint__explain_rule, mcp__plugin_accesslint_accesslint__list_rules
 ---
 
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
+
 This skill remediates accessibility violations: baseline, edit, verify. It only fixes. To find what's wrong, use `accesslint:accessibility-scan` (one page, automated), `accesslint:accessibility-inspect` (one page, manual), or `accesslint:accessibility-audit` (whole site, WCAG-EM); to check for regressions, use `accesslint:accessibility-diff`. The engine runs here are internal to the loop — a baseline before and a check after — not a report.
 
 Shared conventions (grounding, never invent content): [`../shared/methodology.md`](../shared/methodology.md).

@@ -1,12 +1,19 @@
 ---
 name: perfect-ui
-description: "Design and build cohesive web pages with custom visual identity — landing pages and portfolios get rich anatomy + section archetypes; any other page type (blog, about, pricing, contact, coming-soon, dashboard, admin, e-commerce, custom) is supported through generic anatomy + skeleton. Use this skill whenever the user mentions: landing page, portfolio, personal site, hero section, marketing page, product page, sales page, splash page, blog page, about page, pricing page, contact page, coming-soon, waitlist, dashboard, admin panel, e-commerce store, redesign my site, design my portfolio, build a portfolio, work showcase, hire-me page, perfect-ui, perfect landing, or asks to create any web page surface. Two tiers: special (landing | portfolio — rich treatment) and generic (everything else — universal craft toolkit). Self-contained 8-phase pipeline: vibe discovery → visual direction (color/typography/mood) → custom icon set (NO emoji, NO icon library) → AI-generated visuals → optional shader effects layer → inline plan + implement on Next.js + Tailwind + shadcn. Always proposes effect layer as optional. No refusals; outputs distinctive sites, not AI slop."
+description: "Design and build landing pages and portfolios with a custom visual identity (8-phase pipeline: vibe discovery, visual direction, custom icons, visuals, effects, build, audit). Use only for landing pages, portfolios, personal sites, hero sections and marketing pages, or when perfect-ui is named. Not for dashboards, admin panels or app screens. For app/dashboard/product UI defer to ui-ux-system."
 license: MIT
 metadata:
   author: dris1153
   version: "2.5.0"
 argument-hint: "[description OR existing site URL/screenshot] [--type any_page_type] [--new|--redesign] [--no-3d] [--stack nextjs|astro|vanilla]"
 ---
+
+> **Scope (22 Oct 2026):** Persuade/marketing or explicit-use only. For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # Perfect UI — Cohesive Web-Page Designer
 
@@ -41,10 +48,10 @@ Activate whenever user input matches any of these:
 
 - **Landing (special tier):** "design a landing page", "build me a landing", "marketing page for [product]", "hero section", "splash page", "sales page", "redesign this landing"
 - **Portfolio (special tier):** "design my portfolio", "build a portfolio", "personal site for [name]", "work showcase", "hire-me page", "redesign my portfolio"
-- **Generic (any other page type):** "design my pricing page", "build a blog landing", "create an about page", "design a contact page / coming-soon / waitlist", "design a 404 / error page", "design a dashboard for my [tool]", "build an admin panel", "design a product catalog / storefront page", or any free-text page-type description
+- **Generic (any other page type):** "design my pricing page", "build a blog landing", "create an about page", "design a contact page / coming-soon / waitlist", "design a 404 / error page", "design a product catalog / storefront page", or a marketing page-type description. Dashboards, admin panels and app screens are out of scope: use `ui-ux-system`
 - URL or screenshot of an existing site (mode = redesign — applies to any tier)
 
-If user says only "design a website" or "build a site" → ask via `AskUserQuestion` with the expanded Page Type options (see `references/workflow-phases.md` § Phase 0.5 Step 3). The skill no longer refuses any type — for app-surface types (dashboard / admin / e-commerce / full app) it logs an evidence-base disclosure and proceeds with the universal craft toolkit.
+If user says only "design a website" or "build a site" → ask via `AskUserQuestion` with the expanded Page Type options (see `references/workflow-phases.md` § Phase 0.5 Step 3). For app-surface types (dashboard / admin / full app), do not use this skill; defer to `ui-ux-system`.
 
 ## Hard Rules (Non-Negotiable)
 

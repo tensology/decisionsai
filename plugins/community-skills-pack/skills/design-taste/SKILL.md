@@ -1,10 +1,17 @@
 ---
 name: design-taste
-description: Elite frontend design taste for building, reviewing, and polishing web interfaces. Use whenever the user wants to design, redesign, shape, critique, audit, polish, or improve any UI (landing pages, portfolios, dashboards, product UI, components, forms, onboarding, empty states) or asks to make something look better / premium / modern, fix the styling, add or fix animations, or make a design feel less generic ("AI slop"). Covers typography, color, spacing, layout, visual hierarchy, motion, micro-interactions, component states, accessibility, responsive behavior, UX copy, and anti-pattern detection.
+description: "Design taste for Persuade work only: marketing sites, landing pages, portfolios, campaign and experience pages, on an explicit brief. Covers typography, color, layout, motion, copy and anti-slop checks for those surfaces. Not for apps, dashboards, admin, settings, tables, CRUD or forms. For app/dashboard/product UI defer to ui-ux-system."
 license: MIT AND Apache-2.0
 metadata:
   version: "2.1.0"
 ---
+
+> **Scope (22 Oct 2026):** Persuade/marketing or explicit-use only. For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # Design & Taste
 

@@ -1,7 +1,14 @@
 ---
 name: ui-ux-pro-max
-description: "UI/UX design intelligence for web, mobile, and desktop. This skill should be used when designing, building, reviewing, or fixing interfaces, including pages, components, design systems, accessibility, interaction, responsive layout, typography, color, charts, and stack-specific UI implementation. Searchable local data: 79 searchable styles (50 active), 192 product palettes and reasoning profiles, 74 font pairings, 119 UX guidelines, 105 icons, 17 GSAP presets, 25 chart types, and 22 stacks."
+description: "Searchable UI data lookups: palettes, font pairings, chart types, styles, icons and stack guidelines. Use for a palette, font or chart lookup, or when ui-ux-pro-max is named explicitly. Never treat a --persist MASTER.md as the source of truth; the project's tokens and ui-ux-system win. For app/dashboard/product UI defer to ui-ux-system."
 ---
+
+> **Scope (22 Oct 2026):** For app/dashboard/product UI defer to `ui-ux-system` (`~/.agents/skills/ui-ux-system/SKILL.md`).
+
+<!-- GLOBAL_UI_UX_REFERENCE -->
+## Global interface source
+
+Before using this skill for interface work, read the current global `ui-ux-system` skill (`~/.agents/skills/ui-ux-system/SKILL.md`), especially its Paul's rules, settled taste rules, and Definition of Done - UI. Those rules are authoritative and override conflicting guidance here. Aesthetic recipes are opt-in: use them only when the brief explicitly calls for them and they earn their place. This skill adds only its specialized guidance.
 
 # UI/UX Pro Max - Design Intelligence
 
@@ -85,7 +92,9 @@ This aggregates product/style/color/landing/typography matches, applies reasonin
 python "${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max/scripts/search.py" "beauty spa wellness service" --design-system -p "Serenity Spa"
 ```
 
-### Step 2b: Persist Design System (Master + Overrides Pattern)
+### Step 2b: Persist Design System (Master + Overrides Pattern), explicit request only
+
+Only run `--persist` when the user explicitly asks. A generated `MASTER.md` is a draft, never the source of truth: the project's own tokens and `ui-ux-system` win over it.
 
 To save the design system for retrieval across sessions, add `--persist` **and always pass `--output-dir` pointed at the project root** — without it, files are written relative to whatever directory the tool happens to run from:
 
@@ -94,7 +103,7 @@ python "${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max/scripts/search.py" "<
 ```
 
 This creates:
-- `design-system/<project-slug>/MASTER.md` — Global Source of Truth
+- `design-system/<project-slug>/MASTER.md`: persisted draft (not a source of truth; project tokens and `ui-ux-system` win)
 - `design-system/<project-slug>/pages/` — Folder for page-specific overrides
 
 With a page-specific override, add `--page "dashboard"` to also create `design-system/<project-slug>/pages/dashboard.md`. If Master already exists, a new page file is created without changing Master; an existing page file is skipped unless `--force` is explicitly authorized.
@@ -106,7 +115,7 @@ Read an existing `MASTER.md` before deciding whether `--force` is justified. Nev
 **Retrieval when building a specific page:**
 1. Read `design-system/<project-slug>/MASTER.md`
 2. Check if `design-system/<project-slug>/pages/<page-name>.md` exists — if so, its rules override Master
-3. Otherwise use Master rules exclusively
+3. Otherwise use Master rules, below the project's tokens and `ui-ux-system`
 
 ### Step 2c: Design Dials (optional)
 
