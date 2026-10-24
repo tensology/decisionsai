@@ -432,7 +432,7 @@
 
 .activity-icon { color: var(--studio-muted); text-align: center; }
 
-.activity-row.route .activity-icon, .activity-row.route .activity-title { color: var(--studio-blue); }
+.activity-row.route .activity-icon, .activity-row.route .activity-title { color: var(--studio-accent-light); }
 
 .activity-row.failed .activity-icon, .activity-row.failed .activity-title { color: var(--studio-red); }
 
@@ -442,7 +442,7 @@
 
 .activity-title a:hover, .activity-detail a:hover { color: #bdd8ff; text-decoration-color: currentColor; }
 
-.activity-title a:focus-visible, .activity-detail a:focus-visible { border-radius: 2px; outline: 2px solid var(--studio-blue); outline-offset: 2px; }
+.activity-title a:focus-visible, .activity-detail a:focus-visible { border-radius: 2px; outline: 2px solid var(--studio-accent-light); outline-offset: 2px; }
 
 .activity-detail { max-height: 4.2em; margin-top: 2px; overflow: hidden; color: var(--studio-muted); font-size: 10px; white-space: pre-wrap; }
 
@@ -472,7 +472,7 @@
 .turn-event-row > summary:hover,
 .turn-event-main:hover { background: rgba(255,255,255,.032); color: var(--studio-text); }
 
-.turn-event-row > summary:focus-visible { outline: 2px solid var(--studio-blue); outline-offset: 1px; }
+.turn-event-row > summary:focus-visible { outline: 2px solid var(--studio-accent-light); outline-offset: 1px; }
 
 .turn-activity-icon { display: inline-grid; width: 21px; height: 21px; place-items: center; border: 1px solid rgba(255,255,255,.1); border-radius: 6px; background: rgba(255,255,255,.045); color: var(--studio-muted); }
 
@@ -769,7 +769,7 @@
 
 .inspector-activity-dot { width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; background: var(--studio-dim); }
 
-.inspector-activity-dot.you { background: var(--studio-blue); }
+.inspector-activity-dot.you { background: var(--studio-accent-light); }
 
 .inspector-activity-dot.response { background: var(--studio-green); }
 
@@ -785,7 +785,7 @@
 
 .inspector-preview span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.inspector-preview b { margin-left: auto; color: var(--studio-blue); font-size: 8px; }
+.inspector-preview b { margin-left: auto; color: var(--studio-accent-light); font-size: 8px; }
 
 .model-dialog { position: fixed; z-index: 40; inset: auto; width: min(328px, calc(100vw - 24px)); margin: 0; }
 
@@ -1027,7 +1027,7 @@
 .skill-card-source { flex: 0 0 auto; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.06); color: var(--studio-muted); font-size: 9px; }
 .skill-card p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--studio-muted); font-size: 10px; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .skill-card footer { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; }
-.skill-card footer span { padding: 0 5px; border-radius: 3px; background: var(--studio-blue-soft); color: var(--studio-dim); font-size: 9px; }
+.skill-card footer span { padding: 0 5px; border-radius: 3px; background: var(--studio-accent-light-soft); color: var(--studio-dim); font-size: 9px; }
 @media (max-width: 560px) { .skills-card-grid { grid-template-columns: minmax(0, 1fr); } }
 .visual-plan-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 10px 16px; }
 .visual-plan-toolbar button, .visual-plan-footer button { height: 26px; padding: 0 10px; border: 1px solid var(--studio-line-soft); border-radius: 6px; background: transparent; color: var(--studio-muted); font-size: 10px; cursor: pointer; }

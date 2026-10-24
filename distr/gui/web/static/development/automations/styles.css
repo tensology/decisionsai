@@ -49,7 +49,7 @@
 .scheduled-row.active { border-color: rgba(249,115,22,.7); box-shadow: inset 0 0 0 1px rgba(249,115,22,.12); }
 .scheduled-row-main { display: block; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
 .scheduled-row-state { width: 9px; height: 9px; border: 1px solid var(--studio-muted); border-radius: 50%; }
-.scheduled-row-state.running { border-color: var(--studio-blue); background: var(--studio-blue); }
+.scheduled-row-state.running { border-color: var(--studio-accent-light); background: var(--studio-accent-light); }
 .scheduled-row-copy { display: grid; min-width: 0; gap: 3px; }
 .scheduled-row-copy strong, .scheduled-row-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-row-copy strong { font-size: 11px; font-weight: 570; }
