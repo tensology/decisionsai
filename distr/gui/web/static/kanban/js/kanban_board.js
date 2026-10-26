@@ -585,7 +585,7 @@
             deps.apiFetch("/api/tickets/boards/" + boardId + "/use", { method: "POST" }).then(function(data) {
                 deps.showSnackbar("Board set as active");
                 deps.loadBoards(true);
-                if (data && data.linked_project) {
+                if (data && data.linked_project && !data.project_activated) {
                     window.DecisionsAPI.confirm({
                         title: "Activate linked project",
                         message: 'This board is linked to project "' + data.linked_project.name + '". Activate that project too?',

@@ -235,3 +235,54 @@ def test_format_developer_context_dict_for_prompt_uses_stored_context():
     assert "Cursor updated the panel" in text
     assert "active_project_executions" in text
     assert "Update the settings panel from Telegram" in text
+
+
+def test_active_board_follows_active_project_over_unrelated_in_use_board(monkeypatch):
+    """Chat context must describe the same board work intake routes to.
+
+    Work intake resolves scope from the active project. If chat context instead
+    reported whichever unrelated board is flagged in_use, a question and a work
+    request would describe two different projects.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from distr.core.db import Base
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.projects import Project
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    with factory() as session:
+        active = Project(name="Merrypak", in_use=True)
+        other = Project(name="Other", in_use=False)
+        session.add_all([active, other])
+        session.flush()
+        active_board = KanbanBoard(
+            name="Merrypak Delivery", default_project_id=active.id, in_use=False, position=0
+        )
+        unrelated_board = KanbanBoard(
+            name="Other Delivery", default_project_id=other.id, in_use=True, position=1
+        )
+        session.add_all([active_board, unrelated_board])
+        session.flush()
+        active.kanban_board_id = active_board.id
+        session.commit()
+        ids = (active.id, active_board.id, unrelated_board.id)
+
+    monkeypatch.setattr("distr.core.db.get_session", lambda: factory())
+
+    project_ctx = DeveloperProjectContext(
+        id=ids[0], name="Merrypak", kanban_board_id=ids[1]
+    )
+    board = DeveloperContextAssembler()._fetch_active_board(project_ctx)
+
+    assert board is not None
+    assert board.id == ids[1]
+    assert board.id != ids[2]

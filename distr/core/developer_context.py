@@ -631,19 +631,25 @@ class DeveloperContextAssembler:
         from distr.core.db.kanban import KanbanBoard, KanbanTicket
 
         with get_session() as session:
-            board = (
-                session.query(KanbanBoard)
-                .filter(KanbanBoard.in_use == True, KanbanBoard.archived == False)  # noqa: E712
-                .order_by(KanbanBoard.modified_date.desc())
-                .first()
-            )
-            if not board and active_project and active_project.kanban_board_id:
+            board = None
+            # The active project's board wins. Work intake routes by the active
+            # project, so chat context must describe that same board instead of
+            # whichever unrelated board happens to be flagged in_use. Otherwise
+            # a question and a work request talk about two different projects.
+            if active_project and active_project.kanban_board_id:
                 board = (
                     session.query(KanbanBoard)
                     .filter(
                         KanbanBoard.id == active_project.kanban_board_id,
                         KanbanBoard.archived == False,  # noqa: E712
                     )
+                    .first()
+                )
+            if not board:
+                board = (
+                    session.query(KanbanBoard)
+                    .filter(KanbanBoard.in_use == True, KanbanBoard.archived == False)  # noqa: E712
+                    .order_by(KanbanBoard.modified_date.desc())
                     .first()
                 )
             if not board:

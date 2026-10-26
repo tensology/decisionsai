@@ -3193,8 +3193,13 @@ def create_routes():
 
     @router.post("/tickets/boards/{board_id}/use")
     async def set_board_in_use(board_id: int):
-        """Set this board as the active/in-use board. Only one board can be in_use at a time.
-        If the board has a linked project, returns a prompt to activate it."""
+        """Set this board (and its linked project) as the active scope.
+
+        A board and its project are one scope decision. Leaving an old project
+        active made the next implicit work request target the wrong project,
+        because work intake resolves scope from the active project. Activating
+        a board now activates its linked project in the same transaction.
+        """
         with get_session() as s:
             # Deactivate all boards
             s.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
@@ -3204,16 +3209,25 @@ def create_routes():
             board.in_use = True
             s.flush()
 
-            # Check if board has a linked project
             linked_project = None
             if board.default_project_id:
                 from distr.core.db.projects import Project
                 proj = orm_get_by_id(s, Project,board.default_project_id)
-                if proj and not proj.in_use:
+                if proj is not None:
+                    # Keep the project pin in lockstep with the board pin.
+                    s.query(Project).filter(Project.in_use == True).update(
+                        {"in_use": False}
+                    )
+                    proj.in_use = True
+                    if not getattr(proj, "kanban_board_id", None):
+                        proj.kanban_board_id = int(board.id)
                     linked_project = {"id": proj.id, "name": proj.name}
+                    s.flush()
 
             return JSONResponse({
                 "success": True,
+                # Already activated server-side; clients must not prompt again.
+                "project_activated": bool(linked_project),
                 "linked_project": linked_project,
             })
 

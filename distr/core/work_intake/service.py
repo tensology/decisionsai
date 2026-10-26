@@ -20,6 +20,19 @@ from .contracts import WorkIntake, WorkIntakeAction, WorkIntakeDecision
 
 logger = logging.getLogger(__name__)
 
+
+class ScopeNeedsInfo(Exception):
+    """Work cannot be routed without the user naming a project or board.
+
+    Raised instead of silently falling back to an unrelated board or failing
+    with a technical error string. ``ingest`` converts it into ASK_MISSING_INFO.
+    """
+
+    def __init__(self, prompt: str):
+        super().__init__(prompt)
+        self.prompt = str(prompt or "")
+
+
 _EXECUTE_RE = re.compile(
     r"\b(run|execute|start|push|send)\b.{0,120}\b(workflow|loop)\b"
     r"|\b(push|send)\s+(it|this|ticket)\s+(into|to|through)\s+"
@@ -38,11 +51,38 @@ _DEVELOPMENT_THREAD_RE = re.compile(
     r"^(?:development\s+)?thread\s*#?(\d+)\s*[:,-]\s*(.+)$",
     re.I | re.S,
 )
+_WORK_VERB = (
+    r"(?:make|change|fix|repair|patch|update|add|remove|rename|replace|run|execute|"
+    r"build|implement|perform|assess|analyse|analyze|refactor|test|validate|verify|"
+    r"audit|review|inspect|investigate|redesign|copy|migrate|integrate|deploy|"
+    r"launch|ship|release|start|troubleshoot|debug)"
+)
 _PROJECT_WORK_RE = re.compile(
-    r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
-    r"(?:make|change|fix|repair|patch|update|add|remove|rename|replace|run|execute|build|implement|"
-    r"perform|assess|analyse|analyze|refactor|test|validate|verify|audit|review|inspect|"
-    r"investigate|redesign|copy|migrate|integrate)\b",
+    r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|just\s+|kindly\s+|"
+    r"now\s+|also\s+|then\s+|quickly\s+)?(?:go\s+and\s+|go\s+)?"
+    + _WORK_VERB + r"\b",
+    re.I,
+)
+# Work phrased as an idiom, symptom, or "<Project>: <verb>" rather than a
+# leading verb. These must route exactly like "Fix X".
+_WORK_INTENT_ANY_RE = re.compile(
+    r"\b(?:sort\s+out|look\s+into|deal\s+with|have\s+a\s+look\s+at|take\s+a\s+look\s+at|"
+    r"dig\s+into|fix\s+up|troubleshoot|debug)\b"
+    r"|\b(?:there'?s|there\s+is)\s+(?:a\s+|an\s+|some\s+)?"
+    r"(?:bug|issue|problem|error|breakage|defect|regression)\b"
+    r"|\b(?:is|are|was|were|seems?|looks?|keeps?|keeps\s+on)\s+"
+    r"(?:broken|failing|failed|buggy|busted|fucked)\b",
+    re.I,
+)
+_COLON_WORK_RE = re.compile(
+    r"^[^\n:]{1,60}:\s*(?:" + _WORK_VERB + r"|sort\s+out|look\s+into|deal\s+with)\b",
+    re.I,
+)
+# A short "run/execute the <desktop action>" names a saved desktop action, not
+# project work. Leave it to the desktop agent instead of starting a workflow.
+_DESKTOP_RUN_RE = re.compile(
+    r"^(?:please\s+|can\s+you\s+|could\s+you\s+)?(?:run|execute|start|trigger|play)[\s,]+"
+    r"(?:the\s+|my\s+|a\s+|an\s+)?(?:action|shortcut|hotkey|macro|gesture|automation)\b",
     re.I,
 )
 # Casual chat / status questions must stay with the conversational agent even when
@@ -50,10 +90,24 @@ _PROJECT_WORK_RE = re.compile(
 _CASUAL_CHAT_RE = re.compile(
     r"^(?:hi|hello|hey|thanks|thank\s+you|good\s+(?:morning|afternoon|evening)|"
     r"what(?:'s|\s+is|\s+are|\s+was|\s+were)?\b|why\b|how\s+(?:do|does|did|can|should|would|is|are)\b|"
-    r"who\b|when\b|where\b|tell\s+me\b|explain\b|describe\b|"
+    r"who\b|when\b|where\b|"
+    r"is\b|are\b|was\b|were\b|does\b|do\b|did\b|"
+    r"tell\s+me\b|explain\b|describe\b|"
     r"(?:can|could|would)\s+you\s+(?:tell|explain|describe|remind|summarize|help\s+me\s+understand)\b)",
     re.I,
 )
+
+
+def _has_work_intent(value: str) -> bool:
+    """True when the text asks for durable work, however it is phrased."""
+    text = str(value or "")
+    if not text:
+        return False
+    return bool(
+        _PROJECT_WORK_RE.search(text)
+        or _WORK_INTENT_ANY_RE.search(text)
+        or _COLON_WORK_RE.search(text)
+    )
 _BATCH_TICKETS_RE = re.compile(
     r"\b(?:create|make|open|add)?\s*(?:separate|individual|multiple)\s+"
     r"(?:tickets|tasks|work items)\s+(?:for|:)\s+(?P<items>.+?)"
@@ -88,6 +142,7 @@ _UNRESOLVED_REFERENCE_RE = re.compile(
     r"(?:the|that)\s+(?:thing|stuff|issue|change|work)"
     r"|(?:make|change|fix|repair|patch|update|add\s+to|remove|rename|replace|"
     r"inspect|review|test|validate)\s+(?:it|this|that)\b"
+    r"|(?:look\s+at|sort\s+out|deal\s+with|have\s+a\s+look\s+at|take\s+a\s+look\s+at)\s+(?:it|this|that)\b"
     r"|(?:it|this|that)\s+(?:we\s+)?(?:discussed|mentioned|talked\s+about|spoke\s+about)"
     r"|what\s+we\s+(?:discussed|mentioned|talked\s+about|spoke\s+about)"
     r")\b",
@@ -241,17 +296,26 @@ class OrchestratorIntakeService:
             or (intake.metadata or {}).get("active_project_id")
             or (intake.metadata or {}).get("project_name")
         )
+        casual = bool(_CASUAL_CHAT_RE.search(value))
+        work_intent = _has_work_intent(value)
+        # "Run the <desktop action>" is a saved desktop action, not project work.
+        # "Run this through the workflow" is caught earlier by _EXECUTE_RE.
+        if not project_scope and _DESKTOP_RUN_RE.search(value):
+            return WorkIntakeDecision(
+                WorkIntakeAction.ANSWER_DIRECTLY,
+                "Named desktop action/automation run; leave to the desktop agent",
+            )
         # A project association supplies scope, not intent. Never turn a lone
         # verb such as "fix" into permission to create a ticket and execute
         # against that project; ask for the missing object/outcome first.
-        if len(value.split()) < 2 and _PROJECT_WORK_RE.search(value) and not intake.attachments:
+        if len(value.split()) < 2 and work_intent and not intake.attachments:
             return WorkIntakeDecision(
                 WorkIntakeAction.ASK_MISSING_INFO,
                 "Request is too short to route safely",
                 confidence=0.8,
                 response_text="What specifically should I change, and what result should I verify?",
             )
-        if project_scope and _PROJECT_WORK_RE.search(value) and _has_unresolved_reference(intake):
+        if project_scope and work_intent and not casual and _has_unresolved_reference(intake):
             return WorkIntakeDecision(
                 WorkIntakeAction.ASK_MISSING_INFO,
                 "The request refers to prior context that was not supplied",
@@ -260,7 +324,7 @@ class OrchestratorIntakeService:
                     "What specifically should I change in this project, and what result should I verify?"
                 ),
             )
-        if project_scope and _PROJECT_WORK_RE.search(value):
+        if project_scope and work_intent and not casual:
             if _is_lightweight_project_change(value):
                 return WorkIntakeDecision(
                     WorkIntakeAction.CREATE_TICKET,
@@ -279,11 +343,7 @@ class OrchestratorIntakeService:
         # Chat / oracle / voice front door: actionable work intent without an
         # explicit "create ticket" phrase still becomes durable work via intake.
         # Keep casual chat and questions with the conversational agent.
-        if (
-            not _CASUAL_CHAT_RE.search(value)
-            and _PROJECT_WORK_RE.search(value)
-            and not _has_unresolved_reference(intake)
-        ):
+        if not casual and work_intent and not _has_unresolved_reference(intake):
             if _is_lightweight_project_change(value):
                 return WorkIntakeDecision(
                     WorkIntakeAction.CREATE_TICKET,
@@ -370,6 +430,18 @@ class OrchestratorIntakeService:
                     decision.diagnostics["triggered_automation_count"] = len(automation_runs)
             except Exception:
                 logger.debug("Channel automation dispatch failed", exc_info=True)
+        except ScopeNeedsInfo as scope:
+            logger.info(
+                "Orchestrator scope needs info uid=%s action=%s: %s",
+                intake.intake_uid,
+                decision.action.value,
+                scope.prompt,
+            )
+            decision.action = WorkIntakeAction.ASK_MISSING_INFO
+            decision.status = "needs_info"
+            decision.handled = True
+            decision.response_text = scope.prompt
+            decision.diagnostics["scope_needs_info"] = True
         except Exception as exc:
             logger.exception("Orchestrator request failed uid=%s action=%s", intake.intake_uid, decision.action.value)
             decision.status = "failed"
@@ -525,7 +597,10 @@ class OrchestratorIntakeService:
         group_result: dict[str, Any] = {}
         if decision.action == WorkIntakeAction.RUN_WORKFLOW and group_ticket_items:
             if not decision.workflow_id:
-                raise ValueError("The selected board has no default workflow")
+                raise ScopeNeedsInfo(
+                    "The selected board has no workflow linked. "
+                    "Which project or board should run these tickets?"
+                )
             from distr.core.workflow.dispatcher import start_workflow_ticket_group
 
             group_result = start_workflow_ticket_group(
@@ -682,12 +757,24 @@ class OrchestratorIntakeService:
                     board = active[0]
                 elif len(candidates) == 1:
                     board = candidates[0]
-                elif require_workflow:
-                    raise ValueError("More than one workflow-ready board is available; name the project or board")
+                elif candidates:
+                    # Never silently drop work on the first board by position.
+                    # That is how work for one project landed on another.
+                    names = ", ".join(row.name for row in candidates[:6])
+                    raise ScopeNeedsInfo(
+                        "I couldn't tell which project or board this belongs to, "
+                        f"so I didn't guess. Which should I use? Options: {names}."
+                    )
             if board is None:
-                board = session.query(KanbanBoard).filter(KanbanBoard.archived.is_(False)).order_by(KanbanBoard.position, KanbanBoard.id).first()
-            if board is None:
-                raise ValueError("No active ticket board is available")
+                if project is not None:
+                    raise ScopeNeedsInfo(
+                        f"I couldn't find a usable ticket board for {project.name}. "
+                        "Which board should this go to?"
+                    )
+                raise ScopeNeedsInfo(
+                    "I couldn't tell which project or board this belongs to. "
+                    "Which project should I use?"
+                )
             lanes = session.query(KanbanLane).filter(KanbanLane.board_id == board.id).order_by(KanbanLane.position, KanbanLane.id).all()
             if not lanes:
                 raise ValueError(f"Board '{board.name}' has no lanes")
@@ -699,7 +786,27 @@ class OrchestratorIntakeService:
             if workflow is None and board.default_workflow_id:
                 workflow = session.query(AutoWorkflow).filter(AutoWorkflow.id == int(board.default_workflow_id)).first()
             if require_workflow and workflow is None:
-                raise ValueError(f"Board '{board.name}' has no default workflow")
+                alternatives = (
+                    session.query(KanbanBoard)
+                    .filter(
+                        KanbanBoard.archived.is_(False),
+                        KanbanBoard.default_workflow_id.is_not(None),
+                        KanbanBoard.id != board.id,
+                    )
+                    .order_by(KanbanBoard.position, KanbanBoard.id)
+                    .all()
+                )
+                if len(alternatives) == 1:
+                    prompt = (
+                        f"{board.name} has no workflow linked, so I can't run this there. "
+                        f"Should I run it on {alternatives[0].name} instead, or name the project to use?"
+                    )
+                else:
+                    prompt = (
+                        f"{board.name} has no workflow linked, so I can't run this there. "
+                        "Which project or board should run it?"
+                    )
+                raise ScopeNeedsInfo(prompt)
             session.expunge(board)
             session.expunge(lane)
             if project:
