@@ -445,7 +445,10 @@ def register_routes(router, templates):
             from sqlalchemy import desc
             from distr.core.db import get_session
             from distr.core.db.projects import Project
+            from distr.core.kanban.scope import reconcile_active_scope
             with get_session() as session:
+                # A project and its board are one scope; heal any legacy drift.
+                reconcile_active_scope(session)
                 projects = (
                     session.query(Project)
                     .order_by(Project.position.asc(), desc(Project.modified_date), Project.id.asc())

@@ -124,7 +124,61 @@ def test_board_without_project_only_switches_board():
     from distr.core.db.projects import Project
 
     with _session_ctx(factory) as session:
-        # The previously active project is left as-is when the board has none.
-        assert session.get(Project, old_project).in_use is True
+        # A standalone board is board-only scope: no project stays active.
+        assert session.get(Project, old_project).in_use is False
         assert session.get(KanbanBoard, standalone_id).in_use is True
         assert session.get(KanbanBoard, old_board).in_use is False
+
+
+def test_list_boards_heals_divergent_scope():
+    """Listing boards reconciles a legacy project/board divergence."""
+    from datetime import datetime
+
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.projects import Project
+    from distr.gui.web.routes.kanban import create_routes
+
+    factory = _make_factory()
+    with _session_ctx(factory) as session:
+        old_project = Project(name="Old", in_use=True, modified_date=datetime(2020, 1, 1))
+        new_project = Project(name="New", in_use=False, modified_date=datetime(2025, 1, 1))
+        session.add_all([old_project, new_project])
+        session.flush()
+        old_board = KanbanBoard(
+            name="Old Delivery",
+            default_project_id=old_project.id,
+            in_use=False,
+            position=0,
+            modified_date=datetime(2020, 1, 1),
+        )
+        new_board = KanbanBoard(
+            name="New Delivery",
+            default_project_id=new_project.id,
+            in_use=True,
+            position=1,
+            modified_date=datetime(2025, 1, 1),
+        )
+        session.add_all([old_board, new_board])
+        session.flush()
+        old_project.kanban_board_id = old_board.id
+        new_project.kanban_board_id = new_board.id
+        session.commit()
+        old_project_id, new_project_id = old_project.id, new_project.id
+        old_board_id, new_board_id = old_board.id, new_board.id
+
+    app = FastAPI()
+    with patch(
+        "distr.gui.web.routes.kanban.get_session",
+        lambda: _session_ctx(factory),
+    ):
+        app.include_router(create_routes(), prefix="/api")
+        response = TestClient(app).get("/api/tickets/boards")
+
+    assert response.status_code == 200, response.text
+
+    with _session_ctx(factory) as session:
+        # The most recently activated side (the board) wins and both align.
+        assert session.get(Project, new_project_id).in_use is True
+        assert session.get(Project, old_project_id).in_use is False
+        assert session.get(KanbanBoard, new_board_id).in_use is True
+        assert session.get(KanbanBoard, old_board_id).in_use is False

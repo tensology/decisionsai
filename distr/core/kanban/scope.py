@@ -14,33 +14,10 @@ recently activated side win.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Optional
 
 from distr.core.db.kanban import KanbanBoard
 from distr.core.db.projects import Project
-
-
-def _as_naive(value: Any) -> Optional[datetime]:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    if getattr(value, "tzinfo", None) is not None:
-        return value.replace(tzinfo=None)
-    return value
-
-
-def _newer(a: Any, b: Any) -> bool:
-    a_dt, b_dt = _as_naive(a), _as_naive(b)
-    if a_dt is None:
-        return False
-    if b_dt is None:
-        return True
-    return a_dt >= b_dt
 
 
 def linked_board(session: Any, project: Optional[Project]) -> Optional[KanbanBoard]:
@@ -136,6 +113,9 @@ def set_active_board(
         _single_project(session, int(project.id))
         if not getattr(project, "kanban_board_id", None):
             project.kanban_board_id = int(board.id)
+    else:
+        # A standalone board is board-only scope: no project stays active.
+        session.query(Project).filter(Project.in_use == True).update({Project.in_use: False})  # noqa: E712
     session.flush()
     return (project, board)
 
@@ -146,19 +126,16 @@ def reconcile_active_scope(
     """Return the active (project, board), healing any legacy divergence.
 
     When both flags point at the same scope nothing changes. When they
-    disagree, the side that was activated most recently wins and the other is
-    aligned to it.
+    disagree, the board wins: the board is the primary navigation surface the
+    user activates, and work intake/chat both resolve through it. The project
+    pin is aligned to the board in the same transaction.
     """
     project = active_project(session)
     board = active_board(session)
     if project is None and board is None:
         return (None, None)
-    if project is not None and board is not None:
-        if int(board.default_project_id or 0) == int(project.id):
-            return (project, board)
-        if _newer(getattr(board, "modified_date", None), getattr(project, "modified_date", None)):
-            return set_active_board(session, int(board.id))
-        return set_active_project(session, int(project.id))
     if board is not None:
+        if project is not None and int(board.default_project_id or 0) == int(project.id):
+            return (project, board)
         return set_active_board(session, int(board.id))
     return set_active_project(session, int(project.id))

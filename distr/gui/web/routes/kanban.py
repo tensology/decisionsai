@@ -3225,6 +3225,11 @@ def create_routes():
     async def list_boards(include_archived: bool = False):
         with get_session() as s:
             ensure_project_boards(s)
+            from distr.core.kanban.scope import reconcile_active_scope
+
+            # A project and its board are one scope; heal any legacy drift so
+            # the sidebar, the Projects page and work intake agree.
+            reconcile_active_scope(s)
             query = s.query(KanbanBoard)
             if not include_archived:
                 query = query.filter((KanbanBoard.archived == False) | (KanbanBoard.archived == None))
