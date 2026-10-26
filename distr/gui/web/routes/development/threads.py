@@ -348,6 +348,15 @@ def register_routes(router, templates):
                         dispatch_async=True,
                     )
                 if isinstance(execution, dict) and execution.get("error"):
+                    # The run was rejected (e.g. another ticket is already running for
+                    # this project). The chat was created above, so remove it instead of
+                    # leaving an orphaned thread with no run behind.
+                    try:
+                        from distr.core.workflow.development_control import delete_thread
+
+                        await asyncio.to_thread(delete_thread, int(chat_id))
+                    except Exception:
+                        logger.warning("Could not remove rejected studio thread %s", chat_id, exc_info=True)
                     return JSONResponse(
                         {
                             "chat_id": chat_id,
