@@ -91,12 +91,12 @@ def activate_engagement_context(
             from distr.core.db.orm_compat import orm_get_by_id
 
             with get_session() as session:
-                session.query(KanbanBoard).filter(KanbanBoard.in_use.is_(True)).update(
-                    {"in_use": False}
-                )
+                from distr.core.kanban.scope import set_active_board
+
                 board = orm_get_by_id(session, KanbanBoard, int(local_board_id))
                 if board:
-                    board.in_use = True
+                    # Move the board and its project together.
+                    set_active_board(session, int(board.id))
                     session.commit()
                     ctx["activated_board_id"] = int(board.id)
                     ctx["activated_board_name"] = board.name or ""

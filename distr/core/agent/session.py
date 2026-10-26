@@ -1607,6 +1607,9 @@ class AgentSession:
 
         return str(os.environ.get("DECISIONS_AUDIO_BACKEND") or "portaudio").strip().lower()
 
+    # Backends: 'portaudio' (default), 'sdapm' (sounddevice + LiveKit APM AEC),
+    # 'mediadevices' (unsupported: native SIGABRT).
+
     def _create_pipeline(self):
         """Create the Pipecat pipeline"""
         # Clean up old pipeline if it exists
@@ -1750,7 +1753,25 @@ class AgentSession:
 
         audio_backend = self._resolve_audio_backend()
         aec_filter = None
-        if audio_backend == 'mediadevices':
+        if audio_backend == 'sdapm':
+            from distr.core.agent.sd_apm_transport import SdApmAudioTransport
+
+            self.transport = SdApmAudioTransport(
+                input_device=input_device_idx,
+                output_device=output_device_idx,
+                input_sample_rate=audio_config['input_sample_rate'],
+                output_sample_rate=audio_config['output_sample_rate'],
+                pipeline_sample_rate=audio_config['input_sample_rate'],
+                vad_analyzer=self.vad_analyzer,
+                event_queue=self.event_queue,
+                aec_reference_buffer=aec_ref_buf,
+            )
+            self.logger.info(
+                "Audio backend: sdapm (sounddevice + LiveKit APM, in_sr=%s out_sr=%s, aec=True)",
+                audio_config['input_sample_rate'],
+                audio_config['output_sample_rate'],
+            )
+        elif audio_backend == 'mediadevices':
             from distr.core.agent.mediadevices_transport import MediaDevicesAudioTransport
 
             self.transport = MediaDevicesAudioTransport(

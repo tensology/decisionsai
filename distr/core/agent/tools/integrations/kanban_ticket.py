@@ -559,9 +559,11 @@ class KanbanTicketTool(BaseTool):
             if not auto_recover:
                 return (self._board_dict(candidate), False)
 
-            # Self-heal: enforce one active board so "in use" queries remain consistent.
-            s.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
-            candidate.in_use = True
+            # Self-heal: activate the board and its project together so "in use"
+            # queries from chat, work intake and the UI all agree.
+            from distr.core.kanban.scope import set_active_board
+
+            set_active_board(s, int(candidate.id))
             s.commit()
             return (self._board_dict(candidate), True)
 

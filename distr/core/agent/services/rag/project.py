@@ -340,38 +340,16 @@ def activate_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str
 
     session = get_session()
     try:
-        # Deactivate all projects
-        session.query(Project).update({Project.in_use: False})
+        # Activate target project. Project and board are one scope decision:
+        # ``set_active_project`` moves the project and board flags together so
+        # the next implicit work request cannot target a stale board.
+        from distr.core.kanban.scope import set_active_project
 
-        # Activate target project
         project = session.query(Project).get(project_id)
         if not project:
             return {"success": False, "error": f"Project {project_id} not found"}
 
-        project.in_use = True
-        project.modified_date = datetime.utcnow()
-
-        # Project and board selection are one scope decision.  Leaving an old
-        # board active makes the next implicit work request target that board's
-        # project even though the user just switched projects.
-        linked_board = None
-        if getattr(project, "kanban_board_id", None):
-            linked_board = session.query(KanbanBoard).filter(
-                KanbanBoard.id == int(project.kanban_board_id),
-                KanbanBoard.archived.is_(False),
-            ).first()
-        if linked_board is None:
-            linked_board = session.query(KanbanBoard).filter(
-                KanbanBoard.default_project_id == int(project.id),
-                KanbanBoard.archived.is_(False),
-            ).order_by(KanbanBoard.id).first()
-        if linked_board is not None:
-            session.query(KanbanBoard).filter(KanbanBoard.in_use.is_(True)).update(
-                {"in_use": False}
-            )
-            linked_board.in_use = True
-            if not getattr(project, "kanban_board_id", None):
-                project.kanban_board_id = int(linked_board.id)
+        linked_board = set_active_project(session, project_id)[1]
         session.commit()
 
         # Clear previous project from memory (if different)

@@ -3201,28 +3201,16 @@ def create_routes():
         a board now activates its linked project in the same transaction.
         """
         with get_session() as s:
-            # Deactivate all boards
-            s.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
-            board = orm_get_by_id(s, KanbanBoard,board_id)
+            from distr.core.kanban.scope import set_active_board
+
+            board = orm_get_by_id(s, KanbanBoard, board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
-            board.in_use = True
-            s.flush()
-
-            linked_project = None
-            if board.default_project_id:
-                from distr.core.db.projects import Project
-                proj = orm_get_by_id(s, Project,board.default_project_id)
-                if proj is not None:
-                    # Keep the project pin in lockstep with the board pin.
-                    s.query(Project).filter(Project.in_use == True).update(
-                        {"in_use": False}
-                    )
-                    proj.in_use = True
-                    if not getattr(proj, "kanban_board_id", None):
-                        proj.kanban_board_id = int(board.id)
-                    linked_project = {"id": proj.id, "name": proj.name}
-                    s.flush()
+            # One scope: activating the board also activates its project.
+            project, _board = set_active_board(s, board_id)
+            linked_project = (
+                {"id": project.id, "name": project.name} if project is not None else None
+            )
 
             return JSONResponse({
                 "success": True,

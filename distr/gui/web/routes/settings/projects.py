@@ -1743,35 +1743,14 @@ def register_routes(router, templates):
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
-            from distr.core.db.kanban import KanbanBoard
+            from distr.core.kanban.scope import set_active_project
             with get_session() as session:
-                session.query(Project).filter(Project.in_use == True).update({"in_use": False})
                 project = session.query(Project).filter(Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
-                project.in_use = True
-
-                # Keep local project and board scope aligned. ``board_id`` is
-                # the remote provider identifier; local boards use
-                # ``kanban_board_id`` or ``default_project_id``.
-                linked_board_name = None
-                board = None
-                if project.kanban_board_id:
-                    board = session.query(KanbanBoard).filter(
-                        KanbanBoard.id == int(project.kanban_board_id),
-                        KanbanBoard.archived.is_(False),
-                    ).first()
-                if board is None:
-                    board = session.query(KanbanBoard).filter(
-                        KanbanBoard.default_project_id == project_id,
-                        KanbanBoard.archived.is_(False),
-                    ).order_by(KanbanBoard.id).first()
-                if board:
-                    session.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
-                    board.in_use = True
-                    project.kanban_board_id = int(board.id)
-                    linked_board_name = board.name
-
+                # One scope: activating the project also activates its board.
+                _, board = set_active_project(session, project_id)
+                linked_board_name = board.name if board is not None else None
                 session.commit()
                 try:
                     from distr.core.workspace_memory.provision import bootstrap_project
