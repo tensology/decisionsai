@@ -35,12 +35,13 @@ def _fake_session(projects):
 def test_list_projects_returns_speakable_summary(monkeypatch):
     from distr.core.agent.tools.system.project_tools import ListProjectsTool
 
+    folder_path = "/home/user/dev/jackcat"
     projects = [
         SimpleNamespace(
             name="Jackcat",
             id=3,
             in_use=True,
-            folder_location="/Users/paul/dev/jackcat",
+            folder_location=folder_path,
             description="Internal tooling",
         ),
         SimpleNamespace(
@@ -63,7 +64,7 @@ def test_list_projects_returns_speakable_summary(monkeypatch):
     assert "Jackcat" in spoken and "Merrypak" in spoken
     assert "**" not in spoken
     assert "ID:" not in spoken
-    assert "/Users" not in spoken
+    assert folder_path not in spoken
     assert "LIVE DATA" not in spoken
 
     # The spoken form of the full result never carries the reference dump.
@@ -72,17 +73,18 @@ def test_list_projects_returns_speakable_summary(monkeypatch):
     spoken_tts = clean_text_for_tts(out)
     assert "Jackcat" in spoken_tts
     assert "ID:" not in spoken_tts
-    assert "/Users" not in spoken_tts
+    assert folder_path not in spoken_tts
 
 
 def test_get_project_details_returns_speakable_summary(monkeypatch):
     from distr.core.agent.tools.system.project_tools import GetProjectDetailsTool
 
+    folder_path = "/home/user/dev/decisionsai"
     project = SimpleNamespace(
         name="DecisionsAI",
         id=9,
         in_use=True,
-        folder_location="/Users/paul/development/TENSOLOGY/DecisionsAI",
+        folder_location=folder_path,
         description="Agent workspace",
         startup_instructions="./decisions\n",
     )
@@ -98,4 +100,4 @@ def test_get_project_details_returns_speakable_summary(monkeypatch):
     assert "active" in spoken
     assert "folder" in spoken.lower()
     assert "**" not in spoken
-    assert "/Users" not in spoken
+    assert folder_path not in spoken
