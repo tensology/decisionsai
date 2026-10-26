@@ -194,7 +194,8 @@ def test_local_simulation_against_stub_tensology(stub_tensology):
         assert tc.process_tensology_approved_tickets(force=True) == 1
     body = captured["body"]
     assert captured["path"] == "workflows/studio/tasks"
-    assert body["skip_human_checkpoints"] is False
+    # Founder approval in Tensology is the authorisation, so the run starts immediately.
+    assert body["skip_human_checkpoints"] is True
     assert (body["backend"], body["provider"], body["model_name"]) == ("cursor", "cursor", "grok-4.7-medium")
     assert body["project_id"] == 12 and body["board_ticket_key"] == "E2E-TEST-001"
     assert '"channel": "mailshot"' in body["prompt"]

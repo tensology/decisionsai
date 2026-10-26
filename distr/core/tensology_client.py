@@ -680,6 +680,7 @@ def _execution_prompt(
         "discussion": discussion,
         "discussion_truncated": bool(ticket.get("discussion_truncated")),
         "local_image_paths": ticket.get("local_image_paths") if isinstance(ticket.get("local_image_paths"), list) else [],
+        "local_attachment_paths": ticket.get("local_attachment_paths") if isinstance(ticket.get("local_attachment_paths"), list) else [],
     }, ensure_ascii=False, indent=2, default=str)
     return (
         f"Execute approved Tensology ticket {ticket.get('reference')}: {ticket.get('title')}\n\n"
@@ -799,6 +800,7 @@ def _ensure_tensology_kanban_ticket(
                 "attachments": ticket.get("attachments") if isinstance(ticket.get("attachments"), list) else [],
                 "discussion": ticket.get("discussion") if isinstance(ticket.get("discussion"), list) else [],
                 "local_image_paths": ticket.get("local_image_paths") if isinstance(ticket.get("local_image_paths"), list) else [],
+                "local_attachment_paths": ticket.get("local_attachment_paths") if isinstance(ticket.get("local_attachment_paths"), list) else [],
                 "implementation_plan": ticket.get("implementation_plan") or "",
                 "tasks": tasks,
                 "acceptance_criteria": criteria,
@@ -885,8 +887,10 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
             },
             "skill_ids": skill_ids,
             "use_playwright": use_playwright,
-            # Approval upstream authorises the work, not every gate: keep human checkpoints on.
-            "skip_human_checkpoints": False,
+            # The founder already approved this ticket in Tensology by pressing Send to
+            # Decisions, so start work straight away instead of pausing on the pre-run
+            # briefing. The run can still be stopped or steered from the thread.
+            "skip_human_checkpoints": True,
         },
     )
     task = response.get("task") if isinstance(response, dict) else None
@@ -1057,9 +1061,15 @@ def _tensology_attachment_root(project: dict[str, Any], ticket: dict[str, Any]) 
     return root
 
 
-def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
-    """Download image attachments (ticket + discussion) and record their local paths.
+def _has_download_location(item: dict[str, Any]) -> bool:
+    return any(str(item.get(key) or "").strip() for key in ("api_path", "absolute_url", "url"))
 
+
+def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    """Download ticket and discussion attachments (images, voice notes, documents).
+
+    Voice notes and images arrive from incoming WhatsApp proposals; audio is downloaded
+    so the Development thread keeps the original recording alongside its transcript.
     Failures (404, too large, unreachable) are logged and recorded on the attachment as
     ``download_error``; they never block ticket processing.
     """
@@ -1074,26 +1084,35 @@ def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, A
     for message in ticket.get("discussion") or []:
         if isinstance(message, dict) and isinstance(message.get("attachments"), list):
             groups.append(message["attachments"])
-    images = [item for group in groups for item in group if isinstance(item, dict) and _is_image_attachment(item)]
-    if not images:
-        ticket["local_image_paths"] = []
+    files = [
+        item for group in groups
+        for item in group
+        if isinstance(item, dict) and _has_download_location(item)
+    ]
+    ticket["local_image_paths"] = []
+    ticket["local_attachment_paths"] = []
+    if not files:
         return ticket
     root = _tensology_attachment_root(project, ticket)
     used: set[str] = set()
     local_paths: list[str] = []
-    for item in images:
-        raw_name = str(item.get("name") or item.get("filename") or Path(urllib.parse.urlsplit(str(item.get("url") or "")).path).name or "image")
-        name = _safe_attachment_part(Path(raw_name).name, "image")
+    image_paths: list[str] = []
+    for item in files:
+        raw_name = str(item.get("name") or item.get("filename") or Path(urllib.parse.urlsplit(str(item.get("url") or "")).path).name or "attachment")
+        name = _safe_attachment_part(Path(raw_name).name, "attachment")
         stem, suffix, counter = Path(name).stem, Path(name).suffix, 1
         while name in used:
             counter += 1
             name = f"{stem}-{counter}{suffix}"
         used.add(name)
         destination = root / name
+        is_image = _is_image_attachment(item)
         if destination.is_file() and destination.stat().st_size > 0:
             item["local_path"] = str(destination)
             item["download_status"] = "cached"
             local_paths.append(str(destination))
+            if is_image:
+                image_paths.append(str(destination))
             continue
         locations: list[str] = []
         for key in ("api_path", "absolute_url", "url"):
@@ -1111,12 +1130,15 @@ def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, A
             item["download_status"] = "downloaded"
             item["size"] = size
             local_paths.append(str(destination))
-            log.info("Tensology ticket %s image downloaded: %s (%s bytes)", ticket.get("reference"), destination, size)
+            if is_image:
+                image_paths.append(str(destination))
+            log.info("Tensology ticket %s attachment downloaded: %s (%s bytes)", ticket.get("reference"), destination, size)
             break
         else:
             item["download_error"] = "; ".join(errors) or "No downloadable URL on the attachment."
-            log.warning("Tensology ticket %s image %r not downloaded: %s", ticket.get("reference"), raw_name, item["download_error"])
-    ticket["local_image_paths"] = local_paths
+            log.warning("Tensology ticket %s attachment %r not downloaded: %s", ticket.get("reference"), raw_name, item["download_error"])
+    ticket["local_attachment_paths"] = local_paths
+    ticket["local_image_paths"] = image_paths
     return ticket
 
 
@@ -1176,6 +1198,14 @@ def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -
         except TensologyRouteError as exc:
             _report_tensology_route_block(client, ticket, project, exc)
             return False
+        try:
+            from distr.core.tensology_notify import notify_tensology_ticket_incoming
+
+            notify_tensology_ticket_incoming(ticket=ticket, project=project, chat_id=chat_id)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).debug("Incoming ticket notification failed", exc_info=True)
 
     thread_url = f"http://127.0.0.1:8765/development/threads/{chat_id}/"
     if str(ticket.get("decisions_thread_id") or "") != str(chat_id):
@@ -1225,8 +1255,19 @@ def _fetch_and_process_tensology_tickets(ticket_ids: list[int] | None = None) ->
         for ticket in tickets:
             if not isinstance(ticket, dict):
                 continue
-            if _process_tensology_ticket(client, ticket):
-                processed += 1
+            try:
+                if _process_tensology_ticket(client, ticket):
+                    processed += 1
+            except Exception as exc:
+                # One blocked ticket (bad route, missing project, project already
+                # running another ticket) must not abort the rest of the batch.
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Tensology ticket %s skipped this pass: %s",
+                    ticket.get("reference") or ticket.get("id"),
+                    exc,
+                )
         if processed:
             _TICKET_POLL_INTERVAL = TICKET_POLL_ACTIVE_SECONDS
         return processed

@@ -335,6 +335,7 @@ def test_localize_downloads_images_records_paths_and_never_blocks_on_failure(tmp
         attachments=[
             {"name": "spec.png", "url": "/media/q/spec.png", "type": "image/png", "api_path": "tickets/17/attachment?url=%2Fmedia%2Fq%2Fspec.png"},
             {"name": "notes.pdf", "url": "/media/q/notes.pdf", "type": "application/pdf"},
+            {"name": "voice.ogg", "url": "/media/q/voice.ogg", "type": "audio/ogg", "kind": "audio", "transcript": "Add the export flow"},
             {"name": "gone.jpg", "url": "/media/q/gone.jpg", "api_path": "tickets/17/attachment?url=gone"},
         ],
         discussion=[{"content": "see shot", "attachments": [{"name": "shot.png", "url": "/media/d/shot.png", "type": "image/png"}]}],
@@ -352,8 +353,14 @@ def test_localize_downloads_images_records_paths_and_never_blocks_on_failure(tmp
     root = tmp_path / ".decisions/workspaces/projects/8/attachments/tickets/tensology/9/PROJ-9-001"
     assert result["local_image_paths"] == [str(root / "spec.png"), str(root / "shot.png")]
     assert result["attachments"][0]["download_status"] == "downloaded"
-    assert "local_path" not in result["attachments"][1]  # non-image is left alone
-    assert "404" in result["attachments"][2]["download_error"]
+    # Documents and voice notes are now localized too, so the thread keeps the originals.
+    assert result["attachments"][1]["download_status"] == "downloaded"
+    assert result["attachments"][2]["local_path"].endswith("voice.ogg")
+    assert result["attachments"][2]["transcript"] == "Add the export flow"
+    assert result["local_attachment_paths"] == [
+        str(root / "spec.png"), str(root / "notes.pdf"), str(root / "voice.ogg"), str(root / "shot.png"),
+    ]
+    assert "404" in result["attachments"][3]["download_error"]
     assert client.download.call_args_list[0].args[0].startswith("tickets/17/attachment")  # authed api_path first
     assert ticket["attachments"][0].get("local_path") is None  # input not mutated
 
