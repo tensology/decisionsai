@@ -22,6 +22,25 @@ export function createSidebar({ context, actions, el }) {
     function threadRowHtml(chat, active, pinned = false) {
         return `<div class="task-row-wrap${active ? ' active' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}>${actions.threadRowContentHtml(chat, pinned)}</button></div>`;
     }
+    async function applyPinnedBoards(payload) {
+        if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'board_keys')) return;
+        if (payload.board_keys === null) {
+            // Preserve both existing pin sets when introducing the shared setting.
+            const legacyIds = new Set((payload.legacy_project_ids || []).map(Number));
+            const keys = Array.from(new Set([
+                ...state.pinnedBoardKeys,
+                ...context.boards.filter(board => legacyIds.has(Number(board.project_id))).map(board => board.key)
+            ]));
+            payload = await actions.api('/workflows/studio/sidebar/pins', {
+                method: 'PUT', body: { board_keys: keys }
+            });
+        }
+        if (!Array.isArray(payload.board_keys)) return;
+        state.pinnedBoardKeys = payload.board_keys;
+        try {
+            window.localStorage.setItem('decisions-development-pinned-boards', JSON.stringify(state.pinnedBoardKeys));
+        } catch (_) { /* The server remains authoritative without browser storage. */ }
+    }
     function renderSidebar() {
         const pinnedBoards = context.boards.filter((board) => state.pinnedBoardKeys.includes(board.key));
         const pinnedThreads = context.chats.filter((chat) => chat.pinned);
@@ -467,16 +486,19 @@ export function createSidebar({ context, actions, el }) {
         });
     }
 
-    function toggleBoardPin(boardKey) {
+    async function toggleBoardPin(boardKey) {
         const set = new Set(state.pinnedBoardKeys);
         const pinning = !set.has(boardKey);
         if (pinning) set.add(boardKey);
         else set.delete(boardKey);
-        state.pinnedBoardKeys = Array.from(set);
         try {
-            window.localStorage.setItem('decisions-development-pinned-boards', JSON.stringify(state.pinnedBoardKeys));
-        } catch (_) {
-            /* local preference only */
+            const payload = await actions.api('/workflows/studio/sidebar/pins', {
+                method: 'PUT', body: { board_keys: Array.from(set) }
+            });
+            await applyPinnedBoards(payload);
+        } catch (error) {
+            actions.toast(error.message || 'Board pins could not be saved.', 'error');
+            return;
         }
         renderSidebar();
         actions.toast(pinning ? 'Board pinned.' : 'Board unpinned.');
@@ -653,6 +675,18 @@ export function createSidebar({ context, actions, el }) {
         el('sidebar-close').addEventListener('click', actions.closeDrawers);
     }
     return {
+        async runDesktopBoardAction(payload) {
+            const allowed = ['new-ticket', 'new-chat', 'plan', 'kanban', 'list', 'refresh', 'edit',
+                'activate', 'open-folder', 'terminals', 'terminal-toggle', 'archive', 'delete'];
+            if (!allowed.includes(payload?.action) || !actions.boardByKey(payload.board_key)) return;
+            openBoardContextMenu({ clientX: 8, clientY: 8 }, payload.board_key);
+            if (payload.action === 'terminal-toggle') await refreshBoardContextTerminalAction(payload.board_key);
+            const button = el(`board-context-${payload.action}`);
+            el('board-context-menu').classList.add('hidden');
+            if (button && !button.disabled && !button.classList.contains('hidden')) button.click();
+            else actions.toast('This action is unavailable for this project.', 'error');
+        },
+        applyPinnedBoards,
         bindEvents,
         closeBoardContextMenu,
         closeThreadContextMenu,

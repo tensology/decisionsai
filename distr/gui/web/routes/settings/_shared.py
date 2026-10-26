@@ -181,6 +181,7 @@ class GeneralSettings(BaseModel):
     playback_speed: float = 1.0
     speech_volume: int = 100
     vad_threshold: int = 50
+    bargein_mode: str = "smart"
     elevenlabs_stability: float = 0.5
     elevenlabs_similarity_boost: float = 0.6
     elevenlabs_style: float = 0.25
@@ -348,6 +349,10 @@ class SpeechVolumeUpdate(BaseModel):
 
 class VadThresholdUpdate(BaseModel):
     vad_threshold: int = Field(ge=0, le=100)
+
+
+class BargeinModeUpdate(BaseModel):
+    bargein_mode: str = Field(pattern="^(smart|always|off)$")
 
 
 class ElevenLabsVoiceSettingsUpdate(BaseModel):

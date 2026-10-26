@@ -10,6 +10,31 @@ from .models import StudioCommandRequest, StudioCommandUpdateRequest, StudioInte
 
 
 def register_routes(router, templates):
+    @router.post('/workflows/studio/sidebar/desktop-action')
+    async def desktop_board_action(data: dict):
+        from distr.core.workflow.development_sidebar import consume_desktop_board_action
+        token = data.get('token')
+        if not isinstance(token, str) or len(token) > 100:
+            return JSONResponse({'detail': 'Invalid desktop action.'}, status_code=400)
+        try:
+            return JSONResponse(consume_desktop_board_action(token))
+        except ValueError as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=400)
+
+    @router.get('/workflows/studio/sidebar/pins')
+    async def development_sidebar_pins():
+        from distr.core.workflow.development_sidebar import sidebar_pin_preferences
+        return JSONResponse(await asyncio.to_thread(sidebar_pin_preferences))
+
+    @router.put('/workflows/studio/sidebar/pins')
+    async def update_development_sidebar_pins(data: dict):
+        from distr.core.workflow.development_sidebar import save_pinned_boards
+        try:
+            keys = await asyncio.to_thread(save_pinned_boards, data.get('board_keys'))
+            return JSONResponse({'board_keys': keys})
+        except ValueError as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=400)
+
     @router.get("/workflows/studio/tasks/{chat_id}/plans")
     async def workflow_studio_plan_revisions(chat_id: int):
         try:

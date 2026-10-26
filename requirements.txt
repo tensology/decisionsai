@@ -94,6 +94,9 @@ syntok>=1.4.4
 regex>=2023.0.0
 # Pin pipecat-ai to specific version to reduce resolver backtracking
 pipecat-ai[silero]>=0.0.95,<0.0.101
+# WebRTC APM (AEC) via LiveKit's audio device module. Optional engine:
+# the app falls back to the in-house WebRTCAECFilter if this is missing.
+livekit>=1.1,<2.0
 # Browser Use 0.12+ pins Pillow 12, which is incompatible with the supported
 # Pipecat line. Keep this tested pair together until Pipecat supports Pillow 12.
 browser-use==0.11.13

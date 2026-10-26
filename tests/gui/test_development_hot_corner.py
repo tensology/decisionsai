@@ -1,10 +1,11 @@
 import json
 import os
+import pytest
 from datetime import datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -20,9 +21,16 @@ from distr.gui.development_hot_corner import (
     is_top_left_corner,
     load_development_groups,
     load_pinned_projects,
+    project_folder_icon,
     recent_development_threads,
     weekly_entry_seconds,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_sidebar_preferences(monkeypatch, tmp_path):
+    preferences = QtCore.QSettings(str(tmp_path / "preferences.ini"), QtCore.QSettings.Format.IniFormat)
+    monkeypatch.setattr(QtCore, "QSettings", lambda *_args: preferences)
 
 
 def _app() -> QtWidgets.QApplication:
@@ -40,6 +48,96 @@ def test_corner_detection_uses_each_displays_own_origin() -> None:
     assert is_top_left_corner(QtCore.QPoint(-1918, 2), left_screen)
     assert is_top_left_corner(QtCore.QPoint(2, -1198), upper_screen)
     assert not is_top_left_corner(QtCore.QPoint(-1900, 2), left_screen)
+
+
+def test_empty_folder_has_no_open_state_and_cannot_expand(monkeypatch):
+    app = _app()
+    empty = project_folder_icon(False)
+    filled = project_folder_icon(True)
+    def image(icon, state):
+        return icon.pixmap(24, 24, QtGui.QIcon.Mode.Normal, state).toImage()
+    assert image(empty, QtGui.QIcon.State.On) == image(empty, QtGui.QIcon.State.Off)
+    assert image(filled, QtGui.QIcon.State.On) != image(filled, QtGui.QIcon.State.Off)
+    assert image(empty, QtGui.QIcon.State.Off) != image(filled, QtGui.QIcon.State.Off)
+    monkeypatch.setattr('distr.gui.development_hot_corner.load_development_groups',
+                        lambda _: [{'project_id': 9, 'board_key': 'decisions:18',
+                                    'name': 'Empty', 'threads': [], 'weekly_seconds': 0}])
+    panel = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[])
+    panel._refresh_threads()
+    item = _project_item(panel, 9)
+    panel.resize(400, 600)
+    panel.show()
+    app.processEvents()
+    point = panel.tree.visualItemRect(item).center()
+    for _ in range(20):
+        QtTest.QTest.mouseDClick(panel.tree.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point)
+        app.processEvents()
+    panel._queue_project_toggle(panel.tree.indexFromItem(item))
+    panel._toggle_section(QtCore.QPersistentModelIndex(panel.tree.indexFromItem(item)), None)
+    app.processEvents()
+    assert not item.isExpanded()
+    assert item.toolTip(0) == 'Empty: 0 threads'
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
+def test_panel_pin_keeps_sidebar_open_until_unpinned(monkeypatch) -> None:
+    app = _app()
+    panel = DevelopmentHotCornerPanel(enabled=False)
+    panel._enabled = True
+    panel._open_screen = object()
+    monkeypatch.setattr(panel, "isVisible", lambda: True)
+    monkeypatch.setattr(panel, "_pointer_inside", lambda _point: False)
+    monkeypatch.setattr(panel, "_screen_at_hot_corner", lambda _point: None)
+    monkeypatch.setattr(panel, "_sync_live_state", lambda _now: None)
+    hidden = []
+    monkeypatch.setattr(panel, "_hide_panel", lambda: hidden.append(True))
+    panel.panel_pin.click()
+    panel._last_inside_at = 0
+    panel._tick()
+    assert hidden == []
+    assert panel.panel_pin.isChecked()
+    assert panel.panel_pin.text() == ""
+    assert not panel.panel_pin.icon().isNull()
+    icon = panel.panel_pin.icon()
+    assert icon.pixmap(24, 24, QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.On).toImage() != icon.pixmap(
+        24, 24, QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.Off
+    ).toImage()
+    panel.panel_pin.click()
+    panel._last_inside_at = 0
+    panel._tick()
+    assert hidden == [True]
+    assert panel.panel_pin.accessibleName() == "Keep sidebar open"
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
+def test_projects_section_remembers_collapsed_state_on_new_panel(monkeypatch, tmp_path):
+    app = _app()
+    preferences = QtCore.QSettings("Tensology", "DecisionsAI")
+    monkeypatch.setattr(
+        "distr.gui.development_hot_corner.load_development_groups",
+        lambda _provider: [{"project_id": 9, "board_key": "decisions:7",
+                            "name": "Test project", "weekly_seconds": 0, "threads": []}],
+    )
+    first = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[])
+    first._refresh_threads()
+    first._section_rows["projects"].setExpanded(False)
+    first._refresh_threads()
+    assert not first._section_rows["projects"].isExpanded()
+    second = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[])
+    second._refresh_threads()
+    assert not second._section_rows["projects"].isExpanded()
+    second._section_rows["projects"].setExpanded(True)
+    third = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[])
+    third._refresh_threads()
+    assert third._section_rows["projects"].isExpanded()
+    for panel in (first, second, third):
+        panel.close()
+        panel.deleteLater()
+    app.processEvents()
 
 
 def test_two_and_a_half_second_dwell_opens_once_and_leaving_resets(monkeypatch) -> None:
@@ -116,7 +214,7 @@ def test_panel_does_not_accept_focus_and_thread_click_only_selects(monkeypatch) 
     assert title_widget.title == "Hot corner drawer"
     assert title_widget.active is True
     assert thread.sizeHint(0).height() == 24
-    assert panel.tree.indentation() == 8
+    assert panel.tree.indentation() == 0
     assert not panel.tree.wordWrap()
     assert project.isExpanded()
     assert thread.text(1) == "00:01:05"
@@ -227,6 +325,60 @@ def test_panel_loads_pins_directly_instead_of_relying_on_startup_settings(monkey
     app.processEvents()
 
 
+def test_desktop_uses_shared_web_board_pins_and_preserves_unrelated_keys(monkeypatch):
+    app = _app()
+    keys = ['jira:OTHER', 'decisions:7']
+    saved = []
+    monkeypatch.setattr('distr.core.workflow.development_sidebar.load_pinned_boards', lambda: list(keys))
+    def save(value):
+        keys[:] = value
+        saved.append(value)
+    monkeypatch.setattr('distr.core.workflow.development_sidebar.save_pinned_boards', save)
+    groups = [dict(project_id=9, board_key='decisions:7', name='Shared project', weekly_seconds=0, threads=[])]
+    monkeypatch.setattr('distr.gui.development_hot_corner.load_development_groups', lambda _: groups)
+    panel = DevelopmentHotCornerPanel(enabled=False)
+    panel._refresh_threads()
+    assert panel._pinned_project_ids == {9}
+    assert _project_item(panel, 9).parent() is None
+    panel._toggle_project_pin(9)
+    assert saved == [['jira:OTHER']]
+    assert panel._pinned_project_ids == set()
+    keys.append('decisions:7')
+    panel._sync_live_state(10.0)
+    assert panel._pinned_project_ids == {9}
+    assert _project_item(panel, 9).parent() is None
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
+def test_live_ticker_keeps_recent_rows_and_collapsed_navigation(monkeypatch):
+    app = _app()
+    groups = [dict(project_id=9, board_key='decisions:7', name='Project', weekly_seconds=0,
+                   threads=[dict(chat_id=42, title='Running', active=True, status='running',
+                                 modified_at=1, elapsed_seconds=0, weekly_seconds=0, time_running=True)])]
+    monkeypatch.setattr('distr.gui.development_hot_corner.load_development_groups', lambda _: groups)
+    panel = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[])
+    panel._refresh_threads()
+    recent = panel._section_rows['recent']
+    row = recent.child(0)
+    panel._selected_item_key = ('thread', 42)
+    recent.setExpanded(False)
+    panel._section_rows['projects'].setExpanded(False)
+    _project_item(panel, 9).setExpanded(False)
+    for tick in range(3):
+        groups[0]['threads'][0]['elapsed_seconds'] += 1
+        panel._sync_live_state(float(tick))
+        assert recent.child(0) is row
+        assert not recent.isExpanded()
+        assert not panel._section_rows['projects'].isExpanded()
+        assert not _project_item(panel, 9).isExpanded()
+    assert row.text(1) == '00:00:03'
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
+
+
 def test_recent_threads_rank_active_first_then_latest_and_show_five(monkeypatch) -> None:
     app = _app()
     opened = []
@@ -269,9 +421,17 @@ def test_recent_threads_rank_active_first_then_latest_and_show_five(monkeypatch)
     assert opened == ["/development/?recent=1"]
 
     panel._handle_item_click(recent, 0)
+    assert not recent.isExpanded()
+    app.processEvents()
     assert recent.isExpanded()
     panel._handle_item_click(recent, 0)
+    app.processEvents()
     assert not recent.isExpanded()
+
+    panel._handle_item_click(recent, 0)
+    panel._refresh_threads()
+    app.processEvents()
+    assert not panel._section_rows["recent"].isExpanded()
 
     panel.close()
     panel.deleteLater()
@@ -294,7 +454,9 @@ def test_board_actions_open_and_create_in_the_selected_project(monkeypatch) -> N
             "board_key": "decisions:7",
             "name": "Decisions AI",
             "weekly_seconds": 0,
-            "threads": [],
+            "threads": [{"chat_id": 42, "title": "Example", "active": False,
+                         "status": "idle", "elapsed_seconds": 0,
+                         "weekly_seconds": 0, "time_running": False}],
         }],
     )
 
@@ -303,10 +465,64 @@ def test_board_actions_open_and_create_in_the_selected_project(monkeypatch) -> N
     panel.tree.setCurrentItem(project)
     panel._handle_item_click(project, 0)
     assert opened == []
-    panel._handle_item_click(project, 3)
+    panel.resize(360, 600)
+    panel.show()
+    app.processEvents()
+    assert not project.isExpanded()
+    rect = panel.tree.visualItemRect(project)
+    folder_point = QtCore.QPoint(rect.left() + 8, rect.center().y())
+    title_point = QtCore.QPoint(rect.left() + 60, rect.center().y())
+    QtTest.QTest.mouseClick(panel.tree.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=title_point)
+    app.processEvents()
+    assert not project.isExpanded()
+    QtTest.QTest.mouseClick(panel.tree.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=folder_point)
+    app.processEvents()
+    assert project.isExpanded()
+    QtTest.QTest.mouseDClick(panel.tree.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=title_point)
+    app.processEvents()
+    assert not project.isExpanded()
+    assert not project.icon(0).isNull()
+    assert not panel.tree.expandsOnDoubleClick()
     panel._handle_item_click(project, 2)
+    assert project.text(2) == ""
+    assert project.text(3) == "+"
+    panel.resize(360, 600)
+    panel.show()
+    app.processEvents()
+    panel._show_context_menu(panel.tree.visualItemRect(project).center())
+    assert panel._context_menu.actions()[0].text() == "Go to project"
+    panel._context_menu.actions()[0].trigger()
+    from urllib.parse import parse_qs, urlsplit
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.thread_controls import register_routes
+    server, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    server.include_router(router)
+    expected_actions = {
+        "New Ticket": "new-ticket", "New Thread": "new-chat", "Plan": "plan",
+        "Board View": "kanban", "List View": "list", "Refresh Board": "refresh",
+        "Edit Board": "edit", "Set as Active": "activate", "Show in Finder": "open-folder",
+        "Show in File Manager": "open-folder", "Open Terminals": "terminals",
+        "Start / Stop Terminals": "terminal-toggle", "Archive Board": "archive",
+        "Delete project": "delete",
+    }
+    checked = set()
+    with TestClient(server) as client:
+        for action in panel._context_menu.actions():
+            if action.text() not in expected_actions:
+                continue
+            action.trigger()
+            target = opened.pop()
+            token = parse_qs(urlsplit(target).fragment)["desktop-action"][0]
+            response = client.post('/workflows/studio/sidebar/desktop-action', json={"token": token})
+            assert response.json() == {"board_key": "decisions:7", "action": expected_actions[action.text()]}
+            checked.add(expected_actions[action.text()])
+    assert checked == set(expected_actions.values())
+    panel._context_menu.close()
+    panel._handle_item_click(project, 3)
 
-    assert opened == ["/development/boards/decisions/7/", "/chat/?id=77"]
+    assert opened == ["/development/boards/decisions/7/kanban/", "/chat/?id=77"]
     assert created == [{
         "title": "New Development thread",
         "project_id": 9,
@@ -365,6 +581,10 @@ def test_thread_title_opens_and_timer_controls_use_shared_actions(monkeypatch) -
     ]
     panel._context_menu.close()
     panel._handle_item_click(thread, 0)
+    assert opened == []
+    assert panel.tree.currentItem() is thread
+    point = panel.tree.visualItemRect(thread).center()
+    QtTest.QTest.mouseDClick(panel.tree.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point)
     panel._update_thread_time(42, "pause")
     panel._update_thread_time(42, "reset")
     project = _project_item(panel, 9)
@@ -547,7 +767,8 @@ def test_quick_action_icons_open_development_areas() -> None:
     title = panel.findChild(QtWidgets.QLabel, "developmentDrawerTitle")
     new_thread = panel.quick_actions["New thread"]
     planning = panel.quick_actions["Planning"]
-    assert new_thread.mapTo(panel, QtCore.QPoint()).y() == title.mapTo(panel, QtCore.QPoint()).y()
+    assert abs(new_thread.mapTo(panel, new_thread.rect().center()).y()
+               - title.mapTo(panel, title.rect().center()).y()) <= 1
     assert planning.mapTo(panel, QtCore.QPoint()).x() < panel.footer.mapTo(panel, QtCore.QPoint()).x()
     assert abs(
         planning.mapTo(panel, QtCore.QPoint()).y() + planning.height() / 2
@@ -559,24 +780,11 @@ def test_quick_action_icons_open_development_areas() -> None:
     app.processEvents()
 
 
-def test_default_route_is_visible_and_cog_opens_canonical_editor(monkeypatch) -> None:
+def test_sidebar_has_no_model_routing_row():
     app = _app()
-    opened = []
-    routes = iter((("ollama", "muse-glimmer"), ("Kilo", "kilo-auto/free")))
-    monkeypatch.setattr(
-        "distr.gui.development_hot_corner.load_development_default_route",
-        lambda: next(routes),
-    )
-    panel = DevelopmentHotCornerPanel(enabled=False, open_path=opened.append)
-
-    assert panel.default_route.text() == "ollama / muse-glimmer"
-    assert panel.default_route.toolTip() == "Default medium-complexity Development harness and model"
-    panel._refresh_default_route()
-    assert panel.default_route.text() == "Kilo / kilo-auto/free"
-    edit = panel.findChild(QtWidgets.QToolButton, "developmentDrawerDefaultRouteEdit")
-    edit.click()
-    assert opened == ["/settings?llm=workflow#llms"]
-
+    panel = DevelopmentHotCornerPanel(enabled=False)
+    assert panel.findChild(QtWidgets.QFrame, "developmentDrawerDefaultRoute") is None
+    assert panel.findChild(QtWidgets.QToolButton, "developmentDrawerDefaultRouteEdit") is None
     panel.close()
     panel.deleteLater()
     app.processEvents()
@@ -596,7 +804,7 @@ def test_panel_animation_stays_inside_the_selected_screen(monkeypatch) -> None:
     start, end = geometries[0]
     assert start.left() == end.left() == 1920
     assert start.width() == 1
-    assert end.width() == 360
+    assert end.width() == 400
 
     panel.close()
     panel.deleteLater()

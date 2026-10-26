@@ -105,6 +105,10 @@ async function loadGeneralSettings() {
         if (typeof window.updateAudioMonitorVadThreshold === 'function') {
             window.updateAudioMonitorVadThreshold(vadThreshold);
         }
+        const bargeinModeEl = document.getElementById('bargein_mode');
+        if (bargeinModeEl) {
+            bargeinModeEl.value = settings.bargein_mode || 'smart';
+        }
 
         // ElevenLabs voice options (only when provider is elevenlabs)
         const stability = settings.elevenlabs_stability !== undefined ? settings.elevenlabs_stability : 0.5;
@@ -192,6 +196,7 @@ async function saveGeneralSettings() {
             playback_speed: parseFloat(document.getElementById('playback_speed').value),
             speech_volume: parseInt(document.getElementById('speech_volume').value),
             vad_threshold: parseInt(document.getElementById('vad_level').value),
+            bargein_mode: (document.getElementById('bargein_mode') || {}).value || 'smart',
             elevenlabs_stability: parseInt(document.getElementById('elevenlabs_stability').value, 10) / 100,
             elevenlabs_similarity_boost: parseInt(document.getElementById('elevenlabs_similarity').value, 10) / 100,
             elevenlabs_style: parseInt(document.getElementById('elevenlabs_style').value, 10) / 100,
@@ -656,6 +661,18 @@ function setupGeneralSliders() {
         vadLevelSlider.addEventListener('change', function() {
             if (vadLevelThrottle) { clearTimeout(vadLevelThrottle); vadLevelThrottle = null; }
             applyVadLevel(this.value);
+        });
+    }
+    const bargeinModeSelect = document.getElementById('bargein_mode');
+    if (bargeinModeSelect) {
+        bargeinModeSelect.addEventListener('change', function() {
+            fetch('/api/voice/bargein-mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bargein_mode: this.value })
+            })
+                .then(function(r) { if (r.ok) return; return r.json().then(function(err) { throw new Error(err.detail || 'Failed'); }); })
+                .catch(function(e) { console.error(e); if (typeof showNotification === 'function') showNotification('Barge-in mode update failed', 'error'); });
         });
     }
     function applyElevenLabsVoiceSettings() {

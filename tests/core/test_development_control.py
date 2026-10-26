@@ -226,6 +226,33 @@ def test_thread_owned_time_can_play_pause_reset_and_auto_pause(development_db):
     assert all("started_at" in entry and "ended_at" in entry for entry in auto_paused.get("entries") or [])
 
 
+def test_desktop_timer_handler_updates_the_real_thread_timer(development_db, monkeypatch):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6 import QtWidgets
+    from distr.gui.development_hot_corner import DevelopmentHotCornerPanel
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[],
+                                      session_provider=development_db["session"])
+    monkeypatch.setattr(panel, "_refresh_threads", lambda: None)
+    chat_id = development_db["chat_id"]
+    try:
+        panel._update_thread_time(chat_id, "play")
+        assert control.thread_time_state(chat_id)["running"] is True
+        panel._update_thread_time(chat_id, "pause")
+        assert control.thread_time_state(chat_id)["paused"] is True
+        control.reset_thread_time(chat_id, seconds=95)
+        panel._update_thread_time(chat_id, "reset")
+        state = control.thread_time_state(chat_id)
+        assert state["seconds"] == 0
+        assert state["paused"] is True
+    finally:
+        panel.close()
+        panel.deleteLater()
+        app.processEvents()
+
+
 def test_ticket_time_sync_rejects_runaway_totals(development_db):
     from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 

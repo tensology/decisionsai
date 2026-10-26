@@ -325,6 +325,16 @@
                                 Runs a quick silent-vs-interrupt test and applies a recommended continuous-mode VAD level.
                             </p>
                         </div>
+                        <div class="mt-4">
+                            <label for="bargein_mode" class="block text-sm font-semibold text-[#ececf1] mb-2">Barge-in while speaking:</label>
+                            <select id="bargein_mode" name="bargein_mode"
+                                    class="w-full bg-[#2a2f52] border border-[#565869] rounded-md px-3 py-2 text-sm text-[#ececf1]">
+                                <option value="smart">Smart — stop for your voice, ignore its own echo (recommended)</option>
+                                <option value="always">Always — most sensitive (may cut itself off)</option>
+                                <option value="off">Off — never interrupt while it is speaking</option>
+                            </select>
+                            <p class="text-xs text-[#7a7c8c] mt-2">Continuous mode only. Smart suppresses the agent's own speaker echo while still letting you interrupt.</p>
+                        </div>
                     </div>
 
                     <div class="voice-setup-balance-secondary border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] flex flex-col justify-center gap-6">

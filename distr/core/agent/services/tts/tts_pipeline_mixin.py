@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 STALE_INTERRUPT_GRACE_SEC = 2.0
 STALE_CANCELLED_CLEAR_SEC = 1.5
+# A confirmed user barge-in must be honoured. Pipecat broadcasts the
+# InterruptionFrame to all processors asynchronously, so a momentary boolean
+# marker is already cleared by the time the TTS sees the frame. Keep the
+# barge-in valid for a short window instead.
+BARGEIN_ACCEPT_WINDOW_SEC = 1.5
 
 
 class TTSPipelineMixin:
@@ -41,6 +46,15 @@ class TTSPipelineMixin:
         self._speak_queue = None
         self._speak_worker_task = None
         self._speak_busy = False
+        self._bargein_at = 0.0
+
+    def mark_bargein(self) -> None:
+        """Record a confirmed user barge-in.
+
+        The next InterruptionFrame (even if it arrives after this call returns)
+        is then treated as authoritative and is not discarded as a stale race.
+        """
+        self._bargein_at = time.monotonic()
 
     def abort_pending_synthesis(self, *, clear_buffer: bool = True) -> None:
         """Drop queued/in-flight synthesis (hot-swap or hard interrupt)."""
@@ -64,6 +78,11 @@ class TTSPipelineMixin:
 
     def is_stale_interrupt_frame(self) -> bool:
         if getattr(self, "_accept_bargein_interrupt", False):
+            return False
+        # Honor a recently confirmed user barge-in even though its broadcast
+        # InterruptionFrame arrives asynchronously.
+        bargein_at = float(getattr(self, "_bargein_at", 0.0) or 0.0)
+        if bargein_at > 0.0 and (time.monotonic() - bargein_at) < BARGEIN_ACCEPT_WINDOW_SEC:
             return False
         started = float(getattr(self, "_llm_response_started_at", 0.0) or 0.0)
         if started <= 0:

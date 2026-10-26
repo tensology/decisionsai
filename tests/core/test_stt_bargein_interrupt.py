@@ -237,3 +237,107 @@ def test_bargein_energy_decision_suppresses_echo_and_accepts_double_talk():
         "residual_rms": 0.08,
     }
     assert service._check_bargein_energy() is True
+
+
+def test_smart_bargein_holds_on_echo_and_allows_double_talk():
+    """'smart' suppresses self-echo but still lets the user interrupt."""
+    from collections import deque
+
+    service = _TestSTTService.__new__(_TestSTTService)
+    service._is_hands_free = True
+    service._is_dictating = False
+    service._bargein_mode = 'smart'
+    service._aec_ref_buf = SimpleNamespace(is_active=True)
+    # Floor not yet filled -> residual cannot clear it -> echo is held.
+    service._recent_residual_rms = deque(maxlen=5)
+    service._aec_filter = SimpleNamespace(
+        calibrated=True,
+        last_metrics={
+            "reference_correlation": 0.90,
+            "reference_rms": 0.10,
+            "input_rms": 0.05,
+            "residual_rms": 0.02,
+        },
+    )
+
+    # Echo-dominated frame -> hold (do not self-interrupt)
+    assert service._should_hold_bargein() is True
+
+    # Double-talk frame -> allow the user to barge in
+    service._aec_filter.last_metrics = {
+        "reference_correlation": 0.20,
+        "reference_rms": 0.05,
+        "input_rms": 0.10,
+        "residual_rms": 0.10,
+    }
+    assert service._should_hold_bargein() is False
+
+
+def test_smart_bargein_never_confirms_on_quiet_frames():
+    """Regression: the gate confirmed a barge-in on near-silent mic frames.
+
+    Real log (10:14:32) showed `confirm` at in_rms=0.022 with a stale rolling
+    residual mean (0.095) above the threshold. A quiet frame is never a
+    barge-in, regardless of the rolling mean.
+    """
+    from collections import deque
+
+    service = _TestSTTService.__new__(_TestSTTService)
+    service._is_hands_free = True
+    service._is_dictating = False
+    service._bargein_mode = 'smart'
+    service._aec_ref_buf = SimpleNamespace(is_active=True)
+    # Rolling mean still high from the previous loud frame (the stale bug).
+    service._recent_residual_rms = deque([0.20] * 5, maxlen=5)
+    service._echo_floor_rms = 0.071
+    service._echo_floor_multiplier = 1.8
+    service._echo_floor_min = 0.03
+    service._aec_filter = SimpleNamespace(calibrated=True, last_metrics={})
+
+    # Near-silence -> hold even though the rolling residual mean is high.
+    service._aec_filter.last_metrics = {
+        "reference_correlation": 0.10,
+        "reference_rms": 0.086,
+        "input_rms": 0.022,
+        "residual_rms": 0.030,
+    }
+    assert service._should_hold_bargein() is True
+
+    # Speech-level and not reference-dominated -> the user -> allow.
+    service._aec_filter.last_metrics = {
+        "reference_correlation": 0.20,
+        "reference_rms": 0.05,
+        "input_rms": 0.15,
+        "residual_rms": 0.15,
+    }
+    assert service._should_hold_bargein() is False
+
+    # Reference-dominated, speech-level, floor clears -> allow (loud double-talk).
+    service._aec_filter.last_metrics = {
+        "reference_correlation": 0.55,
+        "reference_rms": 0.20,
+        "input_rms": 0.18,
+        "residual_rms": 0.16,
+    }
+    assert service._should_hold_bargein() is False
+
+
+def test_smart_bargein_holds_until_aec_is_calibrated():
+    """Before the per-device delay is measured, don't trust correlation."""
+    service = _TestSTTService.__new__(_TestSTTService)
+    service._is_hands_free = True
+    service._is_dictating = False
+    service._bargein_mode = 'smart'
+    service._aec_ref_buf = SimpleNamespace(is_active=True)
+    service._aec_filter = SimpleNamespace(calibrated=False, last_metrics={})
+    assert service._should_hold_bargein() is True
+
+
+def test_off_mode_never_barges():
+    service = _TestSTTService.__new__(_TestSTTService)
+    service._is_hands_free = True
+    service._is_dictating = False
+    service._bargein_mode = 'off'
+    service._aec_ref_buf = SimpleNamespace(is_active=True)
+    service._aec_filter = SimpleNamespace(calibrated=True, last_metrics={})
+    assert service._should_hold_bargein() is True

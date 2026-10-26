@@ -1223,6 +1223,7 @@ async function performShellRefresh(options) {
     try {
         const {
             projects,
+            sidebarPins,
             boards: boardRows,
             externalBoards,
             chatsData,
@@ -1253,6 +1254,7 @@ async function performShellRefresh(options) {
         });
         state.projects = Array.isArray(projects) ? projects : projects.projects || [];
         state.boards = normalizeBoards(Array.isArray(boardRows) ? boardRows : [], externalBoards || {});
+        await sidebar.applyPinnedBoards(sidebarPins);
         const developmentChats = (chatsData.chats || []).filter((chat) => chat.development);
         state.chats = developmentChats.filter((chat) => !chat.archived);
         state.archivedChats = developmentChats.filter((chat) => chat.archived);
@@ -1996,6 +1998,8 @@ async function restoreDevelopmentLocation(options) {
 }
 
 async function init() {
+    const desktopActionToken = new URLSearchParams(window.location.hash.slice(1)).get('desktop-action');
+    if (desktopActionToken) history.replaceState(null, '', window.location.pathname + window.location.search);
     try {
         state.draft.reasoning_effort = window.localStorage.getItem('decisions-development-reasoning-effort') || 'medium';
         state.draft.service_tier = window.localStorage.getItem('decisions-development-service-tier') || 'standard';
@@ -2010,6 +2014,14 @@ async function init() {
     await restoreDevelopmentLocation({
         lastChatId: Number(chatData.last_chat_id || 0)
     });
+    if (desktopActionToken) {
+        try {
+            const action = await api('/workflows/studio/sidebar/desktop-action', {
+                method: 'POST', body: { token: desktopActionToken }
+            });
+            await sidebar.runDesktopBoardAction(action);
+        } catch (error) { toast(error.message || 'Could not open the desktop action.', 'error'); }
+    }
     const googleStatus = new URLSearchParams(window.location.search || '').get('google');
     if (googleStatus === 'connected') toast('Google connected. Gmail is ready.');
     else if (googleStatus === 'error') toast('Google could not be connected. Try reconnecting again.', 'error');

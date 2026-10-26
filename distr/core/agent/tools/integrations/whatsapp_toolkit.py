@@ -10,6 +10,7 @@ message into an outbound message by accident.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import re
 from datetime import datetime
@@ -21,6 +22,30 @@ from pydantic import BaseModel, Field
 
 
 _APPROVAL_PHRASES = {"approved", "send", "send it", "go ahead", "yes send"}
+
+
+def _status_payload(text: str, audience_jids: list[str], media_path: str) -> dict[str, Any]:
+    if not audience_jids or len(audience_jids) > 500 or any(
+        not isinstance(jid, str) or not re.fullmatch(r"[1-9]\d{5,14}@s\.whatsapp\.net", jid)
+        for jid in audience_jids
+    ):
+        raise ValueError("Provide 1 to 500 explicit individual phone JIDs in audience_jids.")
+    if len(text) > 700:
+        raise ValueError("Status text must be at most 700 characters.")
+    payload = {"text": text, "audience_jids": sorted(set(audience_jids))}
+    if media_path:
+        path = Path(media_path).expanduser()
+        mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".mp4": "video/mp4"}.get(path.suffix.lower())
+        if not mime or not path.is_file() or not 0 < path.stat().st_size <= 16 * 1024 * 1024:
+            raise ValueError("Status media must be an existing JPEG, PNG, or MP4 file of at most 16 MiB.")
+        with path.open("rb") as stream:
+            data = stream.read(16 * 1024 * 1024 + 1)
+        if not data or len(data) > 16 * 1024 * 1024:
+            raise ValueError("Status media must contain 1 byte to 16 MiB.")
+        payload["media"] = {"mime_type": mime, "data_b64": base64.b64encode(data).decode("ascii")}
+    elif not text.strip():
+        raise ValueError("Status requires text or media.")
+    return payload
 
 
 def _approval_token(jid_phone: str, text: str) -> str:
@@ -114,12 +139,15 @@ class WhatsAppToolkitInput(BaseModel):
         description=(
             "search (find contacts/messages), read (return a conversation with media paths), "
             "analyze_media (read cached image media with vision), draft (save an unsent reply), "
-            "send (send only an explicitly approved draft), or status."
+            "send (send only an explicitly approved draft), status (connection only), "
+            "draft_status (preview own WhatsApp Status), publish_status (publish approved Status)."
         ),
     )
     query: str = Field(default="", description="Contact name, phone number, message text, or search term.")
     jid_phone: str = Field(default="", description="WhatsApp phone number or JID when already known.")
-    text: str = Field(default="", description="Exact reply text for draft/send actions.")
+    text: str = Field(default="", description="Exact reply or Status text; caption when Status includes media.")
+    audience_jids: list[str] = Field(default_factory=list, description="Explicit Status viewers as phone@s.whatsapp.net JIDs. Never infer an audience.")
+    media_path: str = Field(default="", description="Local JPEG, PNG, or MP4 for Status publishing; text becomes its caption.")
     prompt: str = Field(default="", description="Question to ask about attached image media.")
     include_media: bool = Field(default=True, description="Include cached local media paths in read results.")
     approved: bool = Field(default=False, description="Must be true for an outbound send.")
@@ -135,6 +163,9 @@ class WhatsAppToolkitTool(BaseTool):
         "and prepare an unsent reply draft. Never send from search/read/draft. "
         "To send, first show the exact draft, then require the returned approval_token, "
         "approved=true, and a fresh explicit approval_phrase from the user. "
+        "For own WhatsApp Status posts use draft_status then publish_status with the exact text, "
+        "media_path, audience_jids, approval_token, approved=true and fresh approval. "
+        "Never infer Status viewers. Connection status is separate. Submission does not confirm viewer delivery. "
         "Use the existing send_voice_note_to_telegram and speak_on_desktop tools for Telegram voice or desktop speech."
     )
     args_schema: type[BaseModel] = WhatsAppToolkitInput
@@ -178,6 +209,8 @@ class WhatsAppToolkitTool(BaseTool):
         query: str = "",
         jid_phone: str = "",
         text: str = "",
+        audience_jids: list[str] | None = None,
+        media_path: str = "",
         prompt: str = "",
         include_media: bool = True,
         approved: bool = False,
@@ -186,6 +219,24 @@ class WhatsAppToolkitTool(BaseTool):
         **kwargs: Any,
     ) -> str:
         action_name = (action or "search").strip().lower().replace("-", "_").replace(" ", "_")
+        if action_name in {"draft_status", "publish_status"}:
+            if action_name == "publish_status" and (not approved or not _approval_is_explicit(approval_phrase)):
+                return "Not published. Require approved=true and a fresh explicit approval_phrase."
+            try:
+                payload = _status_payload(text, audience_jids or [], media_path)
+            except (ValueError, OSError) as exc:
+                return f"Not published. {exc}"
+            token = _approval_token("status@broadcast", json.dumps(payload, sort_keys=True, separators=(",", ":")))
+            if action_name == "draft_status":
+                return json.dumps({"action": action_name, "text": text, "audience_jids": payload["audience_jids"],
+                                   "media_path": media_path, "approval_token": token,
+                                   "publish_requires_explicit_approval": True}, ensure_ascii=False)
+            if approval_token != token:
+                return "Not published. Approval token does not match the exact Status content and audience."
+            from distr.core.integrations.whatsapp.relay_client import publish_status_via_relay
+
+            return json.dumps({"action": action_name, "result": publish_status_via_relay(payload)}, ensure_ascii=False)
+
         if action_name in {"status", "connection_status"}:
             from distr.core.integrations.whatsapp.relay_client import fetch_relay_whatsapp_status
 

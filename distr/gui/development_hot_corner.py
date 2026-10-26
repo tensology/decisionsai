@@ -39,15 +39,31 @@ def save_pinned_projects(project_ids: list[int]) -> None:
     )
 
 
-def load_development_default_route() -> tuple[str, str]:
-    from distr.core.settings import load_settings_from_db
-
-    settings = load_settings_from_db()
-    backend = str(settings.get("project_cli_medium_backend") or "codex").strip()
-    return (
-        "Kilo" if backend.lower() in {"kilo", "kilocode", "ki" + "ro"} else backend,
-        str(settings.get("project_cli_medium_model") or "auto").strip(),
-    )
+def project_folder_icon(has_threads: bool) -> QtGui.QIcon:
+    icon = QtGui.QIcon()
+    for opened in (False, True):
+        pixmap = QtGui.QPixmap(24, 24)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        color = QtGui.QColor("#dce0e5" if has_threads else "#626770")
+        painter.setPen(QtGui.QPen(color, 1.5))
+        painter.setBrush(QtGui.QColor("#292e35" if has_threads else "#17191d"))
+        painter.drawPolygon(QtGui.QPolygonF([
+            QtCore.QPointF(x, y) for x, y in
+            [(3, 6), (10, 6), (12, 9), (21, 9), (21, 20), (3, 20)]
+        ]))
+        if opened and has_threads:
+            painter.setBrush(color)
+            painter.drawPolygon(QtGui.QPolygonF([
+                QtCore.QPointF(x, y) for x, y in [(2, 13), (23, 13), (19, 21), (4, 21)]
+            ]))
+        else:
+            painter.drawLine(3, 11, 21, 11)
+        painter.end()
+        icon.addPixmap(pixmap, QtGui.QIcon.Mode.Normal,
+                       QtGui.QIcon.State.On if opened else QtGui.QIcon.State.Off)
+    return icon
 
 
 def is_top_left_corner(
@@ -247,12 +263,14 @@ class ThreadTitleWidget(QtWidgets.QWidget):
         active: bool,
         tree: QtWidgets.QTreeWidget,
         item: QtWidgets.QTreeWidgetItem,
+        activity_only: bool = False,
     ) -> None:
         super().__init__(tree.viewport())
         self._title = title
         self._active = bool(active)
         self._tree = tree
         self._item = item
+        self._activity_only = activity_only
         self._motion_reduced = _prefers_reduced_motion()
         self._animation_started_at = time.monotonic()
         self._animation_now = self._animation_started_at
@@ -291,11 +309,25 @@ class ThreadTitleWidget(QtWidgets.QWidget):
         foreground = QtGui.QColor(
             "#ffffff" if selected else "#72a7ff" if self._active else "#d6d9df"
         )
-        text_left = 0
-        if self._active:
+        text_left = self._tree.iconSize().width() + 9
+        parent = self._item.parent()
+        value = parent.data(0, QtCore.Qt.ItemDataRole.UserRole) if parent else None
+        if isinstance(value, dict) and value.get("kind") == "project":
+            index = self._tree.indexFromItem(parent)
+            option = QtWidgets.QStyleOptionViewItem()
+            option.initFrom(self._tree)
+            self._tree.itemDelegate().initStyleOption(option, index)
+            option.decorationSize = self._tree.iconSize()
+            option.rect = self._tree.visualRect(index)
+            text_bounds = self._tree.style().subElementRect(
+                QtWidgets.QStyle.SubElement.SE_ItemViewItemText, option, self._tree)
+            text_margin = self._tree.style().pixelMetric(
+                QtWidgets.QStyle.PixelMetric.PM_FocusFrameHMargin, option, self._tree) + 1
+            text_left = self.mapFrom(self._tree.viewport(), text_bounds.topLeft()).x() + text_margin
+        if self._activity_only and self._active:
             spinner_top = (self.height() - self.SPINNER_SIZE) // 2
             spinner_rect = QtCore.QRectF(
-                0.5,
+                (self.width() - self.SPINNER_SIZE) / 2 + 0.5,
                 spinner_top + 0.5,
                 self.SPINNER_SIZE - 1,
                 self.SPINNER_SIZE - 1,
@@ -305,7 +337,8 @@ class ThreadTitleWidget(QtWidgets.QWidget):
             painter.setPen(pen)
             start_angle = 90 if self._motion_reduced else int(self._animation_now * 300) % 360
             painter.drawArc(spinner_rect, start_angle * 16, 250 * 16)
-            text_left = self.SPINNER_SIZE + self.SPINNER_GAP
+        if self._activity_only:
+            return
 
         text_rect = QtCore.QRectF(
             text_left,
@@ -349,12 +382,55 @@ class ThreadTitleWidget(QtWidgets.QWidget):
         painter.restore()
 
 
+class DevelopmentProjectTree(QtWidgets.QTreeWidget):
+    toggleRequested = QtCore.pyqtSignal(QtCore.QModelIndex)
+    threadOpenRequested = QtCore.pyqtSignal(QtCore.QModelIndex)
+
+    def _project_at(self, event):
+        item = self.itemAt(event.position().toPoint())
+        value = item.data(0, QtCore.Qt.ItemDataRole.UserRole) if item else None
+        return item if isinstance(value, dict) and value.get("kind") == "project" else None
+
+    def _on_folder(self, item, event):
+        rect = self.visualItemRect(item)
+        return rect.left() + 8 <= event.position().x() < rect.left() + 8 + self.iconSize().width()
+
+    def mouseReleaseEvent(self, event):
+        if getattr(self, "_ignore_folder_release", False):
+            self._ignore_folder_release = False
+            return
+        item = self._project_at(event)
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and item and self._on_folder(item, event):
+            self.toggleRequested.emit(self.indexFromItem(item))
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        item = self._project_at(event)
+        if item and event.button() == QtCore.Qt.MouseButton.LeftButton:
+            if item.childCount() == 0:
+                return
+            if self._on_folder(item, event):
+                self._ignore_folder_release = True
+            elif (self.columnAt(int(event.position().x())) == 0
+                  and event.position().x() >= self.visualItemRect(item).left() + self.iconSize().width() + 12):
+                self.toggleRequested.emit(self.indexFromItem(item))
+            return
+        selected = self.itemAt(event.position().toPoint())
+        value = selected.data(0, QtCore.Qt.ItemDataRole.UserRole) if selected else None
+        if (event.button() == QtCore.Qt.MouseButton.LeftButton and isinstance(value, dict)
+                and value.get("kind") == "thread" and self.columnAt(int(event.position().x())) == 0):
+            self.threadOpenRequested.emit(self.indexFromItem(selected))
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 class DevelopmentHotCornerPanel(QtWidgets.QWidget):
     """Slide in a compact Development board selector after a short dwell."""
 
     DWELL_SECONDS = 2.5
     LEAVE_SECONDS = 0.45
-    WIDTH = 360
+    WIDTH = 400
     CORNER_TOLERANCE = 8
 
     def __init__(
@@ -388,6 +464,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         resolved_pins = load_pinned_projects() if pinned_project_ids is None else pinned_project_ids
         self._pinned_project_ids = {int(project_id) for project_id in resolved_pins}
         self._pin_saver = pin_saver
+        self._uses_shared_pins = pinned_project_ids is None and pin_saver is save_pinned_projects
         self._corner_screen: QtGui.QScreen | None = None
         self._corner_started_at: float | None = None
         self._open_screen: QtGui.QScreen | None = None
@@ -400,7 +477,11 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         ] = []
         self._project_rows: list[tuple[QtWidgets.QTreeWidgetItem, dict[str, Any]]] = []
         self._section_rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
-        self._section_expanded = {"recent": False, "projects": True}
+        self._view_settings = QtCore.QSettings("Tensology", "DecisionsAI")
+        self._section_expanded = {
+            "recent": False,
+            "projects": self._view_settings.value("sidebar/projectsExpanded", True, type=bool),
+        }
         self._project_expanded: dict[int | None, bool] = {}
         self._context_menu: QtWidgets.QMenu | None = None
         self._rendered_at = time.monotonic()
@@ -451,16 +532,27 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                 border-color: #4b5563;
                 color: #ffffff;
             }
+            QToolButton#developmentDrawerNewThread {
+                min-width: 34px; max-width: 34px;
+                min-height: 34px; max-height: 34px;
+                border: 0; border-radius: 17px;
+                background: #ffffff; color: #08090b;
+                font-size: 22px; font-weight: 500;
+            }
+            QToolButton#developmentDrawerPanelPin {
+                min-width: 20px; max-width: 20px; min-height: 34px;
+                border: 0; background: transparent;
+            }
             QToolButton#developmentDrawerFooterAction {
-                min-width: 26px;
-                max-width: 26px;
-                min-height: 26px;
-                max-height: 26px;
+                min-width: 30px;
+                max-width: 30px;
+                min-height: 30px;
+                max-height: 30px;
                 border: 0;
                 border-radius: 5px;
                 background: transparent;
                 color: #8f949e;
-                font-size: 12px;
+                font-size: 16px;
             }
             QToolButton#developmentDrawerFooterAction:hover {
                 background: #1b1e23;
@@ -468,33 +560,6 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             }
             QFrame#developmentDrawerFooter {
                 border: 0;
-            }
-            QFrame#developmentDrawerDefaultRoute {
-                border-top: 1px solid #2a2c31;
-            }
-            QLabel#developmentDrawerDefaultCaption {
-                color: #8f949e;
-                font-size: 10px;
-            }
-            QLabel#developmentDrawerDefaultRouteText {
-                color: #d6d9df;
-                font-size: 11px;
-                font-weight: 600;
-            }
-            QToolButton#developmentDrawerDefaultRouteEdit {
-                min-width: 26px;
-                max-width: 26px;
-                min-height: 26px;
-                max-height: 26px;
-                border: 0;
-                border-radius: 5px;
-                background: transparent;
-                color: #8f949e;
-                font-size: 14px;
-            }
-            QToolButton#developmentDrawerDefaultRouteEdit:hover {
-                background: #1b1e23;
-                color: #ffffff;
             }
             QLabel#developmentDrawerFooterTime {
                 color: #d6d9df;
@@ -511,8 +576,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             }
             QTreeWidget::item {
                 min-height: 24px;
-                border-radius: 6px;
-                padding: 0 4px;
+                border-radius: 0;
+                padding: 0 8px;
             }
             QTreeWidget::item:hover {
                 background: #17191d;
@@ -539,24 +604,57 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         )
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetNoConstraint)
-        layout.setContentsMargins(20, 22, 8, 18)
+        layout.setContentsMargins(8, 22, 12, 18)
         layout.setSpacing(12)
 
         header = QtWidgets.QHBoxLayout()
         header.setSpacing(6)
         title = QtWidgets.QLabel("Boards")
         title.setObjectName("developmentDrawerTitle")
+        title.setContentsMargins(12, 0, 0, 0)
         header.addWidget(title)
         header.addStretch(1)
         self.quick_actions: dict[str, QtWidgets.QToolButton] = {}
         new_thread = QtWidgets.QToolButton()
-        new_thread.setObjectName("developmentDrawerAction")
+        new_thread.setObjectName("developmentDrawerNewThread")
         new_thread.setText("+")
         new_thread.setToolTip("New thread")
         new_thread.setAccessibleName("New thread")
         new_thread.clicked.connect(lambda: self._open_path("/development/new/"))
         header.addWidget(new_thread)
         self.quick_actions["New thread"] = new_thread
+        header.addSpacing(10)
+        self.panel_pin = QtWidgets.QToolButton()
+        self.panel_pin.setObjectName("developmentDrawerPanelPin")
+        pin_icon = QtGui.QIcon()
+        for pinned in (False, True):
+            pin_pixmap = QtGui.QPixmap(24, 24)
+            pin_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+            painter = QtGui.QPainter(pin_pixmap)
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            painter.translate(12, 12)
+            if not pinned:
+                painter.rotate(45)
+            painter.translate(-12, -12)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff" if pinned else "#a8adb6"), 1.6))
+            if pinned:
+                painter.setBrush(QtGui.QColor("#ffffff"))
+            painter.drawPolygon(QtGui.QPolygonF([
+                QtCore.QPointF(x, y) for x, y in
+                [(8, 3), (16, 3), (15, 11), (18, 15), (6, 15), (9, 11)]
+            ]))
+            if not pinned:
+                painter.drawLine(12, 15, 12, 22)
+            painter.end()
+            pin_icon.addPixmap(pin_pixmap, QtGui.QIcon.Mode.Normal,
+                               QtGui.QIcon.State.On if pinned else QtGui.QIcon.State.Off)
+        self.panel_pin.setIcon(pin_icon)
+        self.panel_pin.setIconSize(QtCore.QSize(18, 18))
+        self.panel_pin.setCheckable(True)
+        self.panel_pin.setAccessibleName("Keep sidebar open")
+        self.panel_pin.setToolTip("Keep sidebar open")
+        self.panel_pin.toggled.connect(self._set_panel_pinned)
+        header.addWidget(self.panel_pin)
         layout.addLayout(header)
 
         footer_actions = []
@@ -577,17 +675,23 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             footer_actions.append(button)
             self.quick_actions[label] = button
 
-        self.tree = QtWidgets.QTreeWidget()
+        self.tree = DevelopmentProjectTree()
+        self.tree.setItemDelegate(QtWidgets.QStyledItemDelegate(self.tree))
+        self.tree.setIconSize(QtCore.QSize(22, 22))
+        self.tree.toggleRequested.connect(self._queue_project_toggle)
+        self.tree.threadOpenRequested.connect(self._open_thread_index)
         self.tree.setColumnCount(4)
+        self.tree.setColumnHidden(2, True)
         self.tree.setHeaderLabels(["", "", "", ""])
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
         for column in (1, 2, 3):
             self.tree.header().setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.tree.header().hide()
-        self.tree.setRootIsDecorated(True)
-        self.tree.setIndentation(8)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setIndentation(0)
         self.tree.setWordWrap(False)
+        self.tree.setExpandsOnDoubleClick(False)
         self.tree.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.tree.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
         self.tree.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
@@ -595,31 +699,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.itemSelectionChanged.connect(self._remember_selection)
         self.tree.itemClicked.connect(self._handle_item_click)
+        self.tree.itemExpanded.connect(self._save_section_state)
+        self.tree.itemCollapsed.connect(self._save_section_state)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree, 1)
-
-        default_route = QtWidgets.QFrame()
-        default_route.setObjectName("developmentDrawerDefaultRoute")
-        default_route_layout = QtWidgets.QHBoxLayout(default_route)
-        default_route_layout.setContentsMargins(2, 9, 0, 0)
-        default_route_layout.setSpacing(6)
-        default_caption = QtWidgets.QLabel("Auto route")
-        default_caption.setObjectName("developmentDrawerDefaultCaption")
-        default_route_layout.addWidget(default_caption)
-        self.default_route = QtWidgets.QLabel("codex / auto")
-        self.default_route.setObjectName("developmentDrawerDefaultRouteText")
-        self.default_route.setToolTip("Default medium-complexity Development harness and model")
-        default_route_layout.addWidget(self.default_route)
-        default_route_layout.addStretch(1)
-        edit_default = QtWidgets.QToolButton()
-        edit_default.setObjectName("developmentDrawerDefaultRouteEdit")
-        edit_default.setText("⚙")
-        edit_default.setToolTip("Edit automatic Development routing")
-        edit_default.setAccessibleName("Edit automatic Development routing")
-        edit_default.clicked.connect(lambda: self._open_path("/settings?llm=workflow#llms"))
-        default_route_layout.addWidget(edit_default)
-        layout.addWidget(default_route)
-        self._refresh_default_route()
 
         footer = QtWidgets.QFrame()
         footer.setObjectName("developmentDrawerFooter")
@@ -660,7 +743,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                 self._sync_live_state(now)
             else:
                 self._refresh_elapsed_labels(now)
-            if self._pointer_inside(pointer) or self._screen_at_hot_corner(pointer) is self._open_screen:
+            if self.panel_pin.isChecked() or self._pointer_inside(pointer) or self._screen_at_hot_corner(pointer) is self._open_screen:
                 self._last_inside_at = now
             elif now - self._last_inside_at >= self.LEAVE_SECONDS:
                 self._hide_panel()
@@ -709,6 +792,11 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._ensure_macos_overlay_level()
         self._animate_geometry(start, end)
 
+    def _set_panel_pinned(self, pinned: bool) -> None:
+        self.panel_pin.setToolTip("Allow sidebar to hide" if pinned else "Keep sidebar open")
+        self.panel_pin.setAccessibleName(self.panel_pin.toolTip())
+        self._last_inside_at = time.monotonic()
+
     def _hide_panel(self) -> None:
         if not self.isVisible() or self._hiding:
             return
@@ -749,6 +837,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         except Exception as exc:
             logger.warning("Could not load Development hot-corner list: %s", exc)
             groups = []
+        self._sync_pinned_projects(groups)
         pinned_groups = [group for group in groups if group["project_id"] in self._pinned_project_ids]
         regular_groups = [group for group in groups if group not in pinned_groups]
         recent_threads = recent_development_threads(groups)
@@ -765,8 +854,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             section.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "section", "key": section_key})
             section_font = section.font(0)
             section_font.setBold(True)
+            section_font.setUnderline(True)
+            section_font.setPixelSize(14)
             section.setFont(0, section_font)
-            section.setForeground(0, QtGui.QColor("#8f949e"))
+            section.setForeground(0, QtGui.QColor("#c6cad1"))
             self.tree.addTopLevelItem(section)
             if section_key == "pinned":
                 section.setChildIndicatorPolicy(QtWidgets.QTreeWidgetItem.ChildIndicatorPolicy.DontShowIndicator)
@@ -805,13 +896,13 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             "",
             format_duration(thread["elapsed_seconds"]),
             "",
-            "↗",
+            "",
         ])
         item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "thread", **thread})
         item.setData(0, QtCore.Qt.ItemDataRole.AccessibleTextRole, str(thread["title"]))
         item.setToolTip(0, str(thread["title"]))
         item.setToolTip(1, "Thread time")
-        item.setToolTip(3, "Open chat in the web UI")
+        item.setTextAlignment(1, QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         item.setSizeHint(0, QtCore.QSize(125, 24))
         section.addChild(item)
         self._thread_rows.append((item, thread))
@@ -828,12 +919,15 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         project_item = QtWidgets.QTreeWidgetItem([
             str(group["name"]),
             format_duration(group["weekly_seconds"]),
+            "",
             "+" if group["project_id"] is not None else "",
-            "↗" if group["board_key"] else "",
         ])
         project_item.setFlags(
             QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsSelectable
         )
+        thread_count = len(group["threads"])
+        project_item.setIcon(0, project_folder_icon(bool(thread_count)))
+        project_item.setToolTip(0, f"{group['name']}: {thread_count} thread{'s' if thread_count != 1 else ''}")
         project_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "project", **group})
         project_font = project_item.font(0)
         project_font.setBold(True)
@@ -841,8 +935,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         project_item.setSizeHint(0, self._project_title_size(str(group["name"]), project_font))
         project_item.setForeground(0, QtGui.QColor("#aeb3bd"))
         project_item.setToolTip(1, "Total development time this week")
-        project_item.setToolTip(2, f"Create a new thread in {group['name']}")
-        project_item.setToolTip(3, f"Open {group['name']} in the web UI")
+        project_item.setTextAlignment(1, QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        project_item.setToolTip(3, f"Create a new thread in {group['name']}")
+        project_item.setTextAlignment(3, QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         if section is None:
             self.tree.addTopLevelItem(project_item)
         else:
@@ -855,13 +950,13 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                 "",
                 format_duration(thread["elapsed_seconds"]),
                 "",
-                "↗",
+                "",
             ])
             child.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "thread", **thread})
             child.setData(0, QtCore.Qt.ItemDataRole.AccessibleTextRole, str(thread["title"]))
             child.setToolTip(0, str(thread["title"]))
             child.setToolTip(1, "Thread time")
-            child.setToolTip(3, "Open chat in the web UI")
+            child.setTextAlignment(1, QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
             child.setSizeHint(0, QtCore.QSize(125, 24))
             project_item.addChild(child)
             self._thread_rows.append((child, thread))
@@ -888,6 +983,11 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         )
         self.tree.setItemWidget(item, 0, widget)
         self._thread_title_widgets.append((item, thread, widget))
+        activity = ThreadTitleWidget(title=str(thread["title"]), active=bool(thread["active"]),
+                                     tree=self.tree, item=item, activity_only=True)
+        activity.setToolTip("Working on this thread" if thread["active"] else "")
+        self.tree.setItemWidget(item, 3, activity)
+        self._thread_title_widgets.append((item, thread, activity))
 
     def _refresh_thread_title_widgets(self, now: float) -> None:
         for _item, thread, widget in self._thread_title_widgets:
@@ -925,22 +1025,16 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             total += weekly
         self.footer.setText(f"Total  {format_duration(total)}")
 
-    def _refresh_default_route(self) -> None:
-        try:
-            provider, model = load_development_default_route()
-        except Exception as exc:
-            logger.warning("Could not load default Development route: %s", exc)
-            return
-        self.default_route.setText(f"{provider} / {model}")
-
     def _sync_live_state(self, now: float) -> None:
         """Update shared timer state without rebuilding or expanding the tree."""
         self._last_live_sync = now
-        self._refresh_default_route()
         try:
             fresh_groups = load_development_groups(self._session_provider)
         except Exception as exc:
             logger.warning("Could not sync Development hot-corner timers: %s", exc)
+            return
+        if self._sync_pinned_projects(fresh_groups):
+            self._refresh_threads()
             return
         fresh_by_project = {group["project_id"]: group for group in fresh_groups}
         fresh_threads = {
@@ -974,6 +1068,18 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         section = self._section_rows.get("recent")
         if section is None:
             return
+        recent_threads = recent_development_threads(groups)
+        expected = [int(thread['chat_id']) for thread in recent_threads[:5]]
+        current = [
+            int(value['chat_id'])
+            for index in range(section.childCount())
+            if isinstance(value := section.child(index).data(0, QtCore.Qt.ItemDataRole.UserRole), dict)
+            and value.get('kind') == 'thread'
+        ]
+        if current == expected and section.childCount() == len(expected) + int(len(recent_threads) > 5):
+            return
+        expanded = section.isExpanded()
+        scroll = self.tree.verticalScrollBar().value()
         self._thread_rows = [
             (item, thread)
             for item, thread in self._thread_rows
@@ -985,7 +1091,6 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             if item.parent() is not section
         ]
         section.takeChildren()
-        recent_threads = recent_development_threads(groups)
         for thread in recent_threads[:5]:
             self._add_recent_row(section, thread, self._selected_item_key)
         if len(recent_threads) > 5:
@@ -993,6 +1098,20 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             more.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "recent_more"})
             more.setForeground(0, QtGui.QColor("#8f949e"))
             section.addChild(more)
+        section.setExpanded(expanded)
+        self.tree.verticalScrollBar().setValue(scroll)
+
+    def _sync_pinned_projects(self, groups: list[dict[str, Any]]) -> bool:
+        if not self._uses_shared_pins:
+            return False
+        from distr.core.workflow.development_sidebar import load_pinned_boards
+        keys = load_pinned_boards()
+        if keys is None:
+            return False
+        next_ids = {group['project_id'] for group in groups if group.get('board_key') in keys}
+        changed = next_ids != self._pinned_project_ids
+        self._pinned_project_ids = next_ids
+        return changed
 
     def _handle_item_click(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         value = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
@@ -1001,23 +1120,56 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         if value.get("kind") == "section":
             section_key = str(value.get("key") or "")
             if section_key in self._section_expanded:
-                expanded = not item.isExpanded()
-                item.setExpanded(expanded)
-                self._section_expanded[section_key] = expanded
+                index = QtCore.QPersistentModelIndex(self.tree.indexFromItem(item))
+                # Let Qt finish click/accessibility dispatch before changing its tree.
+                QtCore.QTimer.singleShot(0, lambda: self._toggle_section(index, section_key))
             return
         if value.get("kind") == "recent_more":
             self._open_path("/development/?recent=1")
             return
         if value.get("kind") == "project":
-            if column == 2 and value.get("project_id") is not None:
+            if column == 3 and value.get("project_id") is not None:
                 self._create_project_thread(value)
-            elif column == 3 and value.get("board_key"):
-                provider, identity = str(value["board_key"]).split(":", 1)
-                self._open_path(f"/development/boards/{provider}/{identity}/")
         elif value.get("kind") == "thread":
-            chat_id = int(value["chat_id"])
-            if column in {0, 3}:
-                self._open_path(f"/chat/?id={chat_id}")
+            self.tree.setCurrentItem(item)
+
+    def _open_thread_index(self, index: QtCore.QModelIndex) -> None:
+        item = self.tree.itemFromIndex(index)
+        value = item.data(0, QtCore.Qt.ItemDataRole.UserRole) if item else None
+        if isinstance(value, dict) and value.get("kind") == "thread":
+            self._open_path(f"/chat/?id={int(value['chat_id'])}")
+
+    def _queue_project_toggle(self, index: QtCore.QModelIndex) -> None:
+        item = self.tree.itemFromIndex(index)
+        if item is None or item.childCount() == 0:
+            return
+        persistent = QtCore.QPersistentModelIndex(index)
+        QtCore.QTimer.singleShot(0, lambda: self._toggle_section(persistent, None))
+
+    def _save_section_state(self, item: QtWidgets.QTreeWidgetItem) -> None:
+        value = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(value, dict) and value.get("kind") == "section":
+            key = value.get("key")
+            if key in self._section_expanded:
+                self._section_expanded[key] = item.isExpanded()
+                if key == "projects":
+                    self._view_settings.setValue("sidebar/projectsExpanded", item.isExpanded())
+
+    def _toggle_section(self, index: QtCore.QPersistentModelIndex, key: str | None) -> None:
+        if not index.isValid():
+            return
+        item = self.tree.itemFromIndex(QtCore.QModelIndex(index))
+        if item is None:
+            return
+        if key is None and item.childCount() == 0:
+            return
+        expanded = not item.isExpanded()
+        item.setExpanded(expanded)
+        if key is not None:
+            self._section_expanded[key] = expanded
+        else:
+            value = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            self._project_expanded[value["project_id"]] = expanded
 
     def _show_context_menu(self, position: QtCore.QPoint) -> None:
         item = self.tree.itemAt(position)
@@ -1025,10 +1177,60 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         if not isinstance(value, dict) or value.get("kind") not in {"project", "thread"}:
             return
         menu = QtWidgets.QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background: #111317; color: #e7e9ed; border: 1px solid #4b5059; padding: 5px; }
+            QMenu::item { padding: 7px 22px 7px 12px; }
+            QMenu::item:selected { background: #253958; color: #ffffff; }
+            QMenu::item:disabled { color: #747b87; }
+            QMenu::separator { height: 1px; background: #4b5059; margin: 5px 7px; }
+            QMenu::section { color: #aeb5c0; padding: 6px 12px 3px; font-weight: bold; }
+        """)
         if value["kind"] == "project" and value.get("project_id") is not None:
             project_id = int(value["project_id"])
-            pin = menu.addAction("Unpin project" if project_id in self._pinned_project_ids else "Pin project")
-            pin.triggered.connect(lambda: self._toggle_project_pin(project_id))
+            board_key = value.get("board_key")
+            if board_key:
+                provider, identity = str(board_key).split(":", 1)
+                base = f"/development/boards/{provider}/{identity}/"
+                menu.addAction("Go to project", lambda: self._open_path(base + "kanban/"))
+                for label, action in (
+                    ("New Ticket", "new-ticket"), ("New Thread", "new-chat"),
+                    ("Plan", "plan"), ("Board View", "kanban"), ("List View", "list"),
+                    ("Refresh Board" if provider == "decisions" else f"Re-sync {provider.title()} Board", "refresh"),
+                    ("Edit Board", "edit"), ("Set as Active", "activate"),
+                    ("Show in Finder" if platform.system() == "Darwin" else "Show in File Manager", "open-folder"),
+                    ("Unpin Board" if project_id in self._pinned_project_ids else "Pin Board", "pin"),
+                    ("Open Terminals", "terminals"), ("Start / Stop Terminals", "terminal-toggle"),
+                    ("Archive Board", "archive"), ("Delete project", "delete"),
+                ):
+                    if provider != "decisions" and action in {"activate", "archive", "delete"}:
+                        continue
+                    heading = {"new-ticket": "Create", "kanban": "View", "edit": "Board",
+                               "terminals": "Terminals", "archive": "Manage"}.get(action)
+                    if heading:
+                        menu.addSeparator()
+                        section = menu.addAction(heading)
+                        section.setEnabled(False)
+                        font = section.font()
+                        font.setBold(True)
+                        font.setPointSize(10)
+                        section.setFont(font)
+                    if action == "pin":
+                        menu.addAction(label, lambda: self._toggle_project_pin(project_id))
+                        continue
+                    entry = menu.addAction(label, lambda _checked=False, selected=action:
+                                           self._open_board_action(str(board_key), selected))
+                    if action in {"archive", "delete"}:
+                        marker = QtGui.QPixmap(12, 12)
+                        marker.fill(QtCore.Qt.GlobalColor.transparent)
+                        painter = QtGui.QPainter(marker)
+                        painter.setPen(QtGui.QPen(QtGui.QColor("#ff8585"), 1.5))
+                        painter.drawRect(3, 4, 6, 6)
+                        painter.drawLine(2, 2, 10, 2)
+                        painter.end()
+                        entry.setIcon(QtGui.QIcon(marker))
+            else:
+                menu.addAction("Unpin project" if project_id in self._pinned_project_ids else "Pin project",
+                               lambda: self._toggle_project_pin(project_id))
         elif value["kind"] == "thread":
             from distr.core.workflow.development_control import (
                 DEVELOPMENT_TIMER_MENU,
@@ -1046,6 +1248,12 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                 )
         self._context_menu = menu
         menu.popup(self.tree.viewport().mapToGlobal(position))
+
+    def _open_board_action(self, board_key: str, action: str) -> None:
+        from distr.core.workflow.development_sidebar import queue_desktop_board_action
+        token = queue_desktop_board_action(board_key, action)
+        provider, identity = board_key.split(":", 1)
+        self._open_path(f"/development/boards/{provider}/{identity}/#desktop-action={token}")
 
     def _update_thread_time(self, chat_id: int, action: str) -> None:
         try:
@@ -1068,7 +1276,23 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             self._pinned_project_ids.remove(project_id)
         else:
             self._pinned_project_ids.add(project_id)
-        self._pin_saver(sorted(self._pinned_project_ids))
+        if self._uses_shared_pins:
+            from distr.core.workflow.development_sidebar import load_pinned_boards, save_pinned_boards
+            groups = [group for _item, group in self._project_rows]
+            keys = load_pinned_boards()
+            if keys is None:
+                keys = [group['board_key'] for group in groups
+                        if group['project_id'] in self._pinned_project_ids and group.get('board_key')]
+            key = next((group.get('board_key') for group in groups if group['project_id'] == project_id), None)
+            if key:
+                keys = [existing for existing in keys if existing != key]
+                if project_id in self._pinned_project_ids:
+                    keys.append(key)
+                save_pinned_boards(keys)
+            else:
+                self._pin_saver(sorted(self._pinned_project_ids))
+        else:
+            self._pin_saver(sorted(self._pinned_project_ids))
         self._refresh_threads()
 
     def _create_project_thread(self, group: dict[str, Any]) -> None:

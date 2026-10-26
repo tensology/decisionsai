@@ -15,6 +15,7 @@ from ._shared import (
     PlaybackSpeedUpdate,
     SpeechVolumeUpdate,
     VadThresholdUpdate,
+    BargeinModeUpdate,
     ElevenLabsVoiceSettingsUpdate,
     OraclePositionUpdate,
     route_handler,
@@ -75,6 +76,7 @@ def register_routes(router, templates):
             "playback_speed": settings.get("playback_speed", 1.0),
             "speech_volume": settings.get("speech_volume", 100),
             "vad_threshold": settings.get("vad_threshold", 50),
+            "bargein_mode": settings.get("bargein_mode", "smart"),
             "elevenlabs_stability": settings.get("elevenlabs_stability", 0.5),
             "elevenlabs_similarity_boost": settings.get("elevenlabs_similarity_boost", 0.6),
             "elevenlabs_style": settings.get("elevenlabs_style", 0.25),
@@ -133,6 +135,14 @@ def register_routes(router, templates):
         from distr.core.services.settings_service import update_vad_threshold
         threshold = update_vad_threshold(data.vad_threshold)
         return JSONResponse({"success": True, "vad_threshold": threshold})
+
+    @router.post("/voice/bargein-mode")
+    @route_handler("update barge-in mode")
+    async def update_bargein_mode_route(data: BargeinModeUpdate):
+        """Update TTS-time barge-in policy, persist to DB, and emit signal."""
+        from distr.core.services.settings_service import update_bargein_mode
+        mode = update_bargein_mode(data.bargein_mode)
+        return JSONResponse({"success": True, "bargein_mode": mode})
 
     @router.post("/voice/elevenlabs-settings")
     @route_handler("update ElevenLabs voice settings")

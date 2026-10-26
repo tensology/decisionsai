@@ -174,6 +174,7 @@ class SignalManager(QObject):
     playback_speed_changed = pyqtSignal(float)
     speech_volume_changed = pyqtSignal(int)       # 0-100
     vad_threshold_changed = pyqtSignal(int)       # 0-100
+    bargein_mode_changed = pyqtSignal(str)        # 'smart' | 'always' | 'off'
     elevenlabs_voice_settings_changed = pyqtSignal(float, float, float, bool)
     audio_devices_changed = pyqtSignal(str, str)  # input_device, output_device
     audio_device_lists_updated = pyqtSignal(list, list)  # newly_added_outputs, newly_added_inputs

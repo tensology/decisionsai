@@ -40,6 +40,7 @@ class Settings(Base):
     cost_ledger_enabled = Column(Boolean, default=True)
     cost_invoice_display = Column(String, default='blended')
     development_hot_corner_pinned_project_ids = Column(Text, default='[]')
+    development_pinned_board_keys = Column(Text, nullable=True)
 
     restore_position = Column(Boolean, default=True)
     oracle_position = Column(String, default='Middle Right')
@@ -69,6 +70,12 @@ class Settings(Base):
     playback_speed = Column(Float, default=1.0)
     volume = Column(Integer, default=50)
     vad_threshold = Column(Integer, default=50)
+    # TTS-time barge-in policy: 'smart' | 'always' | 'off' (see BaseSTTService).
+    bargein_mode = Column(String, default='smart')
+    # Acoustic echo cancellation engine: 'livekit' (default) | 'pywebrtc'.
+    aec_engine = Column(String, default='livekit')
+    # Audio I/O backend: 'mediadevices' (default) | 'portaudio'.
+    audio_backend = Column(String, default='mediadevices')
 
     # AI Settings
     ai_model = Column(String)

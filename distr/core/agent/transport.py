@@ -325,9 +325,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 cls._librosa_available = False
         return cls._librosa_available
 
-    def __init__(self, py_audio, params, event_queue=None, aec_reference_buffer=None, output_device_name=None):
+    def __init__(self, py_audio, params, event_queue=None, aec_reference_buffer=None, output_device_name=None, aec_filter=None):
         super().__init__(py_audio, params)
         self.event_queue = event_queue
+        self._aec_filter = aec_filter
         self._volume = 1.0
         self._speed = 1.0
         self._output_device_name = _normalize_output_device_name(output_device_name)
@@ -1569,10 +1570,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 class HotSwappableLocalAudioTransport(LocalAudioTransport):
     """Complete local audio transport with hot-swapping capabilities."""
     
-    def __init__(self, params, event_queue=None, aec_reference_buffer=None, output_device_name=None):
+    def __init__(self, params, event_queue=None, aec_reference_buffer=None, output_device_name=None, aec_filter=None):
         super().__init__(params)
         self.event_queue = event_queue
         self._aec_ref_buf = aec_reference_buffer
+        self._aec_filter = aec_filter
         self._output_device_name = _normalize_output_device_name(output_device_name)
 
     def input(self) -> HotSwappableLocalAudioInputTransport:
@@ -1587,6 +1589,7 @@ class HotSwappableLocalAudioTransport(LocalAudioTransport):
                 event_queue=self.event_queue,
                 aec_reference_buffer=self._aec_ref_buf,
                 output_device_name=self._output_device_name,
+                aec_filter=self._aec_filter,
             )
             # Give output transport a reference to input (diagnostics / future use).
             self._output._input_transport = self.input()

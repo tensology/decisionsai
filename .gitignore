@@ -200,3 +200,6 @@ clone/
 
 *.bak-*
 /planning/
+
+# Compiled macOS audio helper (rebuilt from bin/decisions_echo_helper.swift)
+/bin/decisions_echo_helper

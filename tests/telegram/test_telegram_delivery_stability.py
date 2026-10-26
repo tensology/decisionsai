@@ -806,6 +806,25 @@ def test_relay_callback_is_recorded_as_telegram_callback(monkeypatch):
     assert manager.sent == ["accepted"]
 
 
+def test_remote_command_bypasses_pending_workflow_and_intake_handlers(monkeypatch):
+    manager = DummyTelegramMessages()
+    consumed = []
+    def must_not_consume(*args, **kwargs):
+        consumed.append(args)
+        raise AssertionError('Remote is a global control command, not a workflow answer')
+    monkeypatch.setattr('distr.core.workflow.interactions.handle_telegram_workflow_reply', must_not_consume)
+    monkeypatch.setattr('distr.core.kanban.whatsapp_intake_approval.handle_telegram_reply', must_not_consume)
+    for index, command in enumerate(('remote', ' REMOTE ', 'please remote link')):
+        manager._handle_telegram_message({'data': {
+            'message_id': f'remote-{index}', 'chat_id': 12345,
+            'chat': {'type': 'private'}, 'from': {'id': 12345}, 'text': command,
+        }})
+    assert len(manager.sent) == 3
+    assert all('https://decisions.tensology.com/api/remote/?channel=' in text for text in manager.sent)
+    assert manager.enqueued == []
+    assert consumed == []
+
+
 def test_duplicate_callback_does_not_emit_false_failure(monkeypatch):
     manager = DummyTelegramMessages()
     monkeypatch.setattr(

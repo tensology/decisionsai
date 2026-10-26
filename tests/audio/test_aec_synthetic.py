@@ -21,6 +21,7 @@ import sys
 import os
 import time
 import numpy as np
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -82,6 +83,10 @@ def _make_stt_stub(ref_buf):
     stt._echo_floor_samples = 0
     stt._bargein_consecutive_required = 10
     stt._bargein_consecutive_count = 0
+    stt._bargein_mode = 'smart'
+    stt._aec_filter = SimpleNamespace(last_metrics={}, calibrated=True)
+    stt._echo_dominance_history = deque(maxlen=15)
+    stt._recent_residual_rms = deque(maxlen=5)
     return stt
 
 
@@ -372,9 +377,18 @@ def test_legacy_grace_period_does_not_block_bargein():
 # ---------------------------------------------------------------------------
 
 def test_adaptive_echo_floor():
-    """Echo floor should adapt to measured residual levels."""
+    """Echo floor should adapt to measured residual levels (including loud echo)."""
     ref_buf = ReferenceBuffer(max_duration_secs=2.0, sample_rate=SR)
+    ref_buf.set_active(True)
     stt = _make_stt_stub(ref_buf)
+    stt._aec_ref_buf = ref_buf
+    # Echo-dominated metrics: the speaker reference explains the mic frame.
+    stt._aec_filter.last_metrics = {
+        "reference_correlation": 0.9,
+        "reference_rms": 0.10,
+        "input_rms": 0.05,
+        "residual_rms": 0.02,
+    }
 
     # Feed low echo residual samples — floor should decrease
     for _ in range(50):
@@ -388,11 +402,24 @@ def test_adaptive_echo_floor():
 
     assert stt._echo_floor_rms > 0.035, f"Floor should increase, got {stt._echo_floor_rms:.4f}"
 
-    # Speech-level RMS (>0.06) should NOT contaminate the floor
+    # Loud echo (>0.06) is learnable now — the old 0.06 cap left the floor
+    # blind to it, which is what let echo register as a false barge-in.
+    for _ in range(50):
+        stt._update_echo_floor(0.12)
+
+    assert stt._echo_floor_rms > 0.06, f"Loud echo should raise floor, got {stt._echo_floor_rms:.4f}"
+
+    # Double-talk (user speaking over TTS) must NOT contaminate the floor
     floor_before = stt._echo_floor_rms
+    stt._aec_filter.last_metrics = {
+        "reference_correlation": 0.2,
+        "reference_rms": 0.05,
+        "input_rms": 0.10,
+        "residual_rms": 0.10,
+    }
     for _ in range(20):
-        stt._update_echo_floor(0.10)  # speech level
-    assert abs(stt._echo_floor_rms - floor_before) < 0.001, "Speech should not affect echo floor"
+        stt._update_echo_floor(0.10)
+    assert abs(stt._echo_floor_rms - floor_before) < 0.001, "User speech should not affect echo floor"
 
     # Threshold should be floor * multiplier, clamped to min
     threshold = stt._get_adaptive_threshold()

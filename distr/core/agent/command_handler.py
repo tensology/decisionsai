@@ -499,6 +499,25 @@ def _cmd_set_vad_threshold(session, params):
             session.logger.warning(f"Failed to update transport base confidence: {e}")
 
 
+def _cmd_set_bargein_mode(session, params):
+    """Set the TTS-time barge-in policy: 'smart' | 'always' | 'off'."""
+    mode = str(params.get('mode', 'smart') or 'smart').strip().lower()
+    if mode not in ('smart', 'always', 'off'):
+        session.logger.warning("Ignoring invalid barge-in mode: %r", mode)
+        return
+    try:
+        session.settings['bargein_mode'] = mode
+    except Exception:
+        pass
+    stt = getattr(session, 'stt_service', None)
+    if stt is not None and hasattr(stt, 'set_bargein_mode'):
+        try:
+            stt.set_bargein_mode(mode)
+        except Exception as e:
+            session.logger.warning(f"Failed to set STT barge-in mode: {e}")
+    session.logger.debug(f"Barge-in mode set to {mode}")
+
+
 # ---------------------------------------------------------------------------
 # Mode commands
 # ---------------------------------------------------------------------------
@@ -1865,6 +1884,7 @@ _COMMAND_MAP = {
     'set_speech_volume': _cmd_set_speech_volume,
     'set_elevenlabs_voice_settings': _cmd_set_elevenlabs_voice_settings,
     'set_vad_threshold': _cmd_set_vad_threshold,
+    'set_bargein_mode': _cmd_set_bargein_mode,
     # Mode
     'set_listening': _cmd_set_listening,
     'set_hands_free': _cmd_set_hands_free,

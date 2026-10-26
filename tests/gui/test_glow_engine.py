@@ -231,3 +231,18 @@ class TestGlowEngineApply:
         engine.apply(resp)
         assert engine._color == (255, 193, 7)
         assert engine._speed == 1000
+
+    def test_reapplying_same_glow_does_not_restart_animation(self, engine):
+        """An ambient indicator re-applied on every hook change keeps its phase."""
+        resp = FakeEventResponse(
+            glow=True,
+            glow_color=(0, 170, 255),
+            glow_speed=875,
+            glow_style="breathing",
+        )
+        engine.apply(resp)
+        engine._elapsed = 250
+        engine._timer.start.reset_mock()
+        engine.apply(resp)
+        engine._timer.start.assert_not_called()
+        assert engine._elapsed == 250

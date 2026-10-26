@@ -107,6 +107,12 @@ class ReferenceBuffer:
         with self._lock:
             return self._active
 
+    @property
+    def write_pos(self) -> int:
+        """Absolute number of samples written (monotonic)."""
+        with self._lock:
+            return self._write_pos
+
     def seconds_since_activation(self) -> float:
         """Return seconds elapsed since the last inactive→active transition.
 
@@ -149,6 +155,7 @@ class WebRTCAECFilter(BaseAudioFilter):
         auto_gain_control: bool = False,
         ns_level: int = 1,
         persist_delay_callback=None,
+        auto_calibrate: bool = True,
     ):
         self._ref_buf = reference_buffer
         self._output_sample_rate = int(output_sample_rate)
@@ -162,6 +169,22 @@ class WebRTCAECFilter(BaseAudioFilter):
         self._processor = None
         self._enabled = True
         self._last_metrics: dict[str, float | int] = {}
+
+        # Per-response AEC health (diagnostic only; no behaviour change).
+        # ERLE samples are collected while TTS plays and summarised once the
+        # reference buffer goes inactive (end of response / interruption).
+        self._was_active = False
+        self._session_erle: list[float] = []
+
+        # Per-device speaker→mic delay estimation. The delay is not persisted
+        # across app runs on purpose: it is re-measured on first TTS playback
+        # for whatever output device is active, so a device switch does not
+        # reuse the previous device's acoustic path.
+        self._auto_calibrate = bool(auto_calibrate)
+        self._estimated_delay_ms: float | None = None
+        self._delay_observations: list[float] = []
+        self._calibration_attempts = 0
+        self._calibrated = not bool(auto_calibrate)
 
     @staticmethod
     def _clamp_delay_ms(delay_ms: float) -> float:
@@ -205,6 +228,9 @@ class WebRTCAECFilter(BaseAudioFilter):
     def set_reference_delay_ms(self, delay_ms: float, *, persist: bool = False) -> None:
         """Update ReferenceBuffer pull delay and AudioProcessor.stream_delay_ms."""
         self._reference_delay_ms = self._clamp_delay_ms(delay_ms)
+        # An explicit set is authoritative — stop auto-calibration from overriding it.
+        self._estimated_delay_ms = self._reference_delay_ms
+        self._calibrated = True
         if self._processor is not None:
             self._processor.stream_delay_ms = int(round(self._reference_delay_ms))
         if persist and self._persist_delay_callback is not None:
@@ -216,6 +242,15 @@ class WebRTCAECFilter(BaseAudioFilter):
     @property
     def reference_delay_ms(self) -> float:
         return self._reference_delay_ms
+
+    @property
+    def calibrated(self) -> bool:
+        """True once the speaker→mic delay has been measured (or given up on).
+
+        Turn-taking suppresses barge-in until this is True so an unmeasured
+        device cannot self-interrupt the agent's own TTS.
+        """
+        return bool(self._calibrated)
 
     @property
     def stream_delay_ms(self) -> int:
@@ -236,7 +271,11 @@ class WebRTCAECFilter(BaseAudioFilter):
 
     async def filter(self, audio: bytes) -> bytes:
         """Cancel speaker echo from mic audio via WebRTC AEC3."""
-        if not self._enabled or not self._ref_buf.is_active:
+        active = self._ref_buf.is_active
+        if self._was_active and not active:
+            self._log_session_summary()
+        self._was_active = active
+        if not self._enabled or not active:
             return audio
 
         if self._processor is None:
@@ -253,6 +292,13 @@ class WebRTCAECFilter(BaseAudioFilter):
             return audio
         # AudioProcessor requires a writable contiguous array.
         near = np.ascontiguousarray(near)
+        near_f32 = near.astype(np.float32) / 32768.0
+
+        # Measure the speaker→mic delay for this device on first playback so
+        # the reference aligns with the acoustic echo. A wrong delay is the
+        # main reason AEC leaves speech-level residual that self-interrupts.
+        if self._auto_calibrate and not self._calibrated:
+            self._auto_calibrate_delay(near_f32)
 
         delay_ms = self._reference_delay_ms
         delay_samples = int(round(delay_ms * self._output_sample_rate / 1000.0))
@@ -270,6 +316,10 @@ class WebRTCAECFilter(BaseAudioFilter):
 
         far = np.clip(np.round(ref * 32767.0), -32768, 32767).astype(np.int16)
         far = self._match_length(far, num_samples)
+
+        # How much of the microphone frame the (aligned) speaker reference
+        # explains. Used downstream to tell agent echo from real user speech.
+        reference_correlation = self._correlation(near_f32, ref)
 
         # Keep processor stream_delay_ms aligned with the calibrated setting.
         # Far is already delay-aligned via ReferenceBuffer.pull; AEC3 still
@@ -309,9 +359,114 @@ class WebRTCAECFilter(BaseAudioFilter):
             "reference_delay_ms": delay_ms,
             "stream_delay_ms": desired_delay,
             "speech_probability": speech_prob,
-            "reference_correlation": 0.0,
+            "reference_correlation": float(reference_correlation),
         }
+        if ref_rms > 0.0:
+            self._session_erle.append(float(erle_db))
         return cleaned.tobytes()
+
+    def _log_session_summary(self) -> None:
+        """Log one line of AEC health per TTS response (grep: AEC summary).
+
+        Distinguishes the two failure modes: an AEC that cannot cancel echo
+        (low ERLE) vs a turn-taking gate firing on something other than echo
+        (healthy ERLE but VAD starts). No behaviour change.
+        """
+        samples = self._session_erle
+        self._session_erle = []
+        if not samples:
+            return
+        arr = np.asarray(samples, dtype=np.float32)
+        logger.info(
+            "WebRTC AEC summary: frames=%d erle_median=%.1f erle_p10=%.1f erle_min=%.1f "
+            "calibrated=%s delay_ms=%.1f",
+            int(arr.size),
+            float(np.median(arr)),
+            float(np.percentile(arr, 10)),
+            float(arr.min()),
+            self._calibrated,
+            self._reference_delay_ms,
+        )
+
+    def _auto_calibrate_delay(self, near_f32: np.ndarray) -> None:
+        """Sweep candidate delays and adopt the best-aligned reference.
+
+        Runs while TTS is playing (the reference buffer is populated). The
+        median of a few confident observations is taken so one noisy frame
+        cannot mis-tune the delay. If nothing converges after a bounded number
+        of attempts the current delay is kept and calibration is closed.
+        """
+        self._calibration_attempts += 1
+        measured, correlation = self._find_reference_alignment(near_f32)
+        if measured is not None:
+            self._delay_observations.append(measured)
+            if len(self._delay_observations) >= 3:
+                self._estimated_delay_ms = float(np.median(self._delay_observations[-5:]))
+                self._reference_delay_ms = self._clamp_delay_ms(self._estimated_delay_ms)
+                if self._processor is not None:
+                    self._processor.stream_delay_ms = int(round(self._reference_delay_ms))
+                self._calibrated = True
+                logger.info(
+                    "WebRTC AEC: auto-calibrated reference delay to %.1fms (corr=%.2f, samples=%d)",
+                    self._reference_delay_ms,
+                    correlation,
+                    len(self._delay_observations),
+                )
+        elif self._calibration_attempts > 80:
+            # No confident alignment (e.g. headphones, quiet output). Stop
+            # trying and fall back to the configured delay.
+            self._calibrated = True
+            logger.info(
+                "WebRTC AEC: calibration gave up after %d attempts; using %.1fms",
+                self._calibration_attempts,
+                self._reference_delay_ms,
+            )
+
+    def _find_reference_alignment(self, near_f32: np.ndarray) -> tuple[float | None, float]:
+        """Find the speaker delay (0–250 ms) that best explains the mic frame."""
+        if near_f32.size < 160 or float(np.sqrt(np.mean(near_f32 * near_f32))) < 0.002:
+            return None, 0.0
+        if self._ref_buf.seconds_since_activation() < 0.25:
+            return None, 0.0
+
+        ref_len = int(len(near_f32) * self._output_sample_rate / self._input_sample_rate)
+        mic_centered = near_f32 - np.mean(near_f32)
+        mic_norm = float(np.linalg.norm(mic_centered))
+        if mic_norm < 1e-5 or ref_len <= 0:
+            return None, 0.0
+
+        best_corr = 0.0
+        best_delay: float | None = None
+        for delay_ms in range(0, 251, 10):
+            raw = self._ref_buf.pull(
+                ref_len,
+                round(delay_ms * self._output_sample_rate / 1000.0),
+            )
+            ref = self._resample(raw, len(near_f32))
+            ref_centered = ref - np.mean(ref)
+            ref_norm = float(np.linalg.norm(ref_centered))
+            if ref_norm < 1e-5:
+                continue
+            corr = abs(float(np.dot(mic_centered, ref_centered) / (mic_norm * ref_norm)))
+            if corr > best_corr:
+                best_corr = corr
+                best_delay = delay_ms
+        if best_delay is None or best_corr < 0.35:
+            return None, best_corr
+        return float(best_delay), best_corr
+
+    @staticmethod
+    def _correlation(a: np.ndarray, b: np.ndarray) -> float:
+        """Normalized absolute correlation between two equal-length signals."""
+        if a.size == 0 or b.size == 0:
+            return 0.0
+        n = min(a.size, b.size)
+        a_c = a[:n] - np.mean(a[:n])
+        b_c = b[:n] - np.mean(b[:n])
+        denom = float(np.linalg.norm(a_c) * np.linalg.norm(b_c))
+        if denom < 1e-8:
+            return 0.0
+        return abs(float(np.dot(a_c, b_c))) / denom
 
     @staticmethod
     def _match_length(data: np.ndarray, target: int) -> np.ndarray:

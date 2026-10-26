@@ -627,6 +627,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             )
         if response is None:
             logger.info("[ORACLE] No Event_Response for hook '%s' — keeping current state", new_hook)
+            self._apply_ambient_hands_free_glow()
             return
 
         logger.info("[ORACLE] Executing hook '%s' (prev='%s') → animation=%s, glow=%s",
@@ -659,8 +660,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if anim_path != current_anim:
             self._play_animation(response)
 
-        # 3. Apply glow via GlowEngine
-        self._glow_engine.apply(response)
+        # 3. Apply glow via GlowEngine. When hands-free is on and this hook has
+        # no glow of its own (thinking / tts_response), keep the continuous-mode
+        # glow running instead of stopping it — otherwise every TTS start would
+        # stop and restart the breathing animation.
+        self._glow_engine.apply(self._effective_glow_response(response))
+        self._apply_ambient_hands_free_glow()
 
         # 4. Show player window (hiding is handled by the event queue on TTS completion)
         if response.show_player:
@@ -988,6 +993,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.save_hands_free_state()
         # Fire the hands-free hook — oracle skins will glow, avatar skins won't (glow: false in skin.json)
         self._event_dispatcher.fire_hook("hands_free_listening", trigger="oracle:enable_hands_free")
+        # If the agent is mid-think, the mode hook is hidden; light the ambient
+        # indicator anyway so the mode is visible immediately.
+        ambient = getattr(self, "_apply_ambient_hands_free_glow", None)
+        if callable(ambient):
+            ambient()
 
     def disable_hands_free(
         self,
@@ -1009,6 +1019,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if self._event_dispatcher.get_current_hook() == "hands_free_listening":
             logging.warning("[ORACLE] hands-free hook still active after disable - forcing idle")
             self._event_dispatcher.force_idle("hands_free_disable_safety")
+        # A hidden-mode change emits no hook transition, so clear/replace the
+        # ambient glow explicitly. Otherwise a blue glow could stick while the
+        # newly visible hook (e.g. thinking) has no glow of its own.
+        refresh_glow = getattr(self, "_refresh_visible_glow", None)
+        if callable(refresh_glow):
+            refresh_glow()
         if clear_pending_restore:
             if getattr(self, '_hands_free_before_dictation', False):
                 logging.info("[ORACLE] Clearing pending hands-free restore after explicit manual disable")
@@ -1371,15 +1387,17 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         # Glow ring — only for oracle type skins (stroke only; leave brush clear so we
         # don't re-fill with the last OracleRenderer brush).
+        # Kept deliberately thin: the rings are drawn on the border rather than
+        # ballooning outward, so the glow reads as a slim rim, not a halo.
         is_oracle = self._skin_config and self._skin_config.type == "oracle"
         if is_oracle and self._shadow_color.alpha() > 0:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             base_color = QtGui.QColor(self._shadow_color)
-            glow_rect = QtCore.QRectF(content_rect).adjusted(-self.stroke_width * 0.55,
-                                                             -self.stroke_width * 0.55,
-                                                             self.stroke_width * 0.55,
-                                                             self.stroke_width * 0.55)
-            for width_factor, alpha_factor in ((3.2, 0.20), (2.1, 0.38), (1.1, 0.78)):
+            glow_rect = QtCore.QRectF(content_rect).adjusted(-self.stroke_width * 0.3,
+                                                             -self.stroke_width * 0.3,
+                                                             self.stroke_width * 0.3,
+                                                             self.stroke_width * 0.3)
+            for width_factor, alpha_factor in ((1.8, 0.16), (1.1, 0.30), (0.6, 0.60)):
                 color = QtGui.QColor(base_color)
                 color.setAlpha(max(0, min(255, int(base_color.alpha() * alpha_factor))))
                 glow_pen = QtGui.QPen(
@@ -2342,11 +2360,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             if unified_server and unified_server.is_ready():
                 url = f"{unified_server.get_url()}{path}" if path.startswith("/") else f"{unified_server.get_url()}/{path}"
                 webbrowser.open(url)
-                logger.info(f"Opened {url}")
+                logger.info("Opened unified web page: %s", path.split('#', 1)[0].split('?', 1)[0])
             else:
                 if _retry_count < _max_retries:
                     if _retry_count == 0:
-                        logger.info("Unified server not ready yet; retrying URL open: %s", path)
+                        logger.info("Unified server not ready yet; retrying local page open")
                     QTimer.singleShot(
                         500,
                         lambda: self._open_web_url(path, _retry_count=_retry_count + 1, _max_retries=_max_retries),
@@ -2455,6 +2473,69 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Track audible speech without reopening a hidden Oracle."""
         self._hidden_tts_active = active
         self._sync_hidden_voice_indicator()
+
+    def _effective_glow_response(self, response):
+        """Pick which glow to apply for the visible hook.
+
+        The hands-free glow is a mode indicator, so a non-glowing hook
+        (thinking, tts_response, talking) must not stop it — that caused the
+        breathing animation to restart on every TTS start. A hook with its own
+        glow (ptt_active, dictation, file_drop) still wins.
+        """
+        if response is not None and response.glow:
+            return response
+        if not bool(getattr(self, "is_hands_free", False)):
+            return response
+        get_response = getattr(self._event_dispatcher, "get_event_response", None)
+        if callable(get_response):
+            ambient = get_response("hands_free_listening")
+            if ambient is not None and ambient.glow:
+                return ambient
+        return response
+
+    def _apply_ambient_hands_free_glow(self) -> None:
+        """Keep the continuous-mode indicator glowing whenever hands-free is on.
+
+        The hands-free glow is a *mode* indicator, not a speech indicator. A
+        hook whose response has glow disabled (thinking, tts_response, talking)
+        must not switch it off. Only a hook that carries its own glow
+        (ptt_active, dictation, file_drop_success, ...) may take over while it
+        is visible; the continuous-mode glow resumes when it ends.
+        """
+        glow_engine = getattr(self, "_glow_engine", None)
+        get_response = getattr(self._event_dispatcher, "get_event_response", None)
+        if glow_engine is None or not callable(get_response):
+            return
+        if not bool(getattr(self, "is_hands_free", False)):
+            return
+        hands_free = get_response("hands_free_listening")
+        if hands_free is None or not hands_free.glow:
+            return
+        visible = self._event_dispatcher.get_current_hook()
+        if visible != "hands_free_listening":
+            visible_response = get_response(visible)
+            if visible_response is not None and visible_response.glow:
+                # Another indicator (PTT, dictation, file drop) owns the glow now.
+                return
+        glow_engine.apply(hands_free)
+
+    def _refresh_visible_glow(self) -> None:
+        """Re-apply the visible hook's glow, or clear it when the hook has none.
+
+        Called after a hands-free mode change so a glow left by the previous
+        mode cannot stick when the newly visible hook has no glow of its own.
+        """
+        glow_engine = getattr(self, "_glow_engine", None)
+        get_response = getattr(self._event_dispatcher, "get_event_response", None)
+        if glow_engine is None or not callable(get_response):
+            return
+        current = self._event_dispatcher.get_current_hook()
+        response = get_response(current)
+        if response is not None and response.glow:
+            glow_engine.apply(response)
+            self._apply_ambient_hands_free_glow()
+        else:
+            glow_engine.stop()
 
     def _sync_hidden_voice_indicator(self, hook: str | None = None) -> None:
         """Show voice feedback beside the pointer only while the Oracle is hidden."""

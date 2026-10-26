@@ -136,6 +136,17 @@ class GlowEngine(QObject):
         color = response.glow_color
         speed = response.glow_speed
 
+        # Already animating this exact glow -> keep its phase. Re-applying an
+        # ambient indicator (e.g. the continuous-mode glow on every hook
+        # change) must not restart the breathing animation and flicker.
+        if (
+            self._active
+            and self._style == style
+            and tuple(self._color) == tuple(color)
+            and self._speed == speed
+        ):
+            return
+
         match style:
             case "breathing":
                 self._start_breathing(color, speed)

@@ -758,6 +758,13 @@ class AgentSession:
                 )
             except Exception as e:
                 self.logger.warning("Failed to initialize STT VAD threshold mapping: %s", e)
+        if hasattr(self.stt_service, 'set_bargein_mode'):
+            try:
+                self.stt_service.set_bargein_mode(
+                    self.settings.get('bargein_mode', 'smart')
+                )
+            except Exception as e:
+                self.logger.warning("Failed to initialize STT barge-in mode: %s", e)
 
         self.logger.info(
             "✅ STT service swap complete - VAD enabled, hands_free=%s, ptt_active=%s, dictating=%s",
@@ -1573,6 +1580,33 @@ class AgentSession:
             self.logger.warning("Could not resolve Kokoro custom voice: %s", e)
         return ref_path, base_voice
 
+    def _resolve_aec_engine(self) -> str:
+        """Pick the AEC engine: 'livekit' (APM) or 'pywebrtc' (ring buffer).
+
+        Env var DECISIONS_AEC_ENGINE wins, then the 'aec_engine' setting.
+        """
+        import os
+
+        value = os.environ.get("DECISIONS_AEC_ENGINE")
+        if not value:
+            try:
+                value = self.settings.get("aec_engine")
+            except Exception:
+                value = None
+        return str(value or "livekit").strip().lower()
+
+    def _resolve_audio_backend(self) -> str:
+        """Pick the audio I/O backend: 'portaudio' (default, stable) or
+        'mediadevices' (rtc.MediaDevices APM).
+
+        Only the DECISIONS_AUDIO_BACKEND env var enables MediaDevices. The
+        MediaDevices transport is unstable here (native SIGABRT on dictation),
+        so it must never be selected implicitly from stored settings.
+        """
+        import os
+
+        return str(os.environ.get("DECISIONS_AUDIO_BACKEND") or "portaudio").strip().lower()
+
     def _create_pipeline(self):
         """Create the Pipecat pipeline"""
         # Clean up old pipeline if it exists
@@ -1714,33 +1748,78 @@ class AgentSession:
                 self.logger.debug("Could not persist aec_reference_delay_ms: %s", exc)
             audio_config['aec_reference_delay_ms'] = float(delay_ms)
 
-        aec_filter = WebRTCAECFilter(
-            reference_buffer=aec_ref_buf,
-            output_sample_rate=audio_config['output_sample_rate'],
-            reference_delay_ms=aec_delay_ms,
-            persist_delay_callback=_persist_aec_delay,
-        )
-        self.logger.info(
-            "AEC: WebRTCAECFilter ready (delay_ms=%.1f, output_sr=%s)",
-            aec_delay_ms,
-            audio_config['output_sample_rate'],
-        )
-        
-        self.transport = HotSwappableLocalAudioTransport(
-            LocalAudioTransportParams(
-                sample_rate=audio_config['input_sample_rate'],
-                audio_out_sample_rate=audio_config['output_sample_rate'],  # Use audio_out_sample_rate (correct attribute name)
-                audio_in_enabled=True,
-                audio_out_enabled=True,
+        audio_backend = self._resolve_audio_backend()
+        aec_filter = None
+        if audio_backend == 'mediadevices':
+            from distr.core.agent.mediadevices_transport import MediaDevicesAudioTransport
+
+            self.transport = MediaDevicesAudioTransport(
+                input_device=input_device_idx,
+                output_device=output_device_idx,
+                input_sample_rate=audio_config['input_sample_rate'],
+                output_sample_rate=audio_config['output_sample_rate'],
                 vad_analyzer=self.vad_analyzer,
-                input_device_index=input_device_idx,
-                output_device_index=output_device_idx,
-                audio_in_filter=aec_filter,
-            ),
-            event_queue=self.event_queue,
-            aec_reference_buffer=aec_ref_buf,
-            output_device_name=audio_config.get('output_device') or 'System Default',
-        )
+                event_queue=self.event_queue,
+                aec_reference_buffer=aec_ref_buf,
+            )
+            self.logger.info(
+                "Audio backend: mediadevices (rtc.MediaDevices APM, in_sr=%s out_sr=%s, aec=True)",
+                audio_config['input_sample_rate'],
+                audio_config['output_sample_rate'],
+            )
+        else:
+            aec_engine = self._resolve_aec_engine()
+            if aec_engine == 'livekit':
+                try:
+                    from distr.core.audio.livekit_aec import LiveKitAECFilter
+
+                    aec_filter = LiveKitAECFilter(
+                        input_sample_rate=audio_config['input_sample_rate'],
+                        output_sample_rate=audio_config['output_sample_rate'],
+                        reference_delay_ms=aec_delay_ms,
+                        reference_buffer=aec_ref_buf,
+                        persist_delay_callback=_persist_aec_delay,
+                    )
+                    self.logger.info(
+                        "AEC engine: livekit (rtc.AudioProcessingModule, delay_ms=%.1f, output_sr=%s)",
+                        aec_delay_ms,
+                        audio_config['output_sample_rate'],
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "LiveKit AEC engine unavailable (%s) — falling back to the WebRTC ring-buffer engine",
+                        exc,
+                    )
+                    aec_filter = None
+            if aec_filter is None:
+                aec_filter = WebRTCAECFilter(
+                    reference_buffer=aec_ref_buf,
+                    output_sample_rate=audio_config['output_sample_rate'],
+                    reference_delay_ms=aec_delay_ms,
+                    persist_delay_callback=_persist_aec_delay,
+                )
+                self.logger.info(
+                    "AEC engine: pywebrtc (delay_ms=%.1f, output_sr=%s)",
+                    aec_delay_ms,
+                    audio_config['output_sample_rate'],
+                )
+
+            self.transport = HotSwappableLocalAudioTransport(
+                LocalAudioTransportParams(
+                    sample_rate=audio_config['input_sample_rate'],
+                    audio_out_sample_rate=audio_config['output_sample_rate'],  # Use audio_out_sample_rate (correct attribute name)
+                    audio_in_enabled=True,
+                    audio_out_enabled=True,
+                    vad_analyzer=self.vad_analyzer,
+                    input_device_index=input_device_idx,
+                    output_device_index=output_device_idx,
+                    audio_in_filter=aec_filter,
+                ),
+                event_queue=self.event_queue,
+                aec_reference_buffer=aec_ref_buf,
+                output_device_name=audio_config.get('output_device') or 'System Default',
+                aec_filter=aec_filter,
+            )
         
         # Give the STT service access to the AEC reference buffer so it knows
         # when TTS is playing (continuous re-interrupt / metrics).

@@ -80,6 +80,23 @@ class BaseSTTService(STTService):
         _on_speaking_stopped(frame, direction)   - service-specific teardown
     """
 
+    # Barge-in policy while TTS is playing:
+    #   'smart'  (default) - suppress VAD onsets explained by speaker echo,
+    #                        allow real double-talk to interrupt.
+    #   'always'           - legacy energy-only behaviour (more sensitive,
+    #                        more prone to self-interruption).
+    #   'off'              - never interrupt the agent's own TTS.
+    _bargein_mode: str = 'smart'
+
+    # Smart mode: consecutive user-classified frames required before a
+    # hands-free barge-in is confirmed. A single echo/transient frame cannot
+    # cut the agent's own speech. 3 frames ≈ 60 ms of sustained speech.
+    _SMART_BARGEIN_CONSECUTIVE_FRAMES: int = 2
+
+    # Smart mode: minimum current-frame mic RMS to treat as a possible user
+    # barge-in. Below this the frame is background noise, never speech.
+    _SMART_BARGEIN_MIN_INPUT_RMS: float = 0.04
+
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
@@ -257,6 +274,21 @@ class BaseSTTService(STTService):
             self._echo_floor_min,
             self._bargein_consecutive_required,
         )
+
+    def set_bargein_mode(self, mode: str):
+        """Set the TTS-time barge-in policy: 'smart' | 'always' | 'off'.
+
+        'smart' keeps barge-in for the user while suppressing the agent's own
+        echo; 'always' is the legacy energy-only gate; 'off' never interrupts.
+        """
+        mode = str(mode or '').strip().lower()
+        if mode not in ('smart', 'always', 'off'):
+            logger.warning(
+                "STT: invalid barge-in mode %r; keeping %s", mode, self._bargein_mode
+            )
+            return
+        self._bargein_mode = mode
+        logger.info("STT: barge-in mode set to %s", mode)
 
     # ------------------------------------------------------------------
     # PTT activation / deactivation
@@ -485,6 +517,9 @@ class BaseSTTService(STTService):
             output._accept_bargein_interrupt = True
         if tts is not None:
             tts._accept_bargein_interrupt = True
+            mark = getattr(tts, "mark_bargein", None)
+            if callable(mark):
+                mark()
         try:
             await self.push_frame(InterruptionFrame(), direction)
         finally:
@@ -507,6 +542,9 @@ class BaseSTTService(STTService):
             output._accept_bargein_interrupt = True
         if tts is not None:
             tts._accept_bargein_interrupt = True
+            mark = getattr(tts, "mark_bargein", None)
+            if callable(mark):
+                mark()
         try:
             await self.push_interruption_task_frame_and_wait()
         finally:
@@ -710,19 +748,17 @@ class BaseSTTService(STTService):
     def _update_echo_floor(self, chunk_rms: float):
         """Update the echo floor estimate with a new mic RMS sample.
 
-        Called on every audio frame during TTS playback (after the grace
-        period). Uses an exponential moving average so the floor adapts
-        slowly — transient spikes (user coughing, brief noise) don't
-        inflate it, but sustained echo level changes are tracked.
+        Uses an exponential moving average so the floor adapts slowly.
 
-        Only updates when the chunk looks like echo (below a reasonable
-        ceiling). If the user is actively speaking over TTS, those high-RMS
-        frames shouldn't pull the echo floor up.
+        Only frames the speaker reference explains are learned from, so user
+        double-talk cannot inflate the floor. There is no upper RMS clamp:
+        loud laptop-speaker echo is exactly the level the floor must track.
+        The old 0.06 ceiling left the floor blind to real echo, which is why
+        a fixed threshold kept letting echo through as a false barge-in.
         """
-        # Don't let speech-level RMS contaminate the echo floor estimate.
-        # Echo residual after AEC is typically 0.01-0.05. Anything above
-        # 0.06 is almost certainly speech or a loud transient.
-        if chunk_rms > 0.06:
+        if not self._is_tts_playing():
+            return
+        if not self._is_reference_dominated():
             return
 
         self._echo_floor_samples += 1
@@ -775,6 +811,83 @@ class BaseSTTService(STTService):
             return False
         return (sum(hist) / len(hist)) >= self._get_adaptive_threshold()
 
+    def _trace_bargein(self, decision: str, reason: str, *, level: str = "info") -> None:
+        """One-line decision trace for hands-free barge-in (grep: bargein-trace).
+
+        Records exactly what the gate saw, so a self-cut can be diagnosed from
+        the log without guesswork.
+        """
+        try:
+            aec = getattr(self, '_aec_filter', None)
+            metrics = getattr(aec, 'last_metrics', {}) or {}
+            hist = list(getattr(self, '_recent_residual_rms', ()))
+            resid_mean = (sum(hist) / len(hist)) if hist else 0.0
+            log = logger.debug if level == "debug" else logger.info
+            log(
+                "STT bargein-trace: decision=%s reason=%s mode=%s calibrated=%s "
+                "corr=%.2f ref=%.3f in=%.3f res=%.3f resid_mean=%.3f thr=%.3f "
+                "floor=%.3f dominated=%s streak=%d",
+                decision,
+                reason,
+                getattr(self, '_bargein_mode', '?'),
+                bool(getattr(aec, 'calibrated', True)),
+                float(metrics.get('reference_correlation', 0.0) or 0.0),
+                float(metrics.get('reference_rms', 0.0) or 0.0),
+                float(metrics.get('input_rms', 0.0) or 0.0),
+                float(metrics.get('residual_rms', 0.0) or 0.0),
+                resid_mean,
+                self._get_adaptive_threshold(),
+                float(getattr(self, '_echo_floor_rms', 0.0) or 0.0),
+                self._is_reference_dominated(),
+                int(getattr(self, '_bargein_consecutive_count', 0)),
+            )
+        except Exception:
+            pass
+
+    def _should_hold_bargein(self) -> bool:
+        """True when a VAD speech onset during TTS must NOT interrupt the agent.
+
+        The VAD cannot tell the user's voice from the agent's own speaker echo;
+        this is the discriminator that can. It is deliberately conservative:
+        when unsure we hold (miss a quiet barge-in) rather than fire (cut the
+        agent off mid-sentence).
+        """
+        mode = getattr(self, '_bargein_mode', 'smart')
+        if mode == 'off':
+            return True
+        if mode == 'smart':
+            aec = getattr(self, '_aec_filter', None)
+            if aec is None:
+                # External AEC (e.g. rtc.MediaDevices APM) already cleans the
+                # mic, so the VAD is authoritative — no in-process
+                # discriminator is available or needed.
+                return False
+            # Until the per-device delay is measured the reference is
+            # misaligned, so correlation cannot be trusted — hold instead of
+            # risking a self-interruption on the first response.
+            if not bool(getattr(aec, 'calibrated', True)):
+                return True
+            metrics = getattr(aec, 'last_metrics', {}) or {}
+            in_rms = float(metrics.get('input_rms', 0.0) or 0.0)
+            # A quiet frame is never a barge-in. The old floor tie-breaker used
+            # a rolling residual average that stayed high after the mic went
+            # quiet, which confirmed cuts on in_rms≈0.02 frames.
+            if in_rms < self._SMART_BARGEIN_MIN_INPUT_RMS:
+                return True
+            # The frame correlates with the speaker reference -> it is the
+            # agent's own echo. Never override this with energy; the previous
+            # floor tie-breaker did, and confirmed barge-ins on dominated frames.
+            if self._is_reference_dominated():
+                # Echo-like frame. Only a speech-level mic that also clears the
+                # learned echo floor counts as the user. The live log showed
+                # confirms at in_rms≈0.02 (near silence) where the rolling
+                # residual mean was still high; the in_rms guard stops those.
+                return not (in_rms >= self._SMART_BARGEIN_MIN_INPUT_RMS and self._residual_clears_echo_floor())
+            # Speech-level and not explained by the speaker -> the user.
+            return False
+        # 'always' = legacy energy-only behaviour
+        return not self._residual_clears_echo_floor()
+
     async def _check_pending_bargein(self, audio_bytes, direction):
         """Complete a deferred barge-in if a SpeakingStartedFrame was held.
 
@@ -799,10 +912,26 @@ class BaseSTTService(STTService):
             self._bargein_consecutive_count = 0
             return
 
-        if self._is_hands_free and not self._is_dictating and not self._residual_clears_echo_floor():
-            # Keep the VAD start pending until real speech clears the echo floor
-            # or SpeakingStoppedFrame cancels it.
-            return
+        if self._is_hands_free and not self._is_dictating:
+            mode = getattr(self, '_bargein_mode', 'smart')
+            if mode == 'off':
+                # Policy forbids interrupting the agent's own TTS.
+                return
+            if mode == 'smart':
+                if self._should_hold_bargein():
+                    self._bargein_consecutive_count = 0
+                    self._trace_bargein("hold", "echo_or_unknown")
+                    return
+                # Frame looks like the user — require a sustained run so a
+                # single echo/transient frame cannot cut the agent.
+                self._bargein_consecutive_count += 1
+                if self._bargein_consecutive_count < self._SMART_BARGEIN_CONSECUTIVE_FRAMES:
+                    self._trace_bargein("wait", f"streak={self._bargein_consecutive_count}", level="debug")
+                    return
+            elif not self._residual_clears_echo_floor():
+                # 'always' (legacy): energy-only gate.
+                self._bargein_consecutive_count = 0
+                return
 
         if not (self._is_hands_free or self._is_dictating):
             self._pending_bargein_check = False
@@ -811,7 +940,8 @@ class BaseSTTService(STTService):
         self._pending_bargein_check = False
         self._bargein_consecutive_count = 0
         mode = "dictation" if self._is_dictating else "hands-free"
-        logger.info("STT: Deferred barge-in confirmed (%s) — immediate (no energy gate)", mode)
+        self._trace_bargein("confirm", mode)
+        logger.info("STT: Deferred barge-in confirmed (%s) — sustained user speech", mode)
 
         self._user_speaking = True
         self._audio_buffer = []
@@ -823,12 +953,6 @@ class BaseSTTService(STTService):
 
         if self._cancel_welcome_callback:
             self._cancel_welcome_callback()
-
-        if self._is_hands_free and self.event_queue:
-            try:
-                self.event_queue.put(("stt_hands_free_glow_on", {}), block=False)
-            except Exception:
-                pass
 
         await self.push_frame(synthetic_frame, direction)
 
@@ -869,6 +993,10 @@ class BaseSTTService(STTService):
             self._tts_interrupted = False
             return
 
+        if getattr(self, '_bargein_mode', 'smart') == 'off':
+            # Policy forbids interrupting the agent's own TTS.
+            return
+
         if self._tts_interrupted or self._ptt_active:
             return
 
@@ -900,17 +1028,13 @@ class BaseSTTService(STTService):
         if not (self._is_hands_free or self._is_dictating):
             return True  # neither mode active — swallow
 
-        # Hands-free only: while TTS plays, a VAD start whose post-AEC energy
-        # does not clear the adaptive echo floor is treated as echo. Defer it;
-        # _check_pending_bargein confirms once sustained energy clears.
-        if self._hands_free_echo_gate_active() and not self._residual_clears_echo_floor():
+        # Hands-free while TTS plays: the echo gate decides on this frame. A
+        # quiet frame (near silence) is never treated as the user, which stops
+        # the stale-residual-mean false confirms seen in the live log.
+        if self._hands_free_echo_gate_active() and self._should_hold_bargein():
             self._pending_bargein_check = True
-            hist = list(self._recent_residual_rms)
-            logger.debug(
-                "STT: Hands-free VAD start deferred as likely echo (residual=%.3f thr=%.3f)",
-                (sum(hist) / len(hist)) if hist else 0.0,
-                self._get_adaptive_threshold(),
-            )
+            self._bargein_consecutive_count = 0
+            self._trace_bargein("defer", "vad_onset")
             return True
 
         # Turn-taking: WebRTC AEC cleans the mic path; Pipecat VAD + native
@@ -951,13 +1075,6 @@ class BaseSTTService(STTService):
                 self._cancel_welcome_callback()
                 logger.info("STT: Cancelled welcome task via callback (barge-in)")
 
-            # Glow signal for hands-free UI
-            if self._is_hands_free and self.event_queue:
-                try:
-                    self.event_queue.put(("stt_hands_free_glow_on", {}), block=False)
-                except Exception:
-                    pass
-
             # Notify the rest of the pipeline that the user is speaking.
             # Only push when interrupting — the LLM cancels its generation
             # on UserStartedSpeakingFrame, which we don't want when TTS
@@ -989,13 +1106,6 @@ class BaseSTTService(STTService):
         self._user_speaking = False
         if self._audio_timing is not None:
             self._audio_timing.mark("vad_stopped")
-
-        # Glow off
-        if self._is_hands_free and not self._ptt_active and self.event_queue:
-            try:
-                self.event_queue.put(("stt_hands_free_glow_off", {}), block=False)
-            except Exception:
-                pass
 
         # Hook: subclass processes the accumulated audio
         await self._on_speaking_stopped(frame, direction)

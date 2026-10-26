@@ -19,8 +19,8 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "whatsapp_toolkit",
         (
-            r"\b(whats\s*app|whatsapp)\b.*\b(messages?|chat|thread|contact|screenshots?|photos?|media|read|search|find|ingest|analy[sz]e|draft|reply|send)\b",
-            r"\b(search|find|read|show|ingest|analy[sz]e|draft|write|send)\b.*\b(whats\s*app|whatsapp)\b",
+            r"\b(whats\s*app|whatsapp)\b.*\b(messages?|chat|thread|contact|screenshots?|photos?|media|read|search|find|ingest|analy[sz]e|draft|reply|send|status|stories)\b",
+            r"\b(search|find|read|show|ingest|analy[sz]e|draft|write|send|post|publish)\b.*\b(whats\s*app|whatsapp)\b",
         ),
     ),
     (

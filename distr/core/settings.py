@@ -54,6 +54,18 @@ DEFAULT_SETTINGS = {
     'selected_oracle': 'oracle',
     'sphere_size': 180,
     'playback_speed': 1.0,
+    # TTS-time barge-in policy: 'smart' (suppress self-echo, keep user
+    # barge-in) | 'always' (legacy energy gate) | 'off' (never interrupt).
+    'bargein_mode': 'smart',
+    # Acoustic echo cancellation engine: 'livekit' (rtc.AudioProcessingModule,
+    # real reverse stream — default) | 'pywebrtc' (legacy ring buffer).
+    # Env override: DECISIONS_AEC_ENGINE. Falls back to pywebrtc if livekit
+    # is unavailable.
+    'aec_engine': 'livekit',
+    # Audio I/O backend: 'mediadevices' (rtc.MediaDevices APM, device-timed
+    # AEC — default) | 'portaudio' (the legacy PyAudio transport).
+    # Env override: DECISIONS_AUDIO_BACKEND.
+    'audio_backend': 'portaudio',
     'startup_listening_state': 'remember',
     'hands_free_mode': False,
     'oracle_position': 'Custom',

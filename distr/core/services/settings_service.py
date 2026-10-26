@@ -245,6 +245,8 @@ def save_general_settings(data) -> None:
                label="speech_volume_changed")
     _safe_emit(_signal("vad_threshold_changed"), data.vad_threshold,
                label="vad_threshold_changed")
+    _safe_emit(_signal("bargein_mode_changed"), data.bargein_mode,
+               label="bargein_mode_changed")
 
     if data.voice_provider == "elevenlabs":
         try:
@@ -619,6 +621,18 @@ def update_vad_threshold(threshold: int) -> int:
                    signal_args=(threshold,),
                    signal_label="vad_threshold_changed")
     return threshold
+
+
+def update_bargein_mode(mode: str) -> str:
+    """Validate, persist, and emit the TTS-time barge-in policy."""
+    mode = str(mode or 'smart').strip().lower()
+    if mode not in ('smart', 'always', 'off'):
+        mode = 'smart'
+    update_setting("bargein_mode", mode,
+                   signal=_signal("bargein_mode_changed"),
+                   signal_args=(mode,),
+                   signal_label="bargein_mode_changed")
+    return mode
 
 
 def update_elevenlabs_settings(

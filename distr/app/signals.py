@@ -361,6 +361,14 @@ class SignalBridgeMixin:
         self._vad_threshold_handler = on_vad_threshold_changed
         signal_manager.vad_threshold_changed.connect(on_vad_threshold_changed)
         logger.info("Connected vad_threshold_changed signal to agent command queue")
+
+        # Barge-in policy (smart / always / off)
+        def on_bargein_mode_changed(mode):
+            logger.info(f"Received bargein_mode_changed signal: {mode}")
+            self._send_command_to_agent('set_bargein_mode', {'mode': mode})
+        self._bargein_mode_handler = on_bargein_mode_changed
+        signal_manager.bargein_mode_changed.connect(on_bargein_mode_changed)
+        logger.info("Connected bargein_mode_changed signal to agent command queue")
         
         # ElevenLabs voice_settings (only when provider is ElevenLabs)
         def on_elevenlabs_voice_settings_changed(stability, similarity_boost, style, use_speaker_boost):

@@ -4,6 +4,7 @@ export function createCatalogLoader(api) {
     let pending = null;
     const sources = {
         projects: ['/projects', []],
+        sidebarPins: ['/workflows/studio/sidebar/pins', {}],
         boards: ['/tickets/boards', []],
         externalBoards: ['/tickets/external-boards', {}],
         chatsData: ['/chats?include_archived=true&surface=development', { chats: [] }],

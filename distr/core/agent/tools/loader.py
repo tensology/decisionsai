@@ -784,7 +784,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
     "WhatsAppToolkitTool": (
         "Search and read WhatsApp contacts, messages, screenshots, and cached media; analyze image media; "
-        "save an unsent reply draft; and send only a draft carrying its approval token plus explicit user approval."
+        "save an unsent reply draft; and send only a draft carrying its approval token plus explicit user approval. "
+        "Draft and publish own WhatsApp Status text, images, or videos with an explicit audience and exact-content approval."
     ),
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
     "CreateCursorTicketTool": "Create a Cursor plugin handoff only when the user explicitly asks for Cursor. In DEBUG=True only, 'make a ticket for Decisions/DecisionsAI' writes a DecisionsAI Cursor handoff; ordinary ticket requests use create_ticket.",

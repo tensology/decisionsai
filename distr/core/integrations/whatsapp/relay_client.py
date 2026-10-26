@@ -326,6 +326,30 @@ def send_message_via_relay(*, jid: str, text: str, caption: str = "") -> dict[st
         return {"success": False, "error": str(exc)}
 
 
+def publish_status_via_relay(payload: dict[str, Any]) -> dict[str, Any]:
+    """Submit own Status, never retry an uncertain publishing request automatically."""
+    if whatsapp_send_dry_run_enabled():
+        return {"success": True, "state": "dry_run", "dry_run": True, "delivery_confirmed": False}
+    headers = relay_auth_headers()
+    if not headers:
+        return {"success": False, "error": "Status publishing requires the internal relay token"}
+    try:
+        response = requests.post(
+            f"{relay_api_base()}/publish-status", json=payload, headers=headers, timeout=65,
+        )
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("Invalid Status relay response")
+        if response.status_code != 200:
+            return {**data, "success": False, "status_code": response.status_code}
+        if data.get("success") is True and data.get("message_id") and data.get("state") == "submitted":
+            return {**data, "delivery_confirmed": False}
+        return {"success": False, "state": "unknown", "error": "No Status submission acknowledgement; check WhatsApp before retrying"}
+    except Exception as exc:
+        return {"success": False, "state": "unknown", "delivery_confirmed": False,
+                "error": f"Status submission could not be confirmed; check WhatsApp before retrying: {exc}"}
+
+
 def list_chats_from_relay(*, limit: int = 100, offset: int = 0, search: str = "") -> dict[str, Any]:
     try:
         resp = requests.get(

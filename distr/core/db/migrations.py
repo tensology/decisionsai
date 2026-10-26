@@ -1658,6 +1658,7 @@ def run_migrations():
         ("project_cli_high_codex_intelligence", "VARCHAR DEFAULT ''"),
         ("project_cli_high_codex_speed", "VARCHAR DEFAULT ''"),
         ("development_hot_corner_pinned_project_ids", "TEXT DEFAULT '[]'"),
+        ("development_pinned_board_keys", "TEXT"),
         ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
     ]
     try:
@@ -2745,6 +2746,9 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
         ("fishaudio_key", "VARCHAR DEFAULT ''"),
         ("fishaudio_voice", "VARCHAR DEFAULT '9a9cf47702da476aa4629e2506d4a857'"),
         ("fishaudio_tts_model", "VARCHAR DEFAULT 's2.1-pro-free'"),
+        ("bargein_mode", "VARCHAR DEFAULT 'smart'"),
+        ("aec_engine", "VARCHAR DEFAULT 'livekit'"),
+        ("audio_backend", "VARCHAR DEFAULT 'mediadevices'"),
     ):
         try:
             with Session() as session:

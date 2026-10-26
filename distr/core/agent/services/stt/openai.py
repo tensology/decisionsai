@@ -252,20 +252,9 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 
                 elif event_type == "input_audio_buffer.speech_started":
                     logger.debug("Realtime: Speech started")
-                    if self.event_queue:
-                        try:
-                            self.event_queue.put(('stt_hands_free_glow_on', {}), block=False)
-                        except Exception:
-                            pass
                 
                 elif event_type == "input_audio_buffer.speech_stopped":
                     logger.debug("Realtime: Speech stopped")
-                    # Only emit glow off signal if in hands-free mode and not in PTT
-                    if self._is_hands_free and not self._ptt_active and self.event_queue:
-                        try:
-                            self.event_queue.put(('stt_hands_free_glow_off', {}), block=False)
-                        except Exception:
-                            pass
                 
                 elif event_type == "error":
                     error_info = event.get("error", {})

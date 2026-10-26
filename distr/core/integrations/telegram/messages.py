@@ -354,6 +354,30 @@ class TelegramMessagesMixin:
         if text:
             text_lower = text.lower().strip()
 
+            if _is_remote_control_request(text_lower):
+                # Get chat_id for the remote control link
+                chat_id = self._get_chat_id() or getattr(self, "telegram_user_id", None)
+                if chat_id:
+                    hashed = hash_channel_id(chat_id)
+                    remote_url = (
+                        f"https://decisions.tensology.com/api/remote/?channel={hashed}"
+                    )
+                    response_text = (
+                        f"🔗 Remote Control:\n{remote_url}\n\n"
+                        f"⚠️ Do not share this link. It grants full remote access to your machine "
+                        f"(mouse, keyboard, screen). The link expires at midnight UTC."
+                    )
+                    logger.info(
+                        "Sending requested remote control link"
+                    )
+                    self.send_to_telegram(response_text)
+                    return
+                else:
+                    error_text = "⚠️ Cannot generate remote control link: chat_id not available yet. Please try again in a moment."
+                    self.send_to_telegram(error_text)
+                    return
+
+
             try:
                 from distr.core.kanban.whatsapp_intake_approval import handle_telegram_reply as handle_wa_intake_reply
 
@@ -425,29 +449,6 @@ class TelegramMessagesMixin:
                     return
             except Exception as exc:
                 logger.error("[Telegram] Workflow interaction routing failed: %s", exc, exc_info=True)
-
-            if _is_remote_control_request(text_lower):
-                # Get chat_id for the remote control link
-                chat_id = self._get_chat_id() or getattr(self, "telegram_user_id", None)
-                if chat_id:
-                    hashed = hash_channel_id(chat_id)
-                    remote_url = (
-                        f"https://decisions.tensology.com/api/remote/?channel={hashed}"
-                    )
-                    response_text = (
-                        f"🔗 Remote Control:\n{remote_url}\n\n"
-                        f"⚠️ Do not share this link. It grants full remote access to your machine "
-                        f"(mouse, keyboard, screen). The link expires at midnight UTC."
-                    )
-                    logger.info(
-                        f"Sending remote control link for chat_id={chat_id} (hashed={hashed}): {remote_url}"
-                    )
-                    self.send_to_telegram(response_text)
-                    return
-                else:
-                    error_text = "⚠️ Cannot generate remote control link: chat_id not available yet. Please try again in a moment."
-                    self.send_to_telegram(error_text)
-                    return
 
             if self._handle_initiative_draft_command(text_lower):
                 return
