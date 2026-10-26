@@ -1146,6 +1146,27 @@ class InitiativeService:
                 except Exception as e:
                     logger.debug("InitiativeService: planner TTS emit failed: %s", e)
 
+    def _append_chat_notice(self, chat_id: int, message: str, *, hidden: bool = False) -> Optional[int]:
+        """Persist a proactive notice on its own chat row and refresh the UI.
+
+        Always a distinct row: a notice must never reuse the live or last user
+        turn, or it would replace that turn's answer.
+        """
+        add_notice = getattr(self.chat_manager, "add_assistant_notice", None)
+        if callable(add_notice):
+            return add_notice(int(chat_id), message, hidden=hidden)
+        from distr.core.chat import ChatService
+
+        row_id = ChatService.append_assistant_notice(int(chat_id), message, hidden=hidden)
+        try:
+            from distr.core.signals import signal_manager
+
+            signal_manager.chat_message_added.emit(int(chat_id), "assistant", message, row_id)
+            signal_manager.chat_updated.emit(int(chat_id))
+        except Exception:
+            logger.debug("InitiativeService: notice emit failed", exc_info=True)
+        return row_id
+
     def _log_planner_to_chat(self, message: str) -> None:
         """Append planner markdown without the generic [Initiative] suggestion prefix."""
         if not self.chat_manager:
@@ -1153,7 +1174,9 @@ class InitiativeService:
         try:
             current_chat = self.chat_manager.get_current_chat()
             if current_chat:
-                self.chat_manager.add_assistant_message(current_chat, message)
+                # Own row, so a planner note can never overwrite the user's
+                # most recent answered turn.
+                self._append_chat_notice(int(current_chat), message)
         except Exception as e:
             logger.debug("InitiativeService: _log_planner_to_chat failed: %s", e)
 
@@ -1712,7 +1735,7 @@ class InitiativeService:
                 f"ID: `{draft.id[:8]}`\n"
                 "Say approve or reject, or manage it in Settings → Initiative."
             )
-            self.chat_manager.add_assistant_message(current_chat, msg)
+            self._append_chat_notice(int(current_chat), msg)
 
     def _chat_is_initiative_approval_context(self, chat_id: int) -> bool:
         """Return true only when surfacing Initiative approvals fits the active chat."""
@@ -1873,9 +1896,12 @@ class InitiativeService:
             if current_chat:
                 if _is_development_chat(int(current_chat)):
                     return
-                self.chat_manager.add_assistant_message(
-                    current_chat, _initiative_update_text(message)
-                )
+                # Proactive notices get their own row. Writing them through
+                # add_assistant_message could target the live/last user turn
+                # and replace its answer (see chat_manager notice-row guard).
+                text = _initiative_update_text(message)
+                if text:
+                    self._append_chat_notice(int(current_chat), text)
         except Exception as e:
             logger.debug("InitiativeService: _log_to_chat failed: %s", e)
 

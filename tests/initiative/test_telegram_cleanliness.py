@@ -209,6 +209,7 @@ def test_surface_draft_queue_does_not_pollute_unrelated_chat(tmp_path):
     svc._surface_draft_queue(42)
 
     chat_manager.add_assistant_message.assert_not_called()
+    chat_manager.add_assistant_notice.assert_not_called()
 
 
 def test_surface_draft_queue_allows_explicit_initiative_chat(tmp_path):
@@ -233,7 +234,7 @@ def test_surface_draft_queue_allows_explicit_initiative_chat(tmp_path):
 
     svc._surface_draft_queue(42)
 
-    sent = chat_manager.add_assistant_message.call_args.args[1]
+    sent = chat_manager.add_assistant_notice.call_args.args[1]
     assert "Pending approval:" in sent
     assert "hermes-7" in sent
 
@@ -260,7 +261,7 @@ def test_surface_draft_queue_expires_stale_approvals_before_chat_surface(tmp_pat
 
     svc._surface_draft_queue(42)
 
-    chat_manager.add_assistant_message.assert_not_called()
+    chat_manager.add_assistant_notice.assert_not_called()
     assert svc._draft_queue.get_by_id("hermes-old") is None
 
 

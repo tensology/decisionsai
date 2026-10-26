@@ -457,22 +457,34 @@ class ListProjectsTool(BaseTool):
                 if not projects:
                     return "No projects found. You can create a new project in the Projects Manager or by dropping a folder."
 
-                response = f"**Available Projects ({len(projects)}) - LIVE DATA:**\n\n"
+                names = [p.name for p in projects]
+                if len(names) == 1:
+                    spoken_names = names[0]
+                elif len(names) == 2:
+                    spoken_names = f"{names[0]} and {names[1]}"
+                else:
+                    spoken_names = ", ".join(names[:-1]) + f", and {names[-1]}"
+                active_project = next((p.name for p in projects if p.in_use), "")
+                spoken = f"You've got {spoken_names}."
+                if active_project:
+                    spoken += f" You're currently in {active_project}."
+
+                reference = f"**Available Projects ({len(projects)}) - LIVE DATA:**\n\n"
 
                 for project in projects:
                     status = "✓ Active" if project.in_use else ""
                     has_folder = "✓ Has folder" if project.folder_location else "⚠ No folder set"
                     
-                    response += f"- **{project.name}** (ID: {project.id})\n"
-                    response += f"  Folder: {project.folder_location if project.folder_location else 'Not set'}\n"
+                    reference += f"- **{project.name}** (ID: {project.id})\n"
+                    reference += f"  Folder: {project.folder_location if project.folder_location else 'Not set'}\n"
                     if status:
-                        response += f"  Status: {status}\n"
+                        reference += f"  Status: {status}\n"
                     if project.description:
-                        response += f"  Description: {project.description}\n"
+                        reference += f"  Description: {project.description}\n"
 
-                response += "\nTo switch to a project, say 'switch to project <name>' or 'open project <name> and start it'."
+                reference += "\nTo switch to a project, say 'switch to project <name>' or 'open project <name> and start it'."
 
-                return response
+                return spoken + "\n\nREFERENCE:\n" + reference
 
             except Exception as e:
                 logger.error(f"Error listing projects: {e}", exc_info=True)
@@ -583,25 +595,41 @@ class GetProjectDetailsTool(BaseTool):
                     return "No projects found in the database."
 
                 # Build detailed response
-                response = f"**Project: {project.name}** (ID: {project.id}) - LIVE DATA\n\n"
-                response += f"**Folder:** {project.folder_location if project.folder_location else '⚠ NOT SET'}\n"
-                response += f"**Active:** {'Yes' if project.in_use else 'No'}\n"
+                folder_set = bool(project.folder_location)
+                state = "active" if project.in_use else "not active"
+                spoken = (
+                    f"{project.name} is {state} and "
+                    + ("has a folder set." if folder_set else "doesn't have a folder set yet.")
+                )
+                if project.description:
+                    desc = re.sub(r"[*_`#]+", "", str(project.description)).strip()
+                    if desc:
+                        spoken += f" {desc.rstrip('.')}."
+                spoken += (
+                    " It's ready to open and start."
+                    if folder_set
+                    else " You'll need to set a folder in the Projects Manager before it can start."
+                )
+
+                reference = f"**Project: {project.name}** (ID: {project.id}) - LIVE DATA\n\n"
+                reference += f"**Folder:** {project.folder_location if project.folder_location else '⚠ NOT SET'}\n"
+                reference += f"**Active:** {'Yes' if project.in_use else 'No'}\n"
                 
                 if project.description:
-                    response += f"**Description:** {project.description}\n"
+                    reference += f"**Description:** {project.description}\n"
                 
                 if project.startup_instructions:
-                    response += f"**Startup Instructions:** {len(project.startup_instructions.strip().split(chr(10)))} command(s) configured\n"
+                    reference += f"**Startup Instructions:** {len(project.startup_instructions.strip().split(chr(10)))} command(s) configured\n"
                 else:
-                    response += "**Startup Instructions:** None configured\n"
+                    reference += "**Startup Instructions:** None configured\n"
                 
                 # Check if ready to start
-                if project.folder_location:
-                    response += "\n✓ This project is ready to be opened and started."
+                if folder_set:
+                    reference += "\n✓ This project is ready to be opened and started."
                 else:
-                    response += "\n⚠ This project needs a folder location set in the Projects Manager before it can be started."
+                    reference += "\n⚠ This project needs a folder location set in the Projects Manager before it can be started."
 
-                return response
+                return spoken + "\n\nREFERENCE:\n" + reference
 
             except Exception as e:
                 logger.error(f"Error getting project details: {e}", exc_info=True)

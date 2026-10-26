@@ -883,38 +883,76 @@ class ChatManagerCore:
         persisted_row_id: Optional[int] = None
         if chat_id not in self.chat_histories:
             self.get_chat_history(chat_id)
-        if (
-            self.chat_histories[chat_id]
-            and self.chat_histories[chat_id][-1]["role"] == "assistant"
-        ):
-            self.chat_histories[chat_id][-1]["content"] = text_content
-        else:
-            self.chat_histories[chat_id].append(
-                {"role": "assistant", "content": text_content}
-            )
 
         session = get_session()
         try:
             chat = session.get(Chat, chat_id)
             target = chat
             root = None
+            params: dict[str, Any] = {}
+            as_notice_row = False
             if chat:
                 root_id = _thread_root_id(session, int(chat_id))
                 root = session.get(Chat, root_id)
                 params = _load_chat_params(getattr(root, "params", None))
-                active_row_id = turn_id or current_bound_chat_turn(int(root_id))
-                if active_row_id is None:
-                    active_row_id = params.get("active_turn_chat_row_id")
+                explicit_turn_id = turn_id
+                bound_turn_id = current_bound_chat_turn(int(root_id))
+                active_row_id = (
+                    explicit_turn_id
+                    or bound_turn_id
+                    or params.get("active_turn_chat_row_id")
+                )
+                candidate = None
                 if active_row_id:
                     try:
-                        active_target = session.get(Chat, int(active_row_id))
+                        candidate = session.get(Chat, int(active_row_id))
                     except (TypeError, ValueError):
-                        active_target = None
-                    if active_target and _thread_root_id(session, int(active_target.id)) == root_id:
-                        target = active_target
-                if target is chat and chat.children:
-                    target = max(chat.children, key=lambda x: x.created_date)
-            if target:
+                        candidate = None
+                    if candidate is not None and _thread_root_id(session, int(candidate.id)) != root_id:
+                        candidate = None
+                if candidate is not None:
+                    # Explicitly bound (turn_id / live response context) or the
+                    # root's active pointer: this call owns that row and may
+                    # update it in place, including while answering.
+                    target = candidate
+                elif chat.children:
+                    latest = max(chat.children, key=lambda x: x.created_date)
+                    if not (latest.response or "").strip():
+                        target = latest
+                    else:
+                        # No binding at all, and the newest row is already
+                        # answered: unbound assistant text (for example a
+                        # proactive initiative notice) must become its own row.
+                        # Overwriting here erased the user's completed answer
+                        # (see chat id 1976).
+                        as_notice_row = True
+
+            if as_notice_row and root is not None:
+                child = Chat(
+                    parent_id=int(root.id),
+                    title=None,
+                    input=None,
+                    response=text_content,
+                    provider=root.provider,
+                    model_name=root.model_name,
+                    voice_provider=root.voice_provider,
+                    voice_model=root.voice_model,
+                    is_hidden=is_hidden,
+                    created_date=datetime.now(timezone.utc),
+                    modified_date=datetime.now(timezone.utc),
+                )
+                session.add(child)
+                root.modified_date = datetime.now(timezone.utc)
+                session.commit()
+                persisted_row_id = int(child.id) if child.id is not None else None
+                record_chat_audit_event(
+                    chat_id=int(chat_id),
+                    chat_row_id=persisted_row_id,
+                    role="assistant",
+                    content=text_content,
+                    hidden=is_hidden,
+                )
+            elif target:
                 active_turn_id = int(target.id) if target.id is not None else None
                 persisted_row_id = active_turn_id
                 target.response = text_content
@@ -948,6 +986,23 @@ class ChatManagerCore:
                     content=text_content,
                     hidden=is_hidden,
                 )
+
+            # In-memory mirror. A notice row is always an additional assistant
+            # message; a normal reply updates the live turn's text in place.
+            if as_notice_row:
+                self.chat_histories[chat_id].append(
+                    {"role": "assistant", "content": text_content}
+                )
+            elif (
+                self.chat_histories[chat_id]
+                and self.chat_histories[chat_id][-1]["role"] == "assistant"
+            ):
+                self.chat_histories[chat_id][-1]["content"] = text_content
+            else:
+                self.chat_histories[chat_id].append(
+                    {"role": "assistant", "content": text_content}
+                )
+
             if not is_hidden:
                 self.emit("chat_updated", chat_id)
                 try:
@@ -960,7 +1015,7 @@ class ChatManagerCore:
             logger.error("Error adding assistant message: %s", e)
         finally:
             session.close()
-        if not is_hidden and is_final:
+        if not is_hidden and is_final and not as_notice_row:
             try:
                 from distr.core.work_intake import get_work_intake_service
 
@@ -973,6 +1028,22 @@ class ChatManagerCore:
             except Exception:
                 logger.debug("Could not correlate final chat response to work intake", exc_info=True)
         return persisted_row_id
+
+    def add_assistant_notice(
+        self, chat_id: int, text_content: str, *, hidden: bool = False
+    ) -> Optional[int]:
+        """Persist an assistant-only notice on its own row.
+
+        Proactive/system notices must never reuse a user turn row, or they would
+        replace that turn's answer. Always creates a distinct child row and emits
+        ``chat_updated`` so the UI reloads it.
+        """
+        row_id = ChatService.append_assistant_notice(
+            int(chat_id), text_content, hidden=hidden
+        )
+        if not hidden:
+            self.emit("chat_updated", chat_id)
+        return row_id
 
     # ---- model/provider ----
 
