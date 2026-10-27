@@ -18,3 +18,5 @@ def test_system_prompt_contains_orchestration_routing():
     assert "MULTI-ACTION TOOL EXECUTION" in text
     assert "ordered action queue" in text
     assert "verify material tool results" in text.lower()
+    assert "WORKFLOW INTERACTIONS" in text
+    assert "do not re-announce the same completion" in text
