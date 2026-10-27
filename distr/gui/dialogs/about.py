@@ -379,6 +379,10 @@ class AboutWindow(QtWidgets.QMainWindow):
                 "having a bad day. Reach for the cloud when you want it, stay local when you need it."
             ),
             (
+                "It's voice-first, because that's where all of this is heading. Typing is friction; "
+                "talking isn't. Hold a key, say the thing, and get on with your day."
+            ),
+            (
                 "It's an orchestrator, so every piece pulls out and swaps. Brain, voice, ears. "
                 "OpenAI today, Ollama tomorrow, Kokoro or some vendor you found on a Tuesday. "
                 "Nothing here is welded shut. And it's open source, so the codebase is yours to poke "
