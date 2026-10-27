@@ -25,6 +25,7 @@ _VIDEO_WIDTH = 720
 _VIDEO_HEIGHT = 405
 _BORDER = 3
 _CARD_RADIUS = 18
+_SPLASH_SECONDS = 8.0  # intro clip length; holds TTS while the video's own audio plays
 
 
 def _video_path() -> str:
@@ -142,6 +143,13 @@ class StartupSplash(QtWidgets.QWidget):
         if not self._started and self._player is not None:
             self._started = True
             self._player.play()
+            # Hold TTS while the intro video's audio plays.
+            try:
+                from distr.core.about_audio import mark_about_audio_started
+
+                mark_about_audio_started(_SPLASH_SECONDS)
+            except Exception:
+                pass
 
     def _apply_window_mask(self) -> None:
         """Round the whole window so the native video surface is clipped too."""
@@ -209,6 +217,12 @@ class StartupSplash(QtWidgets.QWidget):
         try:
             if self._player is not None:
                 self._player.stop()
+        except Exception:
+            pass
+        try:
+            from distr.core.about_audio import clear_about_audio
+
+            clear_about_audio()
         except Exception:
             pass
         self.close()

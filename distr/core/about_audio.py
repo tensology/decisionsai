@@ -1,9 +1,8 @@
-"""Cross-process marker for the About window's Decisions chime.
+"""Cross-process marker for short-lived startup audio (the splash video, the About chime).
 
-The chime plays via ``afplay`` in the GUI process; TTS speaks via ``sounddevice``
-in the agent process. They are different processes and different audio streams, so
-a tiny timestamp file lets the TTS pipeline wait for the chime to finish instead of
-talking over it.
+That audio plays in the GUI process; TTS speaks via ``sounddevice`` in the agent
+process. They are different processes and different audio streams, so a tiny
+timestamp file lets the TTS pipeline wait for it to finish instead of talking over it.
 """
 
 from __future__ import annotations
