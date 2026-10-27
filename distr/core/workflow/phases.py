@@ -438,7 +438,7 @@ def create_phased_workflow(
     chat_id: Optional[int] = None,
 ) -> Optional[int]:
     """Persist a single-session workflow built from phases. Returns its id."""
-    from distr.core.workflow.service import add_step, create_workflow, update_workflow
+    from distr.core.workflow.service import add_step, create_workflow
 
     definition = build_workflow_definition(
         name,
@@ -455,8 +455,6 @@ def create_phased_workflow(
     )
     if not workflow_id:
         return None
-    if chat_id is not None:
-        update_workflow(workflow_id, workflow_type=str(definition["workflow_type"]))
     for position, step in enumerate(definition["steps"]):
         add_step(
             workflow_id,
