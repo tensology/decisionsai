@@ -8,7 +8,56 @@ from distr.core.paths import IMAGES_DIR
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import Qt
 import os
+import subprocess
+import sys
+import threading
 from datetime import datetime
+from pathlib import Path
+
+# The Decisions chime belongs to the About window: it plays whenever the window
+# opens and never overlaps, however many times it is opened and closed.
+_ABOUT_AUDIO_PROCESS = None
+_ABOUT_AUDIO_LOCK = threading.Lock()
+
+
+def _about_sound_path() -> str:
+    # distr/gui/dialogs/about.py -> project root
+    return str(Path(__file__).resolve().parents[3] / "assets" / "sounds" / "decisions.mp3")
+
+
+def _stop_about_audio() -> None:
+    global _ABOUT_AUDIO_PROCESS
+    with _ABOUT_AUDIO_LOCK:
+        process, _ABOUT_AUDIO_PROCESS = _ABOUT_AUDIO_PROCESS, None
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+        except Exception:
+            pass
+
+
+def _play_about_audio() -> None:
+    """Play the Decisions chime for this About open, restarting cleanly (no overlap)."""
+    global _ABOUT_AUDIO_PROCESS
+    try:
+        path = _about_sound_path()
+        if not os.path.isfile(path):
+            return
+        if sys.platform == "darwin":
+            command = ["afplay", path]
+        elif sys.platform.startswith("linux"):
+            command = ["paplay", path]
+        elif sys.platform == "win32":
+            command = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path]
+        else:
+            return
+        _stop_about_audio()
+        with _ABOUT_AUDIO_LOCK:
+            _ABOUT_AUDIO_PROCESS = subprocess.Popen(
+                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+    except Exception:
+        pass
 
 # Shared typography for About / Changelog / Credits tab bodies
 _TAB_FONT_FAMILY = "Arial, sans-serif"
@@ -654,6 +703,11 @@ class AboutWindow(QtWidgets.QMainWindow):
         
         return footer_widget
 
+    def showEvent(self, event):
+        """Play the Decisions chime each time the About window opens."""
+        super().showEvent(event)
+        _play_about_audio()
+
     def closeEvent(self, event):
         """
         Handle window close events.
@@ -663,6 +717,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         """
         event.ignore()
         self.hide()
+        _stop_about_audio()
 
     def center_on_screen(self, oracle_window=None):
         """Center the window on the primary screen, or position on the same screen as oracle window if provided."""

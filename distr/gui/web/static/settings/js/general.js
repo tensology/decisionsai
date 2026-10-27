@@ -60,7 +60,7 @@ async function loadGeneralSettings() {
         const settings = await response.json();
 
         // Load startup checkboxes
-        document.getElementById('load_splash_sound').checked = settings.load_splash_sound || false;
+        document.getElementById('show_splash_video').checked = settings.show_splash_video || false;
         document.getElementById('show_about').checked = settings.show_about || false;
         document.getElementById('welcome_greet_me').checked = settings.welcome_greet_me || false;
         document.getElementById('telegram_send_online_notice').checked = settings.telegram_send_online_notice === true;
@@ -185,7 +185,7 @@ async function saveGeneralSettings() {
         const selectedVoice = document.getElementById('tts_voice').value;
 
         const settings = {
-            load_splash_sound: document.getElementById('load_splash_sound').checked,
+            show_splash_video: document.getElementById('show_splash_video').checked,
             show_about: document.getElementById('show_about').checked,
             welcome_greet_me: document.getElementById('welcome_greet_me').checked,
             telegram_send_online_notice: document.getElementById('telegram_send_online_notice').checked,

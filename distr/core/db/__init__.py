@@ -25,7 +25,7 @@ class Settings(Base):
     # General Settings
     language = Column(String, default='English')
     theme = Column(String)
-    load_splash_sound = Column(Boolean, default=True)
+    show_splash_video = Column(Boolean, default=True)
     show_about = Column(Boolean, default=True)
     welcome_greet_me = Column(Boolean, default=True)
     telegram_send_online_notice = Column(Boolean, default=False)
@@ -773,6 +773,8 @@ try:
                 ("tensology_url", "VARCHAR DEFAULT 'https://www.tensology.com'"),
                 ("tensology_key", "VARCHAR DEFAULT ''"),
                 ("tensology_push_paused", "BOOLEAN DEFAULT 0"),
+                # Startup surfaces
+                ("show_splash_video", "BOOLEAN DEFAULT 1"),
                 # Monk Mode
                 ("monk_mode_enabled", "BOOLEAN DEFAULT 0"),
                 ("monk_sites", "TEXT DEFAULT '[]'"),

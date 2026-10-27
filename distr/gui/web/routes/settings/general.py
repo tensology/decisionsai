@@ -45,7 +45,7 @@ def register_routes(router, templates):
         _voice_provider_id = normalize_voice_provider(str(_raw_vp))
 
         return JSONResponse({
-            "load_splash_sound": settings.get("load_splash_sound", False),
+            "show_splash_video": settings.get("show_splash_video", False),
             "show_about": settings.get("show_about", False),
             "welcome_greet_me": settings.get("welcome_greet_me", False),
             "telegram_send_online_notice": settings.get("telegram_send_online_notice", False),

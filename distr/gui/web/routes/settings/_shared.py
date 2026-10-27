@@ -154,7 +154,7 @@ class VoiceSelectionUpdate(BaseModel):
 
 
 class GeneralSettings(BaseModel):
-    load_splash_sound: bool = False
+    show_splash_video: bool = False
     show_about: bool = False
     welcome_greet_me: bool = False
     telegram_send_online_notice: bool = False

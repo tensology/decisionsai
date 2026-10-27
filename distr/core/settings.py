@@ -42,7 +42,7 @@ DEFAULT_SETTINGS = {
     "cost_invoice_display": "blended",
     "development_hot_corner_pinned_project_ids": [],
 
-    'load_splash_sound': True,
+    'show_splash_video': True,
     'show_about': False,
     'welcome_greet_me': True,
     'telegram_send_online_notice': False,

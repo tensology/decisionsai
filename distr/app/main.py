@@ -1239,16 +1239,12 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         else:
             logger.info("Keeping oracle window hidden from saved visibility setting")
 
-        if is_dock_app():
+        if is_dock_app() and self.settings.get("show_splash_video", False):
             # The intro video plays first; the About window (if enabled) follows it.
             self._show_startup_splash_if_needed()
         else:
             self._maybe_show_about_window()
-
-        # Play splash sound if enabled (once).
-        if self.settings.get("load_splash_sound", False) and not self._splash_sound_played:
-            self._play_splash_sound()
-            self._splash_sound_played = True
+        # The decisions audio now plays when the About window opens, not at startup.
             
         # Enable device check timer after initialization is complete
         # Use a delay to ensure everything is fully initialized
@@ -1333,10 +1329,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             )
     
     def _on_show_about_from_web(self):
-        """Show the about window and play splash sound (triggered from web UI)."""
+        """Show the about window (triggered from web UI). It plays its own audio."""
         if hasattr(self, 'oracle_window') and self.oracle_window:
             self.oracle_window.show_about_window()
-        self._play_splash_sound()
 
     def _play_splash_sound(self):
         """Play the splash sound file in a separate thread."""
