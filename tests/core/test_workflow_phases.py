@@ -109,3 +109,74 @@ def test_light_workflow_has_no_repo_phases():
     phases = phases_for_class("light")
     assert "implement" not in phases
     assert "test" not in phases
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_weight_class_reads_managed_marker():
+    from distr.core.workflow.phases import workflow_weight_class
+
+    settings = '{"managed_by": "phase_engine", "weight_class": "heavy"}'
+    assert workflow_weight_class(settings) == "heavy"
+
+
+def test_workflow_weight_class_ignores_unmanaged_workflows():
+    from distr.core.workflow.phases import workflow_weight_class
+
+    assert workflow_weight_class('{"weight_class": "heavy"}') is None
+    assert workflow_weight_class('{"managed_by": "someone_else", "weight_class": "heavy"}') is None
+    assert workflow_weight_class(None) is None
+    assert workflow_weight_class('{"managed_by": "phase_engine", "weight_class": "nonsense"}') is None
+
+
+def test_class_workflow_names_are_readable():
+    from distr.core.workflow.phases import class_workflow_name
+
+    assert class_workflow_name("standard") == "Ticket: standard (one session)"
+    assert class_workflow_name("critical") == "Ticket: critical (one session)"
+
+
+def test_route_ticket_explains_a_risk_escalation(monkeypatch):
+    from distr.core.workflow import phases
+
+    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 99)
+    plan = phases.route_ticket("Add a migration for invoices", ticket_id=42)
+
+    assert plan["class"] == "critical"
+    assert plan["workflow_id"] == 99
+    assert "migration" in plan["reason"]
+    assert "Ticket #42" in plan["announcement"]
+    assert plan["overridable"] is True
+
+
+def test_route_ticket_explains_a_question(monkeypatch):
+    from distr.core.workflow import phases
+
+    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 11)
+    plan = phases.route_ticket("Where is my order?", has_repo_target=False)
+
+    assert plan["class"] == "light"
+    assert "question" in plan["reason"]
+
+
+def test_route_ticket_reports_an_explicit_override(monkeypatch):
+    from distr.core.workflow import phases
+
+    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 12)
+    plan = phases.route_ticket("tidy the readme", requested="heavy")
+
+    assert plan["class"] == "heavy"
+    assert plan["reason"] == "you asked for this one"
+
+
+def test_route_ticket_survives_missing_managed_workflow(monkeypatch):
+    from distr.core.workflow import phases
+
+    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: None)
+    plan = phases.route_ticket("add a button")
+
+    assert plan["class"] == "standard"
+    assert plan["workflow_id"] is None

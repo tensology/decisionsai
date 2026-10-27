@@ -12,7 +12,15 @@ delegates to the existing workflow service.
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any, Iterable, Optional
+
+logger = logging.getLogger(__name__)
+
+# Marks a workflow as owned by the phase engine, so the router can find the
+# managed workflow for each weight class without guessing at names.
+MANAGED_BY = "phase_engine"
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +432,146 @@ def build_workflow_definition(
         "workflow_type": "manual",
         "class": class_key,
         "steps": steps,
+    }
+
+
+CLASS_WORKFLOW_DESCRIPTIONS: dict[str, str] = {
+    "light": "Questions, lookups and status replies. No repository work, no deploy.",
+    "standard": "A normal ticket: understand, implement, test, fix defects, report, reply in one session.",
+    "heavy": "A bigger change: the standard session plus an independent review and a human gate.",
+    "critical": "Risky work: reproduce first, independent review, human gates, deploy allowed only on approval.",
+}
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if not value:
+        return {}
+    try:
+        loaded = json.loads(str(value))
+        return loaded if isinstance(loaded, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def workflow_weight_class(run_settings: Any) -> Optional[str]:
+    """Return the managed weight class for a workflow, or None if unmanaged."""
+    data = _json_dict(run_settings)
+    if str(data.get("managed_by") or "").strip().lower() != MANAGED_BY:
+        return None
+    class_key = str(data.get("weight_class") or "").strip().lower()
+    return class_key if class_key in WORKFLOW_CLASSES else None
+
+
+def class_workflow_name(class_key: str) -> str:
+    label = str(class_policy(class_key).get("label") or class_key)
+    return f"Ticket: {label.lower()} (one session)"
+
+
+def _mark_managed(workflow_id: int, class_key: str) -> None:
+    """Tag and activate a workflow so it shows as runnable managed policy."""
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow
+
+    with get_session() as db:
+        workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+        if not workflow:
+            return
+        settings = _json_dict(workflow.run_settings)
+        settings.update({
+            "managed_by": MANAGED_BY,
+            "weight_class": class_key,
+            "max_attempts": int(class_policy(class_key).get("max_attempts") or 2),
+            "human_gate": bool(class_policy(class_key).get("human_gate")),
+            "may_deploy": bool(class_policy(class_key).get("may_deploy")),
+        })
+        workflow.run_settings = json.dumps(settings)
+        workflow.status = "active"
+        db.commit()
+
+
+def find_class_workflow_id(class_key: str) -> Optional[int]:
+    """Return the managed workflow id for a weight class, if one exists."""
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow
+
+    wanted = str(class_key or "").strip().lower()
+    if wanted not in WORKFLOW_CLASSES:
+        return None
+    with get_session() as db:
+        rows = (
+            db.query(AutoWorkflow)
+            .filter(AutoWorkflow.status != "archived")
+            .all()
+        )
+        for row in rows:
+            if workflow_weight_class(row.run_settings) == wanted:
+                return int(row.id)
+    return None
+
+
+def ensure_class_workflows() -> dict[str, int]:
+    """Create, tag and activate the managed workflow for every weight class."""
+    created: dict[str, int] = {}
+    for class_key in WORKFLOW_CLASSES:
+        workflow_id = find_class_workflow_id(class_key)
+        if workflow_id is None:
+            workflow_id = create_phased_workflow(
+                class_workflow_name(class_key),
+                class_key,
+                goal="Complete the linked ticket using this workflow's policy.",
+                done_when="The ticket is done, evidence is returned, and the source gets a reply.",
+                description=CLASS_WORKFLOW_DESCRIPTIONS.get(class_key, ""),
+            )
+        if workflow_id:
+            _mark_managed(int(workflow_id), class_key)
+            created[class_key] = int(workflow_id)
+    return created
+
+
+def route_ticket(
+    text: str,
+    *,
+    has_repo_target: bool = True,
+    requested: Optional[str] = None,
+    ticket_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Decide the weight class for a ticket and explain the choice.
+
+    Returns the class, its policy, the matching managed workflow (when it exists)
+    and a human sentence that can be shown or spoken. The classifier can only
+    escalate on risk, so a risky ticket never routes cheap by accident.
+    """
+    class_key = classify(text, has_repo_target=has_repo_target, requested=requested)
+    policy = class_policy(class_key)
+    lowered = str(text or "").lower()
+    risk_hit = next((word for word in RISK_KEYWORDS if word in lowered), "")
+
+    if requested and requested in WORKFLOW_CLASSES and requested == class_key:
+        reason = "you asked for this one"
+    elif risk_hit:
+        reason = f"it mentions {risk_hit.strip()}"
+    elif not has_repo_target:
+        reason = "it looks like a question, not a code change"
+    else:
+        reason = "it's normal repository work with no risk flags"
+
+    workflow_id = find_class_workflow_id(class_key)
+    label = str(policy.get("label") or class_key)
+    prefix = f"Ticket #{int(ticket_id)}" if ticket_id is not None else "This ticket"
+    announcement = (
+        f"{prefix} goes to the {label} workflow ({reason}). "
+        f"Say 'make it lighter' or 'make it heavier' to change that."
+    )
+    return {
+        "class": class_key,
+        "label": label,
+        "reason": reason,
+        "policy": policy,
+        "workflow_id": workflow_id,
+        "announcement": announcement,
+        "overridable": True,
     }
 
 
