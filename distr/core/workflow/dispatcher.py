@@ -852,6 +852,40 @@ def _finalize_development_chat_turn(chat_id: Optional[int], status: str, run_res
         logger.exception("Could not finalize Development chat %s", chat_id)
 
 
+def _deliver_run_reply(ticket_id: int, result_text: str) -> None:
+    """Send the ticket's closing reply when the worker returned one.
+
+    Deterministic and idempotent: the reply phase is contracted to return a
+    ``reply_text:`` field, and delivery refuses to send the same reply twice.
+    """
+    try:
+        from distr.core.workflow.reply_delivery import (
+            deliver_ticket_reply,
+            extract_reply_text,
+        )
+
+        reply_text = extract_reply_text(result_text)
+        if not reply_text:
+            return
+        outcome = deliver_ticket_reply(int(ticket_id), reply_text)
+        if outcome.get("delivered"):
+            logger.info(
+                "Delivered closing reply for ticket %s via %s",
+                ticket_id,
+                outcome.get("channel"),
+            )
+        elif outcome.get("pending_approval"):
+            logger.info("Closing reply for ticket %s is waiting on approval", ticket_id)
+        else:
+            logger.debug(
+                "Closing reply for ticket %s not delivered: %s",
+                ticket_id,
+                outcome.get("reason") or outcome,
+            )
+    except Exception:
+        logger.debug("Closing reply delivery failed for ticket %s", ticket_id, exc_info=True)
+
+
 def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     """Clean up resources and notify the bridge when a run reaches terminal status."""
     _cleanup_run(run_id)
@@ -863,6 +897,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     chat_id: Optional[int] = None
     result_packet: Dict[str, Any] = {}
     validation_records: List[dict] = []
+    worker_output: List[str] = []
     try:
         with get_session() as db:
             run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
@@ -885,6 +920,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
             )
             for sr in step_results:
                 step_obj = sr.step
+                worker_output.append(str(sr.agent_response or ""))
                 steps_summary.append({
                     "title": step_obj.name if step_obj else f"Step {sr.step_id}",
                     "status": sr.status,
@@ -892,6 +928,10 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 })
     except Exception:
         logger.debug("Could not load step results for run %d", run_id)
+
+    # Close the loop with the person who raised the ticket, exactly once.
+    if str(status or "").lower() == "completed" and ticket_id:
+        _deliver_run_reply(int(ticket_id), "\n\n".join(worker_output))
 
     try:
         from distr.core.orchestrator import list_validation_records

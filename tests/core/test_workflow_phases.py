@@ -179,6 +179,20 @@ def test_composed_instruction_marks_the_reply_phase_for_run_time_enrichment():
     assert REPLY_PHASE_MARKER in text
 
 
+def test_composed_instruction_requires_a_reply_text_field():
+    from distr.core.workflow.phases import compose_instruction
+
+    text = compose_instruction(["understand", "report", "reply"])
+    assert "reply_text:" in text
+
+
+def test_composed_instruction_without_reply_asks_for_no_reply_field():
+    from distr.core.workflow.phases import compose_instruction
+
+    text = compose_instruction(["understand", "implement", "test", "report"])
+    assert "reply_text:" not in text
+
+
 def test_composed_instruction_without_reply_has_no_marker():
     from distr.core.workflow.phases import REPLY_PHASE_MARKER, compose_instruction
 

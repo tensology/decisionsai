@@ -348,6 +348,13 @@ def compose_instruction(
         "Finish with: status (done, needs_input or failed), what changed, the exact "
         "commands you ran, the evidence they produced, and anything still unverified."
     )
+    if "reply" in ordered:
+        # Delivery is deterministic and reads this exact field. A missing field
+        # means nothing is sent, so the contract must name it.
+        contract.append(
+            "Return the message for the person who raised this as a `reply_text:` field, "
+            "written for their channel. Keep internal detail, file paths and logs out of it."
+        )
     if needs_human_gate:
         contract.append(
             "Stop and report needs_input before anything irreversible: schema changes, "
