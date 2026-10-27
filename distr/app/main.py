@@ -1321,7 +1321,10 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
 
     def _offer_macos_permissions_setup(self):
         """After boot settles, guide the user through macOS desktop permissions if needed."""
-        self._dismiss_startup_splash()
+        # Never cut the intro video short: wait for it to finish, then ask.
+        if getattr(self, "_startup_splash_process", None) is not None:
+            QTimer.singleShot(1000, self._offer_macos_permissions_setup)
+            return
         if self._quitting or not is_dock_app():
             return
         try:

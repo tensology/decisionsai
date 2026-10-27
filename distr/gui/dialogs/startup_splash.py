@@ -1,9 +1,11 @@
-"""Startup splash: plays the Tensology intro video in a rounded white-bordered window.
+"""Startup splash: plays the Tensology intro video in its own process.
 
-No padding, no title, no orange chrome — just the video. The clip is preloaded into
-memory and the window is only shown, and playback only starts, once the decoder has
-the media ready — otherwise startup contention freezes the first frame and it looks
-like the video "sticks then ends". Falls back to a plain line if the video cannot load.
+Runs standalone (launched by the app) so startup work cannot freeze it. The clip is
+preloaded into memory; the window shows and playback starts only when the decoder is
+ready. The video renders through a QGraphicsScene so its corners can be rounded
+(a native ``QVideoWidget`` ignores masks on macOS).
+
+No padding, no title — just the clip in a rounded white border.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _VIDEO_RELATIVE = "assets/video/tensology-intro.mp4"
 _VIDEO_WIDTH = 720
+_VIDEO_HEIGHT = 405
 _BORDER = 3
 _CARD_RADIUS = 18
 _VIDEO_RADIUS = 15
@@ -43,8 +46,10 @@ class StartupSplash(QtWidgets.QWidget):
 
         self._player = None
         self._audio = None
-        self._video = None
+        self._view = None
+        self._video_item = None
         self._buffer = None  # keeps the in-memory clip alive
+        self._fallback = None
         self._closing = False
         self._started = False
 
@@ -60,9 +65,6 @@ class StartupSplash(QtWidgets.QWidget):
         card.setSpacing(0)
         self._card_layout = card
 
-        # Built lazily: adding a hidden label up front pads the window with dead space.
-        self._fallback = None
-
         self._card.setStyleSheet(
             f"""
             QWidget#startupSplashCard {{
@@ -74,7 +76,7 @@ class StartupSplash(QtWidgets.QWidget):
                 color: #ffffff;
                 font-size: 14px;
                 background: transparent;
-                padding: 40px 24px;
+                padding: 60px 40px;
             }}
             """
         )
@@ -92,12 +94,25 @@ class StartupSplash(QtWidgets.QWidget):
             return
         try:
             from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
-            from PyQt6.QtMultimediaWidgets import QVideoWidget
+            from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
-            self._video = QVideoWidget(self._card)
-            self._video.setFixedSize(_VIDEO_WIDTH, int(_VIDEO_WIDTH * 9 / 16))
-            self._video.setStyleSheet("background: black;")
-            self._card_layout.addWidget(self._video)
+            # Qt-rendered view so a rounded mask actually clips the video.
+            self._view = QtWidgets.QGraphicsView(self._card)
+            self._view.setObjectName("startupSplashView")
+            self._view.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            self._view.setStyleSheet("background: transparent; border: none;")
+            self._view.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self._view.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self._view.setFixedSize(_VIDEO_WIDTH, _VIDEO_HEIGHT)
+            self._view.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+            scene = QtWidgets.QGraphicsScene(self._view)
+            self._view.setScene(scene)
+            self._view.setSceneRect(0, 0, _VIDEO_WIDTH, _VIDEO_HEIGHT)
+            self._video_item = QGraphicsVideoItem()
+            self._video_item.setSize(QtCore.QSizeF(_VIDEO_WIDTH, _VIDEO_HEIGHT))
+            scene.addItem(self._video_item)
+            self._card_layout.addWidget(self._view)
 
             # Preload the whole clip into memory so playback never waits on disk.
             self._buffer = QtCore.QBuffer(self)
@@ -108,7 +123,7 @@ class StartupSplash(QtWidgets.QWidget):
             self._audio = QAudioOutput(self)
             self._audio.setVolume(1.0)
             self._player.setAudioOutput(self._audio)
-            self._player.setVideoOutput(self._video)
+            self._player.setVideoOutput(self._video_item)
             self._player.mediaStatusChanged.connect(self._on_status)
             self._player.errorOccurred.connect(lambda *_: self._show_fallback("Starting Decisions…"))
             self._player.setSourceDevice(self._buffer)
@@ -141,9 +156,10 @@ class StartupSplash(QtWidgets.QWidget):
             self._player.play()
 
     def _apply_video_mask(self) -> None:
-        if self._video is None:
+        if self._view is None:
             return
-        size = self._video.size()
+        viewport = self._view.viewport()
+        size = viewport.size()
         if size.width() <= 0 or size.height() <= 0:
             return
         path = QtGui.QPainterPath()
@@ -152,7 +168,7 @@ class StartupSplash(QtWidgets.QWidget):
             _VIDEO_RADIUS,
             _VIDEO_RADIUS,
         )
-        self._video.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
+        viewport.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
 
     def resizeEvent(self, event):  # noqa: N802 (Qt naming)
         super().resizeEvent(event)
@@ -165,7 +181,6 @@ class StartupSplash(QtWidgets.QWidget):
             QMediaPlayer.MediaStatus.LoadedMedia,
             QMediaPlayer.MediaStatus.BufferedMedia,
         ):
-            # Media is ready: show and start on the same tick.
             self._present()
         elif status in (
             QMediaPlayer.MediaStatus.EndOfMedia,
@@ -174,8 +189,8 @@ class StartupSplash(QtWidgets.QWidget):
             self._finish()
 
     def _show_fallback(self, message: str) -> None:
-        if self._video is not None:
-            self._video.setVisible(False)
+        if self._view is not None:
+            self._view.setVisible(False)
         if self._fallback is None:
             self._fallback = QtWidgets.QLabel(message, self._card)
             self._fallback.setObjectName("startupSplashFallback")
@@ -200,25 +215,17 @@ class StartupSplash(QtWidgets.QWidget):
 
 
 def show_startup_splash(message: str = "", video_path: str | None = None) -> StartupSplash:
-    splash = StartupSplash(message=message, video_path=video_path)
-    # Do not show yet: the window appears the moment the clip is ready (or the
-    # safety timer fires), so the user never sees a frozen first frame.
-    return splash
+    return StartupSplash(message=message, video_path=video_path)
 
 
 def run_standalone(video_path: str | None = None) -> int:
-    """Play the splash in its own process so startup work cannot freeze it.
-
-    Returns the process exit code. Called via ``python -m distr.gui.dialogs.startup_splash``
-    or as a script; the main app launches this and polls for exit.
-    """
+    """Play the splash in its own process so startup work cannot freeze it."""
     import sys
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     splash = StartupSplash(video_path=video_path)
     splash.finished.connect(app.quit)
-    # Hard ceiling so the helper can never linger.
-    QtCore.QTimer.singleShot(30000, app.quit)
+    QtCore.QTimer.singleShot(30000, app.quit)  # hard ceiling
     return app.exec()
 
 
