@@ -138,7 +138,7 @@ class WorkflowAgentBridge:
             ok = st_lower in ("completed", "passed") or (success and not st_lower)
             if result:
                 lim = _PASS_SNIPPET if ok else _FAIL_SNIPPET
-                short = WorkflowAgentBridge._human_step_result(result)
+                short = WorkflowAgentBridge._human_step_result(result, ok=ok)
                 short = short[:lim] + ("..." if len(short) > lim else "")
                 if ok:
                     step_lines.append(f"{title}: {short}")
@@ -164,13 +164,13 @@ class WorkflowAgentBridge:
         return f"{status_line}\n" + "\n".join(step_lines)
 
     @staticmethod
-    def _human_step_result(result: str) -> str:
+    def _human_step_result(result: str, *, ok: bool = True) -> str:
         clean = re.sub(r"\s+", " ", str(result or "")).strip()
         if re.search(r"(?i)\bvoice note sent\b", clean):
             return "It sent a Telegram voice note with the requested message."
         clean = re.sub(r"(?i)^voice note sent:\s*", "Sent the Telegram voice note.", clean).strip()
         if re.search(r"(?i)\bproject cli backend:\s*", clean):
-            return WorkflowAgentBridge._summarize_project_cli_result(clean)
+            return WorkflowAgentBridge._summarize_project_cli_result(clean, ok=ok)
         if re.search(r"(?i)\bnode --test\b|\bpytest\b|\btests?\s+\d+\b", clean):
             return WorkflowAgentBridge._summarize_test_result(clean)
         if re.search(r"(?i)\bgreen\b.*\bvalidation passed\b|\bvalidation passed\b", clean):
@@ -178,14 +178,18 @@ class WorkflowAgentBridge:
         return clean
 
     @staticmethod
-    def _summarize_project_cli_result(clean: str) -> str:
+    def _summarize_project_cli_result(clean: str, *, ok: bool = True) -> str:
         backend_match = re.search(r"(?i)\bProject CLI backend:\s*([A-Za-z0-9_-]+)", clean)
         status_match = re.search(r"(?i)\bStatus:\s*([A-Za-z0-9_-]+)", clean)
         backend = backend_match.group(1).replace("_", " ").title() if backend_match else "The selected CLI backend"
         status = (status_match.group(1).lower() if status_match else "")
 
         if status in ("completed", "passed", "success"):
-            return f"{backend} completed the implementation handoff."
+            if ok:
+                return f"{backend} completed the implementation handoff."
+            # The backend finished its turn but the step did not clear its
+            # contract. Reporting "completed" here contradicted "didn't clear".
+            return f"{backend} finished its turn, but the step didn't clear its contract."
         if status:
             reason = WorkflowAgentBridge._project_cli_failure_reason(clean)
             if reason:

@@ -2067,6 +2067,14 @@ def dispatch_development_prompt(
 
         existing_workflow_id = int(metadata.get("workflow_id") or 0) or None
         workflow_id = existing_workflow_id
+        if existing_workflow_id is not None:
+            from distr.core.workflow.phases import is_retired_workflow
+
+            # The ticket link outlives the workflow. A link to the retired
+            # Development pipeline must route fresh, not resume a dead flow.
+            if is_retired_workflow(existing_workflow_id):
+                existing_workflow_id = None
+                workflow_id = None
         # A deliberate "make it heavier/lighter" relinks the ticket before dispatch.
         if ticket_id is not None:
             from distr.core.workflow.phases import apply_route_override
@@ -2105,6 +2113,10 @@ def dispatch_development_prompt(
                 has_repo_target=bool(int(project.id) > 0),
             )
             workflow_id = int(route_plan.get("workflow_id") or 0) or None
+            if workflow_id and ticket_id is not None:
+                from distr.core.workflow.phases import relink_ticket_to_workflow
+
+                relink_ticket_to_workflow(int(ticket_id), int(workflow_id))
             if workflow_id:
                 try:
                     from distr.core.workflow.development_threads import mark_development_thread

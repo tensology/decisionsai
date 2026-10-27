@@ -671,6 +671,52 @@ def find_class_workflow_id_in_session(session: Any, class_key: str) -> Optional[
     return None
 
 
+def is_retired_workflow(workflow_id: Optional[int]) -> bool:
+    """True when a workflow is gone or archived, so its link must not be reused.
+
+    Tickets pinned to the retired Development pipeline would otherwise resume the
+    11-step flow forever, because their link outlives the workflow itself.
+    """
+    if not workflow_id:
+        return False
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow
+
+    try:
+        with get_session() as db:
+            row = (
+                db.query(AutoWorkflow)
+                .filter(AutoWorkflow.id == int(workflow_id))
+                .first()
+            )
+            return row is None or str(row.status or "").lower() == "archived"
+    except Exception:
+        logger.debug("Could not check workflow %s status", workflow_id, exc_info=True)
+        return False
+
+
+def relink_ticket_to_workflow(ticket_id: int, workflow_id: int) -> bool:
+    """Point a ticket at the workflow it should actually run on."""
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanTicket
+
+    try:
+        with get_session() as db:
+            ticket = (
+                db.query(KanbanTicket)
+                .filter(KanbanTicket.id == int(ticket_id))
+                .first()
+            )
+            if ticket is None:
+                return False
+            ticket.linked_workflow_id = int(workflow_id)
+            db.commit()
+            return True
+    except Exception:
+        logger.debug("Could not relink ticket %s", ticket_id, exc_info=True)
+        return False
+
+
 def route_ticket_plan(
     text: str,
     *,

@@ -95,3 +95,33 @@ def test_explicit_class_word_override(db_factory, monkeypatch):
 
     assert result["class"] == "critical"
     assert result["workflow_id"] == 13
+
+
+def test_is_retired_workflow_flags_archived_and_missing(db_factory):
+    from distr.core.db.workflow import AutoWorkflow
+    from distr.core.workflow import phases
+
+    with db_factory() as db:
+        active = AutoWorkflow(name="Ticket: standard (one session)", status="active")
+        archived = AutoWorkflow(name="Development", status="archived")
+        db.add_all([active, archived])
+        db.commit()
+        active_id, archived_id = int(active.id), int(archived.id)
+
+    assert phases.is_retired_workflow(active_id) is False
+    assert phases.is_retired_workflow(archived_id) is True
+    assert phases.is_retired_workflow(999999) is True
+    assert phases.is_retired_workflow(0) is False
+
+
+def test_relink_ticket_points_it_at_the_routed_workflow(db_factory):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.workflow import phases
+
+    ticket_id = _ticket(db_factory, "Add a button")
+
+    assert phases.relink_ticket_to_workflow(ticket_id, 12) is True
+    with db_factory() as db:
+        assert db.get(KanbanTicket, ticket_id).linked_workflow_id == 12
+
+    assert phases.relink_ticket_to_workflow(999999, 12) is False
