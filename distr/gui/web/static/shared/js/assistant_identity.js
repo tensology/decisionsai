@@ -57,10 +57,15 @@
                 || skins.find((item) => item.folder_name === 'oracle')
                 || skins[0];
             if (!skin) return null;
-            const idleFile = skin.idle_animation || 'idle.webm';
-            const previewUrl = `/api/skins/${encodeURIComponent(skin.folder_name)}/preview/${encodeURIComponent(idleFile)}`;
-            const animated = idleFile.toLowerCase().endsWith('.webm');
-            const src = previewUrl;
+            // A chroma-keyed animation still carries its green screen on this
+            // surface, and an avatar cannot remove it. The static preview image
+            // is already a transparent cut-out, so prefer it for those skins.
+            const hasChromaKey = Array.isArray(skin.chroma_key) && skin.chroma_key.length === 3;
+            const sourceFile = (hasChromaKey && skin.preview_image)
+                ? skin.preview_image
+                : (skin.idle_animation || 'idle.webm');
+            const src = `/api/skins/${encodeURIComponent(skin.folder_name)}/preview/${encodeURIComponent(sourceFile)}`;
+            const animated = sourceFile.toLowerCase().endsWith('.webm');
             if (sequence !== loadSequence || !src) return null;
             snapshot = {
                 src, animated, type: skin.type, name: skin.name || skin.folder_name,

@@ -18,8 +18,10 @@ var EVENT_HOOKS = [
 ];
 var PLAYBACK_MODES = ["loop", "pingpong"];
 var _skinCardBaseClass = 'relative flex flex-col items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all';
-var _skinCardSelectedClass = 'border-[#34d399] bg-[#10a37f]/16 shadow-lg shadow-[#10a37f]/25';
-var _skinCardLoadedClass = 'border-[#10a37f] bg-[#10a37f]/10';
+// Selection reads as a white border on a black card. The old green wash made a
+// selected skin look tinted, and chroma-keyed skins showed it through as a halo.
+var _skinCardSelectedClass = 'border-white bg-[#0d1117] shadow-lg shadow-black/40';
+var _skinCardLoadedClass = 'border-[#565869] bg-[#0d1117]';
 var _skinCardIdleClass = 'border-[#565869] bg-[#0d1117] hover:border-[#7a7c8c]';
 var _skinsSectionTitle = 'Skins';
 var _skinsSectionSubtitle = 'Select and customize your oracle-avatar skin';
@@ -119,16 +121,10 @@ function _updateSkinCardSelectionState() {
         }
 
         if (previewWrap) {
-            if (isSelected) {
-                previewWrap.classList.add('bg-[#10a37f]/18');
-                previewWrap.classList.remove('bg-[#0d1117]', 'bg-[#10a37f]/12');
-            } else if (isLoaded) {
-                previewWrap.classList.add('bg-[#10a37f]/12');
-                previewWrap.classList.remove('bg-[#0d1117]', 'bg-[#10a37f]/18');
-            } else {
-                previewWrap.classList.add('bg-[#0d1117]');
-                previewWrap.classList.remove('bg-[#10a37f]/12', 'bg-[#10a37f]/18');
-            }
+            // Keep the backdrop black for every state. Selection is shown by the
+            // card border, not by a green wash that chroma-keyed skins show through.
+            previewWrap.classList.add('bg-[#0d1117]');
+            previewWrap.classList.remove('bg-[#10a37f]/12', 'bg-[#10a37f]/18');
         }
 
         if (badge) {
@@ -199,8 +195,28 @@ function _createSkinVideoPreview(url, chromaKey, chromaThreshold, cssText) {
     var canvas = document.createElement('canvas');
     canvas.width = 256;
     canvas.height = 256;
-    canvas.style.cssText = 'display:block; width:100%; height:100%;';
+    // object-fit keeps the frame's own aspect ratio. Without it a non-square
+    // container stretched the square canvas and the skin looked squashed.
+    canvas.style.cssText = 'display:block; width:100%; height:100%; object-fit:contain;';
     wrapper.appendChild(canvas);
+
+    // Match the backing store to the source video's aspect ratio, so the
+    // letterbox maths below is a no-op and the chroma key samples real corners.
+    function syncCanvasAspect() {
+        var vw = video.videoWidth;
+        var vh = video.videoHeight;
+        if (!vw || !vh) return;
+        var cap = 256;
+        var factor = Math.min(cap / vw, cap / vh, 1);
+        var nextWidth = Math.max(1, Math.round(vw * factor));
+        var nextHeight = Math.max(1, Math.round(vh * factor));
+        if (nextWidth !== canvas.width || nextHeight !== canvas.height) {
+            canvas.width = nextWidth;
+            canvas.height = nextHeight;
+        }
+    }
+    video.addEventListener('loadedmetadata', syncCanvasAspect);
+    video.addEventListener('loadeddata', syncCanvasAspect);
 
     // Keep the source video in the document so Safari continues decoding it,
     // but never expose its green source frame to the user.
@@ -222,6 +238,7 @@ function _createSkinVideoPreview(url, chromaKey, chromaThreshold, cssText) {
     function drawFrame() {
         if (!wrapper.isConnected) return;
         if (video.readyState >= 2) {
+            syncCanvasAspect();
             context.clearRect(0, 0, canvas.width, canvas.height);
             var sourceWidth = video.videoWidth || canvas.width;
             var sourceHeight = video.videoHeight || canvas.height;
@@ -487,12 +504,14 @@ function renderSkinsGrid() {
         }
 
         var previewWrap = document.createElement('div');
+        // Always black behind the skin, and show selection with a white border.
+        // The old green tint leaked through chroma-keyed skins as a green halo,
+        // which made a selected skin look broken instead of selected.
+        var selectionRing = sel ? ' border-2 border-white' : ' border border-[#565869]';
         if (skin.type === 'oracle') {
-            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-full flex items-center justify-center border border-[#565869] ' +
-                (sel ? 'bg-[#10a37f]/18' : (isLoaded ? 'bg-[#10a37f]/12' : 'bg-[#0d1117]'));
+            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-full flex items-center justify-center bg-[#0d1117]' + selectionRing;
         } else {
-            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-lg flex items-center justify-center ' +
-                (sel ? 'bg-[#10a37f]/18' : (isLoaded ? 'bg-[#10a37f]/12' : 'bg-[#0d1117]'));
+            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-lg flex items-center justify-center bg-[#0d1117]' + selectionRing;
         }
         previewWrap.dataset.skinPreviewWrap = 'true';
         previewWrap.appendChild(previewEl);
