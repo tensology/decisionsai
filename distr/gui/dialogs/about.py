@@ -359,30 +359,38 @@ class AboutWindow(QtWidgets.QMainWindow):
 
         about_paragraphs_text = [
             (
-                "You've got ChatGPT in one tab, Claude in another, an agent grinding on the third "
-                "screen, a WhatsApp full of clients, a Jira board you last opened sometime last "
-                "quarter, and a global hotkey you've already forgotten. DecisionsAI sits in the "
-                "middle and keeps the lot pointed at the same job. The useful bits are a keystroke "
-                "away, because nobody wants to go digging through menus at two in the morning."
+                "Once upon a time, Winamp ruled the desktop. Software had a personality, a skin "
+                "folder you could wreck, an equaliser you fiddled with for no reason, and a llama "
+                "that really whips. Then the industry went beige and started renting everything by "
+                "the month. We just kept the bit we actually liked: your tools should feel like yours."
             ),
             (
-                "It's an orchestrator, so the brain, the voice and the ears all pull out and swap. "
-                "OpenAI today, Ollama tomorrow. Local speech when the internet is sulking, a cloud "
-                "voice when you fancy one. Same story for transcription, and you can bolt on a "
-                "third-party vendor for the noisy bits whenever it suits. Nothing here is welded shut."
+                "Fast forward to your machine right now. Pi is chewing through one terminal, Codex "
+                "is rewriting something in another window, Claude has its own tab, Telegram is "
+                "buzzing in the corner, the inbox is stacking up, WhatsApp is doing whatever "
+                "WhatsApp does, and you are the glue holding it together by hand. Copy, paste, "
+                "remember, repeat. It works right up until it doesn't."
             ),
             (
-                "It's open source, so the codebase is yours to poke at and improve. Build something "
-                "clever, send it back, we'll happily take the credit. It already talks to Jira, "
-                "Trello, WhatsApp (relayer and all), Telegram and Gmail, and it gets along with most "
-                "of the code CLIs out there, so you can work out which model and which tool actually "
-                "earns its keep. There's a phone app too, if you'd rather boss it around from the couch."
+                "DecisionsAI is the part that was missing. It sits in the middle of all of that, "
+                "the middle layer, and turns a pile of scattered tools into one crew. It runs "
+                "local-first, because that is the only honest way we know how: your machine, your "
+                "models, your data, and it keeps going when the internet and the power are both "
+                "having a bad day. Reach for the cloud when you want it, stay local when you need it."
             ),
             (
-                "We grew up in the Winamp era, when software had a personality, a skin folder, and "
-                "an equaliser you fiddled with for no reason. So go on and mess with the avatars and "
-                "oracles. Codex calls them pets, call them whatever you like. Make it look ridiculous "
-                "on purpose. And yes, it really whips Ollama's ass."
+                "It's an orchestrator, so every piece pulls out and swaps. Brain, voice, ears. "
+                "OpenAI today, Ollama tomorrow, Kokoro or some vendor you found on a Tuesday. "
+                "Nothing here is welded shut. And it's open source, so the codebase is yours to poke "
+                "at and run however you like. It already talks to Jira, Trello, WhatsApp (relayer "
+                "and all), Telegram and Gmail, and it gets along with most of the code CLIs, so you "
+                "can work out which model and which tool actually earns its keep. The good bits are a "
+                "hotkey away, and there's a phone app if you'd rather boss it around from the couch."
+            ),
+            (
+                "And because we never got over Winamp, go and mess with the avatars and the oracles. "
+                "Codex calls them pets. Call them whatever you want. Make it look ridiculous on "
+                "purpose. And yes, it really whips Ollama's ass."
             ),
         ]
         about_paragraphs = [_html_paragraph(p) for p in about_paragraphs_text]
