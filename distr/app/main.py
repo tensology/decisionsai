@@ -1238,19 +1238,18 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             logger.info("Keeping oracle window hidden from saved visibility setting")
 
         if is_dock_app():
+            # The intro video plays first; the About window (if enabled) follows it.
             self._show_startup_splash_if_needed()
-            
-        # Only show about window if that setting is enabled
-        if self.settings.get("show_about", False):  # Default to False
-            logger.info("Showing about window based on settings")
-            # Position at oracle ball before showing
-            self.about_window.center_on_screen(self.oracle_window)
-            self.about_window.show()
         else:
-            logger.info("About window disabled in settings")
+            self._maybe_show_about_window()
 
-        # Play splash sound if enabled (only once)
-        if self.settings.get("load_splash_sound", False) and not self._splash_sound_played:
+        # Play splash sound if enabled (once) — not while the intro video already
+        # carries its own audio.
+        if (
+            self.settings.get("load_splash_sound", False)
+            and not self._splash_sound_played
+            and self._startup_splash is None
+        ):
             self._play_splash_sound()
             self._splash_sound_played = True
             
@@ -1265,9 +1264,26 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             from distr.gui.dialogs.startup_splash import show_startup_splash
 
             self._startup_splash = show_startup_splash()
+            self._startup_splash.finished.connect(self._on_startup_splash_finished)
             QTimer.singleShot(20000, self._dismiss_startup_splash)
         except Exception as exc:
             logging.getLogger(__name__).debug("Startup splash unavailable: %s", exc)
+            self._maybe_show_about_window()
+
+    def _on_startup_splash_finished(self):
+        self._startup_splash = None
+        self._maybe_show_about_window()
+
+    def _maybe_show_about_window(self):
+        if not self.settings.get("show_about", False):  # Default to False
+            logger.info("About window disabled in settings")
+            return
+        try:
+            logger.info("Showing about window based on settings")
+            self.about_window.center_on_screen(self.oracle_window)
+            self.about_window.show()
+        except Exception as exc:
+            logger.warning("About window failed to show: %s", exc)
 
     def _dismiss_startup_splash(self):
         splash = getattr(self, "_startup_splash", None)
@@ -1277,6 +1293,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             except Exception:
                 pass
             self._startup_splash = None
+            self._maybe_show_about_window()
 
     def _offer_macos_permissions_setup(self):
         """After boot settles, guide the user through macOS desktop permissions if needed."""
