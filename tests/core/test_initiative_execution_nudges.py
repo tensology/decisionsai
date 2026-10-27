@@ -533,3 +533,58 @@ def test_initiative_terminal_notice_dedupes_repeated_sessions_for_same_step(monk
 
     assert len(manager.sent) == 1
     assert "Cursor finished" in manager.sent[0]
+
+
+def test_waiting_workflow_is_recorded_in_active_chat_context(monkeypatch):
+    from distr.core.human_engagement import reset_engagement_ledger
+    from distr.core.initiative.service import InitiativeService
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_notification_activity()
+    reset_engagement_ledger()
+
+    run = SimpleNamespace(
+        id=7701,
+        workflow_id=430,
+        status="waiting",
+        started_at=datetime.utcnow(),
+        completed_at=None,
+        current_step_id=None,
+        ticket_id=None,
+        run_data=json.dumps({"waiting_kind": "run_briefing"}),
+    )
+    workflow = SimpleNamespace(
+        id=430,
+        name="Sandbox: Paul open questions",
+        workflow_type="instruction",
+        context_rules=None,
+    )
+    fake_session = FakeSession(project_rows=[], workflow_rows=[(run, workflow)])
+    monkeypatch.setattr("distr.core.db.get_session", lambda: fake_session)
+
+    notices = []
+
+    class DummyChatManager:
+        def get_current_chat(self):
+            return 381
+
+        def add_assistant_notice(self, chat_id, message, hidden=False):
+            notices.append((chat_id, message, hidden))
+            return 1
+
+    service = InitiativeService.__new__(InitiativeService)
+    service.telegram_manager = DummyTelegram()
+    service.chat_manager = DummyChatManager()
+    service._execution_notice_cache = {}
+    service._execution_stale_after_s = 900
+    service._execution_stale_repeat_s = 1800
+    service._execution_terminal_notice_window_s = 3600
+
+    service._maybe_send_execution_nudges({"initiative_allow_telegram": True})
+
+    assert notices, "waiting announcement should be recorded in the active chat"
+    chat_id, message, hidden = notices[0]
+    assert chat_id == 381
+    assert "Sandbox: Paul open questions" in message
+    assert "waiting" in message.lower()
+    assert hidden is True

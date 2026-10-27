@@ -2548,6 +2548,31 @@ class InitiativeService:
                                     )
                             except Exception:
                                 logger.debug("InitiativeService: waiting question enrich failed", exc_info=True)
+                            # Record the announcement in the active chat so a later
+                            # "what is <workflow name>?" can be answered instead of
+                            # the words being defined literally.
+                            try:
+                                current_chat = (
+                                    self.chat_manager.get_current_chat()
+                                    if self.chat_manager
+                                    else None
+                                )
+                                if current_chat:
+                                    step_bit = f", step '{step_name}'" if step_name else ""
+                                    self._append_chat_notice(
+                                        int(current_chat),
+                                        (
+                                            f"Workflow '{workflow_name}' (run #{run.id}{step_bit}) "
+                                            f"is waiting for you: {waiting_kind or 'a decision'}. "
+                                            f"{nudge_text}"
+                                        ),
+                                        hidden=True,
+                                    )
+                            except Exception:
+                                logger.debug(
+                                    "InitiativeService: waiting chat notice failed",
+                                    exc_info=True,
+                                )
                             reminder_bucket = (
                                 int(time.time() // repeat_s) if repeat_s > 0 else 0
                             )
