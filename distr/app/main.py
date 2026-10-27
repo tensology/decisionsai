@@ -432,7 +432,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         except Exception as exc:
             logging.getLogger(__name__).debug("agent event queue registration skipped: %s", exc)
         self._splash_sound_played = False  # Flag to prevent double-playing splash sound
-        self._startup_splash = None
+        self._startup_splash = None  # legacy in-process splash handle (unused)
+        self._startup_splash_process = None
+        self._startup_splash_timer = None
         self._splash_sound_lock = threading.Lock()
         self._splash_sound_process = None
 
@@ -1248,7 +1250,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         if (
             self.settings.get("load_splash_sound", False)
             and not self._splash_sound_played
-            and self._startup_splash is None
+            and self._startup_splash_process is None
         ):
             self._play_splash_sound()
             self._splash_sound_played = True
@@ -1258,21 +1260,41 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         QTimer.singleShot(2000, self._enable_device_check_timer)
 
     def _show_startup_splash_if_needed(self):
-        if self._startup_splash is not None:
+        """Play the intro video in its own process so app startup cannot freeze it."""
+        if self._startup_splash_process is not None:
             return
         try:
-            from distr.gui.dialogs.startup_splash import show_startup_splash
+            import subprocess
+            import sys
+            from pathlib import Path
 
-            self._startup_splash = show_startup_splash()
-            self._startup_splash.finished.connect(self._on_startup_splash_finished)
-            QTimer.singleShot(20000, self._dismiss_startup_splash)
+            script = Path(__file__).resolve().parents[1] / "gui" / "dialogs" / "startup_splash.py"
+            self._startup_splash_process = subprocess.Popen(
+                [sys.executable, str(script)],
+                cwd=str(script.parents[2]),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            self._startup_splash_timer = QTimer(self)
+            self._startup_splash_timer.setInterval(300)
+            self._startup_splash_timer.timeout.connect(self._poll_startup_splash)
+            self._startup_splash_timer.start()
         except Exception as exc:
             logging.getLogger(__name__).debug("Startup splash unavailable: %s", exc)
             self._maybe_show_about_window()
 
-    def _on_startup_splash_finished(self):
-        self._startup_splash = None
-        self._maybe_show_about_window()
+    def _poll_startup_splash(self):
+        proc = getattr(self, "_startup_splash_process", None)
+        if proc is None:
+            if self._startup_splash_timer is not None:
+                self._startup_splash_timer.stop()
+            return
+        if proc.poll() is not None:
+            if self._startup_splash_timer is not None:
+                self._startup_splash_timer.stop()
+            self._startup_splash_process = None
+            self._maybe_show_about_window()
 
     def _maybe_show_about_window(self):
         if not self.settings.get("show_about", False):  # Default to False
@@ -1286,13 +1308,15 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             logger.warning("About window failed to show: %s", exc)
 
     def _dismiss_startup_splash(self):
-        splash = getattr(self, "_startup_splash", None)
-        if splash is not None:
+        if self._startup_splash_timer is not None:
+            self._startup_splash_timer.stop()
+        proc = getattr(self, "_startup_splash_process", None)
+        if proc is not None:
             try:
-                splash.close()
+                proc.terminate()
             except Exception:
                 pass
-            self._startup_splash = None
+            self._startup_splash_process = None
             self._maybe_show_about_window()
 
     def _offer_macos_permissions_setup(self):

@@ -204,3 +204,25 @@ def show_startup_splash(message: str = "", video_path: str | None = None) -> Sta
     # Do not show yet: the window appears the moment the clip is ready (or the
     # safety timer fires), so the user never sees a frozen first frame.
     return splash
+
+
+def run_standalone(video_path: str | None = None) -> int:
+    """Play the splash in its own process so startup work cannot freeze it.
+
+    Returns the process exit code. Called via ``python -m distr.gui.dialogs.startup_splash``
+    or as a script; the main app launches this and polls for exit.
+    """
+    import sys
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    splash = StartupSplash(video_path=video_path)
+    splash.finished.connect(app.quit)
+    # Hard ceiling so the helper can never linger.
+    QtCore.QTimer.singleShot(30000, app.quit)
+    return app.exec()
+
+
+if __name__ == "__main__":
+    import sys as _sys
+
+    raise SystemExit(run_standalone(_sys.argv[1] if len(_sys.argv) > 1 else None))
