@@ -20,6 +20,28 @@ _ABOUT_AUDIO_PROCESS = None
 _ABOUT_AUDIO_LOCK = threading.Lock()
 
 
+def _tts_safe_text(text: str) -> str:
+    """Strip punctuation the voice mangles, for the read-about path.
+
+    Ellipses, em/en dashes and stray dots get read aloud as "dot dot dot" or cause
+    odd pauses, so they become plain commas before the text reaches TTS.
+    """
+    import re
+
+    clean = str(text or "")
+    clean = clean.replace("\u2026", ", ")            # … ellipsis
+    clean = clean.replace("\u2014", ", ").replace("\u2013", ", ")  # — –
+    clean = clean.replace("\u2019", "'").replace("\u2018", "'")
+    clean = clean.replace("\u201c", '"').replace("\u201d", '"')
+    clean = re.sub(r"\.{2,}", ", ", clean)          # .. or ...
+    clean = re.sub(r"\s+-\s+", ", ", clean)          # spaced hyphen
+    clean = re.sub(r"\s+", " ", clean)
+    clean = re.sub(r"\s*,\s*", ", ", clean)
+    clean = re.sub(r"(?:,\s*){2,}", ", ", clean)
+    clean = re.sub(r"\s+([.,!?;:])", r"\1", clean)
+    return clean.strip()
+
+
 def _about_sound_path() -> str:
     # distr/gui/dialogs/about.py -> project root
     return str(Path(__file__).resolve().parents[3] / "assets" / "sounds" / "decisions.mp3")
@@ -787,7 +809,7 @@ class AboutWindow(QtWidgets.QMainWindow):
 
     def _read_about_aloud(self, text: str) -> None:
         """Have the agent speak the About copy through the normal TTS path."""
-        message = (text or "").strip()
+        message = _tts_safe_text(text)
         if not message:
             return
         try:
