@@ -244,6 +244,8 @@ def clean_text_for_tts(
     # Replace links before symbol conversion: "=" inside a URL would otherwise become
     # "equals" and split the link, and its dots would read as full stops.
     text = re.sub(r'https?://[^\s]*[^\s.,;:!?]', 'a web link', text, flags=re.IGNORECASE)
+    # Product names the voice mangles (Winamp should sound like "win-amp").
+    text = re.sub(r'\bWinamp\b', 'Win amp', text, flags=re.IGNORECASE)
     if speakable_symbols:
         text = _make_symbols_speakable_for_tts(text)
     # Any surviving bare < or > could still confuse ElevenLabs; replace with parens.
