@@ -9,7 +9,7 @@ import { createPlanning } from './planning/index.js?v=20261003-sitemap-groups';
 
 import { createSidebar } from './sidebar/index.js?v=20261024-sidebar-wfadd';
 
-import { createAutomations } from './automations/index.js?v=20261024-autolist2';
+import { createAutomations } from './automations/index.js?v=20261024-autolist3';
 
 import { createIncoming } from './incoming/index.js?v=20261022-incomingpad';
 

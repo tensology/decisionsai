@@ -226,7 +226,7 @@
 .scheduled-group-count { min-width: 20px; padding: 1px 7px; border-radius: 10px; background: rgba(255,255,255,.08); color: var(--studio-muted); font-size: 11px; text-align: center; }
 .scheduled-table { border: 1px solid var(--studio-line); border-radius: 10px; overflow: hidden; }
 .scheduled-row.readonly, .scheduled-row-head { display: grid; grid-template-columns: minmax(220px, 2.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) minmax(90px, .8fr) 72px; align-items: center; gap: 12px; min-height: 0; padding: 12px 14px; border: 0; border-bottom: 1px solid var(--studio-line-soft); border-radius: 0; }
-.scheduled-cell-next { display: flex; align-items: center; gap: 6px; }
+.scheduled-cell-next { display: grid; gap: 3px; justify-items: start; }
 .scheduled-next-when { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-row.readonly:last-child { border-bottom: 0; }
 .scheduled-row-head { padding: 8px 14px; background: rgba(255,255,255,.03); color: var(--studio-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
