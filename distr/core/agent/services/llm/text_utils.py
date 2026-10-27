@@ -80,6 +80,92 @@ def ensure_line_sentence_boundaries_for_tts(text: str) -> str:
     return "\n".join(out_lines)
 
 
+# File extensions spelled out so TTS does not read "dot t x t" (heard as ". .xt").
+_SPOKEN_FILE_EXTENSIONS = {
+    "txt": "text file",
+    "md": "text file",
+    "rtf": "text file",
+    "pdf": "PDF file",
+    "doc": "Word document",
+    "docx": "Word document",
+    "xls": "spreadsheet",
+    "xlsx": "spreadsheet",
+    "csv": "CSV file",
+    "png": "image",
+    "jpg": "image",
+    "jpeg": "image",
+    "gif": "image",
+    "webp": "image",
+    "heic": "image",
+    "mp3": "audio file",
+    "wav": "audio file",
+    "m4a": "audio file",
+    "ogg": "audio file",
+    "flac": "audio file",
+    "aac": "audio file",
+    "mp4": "video file",
+    "mov": "video file",
+    "mkv": "video file",
+    "avi": "video file",
+    "webm": "video file",
+    "zip": "zip file",
+    "rar": "zip file",
+    "7z": "zip file",
+    "tar": "archive",
+    "gz": "archive",
+    "json": "JSON file",
+    "xml": "XML file",
+    "yaml": "YAML file",
+    "yml": "YAML file",
+    "py": "Python file",
+    "js": "JavaScript file",
+    "ts": "TypeScript file",
+    "html": "HTML file",
+    "css": "CSS file",
+    "sh": "shell script",
+}
+_EXT_ALT = "|".join(sorted(_SPOKEN_FILE_EXTENSIONS, key=len, reverse=True))
+_FILENAME_WITH_EXT_RE = re.compile(
+    rf"\b([\w][\w \-]{{0,64}}?)\.({_EXT_ALT})\b", re.IGNORECASE
+)
+_BARE_EXTENSION_RE = re.compile(rf"(?<![\w.])\.({_EXT_ALT})\b", re.IGNORECASE)
+
+
+def humanize_filenames_for_tts(text: str) -> str:
+    """Speak filenames cleanly: ``voice_note_2026.txt`` -> ``voice note 2026 text file``.
+
+    Keeps letters and numbers intact (no underscore stripping) and spells the
+    extension as a word so engines do not read a bare ".txt" as dot-t-x-t.
+    """
+    if not text:
+        return text
+
+    def _spoken_ext(ext: str) -> str:
+        return _SPOKEN_FILE_EXTENSIONS.get(ext.lower(), ext)
+
+    def _repl(match: re.Match) -> str:
+        stem = re.sub(r"[_-]+", " ", match.group(1)).strip()
+        spoken = _spoken_ext(match.group(2))
+        return f"{stem} {spoken}" if stem else spoken
+
+    text = _FILENAME_WITH_EXT_RE.sub(_repl, text)
+    return _BARE_EXTENSION_RE.sub(lambda m: _spoken_ext(m.group(1)), text)
+
+
+def _path_or_basename(path: str) -> str:
+    """Keep a readable filename from a path; redact bare directories to a placeholder.
+
+    Only recognised file extensions are kept, so host-like tails ("www.example.com")
+    still collapse to the neutral placeholder rather than leaking an odd token.
+    """
+    trimmed = path.rstrip("/\\")
+    base = re.split(r"[/\\]", trimmed)[-1]
+    if 0 < len(base) <= 80 and "." in base and not base.startswith("."):
+        if base.rsplit(".", 1)[-1].lower() in _SPOKEN_FILE_EXTENSIONS:
+            return base
+    return _PATH_REDACT_PLACEHOLDER
+
+
 def redact_filesystem_paths_for_conversation(text: str) -> str:
     """Replace local filesystem paths with plain prose.
 
@@ -93,18 +179,19 @@ def redact_filesystem_paths_for_conversation(text: str) -> str:
     ph = _PATH_REDACT_PLACEHOLDER
 
     # file:// URIs
-    out = re.sub(r'file://[^\s<>\'\"]+', ph, out, flags=re.IGNORECASE)
+    out = re.sub(r'file://[^\s<>\'\"]+', lambda m: _path_or_basename(m.group(0)[7:]), out, flags=re.IGNORECASE)
     # Windows absolute paths
     out = re.sub(
         r'(?<![\w/])([A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)+[^\\/:*?"<>|\r\n]+)',
-        ph,
+        lambda m: _path_or_basename(m.group(0)),
         out,
     )
     # Unix-style absolute paths: /a/b/c — at least two path segments after root.
     # Require the "/" not to be part of a URL scheme (https://) by rejecting "/" after ":" or another "/".
-    out = re.sub(r'(?<![/:])(/(?:[^\s/]+/){2,}[^\s/]+)', ph, out)
+    # Keep the trailing filename so "Saved to /x/y/meeting.txt" still names the file.
+    out = re.sub(r'(?<![/:])(/(?:[^\s/]+/){2,}[^\s/]+)', lambda m: _path_or_basename(m.group(0)), out)
     # Home-relative (~/, ~user/)
-    out = re.sub(r'~[^\s]+', ph, out)
+    out = re.sub(r'~[^\s]+', lambda m: _path_or_basename(m.group(0)), out)
 
     # Merge duplicate placeholders from multi-pass or path + line boilerplate
     out = re.sub(r'(?:' + re.escape(ph) + r'\s*){2,}', ph + ' ', out)
@@ -246,6 +333,8 @@ def clean_text_for_tts(
     text = re.sub(r'https?://[^\s]*[^\s.,;:!?]', 'a web link', text, flags=re.IGNORECASE)
     # Product names the voice mangles (Winamp should sound like "win-amp").
     text = re.sub(r'\bWinamp\b', 'Win amp', text, flags=re.IGNORECASE)
+    # Speak filenames and extensions as words before any punctuation is stripped.
+    text = humanize_filenames_for_tts(text)
     if speakable_symbols:
         text = _make_symbols_speakable_for_tts(text)
     # Any surviving bare < or > could still confuse ElevenLabs; replace with parens.
@@ -284,6 +373,9 @@ def clean_text_for_tts(
 
     # Remove markdown formatting
     text = re.sub(r'\*+', '', text)
+    # Snake_case -> words ("voice_note" must not become "voicenote"); then drop
+    # leftover emphasis underscores.
+    text = re.sub(r'(?<=\w)_+(?=\w)', ' ', text)
     text = re.sub(r'_+', '', text)
     text = re.sub(r'`+', '', text)
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)

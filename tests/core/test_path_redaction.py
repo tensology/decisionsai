@@ -16,7 +16,8 @@ def test_redact_unix_downloads_path():
     )
     out = redact_filesystem_paths_for_conversation(raw)
     assert "/Users/" not in out
-    assert _PATH_REDACT_PLACEHOLDER in out
+    # The filename is kept so the user can hear which file was produced.
+    assert "workflow_failure_and_workflow_step_type_fix_ticket.md" in out
 
 
 def test_redact_preserves_url_hosts():
@@ -29,7 +30,7 @@ def test_redact_windows_path():
     text = r"Saved to C:\Users\paul\Downloads\report.pdf"
     out = redact_filesystem_paths_for_conversation(text)
     assert r"C:\Users" not in out
-    assert _PATH_REDACT_PLACEHOLDER in out
+    assert "report.pdf" in out
 
 
 def test_clean_model_text_for_chat_strips_markdown_noise():
@@ -47,7 +48,8 @@ def test_clean_text_for_tts_turns_residual_slashes_into_spacing():
 
     assert "/" not in out
     assert "\\" not in out
-    assert "app src audio.ts" in out
+    # Recognised extensions are spoken as words, not read as ".t s".
+    assert "app src audio TypeScript file" in out
     assert "alpha beta" in out
     assert "05 12" in out
 
@@ -110,6 +112,25 @@ def test_spoken_task_summary_uses_primary_task_without_title():
     )
     out = spoken_task_summary(instruction)
     assert out == "Tighten the now-playing bar"
+
+
+def test_saved_to_path_keeps_filename_and_speaks_extension():
+    raw = "Transcription complete. Saved to /Users/paul/audio/voice_note_20261027.txt"
+    out = clean_text_for_tts(raw, spoken_prose=True)
+    assert "/Users/" not in out
+    assert "voice note 20261027 text file" in out
+
+
+def test_snake_case_filename_is_not_merged_into_one_word():
+    out = clean_text_for_tts("Saved to voice_note.txt", spoken_prose=True)
+    assert "voicenote" not in out
+    assert "voice note text file" in out
+
+
+def test_bare_extension_is_spoken_as_a_word():
+    out = clean_text_for_tts("Saved to .txt", spoken_prose=True)
+    assert "text file" in out
+    assert "txt" not in out
 
 
 def test_spoken_result_summary_shortens_model_errors():
