@@ -451,3 +451,24 @@ def test_workflow_reply_message_is_human():
     assert "accepted:" not in approve
     assert "passed that to run #167" in feedback
     assert "stopped run #167" in stop
+
+
+def test_affirmative_and_question_classification():
+    allowed = ["continue", "stop", "feedback"]
+    assert classify_reply("what's actually waiting?", allowed)[0] is None
+    assert classify_reply("why is it blocked", allowed)[0] is None
+    assert classify_reply("yes go ahead", allowed)[0] == "continue"
+    assert classify_reply("check again", allowed)[0] == "feedback"
+
+
+def test_status_question_is_not_steering_and_reaches_the_agent():
+    interaction = _create(kind="worker_needs_input", chat_id=123)
+
+    reply = handle_telegram_workflow_reply(
+        "what's actually waiting?", chat_id=123, resolver_id="123"
+    )
+
+    # None means the caller falls through to the conversational agent, which can
+    # answer with the run context. The checkpoint stays pending.
+    assert reply is None
+    assert [item["token"] for item in pending_interactions(chat_id=123)] == [interaction["token"]]

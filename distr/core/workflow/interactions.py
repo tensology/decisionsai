@@ -299,6 +299,24 @@ def record_telegram_delivery_error(*, token: str, error: str) -> bool:
     return bool(result.rowcount)
 
 
+_QUESTION_LEAD_RE = re.compile(
+    r"^(?:what|what's|whats|which|who|whom|whose|when|where|why|how|"
+    r"is|are|am|was|were|do|does|did|can|could|should|would|will|"
+    r"has|have|had|any)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_status_question(text: str) -> bool:
+    """A question about a run is not steering — it must reach the agent."""
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    if clean.endswith("?"):
+        return True
+    return bool(_QUESTION_LEAD_RE.match(clean))
+
+
 def classify_reply(value: str, allowed_actions: list[str]) -> tuple[str | None, str]:
     clean = re.sub(r"\s+", " ", str(value or "").strip())
     low = clean.lower()
@@ -313,8 +331,13 @@ def classify_reply(value: str, allowed_actions: list[str]) -> tuple[str | None, 
         return "stop", clean
     if re.search(r"\b(approve|approved|yes|yep|go ahead|proceed)\b", low) and "approve" in allowed_actions:
         return "approve", clean
-    if re.search(r"\b(continue|resume|looks good|carry on)\b", low) and "continue" in allowed_actions:
+    if re.search(r"\b(continue|resume|looks good|carry on|go ahead|proceed)\b", low) and "continue" in allowed_actions:
         return "continue", clean
+    if _looks_like_status_question(clean):
+        # "what's actually waiting?" is a question, not a steering instruction.
+        # Return None so the conversational agent answers it (with the run
+        # context) instead of silently feeding it to the worker as feedback.
+        return None, clean
     if clean and "feedback" in allowed_actions:
         return "feedback", clean
     return None, clean
