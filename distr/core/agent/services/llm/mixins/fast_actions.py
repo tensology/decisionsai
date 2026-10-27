@@ -606,7 +606,24 @@ class FastActionMixin:
             await self.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
             await asyncio.sleep(0.05)
 
-            chunks = self._split_text_into_chunks(clipboard_text)
+            # Normalise BEFORE splitting: links and ellipses otherwise corrupt the
+            # sentence boundaries (URL dots / "..." look like full stops), which made
+            # the read skip or mangle sentences.
+            import re as _re
+
+            # Replace links and ellipses BEFORE the cleaner runs, so URL dots and "..."
+            # never look like sentence boundaries, then clean and split.
+            normalized = _re.sub(r"https?://[^\s]*[^\s.,;:!?]", "a web link", clipboard_text)
+            normalized = normalized.replace("\u2026", " ")
+            normalized = _re.sub(r"\.{2,}", " ", normalized)
+            normalized = _re.sub(r"\s*\n\s*", " ", normalized)
+            normalized = clean_text_for_tts(
+                normalized, spoken_prose=True, speakable_symbols=True
+            ) or normalized
+            normalized = _re.sub(r"\s+([.,!?;:])", r"\1", normalized)
+            normalized = _re.sub(r"\s+", " ", normalized).strip()
+
+            chunks = self._split_text_into_chunks(normalized)
             for i, chunk in enumerate(chunks):
                 if self._cancelled:
                     break

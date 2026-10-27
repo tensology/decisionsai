@@ -241,6 +241,9 @@ def clean_text_for_tts(
     # Strip any remaining HTML/XML-like tags — angle brackets trigger ElevenLabs SSML parsing
     # and can produce the characteristic elongated "aaaaaaaahhhhh" artifact.
     text = re.sub(r'<[^>]{0,80}>', '', text)
+    # Replace links before symbol conversion: "=" inside a URL would otherwise become
+    # "equals" and split the link, and its dots would read as full stops.
+    text = re.sub(r'https?://[^\s]*[^\s.,;:!?]', 'a web link', text, flags=re.IGNORECASE)
     if speakable_symbols:
         text = _make_symbols_speakable_for_tts(text)
     # Any surviving bare < or > could still confuse ElevenLabs; replace with parens.
