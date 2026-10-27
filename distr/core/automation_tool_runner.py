@@ -14,6 +14,11 @@ _TOOL_BINDINGS: dict[str, tuple[str, str]] = {
         "distr.core.agent.tools.system.proactive_orchestrator",
         "ProactiveOrchestratorTool",
     ),
+    # Automation-only: post one media item to the owner's WhatsApp Status.
+    "whatsapp_status": (
+        "distr.core.agent.tools.integrations.whatsapp_status_tool",
+        "WhatsAppStatusTool",
+    ),
 }
 
 
