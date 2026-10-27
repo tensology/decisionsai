@@ -57,18 +57,48 @@ STREAM_STATE: dict[str, Any] = {
 }
 
 
-def handle_work_request_signal(request_id: Any) -> None:
-    """A Tensology work proposal arrived: record it and put it in front of the user.
+_URGENT_WORK_TERMS = (
+    "urgent", "asap", "immediate", "critical", "outage", "down", "offline",
+    "error", "exception", "traceback", "failing", "failed", "broken", "production",
+    "prod", "5xx", "500",
+)
 
-    Deliberately lightweight: the proposal content stays on Tensology (the Telegram
-    buttons there already carry the decision). Decisions only needs to know there is
-    something waiting so it can surface it and offer to act.
-    """
-    summary = (
-        "A Tensology work proposal is waiting for your decision"
-        + (f" (request {request_id})" if request_id else "")
-        + "."
+
+def work_request_summary(event: dict[str, Any]) -> str:
+    """Turn a Tensology work-request signal into one descriptive, human sentence."""
+    project = " ".join(str(event.get("project") or "").split())
+    title = " ".join(str(event.get("title") or "").split())
+    priority = str(event.get("priority") or "").strip().lower()
+    rationale = " ".join(str(event.get("rationale") or "").split())
+    request_id = event.get("request_id")
+
+    haystack = f"{title} {rationale}".lower()
+    urgent = priority in {"urgent", "high", "critical", "immediate"} or any(
+        term in haystack for term in _URGENT_WORK_TERMS
     )
+
+    lead = "Urgent — needs your attention" if urgent else "A Tensology proposal needs your decision"
+    subject = (title or "a new work proposal").rstrip(". ")
+    head = f"{lead}: for {project}, {subject}" if project else f"{lead}: {subject}"
+
+    parts: list[str] = [head + "."]
+    if rationale and rationale.lower() not in subject.lower():
+        parts.append(f"Why: {rationale[:240].rstrip('. ')}.")
+    if request_id:
+        parts.append(f"(request {request_id}).")
+    parts.append("Say run it, queue it as a ticket, or dismiss.")
+    return " ".join(parts)
+
+
+def handle_work_request_signal(event: Any) -> None:
+    """A Tensology work proposal arrived: describe it and put it in front of the user.
+
+    Only the signal and a short summary travel from Tensology; the full proposal stays
+    there. This is enough to say *what* is waiting, how urgent it looks, and why.
+    """
+    if not isinstance(event, dict):
+        event = {"request_id": event}
+    summary = work_request_summary(event)
     try:
         from distr.core.orchestration_events import emit_orchestration_event
 
@@ -77,7 +107,14 @@ def handle_work_request_signal(request_id: Any) -> None:
             event_type="needs_input",
             status="waiting",
             summary=summary,
-            payload={"surface": "tensology", "subtype": "work_request", "request_id": request_id},
+            payload={
+                "surface": "tensology",
+                "subtype": "work_request",
+                "request_id": event.get("request_id"),
+                "urgent": "Urgent" in summary,
+                "project": event.get("project"),
+                "title": event.get("title"),
+            },
             notify_channels=["chat"],
         )
     except Exception:
@@ -325,9 +362,9 @@ async def run_tensology_ticket_stream(
                                 import inspect as _inspect
 
                                 if _inspect.iscoroutinefunction(handle_work_request):
-                                    await handle_work_request(event.get("request_id"))
+                                    await handle_work_request(event)
                                 else:
-                                    await asyncio.to_thread(handle_work_request, event.get("request_id"))
+                                    await asyncio.to_thread(handle_work_request, event)
                             except Exception:
                                 logger.debug("Tensology work-request handler failed", exc_info=True)
                         elif kind == "ping":

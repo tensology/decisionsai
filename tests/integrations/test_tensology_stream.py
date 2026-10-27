@@ -441,8 +441,8 @@ def test_work_request_event_triggers_handler():
     async def handle(ids):
         pass
 
-    async def handle_wr(request_id):
-        handled.append(request_id)
+    async def handle_wr(event):
+        handled.append(event)
 
     async def sleep(delay):
         pass
@@ -452,17 +452,39 @@ def test_work_request_event_triggers_handler():
         handle_work_request=handle_wr, config=lambda: ("wss://t/ws/decisions", "k"),
         sleep=sleep, max_attempts=1,
     ))
-    assert handled == [55]
+    assert [e.get("request_id") for e in handled] == [55]
 
 
-def test_work_request_signal_records_needs_input(monkeypatch):
+def test_work_request_signal_records_descriptive_needs_input(monkeypatch):
     import distr.core.orchestration_events as oe
 
     calls = []
     monkeypatch.setattr(oe, "emit_orchestration_event", lambda **kw: calls.append(kw))
     with patch("distr.core.chat.ChatService.get_current_chat_id", return_value=None):
-        stream.handle_work_request_signal(77)
+        stream.handle_work_request_signal({
+            "request_id": 77,
+            "project": "Merrypak",
+            "title": "Celery worker dead on jackcat-ub-srv",
+            "priority": "high",
+            "rationale": "The worker keeps dropping the queue.",
+        })
 
     assert calls and calls[0]["event_type"] == "needs_input"
-    assert "77" in calls[0]["summary"]
-    assert calls[0]["source"] == "tensology"
+    summary = calls[0]["summary"]
+    assert summary.startswith("Urgent")
+    assert "Merrypak" in summary
+    assert "Celery worker dead on jackcat-ub-srv" in summary
+    assert "request 77" in summary
+    assert calls[0]["payload"]["urgent"] is True
+
+
+def test_work_request_summary_is_not_urgent_for_plain_work():
+    summary = stream.work_request_summary({
+        "request_id": 5,
+        "project": "AuctionNow",
+        "title": "Add CSV export to reports",
+        "priority": "medium",
+    })
+    assert summary.startswith("A Tensology proposal needs your decision")
+    assert "AuctionNow" in summary and "CSV export" in summary
+    assert "Urgent" not in summary
