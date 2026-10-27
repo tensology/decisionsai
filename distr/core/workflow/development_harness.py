@@ -2063,7 +2063,6 @@ def dispatch_development_prompt(
         execution_mode["mode"] == "workflow"
         and autonomy_level not in {"plan", "approval"}
     ):
-        from distr.core.workflow.planning import plan_workflow
         from distr.core.workflow.work_dispatch import dispatch_work_item
 
         existing_workflow_id = int(metadata.get("workflow_id") or 0) or None
@@ -2085,22 +2084,23 @@ def dispatch_development_prompt(
                 }
             relaunch_inherit = dict(relaunch.get("inherit") or {})
         if workflow_id is None:
-            try:
-                planned_id = plan_workflow(clean, chat_id=int(chat_id), name=None)
-            except Exception as exc:
-                message = str(exc).strip() or "Could not plan a development workflow."
-                ChatService.append_assistant_notice(
-                    int(chat_id),
-                    f"{message} Falling back to the canonical Development workflow.",
-                )
-                planned_id = None
-            if planned_id:
+            # Route the ticket to its weight-class policy. The old path planned a
+            # throwaway "instruction" draft (which was never runnable) and then
+            # fell back to the retired Development pipeline, which is exactly how
+            # the workflow list filled with dead drafts and one token furnace.
+            from distr.core.workflow.phases import route_ticket_workflow_id
+
+            workflow_id = route_ticket_workflow_id(
+                clean,
+                has_repo_target=bool(int(project.id) > 0),
+            ) or None
+            if workflow_id:
                 try:
                     from distr.core.workflow.development_threads import mark_development_thread
 
                     mark_development_thread(
                         int(chat_id),
-                        workflow_id=int(planned_id),
+                        workflow_id=int(workflow_id),
                         ticket_id=ticket_id,
                         board_key=metadata.get("board_key"),
                         board_provider=metadata.get("board_provider"),
@@ -2108,21 +2108,12 @@ def dispatch_development_prompt(
                         board_ticket_title=metadata.get("board_ticket_title"),
                         board_ticket_lane=metadata.get("board_ticket_lane"),
                     )
-                    workflow_id = int(planned_id)
                 except Exception as exc:
                     ChatService.append_assistant_notice(
                         int(chat_id),
-                        f"Could not bind the planned workflow ({exc}). Falling back to the canonical Development workflow.",
+                        f"Could not bind the routed workflow ({exc}).",
                     )
                     workflow_id = None
-        if workflow_id is None:
-            from distr.core.workflow.developer_workflow import resolve_development_workflow
-
-            workflow_id = resolve_development_workflow(
-                project_id=int(project.id) if int(project.id) > 0 else None,
-                ticket_id=ticket_id,
-                board_key=metadata.get("board_key"),
-            )
         model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
         pinned_backend = str(model_route.get("backend") or "").strip().lower()
         local_sel = resolve_local_harness_selection(pinned_backend)

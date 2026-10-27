@@ -186,6 +186,33 @@ def test_composed_instruction_without_reply_has_no_marker():
     assert REPLY_PHASE_MARKER not in text
 
 
+def test_route_ticket_workflow_id_returns_the_managed_workflow(monkeypatch):
+    from distr.core.workflow import phases
+
+    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 55)
+    assert phases.route_ticket_workflow_id("add a button") == 55
+
+
+def test_route_ticket_workflow_id_creates_then_falls_back_to_standard(monkeypatch):
+    from distr.core.workflow import phases
+
+    calls = {"ensured": 0}
+
+    def _ensure():
+        calls["ensured"] += 1
+        return {"standard": 77}
+
+    monkeypatch.setattr(phases, "ensure_class_workflows", _ensure)
+    monkeypatch.setattr(
+        phases,
+        "find_class_workflow_id",
+        lambda key: 77 if key == "standard" else None,
+    )
+
+    assert phases.route_ticket_workflow_id("schema migration") == 77
+    assert calls["ensured"] == 1
+
+
 def test_route_ticket_survives_missing_managed_workflow(monkeypatch):
     from distr.core.workflow import phases
 

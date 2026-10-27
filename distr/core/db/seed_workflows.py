@@ -1,77 +1,95 @@
-"""Seed the single canonical user-visible Development workflow."""
+"""Seed the managed ticket workflows.
+
+The single 11-step "Development" pipeline is retired. Work is routed by weight
+class instead, so seeding now means making sure the four managed policy
+workflows exist, and archiving the old pipeline rather than resurrecting it.
+
+Seeding must never recreate the old pipeline: that is exactly what made it come
+back after every restart.
+"""
 
 from __future__ import annotations
 
 import logging
 
-from distr.core.db import get_session
-from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
-from distr.core.workflow.developer_workflow import DEVELOPER_WORKFLOW_NAME
+from distr.core.workflow.phases import (
+    WORKFLOW_CLASSES,
+    class_workflow_name,
+    ensure_class_workflows,
+    rebuild_class_workflow,
+)
 
 logger = logging.getLogger(__name__)
 
-WORKFLOW_SEEDS = {DEVELOPER_WORKFLOW_NAME: "development-ticket-to-implementation"}
+# Names that used to mean "the one true pipeline". Asking for them now returns
+# the managed policy workflows instead.
+RETIRED_WORKFLOW_NAMES = {
+    "development",
+    "development: ticket to implementation",
+}
+
+
+def managed_workflow_names() -> list[str]:
+    return [class_workflow_name(key) for key in WORKFLOW_CLASSES]
+
+
+def retire_legacy_workflows() -> dict[str, int]:
+    """Archive the retired Development pipeline. Reversible, never deleted."""
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow
+
+    retired = 0
+    with get_session() as db:
+        rows = (
+            db.query(AutoWorkflow)
+            .filter(AutoWorkflow.name.in_(["Development", "Development: Ticket to Implementation"]))
+            .all()
+        )
+        for row in rows:
+            if str(row.status or "").lower() != "archived":
+                row.status = "archived"
+                retired += 1
+        db.commit()
+    return {"retired": retired}
 
 
 def seed_workflows(force_reset: bool = False, workflow_names=None):
-    """Create/repair Development without recreating legacy role workflow tabs."""
-    requested = set(workflow_names or [DEVELOPER_WORKFLOW_NAME])
-    aliases = {DEVELOPER_WORKFLOW_NAME, "Development: Ticket to Implementation"}
-    if not requested.intersection(aliases):
-        return {
-            "seeded_count": 0,
-            "skipped_count": 0,
-            "seeded_names": [],
-            "skipped_names": [],
-            "force_reset": force_reset,
-        }
+    """Ensure the managed ticket workflows exist and the legacy pipeline is retired."""
+    requested = [str(name) for name in (workflow_names or []) if str(name).strip()]
+    # A caller asking only for the retired pipeline still gets a working model.
+    only_legacy = bool(requested) and all(
+        name.strip().lower() in RETIRED_WORKFLOW_NAMES for name in requested
+    )
 
-    with get_session() as db:
-        workflows = db.query(AutoWorkflow).filter(AutoWorkflow.name.in_(aliases)).all()
-        active = [row for row in workflows if str(row.status or "").lower() != "archived"]
-        workflow = max(active or workflows, key=lambda row: (len(row.runs), len(row.steps)), default=None)
-        if workflow is None:
-            workflow = AutoWorkflow(
-                name=DEVELOPER_WORKFLOW_NAME,
-                description="Canonical end-to-end software development workflow.",
-                status="active",
-                workflow_type="manual",
-            )
-            db.add(workflow)
-            db.flush()
-        workflow.name = DEVELOPER_WORKFLOW_NAME
-        workflow.status = "active"
-        workflow.workflow_type = "manual"
-        workflow_id = int(workflow.id)
-        has_steps = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.workflow_id == workflow_id).count() > 0
-        db.commit()
+    seeded: dict[str, int] = {}
+    error = ""
+    try:
+        seeded = ensure_class_workflows()
+    except Exception as exc:  # pragma: no cover - defensive
+        error = str(exc)
+        logger.warning("Could not seed managed workflows: %s", exc)
 
-    if has_steps and not force_reset:
-        return {
-            "seeded_count": 0,
-            "skipped_count": 1,
-            "seeded_names": [],
-            "skipped_names": [DEVELOPER_WORKFLOW_NAME],
-            "force_reset": force_reset,
-        }
+    if force_reset:
+        for class_key, workflow_id in list(seeded.items()):
+            try:
+                rebuild_class_workflow(int(workflow_id), class_key)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Could not rebuild %s workflow: %s", class_key, exc)
 
-    from distr.core.workflow.loop_presets import apply_loop_preset
+    retired = 0
+    try:
+        retired = int(retire_legacy_workflows().get("retired") or 0)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not retire legacy workflows: %s", exc)
 
-    result = apply_loop_preset(workflow_id, DEVELOPER_WORKFLOW_NAME, mode="replace")
-    if not result.get("success"):
-        logger.warning("Could not seed Development workflow: %s", result.get("error"))
-        return {
-            "seeded_count": 0,
-            "skipped_count": 0,
-            "seeded_names": [],
-            "skipped_names": [],
-            "force_reset": force_reset,
-            "error": result.get("error"),
-        }
     return {
-        "seeded_count": 1,
+        "seeded_count": len(seeded),
         "skipped_count": 0,
-        "seeded_names": [DEVELOPER_WORKFLOW_NAME],
+        "seeded_names": list(seeded.keys()),
         "skipped_names": [],
         "force_reset": force_reset,
+        "managed": seeded,
+        "retired_legacy": retired,
+        "converted_legacy_request": only_legacy,
+        **({"error": error} if error else {}),
     }

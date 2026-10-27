@@ -538,6 +538,42 @@ def ensure_class_workflows() -> dict[str, int]:
     return created
 
 
+def rebuild_class_workflow(
+    workflow_id: int,
+    class_key: str,
+    *,
+    goal: str = "Complete the linked ticket using this workflow's policy.",
+    done_when: str = "The ticket is done, evidence is returned, and the source gets a reply.",
+) -> int:
+    """Replace a managed workflow's steps from the current phase definition."""
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflowStep
+    from distr.core.workflow.service import add_step
+
+    definition = build_workflow_definition(
+        class_workflow_name(class_key),
+        class_key,
+        goal=goal,
+        done_when=done_when,
+        description=CLASS_WORKFLOW_DESCRIPTIONS.get(class_key, ""),
+    )
+    with get_session() as db:
+        db.query(AutoWorkflowStep).filter(
+            AutoWorkflowStep.workflow_id == int(workflow_id)
+        ).delete(synchronize_session=False)
+        db.commit()
+    for position, step in enumerate(definition["steps"]):
+        add_step(
+            int(workflow_id),
+            name=str(step["name"]),
+            action_type=str(step["action_type"]),
+            position=position,
+            instruction=str(step["instruction"]),
+            config=dict(step.get("config") or {}),
+        )
+    return int(workflow_id)
+
+
 def route_ticket(
     text: str,
     *,
@@ -581,6 +617,31 @@ def route_ticket(
         "announcement": announcement,
         "overridable": True,
     }
+
+
+def route_ticket_workflow_id(
+    text: str,
+    *,
+    has_repo_target: bool = True,
+    requested: Optional[str] = None,
+) -> int:
+    """Return the managed workflow id a ticket should run on.
+
+    Creates the managed workflows on first use so a fresh install can route work
+    without anyone hand-building a pipeline. Falls back to ``standard`` rather
+    than returning 0, because dispatching a ticket with no workflow is worse
+    than dispatching it on the default policy.
+    """
+    plan = route_ticket(text, has_repo_target=has_repo_target, requested=requested)
+    workflow_id = plan.get("workflow_id")
+    if workflow_id:
+        return int(workflow_id)
+    try:
+        ensure_class_workflows()
+    except Exception:
+        logger.warning("Could not create managed class workflows", exc_info=True)
+    workflow_id = find_class_workflow_id(str(plan.get("class") or "")) or find_class_workflow_id("standard")
+    return int(workflow_id or 0)
 
 
 def create_phased_workflow(

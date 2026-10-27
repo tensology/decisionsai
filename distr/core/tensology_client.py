@@ -924,7 +924,7 @@ def _ensure_tensology_kanban_ticket(
 
 def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) -> tuple[int, dict[str, str]]:
     from distr.core.kanban.ticket_policy import resolve_ticket_complexity
-    from distr.core.workflow.developer_workflow import get_or_create_development_workflow
+    from distr.core.workflow.phases import route_ticket_workflow_id
 
     tasks = ticket.get("tasks") if isinstance(ticket.get("tasks"), list) else []
     complexity = resolve_ticket_complexity(
@@ -942,7 +942,12 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
         default_branch=_repo_default_branch(project.get("folder_location")),
         ops_incident=ops_incident,
     )
-    workflow_id = get_or_create_development_workflow()
+    # Route by weight class instead of always using the retired 11-step pipeline.
+    # A migration or auth change escalates to critical; a small fix stays cheap.
+    workflow_id = route_ticket_workflow_id(
+        f"{ticket.get('title') or ''}\n\n{ticket.get('description') or ''}",
+        has_repo_target=True,
+    )
     mirrored_ticket_id = _ensure_tensology_kanban_ticket(ticket, project, workflow_id)
     skill_ids, use_playwright = _execution_skill_ids(ticket)
     response = _local_api_post(
