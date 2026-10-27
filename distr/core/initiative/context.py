@@ -22,6 +22,7 @@ class ContextBundle:
     developer_context: dict = field(default_factory=dict)
     developer_context_text: str = ""
     work_scan: dict = field(default_factory=dict)
+    pending_work_requests: list = field(default_factory=list)
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
     situational: dict = field(default_factory=dict)
@@ -144,6 +145,14 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to load memory file snippets", exc_info=True)
 
+        pending_work_requests: list = []
+        try:
+            from distr.core.tensology_client import fetch_pending_work_requests
+
+            pending_work_requests = fetch_pending_work_requests()
+        except Exception:
+            logger.debug("ContextAssembler: pending work requests fetch failed", exc_info=True)
+
         situational: dict = {}
         try:
             from distr.core.initiative.situational import build_situational
@@ -188,6 +197,7 @@ class ContextAssembler:
             developer_context=developer_context,
             developer_context_text=developer_context_text,
             work_scan=work_scan,
+            pending_work_requests=pending_work_requests,
             initiative_settings=settings,
             current_datetime=now.isoformat(),
             situational=situational,

@@ -171,6 +171,7 @@ class ProactiveOrchestratorTool(BaseTool):
         from distr.core.initiative.context import ContextAssembler
         from distr.core.initiative.planners import (
             build_planner_orchestration_actions,
+            format_pending_proposals_markdown,
             generate_planner_markdown,
             tts_excerpt_from_markdown,
         )
@@ -192,6 +193,11 @@ class ProactiveOrchestratorTool(BaseTool):
             "mention which source each important item came from."
         )
         markdown, date_info = generate_planner_markdown("day", settings, bundle, instruction)
+        proposals_block = format_pending_proposals_markdown(
+            getattr(bundle, "pending_work_requests", []) or []
+        )
+        if proposals_block:
+            markdown = markdown.rstrip() + "\n" + proposals_block
         orchestration_actions = build_planner_orchestration_actions(bundle, scope="day")
         orchestration_results = self._execute_orchestration_actions(
             orchestration_actions,

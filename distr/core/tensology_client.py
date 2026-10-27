@@ -185,6 +185,94 @@ def configured_tensology_client(source: str = "decisionsai") -> TensologyClient:
     )
 
 
+def fetch_pending_work_requests() -> list[dict[str, Any]]:
+    """Pending Tensology work proposals awaiting a decision (queue / send / dismiss).
+
+    Best-effort: never raises for a missing key or a Tensology outage, so it is safe
+    to call while building the day plan.
+    """
+    try:
+        client = configured_tensology_client()
+    except TensologyApiError:
+        return []
+    try:
+        data = client.get("work-requests", query={"status": "pending"})
+    except TensologyApiError:
+        return []
+    return [item for item in (data if isinstance(data, list) else []) if isinstance(item, dict)]
+
+
+def decide_work_request(proposal_id: int, action: str) -> dict[str, Any]:
+    """Queue, send to Decisions, or dismiss one pending Tensology proposal."""
+    normalized = str(action or "").strip().lower()
+    aliases = {"run": "send_to_decisions", "ticket": "queue", "queue": "queue",
+               "dismiss": "dismiss", "send": "send_to_decisions", "send_to_decisions": "send_to_decisions"}
+    resolved = aliases.get(normalized, normalized)
+    if resolved not in {"queue", "send_to_decisions", "dismiss"}:
+        raise TensologyApiError("Action must be run, queue, or dismiss.", code="invalid_action")
+    client = configured_tensology_client()
+    return client.post(
+        f"work-requests/{int(proposal_id)}/action",
+        {"action": resolved},
+        idempotency_key=f"work-request-{int(proposal_id)}-{resolved}",
+    )
+
+
+_PROPOSAL_DECISION_RE = re.compile(r"^\s*(run|queue|dismiss|send)\s+(all|\d+)\s*$", re.IGNORECASE)
+_PROPOSAL_VERB_ACTION = {
+    "run": "send_to_decisions",
+    "send": "send_to_decisions",
+    "queue": "queue",
+    "dismiss": "dismiss",
+}
+_PROPOSAL_ACTION_PHRASE = {
+    "send_to_decisions": "queued for Decisions",
+    "queue": "sent to the ticket queue",
+    "dismiss": "dismissed",
+}
+
+
+def handle_proposal_decision_reply(text: str) -> str | None:
+    """Resolve a plain "run 1", "queue 2" or "dismiss all" reply against pending proposals.
+
+    Returns a short human acknowledgement, or None when the text is not a proposal
+    decision (so other handlers keep it).
+    """
+    match = _PROPOSAL_DECISION_RE.match(str(text or ""))
+    if not match:
+        return None
+    action = _PROPOSAL_VERB_ACTION[match.group(1).lower()]
+    target = match.group(2).lower()
+
+    proposals = fetch_pending_work_requests()
+    if not proposals:
+        return "There are no Tensology proposals waiting right now."
+    if target == "all":
+        chosen = proposals
+    else:
+        index = int(target)
+        if index < 1 or index > len(proposals):
+            return f"There's no proposal {index}. {len(proposals)} are waiting."
+        chosen = [proposals[index - 1]]
+
+    applied, failed = [], []
+    for proposal in chosen:
+        title = " ".join(str(proposal.get("title") or "").split()) or f"proposal {proposal.get('id')}"
+        try:
+            decide_work_request(int(proposal["id"]), action)
+            applied.append(title)
+        except Exception as exc:
+            failed.append(f"{title} ({exc})")
+
+    phrase = _PROPOSAL_ACTION_PHRASE[action]
+    if not applied:
+        return f"I couldn't action those proposals: {'; '.join(failed)}"
+    summary = f"Done — {len(applied)} proposal(s) {phrase}: {'; '.join(applied)}."
+    if failed:
+        summary += f" Not applied: {'; '.join(failed)}."
+    return summary
+
+
 def send_tensology_heartbeat() -> None:
     """Keep the configured Tensology connection visibly online."""
     from distr.core.settings import load_settings_from_db

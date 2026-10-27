@@ -619,6 +619,7 @@ def _user_payload(
             "recent_audit": bundle.recent_audit[:15],
             "developer_context": bundle.developer_context,
             "work_scan": bundle.work_scan,
+            "pending_work_requests": getattr(bundle, "pending_work_requests", []) or [],
             "memory_files_trimmed": {
                 "agent": (bundle.memory_agent or "")[:8000],
                 "user": (bundle.memory_user or "")[:8000],
@@ -743,3 +744,30 @@ def tts_excerpt_from_markdown(markdown: str, max_len: int = 950) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 1].rsplit(" ", 1)[0] + "…"
+
+
+def format_pending_proposals_markdown(proposals: list, *, max_items: int = 6) -> str:
+    """Deterministic "Proposals needing your call" block with run/queue/dismiss choices.
+
+    Kept out of the LLM path so the names, urgency flags and choices are always exact.
+    """
+    items = [p for p in (proposals or []) if isinstance(p, dict)]
+    if not items:
+        return ""
+    lines = ["", "## Proposals needing your call"]
+    for idx, proposal in enumerate(items[:max_items], start=1):
+        project = str((proposal.get("project") or {}).get("name") or "").strip()
+        title = " ".join(str(proposal.get("title") or "").split()) or f"Proposal {proposal.get('id')}"
+        priority = str(proposal.get("priority") or "").strip().lower()
+        flag = " **(urgent)**" if priority in {"urgent", "high", "critical", "immediate"} else ""
+        where = f" — {project}" if project else ""
+        lines.append(f"{idx}. {title}{where}{flag}")
+        rationale = " ".join(str(proposal.get("rationale") or "").split())
+        if rationale:
+            lines.append(f"   {rationale[:160]}")
+    lines.append("")
+    lines.append(
+        "Reply **run 1**, **queue 2**, **dismiss 3** (or **run all**, **dismiss all**), "
+        "or open Tensology to review."
+    )
+    return "\n".join(lines)

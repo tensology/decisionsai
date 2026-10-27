@@ -379,6 +379,16 @@ class TelegramMessagesMixin:
 
 
             try:
+                from distr.core.tensology_client import handle_proposal_decision_reply
+
+                proposal_reply = handle_proposal_decision_reply(text)
+                if proposal_reply:
+                    self.send_to_telegram(proposal_reply)
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] Proposal decision routing failed: %s", exc, exc_info=True)
+
+            try:
                 from distr.core.kanban.whatsapp_intake_approval import handle_telegram_reply as handle_wa_intake_reply
 
                 wa_intake = handle_wa_intake_reply(text, chat_id=chat_id)
