@@ -197,9 +197,7 @@ export function createAutomations({ context, actions, el }) {
         const selected = String(state.selectedAutomationId) === String(automation.id);
         const nextCell = isMessageTriggered(automation)
             ? { text: 'On message', title: '' }
-            : group === 'paused'
-              ? { text: 'Paused', title: automation.next_run_at ? whenTitle(automation.next_run_at) : '' }
-              : automation.next_run_at
+            : automation.next_run_at
                 ? { text: relativeWhen(automation.next_run_at), title: whenTitle(automation.next_run_at) }
                 : { text: '—', title: '' };
         const lastCell = automation.last_run_at
@@ -211,10 +209,11 @@ export function createAutomations({ context, actions, el }) {
         const statusLabel = group === 'completed' ? 'Completed' : group === 'paused' ? 'Paused' : 'Active';
         return `<div class="scheduled-row readonly${selected ? ' active' : ''}" data-scheduled-row="${id}" role="row">
             <div class="scheduled-row-main" role="cell">
-                <span class="scheduled-row-title"><strong>${esc(automation.name || 'Scheduled task')}</strong>${group === 'paused' ? '' : `<span class="scheduled-pill ${group}">${statusLabel}</span>`}</span>
+                <span class="scheduled-row-title"><strong>${esc(automation.name || 'Scheduled task')}</strong></span>
                 <span class="scheduled-row-what" title="${esc(whatItDoes(automation, 400))}">${esc(whatItDoes(automation))}</span>
                 ${ident ? `<span class="scheduled-row-ident">${esc(ident)}</span>` : ''}
             </div>
+            <span class="scheduled-cell" role="cell"><span class="scheduled-pill ${group}">${statusLabel}</span></span>
             <span class="scheduled-cell" role="cell">${esc(automationScheduleLabel(automation))}</span>
             <span class="scheduled-cell" role="cell" title="${esc(nextCell.title)}">${esc(nextCell.text)}</span>
             <span class="scheduled-cell" role="cell" title="${esc(lastCell.title)}">${esc(lastCell.text)}</span>
@@ -225,23 +224,29 @@ export function createAutomations({ context, actions, el }) {
 
     function renderList() {
         const list = el('scheduled-list');
-        const automations = visibleAutomations();
-        const groups = [
-            ['active', 'Active'],
-            ['paused', 'Paused'],
-            ['completed', 'Completed']
-        ]
-            .map(([key, label]) => {
-                const rows = automations.filter((automation) => automationGroup(automation) === key);
-                if (!rows.length) return '';
-                return `<section class="scheduled-group" aria-label="${label}"><div class="scheduled-table" role="table"><div class="scheduled-row scheduled-row-head" role="row"><span role="columnheader">What it does</span><span role="columnheader">Schedule</span><span role="columnheader">Next run</span><span role="columnheader">Last run</span><span role="columnheader">Project</span><span role="columnheader" class="actions"></span></div>${rows
-                    .map(scheduledRowHtml)
-                    .join('')}</div></section>`;
-            })
-            .join('');
-        list.innerHTML = groups || (state.statusFilter !== 'all' && typeAutomations().length
-            ? `<div class="development-empty">No ${esc((STATUS_LABELS[state.statusFilter] || state.statusFilter).toLowerCase())} automations.</div>`
-            : '<div class="development-empty">No scheduled actions yet. Ask Laya in a thread to create one.</div>');
+        const order = { active: 0, paused: 1, completed: 2 };
+        const automations = visibleAutomations().slice().sort((a, b) => {
+            const ga = order[automationGroup(a)] ?? 3;
+            const gb = order[automationGroup(b)] ?? 3;
+            if (ga !== gb) return ga - gb;
+            const na = a.next_run_at ? new Date(a.next_run_at).getTime() : Infinity;
+            const nb = b.next_run_at ? new Date(b.next_run_at).getTime() : Infinity;
+            return na - nb;
+        });
+        const head = '<div class="scheduled-row scheduled-row-head" role="row">'
+            + '<span role="columnheader">What it does</span>'
+            + '<span role="columnheader">Status</span>'
+            + '<span role="columnheader">Schedule</span>'
+            + '<span role="columnheader">Next run</span>'
+            + '<span role="columnheader">Last run</span>'
+            + '<span role="columnheader">Project</span>'
+            + '<span role="columnheader" class="actions"></span>'
+            + '</div>';
+        list.innerHTML = automations.length
+            ? `<div class="scheduled-table" role="table">${head}${automations.map(scheduledRowHtml).join('')}</div>`
+            : (state.statusFilter !== 'all' && typeAutomations().length
+                ? `<div class="development-empty">No ${esc((STATUS_LABELS[state.statusFilter] || state.statusFilter).toLowerCase())} automations.</div>`
+                : '<div class="development-empty">No scheduled actions yet. Ask Laya in a thread to create one.</div>');
         list.querySelectorAll('[data-row-action]').forEach((button) =>
             button.addEventListener('click', (event) => {
                 event.stopPropagation();

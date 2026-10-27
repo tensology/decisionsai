@@ -432,8 +432,26 @@ def _apply_menu_ptt_shortcut(action: QAction, combo_str: str, *, enabled: bool =
     _apply_menu_shortcut(action, modifier, "", enabled=enabled and bool(modifier))
 
 
+def _automation_run_state(workflow: AutoWorkflow) -> str:
+    """Short word describing whether an automation can be run from the menu now."""
+    if not _automation_instruction(workflow):
+        return "no instruction"
+    status = (workflow.status or "").strip().lower()
+    if status in ("paused", "archived"):
+        return status
+    if status == "draft":
+        return "draft"
+    if workflow.next_run_at:
+        return "scheduled"
+    return "ready"
+
+
 def get_automations_for_menu(limit: int = AUTOMATIONS_MENU_LIMIT) -> list[tuple[str, str, bool]]:
-    """Return automations as ``(automation_id, label, runnable)``."""
+    """Return automations as ``(automation_id, label, runnable)``.
+
+    The label carries a short run-state suffix (ready, scheduled, paused, draft,
+    no instruction) so the menu shows at a glance which ones can be run now.
+    """
     with get_session() as session:
         rows = (
             session.query(AutoWorkflow)
@@ -446,8 +464,9 @@ def get_automations_for_menu(limit: int = AUTOMATIONS_MENU_LIMIT) -> list[tuple[
             if not _is_automation_workflow(workflow):
                 continue
             automation_id = f"wf_{int(workflow.id)}"
-            label = truncate_menu_title(workflow.name or "Untitled Automation", max_len=40)
             runnable = bool(_automation_instruction(workflow))
+            name = truncate_menu_title(workflow.name or "Untitled Automation", max_len=32)
+            label = f"{name}  ·  {_automation_run_state(workflow)}"
             items.append((automation_id, label, runnable))
             if len(items) >= limit:
                 break
