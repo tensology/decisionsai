@@ -250,21 +250,48 @@ class AgentSession:
             from distr.core.db import get_session, CustomVoice
             session = get_session()
             try:
+                cv = None
                 if voice_id.startswith('custom_'):
-                    db_id = int(voice_id.split('_', 1)[1])
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id, CustomVoice.status == 'ready').first()
-                else:
+                    try:
+                        db_id = int(voice_id.split('_', 1)[1])
+                    except (TypeError, ValueError):
+                        db_id = -1
                     cv = session.query(CustomVoice).filter(
-                        CustomVoice.provider == provider,
+                        CustomVoice.id == db_id, CustomVoice.status == 'ready'
+                    ).first()
+                else:
+                    # Match the voice id first and only fall back to the provider
+                    # pair. The same voice is stored under several provider labels
+                    # ("fishaudio" vs "Fish Audio (Online)"), and a strict pair
+                    # match silently produced a generic persona.
+                    cv = session.query(CustomVoice).filter(
                         CustomVoice.provider_voice_id == voice_id,
                         CustomVoice.status == 'ready',
-                    ).first()
+                    ).order_by(CustomVoice.id.desc()).first()
+                    if cv is None:
+                        cv = session.query(CustomVoice).filter(
+                            CustomVoice.provider == provider,
+                            CustomVoice.provider_voice_id == voice_id,
+                            CustomVoice.status == 'ready',
+                        ).first()
                 if cv and cv.personality:
                     self._custom_voice_personality = cv.personality.strip()
+                    self.logger.info(
+                        "Loaded custom voice personality for %s (%s chars)",
+                        voice_id,
+                        len(self._custom_voice_personality),
+                    )
+                else:
+                    # Loud on purpose: a missing personality used to be invisible.
+                    self.logger.warning(
+                        "No custom voice personality matched provider=%s voice=%s; using the default persona",
+                        provider,
+                        voice_id,
+                    )
             finally:
                 session.close()
         except Exception as e:
-            self.logger.debug("Could not load custom voice personality: %s", e)
+            self.logger.warning("Could not load custom voice personality: %s", e, exc_info=True)
 
     def _load_agent_role(self) -> str:
         """Return the agent persona, appending any custom voice personality."""
