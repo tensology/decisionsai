@@ -191,6 +191,21 @@ class StartupSplash(QtWidgets.QWidget):
         if self._closing:
             return
         self._closing = True
+        # Fade out instead of vanishing — an abrupt close flashes a black frame.
+        self._fade = QtCore.QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade.setDuration(220)
+        self._fade.setStartValue(1.0)
+        self._fade.setEndValue(0.0)
+        self._fade.finished.connect(self._close_now)
+        self._fade.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        # Safety: if the animation is unavailable, close anyway.
+        QtCore.QTimer.singleShot(500, self._close_now)
+
+    def _close_now(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        self.hide()
         try:
             if self._player is not None:
                 self._player.stop()
