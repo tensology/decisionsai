@@ -79,8 +79,22 @@ export function createWorkflows({ context, actions, el }) {
         return 'reusable';
     }
 
+    // Managed ticket workflows lead the list, ordered light -> critical, because
+    // they are the policies that actually run incoming work.
+    const WORKFLOW_CLASS_ORDER = { light: 0, standard: 1, heavy: 2, critical: 3 };
+    const WORKFLOW_CLASS_LABEL = { light: 'Light', standard: 'Standard', heavy: 'Heavy', critical: 'Critical' };
+
+    function workflowClassKey(workflow) {
+        const key = String(workflow?.weight_class || '').toLowerCase();
+        return WORKFLOW_CLASS_ORDER[key] === undefined ? '' : key;
+    }
+
     function sortedWorkflowLibraryRows(workflows) {
         return workflows.slice().sort((left, right) => {
+            const leftClass = workflowClassKey(left);
+            const rightClass = workflowClassKey(right);
+            if ((leftClass !== '') !== (rightClass !== '')) return leftClass !== '' ? -1 : 1;
+            if (leftClass !== rightClass) return WORKFLOW_CLASS_ORDER[leftClass] - WORKFLOW_CLASS_ORDER[rightClass];
             const leftState = workflowRunState(left);
             const rightState = workflowRunState(right);
             if (leftState.active !== rightState.active) return leftState.active ? -1 : 1;
@@ -129,7 +143,8 @@ export function createWorkflows({ context, actions, el }) {
             : stepCount
               ? '<p class="workflow-card-pending">Loading steps</p>'
               : '<p class="workflow-card-pending">No steps yet</p>';
-        const summary = `${stepCount} step${stepCount === 1 ? '' : 's'} · ${run ? actions.statusLabel(status) : issue || 'Ready'}`;
+        const classLabel = WORKFLOW_CLASS_LABEL[workflowClassKey(workflow)] || '';
+        const summary = `${classLabel ? `${classLabel} · ` : ''}${stepCount} step${stepCount === 1 ? '' : 's'} · ${run ? actions.statusLabel(status) : issue || 'Ready'}`;
         const stateClass = status === 'waiting' || status === 'paused' ? 'waiting' : status === 'failed' ? 'failed' : active ? 'running' : '';
         return `<article class="workflow-card" data-workflow-card="${Number(workflow.id)}">
             <header class="workflow-card-head">

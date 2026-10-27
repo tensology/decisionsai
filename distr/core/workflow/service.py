@@ -576,11 +576,16 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
             )
         )
         visible = visible[: int(limit or 50)]
+        from distr.core.workflow.phases import workflow_weight_class
+
         return [
             {
                 "id": w.id, "name": w.name,
                 "chat_id": w.chat_id,
                 "workflow_type": w.workflow_type or "manual",
+                "weight_class": workflow_weight_class(w.run_settings),
+                "managed": workflow_weight_class(w.run_settings) is not None,
+                "last_run_at": w.last_run_at.isoformat() if w.last_run_at else None,
                 "description": (w.description or "")[:200],
                 "status": w.status or "draft",
                 "workflow_input": w.workflow_input or "",
