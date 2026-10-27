@@ -2214,6 +2214,7 @@ class OneShotCliBackend(ProjectCliBackend):
         _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "done"}})
         assistant_message: dict[str, Any] = {"role": "assistant", "content": output}
         usage = self._usage_from_output(output)
+        tokens_in, tokens_out = BackendTaskResult.usage_token_totals(usage)
         if usage:
             assistant_message["usage"] = usage
         _emit(on_event, {"type": "message_end", "message": assistant_message})
@@ -2228,10 +2229,32 @@ class OneShotCliBackend(ProjectCliBackend):
                 output=compact_output,
                 error=error,
                 session_id=task.audit_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                usage=usage,
             )
         if rc == 0:
-            return BackendTaskResult(True, self.id, self.id, output=compact_output, session_id=task.audit_id)
-        return BackendTaskResult(False, self.id, self.id, output=compact_output, error=compact_output or f"{self.name} exited with code {rc}", session_id=task.audit_id)
+            return BackendTaskResult(
+                True,
+                self.id,
+                self.id,
+                output=compact_output,
+                session_id=task.audit_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                usage=usage,
+            )
+        return BackendTaskResult(
+            False,
+            self.id,
+            self.id,
+            output=compact_output,
+            error=compact_output or f"{self.name} exited with code {rc}",
+            session_id=task.audit_id,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            usage=usage,
+        )
 
 
 class CursorBackend(OneShotCliBackend):
@@ -2331,6 +2354,38 @@ class CursorBackend(OneShotCliBackend):
         if task.model and task.model != "auto":
             cmd += ["--model", task.model]
         return cmd + [self._callback_instruction(task) + task.instruction]
+
+    def _usage_from_output(self, output: str) -> dict[str, Any]:
+        """Parse cursor-agent stream-json usage so cost is recorded, not guessed."""
+        totals = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+        observed = False
+        for line in str(output or "").splitlines():
+            try:
+                event = json.loads(line)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(event, dict) or str(event.get("type") or "").lower() != "result":
+                continue
+            usage = event.get("usage")
+            if not isinstance(usage, dict):
+                message = event.get("message")
+                usage = message.get("usage") if isinstance(message, dict) else None
+            if not isinstance(usage, dict):
+                continue
+            observed = True
+            for target, source in (
+                ("input", "input_tokens"),
+                ("output", "output_tokens"),
+                ("cacheRead", "cache_read_tokens"),
+                ("cacheWrite", "cache_write_tokens"),
+            ):
+                value = usage.get(source)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    totals[target] += int(value)
+        if not observed:
+            return {}
+        totals["totalTokens"] = totals["input"] + totals["output"]
+        return totals
 
     def _protocol_events(
         self,

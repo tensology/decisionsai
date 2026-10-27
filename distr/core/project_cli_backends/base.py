@@ -50,9 +50,27 @@ class BackendTaskResult:
     diagnostics: dict[str, Any] = field(default_factory=dict)
     next_actions: dict[str, Any] = field(default_factory=dict)
     workspace_state_delta: dict[str, Any] = field(default_factory=dict)
+    # Real provider usage when the CLI exposes it. None means "not reported",
+    # which is different from zero and lets the cost ledger avoid inventing numbers.
+    tokens_in: Optional[int] = None
+    tokens_out: Optional[int] = None
+    usage: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @staticmethod
+    def usage_token_totals(usage: dict[str, Any] | None) -> tuple[Optional[int], Optional[int]]:
+        """Return (input, output) token totals from a normalized usage dict."""
+        if not isinstance(usage, dict) or not usage:
+            return None, None
+
+        def _int(value: Any) -> Optional[int]:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return int(value)
+            return None
+
+        return _int(usage.get("input")), _int(usage.get("output"))
 
 
 @dataclass

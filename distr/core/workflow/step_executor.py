@@ -610,8 +610,11 @@ class StepExecutorMixin:
 
             output = str((result or {}).get("output") or "")
             explicit_tokens = int((result or {}).get("tokens_used") or 0)
-            # ponytail: estimate tokens from output when providers omit usage;
-            # upgrade to provider usage fields when BackendTaskResult always carries them.
+            tokens_in = (result or {}).get("tokens_in")
+            tokens_out = (result or {}).get("tokens_out")
+            if not explicit_tokens and (tokens_in is not None or tokens_out is not None):
+                explicit_tokens = int(tokens_in or 0) + int(tokens_out or 0)
+            # Estimate from output only when the provider reported nothing at all.
             tokens = explicit_tokens or max(500, (len(output) // 4) + 800)
             model_provider = str(
                 (result or {}).get("model_provider")
@@ -2662,6 +2665,10 @@ class StepExecutorMixin:
                 ),
                 "passed": passed,
                 "skip_wait": not waits_for_human,
+                # Real provider usage (None when the CLI did not report it).
+                "tokens_in": getattr(result, "tokens_in", None),
+                "tokens_out": getattr(result, "tokens_out", None),
+                "usage": getattr(result, "usage", None) or None,
             }
         except Exception as e:
             from distr.core.workflow.blueprint_adherence import format_tool_failure
