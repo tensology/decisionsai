@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # managed workflow for each weight class without guessing at names.
 MANAGED_BY = "phase_engine"
 
+# Present in a composed instruction when the reply phase should be enriched at
+# run time with the ticket's real channel and provenance.
+REPLY_PHASE_MARKER = "[REPLY PHASE ENABLED]"
+
 
 # ---------------------------------------------------------------------------
 # Phase atoms
@@ -362,6 +366,10 @@ def compose_instruction(
         "- Do not explore the repository beyond what this change needs.\n"
         "- Do not re-run the whole test suite when only one check is relevant."
     )
+    if "reply" in ordered:
+        # The channel-aware reply rules need the ticket, so they are appended at
+        # run time. The marker is how the dispatcher knows to do that.
+        lines.append(REPLY_PHASE_MARKER)
     return "\n\n".join(lines)
 
 

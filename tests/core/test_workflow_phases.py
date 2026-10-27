@@ -172,6 +172,20 @@ def test_route_ticket_reports_an_explicit_override(monkeypatch):
     assert plan["reason"] == "you asked for this one"
 
 
+def test_composed_instruction_marks_the_reply_phase_for_run_time_enrichment():
+    from distr.core.workflow.phases import REPLY_PHASE_MARKER, compose_instruction
+
+    text = compose_instruction(["understand", "report", "reply"])
+    assert REPLY_PHASE_MARKER in text
+
+
+def test_composed_instruction_without_reply_has_no_marker():
+    from distr.core.workflow.phases import REPLY_PHASE_MARKER, compose_instruction
+
+    text = compose_instruction(["understand", "implement", "test", "report"])
+    assert REPLY_PHASE_MARKER not in text
+
+
 def test_route_ticket_survives_missing_managed_workflow(monkeypatch):
     from distr.core.workflow import phases
 

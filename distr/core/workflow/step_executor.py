@@ -1263,6 +1263,26 @@ class StepExecutorMixin:
         except Exception:
             logger.debug("send_to_project_cli: pickup brief injection failed", exc_info=True)
 
+        # Channel-aware close-the-loop: only for phase-composed workflows that
+        # asked for the reply phase, and only when the ticket has provenance.
+        if "[REPLY PHASE ENABLED]" in instruction:
+            try:
+                from distr.core.db.kanban import KanbanTicket
+                from distr.core.workflow.reply_channel import append_reply_phase
+
+                reply_ticket_id = _coerce_int(run_data.get("ticket_id"))
+                if reply_ticket_id:
+                    with get_session() as db:
+                        reply_ticket = (
+                            db.query(KanbanTicket)
+                            .filter(KanbanTicket.id == int(reply_ticket_id))
+                            .first()
+                        )
+                        if reply_ticket is not None:
+                            instruction = append_reply_phase(instruction, reply_ticket)
+            except Exception:
+                logger.debug("send_to_project_cli: reply phase injection failed", exc_info=True)
+
         try:
             from distr.core.project_cli_backends.harness import HarnessContext
             import concurrent.futures
