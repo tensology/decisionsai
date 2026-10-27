@@ -662,7 +662,7 @@ def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch):
 
     assert resumed == [(20, "yes, approve it")]
     assert any(
-        "accepted: approve" in (kwargs.get("text") or (args[0] if args else ""))
+        "carry on" in (kwargs.get("text") or (args[0] if args else ""))
         for args, kwargs in manager.sent
     )
     assert pending_interactions(chat_id=123) == []

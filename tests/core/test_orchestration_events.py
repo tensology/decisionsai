@@ -243,6 +243,50 @@ def test_orchestration_timeline_exposes_surface_subtype_and_attachment(monkeypat
     assert timeline[0]["is_workflow_attached"] is False
 
 
+def test_progress_frames_and_fragments_are_not_user_facing():
+    from distr.core.orchestration_events import build_orchestration_notification
+
+    init_frame = build_orchestration_notification({
+        "event_type": "worker_progress",
+        "source": "cursor",
+        "summary": '{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/tmp/merrypak"}',
+    })
+    fragment = build_orchestration_notification({
+        "event_type": "worker_progress",
+        "source": "cursor",
+        "summary": "UI",
+    })
+    prose = build_orchestration_notification({
+        "event_type": "worker_progress",
+        "source": "cursor",
+        "summary": "Cursor is checking the checkout flow.",
+    })
+
+    assert init_frame["should_notify"] is False and init_frame["text"] == ""
+    assert fragment["should_notify"] is False and fragment["text"] == ""
+    assert prose["should_notify"] is False
+    assert prose["text"] == "Cursor is checking the checkout flow."
+
+
+def test_callback_artifacts_never_reach_user_text():
+    from distr.core.orchestration_events import build_orchestration_notification
+
+    completed = build_orchestration_notification({
+        "event_type": "worker_completed",
+        "source": "cursor",
+        "subtype": "workflow_run_completed",
+        "summary": (
+            "I'll report the step, then fix the validation defects."
+            "Callback report. [DECISIONS CURSOR CALLBACK]\n{\"workflow_id\": 1}\n[/DECISIONS CURSOR CALLBACK]"
+        ),
+    })
+
+    assert completed["should_notify"] is True
+    assert "Callback report" not in completed["text"]
+    assert "DECISIONS CURSOR CALLBACK" not in completed["text"]
+    assert "fix the validation defects" in completed["text"]
+
+
 def test_route_notification_mentions_missing_visual_baseline():
     from distr.core.orchestration_events import build_orchestration_notification
 

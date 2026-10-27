@@ -97,8 +97,22 @@ def format_model_error(
     return (
         f"{lead} while trying to {operation}. "
         f"Provider: {provider_text}. Model: {model_text}. "
-        f"Error: {message}. {fix}"
+        f"Error: {_humanize_provider_message(message)}. {fix}"
     )
+
+
+def _humanize_provider_message(message: str) -> str:
+    """Collapse provider error text and drop links/secret noise for humans."""
+    text = re.sub(r"https?://\S+", "", str(message or ""))
+    text = re.sub(r"\s+at\s*\.", ".", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+(?:at|from|via|see)\s*$", "", text, flags=re.IGNORECASE)
+    text = text.strip(" .")
+    if not text:
+        return "no further detail was provided"
+    if len(text) > 200:
+        text = text[:197].rstrip() + "..."
+    return text
 
 
 _TTS_ERROR_MESSAGES = {

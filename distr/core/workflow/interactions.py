@@ -687,8 +687,17 @@ def workflow_reply_message(result: dict[str, Any], *, voice: bool = False) -> st
         )
         return "More than one workflow needs a decision. Specify the run number:\n" + choices
     if result.get("error"):
-        return f"I could not apply that workflow decision: {result['error']}"
+        return f"I couldn't apply that workflow decision: {result['error']}"
     action = str(result.get("action") or "continue")
+    run_id = result.get("run_id")
+    run_label = f"run #{run_id}" if run_id else "the run"
     if re.fullmatch(r"model_[0-2]", action):
-        return f"Workflow run #{result.get('run_id')} is checking free-model option {int(action[-1]) + 1}."
-    return f"Workflow run #{result.get('run_id')} accepted: {action}."
+        return f"I've asked {run_label} to try free-model option {int(action[-1]) + 1}."
+    phrases = {
+        "approve": f"Done — I've let {run_label} carry on.",
+        "continue": f"Got it — {run_label} is carrying on.",
+        "reject": f"Understood — I've stopped {run_label}.",
+        "stop": f"Understood — I've stopped {run_label}.",
+        "feedback": f"Thanks — I've passed that to {run_label}; it'll pick up where it paused.",
+    }
+    return phrases.get(action, f"Got it — I've applied that to {run_label}.")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -70,12 +71,65 @@ LEGACY_EVENT_TYPE_MAP = {
 }
 
 
+# CLI/backend protocol frames and callback plumbing are never user-facing prose.
+_CALLBACK_BLOCK_RE = re.compile(
+    r"\[DECISIONS[^\]]*CALLBACK\][\s\S]*?\[/DECISIONS[^\]]*CALLBACK\]",
+    re.IGNORECASE,
+)
+_CALLBACK_NARRATION_RE = re.compile(
+    r"\bcallback report(?:ing)?\b[^.\n]*(?:\.|$)"
+    r"|\bcallback report was (?:rejected|accepted|sent)\b[^.\n]*(?:\.|$)",
+    re.IGNORECASE,
+)
+_PROTOCOL_FRAME_TYPES = {"system", "tool", "tool_use", "tool_result", "init", "result", "user"}
+
+
+def _strip_callback_artifacts(text: str) -> str:
+    text = _CALLBACK_BLOCK_RE.sub(" ", text)
+    text = _CALLBACK_NARRATION_RE.sub(" ", text)
+    return text
+
+
 def _clean_user_text(value: Any) -> str:
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    raw = str(value or "").strip()
+    # A whole-message JSON frame (e.g. {"type":"system","subtype":"init",...}) is
+    # CLI telemetry, not something a person should hear. Recurse into a human
+    # field if one exists, otherwise drop it entirely.
+    if raw[:1] in "{[":
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            for key in ("summary", "message", "text", "result", "output"):
+                inner = parsed.get(key)
+                if isinstance(inner, str) and inner.strip():
+                    return _clean_user_text(inner)
+            if str(parsed.get("type") or "").strip().lower() in _PROTOCOL_FRAME_TYPES:
+                return ""
+            return ""
+        if isinstance(parsed, list):
+            return ""
+    text = _strip_callback_artifacts(raw)
+    text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"\bHermes\s+says\b", "I", text, flags=re.IGNORECASE)
     text = re.sub(r"\bHermes\s+said\b", "I", text, flags=re.IGNORECASE)
     text = re.sub(r"\bHermes\b", "the orchestrator", text, flags=re.IGNORECASE)
-    return text.strip()
+    return _strip_callback_artifacts(text).strip()
+
+
+def clean_user_text(value: Any) -> str:
+    """Strip internal branding, callback plumbing, and raw CLI frames from user text."""
+    return _clean_user_text(value)
+
+
+def _is_meaningful_progress(text: str) -> bool:
+    """Keep prose progress; drop one-word stream fragments and empty frames."""
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    words = [w for w in re.split(r"\s+", clean) if w]
+    return len(words) >= 3
 
 
 def normalize_orchestration_event_type(
@@ -155,7 +209,11 @@ def _notification_text(entry: dict[str, Any]) -> tuple[bool, str]:
     if event_type == "worker_dispatched":
         return False, summary or f"{source_label} started on the work."
     if event_type == "worker_progress":
-        return False, summary or f"{source_label} sent a progress update."
+        # Stream fragments ("UI", "no", "not") and raw CLI frames must not
+        # become timeline/voice entries; they carry no user-facing meaning.
+        if not _is_meaningful_progress(summary):
+            return False, ""
+        return False, summary
     if event_type == "needs_input":
         detail = f": {summary}" if summary else "."
         return True, f"{source_label} needs input{detail}"

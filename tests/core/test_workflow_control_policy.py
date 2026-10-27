@@ -269,3 +269,18 @@ def test_decide_workflow_next_action_uses_control_interrupt_policy():
     )
     assert repeated["action"] == "needs_human_input"
     assert "Change" in " ".join(repeated.get("options") or []) or repeated.get("recommendation")
+
+
+def test_blocked_interruption_question_is_human_and_single_period():
+    from distr.core.workflow.control_policy import decide_interruption
+
+    decision = decide_interruption(
+        worker_status="worker_needs_input",
+        blockers="Allow Shell, then rerun the command above. If it passes, continue.",
+    )
+
+    assert decision.should_interrupt is True
+    assert "The worker is blocked." in decision.question
+    assert decision.question.endswith("stop it.")
+    assert ".." not in decision.question
+    assert "Allow Shell" in decision.question

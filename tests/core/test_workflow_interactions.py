@@ -438,3 +438,16 @@ def test_telegram_qualification_probe_advances_one_durable_run_through_all_phase
         assert run.status == "cancelled"
         db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).delete()
         db.commit()
+
+
+def test_workflow_reply_message_is_human():
+    from distr.core.workflow.interactions import workflow_reply_message
+
+    approve = workflow_reply_message({"action": "approve", "run_id": 167})
+    feedback = workflow_reply_message({"action": "feedback", "run_id": 167})
+    stop = workflow_reply_message({"action": "stop", "run_id": 167})
+
+    assert "carry on" in approve
+    assert "accepted:" not in approve
+    assert "passed that to run #167" in feedback
+    assert "stopped run #167" in stop

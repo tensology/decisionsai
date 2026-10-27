@@ -1127,7 +1127,10 @@ class OrchestratorIntakeService:
         decision.workflow_run_id = run_id
         decision.handled = True
         decision.status = "workflow_interaction"
-        decision.response_text = f"Workflow run #{run_id} accepted: {command}."
+        if command in {"stop", "cancel"}:
+            decision.response_text = f"Understood — I've stopped run #{run_id}."
+        else:
+            decision.response_text = f"Got it — I've steered run #{run_id} with that."
 
     def _development_command(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:
         from distr.core.workflow.development_control import dispatch_command, enqueue_command

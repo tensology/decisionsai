@@ -484,3 +484,52 @@ def test_initiative_idle_nudge_queues_text_when_event_queue_is_available():
     assert payload["input_type"] == "text"
     assert payload["engagement_kind"] == "idle_nudge"
     assert payload["requires_response"] is True
+
+
+def test_initiative_terminal_notice_dedupes_repeated_sessions_for_same_step(monkeypatch):
+    from distr.core.human_engagement import reset_engagement_ledger
+    from distr.core.initiative.service import InitiativeService
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_notification_activity()
+    reset_engagement_ledger()
+
+    def _row(session_id):
+        return SimpleNamespace(
+            id=session_id,
+            project_id=47,
+            route_type="ide_bridge",
+            route_backend="cursor",
+            status="completed",
+            run_id=167,
+            step_id=2143,
+            started_at=datetime.utcnow() - timedelta(minutes=5),
+            updated_at=datetime.utcnow(),
+            completed_at=datetime.utcnow(),
+            error="",
+            input_packet=json.dumps({"source": "cursor", "ticket_title": "Fix admin 500"}),
+            output_packet=json.dumps({"summary": "Done."}),
+        )
+
+    project = SimpleNamespace(
+        id=47,
+        name="Merrypak",
+        folder_location="/tmp/merrypak",
+        coding_backend="cursor",
+    )
+    # Two terminal sessions for the same run/step, as produced by a re-run.
+    fake_session = FakeSession(project_rows=[(_row(7601), project), (_row(7602), project)], workflow_rows=[])
+    monkeypatch.setattr("distr.core.db.get_session", lambda: fake_session)
+
+    manager = DummyTelegram()
+    service = InitiativeService.__new__(InitiativeService)
+    service.telegram_manager = manager
+    service._execution_notice_cache = {}
+    service._execution_stale_after_s = 900
+    service._execution_stale_repeat_s = 1800
+    service._execution_terminal_notice_window_s = 3600
+
+    service._maybe_send_execution_nudges({"initiative_allow_telegram": True})
+
+    assert len(manager.sent) == 1
+    assert "Cursor finished" in manager.sent[0]

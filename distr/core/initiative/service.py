@@ -2236,11 +2236,41 @@ class InitiativeService:
     def _execution_result_summary(self, row, output_packet: dict) -> str:
         from distr.core.agent.services.llm.text_utils import spoken_result_summary
 
+        human = self._execution_human_summary(row)
+        if human:
+            return spoken_result_summary(human, max_len=170)
         for key in ("summary", "result", "message", "final_response", "output"):
             summary = spoken_result_summary(output_packet.get(key, ""), max_len=170)
             if summary:
                 return summary
         return spoken_result_summary(getattr(row, "error", ""), max_len=150)
+
+    def _execution_human_summary(self, row) -> str:
+        """Prefer the workflow''s recorded human summary over raw CLI narration."""
+        run_id = getattr(row, "run_id", None)
+        if not run_id:
+            return ""
+        try:
+            from distr.core.db.workflow import AutoWorkflowRun
+            from distr.core.orchestration_events import clean_user_text
+
+            with get_session() as session:
+                run = (
+                    session.query(AutoWorkflowRun)
+                    .filter(AutoWorkflowRun.id == int(run_id))
+                    .first()
+                )
+                if run is None:
+                    return ""
+                data = self._packet(getattr(run, "run_data", None))
+        except Exception:
+            return ""
+        live = data.get("live_agent_context") if isinstance(data.get("live_agent_context"), dict) else {}
+        for candidate in (live.get("latest_terminal_summary"), data.get("worker_question")):
+            clean = clean_user_text(candidate or "")
+            if clean:
+                return clean
+        return ""
 
     def _execution_idle_fingerprint(self, row, status: str, input_packet: dict) -> str:
         # Idle means the user-facing state has not changed. updated_at can churn
@@ -2363,7 +2393,16 @@ class InitiativeService:
                         age_s = self._dt_age_s(row.completed_at or row.updated_at)
                         if age_s is not None and age_s > self._execution_terminal_notice_window_s:
                             continue
-                        key = f"project:{row.id}:{status}"
+                        # Key on the work (run/step), not the session row, so a
+                        # re-run of the same step cannot re-announce the same
+                        # result. Distinct session rows used to notify separately.
+                        work_key = (
+                            getattr(row, "run_id", None)
+                            or getattr(row, "ticket_id", None)
+                            or row.id
+                        )
+                        step_key = getattr(row, "step_id", None) or "-"
+                        key = f"project:{work_key}:{step_key}:{status}"
                         if self._notice_allowed(key):
                             result = self._execution_result_summary(row, output_packet)
                             self._send_telegram_if_allowed(
@@ -2377,8 +2416,8 @@ class InitiativeService:
                                 settings,
                                 kind="execution_terminal",
                                 subject_type="ide_session",
-                                subject_id=str(row.id),
-                                state_fingerprint=status,
+                                subject_id=str(work_key),
+                                state_fingerprint=f"{status}:{step_key}",
                             )
                             sent_this_tick += 1
                             if sent_this_tick >= max_notices:

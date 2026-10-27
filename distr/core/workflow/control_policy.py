@@ -264,10 +264,17 @@ def decide_interruption(
         "cursor_waiting",
     }:
         detail = blocker_text if blocker_text and blocker_text.lower() != "none" else ""
+        clean_detail = detail.rstrip(" .")
         return InterruptionDecision(
             True,
             detail or "The worker is waiting for information it cannot safely infer.",
-            prompt or (f"The worker is blocked by: {detail}. What should it use?" if detail else "What information should the worker use to continue?"),
+            prompt or (
+                f"The worker is blocked. It needs: {clean_detail}. "
+                "Reply with the missing detail, steer the run, or stop it."
+                if clean_detail
+                else "The worker needs information it can't safely infer. "
+                "Reply with the missing detail, steer the run, or stop it."
+            ),
             "Reply with the missing information, steer the run, or stop it.",
             ("Reply with details", "Steer", "Stop"),
         )
