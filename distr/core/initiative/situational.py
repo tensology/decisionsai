@@ -74,15 +74,47 @@ def _handoff_body_line(handoff: str) -> str:
     return ""
 
 
+def _normalize_waiting_runs(waiting_runs: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in waiting_runs or []:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "run_id": item.get("run_id"),
+            "workflow": str(item.get("workflow") or item.get("workflow_name") or "").strip(),
+            "waiting_kind": str(item.get("waiting_kind") or "").strip(),
+            "question": " ".join(str(item.get("question") or "").split())[:200],
+        })
+    return out
+
+
+def _normalize_pending_decisions(pending_decisions: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in pending_decisions or []:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "id": item.get("id"),
+            "description": " ".join(
+                str(item.get("description") or item.get("title") or "").split()
+            )[:200],
+        })
+    return out
+
+
 def build_situational(
     *,
     active_project: dict | None = None,
     developer_context: dict | None = None,
     last_cycle_at: float | None = None,
     last_chat_stream_at: float | None = None,
+    waiting_runs: Any = None,
+    pending_decisions: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Machine-readable situational block for prompts and suggest/draft text."""
+    waiting = _normalize_waiting_runs(waiting_runs)
+    pending = _normalize_pending_decisions(pending_decisions)
     local = now or datetime.now().astimezone()
     utc = local.astimezone(timezone.utc)
     epoch = local.timestamp()
@@ -124,6 +156,9 @@ def build_situational(
         "handoff_peek": handoff,
         "project_folder": folder,
         "desktop": desktop,
+        "waiting_runs": waiting,
+        "pending_decisions": pending,
+        "needs_call_count": len(waiting) + len(pending),
     }
 
 
@@ -222,4 +257,21 @@ def format_situational_prompt_block(situational: dict[str, Any] | None) -> str:
         lines.append("- handoff_peek:")
         for ln in str(situational["handoff_peek"]).splitlines()[:12]:
             lines.append(f"  {ln}")
+    waiting = situational.get("waiting_runs") if isinstance(situational.get("waiting_runs"), list) else []
+    pending = situational.get("pending_decisions") if isinstance(situational.get("pending_decisions"), list) else []
+    if waiting or pending:
+        lines.append(
+            f"- needs_your_call: {len(waiting)} waiting run(s), "
+            f"{len(pending)} pending decision(s)"
+        )
+        for run in waiting[:5]:
+            label = run.get("workflow") or f"run {run.get('run_id')}"
+            kind = run.get("waiting_kind") or "a decision"
+            question = run.get("question") or ""
+            line = f"  - {label} is waiting for {kind}"
+            if question:
+                line += f' — "{question[:100]}"'
+            lines.append(line)
+        for decision in pending[:5]:
+            lines.append(f"  - pending: {str(decision.get('description') or '')[:100]}")
     return "\n".join(lines) + "\n"

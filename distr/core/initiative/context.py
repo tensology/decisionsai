@@ -148,9 +148,28 @@ class ContextAssembler:
         try:
             from distr.core.initiative.situational import build_situational
 
+            waiting_runs = []
+            try:
+                waiting_runs = self._fetch_waiting_runs()
+            except Exception:
+                logger.debug("ContextAssembler: waiting runs fetch failed", exc_info=True)
+            triage = (
+                work_scan.get("orchestrator_triage")
+                if isinstance(work_scan, dict)
+                else {}
+            )
+            triage_candidates = triage.get("candidates") if isinstance(triage, dict) else []
+            pending_decisions = [
+                {"id": c.get("id"), "description": c.get("question") or c.get("title")}
+                for c in (triage_candidates or [])
+                if isinstance(c, dict)
+            ]
+
             situational = build_situational(
                 active_project=active_project,
                 developer_context=developer_context,
+                waiting_runs=waiting_runs,
+                pending_decisions=pending_decisions,
             )
         except Exception:
             logger.warning("ContextAssembler: failed to build situational spine", exc_info=True)
@@ -350,6 +369,36 @@ class ContextAssembler:
                 })
 
         return result
+
+    def _fetch_waiting_runs(self, limit: int = 8) -> list:
+        """Live workflow runs that are waiting on a human, with what they need."""
+        from distr.core.db import get_session
+        from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
+
+        out: list = []
+        with get_session() as session:
+            rows = (
+                session.query(AutoWorkflowRun, AutoWorkflow)
+                .outerjoin(AutoWorkflow, AutoWorkflow.id == AutoWorkflowRun.workflow_id)
+                .filter(AutoWorkflowRun.status == "waiting")
+                .order_by(AutoWorkflowRun.started_at.desc())
+                .limit(int(limit))
+                .all()
+            )
+            for run, workflow in rows:
+                try:
+                    data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    data = {}
+                out.append({
+                    "run_id": run.id,
+                    "workflow": (getattr(workflow, "name", "") or f"Workflow {run.workflow_id}"),
+                    "waiting_kind": str(data.get("waiting_kind") or ""),
+                    "question": str(
+                        data.get("worker_question") or data.get("waiting_prompt") or ""
+                    ),
+                })
+        return out
 
     def _fetch_unfinished_workflows(self, now: datetime) -> list:
         from distr.core.db.workflow import AutoWorkflow

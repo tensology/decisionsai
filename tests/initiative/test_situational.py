@@ -126,3 +126,31 @@ def test_handoff_resume_proposal_preferred_shape():
     # Short idle must not produce a resume proposal even with handoff text
     sit_short = {**sit, "idle_gap_seconds": 60, "idle_gap": "1m"}
     assert handoff_resume_proposal(sit_short) is None
+
+
+def test_situational_surfaces_needs_call_state():
+    sit = build_situational(
+        waiting_runs=[
+            {
+                "run_id": 167,
+                "workflow": "Sandbox: Paul open questions",
+                "waiting_kind": "run_briefing",
+                "question": "Should I start?",
+            }
+        ],
+        pending_decisions=[
+            {"id": "c1", "description": "Reply to Martin about the sprint labels"}
+        ],
+    )
+
+    assert sit["needs_call_count"] == 2
+    block = format_situational_prompt_block(sit)
+    assert "needs_your_call: 1 waiting run(s), 1 pending decision(s)" in block
+    assert "Sandbox: Paul open questions is waiting for run_briefing" in block
+    assert "sprint labels" in block
+
+
+def test_situational_without_needs_call_omits_block():
+    sit = build_situational()
+    assert sit["needs_call_count"] == 0
+    assert "needs_your_call" not in format_situational_prompt_block(sit)
