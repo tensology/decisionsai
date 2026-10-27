@@ -392,6 +392,11 @@ class AboutWindow(QtWidgets.QMainWindow):
                 "Codex calls them pets. Call them whatever you want. Make it look ridiculous on "
                 "purpose. And yes, it really whips Ollama's ass."
             ),
+            (
+                "Right, off you go. Right-click the oracle to start your journey. Hold Control and "
+                "Command to dictate straight into whatever you're typing in, or hold Option and "
+                "Command to speak to me directly, and I'll help you along the way."
+            ),
         ]
         about_paragraphs = [_html_paragraph(p) for p in about_paragraphs_text]
         about_content.setHtml(_wrap_tab_html("".join(about_paragraphs)))
