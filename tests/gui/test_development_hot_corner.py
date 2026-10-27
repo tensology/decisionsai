@@ -522,7 +522,7 @@ def test_board_actions_open_and_create_in_the_selected_project(monkeypatch) -> N
     panel._context_menu.close()
     panel._handle_item_click(project, 3)
 
-    assert opened == ["/development/boards/decisions/7/kanban/", "/chat/?id=77"]
+    assert opened == ["/development/boards/decisions/7/kanban/", "/development/threads/77/"]
     assert created == [{
         "title": "New Development thread",
         "project_id": 9,
@@ -591,7 +591,7 @@ def test_thread_title_opens_and_timer_controls_use_shared_actions(monkeypatch) -
     panel.tree.setCurrentItem(project)
     app.processEvents()
 
-    assert opened == ["/chat/?id=42"]
+    assert opened == ["/development/threads/42/"]
     assert updates == [(42, "pause"), (42, "reset")]
     assert panel.selected_chat_id is None
     assert project.sizeHint(0).height() > 30

@@ -1137,7 +1137,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         item = self.tree.itemFromIndex(index)
         value = item.data(0, QtCore.Qt.ItemDataRole.UserRole) if item else None
         if isinstance(value, dict) and value.get("kind") == "thread":
-            self._open_path(f"/chat/?id={int(value['chat_id'])}")
+            # Open the Development thread itself, not the plain chat view.
+            # /chat/?id= lands on a different page, which is why the panel and
+            # the opened view looked out of sync.
+            self._open_path(f"/development/threads/{int(value['chat_id'])}/")
 
     def _queue_project_toggle(self, index: QtCore.QModelIndex) -> None:
         item = self.tree.itemFromIndex(index)
@@ -1313,7 +1316,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             self._selected_chat_id = int(chat_id)
             self._selected_item_key = ("thread", int(chat_id))
             self._refresh_threads()
-            self._open_path(f"/chat/?id={int(chat_id)}")
+            self._open_path(f"/development/threads/{int(chat_id)}/")
         except Exception as exc:
             logger.warning("Could not create Development thread from hot corner: %s", exc)
 
