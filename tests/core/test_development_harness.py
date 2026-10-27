@@ -470,13 +470,15 @@ def test_completed_turn_can_start_a_later_turn_in_the_same_thread(tmp_path, monk
 def test_large_multi_phase_thread_request_launches_owned_orchestrator(tmp_path, monkeypatch):
     _, chat_id, _ = _database(tmp_path, monkeypatch)
     captured = {}
+    # Tickets now route to a managed weight-class policy instead of planning a
+    # throwaway draft and falling back to the retired Development pipeline.
     monkeypatch.setattr(
-        "distr.core.workflow.developer_workflow.resolve_development_workflow",
-        lambda **_kwargs: 44,
+        "distr.core.workflow.phases.route_ticket_workflow_id",
+        lambda *_args, **_kwargs: 44,
     )
     monkeypatch.setattr(
         "distr.core.workflow.planning.plan_workflow",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("planner unavailable in test")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("planner must not be used")),
     )
 
     def dispatch(**kwargs):

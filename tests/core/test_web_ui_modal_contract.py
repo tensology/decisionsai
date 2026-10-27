@@ -170,4 +170,6 @@ def test_development_model_menu_is_harness_first():
     assert 'backend: clean_backend if mode == "manual" else ""' in threads or '"backend": clean_backend' in threads
     assert 'pinned_backend not in {"pi", "cursor", "codex", "claude_code"}' in harness
     assert "resolve_ticket_cli_route" in assessment
-    assert "plan_workflow" in harness
+    # Tickets route to a managed weight-class policy instead of planning a
+    # throwaway draft and falling back to the retired Development pipeline.
+    assert "route_ticket_workflow_id" in harness

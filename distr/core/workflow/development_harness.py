@@ -2109,11 +2109,21 @@ def dispatch_development_prompt(
                         board_ticket_lane=metadata.get("board_ticket_lane"),
                     )
                 except Exception as exc:
+                    # Thread marking is bookkeeping. Losing it must not throw away
+                    # a usable routed workflow and strand the ticket.
                     ChatService.append_assistant_notice(
                         int(chat_id),
-                        f"Could not bind the routed workflow ({exc}).",
+                        f"Could not mark this thread against the routed workflow ({exc}).",
                     )
-                    workflow_id = None
+        if not workflow_id:
+            notice = "No workflow is available to run this ticket. Create one from the Workflows page."
+            ChatService.append_assistant_notice(int(chat_id), notice)
+            return {
+                "direct": False,
+                "execution_mode": "workflow",
+                "started": False,
+                "message": notice,
+            }
         model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
         pinned_backend = str(model_route.get("backend") or "").strip().lower()
         local_sel = resolve_local_harness_selection(pinned_backend)
