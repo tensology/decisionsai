@@ -13,20 +13,9 @@ from distr.core.db.projects import Project
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PRESET = "development-ticket-to-implementation"
-
-
-def infer_preset_slug_for_ticket(
-    *,
-    title: str = "",
-    description: str = "",
-    project_folder: str = "",
-) -> str:
-    """Pick a loop preset from ticket + project context. ponytail: keyword heuristic; upgrade to archetype classifier."""
-    # Development is deliberately the one canonical software-work workflow.
-    # Its internal steps branch between planning, implementation, review,
-    # correction and reporting; ticket keywords must not create more tabs.
-    return _DEFAULT_PRESET
+# The retired "Development" preset is no longer a default. Tickets route to a
+# managed weight-class workflow, and an explicit `steps=` payload is the only way
+# to build a bespoke definition here.
 
 
 def _ticket_workflow_name(ticket_title: str, *, stamp: str = "") -> str:
@@ -38,6 +27,8 @@ def _ticket_workflow_name(ticket_title: str, *, stamp: str = "") -> str:
 def spawn_workflow_for_ticket(
     ticket_id: int,
     *,
+    # Accepted for API compatibility. The retired preset path is gone: pass an
+    # explicit `steps=` payload, or let the ticket route to a managed workflow.
     preset_slug: str | None = None,
     steps: list[dict[str, Any]] | None = None,
     workflow_name: str | None = None,
@@ -51,13 +42,11 @@ def spawn_workflow_for_ticket(
 ) -> dict[str, Any]:
     """Create workflow + steps for a ticket, link it, optionally start the run.
 
-    Returns workflow_id, run_id (when started), preset_slug, step_count.
+    Returns workflow_id, run_id (when started), step_count.
     Does not require a pre-existing workflow on the board.
     """
     from distr.core.workflow.import_export import import_workflow
-    from distr.core.workflow.loop_preset_loader import load_bundle_by_slug
-    from distr.core.workflow.loop_presets import apply_loop_preset
-    from distr.core.workflow.service import create_workflow, get_workflow
+    from distr.core.workflow.service import get_workflow
 
     ticket_title = ""
     ticket_description = ""
@@ -160,7 +149,6 @@ def spawn_workflow_for_ticket(
             "success": True,
             "workflow_id": workflow_id,
             "ticket_id": int(ticket_id),
-            "preset_slug": _DEFAULT_PRESET,
             "step_count": len(wf.get("steps") or []),
             "reused": True,
             "selection_reason": selection.get("reason"),
@@ -183,60 +171,25 @@ def spawn_workflow_for_ticket(
                 result["development_url"] = run_result.get("development_url")
         return result
 
-    slug = (preset_slug or "").strip() or infer_preset_slug_for_ticket(
-        title=ticket_title,
-        description="",
-        project_folder=project_folder,
-    )
     name = (workflow_name or "").strip() or _ticket_workflow_name(ticket_title)
 
     workflow_id: int
     step_count = 0
-    applied_slug = slug
 
-    if steps:
-        payload: dict[str, Any] = {
-            "name": name,
-            "description": f"Spawned for ticket #{ticket_id}",
-            "workflow_type": "manual",
-            "steps": steps,
-        }
-        merged_input = dict(workflow_input or {})
-        merged_input["spawned_for_ticket_id"] = int(ticket_id)
-        if skip_human_checkpoints:
-            merged_input["skip_human_checkpoints"] = True
-        payload["workflow_input"] = json.dumps(merged_input)
-        workflow_id = int(import_workflow(payload))
-        wf = get_workflow(workflow_id) or {}
-        step_count = len(wf.get("steps") or [])
-    else:
-        workflow_id = int(create_workflow(name=name, description=f"Spawned for ticket #{ticket_id}"))
-        bundle = load_bundle_by_slug(slug)
-        if not bundle:
-            return {"success": False, "error": f"Unknown preset slug: {slug}"}
-        preset_name = str(bundle.get("name") or slug)
-        applied_slug = str(bundle.get("slug") or slug)
-        applied = apply_loop_preset(workflow_id, preset_name, mode="replace")
-        if not applied.get("success"):
-            return {"success": False, "error": applied.get("error") or "Failed to apply preset"}
-        step_count = int(applied.get("step_count") or 0)
-        if workflow_input or skip_human_checkpoints:
-            with get_session() as db:
-                from distr.core.db.workflow import AutoWorkflow
-
-                wf_row = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
-                if wf_row:
-                    try:
-                        merged = json.loads(wf_row.workflow_input or "{}") or {}
-                    except Exception:
-                        merged = {}
-                    merged.update(workflow_input or {})
-                    merged["spawned_for_ticket_id"] = int(ticket_id)
-                    merged["preset_slug"] = applied_slug
-                    if skip_human_checkpoints:
-                        merged["skip_human_checkpoints"] = True
-                    wf_row.workflow_input = json.dumps(merged)
-                    db.commit()
+    payload: dict[str, Any] = {
+        "name": name,
+        "description": f"Spawned for ticket #{ticket_id}",
+        "workflow_type": "manual",
+        "steps": steps,
+    }
+    merged_input = dict(workflow_input or {})
+    merged_input["spawned_for_ticket_id"] = int(ticket_id)
+    if skip_human_checkpoints:
+        merged_input["skip_human_checkpoints"] = True
+    payload["workflow_input"] = json.dumps(merged_input)
+    workflow_id = int(import_workflow(payload))
+    wf = get_workflow(workflow_id) or {}
+    step_count = len(wf.get("steps") or [])
 
     with get_session() as db:
         ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
@@ -253,7 +206,6 @@ def spawn_workflow_for_ticket(
         "success": True,
         "workflow_id": workflow_id,
         "ticket_id": int(ticket_id),
-        "preset_slug": applied_slug,
         "step_count": step_count,
         "reused": False,
     }

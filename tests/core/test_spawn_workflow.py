@@ -14,7 +14,7 @@ from distr.core.db import Base
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.db.projects import Project
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
-from distr.core.workflow.spawn_workflow import infer_preset_slug_for_ticket, spawn_workflow_for_ticket
+from distr.core.workflow.spawn_workflow import spawn_workflow_for_ticket
 
 
 @pytest.fixture()
@@ -50,24 +50,6 @@ def db_factory(tmp_path, monkeypatch):
     monkeypatch.setattr("distr.core.workflow.loop_presets.get_session", _get_session)
     monkeypatch.setattr("distr.core.db.get_session", _get_session)
     return factory
-
-
-def test_infer_preset_slug_routes_all_development_work_to_one_workflow():
-    for title, description in [
-        ("Dogfood catalog page", ""),
-        ("Prepare release", "Ship PR once CI checks pass"),
-        ("Polish UI", "Verify and ship with screenshots"),
-        ("Scope brief", "Ideation brief to board"),
-    ]:
-        assert infer_preset_slug_for_ticket(title=title, description=description) == (
-            "development-ticket-to-implementation"
-        )
-
-
-def test_infer_preset_slug_default_development():
-    assert infer_preset_slug_for_ticket(title="Add login form", description="Build auth UI") == (
-        "development-ticket-to-implementation"
-    )
 
 
 def test_spawn_workflow_for_ticket_creates_steps_and_links(db_factory, monkeypatch):

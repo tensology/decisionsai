@@ -390,7 +390,8 @@ def _patch_studio_dependencies(
         lambda chat_id, message, **kwargs: calls.setdefault("messages", []).append((chat_id, message)),
     )
     monkeypatch.setattr("distr.core.chat.ChatService.append_assistant_notice", lambda *args, **kwargs: True)
-    monkeypatch.setattr("distr.core.workflow.developer_workflow.resolve_development_workflow", lambda **kwargs: 44)
+    # Threads route to a managed weight-class workflow now, not the retired pipeline.
+    monkeypatch.setattr("distr.core.workflow.phases.route_ticket_workflow_id", lambda *args, **kwargs: 44)
     monkeypatch.setattr("distr.core.workflow.service.get_workflow", lambda workflow_id: workflow)
     monkeypatch.setattr(
         "distr.core.workflow.service.update_workflow",

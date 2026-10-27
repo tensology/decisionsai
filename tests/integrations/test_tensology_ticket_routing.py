@@ -54,7 +54,7 @@ def test_route_block_reports_to_tensology_and_never_creates_a_thread():
         patch.object(tc, "_resolve_tensology_project", return_value=local),
         patch.object(tc, "_existing_tensology_thread", return_value=None),
         patch.object(tc, "_local_api_post") as post,
-        patch("distr.core.workflow.developer_workflow.get_or_create_development_workflow") as wf,
+        patch("distr.core.workflow.phases.route_ticket_workflow_id") as wf,
     ):
         assert tc.process_tensology_approved_tickets(force=True) == 0
     post.assert_not_called()
@@ -188,7 +188,7 @@ def test_local_simulation_against_stub_tensology(stub_tensology):
         patch.object(tc, "_resolve_tensology_project", return_value=HOSTED),
         patch.object(tc, "_existing_tensology_thread", return_value=None),
         patch.object(tc, "_ensure_tensology_kanban_ticket", return_value=1),
-        patch("distr.core.workflow.developer_workflow.get_or_create_development_workflow", return_value=374),
+        patch("distr.core.workflow.phases.route_ticket_workflow_id", return_value=374),
         patch.object(tc, "_local_api_post", side_effect=fake_local_post),
     ):
         assert tc.process_tensology_approved_tickets(force=True) == 1
