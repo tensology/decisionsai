@@ -392,6 +392,13 @@ class AboutWindow(QtWidgets.QMainWindow):
                 "hotkey away, and there's a phone app if you'd rather boss it around from the couch."
             ),
             (
+                "Every third-party vendor arrives with its own rules, quotas and quirks, and a fair "
+                "bit of the work in here is smoothing that over so you don't have to fight each one "
+                "yourself. It handles the small, real jobs too: post a WhatsApp Status, move the "
+                "mouse, put work where it belongs. And it carries guardrails of its own, so it asks "
+                "before it spends your money or sends your message."
+            ),
+            (
                 "And because we never got over Winamp, go and mess with the avatars and the oracles. "
                 "Codex calls them pets. Call them whatever you want. Make it look ridiculous on "
                 "purpose. And yes, it really whips Ollama's ass."
@@ -399,7 +406,8 @@ class AboutWindow(QtWidgets.QMainWindow):
             (
                 "Right, off you go. Right-click the oracle to start your journey. Hold Control and "
                 "Command to dictate straight into whatever you're typing in, or hold Option and "
-                "Command to speak to me directly, and I'll help you along the way."
+                "Command to speak to me directly. Then just say what you want, and I'll help you "
+                "along the way."
             ),
         ]
         about_paragraphs = [_html_paragraph(p) for p in about_paragraphs_text]
