@@ -408,9 +408,18 @@ class AboutWindow(QtWidgets.QMainWindow):
             "QPushButton:hover { background-color: #ffa733; }"
             "QPushButton:pressed { background-color: #e07800; }"
         )
-        read_button.clicked.connect(
-            lambda: self._read_about_aloud(" ".join(about_paragraphs_text))
-        )
+        self._about_text = " ".join(about_paragraphs_text)
+        self._read_button = read_button
+        read_button.clicked.connect(self._on_read_about_clicked)
+        # Re-enable once playback stops or finishes.
+        try:
+            from distr.core.signals import signal_manager
+
+            signal_manager.player_stop.connect(self._enable_read_button)
+            signal_manager.hide_player_window.connect(self._enable_read_button)
+            signal_manager.interrupt_tts.connect(self._enable_read_button)
+        except Exception:
+            pass
         read_row.addStretch()
         read_row.addWidget(read_button)
         read_row.addStretch()
@@ -801,17 +810,36 @@ class AboutWindow(QtWidgets.QMainWindow):
         super().showEvent(event)
         _play_about_audio()
 
+    def _on_read_about_clicked(self) -> None:
+        """Read the About copy, greying the button out until playback stops."""
+        button = getattr(self, "_read_button", None)
+        if button is not None and not button.isEnabled():
+            return
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("Reading…")
+            # Safety: never leave the button greyed out if the stop signal is missed.
+            QtCore.QTimer.singleShot(180_000, self._enable_read_button)
+        self._read_about_aloud(getattr(self, "_about_text", ""))
+
+    def _enable_read_button(self) -> None:
+        button = getattr(self, "_read_button", None)
+        if button is not None:
+            button.setEnabled(True)
+            button.setText("Read about")
+
     def _read_about_aloud(self, text: str) -> None:
         """Have the agent speak the About copy through the normal TTS path."""
         message = _tts_safe_text(text)
         if not message:
+            self._enable_read_button()
             return
         try:
             from distr.core.signals import signal_manager
 
             signal_manager.speak_text_directly.emit(message)
         except Exception:
-            pass
+            self._enable_read_button()
 
     def closeEvent(self, event):
         """

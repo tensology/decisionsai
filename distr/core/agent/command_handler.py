@@ -1176,6 +1176,17 @@ def _cmd_interrupt_tts(session, params):
             except Exception:
                 pass
 
+    # Drop any queued direct read-alouds (e.g. About "Read about" pressed many
+    # times): they otherwise keep speaking after the user hit stop.
+    direct_queue = getattr(session, '_direct_tts_queue', None)
+    if direct_queue is not None:
+        try:
+            while not direct_queue.empty():
+                direct_queue.get_nowait()
+                direct_queue.task_done()
+        except Exception:
+            pass
+
     # Cancel welcome message task
     if session._welcome_task and not session._welcome_task.done():
         session._welcome_task.cancel()
