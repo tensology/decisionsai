@@ -718,18 +718,16 @@ class OrchestratorIntakeService:
                 from sqlalchemy import func
                 from distr.core.kanban.lifecycle import ensure_delivery_lanes
 
-                default_workflow = hinted_workflow or (
-                    session.query(AutoWorkflow)
-                    .filter(AutoWorkflow.name.ilike("Development%"))
-                    .order_by(AutoWorkflow.id)
-                    .first()
-                )
+                # Never name a workflow here by looking it up by name: that would
+                # attach the retired Development pipeline. Weight-class routing
+                # supplies the workflow at ticket level, so leave the default
+                # unset unless the caller explicitly hinted one.
                 max_position = session.query(func.max(KanbanBoard.position)).scalar()
                 board = KanbanBoard(
                     name=f"{project.name} Delivery",
                     default_project_id=int(project.id),
                     default_workflow_id=(
-                        int(default_workflow.id) if default_workflow is not None else None
+                        int(hinted_workflow.id) if hinted_workflow is not None else None
                     ),
                     position=int(max_position or 0) + 1,
                     in_use=False,
