@@ -1,7 +1,7 @@
-"""Startup splash: plays the Tensology intro video, then closes.
+"""Startup splash: plays the Tensology intro video in a rounded white-bordered window.
 
-Replaces the old "Starting Decisions…" text box. Falls back to plain text when the
-video file or the Qt multimedia stack is unavailable, so a boot never hangs on it.
+No padding, no title, no orange chrome — just the video. Falls back to a plain line
+when the video file or the Qt multimedia stack is unavailable, so boot never hangs.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 _VIDEO_RELATIVE = "assets/video/tensology-intro.mp4"
 _VIDEO_WIDTH = 720
-_VIDEO_MARGIN = 18
+_BORDER = 3
 _CARD_RADIUS = 18
-_VIDEO_RADIUS = 14
+_VIDEO_RADIUS = 15
 
 
 def _video_path() -> str:
@@ -29,7 +29,7 @@ def _video_path() -> str:
 class StartupSplash(QtWidgets.QWidget):
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, message: str = "Tensology", video_path: str | None = None):
+    def __init__(self, message: str = "", video_path: str | None = None):
         super().__init__(
             None,
             QtCore.Qt.WindowType.FramelessWindowHint
@@ -44,21 +44,18 @@ class StartupSplash(QtWidgets.QWidget):
         self._video = None
         self._closing = False
 
+        # No outer padding: the card is exactly the video plus its border.
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
         self._card = QtWidgets.QWidget(self)
         self._card.setObjectName("startupSplashCard")
         outer.addWidget(self._card)
 
         card = QtWidgets.QVBoxLayout(self._card)
-        card.setContentsMargins(_VIDEO_MARGIN, _VIDEO_MARGIN, _VIDEO_MARGIN, _VIDEO_MARGIN)
-        card.setSpacing(10)
+        card.setContentsMargins(0, 0, 0, 0)
+        card.setSpacing(0)
         self._card_layout = card
-
-        self._label = QtWidgets.QLabel(message, self._card)
-        self._label.setObjectName("startupSplashLabel")
-        self._label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        card.addWidget(self._label)
 
         self._fallback = QtWidgets.QLabel("Starting Decisions…", self._card)
         self._fallback.setObjectName("startupSplashFallback")
@@ -69,22 +66,15 @@ class StartupSplash(QtWidgets.QWidget):
         self._card.setStyleSheet(
             f"""
             QWidget#startupSplashCard {{
-                background-color: #0d0a1a;
-                border: 1px solid rgba(249, 115, 22, 0.65);
+                background-color: transparent;
+                border: {_BORDER}px solid #ffffff;
                 border-radius: {_CARD_RADIUS}px;
             }}
-            QLabel#startupSplashLabel {{
-                color: #f97316;
-                font-size: 16px;
-                font-weight: 700;
-                letter-spacing: 1.5px;
-                background: transparent;
-            }}
             QLabel#startupSplashFallback {{
-                color: #ececf1;
+                color: #ffffff;
                 font-size: 14px;
                 background: transparent;
-                padding: 24px 12px;
+                padding: 40px 24px;
             }}
             """
         )
@@ -175,7 +165,7 @@ class StartupSplash(QtWidgets.QWidget):
         self.finished.emit()
 
 
-def show_startup_splash(message: str = "Tensology", video_path: str | None = None) -> StartupSplash:
+def show_startup_splash(message: str = "", video_path: str | None = None) -> StartupSplash:
     splash = StartupSplash(message=message, video_path=video_path)
     splash.show()
     QtWidgets.QApplication.processEvents()
