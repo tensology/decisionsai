@@ -61,6 +61,13 @@ class WhatsAppStatusTool(BaseTool):
             return {"success": False, "spoken_summary": f"Could not prepare {label}: {exc}"}
 
         result = publish_status_via_relay(payload)
+        if result.get("dry_run"):
+            return {
+                "success": True,
+                "spoken_summary": f"Dry run: would post {label} to your WhatsApp Status ({len(audience)} contacts).",
+                "state": "dry_run",
+                "audience_count": len(audience),
+            }
         if not bool(result.get("success")):
             return {
                 "success": False,
