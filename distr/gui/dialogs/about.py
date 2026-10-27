@@ -334,43 +334,72 @@ class AboutWindow(QtWidgets.QMainWindow):
         about_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         _configure_tab_browser(about_content)
 
-        about_paragraphs = [
-            _html_paragraph(
-                "The tech industry has two speeds: announce the revolution on Tuesday, "
-                "ship a settings panel on Thursday, and call it a platform by Friday. "
-                "We grew up in the Winamp era, when software had a personality, a skin folder, "
-                "a hidden installer sample about whipping a llama, and the nerve to be "
-                "a little ridiculous on purpose."
+        about_paragraphs_text = [
+            (
+                "Right, let's have this out. You've got ChatGPT in one tab, Claude in another, "
+                "a coding agent chewing through your third monitor, a WhatsApp full of clients who "
+                "think 'quick question' means an hour, and a Kanban board you haven't opened since "
+                "the previous financial year. That's not a workflow. That's a taxi rank at five p.m. "
+                "with nobody holding the rank."
             ),
-            _html_paragraph(
-                "Work ethic, as we understand it: finish the thing, read the error, automate "
-                "the part that makes you hate your job, and go home before you start defending "
-                "a hallucination like it is company policy. Motion is not progress. A standup is "
-                "not a deliverable. Your stack should still make sense when the hype cycle moves on."
+            (
+                "DecisionsAI is the marshal. It sits in the middle — one layer between you and every "
+                "agent, model, tool, chat and inbox you own — and keeps the whole lot pointed at the "
+                "same piece of work. Not another chatbot, not another dashboard: the routing layer "
+                "that decides what runs, who runs it, what it costs, what it touched, and what needs "
+                "your say-so before it goes anywhere near production."
             ),
-            _html_paragraph(
-                "Style is not decoration. Ugly tools train you to accept ugly thinking. "
-                "We like software that looks like someone cared, runs where you put it, "
-                "and does not need a webinar to explain its existence. "
-                "Local models through Ollama when you want them. Cloud GPUs when you do not. "
-                "Same standard either way: does it work, and can you live with it tomorrow."
+            (
+                "We grew up in the Winamp era. Software had a personality, a skin folder, an "
+                "equaliser you fiddled with for no reason, and it definitely whips the llama's ass. "
+                "Then the industry decided everything should be beige and rented by the month. We "
+                "disagree. Tools you actually like, models you can actually run — a local one when "
+                "you want it, a cloud one when you don't, and the same standard either way."
             ),
-            _html_paragraph(
-                "If you opened this window you already found the app. "
-                "We are not going to pitch you from an About box. "
-                "The changelog is the other tab. "
-                "The credits are the people and libraries we owe."
+            (
+                "It's built from South Africa, where the power goes and the internet does not, so "
+                "it runs local-first and queues the rest. The work ethic is the one we were raised "
+                "on: finish the thing, read the error, automate the part that made you hate your job, "
+                "and go home before you start defending a hallucination like it's company policy. "
+                "Motion is not progress. A stand-up is not a deliverable."
             ),
-            _html_paragraph(
-                "<em>It really whips the llama's ass.</em> Winamp buried that line in its "
-                "installer twenty-six years ago as a goofy audio Easter egg. Then Ollama "
-                "named their local inference stack after LLaMA models and the universe "
-                "closed the loop. We did not plan the pun. We are just the ones still laughing.",
-                muted=True,
+            (
+                "Think of it as the nerves between the brain and the hands. Agents plan and type. "
+                "Models think out loud. Tools do the actual damage. DecisionsAI routes between them, "
+                "remembers what happened, asks before it spends your money or sends your message, "
+                "and tells you the truth about what ran — including when the truth is that one of "
+                "them is bluffing."
             ),
         ]
+        about_paragraphs = [_html_paragraph(p) for p in about_paragraphs_text]
+        about_paragraphs.append(_html_paragraph(
+            "<em>It really whips the llama's ass.</em> Winamp whispered that in an installer "
+            "twenty-six years ago. Ollama later named a stack after the LLaMA models and the "
+            "universe closed the loop. We just kept the punchline.",
+            muted=True,
+        ))
         about_content.setHtml(_wrap_tab_html("".join(about_paragraphs)))
         _embed_browser_with_back(about_layout, about_content)
+
+        # Read about — centred under the copy; the agent speaks it aloud.
+        read_row = QtWidgets.QHBoxLayout()
+        read_row.setContentsMargins(12, 8, 12, 12)
+        read_button = QtWidgets.QPushButton("Read about")
+        read_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        read_button.setStyleSheet(
+            "QPushButton { background-color: #ff8800; color: #101820; border: none;"
+            " border-radius: 6px; padding: 8px 22px; font-size: 14px; font-weight: 600; }"
+            "QPushButton:hover { background-color: #ffa733; }"
+            "QPushButton:pressed { background-color: #e07800; }"
+        )
+        read_button.clicked.connect(
+            lambda: self._read_about_aloud(" ".join(about_paragraphs_text))
+        )
+        read_row.addStretch()
+        read_row.addWidget(read_button)
+        read_row.addStretch()
+        about_layout.addLayout(read_row)
+
         tab_widget.addTab(about_tab, "About")
         
         # Create Changelog tab - simple QTextBrowser with its own scrolling
@@ -391,6 +420,15 @@ class AboutWindow(QtWidgets.QMainWindow):
             try:
                 with open(changelog_path, 'r', encoding='utf-8') as f:
                     changelog_text = f.read()
+                # Keep it scannable: the most recent releases only.
+                import re as _re
+
+                sections = _re.split(r'(?m)^(?=## )', changelog_text)
+                if len(sections) > 8:
+                    changelog_text = sections[0] + "".join(sections[1:8]) + (
+                        "\n\n## Older releases\n\n"
+                        "The full history lives in CHANGELOG.md next to the app.\n"
+                    )
                 # Convert markdown to HTML for better display
                 changelog_html = self._markdown_to_html(changelog_text)
                 changelog_content.setHtml(changelog_html)
@@ -414,23 +452,35 @@ class AboutWindow(QtWidgets.QMainWindow):
         credits_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         _configure_tab_browser(credits_content)
         
-        credits = {
-            "Pipecat: Real-Time AI Voice Framework": "https://pipecat.ai/",
-            "Vosk: Low Latency ASR Toolkit": "https://alphacephei.com/vosk/",
-            "Whisper.cpp: Open-Source ASR Toolkit": "https://github.com/ggml-org/whisper.cpp",
-            "AssemblyAI: Speech-to-Text & Audio Transcription": "https://www.assemblyai.com/",
-            "Ollama: AI Model Deployment": "https://ollama.ai/",
-            "OpenAI: API LLMs": "https://openai.com/",
-            "OpenRouter: Unified LLM API Gateway": "https://openrouter.ai/",
-            "Anthropic: Claude API": "https://www.anthropic.com/",
-            "Kokoro: Text-to-Speech": "https://github.com/thewh1teagle/kokoro-onnx/",
-            "ElevenLabs: Text-to-Speech": "https://elevenlabs.io/",
-            "Coqui TTS: Multi-Speaker & Voice Cloning (VCTK + XTTS v2)": "https://github.com/coqui-ai/TTS",
-            "VoxCPM: Tokenizer-Free TTS & Voice Cloning": "https://github.com/OpenBMB/VoxCPM",
-            "PyAutoGUI: GUI Automation (Used for Actions)": "https://pyautogui.readthedocs.io/",
-            "Pydantic: Data Validation": "https://pydantic-docs.helpmanual.io/",
-            "PyQt6: GUI Framework": "https://www.riverbankcomputing.com/software/pyqt/",
-            "Masko: AI-Powered Design & Creative Tools": "http://masko.ai/",
+        credits_sections = {
+            "The engine room": [
+                ("Pipecat — real-time voice framework", "https://pipecat.ai/"),
+                ("FastAPI — the relay and API surface", "https://fastapi.tiangolo.com/"),
+                ("PyQt6 — this very window", "https://www.riverbankcomputing.com/software/pyqt/"),
+                ("Pydantic — validation that holds", "https://docs.pydantic.dev/"),
+                ("Playwright — browser automation", "https://playwright.dev/"),
+                ("PyAutoGUI — desktop actions", "https://pyautogui.readthedocs.io/"),
+            ],
+            "Ears and mouths": [
+                ("Whisper.cpp — speech to text", "https://github.com/ggml-org/whisper.cpp"),
+                ("AssemblyAI — transcription", "https://www.assemblyai.com/"),
+                ("Vosk — offline ASR", "https://alphacephei.com/vosk/"),
+                ("Kokoro — local text to speech", "https://github.com/thewh1teagle/kokoro-onnx/"),
+                ("ElevenLabs — cloud voices", "https://elevenlabs.io/"),
+                ("Coqui TTS — voice cloning", "https://github.com/coqui-ai/TTS"),
+                ("FishAudio — voice", "https://fish.audio/"),
+            ],
+            "Brains": [
+                ("OpenAI — GPT models", "https://openai.com/"),
+                ("Anthropic — Claude", "https://www.anthropic.com/"),
+                ("OpenRouter — one key, many models", "https://openrouter.ai/"),
+                ("Ollama — run a model at home", "https://ollama.com/"),
+            ],
+            "Pipes and plumbing": [
+                ("Baileys — WhatsApp Web bridge", "https://github.com/WhiskeySockets/Baileys"),
+                ("Telegram Bot API", "https://core.telegram.org/bots/api"),
+                ("Masko — AI design tools", "http://masko.ai/"),
+            ],
         }
 
         animation_credits = {
@@ -443,13 +493,20 @@ class AboutWindow(QtWidgets.QMainWindow):
         }
 
         credits_parts = [
-            _html_paragraph(_html_link(url, title), margin="8px 0")
-            for title, url in credits.items()
+            _html_paragraph(
+                "The whole thing stands on other people's work. Go and look at it, buy their "
+                "stuff, and tell them the South Africans sent you.",
+                muted=True,
+            )
         ]
-        credits_parts.append(_html_section_title("Oracle Globe Animation Credits"))
+        for section, entries in credits_sections.items():
+            credits_parts.append(_html_section_title(section))
+            for title, url in entries:
+                credits_parts.append(_html_paragraph(_html_link(url, title), margin="4px 0 4px 16px"))
+        credits_parts.append(_html_section_title("Oracle globe animation"))
         for title, url in animation_credits.items():
             credits_parts.append(
-                _html_paragraph(_html_link(url, title), margin="6px 0 6px 16px")
+                _html_paragraph(_html_link(url, title), margin="4px 0 4px 16px")
             )
 
         credits_content.setHtml(_wrap_tab_html("".join(credits_parts)))
@@ -495,8 +552,8 @@ class AboutWindow(QtWidgets.QMainWindow):
             f"margin: 16px 0 8px 0; font-weight: 600; line-height: {_tab_line_height_css()};"
         )
         h2 = (
-            f"color: {_TAB_LINK_COLOR}; font-size: {_TAB_FONT_SIZE_PX}px; "
-            f"margin: 14px 0 6px 0; font-weight: 600; line-height: {_tab_line_height_css()};"
+            f"color: #ff8800; font-size: {_TAB_FONT_SIZE_PX + 2}px; "
+            f"margin: 22px 0 8px 0; font-weight: 700; line-height: {_tab_line_height_css()};"
         )
         h3 = (
             f"color: #6ab4ff; font-size: {_TAB_FONT_SIZE_PX}px; "
@@ -587,6 +644,16 @@ class AboutWindow(QtWidgets.QMainWindow):
         # Convert remaining markdown list items
         html = re.sub(rf'^- (.+)$', rf'<li style="{li}">\1</li>', html, flags=re.MULTILINE)
         html = re.sub(rf'^  - (.+)$', rf'<li style="{li_nested}">\1</li>', html, flags=re.MULTILINE)
+
+        # Flatten lists: no bullet dots, just clean indented lines.
+        html = re.sub(r'<ul[^>]*>', '', html)
+        html = html.replace('</ul>', '')
+        html = re.sub(
+            r'<li[^>]*>',
+            '<div style="margin: 3px 0 3px 20px; color: #e6e6e6;">',
+            html,
+        )
+        html = html.replace('</li>', '</div>')
 
         # Wrap prose lines in paragraphs so Qt applies line-height consistently.
         lines = html.split('\n')
@@ -717,6 +784,18 @@ class AboutWindow(QtWidgets.QMainWindow):
         """Play the Decisions chime each time the About window opens."""
         super().showEvent(event)
         _play_about_audio()
+
+    def _read_about_aloud(self, text: str) -> None:
+        """Have the agent speak the About copy through the normal TTS path."""
+        message = (text or "").strip()
+        if not message:
+            return
+        try:
+            from distr.core.signals import signal_manager
+
+            signal_manager.speak_text_directly.emit(message)
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         """
