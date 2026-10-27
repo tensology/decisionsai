@@ -213,9 +213,8 @@ export function createAutomations({ context, actions, el }) {
                 <span class="scheduled-row-what" title="${esc(whatItDoes(automation, 400))}">${esc(whatItDoes(automation))}</span>
                 ${ident ? `<span class="scheduled-row-ident">${esc(ident)}</span>` : ''}
             </div>
-            <span class="scheduled-cell" role="cell"><span class="scheduled-pill ${group}">${statusLabel}</span></span>
             <span class="scheduled-cell" role="cell">${esc(automationScheduleLabel(automation))}</span>
-            <span class="scheduled-cell" role="cell" title="${esc(nextCell.title)}">${esc(nextCell.text)}</span>
+            <span class="scheduled-cell scheduled-cell-next" role="cell" title="${esc(nextCell.title)}"><span class="scheduled-pill ${group}">${statusLabel}</span><span class="scheduled-next-when">${esc(nextCell.text)}</span></span>
             <span class="scheduled-cell" role="cell" title="${esc(lastCell.title)}">${esc(lastCell.text)}</span>
             <span class="scheduled-cell" role="cell">${esc(automationProject(automation))}</span>
             <span class="scheduled-cell actions" role="cell">${rowActionsHtml(automation, group)}</span>
@@ -235,7 +234,6 @@ export function createAutomations({ context, actions, el }) {
         });
         const head = '<div class="scheduled-row scheduled-row-head" role="row">'
             + '<span role="columnheader">What it does</span>'
-            + '<span role="columnheader">Status</span>'
             + '<span role="columnheader">Schedule</span>'
             + '<span role="columnheader">Next run</span>'
             + '<span role="columnheader">Last run</span>'
