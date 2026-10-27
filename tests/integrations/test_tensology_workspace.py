@@ -199,7 +199,7 @@ def test_non_ui_ticket_uses_completion_protocol_without_browser_requirement():
     assert use_playwright is False
 
 
-def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
+def test_tensology_thread_attaches_routed_workflow_and_quality_contract():
     ticket = {
         "id": 17,
         "project_id": 9,
@@ -218,9 +218,11 @@ def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
     local_response = {"task": {"id": 42}}
 
     with (
+        # Tickets route to a managed weight-class policy; the retired Development
+        # pipeline is no longer the canonical target.
         patch(
-            "distr.core.workflow.developer_workflow.get_or_create_development_workflow",
-            return_value=374,
+            "distr.core.workflow.phases.route_ticket_workflow_id",
+            return_value=433,
         ),
         patch("distr.core.tensology_client._ensure_tensology_kanban_ticket", return_value=91),
         patch(
@@ -240,15 +242,16 @@ def test_tensology_thread_attaches_canonical_workflow_and_quality_contract():
     }
     path, body = post.call_args.args
     assert path == "workflows/studio/tasks"
-    assert body["workflow_id"] == 374
+    assert body["workflow_id"] == 433
     assert body["ticket_id"] == 91
     assert body["skill_ids"] == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
     assert body["use_playwright"] is True
     assert '"channel": "whatsapp"' in body["prompt"]
     assert '"name": "brief.pdf"' in body["prompt"]
     assert "Keep the compact layout." in body["prompt"]
-    # Tensology approval no longer bypasses human gates; route comes from the project.
-    assert body["skip_human_checkpoints"] is False
+    # The pre-run briefing is skipped because the founder already approved this
+    # ticket in Tensology. Risk gates still come from the routed class policy.
+    assert body["skip_human_checkpoints"] is True
     assert (body["backend"], body["provider"], body["model_name"]) == ("cursor", "cursor", "grok-4.7-medium")
 
 
