@@ -2794,13 +2794,25 @@ async function loadEmptyStateDropdowns() {
     const llmModelEl = document.getElementById('emptyStateLlmModel');
     const voiceProviderEl = document.getElementById('emptyStateVoiceProvider');
     const voiceModelEl = document.getElementById('emptyStateVoiceModel');
-    if (!llmProviderEl || !llmModelEl || !voiceProviderEl || !voiceModelEl) return;
+    if (!llmProviderEl || !llmModelEl || !voiceProviderEl || !voiceModelEl) {
+        // Reveal anyway: a missing element must not leave the spinner forever.
+        revealEmptyStateForm();
+        return;
+    }
+    // Safety net. "Loading chat settings..." used to spin forever when a fetch
+    // never settled, with no error in the console to explain it.
+    const revealTimer = setTimeout(revealEmptyStateForm, 12000);
     try {
         await _ensureTTSProviders();
+        const withTimeout = (url, ms = 8000) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), ms);
+            return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+        };
         const [providersRes, modelsRes, generalRes] = await Promise.all([
-            fetch('/api/llms/available-providers'),
-            fetch(`${API_BASE}/models`),
-            fetch('/api/general')
+            withTimeout('/api/llms/available-providers'),
+            withTimeout(`${API_BASE}/models`),
+            withTimeout('/api/general')
         ]);
         const providersData = providersRes.ok ? await providersRes.json() : { providers: [] };
         const modelsData = modelsRes.ok ? await modelsRes.json() : {};
@@ -2840,6 +2852,8 @@ async function loadEmptyStateDropdowns() {
         await applyChatS2sLocksForModelSelect(llmModelEl);
     } catch (e) {
         console.error('Error loading empty-state dropdowns:', e);
+    } finally {
+        clearTimeout(revealTimer);
     }
     await loadEmptyStateSkins();
     toggleEmptyStateOllamaPullBtn();
@@ -5392,15 +5406,23 @@ async function showNewChatModal() {
     if (modalForm) modalForm.style.display = 'none';
     // Disable create button if agent is currently streaming a response
     if (modalCreate) modalCreate.disabled = isStreaming;
-    await loadDefaultSettings();
-    loadModalSkins();
-    toggleModalOllamaPullBtn();
-    // Hide Kilo promo if KiloCode is already a provider
-    toggleKiloPromo('llmProvider');
-    // Reveal form, hide loader
-    if (modalLoader) modalLoader.style.display = 'none';
-    if (modalForm) modalForm.style.display = '';
-    if (typeof injectInfoIcons === 'function') injectInfoIcons();
+    const revealModal = () => {
+        if (modalLoader) modalLoader.style.display = 'none';
+        if (modalForm) modalForm.style.display = '';
+        if (typeof injectInfoIcons === 'function') injectInfoIcons();
+    };
+    // Same safety net as the empty state: never leave the spinner forever.
+    const revealTimer = setTimeout(revealModal, 12000);
+    try {
+        await loadDefaultSettings();
+        loadModalSkins();
+        toggleModalOllamaPullBtn();
+        // Hide Kilo promo if KiloCode is already a provider
+        toggleKiloPromo('llmProvider');
+    } finally {
+        clearTimeout(revealTimer);
+        revealModal();
+    }
 }
 
 function hideNewChatModal() {
