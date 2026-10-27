@@ -1245,13 +1245,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         else:
             self._maybe_show_about_window()
 
-        # Play splash sound if enabled (once) — not while the intro video already
-        # carries its own audio.
-        if (
-            self.settings.get("load_splash_sound", False)
-            and not self._splash_sound_played
-            and self._startup_splash_process is None
-        ):
+        # Play splash sound if enabled (once).
+        if self.settings.get("load_splash_sound", False) and not self._splash_sound_played:
             self._play_splash_sound()
             self._splash_sound_played = True
             
