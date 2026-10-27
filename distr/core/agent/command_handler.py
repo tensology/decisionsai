@@ -1168,6 +1168,13 @@ def _cmd_interrupt_tts(session, params):
                 session.tts_service._cancelled_since = _time.monotonic()
             if hasattr(session.tts_service, '_text_buffer'):
                 session.tts_service._text_buffer = ""
+        # Hard-cancel queued/in-flight synthesis too, so a long direct read-aloud
+        # (e.g. the About "Read about") stops instead of finishing the queue.
+        if hasattr(session.tts_service, 'abort_pending_synthesis'):
+            try:
+                session.tts_service.abort_pending_synthesis()
+            except Exception:
+                pass
 
     # Cancel welcome message task
     if session._welcome_task and not session._welcome_task.done():
@@ -1397,6 +1404,11 @@ def _cmd_speak_text_directly(session, params):
                     for i, chunk in enumerate(chunks):
                         if not chunk:
                             continue
+                        if getattr(tts, '_cancelled', False):
+                            session.logger.info(
+                                "_cmd_speak_text_directly id=%s cancelled mid-stream", direct_tts_id
+                            )
+                            break
                         await tts.process_frame(TextFrame(text=chunk), direction)
                         if i < len(chunks) - 1:
                             await asyncio.sleep(0.04)
