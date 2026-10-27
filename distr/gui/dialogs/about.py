@@ -100,7 +100,7 @@ _TAB_PADDING_PX = 20
 _TAB_TEXT_COLOR = "#ffffff"
 _TAB_MUTED_COLOR = "#aab4c4"
 _TAB_LINK_COLOR = "#4a9eff"
-_TAB_PANEL_BG = "#1a2a3c"
+_TAB_PANEL_BG = "#0f1a2c"  # match the About window background for consistency
 
 
 def _tab_line_height_css() -> str:
@@ -302,7 +302,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         tab_widget.setStyleSheet(f"""
             QTabWidget::pane {{
                 border: 1px solid #2a3a4c;
-                background-color: #1a2a3c;
+                background-color: #0f1a2c;
                 border-radius: 4px;        
                 padding: 0px;
                 margin: 0px;
@@ -326,13 +326,14 @@ class AboutWindow(QtWidgets.QMainWindow):
                 font-size: 14px;
             }}
             QTabBar::tab:selected {{
-                background-color: #1a2a3c;
+                background-color: #0f1a2c;
                 color: #ffffff;
-                border-bottom: 1px solid #1a2a3c;
+                border-top: 2px solid #ff8800;
+                border-bottom: 1px solid #0f1a2c;
                 margin-bottom: -1px;
             }}
             QTabBar::tab:hover {{
-                background-color: #2a3a4c;
+                background-color: #1a2a3c;
             }}
         """)
         
@@ -358,48 +359,33 @@ class AboutWindow(QtWidgets.QMainWindow):
 
         about_paragraphs_text = [
             (
-                "Right, let's have this out. You've got ChatGPT in one tab, Claude in another, "
-                "a coding agent chewing through your third monitor, a WhatsApp full of clients who "
-                "think 'quick question' means an hour, and a Kanban board you haven't opened since "
-                "the previous financial year. That's not a workflow. That's a taxi rank at five p.m. "
-                "with nobody holding the rank."
+                "You've got ChatGPT in one tab, Claude in another, an agent grinding on the third "
+                "screen, a WhatsApp full of clients, a Jira board you last opened sometime last "
+                "quarter, and a global hotkey you've already forgotten. DecisionsAI sits in the "
+                "middle and keeps the lot pointed at the same job. The useful bits are a keystroke "
+                "away, because nobody wants to go digging through menus at two in the morning."
             ),
             (
-                "DecisionsAI is the marshal. It sits in the middle — one layer between you and every "
-                "agent, model, tool, chat and inbox you own — and keeps the whole lot pointed at the "
-                "same piece of work. Not another chatbot, not another dashboard: the routing layer "
-                "that decides what runs, who runs it, what it costs, what it touched, and what needs "
-                "your say-so before it goes anywhere near production."
+                "It's an orchestrator, so the brain, the voice and the ears all pull out and swap. "
+                "OpenAI today, Ollama tomorrow. Local speech when the internet is sulking, a cloud "
+                "voice when you fancy one. Same story for transcription, and you can bolt on a "
+                "third-party vendor for the noisy bits whenever it suits. Nothing here is welded shut."
             ),
             (
-                "We grew up in the Winamp era. Software had a personality, a skin folder, an "
-                "equaliser you fiddled with for no reason, and it definitely whips the llama's ass. "
-                "Then the industry decided everything should be beige and rented by the month. We "
-                "disagree. Tools you actually like, models you can actually run — a local one when "
-                "you want it, a cloud one when you don't, and the same standard either way."
+                "It's open source, so the codebase is yours to poke at and improve. Build something "
+                "clever, send it back, we'll happily take the credit. It already talks to Jira, "
+                "Trello, WhatsApp (relayer and all), Telegram and Gmail, and it gets along with most "
+                "of the code CLIs out there, so you can work out which model and which tool actually "
+                "earns its keep. There's a phone app too, if you'd rather boss it around from the couch."
             ),
             (
-                "It's built from South Africa, where the power goes and the internet does not, so "
-                "it runs local-first and queues the rest. The work ethic is the one we were raised "
-                "on: finish the thing, read the error, automate the part that made you hate your job, "
-                "and go home before you start defending a hallucination like it's company policy. "
-                "Motion is not progress. A stand-up is not a deliverable."
-            ),
-            (
-                "Think of it as the nerves between the brain and the hands. Agents plan and type. "
-                "Models think out loud. Tools do the actual damage. DecisionsAI routes between them, "
-                "remembers what happened, asks before it spends your money or sends your message, "
-                "and tells you the truth about what ran — including when the truth is that one of "
-                "them is bluffing."
+                "We grew up in the Winamp era, when software had a personality, a skin folder, and "
+                "an equaliser you fiddled with for no reason. So go on and mess with the avatars and "
+                "oracles. Codex calls them pets, call them whatever you like. Make it look ridiculous "
+                "on purpose. And yes, it really whips Ollama's ass."
             ),
         ]
         about_paragraphs = [_html_paragraph(p) for p in about_paragraphs_text]
-        about_paragraphs.append(_html_paragraph(
-            "<em>It really whips the llama's ass.</em> Winamp whispered that in an installer "
-            "twenty-six years ago. Ollama later named a stack after the LLaMA models and the "
-            "universe closed the loop. We just kept the punchline.",
-            muted=True,
-        ))
         about_content.setHtml(_wrap_tab_html("".join(about_paragraphs)))
         _embed_browser_with_back(about_layout, about_content)
 
