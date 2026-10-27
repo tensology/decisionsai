@@ -1163,6 +1163,13 @@ _SANDBOX_RESULT_INSTRUCTION = (
     "workflow report ('Status: completed|failed|needs_input' plus the requested fields).\n\n"
 )
 
+_WORKER_RESULT_CONTRACT = (
+    "FINAL MESSAGE CONTRACT: your last message is shown to the user and may be spoken aloud. "
+    "Write it for a person: what you did, the outcome, and any evidence or blocker. Give the "
+    "result, not your plan — never open with \"I'll ...\" and never mention the callback, "
+    "the reporter, or this packet. If blocked, state exactly what you need in one sentence.\n"
+)
+
 _CALLBACK_BLOCKER_RE = re.compile(
     r"(?i)(callback|decisionsai|decisions_callback|127\.0\.0\.1|localhost)[^\n]{0,160}"
     r"(unreachable|not reachable|operation not permitted|connection refused|failed|blocked|sandbox)"
@@ -2306,6 +2313,7 @@ class CursorBackend(OneShotCliBackend):
             "cursor_interrupted, cursor_progress, cursor_completed, cursor_failed, cursor_needs_input.\n"
             "Do not wait until the final answer if the human submits another prompt, changes direction, "
             "or adds constraints mid-run.\n"
+            + _WORKER_RESULT_CONTRACT +
             "[/DECISIONS CURSOR CALLBACK]\n\n"
         )
 
@@ -2692,6 +2700,7 @@ class CodexBackend(OneShotCliBackend):
             "an unavailable reporter or callback must not block the ticket or be listed under Blockers.\n"
             "Do not wait until the final answer if the human submits another prompt, changes direction, "
             "or adds constraints mid-run.\n"
+            + _WORKER_RESULT_CONTRACT +
             "[/DECISIONS CODEX CALLBACK]\n\n"
         )
 

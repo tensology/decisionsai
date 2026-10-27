@@ -214,6 +214,7 @@ def test_codex_build_command_embeds_decisions_callback(monkeypatch):
     assert "report_decisions_event.py" in instruction
     assert "codex_prompt_submitted" in instruction
     assert "must not block the ticket or be listed under Blockers" in instruction
+    assert "FINAL MESSAGE CONTRACT" in instruction
     assert instruction.endswith("fix tests")
 
 
@@ -244,4 +245,5 @@ def test_cursor_build_command_embeds_decisions_callback(monkeypatch):
     assert '"execution_session_id":31' in instruction
     assert "report_decisions_event.py" in instruction
     assert "cursor_progress" in instruction
+    assert "FINAL MESSAGE CONTRACT" in instruction
     assert instruction.endswith("fix tests")
