@@ -589,35 +589,79 @@ def route_ticket(
     escalate on risk, so a risky ticket never routes cheap by accident.
     """
     class_key = classify(text, has_repo_target=has_repo_target, requested=requested)
-    policy = class_policy(class_key)
-    lowered = str(text or "").lower()
-    risk_hit = next((word for word in RISK_KEYWORDS if word in lowered), "")
-
-    if requested and requested in WORKFLOW_CLASSES and requested == class_key:
-        reason = "you asked for this one"
-    elif risk_hit:
-        reason = f"it mentions {risk_hit.strip()}"
-    elif not has_repo_target:
-        reason = "it looks like a question, not a code change"
-    else:
-        reason = "it's normal repository work with no risk flags"
-
-    workflow_id = find_class_workflow_id(class_key)
-    label = str(policy.get("label") or class_key)
-    prefix = f"Ticket #{int(ticket_id)}" if ticket_id is not None else "This ticket"
-    announcement = (
-        f"{prefix} goes to the {label} workflow ({reason}). "
-        f"Say 'make it lighter' or 'make it heavier' to change that."
+    reason = route_reason(
+        text,
+        class_key=class_key,
+        requested=requested,
+        has_repo_target=has_repo_target,
     )
     return {
         "class": class_key,
-        "label": label,
+        "label": str(class_policy(class_key).get("label") or class_key),
         "reason": reason,
-        "policy": policy,
-        "workflow_id": workflow_id,
-        "announcement": announcement,
+        "policy": class_policy(class_key),
+        "workflow_id": find_class_workflow_id(class_key),
+        "announcement": format_route_announcement(class_key, reason, ticket_id=ticket_id),
         "overridable": True,
     }
+
+
+def route_reason(
+    text: str,
+    *,
+    class_key: str,
+    requested: Optional[str] = None,
+    has_repo_target: bool = True,
+) -> str:
+    """Plain-language reason for a routing choice. Pure, so any caller can explain itself."""
+    if requested and requested in WORKFLOW_CLASSES and requested == class_key:
+        return "you asked for this one"
+    lowered = str(text or "").lower()
+    risk_hit = next((word for word in RISK_KEYWORDS if word in lowered), "")
+    if risk_hit:
+        return f"it mentions {risk_hit.strip()}"
+    if not has_repo_target:
+        return "it looks like a question, not a code change"
+    return "it's normal repository work with no risk flags"
+
+
+def format_route_announcement(
+    class_key: str,
+    reason: str,
+    *,
+    ticket_id: Optional[int] = None,
+    overridable: bool = True,
+) -> str:
+    """The sentence shown and spoken when a ticket is routed.
+
+    ``overridable=False`` drops the change-your-mind sentence for channels that
+    cannot yet act on it, so the message never promises more than we honour.
+    """
+    label = str(class_policy(class_key).get("label") or class_key)
+    prefix = f"Ticket #{int(ticket_id)}" if ticket_id is not None else "This ticket"
+    base = f"{prefix} goes to the {label} workflow ({reason})."
+    if not overridable:
+        return base
+    return f"{base} Say 'make it lighter' or 'make it heavier' to change that."
+
+
+def find_class_workflow_id_in_session(session: Any, class_key: str) -> Optional[int]:
+    """Session-safe lookup of a managed class workflow.
+
+    Intake already holds a transaction, so it cannot call the creating helper
+    without risking a nested write lock. Managed workflows are seeded at
+    startup, so a read-only lookup is enough here.
+    """
+    from distr.core.db.workflow import AutoWorkflow
+
+    wanted = str(class_key or "").strip().lower()
+    if wanted not in WORKFLOW_CLASSES:
+        return None
+    rows = session.query(AutoWorkflow).filter(AutoWorkflow.status != "archived").all()
+    for row in rows:
+        if workflow_weight_class(row.run_settings) == wanted:
+            return int(row.id)
+    return None
 
 
 def route_ticket_plan(

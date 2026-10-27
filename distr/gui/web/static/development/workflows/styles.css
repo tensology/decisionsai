@@ -53,6 +53,8 @@
 .workflow-card-open { display: grid; min-width: 0; flex: 1; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--studio-text); text-align: left; }
 .workflow-card-open strong { min-width: 0; overflow: hidden; font-size: 12px; font-weight: 620; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-card-open small { min-width: 0; overflow: hidden; color: var(--studio-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+/* What the policy is for. Two lines at most, quieter than the name/summary. */
+.workflow-card-open .workflow-card-what { display: -webkit-box; color: var(--studio-dim); font-size: 10px; line-height: 1.4; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; }
 .workflow-card-controls { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .workflow-state { display: block; width: 8px; height: 8px; border-radius: 50%; background: #68758d; box-shadow: 0 0 0 2px rgba(104,117,141,.1); }
 .workflow-state.running { background: var(--studio-green); box-shadow: 0 0 0 2px rgba(34,197,94,.13), 0 0 8px rgba(34,197,94,.24); }

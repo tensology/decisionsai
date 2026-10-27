@@ -749,9 +749,12 @@ class OrchestratorIntakeService:
                     board = matching_boards[0]
             if board is None:
                 query = session.query(KanbanBoard).filter(KanbanBoard.archived.is_(False))
-                if require_workflow:
-                    query = query.filter(KanbanBoard.default_workflow_id.is_not(None))
                 candidates = query.order_by(KanbanBoard.position, KanbanBoard.id).all()
+                if require_workflow:
+                    # Prefer a board that already names a workflow, but no longer
+                    # require it: a missing default is supplied by weight-class
+                    # routing below instead of blocking the ticket.
+                    candidates = [row for row in candidates if row.default_workflow_id] or candidates
                 active = [row for row in candidates if bool(row.in_use)]
                 if len(active) == 1:
                     board = active[0]
@@ -784,7 +787,34 @@ class OrchestratorIntakeService:
                 project = session.query(Project).filter(Project.id == int(board.default_project_id)).first()
             workflow = hinted_workflow
             if workflow is None and board.default_workflow_id:
-                workflow = session.query(AutoWorkflow).filter(AutoWorkflow.id == int(board.default_workflow_id)).first()
+                candidate = (
+                    session.query(AutoWorkflow)
+                    .filter(AutoWorkflow.id == int(board.default_workflow_id))
+                    .first()
+                )
+                # A retired workflow used as the board default must not capture
+                # new work; fall through to weight-class routing instead.
+                if candidate is not None and str(candidate.status or "").lower() != "archived":
+                    workflow = candidate
+            if workflow is None:
+                # Route by weight class instead of demanding a board default that
+                # may be missing or pointing at the retired Development pipeline.
+                from distr.core.workflow.phases import (
+                    classify,
+                    find_class_workflow_id_in_session,
+                )
+
+                ticket_text = f"{intake.text or ''}\n\n{intake.requested_outcome or ''}".strip()
+                class_key = classify(ticket_text, has_repo_target=project is not None)
+                routed_id = find_class_workflow_id_in_session(
+                    session, class_key
+                ) or find_class_workflow_id_in_session(session, "standard")
+                if routed_id:
+                    workflow = (
+                        session.query(AutoWorkflow)
+                        .filter(AutoWorkflow.id == int(routed_id))
+                        .first()
+                    )
             if require_workflow and workflow is None:
                 alternatives = (
                     session.query(KanbanBoard)
@@ -914,6 +944,29 @@ class OrchestratorIntakeService:
         decision.handled = True
         decision.status = "ticket_created"
         decision.response_text = f"Created ticket #{decision.ticket_id}: {_clean_title(value)}"
+        # Tell the person who sent it which policy picked the work up, so the
+        # choice is visible on WhatsApp / Telegram / email too, not just in-app.
+        try:
+            from distr.core.workflow.phases import (
+                classify,
+                format_route_announcement,
+                route_reason,
+            )
+
+            ticket_text = f"{intake.text or ''}\n\n{intake.requested_outcome or ''}".strip()
+            has_repo = decision.project_id is not None
+            class_key = classify(ticket_text, has_repo_target=has_repo)
+            reason = route_reason(ticket_text, class_key=class_key, has_repo_target=has_repo)
+            decision.response_text += "\n\n" + format_route_announcement(
+                class_key,
+                reason,
+                ticket_id=decision.ticket_id,
+                # Channel replies cannot action a route change yet, so do not
+                # invite one here. In-app threads do support it.
+                overridable=False,
+            )
+        except Exception:
+            logger.debug("Could not add routing explanation to intake reply", exc_info=True)
 
     @staticmethod
     def _should_stage_whatsapp_intake_approval(

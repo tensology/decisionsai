@@ -1087,3 +1087,92 @@ def test_whatsapp_intake_records_work_lifecycle(intake_db, monkeypatch):
     assert recorded["source_jid"] == "120363@g.us"
     assert recorded["source_phone"] == "120363"
     assert recorded["message_ids"] == [10, 11]
+
+
+def _routing_db(board_default_workflow: str | None = None):
+    """One board plus managed class workflows, for intake routing tests."""
+    from distr.core.db import Base
+    from distr.core.db.kanban import KanbanBoard, KanbanLane
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import AutoWorkflow
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    session = factory()
+
+    project = Project(name="Routing Project", folder_location="/tmp/routing")
+    session.add(project)
+    session.flush()
+
+    def _managed(name: str, class_key: str) -> "AutoWorkflow":
+        return AutoWorkflow(
+            name=name,
+            status="active",
+            workflow_type="manual",
+            run_settings=json.dumps({"managed_by": "phase_engine", "weight_class": class_key}),
+        )
+
+    standard = _managed("Ticket: standard (one session)", "standard")
+    critical = _managed("Ticket: critical (one session)", "critical")
+    retired = AutoWorkflow(name="Development", status="archived", workflow_type="manual")
+    session.add_all([standard, critical, retired])
+    session.flush()
+
+    board = KanbanBoard(name="Routing Board", default_project_id=project.id, position=0)
+    if board_default_workflow == "retired":
+        board.default_workflow_id = retired.id
+    session.add(board)
+    session.flush()
+    session.add(KanbanLane(board_id=board.id, name="Ready", position=0))
+    session.commit()
+    ids = {"standard": standard.id, "critical": critical.id, "retired": retired.id}
+    session.close()
+    return factory, ids
+
+
+def test_intake_routes_a_risky_ticket_to_the_critical_policy():
+    factory, ids = _routing_db()
+    session_provider = lambda: _session_ctx(factory)
+    intake = WorkIntake(source="whatsapp", user_text="Add a schema migration for the invoices table")
+
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider):
+        _board, _lane, _project, workflow = OrchestratorIntakeService()._resolve_scope(
+            intake, require_workflow=True
+        )
+
+    assert workflow is not None
+    assert workflow.id == ids["critical"]
+
+
+def test_intake_routes_ordinary_work_to_the_standard_policy():
+    factory, ids = _routing_db()
+    session_provider = lambda: _session_ctx(factory)
+    intake = WorkIntake(source="telegram", user_text="Fix the checkout button label")
+
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider):
+        _board, _lane, _project, workflow = OrchestratorIntakeService()._resolve_scope(
+            intake, require_workflow=True
+        )
+
+    assert workflow is not None
+    assert workflow.id == ids["standard"]
+
+
+def test_intake_ignores_a_retired_board_default_and_still_routes():
+    factory, ids = _routing_db(board_default_workflow="retired")
+    session_provider = lambda: _session_ctx(factory)
+    intake = WorkIntake(source="gmail", user_text="Fix the checkout button label")
+
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider):
+        _board, _lane, _project, workflow = OrchestratorIntakeService()._resolve_scope(
+            intake, require_workflow=True
+        )
+
+    assert workflow is not None
+    assert workflow.id == ids["standard"]
+    assert workflow.id != ids["retired"]

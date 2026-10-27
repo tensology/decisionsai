@@ -145,10 +145,12 @@ export function createWorkflows({ context, actions, el }) {
               : '<p class="workflow-card-pending">No steps yet</p>';
         const classLabel = WORKFLOW_CLASS_LABEL[workflowClassKey(workflow)] || '';
         const summary = `${classLabel ? `${classLabel} · ` : ''}${stepCount} step${stepCount === 1 ? '' : 's'} · ${run ? actions.statusLabel(status) : issue || 'Ready'}`;
+        // Managed policies explain themselves: what they are for, not just their name.
+        const what = classLabel ? String(workflow.description || '').trim() : '';
         const stateClass = status === 'waiting' || status === 'paused' ? 'waiting' : status === 'failed' ? 'failed' : active ? 'running' : '';
         return `<article class="workflow-card" data-workflow-card="${Number(workflow.id)}">
             <header class="workflow-card-head">
-                <button type="button" class="workflow-card-open" data-workflow-select="${Number(workflow.id)}"><strong>${actions.escapeHtml(workflow.name || 'Untitled workflow')}</strong><small>${actions.escapeHtml(summary)}</small></button>
+                <button type="button" class="workflow-card-open" data-workflow-select="${Number(workflow.id)}"><strong>${actions.escapeHtml(workflow.name || 'Untitled workflow')}</strong><small>${actions.escapeHtml(summary)}</small>${what ? `<small class="workflow-card-what">${actions.escapeHtml(what)}</small>` : ''}</button>
                 <span class="workflow-card-controls">${stateClass ? `<i class="workflow-state ${stateClass}" role="img" aria-label="${actions.escapeHtml(actions.statusLabel(status))}" title="${actions.escapeHtml(actions.statusLabel(status))}"></i>` : ''}<span class="scheduled-row-icons"><button type="button" class="scheduled-icon-button edit" data-workflow-card-action="open" data-workflow-id="${Number(workflow.id)}" title="Edit" aria-label="Edit ${actions.escapeHtml(workflow.name || 'workflow')}"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m4 14-.5 3 3-.5L15 8l-2.5-2.5L4 14Z"/><path d="m11.5 6.5 2.5 2.5"/></svg></button><button type="button" class="scheduled-icon-button delete danger" data-workflow-card-action="delete" data-workflow-id="${Number(workflow.id)}" title="Delete" aria-label="Delete ${actions.escapeHtml(workflow.name || 'workflow')}"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 6h12M8 6V4h4v2M6 6l.8 10h6.4L14 6"/></svg></button></span></span>
             </header>
             ${preview ? `<button type="button" class="workflow-card-body" data-workflow-select="${Number(workflow.id)}">${preview}</button>` : ''}

@@ -13,7 +13,7 @@ import { createAutomations } from './automations/index.js?v=20261024-autolist3';
 
 import { createIncoming } from './incoming/index.js?v=20261022-incomingpad';
 
-import { createWorkflows } from './workflows/index.js?v=20261024-wfclass1';
+import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
 import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
