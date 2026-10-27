@@ -423,6 +423,54 @@ def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 180) -> d
         return payload
 
 
+def clear_stale_execution_status(chat_id: int, *, _session_provider=None) -> bool:
+    """Clear a cached execution status that no live run backs.
+
+    The thread spinner reads ``params.development.execution.status``, which can
+    outlive the run that set it. Stopping a thread therefore has to correct a
+    non-terminal status that no run is actually holding open.
+    """
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    with (_session_provider or get_session)() as db:
+        chat = db.get(Chat, int(chat_id))
+        if chat is None:
+            return False
+        try:
+            params = json.loads(chat.params or "{}")
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(params, dict):
+            return False
+        development = params.get("development")
+        execution = development.get("execution") if isinstance(development, dict) else None
+        if not isinstance(execution, dict):
+            return False
+        status = str(execution.get("status") or "").strip().lower()
+        if status not in {"initializing", "queued", "running", "waiting"}:
+            return False
+        live = (
+            db.query(AutoWorkflowRun)
+            .filter(
+                AutoWorkflowRun.chat_id == int(chat_id),
+                AutoWorkflowRun.status.in_(
+                    ("initializing", "queued", "running", "waiting")
+                ),
+            )
+            .first()
+        )
+        if live is not None:
+            return False
+        execution["status"] = "stopped"
+        execution["activity_status"] = "stopped"
+        execution["activity"] = ""
+        development["execution"] = execution
+        params["development"] = development
+        chat.params = json.dumps(params)
+        db.commit()
+        return True
+
+
 def resume_thread_time(chat_id: int, *, _session_provider=None) -> dict[str, Any]:
     now = utc_now_naive()
     with (_session_provider or get_session)() as db:
@@ -454,7 +502,9 @@ def pause_thread_time(chat_id: int) -> dict[str, Any]:
         payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
         db.commit()
-        return payload
+    # Stopping the timer must also stop a spinner no run is backing.
+    clear_stale_execution_status(int(chat_id))
+    return payload
 
 
 def reset_thread_time(chat_id: int, *, seconds: int = 0) -> dict[str, Any]:
@@ -484,7 +534,9 @@ def reset_thread_time(chat_id: int, *, seconds: int = 0) -> dict[str, Any]:
         payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
         db.commit()
-        return payload
+    # Stop and reset must also stop a spinner no run is backing.
+    clear_stale_execution_status(int(chat_id))
+    return payload
 
 
 def clear_thread_context(chat_id: int) -> dict[str, Any]:

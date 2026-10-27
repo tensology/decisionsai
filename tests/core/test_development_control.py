@@ -376,3 +376,72 @@ def test_idle_thread_without_response_stops_accumulating_time(development_db, mo
     assert result["running"] is False
     assert result["seconds"] == 180
     assert control.thread_time_state(development_db["chat_id"])["seconds"] == 180
+
+
+def _set_execution_status(session, chat_id: int, status: str) -> None:
+    with session() as db:
+        chat = db.get(Chat, chat_id)
+        params = json.loads(chat.params)
+        params.setdefault("development", {})["execution"] = {"status": status}
+        chat.params = json.dumps(params)
+        db.commit()
+
+
+def _read_execution_status(session, chat_id: int) -> str:
+    with session() as db:
+        chat = db.get(Chat, chat_id)
+        return str(
+            json.loads(chat.params).get("development", {}).get("execution", {}).get("status") or ""
+        )
+
+
+def test_a_stale_running_status_is_cleared(development_db):
+    chat_id = development_db["chat_id"]
+    _set_execution_status(development_db["session"], chat_id, "running")
+
+    assert control.clear_stale_execution_status(chat_id) is True
+
+    assert _read_execution_status(development_db["session"], chat_id) == "stopped"
+
+
+def test_a_live_run_keeps_its_status(development_db):
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    chat_id = development_db["chat_id"]
+    session = development_db["session"]
+    _set_execution_status(session, chat_id, "running")
+    with session() as db:
+        workflow = AutoWorkflow(name="Ticket: standard (one session)", status="active")
+        db.add(workflow)
+        db.flush()
+        db.add(AutoWorkflowRun(workflow_id=workflow.id, chat_id=chat_id, status="running"))
+        db.commit()
+
+    assert control.clear_stale_execution_status(chat_id) is False
+    assert _read_execution_status(session, chat_id) == "running"
+
+
+def test_an_idle_status_is_left_alone(development_db):
+    chat_id = development_db["chat_id"]
+    _set_execution_status(development_db["session"], chat_id, "completed")
+
+    assert control.clear_stale_execution_status(chat_id) is False
+    assert _read_execution_status(development_db["session"], chat_id) == "completed"
+
+
+def test_stop_and_reset_timer_clears_the_spinner(development_db):
+    chat_id = development_db["chat_id"]
+    _set_execution_status(development_db["session"], chat_id, "running")
+
+    control.reset_thread_time(chat_id)
+
+    assert _read_execution_status(development_db["session"], chat_id) == "stopped"
+
+
+def test_stop_timer_clears_the_spinner(development_db):
+    chat_id = development_db["chat_id"]
+    _set_execution_status(development_db["session"], chat_id, "waiting")
+
+    control.pause_thread_time(chat_id)
+
+    assert _read_execution_status(development_db["session"], chat_id) == "stopped"

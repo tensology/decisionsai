@@ -15,7 +15,7 @@ from distr.core.db import Chat, get_session
 from distr.core.db.projects import Project
 from distr.core.kanban.lifecycle import ensure_project_boards
 from distr.core.db.time import utc_now_naive
-from distr.core.db.workflow import DevelopmentTimeEntry, DevelopmentWorkItem
+from distr.core.db.workflow import AutoWorkflowRun, DevelopmentTimeEntry, DevelopmentWorkItem
 
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,21 @@ def load_development_groups(
             .order_by(Chat.modified_date.desc(), Chat.id.desc())
             .all()
         )
+        # A chat keeps a cached execution status. It goes stale when a run ends
+        # without updating it, which left a spinner running forever. Only a chat
+        # with a genuinely live run may show activity.
+        live_chat_ids = {
+            int(row[0])
+            for row in db.query(AutoWorkflowRun.chat_id)
+            .filter(
+                AutoWorkflowRun.chat_id.is_not(None),
+                AutoWorkflowRun.status.in_(
+                    ("initializing", "queued", "running", "waiting")
+                ),
+            )
+            .all()
+            if row[0] is not None
+        }
 
         groups = []
         for project in projects:
@@ -175,7 +190,10 @@ def load_development_groups(
                 "modified_at": chat.modified_date.timestamp() if chat.modified_date else 0,
                 "source_type": str(development.get("source_type") or ""),
                 "status": status,
-                "active": status in {"initializing", "queued", "running", "waiting"},
+                "active": (
+                    status in {"initializing", "queued", "running", "waiting"}
+                    and int(chat.id) in live_chat_ids
+                ),
                 "elapsed_seconds": elapsed_seconds,
                 "weekly_seconds": weekly_seconds,
                 "time_running": time_running,
