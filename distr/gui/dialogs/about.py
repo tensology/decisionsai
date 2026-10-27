@@ -34,6 +34,12 @@ def _stop_about_audio() -> None:
             process.terminate()
         except Exception:
             pass
+    try:
+        from distr.core.about_audio import clear_about_audio
+
+        clear_about_audio()
+    except Exception:
+        pass
 
 
 def _play_about_audio() -> None:
@@ -56,6 +62,10 @@ def _play_about_audio() -> None:
             _ABOUT_AUDIO_PROCESS = subprocess.Popen(
                 command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
+        # Let the TTS pipeline know so it waits rather than talking over the chime.
+        from distr.core.about_audio import mark_about_audio_started
+
+        mark_about_audio_started()
     except Exception:
         pass
 

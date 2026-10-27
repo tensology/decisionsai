@@ -167,6 +167,21 @@ class TTSPipelineMixin:
         if not hasattr(self, "run_tts"):
             logger.warning("TTS: _play_queued_sentence called but run_tts is missing")
             return
+        # Never talk over the About window's Decisions chime: wait it out first.
+        try:
+            from distr.core.about_audio import about_audio_remaining
+
+            remaining = about_audio_remaining()
+            if remaining > 0:
+                logger.info("TTS: waiting %.2fs for the About chime to finish", remaining)
+            while remaining > 0:
+                if generation != self._tts_generation or self._cancelled:
+                    return
+                await asyncio.sleep(min(0.1, remaining))
+                remaining = about_audio_remaining()
+        except Exception:
+            pass
+
         push_direction = self._resolve_tts_push_direction(direction)
         logger.info("TTS SENTENCE EMIT: sentence=%r", sentence[:120])
         sentence_started = time.monotonic()
