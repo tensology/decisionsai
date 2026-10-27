@@ -426,3 +426,43 @@ def test_state_sync_does_nothing_without_claimed_tickets():
     with patch("distr.core.tensology_client.configured_tensology_client") as configured:
         assert tc.sync_tensology_execution_states(force=True) == 0
     configured.assert_not_called()
+
+
+def test_work_request_event_triggers_handler():
+    seen, handled = [], []
+    socket = FakeSocket([
+        json.dumps({"type": "connected"}),
+        json.dumps({"type": "decisions_work_request", "request_id": 55, "event": "proposal_created"}),
+    ])
+
+    async def catch_up():
+        pass
+
+    async def handle(ids):
+        pass
+
+    async def handle_wr(request_id):
+        handled.append(request_id)
+
+    async def sleep(delay):
+        pass
+
+    asyncio.run(stream.run_tensology_ticket_stream(
+        connect=_connector([socket], seen), catch_up=catch_up, handle_events=handle,
+        handle_work_request=handle_wr, config=lambda: ("wss://t/ws/decisions", "k"),
+        sleep=sleep, max_attempts=1,
+    ))
+    assert handled == [55]
+
+
+def test_work_request_signal_records_needs_input(monkeypatch):
+    import distr.core.orchestration_events as oe
+
+    calls = []
+    monkeypatch.setattr(oe, "emit_orchestration_event", lambda **kw: calls.append(kw))
+    with patch("distr.core.chat.ChatService.get_current_chat_id", return_value=None):
+        stream.handle_work_request_signal(77)
+
+    assert calls and calls[0]["event_type"] == "needs_input"
+    assert "77" in calls[0]["summary"]
+    assert calls[0]["source"] == "tensology"

@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 STREAM_PATH = "/ws/decisions"
 TICKET_EVENT_TYPE = "decisions_ticket"
+WORK_REQUEST_EVENT_TYPE = "decisions_work_request"
 PING_INTERVAL_SECONDS = 20
 PING_TIMEOUT_SECONDS = 20
 BACKOFF_INITIAL_SECONDS = 1.0
@@ -54,6 +55,41 @@ STREAM_STATE: dict[str, Any] = {
     "events": 0,
     "reconnects": 0,
 }
+
+
+def handle_work_request_signal(request_id: Any) -> None:
+    """A Tensology work proposal arrived: record it and put it in front of the user.
+
+    Deliberately lightweight: the proposal content stays on Tensology (the Telegram
+    buttons there already carry the decision). Decisions only needs to know there is
+    something waiting so it can surface it and offer to act.
+    """
+    summary = (
+        "A Tensology work proposal is waiting for your decision"
+        + (f" (request {request_id})" if request_id else "")
+        + "."
+    )
+    try:
+        from distr.core.orchestration_events import emit_orchestration_event
+
+        emit_orchestration_event(
+            source="tensology",
+            event_type="needs_input",
+            status="waiting",
+            summary=summary,
+            payload={"surface": "tensology", "subtype": "work_request", "request_id": request_id},
+            notify_channels=["chat"],
+        )
+    except Exception:
+        logger.debug("Tensology work-request orchestration event failed", exc_info=True)
+    try:
+        from distr.core.chat import ChatService
+
+        chat_id = ChatService.get_current_chat_id()
+        if chat_id:
+            ChatService.append_assistant_notice(int(chat_id), summary, hidden=True)
+    except Exception:
+        logger.debug("Tensology work-request chat notice failed", exc_info=True)
 
 
 def tensology_stream_url(settings: dict[str, Any]) -> str:
@@ -202,6 +238,7 @@ async def run_tensology_ticket_stream(
     connect: Callable[[str, str], Any] | None = None,
     catch_up: Callable[[], Awaitable[Any]] | None = None,
     handle_events: Callable[[list[int]], Awaitable[Any]] | None = None,
+    handle_work_request: Callable[[Any], Any] | None = None,
     config: Callable[[], tuple[str, str] | None] | None = None,
     paused: Callable[[], bool] | None = None,
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
@@ -212,6 +249,7 @@ async def run_tensology_ticket_stream(
     connect = connect or _default_connect
     catch_up = catch_up or _default_catch_up
     handle_events = handle_events or _default_handle_events
+    handle_work_request = handle_work_request or handle_work_request_signal
     config = config or _stream_config
     paused = paused or tensology_push_paused
 
@@ -276,6 +314,22 @@ async def run_tensology_ticket_stream(
                                 event.get("ticket_id"), event.get("event") or event.get("reason") or "update",
                             )
                             dispatcher.notify(event.get("ticket_id"))
+                        elif kind == WORK_REQUEST_EVENT_TYPE:
+                            STREAM_STATE["last_event_at"] = time.time()
+                            STREAM_STATE["events"] = int(STREAM_STATE.get("events") or 0) + 1
+                            logger.info(
+                                "Tensology work-request stream event received: request %s (%s)",
+                                event.get("request_id"), event.get("event") or "update",
+                            )
+                            try:
+                                import inspect as _inspect
+
+                                if _inspect.iscoroutinefunction(handle_work_request):
+                                    await handle_work_request(event.get("request_id"))
+                                else:
+                                    await asyncio.to_thread(handle_work_request, event.get("request_id"))
+                            except Exception:
+                                logger.debug("Tensology work-request handler failed", exc_info=True)
                         elif kind == "ping":
                             await websocket.send(json.dumps({"type": "pong", "timestamp": event.get("timestamp")}))
                     # Let an event that arrived just before a clean close finish.
