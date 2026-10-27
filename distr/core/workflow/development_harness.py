@@ -2067,6 +2067,14 @@ def dispatch_development_prompt(
 
         existing_workflow_id = int(metadata.get("workflow_id") or 0) or None
         workflow_id = existing_workflow_id
+        # A deliberate "make it heavier/lighter" relinks the ticket before dispatch.
+        if ticket_id is not None:
+            from distr.core.workflow.phases import apply_route_override
+
+            route_override = apply_route_override(int(ticket_id), clean, chat_id=int(chat_id))
+            if route_override.get("changed"):
+                workflow_id = int(route_override["workflow_id"])
+                existing_workflow_id = workflow_id
         relaunch_inherit: dict[str, Any] = {}
         if existing_workflow_id is not None:
             from distr.core.workflow.relaunch_guard import relaunch_decision
@@ -2088,12 +2096,15 @@ def dispatch_development_prompt(
             # throwaway "instruction" draft (which was never runnable) and then
             # fell back to the retired Development pipeline, which is exactly how
             # the workflow list filled with dead drafts and one token furnace.
-            from distr.core.workflow.phases import route_ticket_workflow_id
+            from distr.core.workflow.phases import announce_route_choice
 
-            workflow_id = route_ticket_workflow_id(
+            route_plan = announce_route_choice(
+                int(chat_id),
                 clean,
+                ticket_id=ticket_id,
                 has_repo_target=bool(int(project.id) > 0),
-            ) or None
+            )
+            workflow_id = int(route_plan.get("workflow_id") or 0) or None
             if workflow_id:
                 try:
                     from distr.core.workflow.development_threads import mark_development_thread

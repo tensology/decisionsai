@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
@@ -619,29 +620,198 @@ def route_ticket(
     }
 
 
+def route_ticket_plan(
+    text: str,
+    *,
+    has_repo_target: bool = True,
+    requested: Optional[str] = None,
+    ticket_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Route a ticket and guarantee a usable workflow id.
+
+    Creates the managed workflows on first use so a fresh install can route work
+    without anyone hand-building a pipeline. Falls back to ``standard`` rather
+    than returning nothing, because dispatching a ticket with no workflow is
+    worse than dispatching it on the default policy.
+    """
+    plan = route_ticket(
+        text,
+        has_repo_target=has_repo_target,
+        requested=requested,
+        ticket_id=ticket_id,
+    )
+    if plan.get("workflow_id"):
+        return plan
+    try:
+        ensure_class_workflows()
+    except Exception:
+        logger.warning("Could not create managed class workflows", exc_info=True)
+    plan["workflow_id"] = (
+        find_class_workflow_id(str(plan.get("class") or ""))
+        or find_class_workflow_id("standard")
+        or None
+    )
+    return plan
+
+
 def route_ticket_workflow_id(
     text: str,
     *,
     has_repo_target: bool = True,
     requested: Optional[str] = None,
 ) -> int:
-    """Return the managed workflow id a ticket should run on.
+    """Return the managed workflow id a ticket should run on."""
+    plan = route_ticket_plan(text, has_repo_target=has_repo_target, requested=requested)
+    return int(plan.get("workflow_id") or 0)
 
-    Creates the managed workflows on first use so a fresh install can route work
-    without anyone hand-building a pipeline. Falls back to ``standard`` rather
-    than returning 0, because dispatching a ticket with no workflow is worse
-    than dispatching it on the default policy.
+
+def announce_route_choice(
+    chat_id: Optional[int],
+    text: str,
+    *,
+    ticket_id: Optional[int] = None,
+    has_repo_target: bool = True,
+    requested: Optional[str] = None,
+    speak: bool = True,
+) -> dict[str, Any]:
+    """Tell the user which policy picked up their ticket, and why.
+
+    Routing is only trustworthy if it is visible and overridable, so the choice
+    is posted into the thread and read aloud when voice is available.
     """
-    plan = route_ticket(text, has_repo_target=has_repo_target, requested=requested)
-    workflow_id = plan.get("workflow_id")
-    if workflow_id:
-        return int(workflow_id)
-    try:
-        ensure_class_workflows()
-    except Exception:
-        logger.warning("Could not create managed class workflows", exc_info=True)
-    workflow_id = find_class_workflow_id(str(plan.get("class") or "")) or find_class_workflow_id("standard")
-    return int(workflow_id or 0)
+    plan = route_ticket_plan(
+        text,
+        has_repo_target=has_repo_target,
+        requested=requested,
+        ticket_id=ticket_id,
+    )
+    announcement = str(plan.get("announcement") or "").strip()
+    if announcement and chat_id:
+        try:
+            from distr.core.chat import ChatService
+
+            ChatService.append_assistant_notice(int(chat_id), announcement)
+        except Exception:
+            logger.debug("route announcement notice failed", exc_info=True)
+        if speak:
+            try:
+                from distr.core.signals import speak_text_directly_event_queue
+
+                speak_text_directly_event_queue(announcement)
+            except Exception:
+                logger.debug("route announcement speech failed", exc_info=True)
+    return plan
+
+
+# Overrides must be deliberate: a trigger phrase plus a direction or class word.
+_OVERRIDE_TRIGGERS = (
+    "make it ",
+    "use the ",
+    "switch to ",
+    "route it ",
+    "put it on ",
+    "change it to ",
+)
+_ROUTE_UP_WORDS = ("heavier", "bigger", "more careful", "escalate")
+_ROUTE_DOWN_WORDS = ("lighter", "smaller", "simpler", "downgrade")
+CLASS_LADDER: tuple[str, ...] = ("light", "standard", "heavy", "critical")
+
+
+def detect_route_override(text: str) -> Optional[str]:
+    """Return a requested class, or "up"/"down", from an explicit override phrase."""
+    lowered = str(text or "").lower().strip()
+    if not any(trigger in lowered for trigger in _OVERRIDE_TRIGGERS):
+        return None
+    for key in CLASS_LADDER:
+        if re.search(rf"\b{key}\b", lowered):
+            return key
+    if any(word in lowered for word in _ROUTE_UP_WORDS):
+        return "up"
+    if any(word in lowered for word in _ROUTE_DOWN_WORDS):
+        return "down"
+    return None
+
+
+def _step_class(base_class: str, direction: str) -> str:
+    if direction in CLASS_LADDER:
+        return direction
+    index = CLASS_LADDER.index(base_class) if base_class in CLASS_LADDER else 1
+    index = min(len(CLASS_LADDER) - 1, index + 1) if direction == "up" else max(0, index - 1)
+    return CLASS_LADDER[index]
+
+
+def apply_route_override(
+    ticket_id: int,
+    text: str,
+    *,
+    chat_id: Optional[int] = None,
+    speak: bool = True,
+) -> dict[str, Any]:
+    """Honour "make it lighter/heavier" by relinking the ticket to that policy.
+
+    Risk still wins: a migration cannot be talked down to the cheap policy, so the
+    override is floored at ``heavy`` whenever risk keywords are present.
+    """
+    direction = detect_route_override(text)
+    if not direction:
+        return {"changed": False}
+
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanTicket
+
+    with get_session() as db:
+        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+        if ticket is None:
+            return {"changed": False}
+        ticket_text = f"{ticket.title or ''}\n\n{ticket.description or ''}"
+
+    base_class = classify(ticket_text, has_repo_target=True)
+    target_class = _step_class(base_class, direction)
+    if any(word in ticket_text.lower() for word in RISK_KEYWORDS) and CLASS_LADDER.index(target_class) < CLASS_LADDER.index("heavy"):
+        target_class = "heavy"
+
+    workflow_id = find_class_workflow_id(target_class)
+    if not workflow_id:
+        try:
+            ensure_class_workflows()
+        except Exception:
+            logger.warning("Could not create managed class workflows", exc_info=True)
+        workflow_id = find_class_workflow_id(target_class)
+    if not workflow_id:
+        return {"changed": False, "error": f"No workflow exists for the {target_class} policy"}
+
+    with get_session() as db:
+        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+        if ticket is None:
+            return {"changed": False}
+        ticket.linked_workflow_id = int(workflow_id)
+        db.commit()
+
+    label = str(class_policy(target_class).get("label") or target_class)
+    announcement = (
+        f"Ticket #{int(ticket_id)} is now on the {label} workflow. "
+        f"That takes effect on the next step."
+    )
+    if chat_id:
+        try:
+            from distr.core.chat import ChatService
+
+            ChatService.append_assistant_notice(int(chat_id), announcement)
+        except Exception:
+            logger.debug("route override notice failed", exc_info=True)
+        if speak:
+            try:
+                from distr.core.signals import speak_text_directly_event_queue
+
+                speak_text_directly_event_queue(announcement)
+            except Exception:
+                logger.debug("route override speech failed", exc_info=True)
+    return {
+        "changed": True,
+        "class": target_class,
+        "workflow_id": int(workflow_id),
+        "announcement": announcement,
+    }
 
 
 def create_phased_workflow(

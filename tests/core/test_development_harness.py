@@ -473,8 +473,8 @@ def test_large_multi_phase_thread_request_launches_owned_orchestrator(tmp_path, 
     # Tickets now route to a managed weight-class policy instead of planning a
     # throwaway draft and falling back to the retired Development pipeline.
     monkeypatch.setattr(
-        "distr.core.workflow.phases.route_ticket_workflow_id",
-        lambda *_args, **_kwargs: 44,
+        "distr.core.workflow.phases.announce_route_choice",
+        lambda *_args, **_kwargs: {"workflow_id": 44, "class": "heavy", "announcement": "routed"},
     )
     monkeypatch.setattr(
         "distr.core.workflow.planning.plan_workflow",

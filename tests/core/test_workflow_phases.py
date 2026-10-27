@@ -213,6 +213,74 @@ def test_route_ticket_workflow_id_creates_then_falls_back_to_standard(monkeypatc
     assert calls["ensured"] == 1
 
 
+def test_announce_route_choice_posts_and_speaks_the_decision(monkeypatch):
+    from distr.core.workflow import phases
+
+    posted: list[tuple[int, str]] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 33)
+    monkeypatch.setattr(
+        "distr.core.chat.ChatService.append_assistant_notice",
+        lambda chat_id, message, **kwargs: posted.append((chat_id, message)),
+    )
+    monkeypatch.setattr(
+        "distr.core.signals.speak_text_directly_event_queue",
+        lambda message: spoken.append(message),
+    )
+
+    plan = phases.announce_route_choice(7, "Add a migration for invoices", ticket_id=42)
+
+    assert plan["class"] == "critical"
+    assert plan["workflow_id"] == 33
+    assert posted and posted[0][0] == 7
+    assert "Ticket #42" in posted[0][1]
+    assert "Critical" in posted[0][1]
+    assert spoken == [posted[0][1]]
+
+
+def test_announce_route_choice_can_skip_speech(monkeypatch):
+    from distr.core.workflow import phases
+
+    spoken: list[str] = []
+    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 33)
+    monkeypatch.setattr("distr.core.chat.ChatService.append_assistant_notice", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "distr.core.signals.speak_text_directly_event_queue",
+        lambda message: spoken.append(message),
+    )
+
+    phases.announce_route_choice(7, "add a button", speak=False)
+
+    assert spoken == []
+
+
+def test_detect_route_override_reads_direction_and_class():
+    from distr.core.workflow.phases import detect_route_override
+
+    assert detect_route_override("make it heavier") == "up"
+    assert detect_route_override("make it lighter") == "down"
+    assert detect_route_override("make it critical") == "critical"
+    assert detect_route_override("use the light workflow") == "light"
+
+
+def test_detect_route_override_ignores_ordinary_messages():
+    from distr.core.workflow.phases import detect_route_override
+
+    assert detect_route_override("fix the login form") is None
+    assert detect_route_override("this is a lighter shade of blue") is None
+    assert detect_route_override("the migration failed") is None
+
+
+def test_step_class_moves_one_rung():
+    from distr.core.workflow.phases import _step_class
+
+    assert _step_class("standard", "up") == "heavy"
+    assert _step_class("standard", "down") == "light"
+    assert _step_class("critical", "up") == "critical"
+    assert _step_class("light", "down") == "light"
+    assert _step_class("light", "critical") == "critical"
+
+
 def test_route_ticket_survives_missing_managed_workflow(monkeypatch):
     from distr.core.workflow import phases
 
