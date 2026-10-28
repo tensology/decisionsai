@@ -33,11 +33,19 @@ def _drain(queue) -> list[str]:
 
 
 def test_speak_queue_is_bounded():
+    """Conversational speech is capped at SPEAK_QUEUE_MAX.
+
+    The queue CAPACITY is larger so a deliberate read-aloud never blocks or
+    drops; the conversational backlog is short because stale lines are dropped.
+    """
+
     async def scenario():
         stub = _Stub()
         stub._ensure_speak_worker()
         try:
-            return stub._speak_queue.maxsize
+            for index in range(30):
+                await stub._enqueue_sentence(f"sentence {index}", None)
+            return stub._speak_queue.qsize(), stub._speak_queue.maxsize
         finally:
             task = stub._speak_worker_task
             if task:
@@ -47,7 +55,10 @@ def test_speak_queue_is_bounded():
                 except (asyncio.CancelledError, Exception):
                     pass
 
-    assert asyncio.run(scenario()) == mixin.SPEAK_QUEUE_MAX
+    queued, capacity = asyncio.run(scenario())
+
+    assert queued <= mixin.SPEAK_QUEUE_MAX
+    assert capacity >= mixin.SPEAK_QUEUE_MAX
 
 
 def test_a_long_reply_drops_stale_lines_and_keeps_the_newest():

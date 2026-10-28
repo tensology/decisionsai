@@ -127,24 +127,22 @@ class TTSPipelineMixin:
             self._processed_sentences.clear()
 
     def begin_read_all(self) -> None:
-        """Mark the next speech as a complete read-aloud that must lose nothing."""
+        """Mark the next speech as a complete read-aloud that must lose nothing.
+
+        Only a flag is set. The queue object is deliberately left alone: the
+        worker captured a reference to it, so swapping in a bigger queue left the
+        worker draining the old one and the read-aloud produced no audio at all.
+        """
         self._read_all_sentences = True
-        # Grow the queue if the worker is idle; a live queue cannot be resized.
-        queue = getattr(self, "_speak_queue", None)
-        if queue is not None and queue.empty() and queue.maxsize < SPEAK_QUEUE_MAX_READ_ALL:
-            self._speak_queue = asyncio.Queue(maxsize=SPEAK_QUEUE_MAX_READ_ALL)
 
     def end_read_all(self) -> None:
         self._read_all_sentences = False
 
     def _ensure_speak_worker(self) -> None:
         if self._speak_queue is None:
-            limit = (
-                SPEAK_QUEUE_MAX_READ_ALL
-                if getattr(self, "_read_all_sentences", False)
-                else SPEAK_QUEUE_MAX
-            )
-            self._speak_queue = asyncio.Queue(maxsize=limit)
+            # Sized for a read-aloud; conversational speech is kept short by the
+            # explicit drop below, not by the queue capacity.
+            self._speak_queue = asyncio.Queue(maxsize=SPEAK_QUEUE_MAX_READ_ALL)
         if self._speak_worker_task is None or self._speak_worker_task.done():
             self._speak_worker_task = asyncio.create_task(self._speak_worker_loop())
 
@@ -192,11 +190,6 @@ class TTSPipelineMixin:
             # must be complete, and dropping here silently ate whole sentences.
             await queue.put(item)
             return
-        try:
-            queue.put_nowait(item)
-            return
-        except asyncio.QueueFull:
-            pass
         # Speech has fallen behind. Drop the oldest pending line rather than
         # reading minutes-old sentences: a 10s-per-sentence provider turned an
         # unbounded queue into a 97s backlog of stale speech.
