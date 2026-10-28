@@ -250,20 +250,19 @@ def setup_logging(clear_logs=True):
         os.makedirs(log_dir)
     log_file = os.path.join(log_dir, 'decisions.log')
 
-    # Remove all handlers from root logger and 'distr' logger to prevent duplicates
+    # Remove all handlers from root logger and 'distr' logger to prevent duplicates.
+    # Detach without closing: handlers are shared between loggers, and closing one
+    # closes the stream for every logger still using it (that killed logging in a
+    # running app — see worker_logging).
     for logger_name in ('distr', ''):
         logger = logging.getLogger(logger_name)
-        while logger.handlers:
-            handler = logger.handlers[0]
+        for handler in list(logger.handlers):
             logger.removeHandler(handler)
-            handler.close()
 
     # Dedicated agent activity logger (tool completions) — reset handlers each setup
     activity_logger = logging.getLogger("distr.agent.activity")
-    while activity_logger.handlers:
-        _h = activity_logger.handlers[0]
-        activity_logger.removeHandler(_h)
-        _h.close()
+    for handler in list(activity_logger.handlers):
+        activity_logger.removeHandler(handler)
     activity_logger.setLevel(logging.INFO)
     activity_logger.propagate = False
         

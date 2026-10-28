@@ -60,18 +60,19 @@ def setup_worker_logging() -> None:
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "decisions.log")
 
+    # Detach existing handlers WITHOUT closing them. The main process shares one
+    # FileHandler across "distr", the root logger and "distr.agent.activity";
+    # closing it here closed the stream the main app was still writing to, and
+    # every later log emit raised "I/O operation on closed file" — which is why
+    # the app went silent while still running.
     for logger_name in ("distr", ""):
         target = logging.getLogger(logger_name)
-        while target.handlers:
-            handler = target.handlers[0]
+        for handler in list(target.handlers):
             target.removeHandler(handler)
-            handler.close()
 
     activity_logger = logging.getLogger("distr.agent.activity")
-    while activity_logger.handlers:
-        handler = activity_logger.handlers[0]
+    for handler in list(activity_logger.handlers):
         activity_logger.removeHandler(handler)
-        handler.close()
 
     console_stream = sys.stderr
     if hasattr(console_stream, "reconfigure"):
