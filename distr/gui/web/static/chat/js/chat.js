@@ -1696,7 +1696,15 @@ function handleChatEventStreamFinished(msg) {
     _streamTextBuffer = '';
     _streamRafPending = false;
     removeTypingIndicator();
-    const wrap = document.getElementById('streamingAssistantMessage');
+    let wrap = document.getElementById('streamingAssistantMessage');
+    const eventText = (msg.response_text != null && msg.response_text !== '') ? msg.response_text : '';
+    if (!wrap && eventText) {
+        // Not every turn emits chat_stream_started (a dictation turn may finish
+        // with no started event at all). No bubble meant the finished event had
+        // nothing to finalize into and the reply was silently dropped — the user
+        // saw their message and then nothing.
+        wrap = ensureStreamingAssistantMessageElement();
+    }
     if (wrap) {
         const existingActivityHtml = extractAssistantActivityForPreserve(wrap);
         const textEl = document.getElementById('streamingAssistantText');
