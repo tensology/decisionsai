@@ -44,6 +44,10 @@ except ImportError:
 
 
 class CoquiTTSService(TTSPipelineMixin, TTSService):
+    # Synthesis applies the requested speed itself (speed= goes to the model),
+    # so the transport must not time-stretch it as well or the setting is
+    # applied twice.
+    applies_own_playback_speed = True
     """Coqui TTS running locally via the TTS package (VCTK multi-speaker model).
 
     Args:

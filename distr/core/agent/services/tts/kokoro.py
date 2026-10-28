@@ -41,6 +41,10 @@ def _normalize_text_for_tts(text: str) -> str:
 
 
 class KokoroTTSService(TTSPipelineMixin, TTSService):
+    # Synthesis applies the requested speed itself (speed= goes to the model),
+    # so the transport must not time-stretch it as well or the setting is
+    # applied twice.
+    applies_own_playback_speed = True
     """Kokoro-based TTS service using Pipecat"""
     
     def __init__(self, model_path: str, voices_path: str, voice_name: str = "af_heart", stt_service=None, playback_speed: float = 1.0, event_queue=None, speech_volume: int = 100, reference_voice_path: str = None, **kwargs):

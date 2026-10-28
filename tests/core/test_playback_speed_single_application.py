@@ -64,3 +64,65 @@ def test_a_provider_without_its_own_speed_still_uses_the_transport():
 
     assert service.speed == 1.25
     assert session._output.speed == 1.25
+
+
+# --- Provider matrix -------------------------------------------------------
+# Every TTS provider must be consistent about WHO applies playback speed, and
+# whether it can play pre-synthesised audio. These pin the audit so a new
+# provider cannot silently double-apply speed or lose the prefetch win.
+
+SYNTHESISES_AT_SPEED = [
+    "FishAudioTTSService",
+    "CoquiTTSService",
+    "KokoroTTSService",
+    "SupertonicTTSService",
+]
+NEUTRAL_SYNTHESIS = ["OpenAITTSService", "ElevenLabsTTSService", "PixazoTTSService"]
+
+
+def _tts_classes():
+    from distr.core.agent.services.tts import (
+        ElevenLabsTTSService,
+        OpenAITTSService,
+        SupertonicTTSService,
+    )
+    from distr.core.agent.services.tts.coqui import CoquiTTSService
+    from distr.core.agent.services.tts.kokoro import KokoroTTSService
+    from distr.core.agent.services.tts.pixazo import PixazoTTSService
+
+    return {
+        "FishAudioTTSService": FishAudioTTSService,
+        "CoquiTTSService": CoquiTTSService,
+        "KokoroTTSService": KokoroTTSService,
+        "SupertonicTTSService": SupertonicTTSService,
+        "OpenAITTSService": OpenAITTSService,
+        "ElevenLabsTTSService": ElevenLabsTTSService,
+        "PixazoTTSService": PixazoTTSService,
+    }
+
+
+def test_providers_that_synthesise_at_speed_declare_it():
+    classes = _tts_classes()
+    missing = [n for n in SYNTHESISES_AT_SPEED if not getattr(classes[n], "applies_own_playback_speed", False)]
+    assert missing == [], f"these would have speed applied twice: {missing}"
+
+
+def test_providers_with_neutral_synthesis_leave_speed_to_the_transport():
+    classes = _tts_classes()
+    wrong = [n for n in NEUTRAL_SYNTHESIS if getattr(classes[n], "applies_own_playback_speed", False)]
+    assert wrong == [], f"these would lose playback speed entirely: {wrong}"
+
+
+def test_prefetch_covers_every_streaming_provider():
+    classes = _tts_classes()
+    for name in SYNTHESISES_AT_SPEED + NEUTRAL_SYNTHESIS:
+        if name == "KokoroTTSService":
+            continue  # local provider with its own playback path
+        cls = classes[name]
+        assert cls._can_prefetch_synthesis(cls.__new__(cls)) is True, name
+
+
+def test_kokoro_keeps_its_own_playback_path():
+    from distr.core.agent.services.tts.kokoro import KokoroTTSService
+
+    assert KokoroTTSService._can_prefetch_synthesis(KokoroTTSService.__new__(KokoroTTSService)) is False

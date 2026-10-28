@@ -71,6 +71,10 @@ def get_or_load_tts(model: str = "supertonic-3", model_dir: str | None = None):
 
 
 class SupertonicTTSService(TTSPipelineMixin, TTSService):
+    # Synthesis applies the requested speed itself (speed= goes to the model),
+    # so the transport must not time-stretch it as well or the setting is
+    # applied twice.
+    applies_own_playback_speed = True
     """Pipecat-compatible Supertonic TTS service."""
 
     def __init__(

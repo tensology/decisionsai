@@ -35,6 +35,12 @@ SPEAK_QUEUE_MAX = 4
 SPEAK_QUEUE_MAX_READ_ALL = 512
 
 
+async def _iterate_frames(frames: list):
+    """Replay frames that were synthesised ahead of playback."""
+    for frame in frames:
+        yield frame
+
+
 class TTSPipelineMixin:
     """Non-blocking sentence queue + stale interrupt/cancel recovery."""
 
@@ -54,6 +60,7 @@ class TTSPipelineMixin:
         self._cancelled_since = 0.0
         self._tts_generation = 0
         self._read_all_sentences = False
+        self._prefetched_frames = None
         self._speak_queue = None
         self._speak_worker_task = None
         self._speak_busy = False
@@ -150,16 +157,56 @@ class TTSPipelineMixin:
         queue = self._speak_queue
         if queue is None:
             return
+        # One sentence of lookahead, already synthesised and waiting to play.
+        pending: Any = None
+        pending_frames: list | None = None
         while True:
-            sentence, generation, direction = await queue.get()
+            if pending is not None:
+                item, frames = pending, pending_frames
+                pending = pending_frames = None
+            else:
+                item, frames = await queue.get(), None
+            sentence, generation, direction = item
+            lookahead: Any = None
+            lookahead_task: asyncio.Task | None = None
             try:
                 if generation != self._tts_generation or self._cancelled:
                     continue
                 self._speak_busy = True
-                await self._play_queued_sentence(sentence, generation, direction)
+                # Start the next sentence now, so its synthesis overlaps with the
+                # audio of this one instead of following it.
+                if self._can_prefetch_synthesis() and not queue.empty():
+                    try:
+                        lookahead = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        lookahead = None
+                    if lookahead is not None:
+                        lookahead_task = asyncio.create_task(
+                            self._materialize_sentence(lookahead[0])
+                        )
+                try:
+                    self._prefetched_frames = frames
+                    await self._play_queued_sentence(sentence, generation, direction)
+                finally:
+                    self._prefetched_frames = None
             finally:
                 self._speak_busy = False
                 queue.task_done()
+            if lookahead is not None:
+                keep = False
+                try:
+                    lookahead_frames = await lookahead_task  # type: ignore[arg-type]
+                    keep = bool(lookahead_frames) and (
+                        lookahead[1] == self._tts_generation and not self._cancelled
+                    )
+                except Exception:
+                    logger.debug("TTS: lookahead synthesis failed", exc_info=True)
+                if keep:
+                    pending, pending_frames = lookahead, lookahead_frames
+                else:
+                    # The item was already taken from the queue; release its slot
+                    # or a pending queue.join() would wait forever.
+                    queue.task_done()
 
     async def _enqueue_sentence(self, sentence: str, direction: Any) -> None:
         clean = (sentence or "").strip()
@@ -232,18 +279,50 @@ class TTSPipelineMixin:
                 queued,
             )
 
+    def _can_prefetch_synthesis(self) -> bool:
+        """True when the base streaming implementation will play the audio.
+
+        Providers that override ``_play_queued_sentence`` (Kokoro synthesises
+        locally and fast) keep their own path; only the cloud-streaming providers
+        pay enough synthesis latency for a lookahead to be worth it.
+        """
+        return type(self)._play_queued_sentence is TTSPipelineMixin._play_queued_sentence
+
+    async def _materialize_sentence(self, sentence: str) -> list:
+        """Synthesise a sentence to frames ahead of time, without pushing them.
+
+        Synthesis is the bottleneck (Fish Audio: ~5s per sentence), so running it
+        while the previous sentence is still playing turns per-sentence cost into
+        overlap instead of addition.
+        """
+        return [frame async for frame in self.run_tts(sentence)]  # type: ignore[attr-defined]
+
     async def _play_queued_sentence(self, sentence: str, generation: int, direction: Any) -> None:
         """Default: stream audio frames from ``run_tts``."""
         if not hasattr(self, "run_tts"):
             logger.warning("TTS: _play_queued_sentence called but run_tts is missing")
             return
+        prefetched = getattr(self, "_prefetched_frames", None)
+        if prefetched:
+            await self._push_sentence_frames(
+                sentence, _iterate_frames(prefetched), generation, direction
+            )
+            return
+        await self._push_sentence_frames(
+            sentence, self.run_tts(sentence), generation, direction  # type: ignore[attr-defined]
+        )
+
+    async def _push_sentence_frames(
+        self, sentence: str, frame_source: Any, generation: int, direction: Any
+    ) -> None:
+        """Push one sentence's frames to the transport, in order."""
         push_direction = self._resolve_tts_push_direction(direction)
         logger.info("TTS SENTENCE EMIT: sentence=%r", sentence[:120])
         sentence_started = time.monotonic()
         first_audio_at = None
         audio_frame_count = 0
         truncated = False
-        async for audio_frame in self.run_tts(sentence):  # type: ignore[attr-defined]
+        async for audio_frame in frame_source:
             if generation != self._tts_generation or self._cancelled:
                 truncated = True
                 break
