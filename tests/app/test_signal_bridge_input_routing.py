@@ -411,3 +411,55 @@ def test_web_chat_events_are_queued_for_ordered_delivery():
     assert "name=\"web-chat-event-bridge\"" in src
     assert "self._web_chat_event_queue.put_nowait(item)" in src
     assert "threading.Thread(target=_do_post" not in src
+
+
+def test_sending_a_web_message_interrupts_playback_first(monkeypatch):
+    """Typing while the agent talks must flush the speech it has moved past."""
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    monkeypatch.setattr(
+        "distr.core.notification_routing.record_surface_activity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _DummyBus(),
+    )
+    host = _Host()
+    host.telegram_manager = SimpleNamespace(_pending_remote_agent_response=None)
+    host._bridge_signals_to_agent()
+
+    fake_signal_manager.web_send_to_agent_requested.emit(
+        89, "new question", True, None, None, None
+    )
+
+    commands = [command for command, _params in host.sent_commands]
+    # The interrupt is queued ahead of the turn so it cannot land after it.
+    assert commands[-2:] == ["interrupt_tts", "process_text_input"]
+
+
+def test_a_remote_surface_message_does_not_interrupt_local_playback(monkeypatch):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    monkeypatch.setattr(
+        "distr.core.notification_routing.record_surface_activity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _DummyBus(),
+    )
+    host = _Host()
+    host.telegram_manager = SimpleNamespace(_pending_remote_agent_response=None)
+    host._bridge_signals_to_agent()
+
+    fake_signal_manager.web_send_to_agent_requested.emit(
+        89, "remote question", True, None, None, {"origin_surface": "remote"}
+    )
+
+    commands = [command for command, _params in host.sent_commands]
+    assert commands == ["process_text_input"]

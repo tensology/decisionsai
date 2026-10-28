@@ -831,6 +831,12 @@ class SignalBridgeMixin:
                     params['automation_run_id'] = int(opts['automation_run_id'])
                 if opts.get('automation_name'):
                     params['automation_name'] = str(opts['automation_name'])
+                # Sending a message is a barge-in: flush whatever is still playing
+                # so the reply is not queued behind speech the user has moved on
+                # from. Sent through the same command queue as the turn so the
+                # interrupt is guaranteed to land before process_text_input.
+                if origin_surface != 'remote':
+                    self._send_command_to_agent('interrupt_tts', {})
                 # Pass speak_bool directly into process_text_input so process_chat_input applies it
                 # as a per-request override — no separate set_speaker_enabled needed, and no second
                 # current_chat_changed that would create a new LLM service after set_speaker_enabled ran.
