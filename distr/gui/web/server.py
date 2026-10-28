@@ -102,6 +102,15 @@ def get_unified_server() -> Optional['UnifiedGuiServer']:
     return _unified_server
 
 
+def _static_mtime_token(relative_path: str) -> str:
+    """Cache-buster that changes whenever a static file changes."""
+    try:
+        path = Path(__file__).resolve().parent / "static" / relative_path
+        return str(int(path.stat().st_mtime))
+    except Exception:
+        return "0"
+
+
 def _app_version_label(project_root: Path) -> str:
     """Short version label for the web chrome."""
     global _APP_VERSION_CACHE
@@ -302,6 +311,10 @@ def create_app() -> FastAPI:
             "base_path": base_path,
             "internal_api_token": app.state.internal_api_token,
             "app_version": _app_version_label(project_root),
+            # app_version only changes when VERSION/CHANGELOG change, so editing
+            # chat.js left browsers running stale JavaScript forever. Key the
+            # cache-buster on the file's mtime so edits are actually picked up.
+            "chat_js_mtime": _static_mtime_token("chat/js/chat.js"),
             "development_timer_menu": DEVELOPMENT_TIMER_MENU,
         }
 
