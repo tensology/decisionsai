@@ -1661,24 +1661,32 @@ let _streamTextBuffer = '';
 let _streamRafPending = false;
 
 function handleChatEventStreamToken(msg) {
-    if (msg.chat_id !== currentChatId) return;
-    if (msg.token) {
-        _streamTextBuffer += msg.token;
-        if (!_streamRafPending) {
-            _streamRafPending = true;
-            requestAnimationFrame(() => {
-                _streamRafPending = false;
-                const el = document.getElementById('streamingAssistantText');
-                if (el) {
-                    el.textContent += _streamTextBuffer;
-                    const typingEl = document.getElementById('streamingTypingIndicator');
-                    if (typingEl) typingEl.style.display = 'none';
-                }
-                _appendLiveAssistantStreamText(currentChatId, _streamTextBuffer);
-                _streamTextBuffer = '';
-                scrollToBottom();
-            });
-        }
+    if (Number(msg.chat_id) !== Number(currentChatId)) return;
+    if (!msg.token) return;
+    _streamTextBuffer += msg.token;
+    if (!_streamRafPending) {
+        _streamRafPending = true;
+        requestAnimationFrame(() => {
+            _streamRafPending = false;
+            // Tokens can arrive before stream_started (or with no started event
+            // at all). The old code only appended when the bubble already
+            // existed, so every early token was dropped and the reply appeared
+            // in one lump at the end. Create the bubble here if it is missing.
+            if (!document.getElementById('streamingAssistantMessage')) {
+                removeTypingIndicator();
+                streamingChatId = msg.chat_id;
+                _setLiveAssistantStreaming(msg.chat_id, '');
+            }
+            const el = document.getElementById('streamingAssistantText');
+            if (el) {
+                el.textContent += _streamTextBuffer;
+                const typingEl = document.getElementById('streamingTypingIndicator');
+                if (typingEl) typingEl.style.display = 'none';
+            }
+            _appendLiveAssistantStreamText(currentChatId, _streamTextBuffer);
+            _streamTextBuffer = '';
+            scrollToBottom();
+        });
     }
 }
 
