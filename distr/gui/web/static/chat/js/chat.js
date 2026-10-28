@@ -973,8 +973,13 @@ function startChatWebSocket(force) {
         chatWs.onopen = () => {
             chatWsReconnectDelay = 1000; // reset backoff on successful connect
             chatWsLastPongAt = Date.now();
-            if (chatWsSubscribedId != null && chatWs.readyState === WebSocket.OPEN) {
-                chatWs.send(JSON.stringify({ subscribe: chatWsSubscribedId }));
+            // onclose nulls chatWsSubscribedId, so the old check was never true on a
+            // reconnect: the socket came back UNSUBSCRIBED and silently delivered
+            // no events. Live updates only reappeared after a page refresh.
+            const subscribeId = chatWsSubscribedId != null ? chatWsSubscribedId : currentChatId;
+            if (subscribeId != null && chatWs.readyState === WebSocket.OPEN) {
+                chatWsSubscribedId = subscribeId;
+                chatWs.send(JSON.stringify({ subscribe: subscribeId }));
             }
             // The durable ledger is the recovery source for any events dropped
             // while the socket was disconnected.
