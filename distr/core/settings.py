@@ -43,6 +43,7 @@ DEFAULT_SETTINGS = {
     "development_hot_corner_pinned_project_ids": [],
 
     'show_splash_video': True,
+    'notification_sound': 'bell',
     'show_about': False,
     'welcome_greet_me': True,
     'telegram_send_online_notice': False,

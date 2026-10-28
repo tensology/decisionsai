@@ -1487,6 +1487,11 @@ function handleChatEventMessageAdded(msg) {
         }
         return;
     }
+    if (role === 'assistant') {
+        // A new reply arrived. The shared player only chimes when the tab is in
+        // the background, and honours whatever sound is set in Settings.
+        window.DecisionsNotificationSound?.playCurrent();
+    }
     if (role === 'user') {
         // Voice/PTT messages come via WS without sendMessage() — render them.
         // Skip only if sendMessage() already rendered this exact text optimistically.

@@ -65,6 +65,8 @@ async function loadGeneralSettings() {
         document.getElementById('welcome_greet_me').checked = settings.welcome_greet_me || false;
         document.getElementById('telegram_send_online_notice').checked = settings.telegram_send_online_notice === true;
         document.getElementById('load_on_startup').checked = settings.load_on_startup || false;
+        const soundSelect = document.getElementById('notification_sound');
+        if (soundSelect) soundSelect.value = settings.notification_sound || 'bell';
         const defaultEditor = document.getElementById('default_project_editor');
         if (defaultEditor) defaultEditor.value = settings.default_project_editor || 'codex';
 
@@ -190,6 +192,7 @@ async function saveGeneralSettings() {
             welcome_greet_me: document.getElementById('welcome_greet_me').checked,
             telegram_send_online_notice: document.getElementById('telegram_send_online_notice').checked,
             load_on_startup: document.getElementById('load_on_startup').checked,
+            notification_sound: (document.getElementById('notification_sound') || {}).value || 'bell',
             default_project_editor: (document.getElementById('default_project_editor') || {}).value || 'codex',
             listening_state: listeningState,
             voice_provider: voiceProvider,
@@ -1477,6 +1480,18 @@ function retakeCvRecording() {
     _resetRecordingUI();
     _updateCvSubmitState();
 }
+
+// The sound itself comes from the shared player, so chat, development and
+// settings all honour the same setting.
+document.addEventListener('DOMContentLoaded', () => {
+    const preview = document.getElementById('notification_sound_preview');
+    if (!preview) return;
+    preview.addEventListener('click', () => {
+        const select = document.getElementById('notification_sound');
+        const player = window.DecisionsNotificationSound;
+        if (player) player.play(select ? select.value : 'bell');
+    });
+});
 
 // Export functions for use in other files
 window.loadGeneralSettings = loadGeneralSettings;

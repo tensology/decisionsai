@@ -71,6 +71,22 @@
                     <span class="settings-toggle__switch" aria-hidden="true"></span>
                 </label>
                 <label class="block md:col-span-2">
+                    <span class="block text-sm font-medium text-[#ececf1] mb-2">Notification sound</span>
+                    <div class="flex items-center gap-2">
+                        <select id="notification_sound" name="notification_sound" class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white">
+                            <option value="bell">Bell</option>
+                            <option value="chime">Chime</option>
+                            <option value="dong">Dong</option>
+                            <option value="gentle">Gentle alarm</option>
+                            <option value="tone">Notification tone</option>
+                            <option value="elegant">Elegant</option>
+                            <option value="achievement">Achievement</option>
+                            <option value="none">Silent</option>
+                        </select>
+                        <button type="button" id="notification_sound_preview" class="secondary-button whitespace-nowrap" title="Play the selected sound">Play</button>
+                    </div>
+                </label>
+                <label class="block md:col-span-2">
                     <span class="block text-sm font-medium text-[#ececf1] mb-2">Default project editor</span>
                     <select id="default_project_editor" class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white">
                         <option value="codex">Codex</option>

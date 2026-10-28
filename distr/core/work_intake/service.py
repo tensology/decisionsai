@@ -186,6 +186,28 @@ def _is_lightweight_project_change(value: str) -> bool:
     ))
 
 
+def _ticket_about(description: str, *, limit: int = 220) -> str:
+    """One plain sentence describing what the ticket is about.
+
+    Extracted from the ticket description so the arrival message says what the
+    work is, instead of just echoing the title.
+    """
+    text = re.sub(r"\s+", " ", str(description or "")).strip()
+    if not text:
+        return ""
+    # Drop transport scaffolding and attachment lists that are not prose.
+    text = re.split(r"\bAttachments:\b", text, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    if not text:
+        return ""
+    sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
+    if len(sentence) > limit:
+        sentence = sentence[:limit].rsplit(" ", 1)[0].rstrip() + "..."
+    # Lowercase the first letter unless it opens with a proper noun/initialism.
+    if sentence and sentence[0].isupper() and not sentence.split()[0].isupper():
+        sentence = sentence[0].lower() + sentence[1:]
+    return sentence.rstrip(".")
+
+
 def _clean_title(value: str) -> str:
     value = re.sub(
         r"^\s*(?:please\s+)?(?:run|execute|start|push|send)\s+"
@@ -941,30 +963,14 @@ class OrchestratorIntakeService:
                 logger.debug("Could not persist email work lifecycle from intake", exc_info=True)
         decision.handled = True
         decision.status = "ticket_created"
-        decision.response_text = f"Created ticket #{decision.ticket_id}: {_clean_title(value)}"
-        # Tell the person who sent it which policy picked the work up, so the
-        # choice is visible on WhatsApp / Telegram / email too, not just in-app.
-        try:
-            from distr.core.workflow.phases import (
-                classify,
-                format_route_announcement,
-                route_reason,
-            )
-
-            ticket_text = f"{intake.text or ''}\n\n{intake.requested_outcome or ''}".strip()
-            has_repo = decision.project_id is not None
-            class_key = classify(ticket_text, has_repo_target=has_repo)
-            reason = route_reason(ticket_text, class_key=class_key, has_repo_target=has_repo)
-            decision.response_text += "\n\n" + format_route_announcement(
-                class_key,
-                reason,
-                ticket_id=decision.ticket_id,
-                # Channel replies cannot action a route change yet, so do not
-                # invite one here. In-app threads do support it.
-                overridable=False,
-            )
-        except Exception:
-            logger.debug("Could not add routing explanation to intake reply", exc_info=True)
+        # Lead with the work, not the plumbing: what came in, what it is about,
+        # and what happens next. No workflow or policy talk on arrival.
+        ticket_title = _clean_title(value)
+        decision.response_text = f"Ticket #{decision.ticket_id} has come in: {ticket_title}"
+        about = _ticket_about(description)
+        if about:
+            decision.response_text += f"\n\n{about[0].upper()}{about[1:]}."
+        decision.response_text += "\n\nI'll get started on it and tell you how it goes."
 
     @staticmethod
     def _should_stage_whatsapp_intake_approval(

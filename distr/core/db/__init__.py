@@ -27,6 +27,7 @@ class Settings(Base):
     theme = Column(String)
     show_splash_video = Column(Boolean, default=True)
     show_about = Column(Boolean, default=True)
+    notification_sound = Column(String, default='bell')
     welcome_greet_me = Column(Boolean, default=True)
     telegram_send_online_notice = Column(Boolean, default=False)
     load_on_startup = Column(Boolean, default=True)
@@ -775,6 +776,8 @@ try:
                 ("tensology_push_paused", "BOOLEAN DEFAULT 0"),
                 # Startup surfaces
                 ("show_splash_video", "BOOLEAN DEFAULT 1"),
+                # Notification sound choice (see distr.core.notification_sounds)
+                ("notification_sound", "VARCHAR DEFAULT 'bell'"),
                 # Monk Mode
                 ("monk_mode_enabled", "BOOLEAN DEFAULT 0"),
                 ("monk_sites", "TEXT DEFAULT '[]'"),

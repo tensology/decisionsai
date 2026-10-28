@@ -46,6 +46,7 @@ def register_routes(router, templates):
 
         return JSONResponse({
             "show_splash_video": settings.get("show_splash_video", False),
+            "notification_sound": settings.get("notification_sound", "bell"),
             "show_about": settings.get("show_about", False),
             "welcome_greet_me": settings.get("welcome_greet_me", False),
             "telegram_send_online_notice": settings.get("telegram_send_online_notice", False),
