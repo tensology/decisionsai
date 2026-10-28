@@ -1175,8 +1175,10 @@ class InitiativeService:
             current_chat = self.chat_manager.get_current_chat()
             if current_chat:
                 # Own row, so a planner note can never overwrite the user's
-                # most recent answered turn.
-                self._append_chat_notice(int(current_chat), message)
+                # most recent answered turn. Hidden from the transcript: a
+                # proactive notice is not a reply, and rendering it as one made a
+                # single answer look like two.
+                self._append_chat_notice(int(current_chat), message, hidden=True)
         except Exception as e:
             logger.debug("InitiativeService: _log_planner_to_chat failed: %s", e)
 
@@ -1735,7 +1737,9 @@ class InitiativeService:
                 f"ID: `{draft.id[:8]}`\n"
                 "Say approve or reject, or manage it in Settings → Initiative."
             )
-            self._append_chat_notice(int(current_chat), msg)
+            # Hidden for the same reason: an approval prompt is a notice, not an
+            # assistant reply. It still reaches the user by voice and Telegram.
+            self._append_chat_notice(int(current_chat), msg, hidden=True)
 
     def _chat_is_initiative_approval_context(self, chat_id: int) -> bool:
         """Return true only when surfacing Initiative approvals fits the active chat."""
@@ -1913,7 +1917,9 @@ class InitiativeService:
                 # and replace its answer (see chat_manager notice-row guard).
                 text = _initiative_update_text(message)
                 if text:
-                    self._append_chat_notice(int(current_chat), text)
+                    # Hidden: proactive updates are delivered by voice and Telegram,
+                    # and must not appear as a second assistant answer.
+                    self._append_chat_notice(int(current_chat), text, hidden=True)
         except Exception as e:
             logger.debug("InitiativeService: _log_to_chat failed: %s", e)
 
