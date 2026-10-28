@@ -151,6 +151,15 @@ _PROBE_FAILURE_TTL_SECONDS = 900.0
 _PROBE_TIMEOUT_SECONDS = 4
 
 
+def clear_probe_cache() -> None:
+    """Drop cached audio-probe results.
+
+    Tests and explicit re-scans need a fresh probe; the cache otherwise serves
+    the previous answer for its TTL.
+    """
+    _PROBE_CACHE.clear()
+
+
 def _cached_probe(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):

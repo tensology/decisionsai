@@ -2,7 +2,17 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from distr.core.agent import config_loader
+
+
+@pytest.fixture(autouse=True)
+def _fresh_probe_cache():
+    """Probe results are cached; these tests assert on the probe itself."""
+    config_loader.clear_probe_cache()
+    yield
+    config_loader.clear_probe_cache()
 
 
 def test_resolve_system_default_output_device_parses_subprocess_payload():

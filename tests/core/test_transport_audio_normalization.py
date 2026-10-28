@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 import numpy as np
 from types import SimpleNamespace
@@ -167,6 +168,15 @@ def test_transport_does_not_reuse_fresh_index_from_incompatible_device_list(monk
     transport._out_stream = _FakeStream(active=True)
 
     assert transport._resolve_configured_output_device_index() == 2
+
+
+@pytest.fixture(autouse=True)
+def _fresh_probe_cache():
+    from distr.core.agent import config_loader
+
+    config_loader.clear_probe_cache()
+    yield
+    config_loader.clear_probe_cache()
 
 
 def test_set_device_refreshes_stale_pyaudio_registry_for_new_bluetooth_output(monkeypatch):
