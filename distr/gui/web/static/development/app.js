@@ -1,6 +1,6 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261022-tips2';
 import { createReports } from './reports/index.js';
-import { createThreadLiveUpdates } from './threads/live.js';
+import { createThreadLiveUpdates } from './threads/live.js?v=20261027f';
 import { createThreadSession } from './threads/session.js?v=20261022-composer6';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';

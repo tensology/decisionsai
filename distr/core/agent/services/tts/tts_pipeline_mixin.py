@@ -23,6 +23,10 @@ STALE_CANCELLED_CLEAR_SEC = 1.5
 # marker is already cleared by the time the TTS sees the frame. Keep the
 # barge-in valid for a short window instead.
 BARGEIN_ACCEPT_WINDOW_SEC = 1.5
+# How many spoken sentences may wait ahead of playback. Providers such as
+# FishAudio take about ten seconds per sentence, so an unbounded queue let a
+# normal reply fall 97 seconds behind and then play stale speech.
+SPEAK_QUEUE_MAX = 4
 
 
 class TTSPipelineMixin:
@@ -117,7 +121,7 @@ class TTSPipelineMixin:
 
     def _ensure_speak_worker(self) -> None:
         if self._speak_queue is None:
-            self._speak_queue = asyncio.Queue()
+            self._speak_queue = asyncio.Queue(maxsize=SPEAK_QUEUE_MAX)
         if self._speak_worker_task is None or self._speak_worker_task.done():
             self._speak_worker_task = asyncio.create_task(self._speak_worker_loop())
 
@@ -157,8 +161,37 @@ class TTSPipelineMixin:
         except Exception:
             pass
         self._ensure_speak_worker()
-        assert self._speak_queue is not None
-        await self._speak_queue.put((clean, self._tts_generation, direction))
+        queue = self._speak_queue
+        assert queue is not None
+        item = (clean, self._tts_generation, direction)
+        try:
+            queue.put_nowait(item)
+            return
+        except asyncio.QueueFull:
+            pass
+        # Speech has fallen behind. Drop the oldest pending line rather than
+        # reading minutes-old sentences: a 10s-per-sentence provider turned an
+        # unbounded queue into a 97s backlog of stale speech.
+        dropped = 0
+        try:
+            while queue.qsize() >= SPEAK_QUEUE_MAX:
+                _stale_sentence, _gen, _dir = queue.get_nowait()
+                queue.task_done()
+                dropped += 1
+        except asyncio.QueueEmpty:
+            pass
+        if dropped:
+            logger.warning(
+                "TTS: dropped %d stale queued sentence(s) to keep speech current (max=%d)",
+                dropped,
+                SPEAK_QUEUE_MAX,
+            )
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # The worker is about to free a slot; losing one line is preferable
+            # to blocking the response on a queue that is already behind.
+            logger.warning("TTS: speak queue still full; dropping the newest sentence")
 
     async def _drain_speak_queue(self) -> None:
         queue = self._speak_queue
