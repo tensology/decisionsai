@@ -303,3 +303,15 @@ def test_route_ticket_survives_missing_managed_workflow(monkeypatch):
 
     assert plan["class"] == "standard"
     assert plan["workflow_id"] is None
+
+
+def test_the_review_step_runs_on_a_different_model_than_the_work():
+    from distr.core.workflow.phases import REVIEW_MODEL, build_workflow_definition
+
+    definition = build_workflow_definition("Heavy", "heavy", goal="Add reporting")
+    working, review = definition["steps"][0], definition["steps"][1]
+
+    assert review["config"]["model"] == REVIEW_MODEL
+    assert review["config"]["model_provider"] == "openrouter"
+    # Independence means a different model, not just a different step.
+    assert working["config"].get("model") != review["config"]["model"]

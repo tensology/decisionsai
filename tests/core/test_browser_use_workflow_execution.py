@@ -45,13 +45,16 @@ def test_browser_use_step_executes_through_deterministic_browser_adapter():
 
 
 def test_workflow_editor_exposes_browser_use_as_an_action_type():
-    js = (
+    # The live step editor is the Development one; the blueprint editor is legacy.
+    dialog = (
         __import__("pathlib").Path(__file__).parents[2]
-        / "distr/gui/web/static/workflows/js/workflows.js"
+        / "distr/gui/web/templates/development/workflows/step-dialog.html"
     ).read_text(encoding="utf-8")
 
-    assert '<option value="browser_use"' in js
-    assert 'if (tools.indexOf("browser_use") >= 0) return "browser_use";' in js
+    assert '<option value="browser_use">' in dialog
+    # The other backend action types must be selectable too, not just four of them.
+    for action in ("execute_code", "playwright", "computer_use", "ytdlp", "play_recording", "decision_action"):
+        assert f'<option value="{action}">' in dialog
 
 
 def test_ui_feedback_uses_in_app_dialog_instead_of_native_prompt():

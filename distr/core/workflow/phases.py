@@ -156,6 +156,13 @@ PHASES: dict[str, dict[str, str]] = {
 # Phases that change a repository and therefore need a linked project.
 REPO_PHASES = frozenset({"reproduce", "implement", "test", "fix_defects", "review", "verify"})
 
+# An independent review only means something if a different model does it than
+# the one that wrote the change. Pin the review step to its own route so the
+# reviewer is not the author by accident.
+REVIEW_BACKEND = "pi"
+REVIEW_MODEL_PROVIDER = "openrouter"
+REVIEW_MODEL = "deepseek/deepseek-v4-pro"
+
 
 # ---------------------------------------------------------------------------
 # Weight classes: budget and gates, not steps
@@ -438,6 +445,9 @@ def build_workflow_definition(
                     "step_role": "review",
                     "read_only_expected": True,
                     "max_retries": 1,
+                    "backend_id": REVIEW_BACKEND,
+                    "model": REVIEW_MODEL,
+                    "model_provider": REVIEW_MODEL_PROVIDER,
                 },
             }
         )
