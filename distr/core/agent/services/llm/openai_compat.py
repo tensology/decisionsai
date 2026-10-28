@@ -317,7 +317,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     return
 
             await self._push_pipeline_frame(LLMFullResponseStartFrame())
-            current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            current_chat_id = self._resolve_stream_chat_id()
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
                 if current_chat_id:
@@ -492,6 +492,31 @@ class OpenAICompatibleLLMService(BaseLLMService):
             needs_end_frame = self._cleanup_generation(end_frame_sent, full_content, follow_up_content)
             if needs_end_frame:
                 await self._push_pipeline_frame(LLMFullResponseEndFrame())
+
+    def _resolve_stream_chat_id(self) -> int | None:
+        """Chat id to tag stream events with, never None when one is knowable.
+
+        Only the *current* chat was consulted, and on dictated turns it is often
+        unset. The agent then skipped ``chat_stream_started`` entirely, so the web
+        UI never created a streaming bubble: no dots, no tokens, and the finished
+        reply had nothing to render into.
+        """
+        cid = self.chat_manager.get_current_chat() if self.chat_manager else None
+        if cid:
+            return int(cid)
+        try:
+            from distr.core.db import get_session, Settings
+
+            with get_session() as session:
+                row = session.query(Settings).first()
+                if row is not None:
+                    for attr in ("last_chat_id", "agent_current_chat_id"):
+                        value = getattr(row, attr, None)
+                        if value:
+                            return int(value)
+        except Exception:
+            logger.debug("%s: could not resolve a fallback chat id", self.SERVICE_NAME, exc_info=True)
+        return None
 
     def _refresh_system_prompt_for_generation(self):
         """Rebuild the first system message with latest dropped-files context."""
