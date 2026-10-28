@@ -1392,6 +1392,10 @@ def _cmd_speak_text_directly(session, params):
                 prev_tts_force = bool(getattr(getattr(session, 'tts_service', None), '_force_desktop_tts', False))
                 if hasattr(session, 'tts_service') and session.tts_service is not None:
                     session.tts_service._force_desktop_tts = True
+                    # A read-aloud must speak every sentence; without this the
+                    # speech queue dropped lines once it fell behind synthesis.
+                    if hasattr(session.tts_service, 'begin_read_all'):
+                        session.tts_service.begin_read_all()
                 for t in threading.enumerate():
                     if hasattr(t, 'telegram_request') and t.telegram_request:
                         saved_flags[t] = True
@@ -1440,6 +1444,8 @@ def _cmd_speak_text_directly(session, params):
                     current_thread.force_desktop_tts = prev_force_desktop
                     if hasattr(session, 'tts_service') and session.tts_service is not None:
                         session.tts_service._force_desktop_tts = prev_tts_force
+                        if hasattr(session.tts_service, 'end_read_all'):
+                            session.tts_service.end_read_all()
                     session.logger.info("_cmd_speak_text_directly done id=%s", direct_tts_id)
 
             async def enqueue_directly():

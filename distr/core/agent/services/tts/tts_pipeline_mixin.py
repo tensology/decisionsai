@@ -26,7 +26,13 @@ BARGEIN_ACCEPT_WINDOW_SEC = 1.5
 # How many spoken sentences may wait ahead of playback. Providers such as
 # FishAudio take about ten seconds per sentence, so an unbounded queue let a
 # normal reply fall 97 seconds behind and then play stale speech.
+# Conversational backlog cap: when live speech falls behind we drop stale lines
+# rather than reading minutes-old sentences.
 SPEAK_QUEUE_MAX = 4
+# A deliberate read-aloud (About "Read about", a long document handed to
+# speak_text_directly) is the opposite case: the user asked for every word, so
+# the queue is given room and nothing is dropped.
+SPEAK_QUEUE_MAX_READ_ALL = 512
 
 
 class TTSPipelineMixin:
@@ -47,6 +53,7 @@ class TTSPipelineMixin:
     def _init_tts_pipeline_state(self) -> None:
         self._cancelled_since = 0.0
         self._tts_generation = 0
+        self._read_all_sentences = False
         self._speak_queue = None
         self._speak_worker_task = None
         self._speak_busy = False
@@ -119,9 +126,25 @@ class TTSPipelineMixin:
         if hasattr(self, "_processed_sentences"):
             self._processed_sentences.clear()
 
+    def begin_read_all(self) -> None:
+        """Mark the next speech as a complete read-aloud that must lose nothing."""
+        self._read_all_sentences = True
+        # Grow the queue if the worker is idle; a live queue cannot be resized.
+        queue = getattr(self, "_speak_queue", None)
+        if queue is not None and queue.empty() and queue.maxsize < SPEAK_QUEUE_MAX_READ_ALL:
+            self._speak_queue = asyncio.Queue(maxsize=SPEAK_QUEUE_MAX_READ_ALL)
+
+    def end_read_all(self) -> None:
+        self._read_all_sentences = False
+
     def _ensure_speak_worker(self) -> None:
         if self._speak_queue is None:
-            self._speak_queue = asyncio.Queue(maxsize=SPEAK_QUEUE_MAX)
+            limit = (
+                SPEAK_QUEUE_MAX_READ_ALL
+                if getattr(self, "_read_all_sentences", False)
+                else SPEAK_QUEUE_MAX
+            )
+            self._speak_queue = asyncio.Queue(maxsize=limit)
         if self._speak_worker_task is None or self._speak_worker_task.done():
             self._speak_worker_task = asyncio.create_task(self._speak_worker_loop())
 
@@ -164,6 +187,11 @@ class TTSPipelineMixin:
         queue = self._speak_queue
         assert queue is not None
         item = (clean, self._tts_generation, direction)
+        if getattr(self, "_read_all_sentences", False):
+            # Wait for a slot instead of dropping: a read-aloud the user asked for
+            # must be complete, and dropping here silently ate whole sentences.
+            await queue.put(item)
+            return
         try:
             queue.put_nowait(item)
             return

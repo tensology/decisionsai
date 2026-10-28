@@ -86,3 +86,40 @@ def test_empty_sentences_are_ignored():
         return stub._speak_queue is None or stub._speak_queue.empty()
 
     assert asyncio.run(scenario()) is True
+
+
+def test_a_deliberate_read_aloud_keeps_every_sentence():
+    """Clicking "Read about" must speak the whole copy, not a truncated version.
+
+    Read-aloud used the conversational drop policy, so once synthesis fell behind
+    whole sentences were thrown away (42 times in one session).
+    """
+
+    async def scenario():
+        stub = _Stub()
+        stub.begin_read_all()
+        for index in range(20):
+            await stub._enqueue_sentence(f"sentence {index}", None)
+        queued = _drain(stub._speak_queue)
+        stub.end_read_all()
+        stub.gate.set()
+        task = stub._speak_worker_task
+        if task:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        return queued
+
+    queued = asyncio.run(scenario())
+
+    assert queued == [f"sentence {index}" for index in range(20)]
+
+
+def test_read_all_mode_is_not_left_on():
+    stub = _Stub()
+    stub.begin_read_all()
+    assert stub._read_all_sentences is True
+    stub.end_read_all()
+    assert stub._read_all_sentences is False

@@ -4861,8 +4861,13 @@ async function sendToAgentAndPoll(message, abortSignal) {
 }
 
 function cancelStream() {
-    if (!loadedChatId) return;
-    fetch(`${API_BASE}/chats/${loadedChatId}/cancel`, { method: 'POST' }).catch(() => {});
+    // Stop must always silence the agent. It used to return early when no chat
+    // was loaded, so Stop did nothing while the About copy was being read aloud.
+    if (loadedChatId) {
+        fetch(`${API_BASE}/chats/${loadedChatId}/cancel`, { method: 'POST' }).catch(() => {});
+    } else {
+        fetch(`${API_BASE}/tts/stop`, { method: 'POST' }).catch(() => {});
+    }
     if (streamAbortController) {
         streamAbortController.abort();
     }

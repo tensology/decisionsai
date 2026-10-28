@@ -2533,6 +2533,21 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.warning("Restore speaker failed: %s", e)
             return JSONResponse({"ok": False})
 
+    @router.post("/tts/stop")
+    async def stop_tts():
+        """Silence the agent when there is no chat to cancel against.
+
+        The About window reads its copy aloud with no active chat, so the chat
+        cancel route was unreachable and Stop did nothing there.
+        """
+        try:
+            from distr.core.signals import signal_manager
+
+            signal_manager.interrupt_tts.emit()
+        except Exception as e:
+            logger.debug("Stop TTS: interrupt_tts emit failed: %s", e)
+        return JSONResponse({"ok": True})
+
     @router.post("/chats/{chat_id}/cancel")
     async def cancel_stream(chat_id: int):
         """Tell the desktop agent to interrupt TTS/generation."""
