@@ -72,3 +72,22 @@ def test_the_button_greys_out_while_reading(monkeypatch):
 
     assert window._read_button.enabled is False
     assert window._read_button.text == "Reading…"
+
+
+def test_finishing_the_read_resets_the_button(monkeypatch):
+    """The About copy is read without the player window, so no player event fires.
+
+    Without an explicit completion signal the button sat on "Reading…" forever.
+    """
+    log: list[str] = []
+    monkeypatch.setattr("distr.core.signals.signal_manager", _SignalManager(log))
+
+    window = _Window()
+    AboutWindow._on_read_about_clicked(window)
+    assert window._read_button.enabled is False
+
+    # What the app event handler does when the agent reports completion.
+    AboutWindow._enable_read_button(window)
+
+    assert window._read_button.enabled is True
+    assert window._read_button.text == "Read about"

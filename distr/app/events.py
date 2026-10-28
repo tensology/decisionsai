@@ -420,6 +420,12 @@ class EventHandlerMixin:
                     self._tts_non_interrupt_fallback_timer.start(2500)
             self._close_player_if_tts_complete("playback_finished")
 
+        elif event == 'read_aloud_finished':
+            # A deliberate read-aloud (About "Read about") finished. It never goes
+            # through the player window, so the caller's button needs this to reset.
+            logger.info("[EVENT QUEUE] Read-aloud finished")
+            signal_manager.read_aloud_finished.emit()
+
         elif event == 'tts_stopped':
             duration = data.get('duration', 0.0)
             logger.info(f"[EVENT QUEUE] TTS stopped event received, duration: {duration}")

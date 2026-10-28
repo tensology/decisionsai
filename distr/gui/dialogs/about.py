@@ -435,6 +435,9 @@ class AboutWindow(QtWidgets.QMainWindow):
             signal_manager.player_stop.connect(self._enable_read_button)
             signal_manager.hide_player_window.connect(self._enable_read_button)
             signal_manager.interrupt_tts.connect(self._enable_read_button)
+            # Direct read-alouds never touch the player window, so without this the
+            # button stayed on "Reading…" after the copy had finished.
+            signal_manager.read_aloud_finished.connect(self._enable_read_button)
         except Exception:
             pass
         read_row.addStretch()

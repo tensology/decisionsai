@@ -44,6 +44,10 @@ class SignalManager(QObject):
     # Interrupt TTS signal (GUI -> Agent request)
     interrupt_tts = pyqtSignal()
 
+    # A deliberate read-aloud (About "Read about") finished playing. The player
+    # signals are not emitted for direct speech, so the button never reset.
+    read_aloud_finished = pyqtSignal()
+
     # STT state signals (Agent -> GUI confirmations)
     stt_ready = pyqtSignal()            # STT service fully initialized - safe to use PTT
     stt_capture_started = pyqtSignal()  # STT started capturing audio (PTT active)

@@ -1459,6 +1459,15 @@ def _cmd_speak_text_directly(session, params):
                     session._direct_tts_worker = worker
                 await queue.put(speak_directly)
                 await queue.join()
+                # Tell the GUI the read finished. Direct speech does not go through
+                # the player window, so no player event resets the caller's button.
+                try:
+                    if getattr(session, 'event_queue', None):
+                        session.event_queue.put(('read_aloud_finished', {}), block=False)
+                except Exception:
+                    session.logger.debug(
+                        "read_aloud_finished emit failed", exc_info=True
+                    )
 
             asyncio.run_coroutine_threadsafe(enqueue_directly(), session.runner._loop)
         else:
