@@ -685,11 +685,10 @@ class SignalBridgeMixin:
             cid = getattr(self, "_web_stream_chat_id", None)
             if cid is not None and token:
                 self._web_stream_token_buffer.append(token)
-                if self._web_stream_flush_timer is None:
-                    self._web_stream_flush_timer = QTimer()
-                    self._web_stream_flush_timer.setSingleShot(True)
-                    self._web_stream_flush_timer.timeout.connect(_flush_stream_tokens)
-                    self._web_stream_flush_timer.start(10)
+                # Flush on the token itself, not on a timer. The timer only fired
+                # after generation finished, so the browser received the whole
+                # reply as ONE frame and could never render it progressively.
+                _flush_stream_tokens()
         signal_manager.chat_stream_token.connect(on_chat_stream_token_web)
 
         def on_chat_stream_finished_web(chat_id):
