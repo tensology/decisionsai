@@ -5,11 +5,13 @@ Extracted from session.py to reduce duplication (STT parsing appears 2x)
 and to make config logic testable independently.
 """
 
+import functools
 import json
 import logging
 import subprocess
 import sys
-from typing import Optional, List, Tuple
+import time
+from typing import Any, Optional, List, Tuple
 
 from .constants import (
     DEFAULT_ASSEMBLYAI_MODEL, DEFAULT_OPENAI_WHISPER_MODEL,
@@ -138,6 +140,35 @@ def _find_device_in_list(devices, device_name: str, is_input: bool):
     return None, available
 
 
+# Probing PortAudio costs a subprocess, and on a machine where the audio stack is
+# wedged it hangs until the timeout. These were called on a short refresh loop, so
+# every call burned the full timeout and kept the agent permanently busy probing
+# audio instead of handling the user's turn. Cache successes, and back off hard
+# from failures.
+_PROBE_CACHE: dict[str, tuple[float, Any]] = {}
+_PROBE_TTL_SECONDS = 300.0
+_PROBE_FAILURE_TTL_SECONDS = 900.0
+_PROBE_TIMEOUT_SECONDS = 4
+
+
+def _cached_probe(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        entry = _PROBE_CACHE.get(func.__name__)
+        if entry is not None:
+            stamp, value = entry
+            failed = value is None or value == (None, None)
+            ttl = _PROBE_FAILURE_TTL_SECONDS if failed else _PROBE_TTL_SECONDS
+            if time.monotonic() - stamp < ttl:
+                return value
+        value = func(*args, **kwargs)
+        _PROBE_CACHE[func.__name__] = (time.monotonic(), value)
+        return value
+
+    return wrapper
+
+
+@_cached_probe
 def resolve_system_default_input_device() -> Tuple[Optional[int], Optional[str]]:
     """Resolve the OS default input device from a fresh PortAudio init."""
     script = """
@@ -154,7 +185,7 @@ except Exception as exc:
             [sys.executable, "-c", script],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_PROBE_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             logger.warning(
@@ -176,6 +207,7 @@ except Exception as exc:
         return None, None
 
 
+@_cached_probe
 def resolve_system_default_output_device() -> Tuple[Optional[int], Optional[str]]:
     """Resolve the OS default output device from a fresh PortAudio init.
 
@@ -199,7 +231,7 @@ except Exception as exc:
             [sys.executable, "-c", script],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_PROBE_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             logger.warning(
@@ -235,6 +267,7 @@ except Exception as exc:
         return None, None
 
 
+@_cached_probe
 def _query_devices_fresh_subprocess() -> Optional[List[Tuple[int, str, int, int]]]:
     """Query devices from a fresh Python subprocess (own PortAudio init = fresh device list).
     Returns [(index, name, max_input_ch, max_output_ch), ...] or None on failure.
@@ -252,7 +285,7 @@ print(json.dumps(out))
             [sys.executable, "-c", script],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_PROBE_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             logger.warning("Fresh device query subprocess failed: %s", result.stderr or result.stdout)
