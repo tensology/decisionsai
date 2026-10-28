@@ -850,7 +850,12 @@ except Exception as _wf_mig_err:
 Base.metadata.create_all(engine)
 
 # Create a session factory
-Session = sessionmaker(bind=engine)
+# expire_on_commit=False is deliberate. SessionContext commits on exit, and with
+# the default (True) every loaded attribute is expired the moment a `with
+# get_session()` block ends. Reading a row after that block then raises
+# DetachedInstanceError, which callers usually swallow, so the feature fails
+# silently instead of loudly. Keep attributes loaded after commit.
+Session = sessionmaker(bind=engine, expire_on_commit=False)
 
 class SessionContext:
     """Context manager for database sessions to ensure proper cleanup.
