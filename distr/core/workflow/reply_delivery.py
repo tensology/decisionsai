@@ -243,7 +243,12 @@ def deliver_ticket_reply(
         }
 
     shaped = shape_reply(text, target.channel, contact=target.contact)
-    send_to = target.thread_id or target.contact
+    # Email must go to the address. A thread id is not a recipient, and picking it
+    # first produced "Invalid To header" from Gmail.
+    if target.channel in {"email", "mailshot"}:
+        send_to = target.contact or target.thread_id
+    else:
+        send_to = target.thread_id or target.contact
     promises = find_promise_claims(shaped)
 
     from distr.core.workflow.phases import classify

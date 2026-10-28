@@ -262,3 +262,26 @@ def test_adapter_failure_is_reported_and_recorded(db_factory, monkeypatch):
 
     assert result["delivered"] is False
     assert "relay down" in result["error"]
+
+
+def test_email_reaches_the_address_not_the_thread_id(db_factory, sent):
+    ticket_id = _ticket(
+        db_factory,
+        source_provider="gmail",
+        source_thread_id="thread-abc",
+        source_contact="person@example.com",
+    )
+
+    result = reply_delivery.deliver_ticket_reply(ticket_id, "The fix is in.")
+
+    assert result["delivered"] is True
+    assert sent and sent[0]["target"] == "person@example.com"
+
+
+def test_whatsapp_still_uses_the_thread_jid(db_factory, sent):
+    ticket_id = _ticket(db_factory, source_provider="whatsapp", source_thread_id="27634103646")
+
+    result = reply_delivery.deliver_ticket_reply(ticket_id, "The fix is in.")
+
+    assert result["delivered"] is True
+    assert sent and sent[0]["target"] == "27634103646"
