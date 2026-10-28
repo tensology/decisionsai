@@ -168,10 +168,14 @@ def test_duplicate_workflow_preserves_execution_contract_and_remaps_routes(db_fa
 
 
 def test_loop_preset_bundles_exist():
+    """The library is curated: one preset per distinct job, the rest parked."""
     summaries = list_preset_summaries()
-    assert len(summaries) == 1
     slugs = {row.get("slug") for row in summaries}
-    assert slugs == {"development-ticket-to-implementation"}
+    assert "development-ticket-to-implementation" in slugs
+    assert len(slugs) >= 2, "the library must offer more than one preset"
+    # Parked presets must stay unlisted.
+    for parked in ("ship-pr-until-green", "ideation-brief-to-board", "pr-babysitter"):
+        assert parked not in slugs, f"{parked} should stay parked"
 
 
 def test_list_loop_presets_matches_catalog():

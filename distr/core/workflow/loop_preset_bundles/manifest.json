@@ -1,7 +1,7 @@
 {
   "format_version": "1.0",
   "format": "decisionsai_loop_preset_manifest_v1",
-  "description": "Active role-based loop presets. Older presets remain parked as unlisted bundle files.",
+  "description": "Curated loop presets, one per distinct job. Older or overlapping presets remain parked as unlisted bundle files under loop_preset_bundles/bundles.",
   "presets": [
     {
       "slug": "development-ticket-to-implementation",
@@ -10,6 +10,70 @@
       "category": "Engineering",
       "archetype": "incremental_ship",
       "file": "bundles/development-ticket-to-implementation.json"
+    },
+    {
+      "slug": "article-from-ticket",
+      "name": "Article from Ticket",
+      "role": "content",
+      "category": "Content",
+      "archetype": "incremental_ship",
+      "file": "bundles/article-from-ticket.json"
+    },
+    {
+      "slug": "seo-landing-page",
+      "name": "SEO Landing Page",
+      "role": "content",
+      "category": "Content",
+      "archetype": "incremental_ship",
+      "file": "bundles/seo-landing-page.json"
+    },
+    {
+      "slug": "cold-outreach-batch",
+      "name": "Cold Outreach Batch",
+      "role": "sales",
+      "category": "Sales",
+      "archetype": "incremental_ship",
+      "file": "bundles/cold-outreach-batch.json"
+    },
+    {
+      "slug": "follow-up-cadence",
+      "name": "Follow-up Cadence",
+      "role": "sales",
+      "category": "Sales",
+      "archetype": "watch_maintain",
+      "file": "bundles/follow-up-cadence.json"
+    },
+    {
+      "slug": "pr-self-review",
+      "name": "PR Self-Review",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "review_cleanup",
+      "file": "bundles/pr-self-review.json"
+    },
+    {
+      "slug": "polish-verify-and-ship",
+      "name": "Polish: Verify and Ship",
+      "role": "qa_engineer",
+      "category": "Quality",
+      "archetype": "review_cleanup",
+      "file": "bundles/polish-verify-and-ship.json"
+    },
+    {
+      "slug": "de-sloppify-pass",
+      "name": "De-Sloppify Pass",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "review_cleanup",
+      "file": "bundles/de-sloppify-pass.json"
+    },
+    {
+      "slug": "implement-js-fallow-audit",
+      "name": "Engineering: Implement + Fallow Audit (JS)",
+      "role": "senior_software_engineer",
+      "category": "Engineering",
+      "archetype": "incremental_ship",
+      "file": "bundles/implement-js-fallow-audit.json"
     }
   ]
 }
