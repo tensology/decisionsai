@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import Dict, Optional
 
 from PyQt6.QtCore import QTimer
@@ -93,7 +94,12 @@ class WorkflowOrchestrationMixin:
             due_automations = get_due_automations()
             if due_automations:
                 logger.debug("Automation scheduler tick: %d automation(s) due", len(due_automations))
-            for automation in due_automations:
+            for index, automation in enumerate(due_automations):
+                if index:
+                    # Space catch-up dispatches. A burst used to post every overdue
+                    # item within the same second, so a 07:00 video and a 07:03
+                    # flyer could reach WhatsApp Status out of their set order.
+                    time.sleep(2.0)
                 logger.info(
                     "Automation scheduler: firing %s (%s)",
                     automation.get("id"),

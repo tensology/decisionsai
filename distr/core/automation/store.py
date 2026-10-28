@@ -415,6 +415,10 @@ def list_due_automations() -> list[dict[str, Any]]:
                 Automation.next_run_at.isnot(None),
                 Automation.next_run_at <= now,
             )
+            # Dispatch in scheduled order. Without this, a catch-up tick fired
+            # every overdue automation at once in id order, so the 07:00 video and
+            # the 07:03 flyer both went out in the same minute.
+            .order_by(Automation.schedule_time.asc(), Automation.id.asc())
             .all()
         )
         due: list[dict[str, Any]] = []
@@ -441,6 +445,7 @@ def list_due_automations() -> list[dict[str, Any]]:
                 AutoWorkflow.next_run_at.isnot(None),
                 AutoWorkflow.next_run_at <= now,
             )
+            .order_by(AutoWorkflow.schedule_time.asc(), AutoWorkflow.id.asc())
             .all()
         )
         for workflow in legacy_rows:

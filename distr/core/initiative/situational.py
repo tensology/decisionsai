@@ -102,6 +102,70 @@ def _normalize_pending_decisions(pending_decisions: Any) -> list[dict[str, Any]]
     return out
 
 
+_WAIT_KIND_PHRASES = {
+    "run_briefing": "your go-ahead to start",
+    "step_review": "your review of a step",
+    "worker_needs_input": "something only you can give it",
+    "control_interrupt": "a decision before it can carry on",
+    "approval": "your approval",
+    "route_approval": "approval of a route change",
+    "provider_preflight": "approval before it sends work to the model",
+    "restart_recovery": "your go-ahead to resume after a restart",
+}
+
+
+def waiting_reason_phrase(waiting_kind: Any) -> str:
+    """Plain words for an internal waiting kind."""
+    key = str(waiting_kind or "").strip().lower()
+    return _WAIT_KIND_PHRASES.get(key, "a decision")
+
+
+def _local_stamp(value: Any) -> str:
+    """Render a naive-UTC datetime in the user's local time."""
+    if not value:
+        return ""
+    try:
+        dt = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(value)[:16]
+
+
+def automation_schedules(limit: int = 12) -> list[dict[str, Any]]:
+    """Active scheduled automations, soonest first.
+
+    The agent had no view of its own schedule, so "what is running today?" was
+    unanswerable. This is the machine-readable version of that answer.
+    """
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.automation import Automation
+
+        with get_session() as db:
+            rows = (
+                db.query(Automation)
+                .filter(Automation.status == "active")
+                .filter(Automation.schedule_enabled.is_(True))
+                .order_by(Automation.next_run_at.asc())
+                .limit(int(limit))
+                .all()
+            )
+            return [
+                {
+                    "id": int(row.id),
+                    "name": (row.name or "").strip(),
+                    "at": (row.schedule_time or "").strip(),
+                    "next_run": _local_stamp(row.next_run_at),
+                    "last_run": _local_stamp(row.last_run_at),
+                }
+                for row in rows
+            ]
+    except Exception:
+        return []
+
+
 def build_situational(
     *,
     active_project: dict | None = None,
@@ -159,6 +223,7 @@ def build_situational(
         "waiting_runs": waiting,
         "pending_decisions": pending,
         "needs_call_count": len(waiting) + len(pending),
+        "schedules": automation_schedules(),
     }
 
 
@@ -266,12 +331,28 @@ def format_situational_prompt_block(situational: dict[str, Any] | None) -> str:
         )
         for run in waiting[:5]:
             label = run.get("workflow") or f"run {run.get('run_id')}"
-            kind = run.get("waiting_kind") or "a decision"
+            reason = waiting_reason_phrase(run.get("waiting_kind"))
             question = run.get("question") or ""
-            line = f"  - {label} is waiting for {kind}"
+            line = f"  - {label} is waiting for {reason}"
             if question:
-                line += f' — "{question[:100]}"'
+                line += f': "{question[:100]}"'
             lines.append(line)
         for decision in pending[:5]:
             lines.append(f"  - pending: {str(decision.get('description') or '')[:100]}")
+    schedules = situational.get("schedules") if isinstance(situational.get("schedules"), list) else []
+    if schedules:
+        lines.append(f"- scheduled_automations ({len(schedules)} active):")
+        for item in schedules[:12]:
+            name = str(item.get("name") or "automation")
+            at = str(item.get("at") or "")
+            next_run = str(item.get("next_run") or "")
+            last_run = str(item.get("last_run") or "")
+            bits = [name]
+            if at:
+                bits.append(f"daily at {at}")
+            if next_run:
+                bits.append(f"next {next_run}")
+            if last_run:
+                bits.append(f"last {last_run}")
+            lines.append("  - " + ", ".join(bits))
     return "\n".join(lines) + "\n"
