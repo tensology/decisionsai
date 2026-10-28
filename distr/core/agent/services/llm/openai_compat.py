@@ -779,8 +779,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 except asyncio.CancelledError:
                     pass
 
-        logger.debug("%s stream: %d chunks, %d content, %d tool_calls, content_len=%d",
-                     self.SERVICE_NAME, chunk_count, content_chunks, len(tool_calls), len(full_content))
+        # INFO, not DEBUG: the chunk count is the only way to tell whether the
+        # provider actually streamed. One chunk for a whole reply means the UI can
+        # never show it growing, however healthy the pipeline looks.
+        logger.info("%s stream: %d chunks, %d content, %d tool_calls, content_len=%d",
+                    self.SERVICE_NAME, chunk_count, content_chunks, len(tool_calls), len(full_content))
 
         if not tool_calls and full_content and '<tool_call>' in full_content:
             parsed = self._parse_text_tool_calls(full_content)
