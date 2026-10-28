@@ -1903,10 +1903,19 @@ class AgentSession:
         # Set initial volume and speed from settings
         initial_volume = self.settings.get('speech_volume', 100) / 100.0
         initial_speed = self.settings.get('playback_speed', 1.0)
+        # A provider that synthesises at the target speed already applied it; the
+        # transport stretching it again would double the setting.
+        transport_speed = 1.0 if getattr(
+            self.tts_service, 'applies_own_playback_speed', False
+        ) else initial_speed
         self.transport.output().set_volume(initial_volume)
-        self.transport.output().set_speed(initial_speed)
+        self.transport.output().set_speed(transport_speed)
         
-        self.logger.info(f"Transport created: audio_in={True}, audio_out={True}, volume={initial_volume:.2f}, speed={initial_speed:.2f}x")
+        self.logger.info(
+            f"Transport created: audio_in={True}, audio_out={True}, "
+            f"volume={initial_volume:.2f}, speed={initial_speed:.2f}x "
+            f"(transport={transport_speed:.2f}x)"
+        )
         
         # Ensure S2S bridge exists (passthrough when inactive)
         if self.s2s_service is None:

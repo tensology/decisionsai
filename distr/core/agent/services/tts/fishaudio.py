@@ -32,6 +32,11 @@ _FISH_PCM_FRAME_BYTES = 1764  # 20 ms, mono s16le at 44.1 kHz
 class FishAudioTTSService(OpenAITTSService):
     """Fish Audio S2 TTS. Inherits OpenAI pipeline framing; only synthesis differs."""
 
+    # Fish Audio synthesises at the requested speed (speed= is sent with the
+    # request), so the transport must NOT time-stretch it as well or the setting
+    # is applied twice.
+    applies_own_playback_speed = True
+
     def __init__(
         self,
         api_key: str,

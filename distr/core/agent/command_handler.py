@@ -411,7 +411,13 @@ def _cmd_set_playback_speed(session, params):
     session.logger.debug(f"Playback speed changed to {speed:.1f}x")
     session.tts_service.set_playback_speed(speed)
     if hasattr(session, 'transport') and session.transport:
-        session.transport.output().set_speed(speed)
+        # Providers that synthesise at the target speed must not be stretched
+        # again: doing both applied the setting twice (1.25x came out nearer
+        # 1.38x) and added time-stretch artefacts on top of a clean resynthesis.
+        transport_speed = 1.0 if getattr(
+            session.tts_service, 'applies_own_playback_speed', False
+        ) else speed
+        session.transport.output().set_speed(transport_speed)
     else:
         session.logger.warning("Transport not available, cannot update playback speed")
 

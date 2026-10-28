@@ -17,6 +17,16 @@
 /* Smooth scroll behavior */
 html {
     scroll-behavior: smooth;
+    /* Native widgets (select popups, scrollbars, date pickers) are drawn by the
+       OS and default to light. Without this the "Barge-in while speaking"
+       dropdown opened as a white list on the dark page. */
+    color-scheme: dark;
+}
+
+/* Belt and braces for browsers that ignore color-scheme on popup lists. */
+select option {
+    background-color: #1a1f3a;
+    color: #ececf1;
 }
 
 /* Shared settings save action: below the page content, centred (overrides base.css absolute top-right) */
