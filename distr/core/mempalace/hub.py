@@ -117,8 +117,20 @@ class HubToolError(HubError):
     """The hub answered but rejected this call (retrying the same call won't help)."""
 
 
-def call_tool(palace_path: str, name: str, arguments: dict[str, Any], *, hub: dict | None = None) -> dict[str, Any]:
-    """Call one MCP tool on the hub; return the decoded JSON payload."""
+def call_tool(
+    palace_path: str,
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    hub: dict | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Call one MCP tool on the hub; return the decoded JSON payload.
+
+    ``timeout`` overrides the 20s default. Callers on a latency-critical path
+    (building the system prompt) must pass a short one: a hung hub otherwise
+    stalled every single turn for the full timeout.
+    """
     global _rpc_id
     hub = hub or discover(palace_path)
     if hub is None:
@@ -132,7 +144,9 @@ def call_tool(palace_path: str, name: str, arguments: dict[str, Any], *, hub: di
     ).encode("utf-8")
     req = urllib.request.Request(f"{hub['base_url']}/mcp", data=body, headers=dict(hub["headers"]), method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=CALL_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(
+            req, timeout=CALL_TIMEOUT_S if timeout is None else timeout
+        ) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         raise HubError(f"hub HTTP {exc.code}") from None

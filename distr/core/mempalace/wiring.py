@@ -23,6 +23,10 @@ from distr.core.mempalace.mapping import (
     WING_SEED_CORPUS_PACK,
 )
 
+# Prompt-context recall must fail fast: it is optional context, not a user
+# action. The hub's 20s default made every reply wait when the hub was slow.
+ORCHESTRATOR_CONTEXT_TIMEOUT_S = 2.0
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,6 +180,9 @@ def prefer_read_orchestrator_context(
             wing=WING_DECISIONS,
             room=ROOM_ORCHESTRATOR,
             n_results=n_results,
+            # Prompt context is a nice-to-have; it must never hold up a turn.
+            # A hung hub used to cost the full 20s default on EVERY reply.
+            timeout=ORCHESTRATOR_CONTEXT_TIMEOUT_S,
         )
         return ctx or None
     except Exception:

@@ -141,6 +141,7 @@ class MemPalaceAdapter:
         wing: str | None = None,
         room: str | None = None,
         n_results: int = 5,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Semantic search: hub ``mempalace_search``, else ``search_memories``."""
         q = (query or "").strip()
@@ -154,7 +155,9 @@ class MemPalaceAdapter:
             if room:
                 args["room"] = room
             try:
-                res = _hub.call_tool(self.palace_path, "mempalace_search", args, hub=hub)
+                res = _hub.call_tool(
+                    self.palace_path, "mempalace_search", args, hub=hub, timeout=timeout
+                )
                 res.setdefault("results", [])
                 res["via"] = "hub"
                 return res
@@ -290,9 +293,10 @@ class MemPalaceAdapter:
         room: str | None = None,
         n_results: int = 5,
         max_chars: int = 2500,
+        timeout: float | None = None,
     ) -> str:
         """Render search hits as a prompt context block (empty if none)."""
-        raw = self.search(query, wing=wing, room=room, n_results=n_results)
+        raw = self.search(query, wing=wing, room=room, n_results=n_results, timeout=timeout)
         if raw.get("error") and not raw.get("results") and not raw.get("matches"):
             return ""
         hits = raw.get("results") or raw.get("matches") or raw.get("drawers") or []
