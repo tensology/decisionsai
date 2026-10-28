@@ -247,7 +247,7 @@ def tool_execution_block_reason(
 ) -> str:
     """Block forbidden mutations and successful mutation replays within one user turn."""
     args = arguments if isinstance(arguments, dict) else {}
-    # Hard guard (Paul, 2026-10-22): instructions never spawn chats, whatever the wording.
+    # Hard guard (2026-10-22): instructions never spawn chats, whatever the wording.
     if is_new_chat_tool_call(tool_name, args):
         return NEW_CHAT_BLOCK_REASON
     ide_reason = ide_thread_misroute_reason(tool_name, args, user_text)

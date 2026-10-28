@@ -1,6 +1,6 @@
 """Nightly self-improvement review (every second night). Proposes; never applies.
 
-Every drafted diff is queued in ``approvals`` (pending) for Paul's explicit sign-off;
+Every drafted diff is queued in ``approvals`` (pending) for explicit user sign-off;
 only ``approvals.approve`` writes it to the working tree (no commit/push).
 
 1. Pull ``frustration.v1`` events since the stored cursor from the hub.

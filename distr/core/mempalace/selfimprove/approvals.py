@@ -1,14 +1,14 @@
 """Pending-approval queue for self-improvement proposals. Nothing is ever auto-applied.
 
 Flow: capture -> nightly scores clusters and drafts a diff -> ``enqueue`` puts it in
-``~/.decisions/self-improve/pending/<id>.json`` (status=pending) -> Paul approves
+``~/.decisions/self-improve/pending/<id>.json`` (status=pending) -> the user approves
 (``python -m distr.core.mempalace.selfimprove approve <id>`` or
 ``POST /api/selfimprove/proposals/<id>/approve``) -> ``git apply`` writes it to the
 working tree. No commit, no push, no snapshots: git (or the kept patch file with
 ``git apply -R``) is the rollback. Every enqueue/approve/reject is logged as JSONL in
 ``~/.decisions/logs/selfimprove-approvals.jsonl``.
 
-Risk is classified for display only (Paul still approves every item).
+Risk is classified for display only (the user still approves every item).
 """
 
 from __future__ import annotations

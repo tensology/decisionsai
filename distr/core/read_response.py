@@ -114,7 +114,7 @@ def store_spoken_message(session, chat_id: int, spoken: str, *, source_row_id: O
 
 
 def speak_spoken_text(text: str) -> bool:
-    """Approved by Paul for this button only: oracle's existing direct-TTS path."""
+    """Approved for this button only: the oracle's existing direct-TTS path."""
     from distr.core.signals import speak_text_directly_event_queue
 
     t = (text or "").strip()
