@@ -344,6 +344,54 @@ def get_tool_parameters(tool_name: str) -> dict:
         return {}
 
 
+def inline_schema_refs(schema: dict, _defs: dict | None = None, _depth: int = 0) -> dict:
+    """Resolve ``$ref`` against ``$defs`` so the schema stands on its own.
+
+    Pydantic emits nested models as ``{"$ref": "#/$defs/TicketDraftInput"}`` plus a
+    top-level ``$defs`` block. Callers here copy only the field snippets, so the
+    definitions were dropped and providers with strict schema validation rejected
+    the request outright:
+
+        reference to undefined schema at properties.tickets.items
+
+    Inlining makes every tool schema self-contained, which every provider accepts.
+    """
+    defs = _defs if _defs is not None else (schema.get("$defs") or schema.get("definitions") or {})
+    if not isinstance(schema, dict) or _depth > 12:
+        return schema
+
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/"):
+        target = defs
+        parts = ref[2:].split("/")
+        # ``defs`` already points inside $defs/definitions, so drop that prefix.
+        if parts and parts[0] in ("$defs", "definitions"):
+            parts = parts[1:]
+        for part in parts:
+            if not isinstance(target, dict) or part not in target:
+                # Unresolvable: drop the ref rather than ship a dangling pointer.
+                return {}
+            target = target[part]
+        if isinstance(target, dict):
+            return inline_schema_refs(target, defs, _depth + 1)
+        return schema
+
+    resolved = {}
+    for key, value in schema.items():
+        if key in ("$defs", "definitions"):
+            continue
+        if isinstance(value, dict):
+            resolved[key] = inline_schema_refs(value, defs, _depth + 1)
+        elif isinstance(value, list):
+            resolved[key] = [
+                inline_schema_refs(item, defs, _depth + 1) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            resolved[key] = value
+    return resolved
+
+
 def convert_tools_to_openai_format(tools_list):
     """Convert LangChain tools to OpenAI/Ollama function calling format.
     
@@ -369,6 +417,9 @@ def convert_tools_to_openai_format(tools_list):
                     except AttributeError:
                         # Pydantic v1
                         schema = tool.args_schema.schema()
+                    # Nested models arrive as $ref/$defs; inline them so strict
+                    # providers (Gemini) do not reject an undefined schema.
+                    schema = inline_schema_refs(schema)
                     
                     # Convert Pydantic schema to OpenAI/Ollama format
                     properties = {}
