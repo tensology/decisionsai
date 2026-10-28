@@ -160,24 +160,34 @@ def clear_probe_cache() -> None:
     _PROBE_CACHE.clear()
 
 
-def _cached_probe(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        entry = _PROBE_CACHE.get(func.__name__)
-        if entry is not None:
-            stamp, value = entry
-            failed = value is None or value == (None, None)
-            ttl = _PROBE_FAILURE_TTL_SECONDS if failed else _PROBE_TTL_SECONDS
-            if time.monotonic() - stamp < ttl:
-                return value
-        value = func(*args, **kwargs)
-        _PROBE_CACHE[func.__name__] = (time.monotonic(), value)
-        return value
+def _cached_probe(ttl: float = _PROBE_TTL_SECONDS, failure_ttl: float = _PROBE_FAILURE_TTL_SECONDS):
+    """Cache a probe result so a hung PortAudio query is not repeated constantly.
 
-    return wrapper
+    The TTL is per function: the device *list* is stable enough to cache for
+    minutes, but the *default* device changes when you plug in headphones, so it
+    must refresh quickly or TTS keeps playing into whatever was selected before.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            entry = _PROBE_CACHE.get(func.__name__)
+            if entry is not None:
+                stamp, value = entry
+                failed = value is None or value == (None, None)
+                limit = failure_ttl if failed else ttl
+                if time.monotonic() - stamp < limit:
+                    return value
+            value = func(*args, **kwargs)
+            _PROBE_CACHE[func.__name__] = (time.monotonic(), value)
+            return value
+
+        return wrapper
+
+    return decorator
 
 
-@_cached_probe
+@_cached_probe(ttl=15.0, failure_ttl=30.0)
 def resolve_system_default_input_device() -> Tuple[Optional[int], Optional[str]]:
     """Resolve the OS default input device from a fresh PortAudio init."""
     script = """
@@ -216,7 +226,7 @@ except Exception as exc:
         return None, None
 
 
-@_cached_probe
+@_cached_probe(ttl=15.0, failure_ttl=30.0)
 def resolve_system_default_output_device() -> Tuple[Optional[int], Optional[str]]:
     """Resolve the OS default output device from a fresh PortAudio init.
 
@@ -276,7 +286,7 @@ except Exception as exc:
         return None, None
 
 
-@_cached_probe
+@_cached_probe(ttl=300.0, failure_ttl=120.0)
 def _query_devices_fresh_subprocess() -> Optional[List[Tuple[int, str, int, int]]]:
     """Query devices from a fresh Python subprocess (own PortAudio init = fresh device list).
     Returns [(index, name, max_input_ch, max_output_ch), ...] or None on failure.
