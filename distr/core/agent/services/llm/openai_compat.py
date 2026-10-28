@@ -493,6 +493,25 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if needs_end_frame:
                 await self._push_pipeline_frame(LLMFullResponseEndFrame())
 
+    def _root_chat_id(self, chat_id: int) -> int:
+        """Normalise to the conversation the web UI is actually subscribed to.
+
+        Message rows carry parent_id pointing at the conversation root; the web
+        page subscribes with the root id. Tagging stream events with a child row
+        made the browser drop every token, while the user's own message still
+        appeared (it travels on a different event).
+        """
+        try:
+            from distr.core.db import get_session, Chat
+
+            with get_session() as session:
+                row = session.query(Chat).filter(Chat.id == chat_id).first()
+                if row is not None and getattr(row, "parent_id", None):
+                    return int(row.parent_id)
+        except Exception:
+            logger.debug("could not normalise chat id %s", chat_id, exc_info=True)
+        return chat_id
+
     def _resolve_stream_chat_id(self) -> int | None:
         """Chat id to tag stream events with, never None when one is knowable.
 
@@ -503,7 +522,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """
         cid = self.chat_manager.get_current_chat() if self.chat_manager else None
         if cid:
-            return int(cid)
+            return self._root_chat_id(int(cid))
         try:
             from distr.core.db import get_session, Settings
 
