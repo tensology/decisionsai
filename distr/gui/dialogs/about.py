@@ -828,16 +828,32 @@ class AboutWindow(QtWidgets.QMainWindow):
         _play_about_audio()
 
     def _on_read_about_clicked(self) -> None:
-        """Read the About copy, greying the button out until playback stops."""
+        """Read the About copy, greying the button out until playback stops.
+
+        Clicking again REPLACES the current read rather than queueing another one.
+        The button re-enables on player_stop, which can fire before the queued
+        sentences have drained, so a second click used to enqueue the whole copy
+        again behind audio that was still playing and the player lost the order
+        of the stream.
+        """
         button = getattr(self, "_read_button", None)
-        if button is not None and not button.isEnabled():
-            return
+        self._stop_current_read()
         if button is not None:
             button.setEnabled(False)
             button.setText("Reading…")
             # Safety: never leave the button greyed out if the stop signal is missed.
             QtCore.QTimer.singleShot(180_000, self._enable_read_button)
         self._read_about_aloud(getattr(self, "_about_text", ""))
+
+    @staticmethod
+    def _stop_current_read() -> None:
+        """Stop anything currently being spoken and clear queued read-alouds."""
+        try:
+            from distr.core.signals import signal_manager
+
+            signal_manager.interrupt_tts.emit()
+        except Exception:
+            pass
 
     def _enable_read_button(self) -> None:
         button = getattr(self, "_read_button", None)
