@@ -104,6 +104,8 @@ def _set_sequential_run_settings(factory, workflow_id: int) -> None:
                 "concurrency_scope": "workflow",
                 "max_parallel_tickets": 1,
                 "branch_per_ticket": True,
+                # Headless queue test: no human checkpoints to wait on.
+                "human_checkpoints": False,
             }
         )
         session.commit()
