@@ -32,14 +32,15 @@ def test_a_step_that_did_not_clear_is_not_called_completed():
     report = _report("failed", success=False)
 
     assert "didn't clear" in report
-    assert "completed the implementation handoff" not in report
-    assert "didn't clear its contract" in report
+    assert "stopped before this part was finished" in report
+    # Must not claim the work was finished in any form.
+    assert "finished this part of the work" not in report
 
 
-def test_a_passing_step_still_reads_as_completed():
+def test_a_passing_step_reads_as_finished_in_plain_words():
     report = _report("passed", success=True)
 
-    assert "completed the implementation handoff" in report
+    assert "finished this part of the work" in report
     assert "didn't clear" not in report
 
 

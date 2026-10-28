@@ -186,16 +186,16 @@ class WorkflowAgentBridge:
 
         if status in ("completed", "passed", "success"):
             if ok:
-                return f"{backend} completed the implementation handoff."
+                return f"{backend} finished this part of the work."
             # The backend finished its turn but the step did not clear its
             # contract. Reporting "completed" here contradicted "didn't clear".
-            return f"{backend} finished its turn, but the step didn't clear its contract."
+            return f"{backend} stopped before this part was finished."
         if status:
             reason = WorkflowAgentBridge._project_cli_failure_reason(clean)
             if reason:
-                return f"{backend} reported status: {status} \u2014 {reason}"
-            return f"{backend} reported status: {status}."
-        return f"{backend} started the implementation handoff."
+                return f"{backend} couldn't finish this part: {reason}"
+            return f"{backend} couldn't finish this part."
+        return f"{backend} started working on it."
 
     @staticmethod
     def _project_cli_failure_reason(clean: str) -> str:
