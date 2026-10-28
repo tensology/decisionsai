@@ -1691,7 +1691,7 @@ function handleChatEventStreamToken(msg) {
 }
 
 function handleChatEventStreamFinished(msg) {
-    if (msg.chat_id !== currentChatId) return;
+    if (Number(msg.chat_id) !== Number(currentChatId)) return;
     // Flush any buffered stream tokens before finalizing
     _streamTextBuffer = '';
     _streamRafPending = false;
@@ -1786,7 +1786,7 @@ function handleChatEventStreamFinished(msg) {
 }
 
 function handleChatEventStreamError(msg) {
-    if (msg.chat_id != null && msg.chat_id !== currentChatId) return;
+    if (msg.chat_id != null && Number(msg.chat_id) !== Number(currentChatId)) return;
     _streamTextBuffer = '';
     _streamRafPending = false;
     _lastStreamFinalizedPlain = null;
@@ -1849,7 +1849,7 @@ function isHiddenLiveToolEvent(msg) {
 }
 
 function handleChatEventToolExecuted(msg) {
-    if (msg.chat_id !== currentChatId) return;
+    if (Number(msg.chat_id) !== Number(currentChatId)) return;
     if (!chatMessages) return;
     if (isHiddenLiveToolEvent(msg)) return;
     if (hasRenderedToolEvent(msg)) return;
@@ -2011,7 +2011,7 @@ function appendToolToActivityGroup(message) {
 }
 
 function handleChatEventWorkflow(msg) {
-    if (msg.chat_id !== currentChatId) return;
+    if (Number(msg.chat_id) !== Number(currentChatId)) return;
     const workflowEvent = {
         run_id: msg.run_id,
         workflow_id: msg.workflow_id,
