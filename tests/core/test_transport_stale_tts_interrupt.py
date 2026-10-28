@@ -119,3 +119,65 @@ def test_interrupt_tts_while_playing_still_mutes():
     transport_out, session = _interrupt_session("PLAYING", force_silence=False)
     _cmd_interrupt_tts(session, {})
     assert transport_out._force_silence is True
+
+
+def test_interrupt_flushes_streams_without_abort_stream():
+    events = []
+
+    class Stream:
+        def is_active(self):
+            return True
+
+        def stop_stream(self):
+            events.append("stop")
+
+        def start_stream(self):
+            events.append("start")
+
+    transport_out, session = _interrupt_session("PLAYING")
+    transport_out._out_stream = Stream()
+    _cmd_interrupt_tts(session, {})
+    assert events == ["stop", "start"]
+
+
+def test_interrupt_serializes_stop_with_audio_writes():
+    events = []
+    writing = False
+
+    class Stream:
+        def is_active(self):
+            return True
+
+        def stop_stream(self):
+            assert not writing, "PortAudio stop raced an output write"
+            events.append("stop")
+
+        def start_stream(self):
+            events.append("start")
+
+    async def scenario():
+        nonlocal writing
+        executor = ThreadPoolExecutor(max_workers=1)
+        transport = _transport(_state=AudioPlaybackState.PLAYING, _out_stream=Stream(), _executor=executor)
+        _, session = _interrupt_session("PLAYING")
+        session.transport._output = transport
+        session._main_loop = asyncio.get_running_loop()
+
+        def write():
+            nonlocal writing
+            writing = True
+            time.sleep(0.05)
+            writing = False
+            events.append("write")
+
+        try:
+            pending = executor.submit(write)
+            while not writing:
+                await asyncio.sleep(0)
+            await asyncio.to_thread(_cmd_interrupt_tts, session, {})
+            pending.result()
+        finally:
+            executor.shutdown(wait=True)
+
+    asyncio.run(scenario())
+    assert events == ["write", "stop", "start"]

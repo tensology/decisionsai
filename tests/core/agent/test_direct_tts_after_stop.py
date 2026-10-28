@@ -89,6 +89,10 @@ def test_stop_then_speak_again_is_synthesised(monkeypatch):
         first = len(tts.audible)
         ch._cmd_speak_text_directly(session, {"text": text})  # same text, right after Stop
     finally:
+        worker = getattr(session, '_direct_tts_worker', None)
+        if worker is not None:
+            worker.cancel()
+            loop.run_until_complete(asyncio.gather(worker, return_exceptions=True))
         loop.close()
     assert len(tts.audible) > first, "second utterance after Stop must be synthesised audibly"
     assert not tts.silent_or_dropped

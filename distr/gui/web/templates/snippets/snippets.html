@@ -200,10 +200,83 @@
     color: #fde68a;
     background: rgba(249, 115, 22, 0.14);
   }
+
+  @media (max-width: 640px) {
+    #snippets-page {
+      height: calc(100dvh - 3.5rem);
+      min-height: 0;
+      padding: 8px;
+    }
+    #snippets-page > .snippets-panel {
+      min-height: 0;
+    }
+    #snippets-header {
+      padding: 12px;
+    }
+    #snippet-add {
+      min-height: 44px;
+      flex: 0 0 auto;
+      padding: 0 12px;
+    }
+    #snippets-list {
+      min-height: 0;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      padding: 10px;
+    }
+    .snippet-row {
+      grid-template-columns: minmax(0, 1fr) 44px 44px;
+      gap: 8px;
+      padding: 10px;
+    }
+    .snippet-num {
+      grid-column: 1 / -1;
+      text-align: left;
+    }
+    .snippet-text {
+      grid-column: 1 / -1;
+      height: 44px;
+      font-size: 16px;
+      line-height: normal;
+      overflow: auto;
+      text-overflow: clip;
+    }
+    .snippet-hotkey {
+      height: 44px;
+      min-width: 0;
+      font-size: 16px;
+    }
+    .snippet-save,
+    .snippet-delete {
+      width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+    }
+    .snippets-footer {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px 12px;
+    }
+    .snippets-footer-copy {
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .snippets-footer-copy img {
+      width: 36px;
+      height: 36px;
+    }
+    .snippets-footer-action {
+      width: 100%;
+      height: 44px;
+      min-height: 44px;
+    }
+  }
 </style>
-<div class="w-full px-6 py-4 h-[calc(100vh-4rem)]">
-  <div class="h-full bg-[#1a1f3a] border border-white/20 rounded-lg overflow-hidden flex flex-col">
-    <div class="px-6 py-4 border-b border-white/10 flex items-center justify-between gap-4">
+<div id="snippets-page" class="w-full px-6 py-4 h-[calc(100vh-4rem)]">
+  <div class="snippets-panel h-full bg-[#1a1f3a] border border-white/20 rounded-lg overflow-hidden flex flex-col">
+    <div id="snippets-header" class="px-6 py-4 border-b border-white/10 flex items-center justify-between gap-4">
       <div>
         <h2 class="text-xl font-semibold text-white">Snippets</h2>
       </div>

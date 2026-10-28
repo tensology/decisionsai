@@ -3,11 +3,38 @@
 {% block title %}Actions{% endblock %}
 
 {% block content %}
-<div class="w-full px-6 py-4 flex gap-6 h-[calc(100vh-4rem)]">
+<style>
+    #actions-workspace { height: calc(100dvh - 4rem); }
+    #action-back { display: none; }
+    #action-detail-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    @media (max-width: 1023px) {
+        #actions-workspace { padding: 12px; gap: 0; min-height: 0; }
+        #actions-sidebar { width: 100%; min-width: 0; }
+        #actions-workspace[data-view="list"] #actions-editor,
+        #actions-workspace[data-view="detail"] #actions-sidebar { display: none; }
+        #actions-editor { width: 100%; }
+        #action-back { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .action-detail-header { padding: 12px; gap: 8px; }
+        #action-detail-title { flex: 1; font-size: 16px; }
+        .action-detail-body { padding: 16px; }
+        .action-fields-row { flex-direction: column; gap: 16px; }
+        #detail-triggers-input { width: 100%; min-width: 0; }
+        #actions-workspace button { min-height: 44px; }
+        .action-item-delete { min-width: 44px; }
+        .action-item { overflow-wrap: anywhere; }
+        #actions-workspace input, #actions-workspace textarea { font-size: 16px; }
+        #actions-search { min-height: 44px; }
+        #actions-workspace button:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+    }
+    @media (max-width: 759px) {
+        #actions-workspace { height: calc(100dvh - 3.5rem); }
+    }
+</style>
+<div id="actions-workspace" data-view="list" class="w-full px-6 py-4 flex gap-6 h-[calc(100vh-4rem)]">
     <!-- Left panel: search + action list + Add -->
-    <div class="w-80 flex-shrink-0 flex flex-col gap-4">
+    <div id="actions-sidebar" class="w-80 flex-shrink-0 flex flex-col gap-4">
         <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
-            <input type="text" id="actions-search" placeholder="Search actions..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+            <input type="text" id="actions-search" aria-label="Search actions" placeholder="Search actions..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
         </div>
         <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
             <div id="actions-list" class="flex-1 overflow-y-auto space-y-2">
@@ -25,7 +52,7 @@
     </div>
 
     <!-- Right panel: empty state or detail form -->
-    <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
+    <div id="actions-editor" class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
         <!-- Empty state -->
         <div id="actions-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
             <p class="text-gray-400 text-sm max-w-md mb-6">Save repeatable actions for the assistant to run later. Record clicks and keystrokes, or write an instruction-based action you can trigger whenever you need it.</p>
@@ -34,23 +61,24 @@
 
         <!-- Detail form (hidden until action selected) -->
         <div id="actions-detail" class="hidden flex-1 flex flex-col min-h-0">
-            <div class="border-b border-white/20 px-6 py-4 flex items-center justify-between">
+            <div class="action-detail-header border-b border-white/20 px-6 py-4 flex items-center justify-between">
+                <button type="button" id="action-back" class="px-3 rounded text-white border border-white/20" aria-label="Back to actions">Back</button>
                 <h2 id="action-detail-title" class="text-lg font-semibold text-white">Action</h2>
                 <div class="flex gap-2">
                     <button type="button" id="action-update" class="px-4 py-2 rounded-lg bg-[#f97316] text-white hover:bg-[#ea580c] active:scale-[0.98] transition-colors text-sm font-medium shadow-sm border border-[#ea580c]/30">Update</button>
                     <button type="button" id="action-remove" class="px-4 py-2 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20 text-sm">Remove</button>
                 </div>
             </div>
-            <div class="flex-1 overflow-y-auto p-6">
+            <div class="action-detail-body flex-1 overflow-y-auto p-6">
                     <!-- Form fields first -->
                     <div class="space-y-4 mb-6">
-                        <div class="flex gap-4">
+                        <div class="action-fields-row flex gap-4">
                             <div class="flex-1 min-w-0">
-                                <label class="block text-sm text-gray-400 mb-1">Title</label>
+                                <label for="detail-title" class="block text-sm text-gray-400 mb-1">Title</label>
                                 <input type="text" id="detail-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
                             </div>
                             <div class="flex-1 min-w-0">
-                                <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
+                                <label for="detail-triggers-input" class="block text-sm text-gray-400 mb-1">Trigger words</label>
                                 <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-[#3b82f6]/50 rounded text-sm text-gray-300 relative">
                                     <!-- Badges rendered by JS -->
                                     <div id="trigger-badges-flex" class="flex flex-wrap gap-2"></div>
@@ -59,7 +87,7 @@
                             </div>
                         </div>
                         <div>
-                            <label class="block text-sm text-gray-400 mb-1">Description</label>
+                            <label for="detail-description" class="block text-sm text-gray-400 mb-1">Description</label>
                             <textarea id="detail-description" rows="6" class="w-full min-h-[9rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="What does this action do?"></textarea>
                         </div>
                     </div>
@@ -93,7 +121,7 @@
                     <!-- Instruction tab -->
                     <div id="tab-instruction" class="action-tab-pane hidden space-y-4">
                         <div>
-                            <label class="block text-sm text-gray-400 mb-1">Instruction for the LLM</label>
+                            <label for="detail-instruction" class="block text-sm text-gray-400 mb-1">Instruction for the LLM</label>
                             <p class="text-xs text-gray-500 mb-1">When you trigger this action by name, the assistant will run this instruction.</p>
                             <textarea id="detail-instruction" rows="8" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="Enter your instruction here..."></textarea>
                         </div>

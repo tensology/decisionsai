@@ -980,6 +980,11 @@ def _cmd_push_to_talk_start(session, params):
         if hasattr(session.llm_service, '_cancelled'):
             session.llm_service._cancelled = True
     if hasattr(session, 'tts_service') and session.tts_service:
+        # A new response clears _cancelled; invalidate old sentence generations too.
+        if hasattr(session.tts_service, 'abort_pending_synthesis'):
+            session.tts_service.abort_pending_synthesis()
+        if hasattr(session.tts_service, 'mark_bargein'):
+            session.tts_service.mark_bargein()
         if hasattr(session.tts_service, '_cancelled'):
             session.tts_service._cancelled = True
             if hasattr(session.tts_service, '_cancelled_since'):
@@ -1217,10 +1222,20 @@ def _cmd_interrupt_tts(session, params):
         if state_name in ("SYNTHESIZING", "PLAYING", "DRAINING"):
             transport_out._force_silence = True
             try:
-                stream = getattr(transport_out, '_out_stream', None)
-                if stream and stream.is_active():
-                    stream.abort_stream()
-                    stream.start_stream()
+                if _loop and _loop.is_running() and hasattr(transport_out, '_abort_output_stream_async'):
+                    # Commands run on a worker thread; serialize stop with device writes.
+                    asyncio.run_coroutine_threadsafe(
+                        transport_out._abort_output_stream_async(), _loop
+                    ).result(timeout=2.0)
+                else:
+                    stream = getattr(transport_out, '_out_stream', None)
+                    if stream and stream.is_active():
+                        abort = getattr(stream, 'abort_stream', None)
+                        if callable(abort):
+                            abort()
+                        else:
+                            stream.stop_stream()
+                        stream.start_stream()
             except Exception as e:
                 logger.debug("Interrupt: could not abort output stream: %s", e)
         else:

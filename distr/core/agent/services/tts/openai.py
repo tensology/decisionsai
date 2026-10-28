@@ -175,7 +175,7 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
                 continue
             self._mark_sentence_processed(sentence)
             hold.append(sentence)
-            if tts_chunk_has_enough_weight(hold, max_sentences=max(3, batch_size)):
+            if tts_chunk_has_enough_weight(hold, max_sentences=batch_size):
                 chunk = " ".join(hold)
                 hold = []
                 await self._enqueue_sentence(chunk, direction)

@@ -7,6 +7,9 @@
     var searchText = "";
     var actionsData = [];
     var isRecording = false;
+    var actionSelectionSeq = 0;
+    var workspace = document.getElementById("actions-workspace");
+    var backButton = document.getElementById("action-back");
 
     function escapeAttr(s) {
         if (!s) return "";
@@ -77,7 +80,7 @@
             });
             wrap.addEventListener("focus", function() {
                 var id = parseInt(wrap.getAttribute("data-id"), 10);
-                if (id && currentActionId !== id) selectAction(id);
+                if (id && currentActionId !== id && window.matchMedia("(min-width: 1024px)").matches) selectAction(id);
             });
         });
     }
@@ -168,7 +171,7 @@
                 actionsData = data;
                 renderList(data);
                 if (data.length > 0) {
-                    if (!skip_auto_select) selectAction(data[0].id);
+                    if (!skip_auto_select && window.matchMedia("(min-width: 1024px)").matches) selectAction(data[0].id);
                 } else {
                     showEmpty();
                 }
@@ -179,6 +182,7 @@
     }
 
     function showEmpty() {
+        workspace.dataset.view = "list";
         document.getElementById("actions-empty").classList.remove("hidden");
         document.getElementById("actions-detail").classList.add("hidden");
         currentActionId = null;
@@ -246,6 +250,7 @@
     }
 
     function showDetail(action) {
+        workspace.dataset.view = "detail";
         document.getElementById("actions-empty").classList.add("hidden");
         document.getElementById("actions-detail").classList.remove("hidden");
         currentActionId = action.id;
@@ -271,6 +276,7 @@
         if (stopDetail) stopDetail.classList.add("hidden");
 
         renderList(actionsData);
+        if (window.matchMedia("(max-width: 1023px)").matches) backButton.focus({ preventScroll: true });
     }
 
     function switchTab(tabName) {
@@ -287,18 +293,23 @@
         if (pane) pane.classList.remove("hidden");
     }
 
-    function selectAction(id) {
-        currentActionId = id;
+    function selectAction(id, refresh) {
+        var seq = ++actionSelectionSeq;
+        if (!refresh && currentActionId === id && !document.getElementById("actions-detail").classList.contains("hidden")) {
+            workspace.dataset.view = "detail";
+            if (window.matchMedia("(max-width: 1023px)").matches) backButton.focus({ preventScroll: true });
+            return;
+        }
         fetch("/api/actions/" + id)
             .then(function(r) {
                 if (!r.ok) throw new Error(r.status);
                 return r.json();
             })
             .then(function(action) {
-                showDetail(action);
+                if (seq === actionSelectionSeq) showDetail(action);
             })
             .catch(function() {
-                showSnackbar("Could not load action", "error");
+                if (seq === actionSelectionSeq) showSnackbar("Could not load action", "error");
             });
     }
 
@@ -327,7 +338,7 @@
         })
             .then(function(r) {
                 if (r.ok) {
-                    loadActions(true).then(function() { selectAction(currentActionId); });
+                    loadActions(true).then(function() { selectAction(currentActionId, true); });
                     showSnackbar("Action updated", "success");
                 } else {
                     return r.json().then(function(e) { throw new Error(e.detail || "Failed to save"); });
@@ -348,6 +359,7 @@
 
     function startRecording() {
         isRecording = true;
+        backButton.disabled = true;
         var recDetail = document.getElementById("detail-record-btn");
         var stopDetail = document.getElementById("detail-stop-btn");
         if (recDetail) recDetail.classList.add("hidden");
@@ -362,12 +374,13 @@
                 if (r.ok) showSnackbar("Recording started (desktop app). Stop when done.", "success");
                 else r.json().then(function(e) { showSnackbar(e.detail || "Start recording failed", "error"); });
             })
-            .catch(function() { showSnackbar("Start recording failed", "error"); isRecording = false; });
+            .catch(function() { showSnackbar("Start recording failed", "error"); isRecording = false; backButton.disabled = false; });
     }
 
     function stopRecording() {
         if (!isRecording) return;
         isRecording = false;
+        backButton.disabled = false;
         var recDetail = document.getElementById("detail-record-btn");
         var stopDetail = document.getElementById("detail-stop-btn");
         if (recDetail) recDetail.classList.remove("hidden");
@@ -376,7 +389,7 @@
             .then(function(r) {
                 if (r.ok) {
                     showSnackbar("Recording stopped", "success");
-                    if (currentActionId) { loadActions(true).then(function() { selectAction(currentActionId); }); }
+                    if (currentActionId) { loadActions(true).then(function() { selectAction(currentActionId, true); }); }
                 } else {
                     r.json().then(function(e) { showSnackbar(e.detail || "Stop failed", "error"); });
                 }
@@ -444,6 +457,13 @@
         triggersInput.addEventListener("blur", addTriggerWordsFromInput);
     }
 
+    backButton.addEventListener("click", function() {
+        if (isRecording) return;
+        ++actionSelectionSeq;
+        workspace.dataset.view = "list";
+        var selected = document.querySelector('.action-item[data-id="' + currentActionId + '"]');
+        if (selected) selected.focus({ preventScroll: true });
+    });
     document.getElementById("action-create-big") && document.getElementById("action-create-big").addEventListener("click", addAction);
     document.getElementById("action-add") && document.getElementById("action-add").addEventListener("click", addAction);
     document.getElementById("action-update") && document.getElementById("action-update").addEventListener("click", saveAction);

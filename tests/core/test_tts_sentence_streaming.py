@@ -217,6 +217,26 @@ def test_pixazo_batches_three_sentences_per_synthesis_call():
     assert enqueued == ["One. Two. Three.", "Four. Five."]
 
 
+def test_fishaudio_starts_after_first_sentence_without_waiting_for_response_end():
+    from distr.core.agent.services.tts.fishaudio import FishAudioTTSService
+
+    service = object.__new__(FishAudioTTSService)
+    service._cancelled = False
+    service._processed_sentences = set()
+    service._tts_sentence_batch_size = 1
+    service._sentence_batch_hold = []
+    enqueued = []
+
+    async def enqueue(sentence, direction):
+        enqueued.append(sentence)
+
+    service._enqueue_sentence = enqueue
+    asyncio.run(service._enqueue_new_sentences(["The sea is calm today."], None))
+
+    assert enqueued == ["The sea is calm today."]
+    assert service._sentence_batch_hold == []
+
+
 def test_play_queued_sentence_forwards_tts_lifecycle_frames():
     from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
     from distr.core.agent.libs import TTSStartedFrame, TTSStoppedFrame

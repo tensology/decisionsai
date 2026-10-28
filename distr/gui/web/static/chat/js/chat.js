@@ -1230,9 +1230,16 @@ function promoteTranscriptionPreviewToUserMessage(committedText) {
         return false;
     }
     _stopSttPreviewClock();
-    if (liveStt) liveStt.remove();
-    const div = createMessageElement({ role: 'user', content: plain, timestamp: Date.now() });
-    insertMessageElementInOrder(div, { role: 'user', content: plain, timestamp: Date.now() });
+    // Keep the spoken question in place while persistence catches up.
+    const div = liveStt || createMessageElement({ role: 'user', content: plain, timestamp: Date.now() });
+    div.id = '';
+    div.dataset.messageTs = String(Date.now());
+    if (previewTextEl) {
+        previewTextEl.removeAttribute('id');
+        previewTextEl.textContent = plain;
+    }
+    div.querySelector('.stt-preview-label')?.classList.remove('stt-preview-label');
+    if (!div.isConnected) chatMessages.appendChild(div);
     _addOptimisticUserMessage(plain);
     _setCommittedLiveUserState(plain);
     syncRenderedMessageCountFromDom();
@@ -1259,7 +1266,9 @@ function ensureStreamingAssistantMessageElement() {
             <div class="message-actions" style="display: none;"></div>
         </div>
     `;
-    insertMessageElementInOrder(div, { role: 'assistant', timestamp: Date.now() });
+    // A live reply belongs after history even when an old row's clock is ahead.
+    div.dataset.messageTs = String(Date.now());
+    chatMessages.appendChild(div);
     flushPendingAssistantTools(div, null);
     return div;
 }
@@ -1502,6 +1511,10 @@ function handleChatEventMessageAdded(msg) {
         // Skip only if sendMessage() already rendered this exact text optimistically.
         const np = _normalizeMsgPlain(content);
         const ts = msg.timestamp || Date.now();
+        if (np && hasLiveUserTranscriptionPreview()
+            && _normalizeMsgPlain(document.getElementById('transcriptionStatusText')?.textContent) === np) {
+            promoteTranscriptionPreviewToUserMessage(content);
+        }
         if (reconcileOptimisticUserMessage(msg)) {
             _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
@@ -1675,6 +1688,7 @@ function handleChatEventStreamToken(msg) {
         removeTypingIndicator();
         streamingChatId = msg.chat_id;
         _setLiveAssistantStreaming(msg.chat_id, '');
+        ensureStreamingAssistantMessageElement();
     }
     const el = document.getElementById('streamingAssistantText');
     if (el) {
@@ -1728,7 +1742,7 @@ function handleChatEventStreamFinished(msg) {
             </div>
         `;
         restoreAssistantEmbeddedActivity(wrap, existingActivityHtml);
-        insertMessageElementInOrder(wrap, { role: 'assistant', timestamp: finishedAt, chat_row_id: msg.chat_row_id });
+        if (msg.chat_row_id != null) wrap.dataset.turnChatId = String(msg.chat_row_id);
         repairOrphanAssistantBeforeUser();
         syncRenderedMessageCountFromDom();
         _lastStreamFinalizedPlain = _normalizeMsgPlain(raw);
@@ -1920,11 +1934,10 @@ function appendStandaloneToolActivity(message) {
     if (!chatMessages) return null;
     const group = appendStandaloneToolToActivityGroup(message);
     if (group && !group.isConnected) {
-        insertMessageElementInOrder(group, {
-            role: 'tool_group',
-            timestamp: message.timestamp,
-            chat_row_id: message.chat_row_id
-        });
+        // Dictation/read-aloud events are live, even when history's clock is ahead.
+        group.dataset.messageTs = String(messageTimestampMs(message) || Date.now());
+        chatMessages.appendChild(group);
+        syncRenderedMessageCountFromDom();
         scrollToBottom();
     }
     return group;

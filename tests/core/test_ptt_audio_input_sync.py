@@ -198,3 +198,23 @@ def test_dictation_ptt_start_skips_agent_interrupt_path():
     stt_service.set_ptt_active.assert_called_once_with(True, queue_interruption=False)
     assert session.ptt_active is True
     assert llm_service._cancelled is False
+
+
+def test_agent_ptt_invalidates_queued_synthesis_before_new_response():
+    from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
+
+    tts = TTSPipelineMixin()
+    tts._init_tts_pipeline_state()
+    tts._cancelled = False
+    tts._text_buffer = "Old speech"
+    session = _session_with_input_transport(MagicMock())
+    session.tts_service = tts
+    session.llm_service = None
+    session.stt_service = None
+    generation = tts._tts_generation
+
+    command_handler._cmd_push_to_talk_start(session, {})
+    tts.reset_tts_response_start()
+
+    assert tts._tts_generation > generation
+    assert tts._text_buffer == ""

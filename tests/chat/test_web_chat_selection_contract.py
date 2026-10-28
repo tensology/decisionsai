@@ -345,7 +345,8 @@ def test_committed_voice_transcription_promotes_preview_without_waiting_for_data
     assert "hasOpenUserTurnPlain(plain)" in promote_block
     assert "hasRenderedMessagePlain('user', plain)" not in promote_block
     assert "createMessageElement({ role: 'user', content: plain" in promote_block
-    assert "insertMessageElementInOrder(div, { role: 'user', content: plain" in promote_block
+    assert "const div = liveStt || createMessageElement" in promote_block
+    assert "if (!div.isConnected) chatMessages.appendChild(div)" in promote_block
     assert "_addOptimisticUserMessage(plain);" in promote_block
     assert "if (clearLivePreview)" in status_block
     assert "promoteTranscriptionPreviewToUserMessage();" in status_block
@@ -399,7 +400,7 @@ def test_repeated_voice_transcript_text_is_not_deduped_against_older_turns():
 def test_recent_optimistic_user_message_is_not_rendered_again_after_assistant_reply():
     src = _chat_js_source()
     message_added_block = src.split("function handleChatEventMessageAdded", 1)[1].split(
-        "if (role === 'assistant'",
+        "function findRenderedMessageByIdentity",
         1,
     )[0]
     render_incremental_block = src.split("// Fast path: append only new messages", 1)[1].split(
@@ -458,7 +459,7 @@ def test_voice_message_reconciliation_normalizes_whitespace_and_binds_the_persis
 def test_persisted_voice_message_does_not_register_as_a_future_optimistic_message():
     src = _chat_js_source()
     message_added_block = src.split("function handleChatEventMessageAdded", 1)[1].split(
-        "if (role === 'assistant'",
+        "function findRenderedMessageByIdentity",
         1,
     )[0]
 
