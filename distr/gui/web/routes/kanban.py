@@ -1647,6 +1647,41 @@ def _workflow_board_ticket_payload(
         "source_chat_id": ticket.source_chat_id,
         **_ticket_source_payload(ticket),
     }
+    # Routing policy and spend, so a ticket shows which policy ran it and what it
+    # cost. Never let either lookup break ticket serialization.
+    try:
+        from distr.core.db.workflow import AutoWorkflow
+        from distr.core.workflow.phases import workflow_weight_class
+
+        if ticket.linked_workflow_id:
+            with get_session() as db:
+                wf = (
+                    db.query(AutoWorkflow)
+                    .filter(AutoWorkflow.id == int(ticket.linked_workflow_id))
+                    .first()
+                )
+                # Read inside the session; a detached row raises on attribute access.
+                if wf is not None:
+                    payload["workflow_name"] = wf.name or ""
+                    weight = workflow_weight_class(wf.run_settings)
+                    if weight:
+                        payload["weight_class"] = weight
+    except Exception:
+        logger.debug("Ticket weight class lookup failed", exc_info=True)
+    try:
+        from sqlalchemy import text
+
+        with get_session() as db:
+            row = db.execute(
+                text(
+                    "SELECT COALESCE(SUM(tokens_total), 0) "
+                    "FROM cost_ledger_entries WHERE ticket_id = :tid"
+                ),
+                {"tid": int(ticket.id)},
+            ).fetchone()
+            payload["tokens_total"] = int(row[0] or 0) if row else 0
+    except Exception:
+        logger.debug("Ticket cost lookup failed", exc_info=True)
     # Minimal live Jira status surface for board/thread/Incoming consumers.
     if str(ticket.external_source or "").lower() == "jira" or str(ticket.source_provider or "").lower() == "jira":
         try:
