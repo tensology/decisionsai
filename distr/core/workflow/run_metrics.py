@@ -18,7 +18,7 @@ from typing import Any
 
 def run_metrics(run_id: int) -> dict[str, Any]:
     """Return the measurable footprint of one workflow run."""
-    from sqlalchemy import text
+    from sqlalchemy import or_, text
 
     from distr.core.db import get_session
     from distr.core.db.kanban import ProjectExecutionSession
@@ -42,11 +42,20 @@ def run_metrics(run_id: int) -> dict[str, Any]:
             .filter(AutoWorkflowStepResult.run_id == int(run_id))
             .count()
         )
-        sessions = (
-            db.query(ProjectExecutionSession)
-            .filter(ProjectExecutionSession.run_id == int(run_id))
-            .all()
+        session_query = db.query(ProjectExecutionSession).filter(
+            ProjectExecutionSession.run_id == int(run_id)
         )
+        if run.started_at is not None:
+            # Legacy rows can carry a colliding run_id (127 of them in this DB), so
+            # count only sessions that fall inside this run's window. Otherwise a
+            # clean one-session run reports sessions it never used.
+            session_query = session_query.filter(
+                or_(
+                    ProjectExecutionSession.started_at.is_(None),
+                    ProjectExecutionSession.started_at >= run.started_at,
+                )
+            )
+        sessions = session_query.all()
         try:
             ledger = db.execute(
                 text(

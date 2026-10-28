@@ -582,6 +582,45 @@ def rebuild_class_workflow(
     return int(workflow_id)
 
 
+def refresh_managed_workflow_instructions() -> dict[str, int]:
+    """Rewrite managed workflows' step instructions from the current phase definition.
+
+    A workflow persists the instruction composed when it was created, so improving
+    the phase contract (e.g. requiring ``reply_text:``) never reached workflows that
+    already existed. This updates in place, keeping step ids and run history.
+    """
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflowStep
+
+    updated: dict[str, int] = {}
+    for class_key in WORKFLOW_CLASSES:
+        workflow_id = find_class_workflow_id(class_key)
+        if not workflow_id:
+            continue
+        definition = build_workflow_definition(
+            class_workflow_name(class_key),
+            class_key,
+            goal="Complete the linked ticket using this workflow's policy.",
+            done_when="The ticket is done, evidence is returned, and the source gets a reply.",
+            description=CLASS_WORKFLOW_DESCRIPTIONS.get(class_key, ""),
+        )
+        with get_session() as db:
+            steps = (
+                db.query(AutoWorkflowStep)
+                .filter(AutoWorkflowStep.workflow_id == int(workflow_id))
+                .order_by(AutoWorkflowStep.position)
+                .all()
+            )
+            for step, spec in zip(steps, definition["steps"]):
+                step.name = str(spec["name"])
+                step.instruction = str(spec["instruction"])
+                if spec.get("config"):
+                    step.config = json.dumps(spec["config"])
+            db.commit()
+            updated[class_key] = len(steps)
+    return updated
+
+
 def route_ticket(
     text: str,
     *,
