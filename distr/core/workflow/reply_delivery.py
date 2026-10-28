@@ -230,8 +230,11 @@ def deliver_ticket_reply(
             return {"delivered": False, "reason": "ticket not found"}
         ticket_text = f"{ticket.title or ''}\n\n{ticket.description or ''}"
         has_repo = ticket.linked_project_id is not None
+        # Resolve provenance while the row is still attached. Reading a detached
+        # ORM instance raises DetachedInstanceError, which callers swallow, so the
+        # reply was silently skipped in production.
+        target = resolve_reply_target(ticket)
 
-    target = resolve_reply_target(ticket)
     if not target.can_send:
         return {
             "delivered": False,

@@ -23,7 +23,9 @@ def db_factory(monkeypatch):
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    # expire_on_commit=True mirrors production: reading a detached ORM row raises,
+    # which is how the reply path was silently skipping.
+    factory = sessionmaker(bind=engine, expire_on_commit=True)
     monkeypatch.setattr("distr.core.db.get_session", lambda: factory())
     return factory
 
