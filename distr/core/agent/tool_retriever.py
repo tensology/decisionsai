@@ -32,6 +32,9 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Log the sbert-to-TF-IDF fallback once, not on every index build.
+_SBERT_FALLBACK_LOGGED = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -225,7 +228,18 @@ class ToolRetriever:
         return names, descriptions
 
     def _try_build_sbert(self, descriptions: list) -> bool:
-        """Try building index with sentence-transformers. Returns True on success."""
+        """Try building index with sentence-transformers, cache only.
+
+        Building the tool index must never touch the network. Loading the model
+        used to attempt a HuggingFace download, and on an offline machine
+        huggingface_hub retried with backoff, stalling every agent turn before
+        falling back to TF-IDF anyway. Offline mode makes a missing model fail
+        immediately instead.
+        """
+        import os
+
+        previous = os.environ.get("HF_HUB_OFFLINE")
+        os.environ["HF_HUB_OFFLINE"] = "1"
         try:
             from sentence_transformers import SentenceTransformer
             model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -237,8 +251,18 @@ class ToolRetriever:
             self._backend = "sbert"
             return True
         except Exception as e:
-            logger.info("sentence-transformers unavailable (%s), trying TF-IDF fallback", e)
+            global _SBERT_FALLBACK_LOGGED
+            if not _SBERT_FALLBACK_LOGGED:
+                logger.info(
+                    "sentence-transformers unavailable from cache (%s); using TF-IDF", e
+                )
+                _SBERT_FALLBACK_LOGGED = True
             return False
+        finally:
+            if previous is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous
 
     def _try_build_tfidf(self, descriptions: list) -> bool:
         """Build index with sklearn TF-IDF. Returns True on success."""
@@ -248,7 +272,11 @@ class ToolRetriever:
             tfidf_matrix = vectorizer.fit_transform(descriptions)
             self._vectorizer = vectorizer
             self._tfidf_matrix = tfidf_matrix
-            self._backend = "tfidf"
+            # Do not clobber a working sbert backend: TF-IDF is built alongside it
+            # as a small-tier fallback, and overwriting made every build report
+            # "tfidf" even when sbert was the one in use.
+            if self._backend != "sbert":
+                self._backend = "tfidf"
             return True
         except Exception as e:
             logger.warning("TF-IDF fallback also failed: %s", e)
