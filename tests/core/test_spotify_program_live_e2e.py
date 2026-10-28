@@ -135,6 +135,9 @@ def test_spotify_fixture_ui_proof_captures_real_browser_evidence(tmp_path) -> No
     assert "2. [click] Start playback" in completed.stdout
 
 
+@pytest.mark.skip(
+    reason="Needs the Spotify program loop presets, parked on 2026-10-23 (94a5d0a9)."
+)
 @pytest.mark.e2e
 def test_spotify_program_seed_has_one_ecosystem(tmp_path) -> None:
     harness = WorkflowTicketLoopHarness(BASE_URL)
@@ -156,6 +159,9 @@ def test_spotify_program_seed_has_one_ecosystem(tmp_path) -> None:
     assert len(spotify_workflows) == 3
 
 
+@pytest.mark.skip(
+    reason="Needs the Spotify program loop presets, parked on 2026-10-23 (94a5d0a9)."
+)
 @pytest.mark.e2e
 def test_spotify_program_chain_development_and_polish(tmp_path) -> None:
     harness = WorkflowTicketLoopHarness(BASE_URL)
@@ -185,12 +191,10 @@ def test_spotify_program_presets_match_expected_slugs(tmp_path) -> None:
     if not harness.server_reachable():
         pytest.skip(f"Web server not reachable at {BASE_URL}")
 
+    # These presets were parked on 2026-10-23 (94a5d0a9). Their bundles still exist
+    # under loop_preset_bundles/bundles but are deliberately unlisted, so the
+    # catalogue must not offer them.
     presets = harness.api_request("/workflows/loop-presets")
     slugs = {str(row.get("slug") or "") for row in (presets.get("presets") or [])}
-    assert SPOTIFY_IDEATION_PRESET in slugs
-    assert SPOTIFY_DEVELOPMENT_PRESET in slugs
-    assert SPOTIFY_POLISH_PRESET in slugs
-
-    fixture = harness.seed_spotify_program(tmp_path)
-    expected_titles = [spec.title for spec in build_spotify_ticket_specs()[:3]]
-    assert [t["title"] for t in fixture["tickets"]] == expected_titles
+    for parked in (SPOTIFY_IDEATION_PRESET, SPOTIFY_POLISH_PRESET):
+        assert parked not in slugs, f"{parked} should stay parked"
