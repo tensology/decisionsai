@@ -35,6 +35,14 @@ SPEAK_QUEUE_MAX = 4
 SPEAK_QUEUE_MAX_READ_ALL = 512
 
 
+# Stage pairs behind the human-readable turn-timing line.
+_TIMING_PAIRS = {
+    "transcript_to_llm": ("stt_final", "llm_first_token"),
+    "llm_to_tts": ("llm_first_token", "tts_first_audio"),
+    "capture_to_first_audio": ("capture", "tts_first_audio"),
+}
+
+
 async def _iterate_frames(frames: list):
     """Replay frames that were synthesised ahead of playback."""
     for frame in frames:
@@ -60,6 +68,7 @@ class TTSPipelineMixin:
         self._cancelled_since = 0.0
         self._tts_generation = 0
         self._read_all_sentences = False
+        self._turn_timing_logged = False
         self._prefetched_frames = None
         self._speak_queue = None
         self._speak_worker_task = None
@@ -130,8 +139,26 @@ class TTSPipelineMixin:
             self._sentence_batch_hold = []
         self._cancelled = False
         self._cancelled_since = 0.0
+        self._turn_timing_logged = False
         if hasattr(self, "_processed_sentences"):
             self._processed_sentences.clear()
+
+    def _log_turn_timing(self, timing: Any) -> None:
+        """Log where a voice turn's seconds actually went, once per response.
+
+        Without this the only visible number was TTS synthesis, which made the
+        provider look like the whole story when the LLM wait was also long.
+        """
+        if getattr(self, "_turn_timing_logged", False):
+            return
+        self._turn_timing_logged = True
+        parts = []
+        for label in ("transcript_to_llm", "llm_to_tts", "capture_to_first_audio"):
+            value = timing.elapsed(*_TIMING_PAIRS[label])
+            if value is not None:
+                parts.append(f"{label}={value:.2f}s")
+        if parts:
+            logger.warning("Voice turn timing: %s", " ".join(parts))
 
     def begin_read_all(self) -> None:
         """Mark the next speech as a complete read-aloud that must lose nothing.
@@ -349,6 +376,7 @@ class TTSPipelineMixin:
                     timing = getattr(self, "_audio_timing", None)
                     if timing is not None:
                         timing.mark("tts_first_audio", at=first_audio_at)
+                        self._log_turn_timing(timing)
                 audio_frame_count += 1
             except Exception as e:
                 logger.error("TTS: Error pushing frame: %s", e, exc_info=True)
