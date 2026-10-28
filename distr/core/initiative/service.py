@@ -1880,13 +1880,25 @@ class InitiativeService:
 
         # Also log to chat
         self._log_to_chat(
-            f"Pending approval [{resolved_tier.name}] — {action.action_type}: {action.description}",
+            self._pending_approval_line(resolved_tier, action),
             settings,
         )
 
     # ------------------------------------------------------------------
     # Messaging helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pending_approval_line(tier: Any, action: Any) -> str:
+        """Human line for a queued approval.
+
+        The raw action type (``ticket_lane_move``, ``workflow_start``) used to be
+        read to the user verbatim; it means nothing outside the engine.
+        """
+        description = str(getattr(action, "description", "") or "").strip()
+        tier_name = str(getattr(tier, "name", "") or "").strip()
+        lead = f"Waiting on your approval ({tier_name})" if tier_name else "Waiting on your approval"
+        return f"{lead}: {description}" if description else lead
 
     def _log_to_chat(self, message: str, settings: dict) -> None:
         if not self.chat_manager:
@@ -2558,16 +2570,24 @@ class InitiativeService:
                                     else None
                                 )
                                 if current_chat:
-                                    step_bit = f", step '{step_name}'" if step_name else ""
-                                    self._append_chat_notice(
-                                        int(current_chat),
-                                        (
-                                            f"Workflow '{workflow_name}' (run #{run.id}{step_bit}) "
-                                            f"is waiting for you: {waiting_kind or 'a decision'}. "
-                                            f"{nudge_text}"
-                                        ),
-                                        hidden=True,
-                                    )
+                                    # Say only what the person needs. The run id,
+                                    # step name and waiting_kind are plumbing and used
+                                    # to be read back to the user verbatim.
+                                    # Announce each waiting state once; reminder
+                                    # cadence belongs on the channel that opted in.
+                                    announced = getattr(self, "_announced_waits", None)
+                                    if announced is None:
+                                        announced = self._announced_waits = {}
+                                    fingerprint = f"{run.id}:{waiting_kind}:{step_name}"
+                                    if announced.get(fingerprint) != "sent":
+                                        self._append_chat_notice(
+                                            int(current_chat),
+                                            nudge_text,
+                                            hidden=True,
+                                        )
+                                        if len(announced) > 200:
+                                            announced.clear()
+                                        announced[fingerprint] = "sent"
                             except Exception:
                                 logger.debug(
                                     "InitiativeService: waiting chat notice failed",

@@ -596,11 +596,13 @@ def build_workflow_waiting_nudge(
             "Say continue to retry the saved step, or stop to cancel."
         )
     elif kind in {"ide_handoff", "needs_human_input", "worker_needs_input"}:
+        # "waiting in the linked IDE or harness" told the user nothing about what
+        # was actually needed. Say what it is stuck on, then how to unblock it.
         text = (
-            f"{subject} is waiting on you in the linked IDE or harness. "
-            "Finish there, then tell me **continue**, or open Workflows → Active Runs."
+            f"{subject} is stuck and needs something from you. "
+            "Tell me what to do and I'll carry on, or open Workflows → Active Runs to see where it stopped."
         )
-        voice = f"{subject} is waiting in your IDE. Say continue when you're ready."
+        voice = f"{subject} is stuck and needs you. Tell me what to do and I'll carry on."
     else:
         step_bit = f" at {step}" if step else ""
         text = (

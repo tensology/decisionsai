@@ -990,20 +990,8 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
     chat_id = int((task or {}).get("id") or 0)
     if not chat_id:
         raise TensologyApiError("DecisionsAI did not return a Development thread id.", code="thread_missing")
-    # Say which policy picked this ticket and why, in the thread the founder opens.
-    try:
-        from distr.core.workflow.phases import announce_route_choice
-
-        announce_route_choice(
-            chat_id,
-            f"{ticket.get('title') or ''}\n\n{ticket.get('description') or ''}",
-            ticket_id=mirrored_ticket_id,
-            has_repo_target=True,
-        )
-    except Exception:
-        import logging
-
-        logging.getLogger(__name__).debug("tensology route announcement failed", exc_info=True)
+    # No workflow/policy announcement here. The thread already opens on the ticket
+    # itself; naming the internal policy on arrival reads as noise, not progress.
     return chat_id, {"complexity": complexity, **route}
 
 
