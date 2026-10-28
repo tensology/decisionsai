@@ -17,6 +17,8 @@ from scripts.workflow_ticket_loop_e2e import (
     select_spotify_ticket_specs,
 )
 
+pytestmark = pytest.mark.slow
+
 BASE_URL = "http://127.0.0.1:8765"
 
 

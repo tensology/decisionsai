@@ -15,6 +15,9 @@ from distr.core.kanban import jira_intake as intake
 from distr.core.kanban import jira_work_lifecycle as jlife
 from distr.core.kanban import work_ops
 from distr.core.kanban.ticket_time_tracking import add_time_spent_seconds
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def test_work_ops_intake_cli_draft_revise_send_e2e(monkeypatch, tmp_path):

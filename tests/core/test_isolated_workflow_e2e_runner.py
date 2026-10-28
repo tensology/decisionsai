@@ -8,6 +8,9 @@ from scripts.run_isolated_workflow_e2e import (
     _profile_contract,
     _pytest_command,
 )
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def test_default_profile_uses_canonical_browser_contract() -> None:

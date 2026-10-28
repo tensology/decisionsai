@@ -19,6 +19,9 @@ from tests.core.workflow_e2e_harness import (
     wait_for_terminal_run,
     workflow_patch_stack,
 )
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def _seed_two_queued_tickets(factory, tmp_path, workflow_id: int) -> dict:

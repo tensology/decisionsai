@@ -26,6 +26,9 @@ from distr.core.workflow.loop_catalog import ELORM_LOOP_KICKOFFS
 from distr.core.workflow.planning import loop_contract_to_context_rules, parse_loop_contract
 from distr.core.workflow.router import StepRouter
 from distr.gui.web.routes.settings.workflows import register_routes
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def _make_factory(tmp_path):

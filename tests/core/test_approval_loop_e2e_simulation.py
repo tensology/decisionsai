@@ -11,6 +11,9 @@ from sqlalchemy import create_engine, text
 from distr.core.kanban import whatsapp_work_lifecycle as lifecycle
 from distr.core.workflow.dispatcher import DEFAULT_RUN_SETTINGS, _workflow_run_settings
 from distr.core.workflow.run_briefing import human_checkpoint_enabled
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def _isolated_engine(monkeypatch, tmp_path):

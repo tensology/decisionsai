@@ -48,6 +48,8 @@ from distr.core.workflow.step_executor import (
 from distr.core.workflow.verification import _run_verification
 from distr.core.kanban.ticket_workflow_engagement import build_route_selection_message
 
+pytestmark = pytest.mark.slow
+
 
 def test_manual_thread_route_skips_auto_model_catalog_refresh():
     assert should_refresh_auto_model_policy({

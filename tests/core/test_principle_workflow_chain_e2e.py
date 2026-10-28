@@ -18,6 +18,8 @@ from tests.core.workflow_e2e_harness import (
     start_preset_run,
 )
 
+pytestmark = pytest.mark.slow
+
 
 DEVELOPMENT_SLUG = "development-ticket-to-implementation"
 

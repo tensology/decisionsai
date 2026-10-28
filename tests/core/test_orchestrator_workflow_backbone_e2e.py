@@ -12,6 +12,9 @@ from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base
 from distr.core.project_cli_backends.base import BackendStatus, BackendTaskResult, ProjectCliBackend
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def _make_factory(tmp_path):

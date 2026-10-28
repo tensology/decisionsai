@@ -10,6 +10,9 @@ from distr.core.db.kanban import KanbanBoard, KanbanTicket
 from distr.core.db.projects import Project
 from distr.core.kanban.lifecycle import ensure_delivery_lanes
 from distr.core.kanban import whatsapp_work_lifecycle as lifecycle
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def test_whatsapp_message_to_ticket_to_qa_reply_review_chain(monkeypatch, tmp_path):

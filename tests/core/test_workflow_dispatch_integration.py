@@ -23,6 +23,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+pytestmark = pytest.mark.slow
+
 # ── Stub out Qt/signal dependencies that aren't available in test env ──────
 _mock_signals = MagicMock()
 _mock_signals.signal_manager = MagicMock()

@@ -8,6 +8,9 @@ from distr.core.db import Base
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.kanban import jira_intake as intake
 from distr.core.kanban import jira_work_lifecycle as jlife
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 def test_jira_email_to_stage_to_review_chain(monkeypatch, tmp_path):
