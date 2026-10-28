@@ -120,9 +120,9 @@ class WorkflowAgentBridge:
         if cancelled:
             status_line = "I stopped that run."
         elif success or (all_steps_ok and saw_green):
-            status_line = "All done."
+            status_line = "Done."
         else:
-            status_line = "That didn't work out."
+            status_line = "I couldn't finish this one."
 
         # Failed steps retain a useful error clue. Completed steps are summarized
         # so chat follow-ups do not receive CLI transcripts or callback payloads.
@@ -153,6 +153,12 @@ class WorkflowAgentBridge:
         if not step_lines:
             return f"{status_line}\nNo steps were recorded."
 
+        # Lead with the blocker in plain words when there is one. A list of step
+        # statuses alone tells the user nothing about what to do next.
+        blocker = WorkflowAgentBridge._extract_blocker(steps_summary)
+        if blocker and not (success or cancelled):
+            step_lines.insert(0, f"What stopped it: {blocker}")
+
         # fix2: retries of one step produce identical lines; show each once.
         counts: dict[str, int] = {}
         for line in step_lines:
@@ -162,6 +168,21 @@ class WorkflowAgentBridge:
             for line, count in counts.items()
         ]
         return f"{status_line}\n" + "\n".join(step_lines)
+
+    @staticmethod
+    def _extract_blocker(steps_summary: list) -> str:
+        """Pull the concrete blocker out of worker reports, in its own words."""
+        pattern = re.compile(
+            r"(?im)^\s*(?:\*\*)?(?:blockers?|blocked by)(?:\*\*)?\s*:\s*(?P<body>.+?)(?=\n\s*(?:\*\*)?[A-Za-z][A-Za-z /_-]{1,40}(?:\*\*)?\s*:|\Z)",
+            re.DOTALL,
+        )
+        for step in reversed(list(steps_summary or [])):
+            text = str((step or {}).get("result") or "")
+            for match in reversed(list(pattern.finditer(text))):
+                body = re.sub(r"\s+", " ", match.group("body")).strip().strip("*`")
+                if body:
+                    return body.strip()[:300]
+        return ""
 
     @staticmethod
     def _human_step_result(result: str, *, ok: bool = True) -> str:

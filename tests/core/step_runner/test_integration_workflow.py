@@ -238,7 +238,7 @@ class TestFullWorkflowLifecycle:
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
         assert reports[0]["session_id"] == 1
-        assert "All done." in reports[0]["report"]
+        assert "Done." in reports[0]["report"]
         assert "Step 1 finished." in reports[0]["report"]
         assert "Step 2 finished." in reports[0]["report"]
         assert "Step 1" in reports[0]["report"]
@@ -422,7 +422,7 @@ class TestConcurrentWorkflows:
         assert session_ids == {1, 2}
 
         for r in reports:
-            assert "All done." in r["report"]
+            assert "Done." in r["report"]
 
     @patch("distr.core.signals.signal_manager")
     @patch("distr.app.workflow.WorkflowOrchestrationMixin._finish_workflow_run")

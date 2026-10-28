@@ -2104,10 +2104,11 @@ def dispatch_development_prompt(
             # throwaway "instruction" draft (which was never runnable) and then
             # fell back to the retired Development pipeline, which is exactly how
             # the workflow list filled with dead drafts and one token furnace.
-            from distr.core.workflow.phases import announce_route_choice
+            from distr.core.workflow.phases import route_ticket_plan
 
-            route_plan = announce_route_choice(
-                int(chat_id),
+            # Route silently. The ticket-arrival message already explains what the
+            # work is; naming the internal policy here is noise, not information.
+            route_plan = route_ticket_plan(
                 clean,
                 ticket_id=ticket_id,
                 has_repo_target=bool(int(project.id) > 0),

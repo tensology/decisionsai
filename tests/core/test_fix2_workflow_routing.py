@@ -258,7 +258,7 @@ def test_report_shows_reason_and_dedupes():
             {"title": "Plan", "status": "failed", "result": fail},
         ],
     })
-    assert report.count("Pi reported status: failed") == 1
+    assert report.count("Pi couldn't finish this part") == 1
     assert "repeated 3" in report
     assert "401" in report and "Unauthorized" in report
     assert "Try next" not in report

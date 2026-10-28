@@ -193,6 +193,18 @@ def _agent_result_passed(result_text: str) -> bool:
     return not any(marker in text for marker in failure_markers)
 
 
+def _result_reports_needs_input(result_text: str) -> bool:
+    """True when the worker's own contract says it is blocked on a human.
+
+    A ``Status: needs_input`` report must pause the run. It used to count as a
+    pass, so the pipeline moved on to review work that had not been done.
+    """
+    # Strip markdown emphasis first: workers write both `Status: needs_input`
+    # and `**Status:** needs_input`.
+    text = re.sub(r"\*+", "", str(result_text or ""))
+    return bool(re.search(r"(?im)^\s*status\s*:\s*needs_input\b", text))
+
+
 def _consume_qualification_fault(
     run_data: dict[str, Any],
     *,
@@ -2664,6 +2676,11 @@ class StepExecutorMixin:
                 passed = True
                 error = ""
             waits_for_human = bool(getattr(result, "waits_for_human", False))
+            if passed and _result_reports_needs_input(output):
+                # The worker finished its turn but is blocked on a human. Pause
+                # instead of passing the step and reviewing work that isn't there.
+                passed = False
+                waits_for_human = True
             text = output or error or f"Sent to {backend_name}."
             if not passed and not waits_for_human:
                 from distr.core.workflow.blueprint_adherence import format_tool_failure

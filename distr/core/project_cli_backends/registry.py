@@ -1380,6 +1380,9 @@ def _git_status_short(folder: str) -> list[str]:
 
 _READ_ONLY_SNAPSHOT_IGNORES = {
     ".decisions",
+    # Cursor writes its dev MCP config here for every turn, including read-only
+    # reviews. Counting that as a project change failed honest review steps.
+    ".cursor",
     ".git",
     ".venv",
     "venv",
@@ -2263,7 +2266,17 @@ class CursorBackend(OneShotCliBackend):
     description = "Cursor's project coding CLI backend."
     executable_candidates = ["cursor-agent"]
     # Account/login auth + live stream so Development UI is not stuck on "Waiting".
-    command_args = ["--trust", "-p", "--output-format", "stream-json", "--stream-partial-output"]
+    # --force allows shell commands unless explicitly denied. Without it a
+    # non-interactive run auto-denies every command, so the agent could only
+    # report "Shell was blocked" and never do live work.
+    command_args = [
+        "--trust",
+        "--force",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--stream-partial-output",
+    ]
     structured_jsonl = True
     setup_instructions = (
         "Install Cursor CLI support from Cursor, then make sure the cursor-agent command is on PATH."
