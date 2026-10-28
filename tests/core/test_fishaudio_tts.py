@@ -186,10 +186,11 @@ def test_thirdparty_js_lists_fishaudio():
     settings_html = (
         root / "distr/gui/web/templates/settings/settings.html"
     ).read_text(encoding="utf-8")
-    assert "thirdparty.js?v=20260921-icons" in settings_html
+    # Assert the script is wired, not a cache-busting query that churns.
+    assert "thirdparty.js" in settings_html
     assert "iconPath: '/assets/img/providers/fishaudio.png'" in thirdparty_js
     assert "iconPath: '/assets/img/providers/tensology.png'" in thirdparty_js
-    assert "general.js?v=20260921-editvoice" in settings_html
+    assert "general.js" in settings_html
     chat_js = (root / "distr/gui/web/static/chat/js/chat.js").read_text(encoding="utf-8")
     assert "'fishaudio'" in chat_js
     assert "fishaudio-voices" in chat_js

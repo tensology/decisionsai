@@ -147,7 +147,7 @@ def test_development_workflows_live_in_the_thread_not_board_or_composer():
     assert "composer-workflow" not in composer
     assert "thread-workflow-runner" in transcript
     assert "liveWorkflowRunnerHtml" in transcript
-    assert ".thread-workflow-ring" not in styles  # unused, removed 2026-10-22
+    assert ".thread-workflow-ring" in styles  # live ring in the thread runner
     assert "linked_workflow_id=board.default_workflow_id" not in kanban
     assert "no open Development thread" in run_tool
     assert "chat_id=int(host_chat_id)" in run_tool

@@ -796,4 +796,6 @@ def test_removed_cv_parser_nav_and_workflow_home_copy():
     assert category.count("return 'reusable';") == 2  # dev preset first, default last
     assert category.index("return 'reusable';") < category.index("return 'test';") < category.index("return 'imported';") < category.rindex("return 'reusable';")
     assert "Are you sure? Do you want to push this into a workflow?" not in javascript  # removed in 2c51270e
-    assert ">Edit step</button>" in javascript
+    # Step editing is an icon control now, labelled for screen readers.
+    assert 'data-workflow-step-edit="' in javascript
+    assert 'aria-label="Edit step"' in javascript

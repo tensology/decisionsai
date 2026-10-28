@@ -113,7 +113,7 @@ def test_workflow_config_modal_exposes_run_policy_and_context_rules():
     assert "function refreshWorkflowGlobalExecutionPanel" in js
     assert "function saveWorkflowGlobalExecutionRouting" in js
     assert "hermes-readiness-strip" not in html
-    assert "Ticket complexity routing" in html
+    assert "Complexity routing" in html
     assert "function workflowExecRouteHtml" in js
     assert "function saveWorkflowExecRouting" in js
     assert "wf-board-edit-tab" not in js

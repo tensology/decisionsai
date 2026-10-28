@@ -241,9 +241,17 @@ def _write_harness_projections(
         "pi": home / ".pi" / "agent" / "skills" / "decisions-ecc-harness" / "SKILL.md",
         "grok": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
     }
+    # Several harnesses can share one projection path (cursor and grok both use
+    # ~/.cursor/skills/...). Their text differs by harness name, so writing each
+    # in turn flipped the file back and forth and bootstrap never settled.
+    seen_paths: set[str] = set()
     for harness, path in targets.items():
         if not detected.get(harness):
             continue
+        key = str(path)
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
         if _write_if_changed(
             path,
             _projection_text(
@@ -252,7 +260,7 @@ def _write_harness_projections(
                 manifest_path=manifest_path,
             ),
         ):
-            written.append(str(path))
+            written.append(key)
     return written
 
 

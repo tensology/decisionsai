@@ -19,7 +19,10 @@ def test_codex_rrule_translation_preserves_time_timezone_and_weekdays():
         "interval": 15,
         "interval_unit": "minutes",
         "days": "1",
+        "month": "",
         "timezone": "Africa/Johannesburg",
+        # Canonical schedule shape also carries per-date skips.
+        "ignored_occurrences": [],
     }
     assert weekdays["kind"] == "weekly"
     assert weekdays["time"] == "08:15"

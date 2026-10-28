@@ -175,16 +175,20 @@ def test_complexity_model_dropdowns_are_the_pin_source_of_truth_with_auto_toggle
     js = WORKFLOWS_JS.read_text(encoding="utf-8")
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
     routes = WORKFLOW_EXECUTION_PY.read_text(encoding="utf-8")
+    # Complexity-routing pickers/save were extracted to a shared module so
+    # Workflows and Settings compose the same table.
+    shared_exec = (ROOT / "distr/gui/web/static/shared/js/workflow_exec_routing.js").read_text(encoding="utf-8")
 
-    assert 'class="wf-exec-model' in js
-    assert 'class="wf-exec-auto ' in js
-    assert "function syncWorkflowExecAutoToggle(level, root)" in js
-    assert 'model.value = "auto"' in js
-    assert "model.dataset.lastPinnedModel = model.value" in js
-    assert 'String(model.dataset.lastPinnedModel || "")' in js
+    assert 'class="wf-exec-model' in shared_exec
+    assert "wf-exec-auto" in shared_exec
+    assert "function syncWorkflowExecAutoToggle(level, root)" in shared_exec
+    assert 'classList.toggle("is-auto", on)' in shared_exec
+    # Auto is a per-tier flag that disables the pickers but keeps their values,
+    # so unticking restores the manual route. (The old lastPinnedModel memory is gone.)
+    assert "el.disabled = on" in shared_exec
+    assert "the saved value is kept" in shared_exec
     assert '"model_provider": (settings.get(f"project_cli_{level}_model_provider")' in routes
     assert 'settings[f"project_cli_{level}_model_provider"]' in routes
-    assert "Keeping the pinned model visible." in js
     assert ".wf-exec-auto-label" in html
 
 

@@ -30,6 +30,12 @@ async def test_chained_tool_is_attached_to_active_turn(monkeypatch):
             self.event_queue = None
             self._is_telegram_request = False
 
+        # The real service rewrites tool args for intent; this test only cares
+        # that the chained tool lands on the active turn, so pass through.
+        @staticmethod
+        def _rewrite_tool_for_intent(func_name, func_args, user_message):
+            return func_name, func_args
+
         def _sanitize_tool_calls(self, tool_calls):
             return tool_calls
 

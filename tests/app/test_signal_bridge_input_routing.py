@@ -62,6 +62,10 @@ def _fake_signal_manager():
         "transcription_progress",
         "tool_executed",
         "workflow_event",
+        "bargein_mode_changed",
+        "playback_speed_changed",
+        "speech_volume_changed",
+        "vad_threshold_changed",
     ]
     return SimpleNamespace(**{name: _Signal() for name in names})
 

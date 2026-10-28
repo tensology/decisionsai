@@ -16,6 +16,8 @@ class _FakeService:
     _speaker_enabled = True
     _is_telegram_request = False
     SERVICE_NAME = "TestOpenAICompat"
+    # Mirrors OpenAICompatibleLLMService._FOLLOW_UP_STREAM_TIMEOUT_SEC.
+    _FOLLOW_UP_STREAM_TIMEOUT_SEC = 60.0
 
     def __init__(self) -> None:
         self._messages = []
