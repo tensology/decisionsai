@@ -124,3 +124,18 @@ def test_append_reply_phase_adds_the_block():
 def test_channel_profile_defaults_are_sane():
     assert channel_profile("nonsense").key == "email"
     assert channel_profile("whatsapp").max_chars < channel_profile("email").max_chars
+
+
+def test_tensology_is_its_own_channel_not_email():
+    from distr.core.workflow.reply_channel import normalize_channel, resolve_reply_target
+
+    assert normalize_channel("tensology") == "tensology"
+
+    target = resolve_reply_target(
+        {"source_provider": "tensology", "source_external_id": "PROJ-169-001"}
+    )
+    assert target.channel == "tensology"
+    assert target.thread_id == "PROJ-169-001"
+    # The Tensology integration posts the execution report itself.
+    assert target.can_send is False
+    assert "handled_by_tensology_integration" in target.missing

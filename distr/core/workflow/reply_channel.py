@@ -88,6 +88,17 @@ CHANNEL_PROFILES: dict[str, ChannelProfile] = {
         tone="Brief in-app update.",
         supports_thread_reply=False,
     ),
+    "tensology": ChannelProfile(
+        key="tensology",
+        label="Tensology",
+        max_chars=1400,
+        greeting=False,
+        signoff=False,
+        tone="Concise tracker update: what changed, how it was verified, what is outstanding.",
+        # The Tensology integration posts the execution report itself, so this
+        # module must not try to email anyone on its behalf.
+        supports_thread_reply=False,
+    ),
 }
 
 DEFAULT_CHANNEL = "email"
@@ -105,6 +116,8 @@ _CHANNEL_ALIASES = {
     "trello_card": "trello",
     "campaign": "mailshot",
     "bulk_email": "mailshot",
+    "tensology": "tensology",
+    "tensology_board": "tensology",
     "website": "web",
     "app": "web",
 }
@@ -208,6 +221,7 @@ def resolve_reply_target(ticket: Any) -> ReplyTarget:
     thread_id = str(
         _get(ticket, "source_thread_id", "")
         or _get(ticket, "whatsapp_message_wa_id", "")
+        or _get(ticket, "source_external_id", "")
         or _get(ticket, "external_id", "")
         or ""
     ).strip()
@@ -223,6 +237,9 @@ def resolve_reply_target(ticket: Any) -> ReplyTarget:
         missing.append("source_thread_id")
     if profile.key in {"email", "mailshot"} and not contact:
         missing.append("source_contact")
+    if profile.key == "tensology":
+        # Delivered by the Tensology integration, not by an outbound adapter here.
+        missing.append("handled_by_tensology_integration")
 
     target = ReplyTarget(
         channel=profile.key,
