@@ -17,6 +17,7 @@ from distr.core.workflow.phases import (
     class_workflow_name,
     ensure_class_workflows,
     rebuild_class_workflow,
+    refresh_managed_workflow_instructions,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,12 +70,22 @@ def seed_workflows(force_reset: bool = False, workflow_names=None):
         error = str(exc)
         logger.warning("Could not seed managed workflows: %s", exc)
 
+    refreshed: dict[str, int] = {}
     if force_reset:
         for class_key, workflow_id in list(seeded.items()):
             try:
                 rebuild_class_workflow(int(workflow_id), class_key)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("Could not rebuild %s workflow: %s", class_key, exc)
+    else:
+        # A workflow persists the instruction composed when it was created, so a
+        # phase-contract improvement would never reach existing workflows. Bring
+        # them forward in place on every startup; step ids and runs are preserved.
+        try:
+            refreshed = refresh_managed_workflow_instructions()
+        except Exception as exc:  # pragma: no cover - defensive
+            refreshed = {}
+            logger.warning("Could not refresh managed workflow instructions: %s", exc)
 
     retired = 0
     try:
@@ -89,6 +100,7 @@ def seed_workflows(force_reset: bool = False, workflow_names=None):
         "skipped_names": [],
         "force_reset": force_reset,
         "managed": seeded,
+        "refreshed": refreshed,
         "retired_legacy": retired,
         "converted_legacy_request": only_legacy,
         **({"error": error} if error else {}),
