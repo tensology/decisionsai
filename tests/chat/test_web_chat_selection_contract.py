@@ -246,8 +246,7 @@ def test_header_icon_buttons_have_visible_tooltip_contract():
     css = _chat_css_source()
 
     for control_id, label in [
-        ("compactChatButton", "Compact context"),
-        ("forkChatButton", "Fork chat"),
+        ("chatMoreButton", "Chat actions"),
         ("contextRing", "Estimated context used"),
         ("configureChatButton", "Configure chat"),
     ]:
@@ -255,8 +254,9 @@ def test_header_icon_buttons_have_visible_tooltip_contract():
         assert f'aria-label="{label}"' in html
         assert f'data-tooltip="{label}"' in html
 
-    assert 'class="header-icon-btn chat-header-tooltip" id="compactChatButton"' in html
-    assert 'class="header-icon-btn chat-header-tooltip" id="forkChatButton"' in html
+    assert 'id="compactChatButton"' not in html
+    assert 'id="forkChatButton"' not in html
+    assert html.index('id="configureChatButton"') < html.index('id="chatMoreButton"')
     assert 'class="context-ring chat-header-tooltip" id="contextRing"' in html
     assert 'class="header-icon-btn chat-header-tooltip" id="configureChatButton"' in html
 

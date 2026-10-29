@@ -3,24 +3,31 @@
 // Last device names from API – used so Save never overwrites with empty when dropdown fails to match
 var _lastLoadedInputDevice = 'System Default';
 var _lastLoadedOutputDevice = 'System Default';
+var _audioEditRevision = 0;
+var _audioDirty = false;
+var _audioSaving = false;
+
+function _markAudioEdited() {
+    _audioEditRevision += 1;
+    _audioDirty = true;
+}
 
 function _setSelectValueIfPossible(select, value) {
     if (!select || !value) return;
     if (select.value === value) return;
-    select.value = value;
-    if (select.value !== value) {
-        for (var i = 0; i < select.options.length; i++) {
-            var opt = select.options[i];
-            if (opt.value === value || (opt.value && opt.value.indexOf(value) !== -1) || (value && value.indexOf(opt.value) !== -1)) {
-                select.value = opt.value;
-                return;
-            }
-        }
+    if (!Array.from(select.options).some(function(opt) { return opt.value === value; })) {
+        var option = document.createElement('option');
+        option.value = value;
+        option.textContent = value + ' (disconnected)';
+        option.title = 'Using the system default until this device reconnects.';
+        select.appendChild(option);
     }
+    select.value = value;
 }
 
 // Load audio settings from backend
 async function loadAudioSettings() {
+    const revision = _audioEditRevision;
     try {
         // Load devices first so dropdowns are populated before we set values
         await loadAudioDevices();
@@ -30,6 +37,8 @@ async function loadAudioSettings() {
             throw new Error('Failed to load audio settings');
         }
         const settings = await response.json();
+        // A late load must not erase a selection made while it was in flight.
+        if (_audioDirty || revision !== _audioEditRevision) return;
 
         _lastLoadedInputDevice = settings.input_device || 'System Default';
         _lastLoadedOutputDevice = settings.output_device || 'System Default';
@@ -61,12 +70,11 @@ function _highlightSavedDevice(tbodyId, deviceName) {
         row.classList.remove('selected', 'bg-[#007bff]');
     });
     if (!deviceName || deviceName === 'System Default') return;
-    const nameLower = deviceName.toLowerCase();
     rows.forEach(function(row) {
         const nameCell = row.querySelector('td:first-child');
         if (!nameCell) return;
         const rowName = nameCell.textContent.trim();
-        if (rowName === deviceName || rowName.toLowerCase().indexOf(nameLower) !== -1 || nameLower.indexOf(rowName.toLowerCase()) !== -1) {
+        if (rowName === deviceName) {
             row.classList.add('selected', 'bg-[#007bff]');
         }
     });
@@ -75,6 +83,9 @@ function _highlightSavedDevice(tbodyId, deviceName) {
 // Save audio settings to backend (triggers hot-swap). Dropdown is the source of truth.
 async function saveAudioSettings(options) {
     options = options || {};
+    if (_audioSaving) return;
+    _audioSaving = true;
+    const revision = _audioEditRevision;
     try {
         var inputVal = document.getElementById('input_device').value;
         var outputVal = document.getElementById('output_device').value;
@@ -104,10 +115,12 @@ async function saveAudioSettings(options) {
         }
 
         // Keep dropdowns showing what we saved (they already are; sync table highlight to match)
-        document.getElementById('input_device').value = settings.input_device;
-        document.getElementById('output_device').value = settings.output_device;
-        _highlightSavedDevice('audio_output_tbody', settings.output_device);
-        _highlightSavedDevice('audio_input_tbody', settings.input_device);
+        _lastLoadedInputDevice = settings.input_device;
+        _lastLoadedOutputDevice = settings.output_device;
+        if (revision === _audioEditRevision) {
+            _audioDirty = false;
+            _audioEditRevision += 1;
+        }
 
         const result = await response.json();
         if (!options.silent) {
@@ -117,6 +130,8 @@ async function saveAudioSettings(options) {
     } catch (error) {
         console.error('Error saving audio settings:', error);
         showNotification('Failed to save audio settings: ' + error.message, 'error');
+    } finally {
+        _audioSaving = false;
     }
 }
 
@@ -149,16 +164,10 @@ function populateAudioDevicesFromData(data) {
     if (inputSelect) {
         var targetInput = prevInput || _lastLoadedInputDevice;
         _setSelectValueIfPossible(inputSelect, targetInput);
-        if (inputSelect.value && inputSelect.value !== 'System Default') {
-            _lastLoadedInputDevice = inputSelect.value;
-        }
     }
     if (outputSelect) {
         var targetOutput = prevOutput || _lastLoadedOutputDevice;
         _setSelectValueIfPossible(outputSelect, targetOutput);
-        if (outputSelect.value && outputSelect.value !== 'System Default') {
-            _lastLoadedOutputDevice = outputSelect.value;
-        }
     }
 
     const outputTbody = document.getElementById('audio_output_tbody');
@@ -198,6 +207,8 @@ function populateAudioDevicesFromData(data) {
             inputTbody.appendChild(row);
         });
     }
+    _highlightSavedDevice('audio_output_tbody', outputSelect && outputSelect.value);
+    _highlightSavedDevice('audio_input_tbody', inputSelect && inputSelect.value);
 }
 
 // Load available audio devices
@@ -242,6 +253,7 @@ function selectTableRow(row, type) {
     const deviceName = row.querySelector('td:first-child').textContent;
     const selectId = type === 'output' ? 'output_device' : 'input_device';
     document.getElementById(selectId).value = deviceName;
+    _markAudioEdited();
 }
 
 // Detect audio devices (runs server-side detection, merges new devices, returns updated list)
@@ -278,6 +290,7 @@ async function resetAudioDevices() {
         document.getElementById('input_device').value = 'System Default';
         document.getElementById('output_device').value = 'System Default';
         document.getElementById('remember_audio_settings').checked = false;
+        _markAudioEdited();
 
         // Clear table selections
         const allRows = document.querySelectorAll('#audio_output_tbody tr, #audio_input_tbody tr');
@@ -477,10 +490,8 @@ function _startAudioDevicesVersionPolling() {
             if (!r.ok) return;
             var data = await r.json();
             var v = data.version || 0;
-            if (v !== _lastAudioDevicesVersion && _lastAudioDevicesVersion > 0) {
+            if (v !== _lastAudioDevicesVersion) {
                 await loadAudioDevices();
-                _highlightSavedDevice('audio_output_tbody', _lastLoadedOutputDevice);
-                _highlightSavedDevice('audio_input_tbody', _lastLoadedInputDevice);
                 if (typeof showNotification === 'function') showNotification('Audio devices updated', 'info');
             }
             _lastAudioDevicesVersion = v;
@@ -499,6 +510,10 @@ function _stopAudioDevicesVersionPolling() {
 function _initAudio() {
     if (!document.getElementById('input_device') && !document.getElementById('tab-audio')) return;
     initAudioSectionTabs();
+    ['input_device', 'output_device', 'remember_audio_settings'].forEach(function(id) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', _markAudioEdited);
+    });
     if (document.getElementById('tab-audio')) {
         loadAudioSettings().then(function() {
             _lastAudioDevicesVersion = 0;

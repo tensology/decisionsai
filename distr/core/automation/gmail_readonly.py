@@ -33,17 +33,19 @@ def connect(service: Any = None) -> Any:
 
 def search(service: Any, query: str, *, max_results: int = 20) -> list[dict[str, Any]]:
     """Return [{id, thread_id, from, subject, date, internal_ms, labels}] for ``query``."""
-    listing = service._make_request("GET", f"{GMAIL}/messages?maxResults={int(max_results)}&q={quote(query)}")
+    max_results = min(20, max(1, int(max_results)))
+    listing = service._make_request("GET", f"{GMAIL}/messages?maxResults={int(max_results)}&q={quote(query)}", timeout=(5, 10))
     if listing is None:
         raise GmailUnavailable(str(getattr(service, "last_error", "") or "Gmail list failed"))
     out: list[dict[str, Any]] = []
-    for ref in listing.get("messages", []) or []:
+    for ref in (listing.get("messages", []) or [])[:max_results]:
         msg = service._make_request(
             "GET",
             f"{GMAIL}/messages/{ref['id']}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date",
+            timeout=(5, 10),
         )
         if not msg:
-            continue
+            raise GmailUnavailable(str(getattr(service, "last_error", "") or "Gmail metadata read failed; this scan is incomplete."))
         headers = {h.get("name", "").lower(): h.get("value", "") for h in (msg.get("payload") or {}).get("headers", [])}
         out.append(
             {

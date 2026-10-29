@@ -119,7 +119,12 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
                 page.locator(".app-container").screenshot(path=str(tmp_path / f"chat-oracle-{width}x{height}.png"))
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.locator("#chatMessages").evaluate("node => getComputedStyle(node).backgroundSize").startswith("112px")
-            assert page.locator("#llamaClickTarget").evaluate("node => Math.round(node.getBoundingClientRect().width)") == 88
+            assert page.locator("#llamaClickTarget").evaluate("node => Math.round(node.getBoundingClientRect().width)") == 44
+
+            page.evaluate("viewedChatSkin = 'hayley'; loadAssistantAvatarSkin(true)")
+            assert history_avatar.get_attribute('data-skin-name') == 'Hayley'
+            assert page.locator('#chatMessages .message.assistant .assistant-avatar-image.avatar').count() == 2
+            page.evaluate('viewedChatSkin = null')
 
             page.evaluate(
                 """async () => {

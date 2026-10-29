@@ -16,7 +16,7 @@ from distr.core.settings import load_settings_from_db
 
 logger = logging.getLogger(__name__)
 
-TITLE_REFRESH_MESSAGE_INTERVAL = 5
+TITLE_REFRESH_MESSAGE_INTERVAL = 2
 TITLE_CONTEXT_MESSAGE_COUNT = 5
 
 _ollama_tags_cache: Tuple[float, Optional[set[str]]] = (0.0, None)
@@ -54,7 +54,7 @@ def _thread_rows(session, chat_id: int):
             FROM chats c
             INNER JOIN chat_thread ct ON c.parent_id = ct.id
         )
-        SELECT * FROM chat_thread ORDER BY created_date ASC
+        SELECT * FROM chat_thread ORDER BY id ASC
         """
     )
     return session.execute(thread_query, {"root_id": chat_id}).fetchall()
@@ -184,7 +184,7 @@ def suggest_chat_title(messages: List[Dict[str, Any]], *, settings: dict) -> str
                             "role": "system",
                             "content": (
                                 "Write a very short chat title (3-6 words) that captures the mood "
-                                "and topic of this exchange — like a brief chapter heading. "
+                                "and latest user intent of this exchange. Focus on the current request rather than earlier topics. "
                                 "No quotes, no trailing punctuation, no filler."
                             ),
                         },
@@ -246,13 +246,19 @@ def maybe_refresh_chat_title(
     last_refresh = int(title_auto.get("last_refresh_message_count") or 0)
     if not force and message_count - last_refresh < TITLE_REFRESH_MESSAGE_INTERVAL:
         return None
-    if message_count < 2 and not force:
+    if (message_count < 2 or conversation[-1].get("role") != "assistant") and not force:
         return None
 
     new_title = suggest_chat_title(messages, settings=settings)
     if not new_title:
         return None
 
+    session.flush()
+    session.refresh(root_chat, attribute_names=["additional_context"])
+    additional_context = _chat_additional_context(root_chat.additional_context)
+    title_auto = _title_auto_meta(additional_context)
+    if title_auto.get("manual") or int(title_auto.get("last_refresh_message_count") or 0) > message_count:
+        return None
     root_chat.title = new_title
     title_auto = {
         "manual": False,

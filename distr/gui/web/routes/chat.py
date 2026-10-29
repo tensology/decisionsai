@@ -5,7 +5,7 @@ API routes/endpoints for Chat web UI
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
 from starlette.requests import ClientDisconnect, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Set, Iterable
 from collections import defaultdict
@@ -44,6 +44,8 @@ async def broadcast_chat_event(payload: Dict[str, Any]) -> int:
                 registered.difference_update(failed)
                 if not registered:
                     _chat_ws_connections.pop(chat_id, None)
+    if payload.get("event") in {"message_added", "stream_finished"}:
+        await broadcast_topic_event("chat_list", {"type": "chat_list_changed", "chat_id": chat_id})
     return len(conns) - len(failed)
 
 
@@ -144,6 +146,8 @@ def publish_chat_event_threadsafe(payload: Dict[str, Any]):
 
 from distr.core.db import get_session, Chat
 from distr.core.chat import ChatService, record_chat_audit_event
+from distr.core.chat_sidebar import chat_skin, set_chat_skin, sidebar_state, validate_chat_skin
+from distr.core.chat_agents import agent_identity
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
 from distr.core.agent.constants import normalize_voice_provider
@@ -875,6 +879,9 @@ class SteerTurnRequest(ChatRequestModel):
 class CreateChatRequest(ChatRequestModel):
     """Request to create a new chat (used by web UI and empty-state / starting form)."""
 
+    skin_name: Optional[str] = None
+    agent_name: Optional[str] = Field(default=None, max_length=80)
+    agent_role: str = Field(default="", max_length=4000)
     title: Optional[str] = None
     provider: Optional[str] = None
     model_name: Optional[str] = None
@@ -893,6 +900,7 @@ class CreateChatRequest(ChatRequestModel):
 class UpdateChatRequest(ChatRequestModel):
     """Request to update chat. All fields optional; only provided fields are updated."""
 
+    skin_name: Optional[str] = None
     title: Optional[str] = None
     provider: Optional[str] = None
     model_name: Optional[str] = None
@@ -902,6 +910,14 @@ class UpdateChatRequest(ChatRequestModel):
     route_mode: Optional[str] = None
     execution_profile: Optional[str] = None
     autonomy_level: Optional[str] = None
+
+
+class ReadChatRequest(ChatRequestModel):
+    reply_id: int = Field(ge=0)
+
+
+class PrimaryAvatarRequest(ChatRequestModel):
+    skin_name: str = Field(min_length=1, max_length=128)
 
 
 class CompactChatRequest(ChatRequestModel):
@@ -953,6 +969,26 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
     """
     router = APIRouter()
 
+    @router.get('/agents/primary')
+    async def get_primary_agent():
+        from distr.core.chat_agents import ensure_primary_agent
+
+        return JSONResponse({'primary_agent': ensure_primary_agent(load_settings_from_db())})
+
+    @router.patch('/agents/primary/avatar')
+    async def change_primary_avatar(body: PrimaryAvatarRequest):
+        from distr.core.chat_agents import ensure_primary_agent
+        from distr.core.services.settings_service import update_oracle_skin
+
+        try:
+            skin = validate_chat_skin(body.skin_name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        if not ensure_primary_agent(load_settings_from_db()):
+            raise HTTPException(409, 'Create an agent before choosing a primary avatar.')
+        update_oracle_skin(skin)
+        return JSONResponse({'primary_agent': ensure_primary_agent(load_settings_from_db())})
+
     @router.websocket("/ws")
     async def chat_websocket(websocket: WebSocket):
         """WebSocket for real-time chat updates. Query param chat_id=N or send {"subscribe": N}; server sends {"type": "chat_updated", "chat_id": int}."""
@@ -997,7 +1033,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         )
                         continue
                     topic = msg.get("subscribe_topic")
-                    if topic == INCOMING_TOPIC:
+                    if topic in {INCOMING_TOPIC, "chat_list"}:
                         with _chat_ws_lock:
                             _topic_ws_connections.setdefault(topic, set()).add(websocket)
                         await websocket.send_json({"type": "subscribed", "topic": topic})
@@ -1072,6 +1108,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 await ws.send_text(payload)
             except Exception as e:
                 logger.debug("WebSocket send error: %s", e)
+        await broadcast_topic_event("chat_list", {"type": "chat_list_changed", "chat_id": chat_id})
         return JSONResponse({"ok": True})
 
     @router.post("/internal/notify-chat-event")
@@ -1115,6 +1152,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     query = query.filter(Chat.is_archived == False)
                 chats = query.order_by(Chat.modified_date.desc(), Chat.id.desc()).all()
 
+                settings = load_settings_from_db()
                 result = []
                 for chat in chats:
                     owned_by_development = is_development_thread(session, chat)
@@ -1128,6 +1166,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         {
                             "id": chat.id,
                             "title": chat.title or "New Chat",
+                            **(sidebar_state(session, chat, settings) if not owned_by_development else {}),
+                            "voice_name": _voice_model_to_display_name(chat.voice_provider, chat.voice_model, settings),
                             "created_date": chat.created_date.isoformat()
                             if chat.created_date
                             else None,
@@ -1161,7 +1201,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                             "archived": bool(chat.is_archived),
                         }
                     )
-                settings = load_settings_from_db()
+                session.commit()
                 last_chat_id = settings.get("last_chat_id")
                 if last_chat_id is not None and not isinstance(last_chat_id, int):
                     try:
@@ -1407,6 +1447,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     provider=provider,
                     model_name=model_name,
                 )
+                sidebar = sidebar_state(session, root_chat, settings)
+                session.commit()
                 additional_context = _chat_additional_context(root_chat.additional_context)
                 compact_checkpoint = additional_context.get("compact_checkpoint")
                 model_route = development.get("model_route") if isinstance(development.get("model_route"), dict) else {}
@@ -1414,6 +1456,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     {
                         "id": root_chat.id,
                         "title": header_payload["title"],
+                        **sidebar,
                         "messages": messages,
                         "provider": provider,
                         "model_name": model_name,
@@ -1457,7 +1500,18 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         """Create a new chat via central chat_service; interrupt TTS, reload agent, optionally send starting question to LLM.
         Prefer provider/model/voice_provider/voice_model from request (web UI selection) over system settings."""
         try:
+            if request_data.agent_name is not None:
+                from distr.core.chat_agents import validate_agent_profile
+
+                try:
+                    validate_agent_profile(request_data.agent_name, request_data.agent_role)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc))
             settings = load_settings_from_db()
+            try:
+                skin_name = validate_chat_skin(request_data.skin_name or settings.get("selected_oracle") or "oracle")
+            except ValueError as exc:
+                raise HTTPException(422, str(exc))
             # Get provider with fallback priority: request -> conversational settings -> agent settings -> default
             raw_provider = (
                 (request_data.provider or "").strip()
@@ -1544,6 +1598,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             speak = request_data.speak if request_data.speak is not None else True
 
             chat_id, first_message = ChatService.create_new_chat(
+                skin_name=skin_name,
                 llm_provider=raw_provider,
                 llm_model=model_name,
                 tts_provider=voice_provider,
@@ -1554,6 +1609,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 route_mode=route_mode,
                 execution_profile=request_data.execution_profile,
                 autonomy_level=request_data.autonomy_level,
+                agent_name=request_data.agent_name,
+                agent_role=request_data.agent_role,
+                activate=request_data.agent_name is None,
             )
 
             with get_session() as session:
@@ -1564,7 +1622,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     )
                 chat_dict = {
                     "id": chat.id,
+                    **agent_identity(session, chat.id),
                     "title": chat.title or "New Chat",
+                    "skin_name": chat_skin(chat),
                     "provider": chat.provider,
                     "model_name": chat.model_name,
                     "voice_provider": chat.voice_provider,
@@ -1613,7 +1673,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     ):
                         _changed = True
 
-                if _changed:
+                if _changed and request_data.agent_name is None:
                     _save_settings(_settings)
                     logger.info(
                         "Create chat: persisted selections to global settings (provider=%s, model=%s, voice_provider=%s, voice_model=%s)",
@@ -1625,7 +1685,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             try:
                 from distr.core.signals import signal_manager
 
-                if first_message:
+                if request_data.agent_name is not None:
+                    # Creating an identity must not replace the primary runtime.
+                    pass
+                elif first_message:
                     # web_create_chat_emits_requested handler in app.py sends commands
                     # in guaranteed order: interrupt_tts -> hot_swap_llm -> process_text_input.
                     # Do NOT also emit model_hot_reload or current_chat_changed here - the latter would be sent to the agent and cancel in-flight generation.
@@ -1689,6 +1752,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "voice_model": chat.voice_model,
                 }
                 updated = False
+                if request_data.skin_name is not None:
+                    try:
+                        skin_name = validate_chat_skin(request_data.skin_name)
+                    except ValueError as exc:
+                        raise HTTPException(422, str(exc))
+                    set_chat_skin(chat, skin_name)
+                    updated = True
+                    settings_fields_touched = True
                 if request_data.title is not None:
                     chat.title = (request_data.title or "").strip() or None
                     context = _chat_additional_context(chat.additional_context)
@@ -1757,6 +1828,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 response_payload = {
                     "id": int(chat.id),
                     "title": chat.title or "New Chat",
+                    "skin_name": chat_skin(chat),
                     "provider": chat.provider,
                     "model_name": chat.model_name,
                     "voice_provider": chat.voice_provider,
@@ -1891,7 +1963,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     raise HTTPException(status_code=404, detail="Chat not found")
                 _reject_development_lifecycle(session, root_chat)
                 rows = _thread_rows_for_compaction(session, chat_id)
-                messages = _messages_from_rows(rows)
+                messages = _messages_from_rows(sorted(rows, key=lambda row: row.id))
                 provider = (
                     (root_chat.provider or "").strip()
                     or settings.get("conversational_llm_provider")
@@ -2012,7 +2084,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 root.additional_context = json.dumps(context, ensure_ascii=False, default=str)
                 root.modified_date = datetime.utcnow()
                 checkpoint_row_id = int(checkpoint_row.id)
-                refreshed_messages = _messages_from_rows(rows) + [
+                refreshed_messages = _messages_from_rows(sorted(rows, key=lambda row: row.id)) + [
                     {"role": "assistant", "content": notice, "chat_row_id": checkpoint_row_id}
                 ]
                 _maybe_refresh_chat_title(
@@ -2196,6 +2268,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                from distr.core.chat_agents import primary_agent
+
+                primary = primary_agent(session)
+                if primary and primary.main_chat_id == chat_id:
+                    raise HTTPException(409, "The primary agent's main conversation cannot be deleted.")
                 _reject_development_lifecycle(session, chat)
                 from distr.core.chat import cleanup_chat_dependencies
 
@@ -2216,6 +2293,17 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         except Exception as e:
             logger.error(f"Failed to delete chat: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.post("/chats/{chat_id}/read")
+    async def mark_chat_read(chat_id: int, request_data: ReadChatRequest):
+        with get_session() as session:
+            root = session.get(Chat, chat_id)
+            if not root:
+                raise HTTPException(404, "Chat not found")
+            _reject_development_lifecycle(session, root)
+            result = sidebar_state(session, root, load_settings_from_db(), mark_read=request_data.reply_id)
+            session.commit()
+        return JSONResponse(result)
 
     @router.post("/chats/{chat_id}/load-in-agent")
     async def load_chat_in_agent(chat_id: int):

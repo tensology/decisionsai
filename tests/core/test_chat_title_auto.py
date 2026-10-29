@@ -10,7 +10,7 @@ from distr.core.chat_title_auto import (
 
 
 def test_interval_constants():
-    assert TITLE_REFRESH_MESSAGE_INTERVAL == 5
+    assert TITLE_REFRESH_MESSAGE_INTERVAL == 2
     assert TITLE_CONTEXT_MESSAGE_COUNT == 5
 
 
@@ -82,9 +82,6 @@ def test_maybe_refresh_chat_title_updates_on_interval(monkeypatch):
     messages = [
         {"role": "user", "content": "one"},
         {"role": "assistant", "content": "two"},
-        {"role": "user", "content": "three"},
-        {"role": "assistant", "content": "four"},
-        {"role": "user", "content": "five"},
     ]
 
     monkeypatch.setattr(
@@ -95,6 +92,12 @@ def test_maybe_refresh_chat_title_updates_on_interval(monkeypatch):
     class FakeSession:
         committed = False
 
+        def flush(self):
+            pass
+
+        def refresh(self, chat, attribute_names):
+            pass
+
         def commit(self):
             self.committed = True
 
@@ -103,3 +106,39 @@ def test_maybe_refresh_chat_title_updates_on_interval(monkeypatch):
     assert result == "Planning server access"
     assert chat.title == "Planning server access"
     assert session.committed is True
+
+
+def test_latest_intent_titles_preserve_manual_names_and_skin_metadata(monkeypatch):
+    import json
+    from distr.core.db import Chat, get_session
+
+    monkeypatch.setattr('distr.core.chat_title_auto.suggest_chat_title', lambda msgs, settings: msgs[-2]['content'])
+    with get_session() as session:
+        chat = Chat(title='Old topic', additional_context=json.dumps({'skin_name': 'character'}))
+        session.add(chat); session.commit()
+        messages = [{'role': 'user', 'content': 'Fix sidebar'}, {'role': 'assistant', 'content': 'Done'}]
+        assert maybe_refresh_chat_title(session, chat, messages, settings={'ollama_url': ''}) == 'Fix sidebar'
+        assert json.loads(chat.additional_context)['skin_name'] == 'character'
+        messages += [{'role': 'user', 'content': 'Plan deployment'}, {'role': 'assistant', 'content': 'Plan ready'}]
+        assert maybe_refresh_chat_title(session, chat, messages, settings={'ollama_url': ''}) == 'Plan deployment'
+        context = json.loads(chat.additional_context)
+        context['title_auto']['manual'] = True
+        chat.title = 'My chosen name'; chat.additional_context = json.dumps(context); session.commit()
+        messages += [{'role': 'user', 'content': 'Another topic'}, {'role': 'assistant', 'content': 'Reply'}]
+        assert maybe_refresh_chat_title(session, chat, messages, settings={'ollama_url': ''}) is None
+        assert chat.title == 'My chosen name'
+
+
+def test_recent_intent_uses_insertion_order_even_with_future_dated_history():
+    from datetime import datetime
+    from distr.core.db import Chat, get_session
+    from distr.core.chat_title_auto import _load_chat_messages
+
+    with get_session() as session:
+        chat = Chat(title='Future history')
+        session.add(chat); session.flush()
+        session.add(Chat(parent_id=chat.id, input='Old topic', response='Old answer', created_date=datetime(2099, 1, 1)))
+        session.flush()
+        session.add(Chat(parent_id=chat.id, input='Latest intent', response='Current answer'))
+        session.flush()
+        assert _load_chat_messages(session, chat.id)[-2]['content'] == 'Latest intent'

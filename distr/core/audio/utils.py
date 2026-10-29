@@ -101,8 +101,22 @@ def query_windows_devices():
 
 
 def query_macos_devices():
-    """Query devices via PortAudio/sounddevice (same names as Qt dialog / TTS transport)."""
-    outputs, inputs = _query_sounddevice_devices()
+    """Use the monitor's fresh catalog, not the process's stale CoreAudio registry."""
+    from distr.core.agent.config_loader import _query_devices_fresh_subprocess
+
+    fresh = _query_devices_fresh_subprocess()
+    if fresh is None:
+        return _query_sounddevice_devices()
+    outputs, inputs = [], []
+    for _index, name, max_in, max_out in fresh:
+        name = (name or '').strip()
+        if not name:
+            continue
+        device = {'name': name, 'id': name, 'type': get_device_type(name)}
+        if max_out > 0:
+            outputs.append(device)
+        if max_in > 0:
+            inputs.append(device)
     logger.debug(f"query_macos_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
     return outputs, inputs
 
@@ -568,7 +582,7 @@ def get_current_device_list_hash():
     import hashlib
     try:
         from distr.core.agent.config_loader import _query_devices_fresh_subprocess
-        fresh = _query_devices_fresh_subprocess()
+        fresh = _query_devices_fresh_subprocess(force_refresh=True)
         if fresh:
             device_names = sorted({name for _i, name, _in, _out in fresh if name})
             return hashlib.md5("|".join(device_names).encode("utf-8")).hexdigest()

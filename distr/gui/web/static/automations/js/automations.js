@@ -27,6 +27,9 @@
     var automationsData = [];
     var automationPresets = [];
     var isCreating = false;
+    var formAutomation = {};
+    var formBaseline = null;
+    var automationLoadVersion = 0;
     var mainView = "automations";
     var calendarMode = "month";
     var calendarAnchor = null;
@@ -319,6 +322,7 @@
             monthly: "Monthly"
         };
         if (kind === "once") return cfg.run_at ? "Once at " + shortDate(cfg.run_at) : "Once";
+        if (kind === "cron") return "Cron: " + (cfg.cron || "") + (cfg.timezone ? " (" + cfg.timezone + ")" : "");
         if (kind === "interval") {
             if (cfg.kind === "15min" || cfg.kind === "15m") return "Every 15 minutes";
             if (cfg.kind === "30min" || cfg.kind === "30m") return "Every 30 minutes";
@@ -1262,6 +1266,7 @@
 
     function fillForm(row) {
         row = row || emptyAutomation();
+        formAutomation = row;
         var schedule = row.schedule || {};
         var kind = normalizeScheduleKind(schedule.kind || schedule.frequency || "daily");
         var interval = schedule.interval || 15;
@@ -1278,6 +1283,8 @@
         setValue("automation-instruction", row.instruction || "");
         setValue("automation-preset-id", row.preset_id || "");
         setValue("automation-kind", kind);
+        setValue("automation-cron", schedule.cron || "");
+        setValue("automation-timezone", schedule.timezone || "");
         setValue("automation-time", schedule.time || "09:00");
         setValue("automation-once-at", String(schedule.run_at || ""));
         setValue("automation-interval-value", interval);
@@ -1296,6 +1303,7 @@
         document.getElementById("automation-delete").disabled = !row.id;
         document.getElementById("automation-run").disabled = !row.id;
         updateScheduleControls();
+        formBaseline = JSON.stringify(payloadFromForm());
     }
 
     function renderRuns(runs) {
@@ -1365,8 +1373,14 @@
 
     function payloadFromForm() {
         var kind = document.getElementById("automation-kind").value || "daily";
-        var schedule = { kind: kind };
-        if (kind === "once") {
+        // Keep fields without editor controls (timezone, skipped occurrences,
+        // month filters) when editing an existing schedule.
+        var schedule = Object.assign({}, formAutomation.schedule || {}, { kind: kind });
+        if (kind !== "cron") delete schedule.cron;
+        if (kind === "cron") {
+            schedule.cron = document.getElementById("automation-cron").value.trim();
+            schedule.timezone = document.getElementById("automation-timezone").value.trim();
+        } else if (kind === "once") {
             var runAt = document.getElementById("automation-once-at").value;
             if (runAt) schedule.run_at = runAt;
         } else if (kind === "interval") {
@@ -1385,7 +1399,7 @@
         }
         return {
             name: (document.getElementById("automation-name").value || "Untitled Automation").trim(),
-            automation_type: "scheduled_instruction",
+            automation_type: formAutomation.automation_type || "scheduled_instruction",
             status: document.getElementById("automation-status").value || "active",
             instruction: (document.getElementById("automation-instruction").value || "").trim(),
             preset_id: (document.getElementById("automation-preset-id") && document.getElementById("automation-preset-id").value) || "",
@@ -1393,17 +1407,23 @@
         };
     }
 
+    function hasUnsavedFormChanges() {
+        return formBaseline !== null && JSON.stringify(payloadFromForm()) !== formBaseline;
+    }
+
     function softRefreshCurrentAutomation() {
         if (!currentAutomationId) return Promise.resolve();
-        return apiFetch("/api/automations/" + encodeURIComponent(currentAutomationId))
+        var selectedId = currentAutomationId;
+        var loadVersion = automationLoadVersion;
+        return apiFetch("/api/automations/" + encodeURIComponent(selectedId))
             .then(function(data) {
                 var automation = data.automation;
-                if (!automation) return;
+                if (!automation || currentAutomationId !== selectedId || loadVersion !== automationLoadVersion) return;
                 var idx = automationsData.findIndex(function(a) { return a.id === automation.id; });
                 if (idx >= 0) {
                     automationsData[idx] = automation;
                 }
-                fillForm(automation);
+                if (!hasUnsavedFormChanges()) fillForm(automation);
                 renderList(automationsData);
                 if (mainView === "calendar") renderCalendar();
                 if (Array.isArray(data.runs)) {
@@ -1444,10 +1464,12 @@
     }
 
     function loadAutomations(skipAutoSelect) {
+        var loadVersion = ++automationLoadVersion;
         var list = document.getElementById("automation-list");
         if (list) list.innerHTML = '<p class="text-sm text-gray-400">Loading automations...</p>';
         return apiFetch("/api/automations")
             .then(function(data) {
+                if (loadVersion !== automationLoadVersion) return;
                 automationsData = data.automations || [];
                 renderList(automationsData);
                 if (mainView === "calendar") {
@@ -1457,7 +1479,8 @@
                 if (compactLayout() && workspace && workspace.dataset.view === "list") {
                     renderMainWorkspace();
                 } else if (currentAutomationId && automationsData.some(function(a) { return a.id === currentAutomationId; })) {
-                    selectAutomation(currentAutomationId);
+                    if (skipAutoSelect) renderMainWorkspace();
+                    else selectAutomation(currentAutomationId);
                 } else if (!skipAutoSelect && automationsData.length) {
                     selectAutomation(automationsData[0].id);
                 } else if (!isCreating) {
@@ -1475,13 +1498,19 @@
         var id = document.getElementById("automation-id").value;
         var method = id ? "PUT" : "POST";
         var path = id ? "/api/automations/" + encodeURIComponent(id) : "/api/automations";
+        var submittedPayload = payloadFromForm();
+        ++automationLoadVersion;
         apiFetch(path, {
             method: method,
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payloadFromForm())
+            body: JSON.stringify(submittedPayload)
         }).then(function(data) {
-            currentAutomationId = (data.automation || {}).id || id;
-            isCreating = false;
+            var saved = data.automation || {};
+            if (String(document.getElementById("automation-id").value || "") === String(id || "")) {
+                currentAutomationId = saved.id || id;
+                isCreating = false;
+                if (JSON.stringify(payloadFromForm()) === JSON.stringify(submittedPayload)) fillForm(saved);
+            }
             showSnackbar("Automation saved", "success");
             return loadAutomations(true);
         }).catch(function(e) {
@@ -1588,6 +1617,8 @@
         var intervalWrap = document.getElementById("automation-interval-wrap");
         var weeklyWrap = document.getElementById("automation-weekly-days-wrap");
         var monthlyWrap = document.getElementById("automation-monthly-days-wrap");
+        var cronWrap = document.getElementById("automation-cron-wrap");
+        var timezoneWrap = document.getElementById("automation-timezone-wrap");
         var time = document.getElementById("automation-time");
         var onceAt = document.getElementById("automation-once-at");
         if (!kindEl || !timeWrap || !onceWrap || !intervalWrap) return;
@@ -1597,6 +1628,8 @@
         timeWrap.classList.toggle("hidden", !showTime);
         onceWrap.classList.toggle("hidden", kind !== "once");
         intervalWrap.classList.toggle("hidden", kind !== "interval");
+        if (cronWrap) cronWrap.classList.toggle("hidden", kind !== "cron");
+        if (timezoneWrap) timezoneWrap.classList.toggle("hidden", kind !== "cron");
         if (weeklyWrap) weeklyWrap.classList.toggle("hidden", kind !== "weekly");
         if (monthlyWrap) monthlyWrap.classList.toggle("hidden", kind !== "monthly");
         if (time) time.disabled = !showTime;

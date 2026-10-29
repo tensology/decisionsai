@@ -41,6 +41,7 @@ def composio_mcp_recommendations() -> dict[str, Any]:
             ),
             "docs": "https://docs.composio.dev/docs/composio-connect",
             "auto_merge": True,
+            "merge_targets": ["decisions", "cursor", "codex"],
             "requires_env": ["COMPOSIO_API_KEY", "COMPOSIO_KEY"],
             "cursor_name": "composio",
             "skill": "decisions-composio",
@@ -48,7 +49,7 @@ def composio_mcp_recommendations() -> dict[str, Any]:
             "codex_mcp": {"url": COMPOSIO_CONNECT_URL},
             "api_key_env": ["COMPOSIO_API_KEY", "COMPOSIO_KEY"],
             "api_key_settings_field": "rube_token",
-            "api_key_header": "x-api-key",
+            "api_key_header": "x-consumer-api-key",
             "setup": "Settings → API Keys → Composio; OAuth per app via COMPOSIO_MANAGE_CONNECTIONS",
             "workflow": [
                 "COMPOSIO_SEARCH_TOOLS",

@@ -90,13 +90,20 @@ def _cmd_agent_health_probe(session, params):
     """Acknowledge that the agent command worker is still consuming input."""
     if not session.event_queue:
         return
+    status = {
+        'probe_id': params.get('probe_id') if isinstance(params, dict) else None,
+        'timestamp': time.time(),
+    }
+    try:
+        output = session.transport.output()
+        if hasattr(output, '_active_output_route'):
+            status['audio_output'] = output._active_output_route()
+    except Exception:
+        session.logger.debug('Output route unavailable during health probe', exc_info=True)
     session.event_queue.put(
         (
             'agent_health_ack',
-            {
-                'probe_id': params.get('probe_id') if isinstance(params, dict) else None,
-                'timestamp': time.time(),
-            },
+            status,
         ),
         block=False,
     )
@@ -323,6 +330,10 @@ def _active_audio_device_name(session, *, is_input: bool) -> str:
 
 
 def _cmd_update_audio_devices(session, params):
+    force_refresh = bool(params.get('force_refresh'))
+    if force_refresh:
+        from .config_loader import clear_probe_cache
+        clear_probe_cache()
     input_device = params.get('input_device')
     output_device = params.get('output_device')
     session.logger.debug(f"Received command: update_audio_devices (Input: {input_device}, Output: {output_device})")
@@ -351,13 +362,15 @@ def _cmd_update_audio_devices(session, params):
 
     if input_device:
         audio_cfg['input_device'] = input_device
-        if input_changed and hasattr(session, 'transport'):
+        if (input_changed or force_refresh) and hasattr(session, 'transport'):
             input_idx = session._get_device_index(input_device, is_input=True)
             session.logger.debug(f"Hot-swapping input device to index {input_idx} (None=Default)")
+            endpoint = session.transport.input()
+            swap = endpoint.refresh_device if force_refresh and hasattr(endpoint, 'refresh_device') else endpoint.set_device
             if target_loop and target_loop.is_running():
-                target_loop.call_soon_threadsafe(session.transport.input().set_device, input_idx)
+                target_loop.call_soon_threadsafe(swap, input_idx)
             else:
-                session.transport.input().set_device(input_idx)
+                swap(input_idx)
         elif not input_changed:
             if hasattr(session, 'transport') and new_input == "System Default":
                 session.logger.debug("Refreshing input stream for unchanged System Default selection")
@@ -370,7 +383,7 @@ def _cmd_update_audio_devices(session, params):
 
     if output_device:
         audio_cfg['output_device'] = output_device
-        if output_changed and hasattr(session, 'transport'):
+        if (output_changed or force_refresh) and hasattr(session, 'transport'):
             output_idx = session._get_device_index(output_device, is_input=False)
             session.logger.debug(f"Hot-swapping output device to index {output_idx} (None=Default)")
             if target_loop and target_loop.is_running():

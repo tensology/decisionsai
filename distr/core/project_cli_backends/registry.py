@@ -875,7 +875,7 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
     ):
         command.extend(["--session-id", _pi_workflow_session_id(task)])
     system_prompt = f"You are working on project: {task.project_name}"
-    if task.origin == "workflow":
+    if task.origin == "workflow" or task.adapter_options.get("bounded_automation") == "email_action_items":
         output_token_budget = task.adapter_options.get("output_token_budget")
         try:
             output_token_budget = max(0, int(output_token_budget or 0))
@@ -1054,6 +1054,7 @@ async def _finalize_pi_workflow_session(
     output = _BoundedCliOutput(head_limit=12_000, tail_limit=120_000)
     errors: list[str] = []
     process: asyncio.subprocess.Process | None = None
+    finalization_deadline = time.monotonic() + finalization_timeout
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -1075,7 +1076,10 @@ async def _finalize_pi_workflow_session(
         assert process.stdout is not None
         while True:
             try:
-                raw = await asyncio.wait_for(process.stdout.readline(), timeout=finalization_timeout)
+                remaining = finalization_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=remaining)
             except asyncio.TimeoutError:
                 errors.append(
                     "Pi workflow report finalization timed out after "
@@ -1647,6 +1651,15 @@ class PiBackend(ProjectCliBackend):
         except (TypeError, ValueError):
             hard_max_inspection_tool_calls = max_inspection_tool_calls
         inspection_budget_warned = False
+        bounded_automation = (
+            task.origin == "development"
+            and task.adapter_options.get("bounded_automation") == "email_action_items"
+        )
+        tool_phase_limit = (
+            min(300, max(1, int(task.adapter_options.get("tool_phase_timeout_seconds") or 300)))
+            if bounded_automation else timing.timeout_seconds
+        )
+        tool_phase_expired = False
         process: asyncio.subprocess.Process | None = None
         try:
             process = await asyncio.create_subprocess_exec(
@@ -1675,6 +1688,10 @@ class PiBackend(ProjectCliBackend):
             assert process.stdout is not None
             while True:
                 elapsed = time.monotonic() - started_at
+                if bounded_automation and elapsed >= tool_phase_limit:
+                    tool_phase_expired = True
+                    process.terminate()
+                    break
                 if elapsed >= timing.timeout_seconds:
                     timed_out = True
                     process.terminate()
@@ -1801,6 +1818,17 @@ class PiBackend(ProjectCliBackend):
                     if error_message:
                         model_errors.append(error_message)
                     _emit(on_event, event)
+                    if (
+                        bounded_automation
+                        and event_type == "tool_execution_end"
+                        and hard_max_inspection_tool_calls
+                        and inspection_tool_calls >= hard_max_inspection_tool_calls
+                    ):
+                        # Finish the accepted call before stopping. Its result
+                        # stays in the durable session for the report-only turn.
+                        inspection_budget_exceeded = True
+                        process.terminate()
+                        break
                     # In one-shot JSON mode Pi's ``agent_end`` event is the
                     # terminal protocol signal. Some provider/extension
                     # combinations leave the wrapper process alive after that
@@ -1854,7 +1882,7 @@ class PiBackend(ProjectCliBackend):
                 output,
                 expected_outputs=task.adapter_options.get("expected_outputs"),
             )
-            if task.origin == "workflow"
+            if task.origin == "workflow" or bounded_automation
             else ""
         )
         recoverable_terminal_errors = bool(model_errors) and saw_agent_end and all(
@@ -1867,14 +1895,19 @@ class PiBackend(ProjectCliBackend):
             for item in model_errors
         )
         finalized_after_guardrail = False
-        needs_terminal_report = bool(report_error or (task.ticket_id and not output))
+        needs_terminal_report = bool(
+            report_error
+            or (task.ticket_id and not output)
+            or (bounded_automation and (tool_phase_expired or inspection_budget_exceeded))
+        )
         if (
-            (task.origin == "workflow" or task.ticket_id)
+            (task.origin == "workflow" or task.ticket_id or bounded_automation)
             and task.execution_session_id
             and needs_terminal_report
             and not timed_out
             and (
                 inspection_budget_exceeded
+                or tool_phase_expired
                 or (
                     saw_agent_end
                     and (not model_errors or recoverable_terminal_errors)
@@ -1893,7 +1926,7 @@ class PiBackend(ProjectCliBackend):
                     output,
                     expected_outputs=task.adapter_options.get("expected_outputs"),
                 )
-                if not report_error and inspection_budget_exceeded:
+                if not report_error and (inspection_budget_exceeded or tool_phase_expired):
                     # The guardrail already prevented the extra tool call. A
                     # tool-free terminal report from the same durable session
                     # is the desired bounded recovery, not a reason to discard

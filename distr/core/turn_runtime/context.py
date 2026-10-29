@@ -131,6 +131,9 @@ def build_development_context(
         image_blocks.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}})
     if image_blocks:
         user_content = [{"type": "text", "text": user_text}, *image_blocks]
+    from distr.core.chat_agents import agent_instructions
+
+    identity = agent_instructions(chat_id)
     return tuple(
         [
             {
@@ -139,7 +142,7 @@ def build_development_context(
                     metadata,
                     project_folder=project_folder,
                     autonomy_level=autonomy_level,
-                ),
+                ) + ("\n\n" + identity if identity else ""),
             },
             *selected,
             {"role": "user", "content": user_content},

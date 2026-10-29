@@ -303,6 +303,14 @@ def cleanup_chat_dependencies(
 
     target_id = int(chat_id)
     counts: dict[str, int] = {}
+    # Deleting a conversation preserves its agent, but never leaves a reusable
+    # conversation ID attached to an unrelated future chat.
+    from distr.core.db import AgentConversation, ChatAgent
+
+    session.query(AgentConversation).filter(AgentConversation.chat_id == target_id).delete(synchronize_session=False)
+    session.query(ChatAgent).filter(ChatAgent.main_chat_id == target_id).update(
+        {ChatAgent.main_chat_id: None}, synchronize_session=False
+    )
 
     work_items = (
         session.query(DevelopmentWorkItem)
@@ -575,11 +583,19 @@ class ChatService:
         starting_metadata: Optional[dict[str, Any]] = None,
         activate: bool = True,
         _session_provider=None,
+        skin_name: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        agent_role: str = "",
     ) -> Tuple[int, Optional[str]]:
         """Create a chat, optionally making it the active conversational agent chat."""
         session_provider = _session_provider or get_session
+        if agent_name is not None:
+            from distr.core.chat_agents import validate_agent_profile
+
+            agent_name, agent_role = validate_agent_profile(agent_name, agent_role)
         with session_provider() as session:
             settings = session.query(Settings).first()
+            default_skin = getattr(settings, "selected_oracle", None) if settings else None
             if settings:
                 if not llm_provider:
                     llm_provider = getattr(
@@ -626,9 +642,10 @@ class ChatService:
                 created_date=now,
                 modified_date=now,
             )
+            from distr.core.chat_sidebar import set_chat_skin
+            set_chat_skin(root, skin_name or default_skin or "oracle")
             session.add(root)
-            session.commit()
-            session.refresh(root)
+            session.flush()
             chat_id = root.id
             # SQLite can reuse the id of a deleted root chat. Older releases only
             # removed the transcript rows, leaving Development state keyed by that
@@ -640,6 +657,10 @@ class ChatService:
                 delete_owned_ticket=True,
                 delete_owned_workflows=True,
             )
+            if agent_name is not None:
+                from distr.core.chat_agents import create_agent_profile
+
+                create_agent_profile(session, root, agent_name, agent_role)
             session.commit()
             if starting_question:
                 child = Chat(

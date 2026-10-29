@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey, Index, UniqueConstraint, text as sa_text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey, Index, UniqueConstraint, CheckConstraint, text as sa_text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, backref
 from sqlalchemy.dialects.sqlite import CHAR
@@ -359,6 +359,39 @@ class Chat(Base):
     children = relationship("Chat", 
                           backref=backref("parent", remote_side=[id]),
                           cascade="all, delete-orphan")
+
+
+class ChatAgent(Base):
+    """Persistent identity, independent of any one conversation."""
+    __tablename__ = 'chat_agents'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False)
+    role = Column(Text, nullable=False, default='')
+    skin_name = Column(String, nullable=False, default='oracle')
+    provider = Column(String, nullable=True)
+    model_name = Column(String, nullable=True)
+    voice_provider = Column(String, nullable=True)
+    voice_model = Column(String, nullable=True)
+    main_chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True, unique=True)
+    created_date = Column(DateTime, default=utc_now_naive)
+
+
+class PrimaryChatAgent(Base):
+    """One durable primary identity, separate from the currently active chat."""
+    __tablename__ = 'primary_chat_agent'
+    __table_args__ = (CheckConstraint('id = 1', name='one_primary_chat_agent'),)
+
+    id = Column(Integer, primary_key=True, default=1)
+    agent_id = Column(Integer, ForeignKey('chat_agents.id'), nullable=False, unique=True)
+
+
+class AgentConversation(Base):
+    """Many conversations can belong to one persistent agent."""
+    __tablename__ = 'agent_conversations'
+
+    agent_id = Column(Integer, ForeignKey('chat_agents.id'), primary_key=True)
+    chat_id = Column(Integer, ForeignKey('chats.id'), primary_key=True, unique=True)
 
 
 class ChatTurnEvent(Base):

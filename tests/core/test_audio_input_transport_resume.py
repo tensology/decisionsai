@@ -88,6 +88,17 @@ def test_resume_input_recreates_audio_task_after_idle_pause(monkeypatch):
     assert transport.get_input_health()["audio_task_alive"] is True
 
 
+def test_reconnected_microphone_reopens_even_when_index_is_reused(monkeypatch):
+    transport = _transport()
+    monkeypatch.setattr(transport, '_create_audio_task', lambda: None)
+    transport._open_input_stream()
+    old_stream = transport._in_stream
+    transport.refresh_device(transport._params.input_device_index)
+    assert old_stream.closed
+    assert transport._in_stream is not old_stream
+    assert transport._in_stream.is_active()
+
+
 def test_pause_idle_input_keeps_existing_stream_warm():
     transport = _transport()
     transport._open_input_stream()

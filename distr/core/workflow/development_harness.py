@@ -1195,6 +1195,8 @@ def _runtime_identity_text(metadata: dict[str, Any]) -> str:
 
 
 def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, autonomy_level: str) -> str:
+    from distr.core.chat_agents import agent_instructions
+
     history = ChatService.get_chat_history(int(chat_id))
     if history and history[-1].get("role") == "user" and str(history[-1].get("content") or "").strip() == prompt.strip():
         history = history[:-1]
@@ -1252,6 +1254,7 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
             "Use direct execution for compact work. When deterministic instruction analysis selects a workflow, keep this thread as the owner and run the workflow orchestrator as its sub-agent. "
             "A direct modification request is authorization to implement it. Do not finish by offering to make the requested change or asking which obvious project target to use when repository and runtime evidence identify it. When cosmetic details are omitted, make the smallest conventional implementation and report what you chose.",
             _runtime_identity_text(metadata),
+            agent_instructions(chat_id),
             skill_instruction,
             "\n".join(item for item in scope if item),
             "Conversation context since the latest context checkpoint:\n" + "\n\n".join(transcript) if transcript else "",
@@ -1405,6 +1408,10 @@ async def _run_execution(
     )
 
     backend, model, adapter_options, complexity = _route(project, metadata, assessment)
+    if assessment.get("bounded_automation") == "email_action_items":
+        from distr.core.automation.execution_policy import email_triage_options
+
+        adapter_options.update(email_triage_options())
     runtime_metadata = _metadata_with_runtime_identity(
         metadata,
         backend=backend,

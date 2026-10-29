@@ -27,7 +27,7 @@ from sqlalchemy import desc, nulls_last
 from distr.core.db import Action, Chat, Snippet, get_session
 from distr.core.db.kanban import KanbanBoard
 from distr.core.db.projects import Project
-from distr.core.db.workflow import AutoWorkflow
+from distr.core.automation.store import list_automations, update_automation
 from distr.core.project_startup_terminals import (
     parse_startup_command_lines,
     project_startup_terminals_running,
@@ -63,12 +63,9 @@ def format_chat_short_hash(chat_id: Optional[int]) -> str:
     return f"Chat: #{md5_hash[:6]}"
 
 
-def truncate_menu_title(title: str, max_len: int = 48) -> str:
-    """Truncate long chat titles for menu display."""
-    cleaned = (title or "New Chat").strip() or "New Chat"
-    if len(cleaned) <= max_len:
-        return cleaned
-    return cleaned[: max_len - 1] + "…"
+def format_menu_title(title: str) -> str:
+    """Keep the full menu title, with a fallback for blank names."""
+    return (title or "New Chat").strip() or "New Chat"
 
 
 def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
@@ -93,7 +90,7 @@ def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
                 params = {}
             if isinstance(params.get("development"), dict):
                 continue
-            rows.append((chat.id, truncate_menu_title(chat.title or "New Chat")))
+            rows.append((chat.id, format_menu_title(chat.title or "New Chat")))
             if len(rows) >= int(limit):
                 break
         return rows
@@ -127,7 +124,7 @@ def _get_development_threads_for_menu(
                 continue
             if bool(development.get("pinned")) is not pinned:
                 continue
-            rows.append((int(chat.id), truncate_menu_title(chat.title or "Development thread")))
+            rows.append((int(chat.id), format_menu_title(chat.title or "Development thread")))
             if len(rows) >= int(limit):
                 break
         return rows
@@ -184,7 +181,7 @@ def get_projects_for_menu() -> list[tuple[int, str, bool, bool]]:
             rows.append(
                 (
                     project.id,
-                    truncate_menu_title(project.name or "Untitled", max_len=40),
+                    format_menu_title(project.name or "Untitled"),
                     has_startup,
                     terminals_running,
                 )
@@ -314,7 +311,7 @@ def get_planning_projects_for_menu() -> list[tuple[int, str, str]]:
             rows.append(
                 (
                     project_id,
-                    truncate_menu_title(project.name or "Untitled", max_len=40),
+                    format_menu_title(project.name or "Untitled"),
                     development_board_key(source, identity),
                 )
             )
@@ -332,7 +329,7 @@ def get_recent_actions_for_menu(limit: int = 10) -> list[tuple[int, str, bool]]:
         )
         rows: list[tuple[int, str, bool]] = []
         for action in actions:
-            label = truncate_menu_title(action.title or "Untitled", max_len=40)
+            label = format_menu_title(action.title or "Untitled")
             if action.is_instruction:
                 label = f"{label} (instruction)"
             rows.append((action.id, label, action_is_playable(action)))
@@ -343,22 +340,9 @@ logger = logging.getLogger(__name__)
 
 RECENT_CHATS_MENU_LIMIT = 5
 RECENT_ACTIONS_MENU_LIMIT = 10
-AUTOMATION_MENU_SURFACE = "automation"
 SNIPPETS_MENU_LIMIT = 20
 AUTOMATIONS_MENU_LIMIT = 15
 KANBAN_BOARDS_MENU_LIMIT = 20
-
-
-def _json_menu_config(raw: Any) -> dict:
-    if isinstance(raw, dict):
-        return raw
-    if not raw:
-        return {}
-    try:
-        loaded = json.loads(str(raw))
-        return loaded if isinstance(loaded, dict) else {}
-    except Exception:
-        return {}
 
 
 def is_whatsapp_enabled_in_settings() -> bool:
@@ -366,21 +350,6 @@ def is_whatsapp_enabled_in_settings() -> bool:
     from distr.core.kanban.whatsapp_relay_sync import is_whatsapp_account_connected
 
     return is_whatsapp_account_connected()
-
-
-def _is_automation_workflow(workflow: AutoWorkflow) -> bool:
-    marker = _json_menu_config(workflow.context_rules)
-    return (
-        workflow.workflow_type == "scheduled"
-        and str(marker.get("decisions_surface") or "").strip().lower() == AUTOMATION_MENU_SURFACE
-    )
-
-
-def _automation_instruction(workflow: AutoWorkflow) -> str:
-    steps = sorted(list(workflow.steps or []), key=lambda step: step.position or 0)
-    if not steps:
-        return ""
-    return (steps[0].instruction or "").strip()
 
 
 def get_snippets_for_menu(limit: int = SNIPPETS_MENU_LIMIT) -> list[tuple[int, str, str]]:
@@ -395,7 +364,7 @@ def get_snippets_for_menu(limit: int = SNIPPETS_MENU_LIMIT) -> list[tuple[int, s
         return [
             (
                 int(snippet.id),
-                truncate_menu_title(snippet.title or "Untitled snippet", max_len=40),
+                format_menu_title(snippet.title or "Untitled snippet"),
                 str(snippet.remote_hotkey or "").strip(),
             )
             for snippet in snippets
@@ -432,45 +401,16 @@ def _apply_menu_ptt_shortcut(action: QAction, combo_str: str, *, enabled: bool =
     _apply_menu_shortcut(action, modifier, "", enabled=enabled and bool(modifier))
 
 
-def _automation_run_state(workflow: AutoWorkflow) -> str:
-    """Short word describing whether an automation can be run from the menu now."""
-    if not _automation_instruction(workflow):
-        return "no instruction"
-    status = (workflow.status or "").strip().lower()
-    if status in ("paused", "archived"):
-        return status
-    if status == "draft":
-        return "draft"
-    if workflow.next_run_at:
-        return "scheduled"
-    return "ready"
-
-
 def get_automations_for_menu(limit: int = AUTOMATIONS_MENU_LIMIT) -> list[tuple[str, str, bool]]:
-    """Return automations as ``(automation_id, label, runnable)``.
-
-    The label carries a short run-state suffix (ready, scheduled, paused, draft,
-    no instruction) so the menu shows at a glance which ones can be run now.
-    """
-    with get_session() as session:
-        rows = (
-            session.query(AutoWorkflow)
-            .order_by(desc(AutoWorkflow.modified_date))
-            .limit(max(limit * 3, limit))
-            .all()
+    """Return automations as ``(automation_id, label, enabled)`` from the web store."""
+    return [
+        (
+            automation["id"],
+            format_menu_title(automation.get("name") or "Untitled Automation"),
+            (automation.get("status") or "active").strip().lower() == "active",
         )
-        items: list[tuple[str, str, bool]] = []
-        for workflow in rows:
-            if not _is_automation_workflow(workflow):
-                continue
-            automation_id = f"wf_{int(workflow.id)}"
-            runnable = bool(_automation_instruction(workflow))
-            name = truncate_menu_title(workflow.name or "Untitled Automation", max_len=32)
-            label = f"{name}  ·  {_automation_run_state(workflow)}"
-            items.append((automation_id, label, runnable))
-            if len(items) >= limit:
-                break
-        return items
+        for automation in list_automations()[:limit]
+    ]
 
 
 def format_skin_folder_label(folder_name: str) -> str:
@@ -500,7 +440,7 @@ def get_available_skins_for_menu(avatars_dir: Optional[str] = None) -> list[tupl
 def format_board_menu_label(name: str, source: Optional[str] = None) -> str:
     """Return a tray-menu board title without embedding the provider in the label."""
     _ = source
-    return truncate_menu_title(name or "Untitled board", max_len=34)
+    return format_menu_title(name or "Untitled board")
 
 
 def development_board_key(source: str, board_key: str) -> str:
@@ -1729,13 +1669,15 @@ class MenuTrayMixin:
         self._automations_list_separator.setVisible(bool(automations))
         eula_accepted = bool((getattr(self, "settings", None) or {}).get("accepted_eula", False))
 
-        for automation_id, title, runnable in automations:
+        for automation_id, title, enabled in automations:
             item = QAction(title, self.automations_submenu)
-            item.setEnabled(eula_accepted and runnable)
-            if not runnable:
-                item.setToolTip("This automation has no instruction to run")
+            item.setCheckable(True)
+            item.setChecked(enabled)
+            item.setEnabled(eula_accepted and automation_id.startswith("auto_"))
+            if not automation_id.startswith("auto_"):
+                item.setToolTip("Restart DecisionsAI to migrate this automation before changing it")
             item.triggered.connect(
-                lambda checked=False, aid=automation_id: self._run_automation_from_menu(aid)
+                lambda checked, aid=automation_id: self._toggle_automation_from_menu(aid, checked)
             )
             self.automations_submenu.addAction(item)
             self._automation_menu_actions.append(item)
@@ -1796,49 +1738,14 @@ class MenuTrayMixin:
             has_pinned_threads = False
         self.pinned_development_menu_action.setVisible(has_pinned_threads)
 
-    def _parse_automation_workflow_id(self, automation_id: str) -> Optional[int]:
-        raw = str(automation_id or "").strip()
-        if raw.startswith("wf_"):
-            raw = raw[3:]
-        if not raw.isdigit():
-            return None
-        return int(raw)
-
-    def _automation_dict_for_dispatch(self, workflow: AutoWorkflow) -> dict:
-        return {
-            "id": f"wf_{int(workflow.id)}",
-            "workflow_id": int(workflow.id),
-            "name": workflow.name or "Untitled Automation",
-            "instruction": _automation_instruction(workflow),
-        }
-
-    def _run_automation_from_menu(self, automation_id: str) -> None:
-        if not self._check_eula_accepted():
-            return
+    def _toggle_automation_from_menu(self, automation_id: str, enabled: bool) -> None:
         try:
-            from distr.core.automation_orchestrator import dispatch_automation_to_current_chat
-
-            workflow_id = self._parse_automation_workflow_id(automation_id)
-            if workflow_id is None:
-                logger.warning("Oracle menu: invalid automation id %s", automation_id)
-                return
-            with get_session() as session:
-                workflow = session.query(AutoWorkflow).filter(
-                    AutoWorkflow.id == workflow_id
-                ).first()
-                if not workflow or not _is_automation_workflow(workflow):
-                    logger.warning("Oracle menu: automation %s not found", automation_id)
-                    return
-                automation = self._automation_dict_for_dispatch(workflow)
-            dispatch_automation_to_current_chat(automation, manual=True, speak=True)
-            logger.info("Oracle menu: ran automation %s", automation_id)
-        except Exception as e:
-            logger.error(
-                "Oracle menu: failed to run automation %s: %s",
-                automation_id,
-                e,
-                exc_info=True,
-            )
+            if self._check_eula_accepted():
+                update_automation(automation_id, status="active" if enabled else "paused")
+        except Exception:
+            logger.exception("Oracle menu: failed to toggle automation %s", automation_id)
+        finally:
+            self._rebuild_automation_menu_items()
 
     def _rebuild_kanban_menu_items(self) -> None:
         if not getattr(self, "kanban_submenu", None):

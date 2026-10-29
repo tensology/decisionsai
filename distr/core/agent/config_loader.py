@@ -171,12 +171,13 @@ def _cached_probe(ttl: float = _PROBE_TTL_SECONDS, failure_ttl: float = _PROBE_F
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            force_refresh = kwargs.pop('force_refresh', False)
             entry = _PROBE_CACHE.get(func.__name__)
             if entry is not None:
                 stamp, value = entry
                 failed = value is None or value == (None, None)
                 limit = failure_ttl if failed else ttl
-                if time.monotonic() - stamp < limit:
+                if time.monotonic() - stamp < limit and (failed or not force_refresh):
                     return value
             value = func(*args, **kwargs)
             _PROBE_CACHE[func.__name__] = (time.monotonic(), value)

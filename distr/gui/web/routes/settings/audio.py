@@ -26,23 +26,8 @@ def register_routes(router, templates):
     @route_handler("save audio settings")
     async def save_audio_settings_route(settings_data: AudioSettings):
         """Save audio settings"""
-        from distr.core.services.settings_service import save_audio_settings, _run_on_qt_main_thread
+        from distr.core.services.settings_service import save_audio_settings
         save_audio_settings(settings_data)
-
-        in_dev = settings_data.input_device
-        out_dev = settings_data.output_device
-        try:
-            from PyQt6.QtWidgets import QApplication
-
-            app = QApplication.instance()
-            if app is not None and hasattr(app, "update_agent_audio_devices"):
-                def _notify():
-                    app.update_agent_audio_devices(in_dev, out_dev)
-
-                _run_on_qt_main_thread(_notify, label="audio_devices_changed")
-                logger.info("Scheduled agent audio update on main thread: input=%s, output=%s", in_dev, out_dev)
-        except Exception as e:
-            logger.debug("Could not schedule agent audio update from web (may be headless): %s", e)
 
         return JSONResponse({"success": True, "message": "Audio settings saved"})
 
@@ -99,13 +84,18 @@ def register_routes(router, templates):
     @route_handler("detect audio devices")
     async def detect_audio_devices():
         """Run full device detection and return updated device list."""
-        from distr.core.audio.utils import detect_devices, format_devices_for_api
+        from distr.core.audio.utils import detect_devices, format_devices_for_api, query_native_devices
         from distr.gui.web.audio_events import increment_audio_devices_updated
-        _, _, merged_outputs, merged_inputs = detect_devices()
+        from distr.core.agent.config_loader import _query_devices_fresh_subprocess
+        _query_devices_fresh_subprocess(force_refresh=True)
+        detect_devices()
+        # The remembered catalog includes disconnected hardware. Keep it for
+        # reconnect history, but show only currently available devices here.
+        outputs, inputs = query_native_devices()
         increment_audio_devices_updated()
         return JSONResponse({
-            "input_devices": format_devices_for_api(merged_inputs),
-            "output_devices": format_devices_for_api(merged_outputs),
+            "input_devices": format_devices_for_api(inputs),
+            "output_devices": format_devices_for_api(outputs),
             "success": True
         })
 

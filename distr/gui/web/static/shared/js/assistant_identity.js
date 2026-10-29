@@ -44,7 +44,7 @@
         });
     }
 
-    async function load({ force = false } = {}) {
+    async function load({ force = false, skinName = null } = {}) {
         if (loadPromise && !force) return loadPromise;
         const sequence = ++loadSequence;
         loadPromise = (async () => {
@@ -52,7 +52,7 @@
             if (!response.ok) throw new Error(`Skin request failed with ${response.status}`);
             const data = await response.json();
             const skins = Array.isArray(data.skins) ? data.skins : [];
-            const selected = data.selected_skin || 'oracle';
+            const selected = skinName || data.selected_skin || 'oracle';
             const skin = skins.find((item) => item.folder_name === selected)
                 || skins.find((item) => item.folder_name === 'oracle')
                 || skins[0];

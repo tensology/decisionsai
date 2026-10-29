@@ -32,7 +32,7 @@ def settings_secret(
 
 
 def composio_api_key() -> str:
-    """Composio Connect MCP project API key (DB column: rube_token)."""
+    """Composio Connect consumer API key (DB column: rube_token)."""
     return settings_secret(
         "COMPOSIO_API_KEY",
         "COMPOSIO_KEY",

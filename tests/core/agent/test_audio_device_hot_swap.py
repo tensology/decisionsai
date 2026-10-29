@@ -1,6 +1,20 @@
 from distr.core.agent import command_handler
 
 
+def test_health_probe_reports_worker_output_route_without_playing_audio():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    route={'configured_output':'Headset','output_device_name':'Headset','stream_active':True}
+    queue=Mock()
+    endpoint=SimpleNamespace(_active_output_route=lambda: route)
+    session=SimpleNamespace(event_queue=queue,transport=SimpleNamespace(output=lambda: endpoint))
+    command_handler._cmd_agent_health_probe(session,{'probe_id':'audio-check'})
+    event=queue.put.call_args.args[0]
+    assert event[0]=='agent_health_ack'
+    assert event[1]['probe_id']=='audio-check'
+    assert event[1]['audio_output']==route
+
+
 class _Loop:
     def is_running(self):
         return False
@@ -58,6 +72,19 @@ class _Session:
         if device_name == "New Speakers":
             return 33
         return 11 if is_input else 22
+
+
+def test_catalog_change_refreshes_unchanged_named_endpoints(monkeypatch):
+    session = _Session()
+    session.input_device = "Studio Mic"
+    session.output_device = "USB Speakers"
+    session.config["audio"] = {"input_device": "Studio Mic", "output_device": "USB Speakers"}
+    monkeypatch.setattr(session, "_get_device_index", lambda *args, **kwargs: None)
+    command_handler._cmd_update_audio_devices(session, {
+        "input_device": "Studio Mic", "output_device": "USB Speakers", "force_refresh": True,
+    })
+    assert session.transport.input().swap_calls == [None]
+    assert session.transport.output().swap_calls == [None]
 
 
 def test_update_audio_devices_does_not_send_tts_interrupt(monkeypatch):

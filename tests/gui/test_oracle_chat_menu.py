@@ -19,9 +19,8 @@ from distr.gui.oracle.menu import (
     is_whatsapp_enabled_in_settings,
     organize_board_menu_sections,
     resolve_action_play_name,
-    truncate_menu_title,
+    format_menu_title,
     toggle_project_terminals_via_web,
-    _is_automation_workflow,
 )
 
 
@@ -322,20 +321,19 @@ def test_about_menu_item_above_quit_with_separator() -> None:
     assert source.index("self.menu.addSeparator()", about_sep_idx) < quit_sep_idx
 
 
-def test_truncate_menu_title_short() -> None:
-    assert truncate_menu_title("Hello") == "Hello"
+def test_format_menu_title_short() -> None:
+    assert format_menu_title("Hello") == "Hello"
 
 
-def test_truncate_menu_title_long() -> None:
+def test_format_menu_title_long() -> None:
     title = "A" * 60
-    truncated = truncate_menu_title(title)
-    assert len(truncated) == 48
-    assert truncated.endswith("…")
+    truncated = format_menu_title(title)
+    assert truncated == title
 
 
-def test_truncate_menu_title_empty_fallback() -> None:
-    assert truncate_menu_title("") == "New Chat"
-    assert truncate_menu_title("   ") == "New Chat"
+def test_format_menu_title_empty_fallback() -> None:
+    assert format_menu_title("") == "New Chat"
+    assert format_menu_title("   ") == "New Chat"
 
 
 def test_skin_display_name_unchanged() -> None:
@@ -416,15 +414,59 @@ def test_get_available_skins_for_menu_oracle_first(tmp_path) -> None:
     assert [name for name, _ in skins] == ["oracle", "adam", "zebra"]
 
 
-def test_is_automation_workflow_requires_surface_marker() -> None:
-    class _Workflow:
-        workflow_type = "scheduled"
-        context_rules = '{"decisions_surface": "automation"}'
+def test_automation_menu_uses_web_store_and_preserves_public_ids(monkeypatch) -> None:
+    from distr.gui.oracle import menu
 
-    assert _is_automation_workflow(_Workflow()) is True
+    rows = [
+        {"id": "auto_7", "name": "Daily report", "instruction": "Report", "next_run_at": "2026-10-30"},
+        {"id": "auto_8", "name": "Paused report", "instruction": "Report", "status": "paused"},
+        {"id": "auto_9", "name": "Empty draft", "instruction": "  ", "status": "draft"},
+        {"id": "wf_4", "name": "Legacy", "instruction": "Report"},
+    ]
+    monkeypatch.setattr(menu, "list_automations", lambda: rows)
+    assert menu.get_automations_for_menu() == [
+        ("auto_7", "Daily report", True),
+        ("auto_8", "Paused report", False),
+        ("auto_9", "Empty draft", False),
+        ("wf_4", "Legacy", True),
+    ]
+    assert len(menu.get_automations_for_menu(limit=2)) == 2
+    monkeypatch.setattr(menu, "list_automations", lambda: [])
+    assert menu.get_automations_for_menu() == []
 
-    class _Other:
-        workflow_type = "scheduled"
-        context_rules = '{"decisions_surface": "workflow"}'
 
-    assert _is_automation_workflow(_Other()) is False
+def test_automation_menu_toggle_persists_status_without_running(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from distr.gui.oracle import menu
+    from distr.core.automation.store import create_automation, get_automation
+    from distr.core import automation_orchestrator
+
+    automation = create_automation(
+        name="Tray toggle", instruction="Do not execute in this test",
+        automation_type="scheduled_instruction", status="active", preset_id="",
+        schedule={"kind": "daily", "time": "09:00"},
+        action_config={"preserve_me": True},
+    )
+    dispatch = Mock()
+    monkeypatch.setattr(automation_orchestrator, "dispatch_automation_to_current_chat", dispatch)
+    refresh = Mock()
+    host = SimpleNamespace(_check_eula_accepted=lambda: True, _rebuild_automation_menu_items=refresh)
+    for enabled, status in ((False, "paused"), (True, "active")):
+        menu.MenuTrayMixin._toggle_automation_from_menu(host, automation["id"], enabled)
+        stored = get_automation(automation["id"])
+        assert stored["status"] == status
+        assert bool(stored["next_run_at"]) == enabled
+        assert stored["instruction"] == automation["instruction"]
+        assert stored["action_config"] == automation["action_config"]
+    dispatch.assert_not_called()
+    assert refresh.call_count == 2
+    update = Mock(side_effect=RuntimeError("write failed"))
+    monkeypatch.setattr(menu, "update_automation", update)
+    menu.MenuTrayMixin._toggle_automation_from_menu(host, automation["id"], False)
+    assert refresh.call_count == 3
+    host._check_eula_accepted = lambda: False
+    update.reset_mock()
+    menu.MenuTrayMixin._toggle_automation_from_menu(host, automation["id"], False)
+    update.assert_not_called()
+    assert refresh.call_count == 4

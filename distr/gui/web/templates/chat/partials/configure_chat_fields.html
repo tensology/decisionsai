@@ -40,7 +40,7 @@
             </div>
 {%- endmacro %}
 
-{% macro configure_chat_fields(variant) -%}
+{% macro configure_chat_fields(variant, include_voice=true, include_skin=true) -%}
 {% set modal = (variant == 'modal') %}
 
             <div class="empty-state-section-header">
@@ -90,9 +90,9 @@
                     </div>
                 </div>
             </div>
-            {{ voice_select_fields(variant) }}
-            <p class="{% if modal %}modal-section-label{% else %}empty-state-section-label{% endif %}">Skin</p>
+            {% if include_voice %}{{ voice_select_fields(variant) }}{% endif %}
+            {% if include_skin %}<p class="{% if modal %}modal-section-label{% else %}empty-state-section-label{% endif %}">{% if modal %}Avatar{% else %}Skin{% endif %}</p>
             <div id="{% if modal %}modalSkinGrid{% else %}emptyStateSkinGrid{% endif %}" class="empty-state-skin-grid">
                 <!-- Dynamically populated -->
-            </div>
+            </div>{% endif %}
 {%- endmacro %}

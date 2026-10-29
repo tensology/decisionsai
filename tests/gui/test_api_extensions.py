@@ -83,8 +83,10 @@ def test_board_api_writes_require_internal_token(full_app):
     client = TestClient(full_app)
     r = client.post("/board/api/columns", json={"name": "x"})
     assert r.status_code == 401
-    # GET stays open (read-only legacy board view).
-    assert client.get("/board/api/board").status_code != 401
+    # Board reads contain private work and use the same token guard as writes.
+    assert client.get("/board/api/board").status_code == 401
+    # The board payload itself requires project scope; this test checks auth.
+    assert client.get("/board/api/board", headers=HDR).status_code != 401
     # With the token the request reaches the route (it may fail for other reasons, but not auth).
     # No project bound in tests -> the route's own "Project ID not specified" error
     # (wrapped as 500 by the legacy handler): auth passed, nothing was written.
@@ -216,6 +218,25 @@ def test_turn_response_fields_without_wait_does_not_block(db):
     out = asyncio.run(ext.turn_response_fields(root, turn_id=None, after_row_id=ext.max_thread_row_id(root), message="x"))
     assert time.monotonic() - t0 < 1.0
     assert out["turn_id"] is None and out["turn_pending"] is True
+
+
+def test_first_reply_is_found_when_agent_fills_the_empty_root(db):
+    from distr.gui.web.routes import api_extensions as ext
+    from distr.core.db import Chat
+
+    root, _ = _seed(db, responses=())
+    baseline = ext.max_thread_row_id(root)
+    assert baseline == 0
+    with db() as session:
+        row = session.get(Chat, root)
+        row.input = 'first question'
+        row.response = 'first answer'
+        session.commit()
+    result = asyncio.run(ext.turn_response_fields(root, turn_id=None,
+        after_row_id=baseline, message='first question', wait=True, timeout=1))
+    assert result['turn_id'] == root
+    assert result['turn_status']['assistant_text'] == 'first answer'
+    assert ext.max_thread_row_id(root) == root
 
 
 def test_latest_turn_summary_for_ws_payload(db, monkeypatch):

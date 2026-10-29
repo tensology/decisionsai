@@ -896,6 +896,8 @@ class SignalBridgeMixin:
         def on_web_load_chat_in_agent_requested(chat_id):
             """Hot-swap agent to a different chat without restarting the process."""
             try:
+                from distr.core.chat_sidebar import restore_chat_skin
+                restore_chat_skin(int(chat_id))
                 self._send_command_to_agent('interrupt_tts', {})
                 self._send_command_to_agent('current_chat_changed', {'chat_id': chat_id})
                 logger.info("Web load-in-agent: queued interrupt_tts + current_chat_changed for chat_id=%s", chat_id)

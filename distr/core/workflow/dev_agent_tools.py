@@ -250,9 +250,11 @@ from distr.core.workflow import dev_approvals as _apr  # noqa: E402
 from distr.core.workflow import dev_browser_tools as _brw  # noqa: E402
 from distr.core.workflow import dev_calendar_tools as _cal  # noqa: E402
 from distr.core.workflow import dev_file_tools as _fil  # noqa: E402
+from distr.core.workflow import dev_gmail_tools as _gmail  # noqa: E402
 
 for _name, _schema, _fn in (
     ("calendar", _cal.SCHEMA, _cal.calendar),
+    ("gmail_search", _gmail.SCHEMA, _gmail.gmail_search),
     ("files", _fil.SCHEMA, _fil.files),
     ("browser", _brw.SCHEMA, _brw.browser),
     ("approval_wait", _apr.APPROVAL_WAIT_SCHEMA, _apr.approval_wait),

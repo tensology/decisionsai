@@ -138,10 +138,10 @@ const PROVIDERS = [
         keyField: 'key',
         skipValidate: true,
         blurb: 'Third-party app connectivity and external tool routing.',
-        docsLabel: 'Composio Platform',
-        docsUrl: 'https://platform.composio.dev',
+        docsLabel: 'Composio Connect',
+        docsUrl: 'https://dashboard.composio.dev/~/org/connect',
         helper: 'Composio is saved directly here. It skips API validation and recalibrates after save.',
-        infoHtml: 'Powers <strong>Composio Connect</strong> MCP in Cursor/Codex (1000+ apps). Rube is deprecated — not configured. Get your key from <a href="https://platform.composio.dev" target="_blank">platform.composio.dev</a> → Project Settings → API Keys. Decisions injects it into your IDE MCP config on save — no manual <code>mcp.json</code> editing.',
+        infoHtml: 'Connects <strong>DecisionsAI</strong>, Cursor and Codex to Composio Connect. Copy your consumer key from <a href="https://dashboard.composio.dev/~/org/connect" target="_blank">Composio For You</a> → Settings → Sessions &amp; API Key. Decisions saves it securely and configures the <code>x-consumer-api-key</code> header automatically.',
         color: 'from-slate-300/25 to-slate-500/10',
         iconPath: '/assets/img/providers/composio.png'
     },

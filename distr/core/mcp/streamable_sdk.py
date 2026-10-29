@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import threading
+from contextlib import asynccontextmanager
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _http_transport(url: str, headers: dict[str, str]):
+    from mcp.client.streamable_http import streamable_http_client
+
+    if "http_client" in inspect.signature(streamable_http_client).parameters:
+        import httpx
+
+        async with httpx.AsyncClient(headers=headers, timeout=60.0) as client:
+            async with streamable_http_client(url, http_client=client) as streams:
+                yield streams
+    else:
+        # Older SDKs accepted headers directly. Never retry without credentials.
+        async with streamable_http_client(url, headers=headers) as streams:
+            yield streams
 
 
 def mcp_sdk_available() -> bool:
@@ -61,19 +79,10 @@ class StreamableSdkSession:
 
     async def _async_main(self) -> None:
         from mcp import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
 
         self._stop_evt = asyncio.Event()
         try:
-            try:
-                transport_cm = (
-                    streamable_http_client(self._url, headers=self._headers)
-                    if self._headers
-                    else streamable_http_client(self._url)
-                )
-            except TypeError:
-                transport_cm = streamable_http_client(self._url)
-            async with transport_cm as streams:
+            async with _http_transport(self._url, self._headers) as streams:
                 read_stream = streams[0]
                 write_stream = streams[1]
                 async with ClientSession(read_stream, write_stream) as session:

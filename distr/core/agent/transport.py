@@ -306,6 +306,10 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
         logger.info("Refreshing input stream for unchanged System Default selection")
         self.set_device(None, force_refresh=True)
 
+    def refresh_device(self, device_index: Optional[int]):
+        """A reconnect can reuse the same PortAudio index with a dead stream."""
+        self.set_device(device_index, force_refresh=True)
+
 class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
     """Local audio output transport that supports hot-swapping devices."""
     

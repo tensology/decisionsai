@@ -662,7 +662,7 @@ def update_elevenlabs_settings(
     return stability, similarity_boost, style, use_speaker_boost
 
 
-def update_oracle_skin(skin: str) -> None:
+def update_oracle_skin(skin: str, *, persist_chat: bool = True) -> None:
     """Run migration, persist, and emit oracle skin change.
 
     Requirements: 11.2, 11.8
@@ -670,10 +670,38 @@ def update_oracle_skin(skin: str) -> None:
     from distr.core.skin_migration import migrate_selected_oracle
 
     migrated = migrate_selected_oracle(skin)
+    if persist_chat:
+        from distr.core.db import Chat, Settings, AgentConversation, get_session
+        from distr.core.chat_agents import primary_agent
+        from distr.core.chat_sidebar import set_chat_skin
+
+        with get_session() as session:
+            primary = primary_agent(session)
+            if primary:
+                primary.skin_name = migrated
+                settings_row = session.query(Settings).first()
+                if settings_row:
+                    settings_row.selected_oracle = migrated
+                for root in session.query(Chat).join(AgentConversation, AgentConversation.chat_id == Chat.id).filter(AgentConversation.agent_id == primary.id):
+                    set_chat_skin(root, migrated)
+                session.commit()
+                _safe_emit(_signal('direct_oracle_change'), migrated, label='direct_oracle_change')
+                return
     update_setting("selected_oracle", migrated,
                    signal=_signal("direct_oracle_change"),
                    signal_args=(migrated,),
                    signal_label="direct_oracle_change")
+    if persist_chat:
+        from distr.core.db import Chat, Settings, get_session
+        from distr.core.chat_sidebar import set_chat_skin
+
+        with get_session() as session:
+            settings = session.query(Settings).first()
+            chat_id = (settings.agent_current_chat_id or settings.last_chat_id) if settings else None
+            chat = session.get(Chat, chat_id) if chat_id else None
+            if chat is not None and chat.parent_id is None:
+                set_chat_skin(chat, migrated)
+                session.commit()
 
 
 POSITION_DISPLAY = {
@@ -798,11 +826,8 @@ def save_audio_settings(data) -> None:
     settings["input_device"] = data.input_device
     settings["output_device"] = data.output_device
     settings["lock_sound"] = data.remember_audio_settings
-    if data.remember_audio_settings:
-        if data.locked_output:
-            settings["locked_output"] = data.locked_output
-        if data.locked_input:
-            settings["locked_input"] = data.locked_input
+    settings["locked_output"] = data.output_device if data.remember_audio_settings else None
+    settings["locked_input"] = data.input_device if data.remember_audio_settings else None
     save_settings_to_db(settings)
 
     _safe_emit(_signal("audio_devices_changed"),

@@ -653,7 +653,10 @@ class ChatManagerCore:
         if chat_id in self.chat_histories:
             return self.chat_histories[chat_id]
         thread_messages = ChatService.get_chat_history(chat_id)
-        messages = [{"role": "system", "content": self.agent_prompt}] + thread_messages
+        from distr.core.chat_agents import agent_instructions
+
+        identity = agent_instructions(chat_id)
+        messages = [{"role": "system", "content": self.agent_prompt + ("\n\n" + identity if identity else "")}] + thread_messages
         self.chat_histories[chat_id] = messages
         return messages
 
@@ -1008,7 +1011,8 @@ class ChatManagerCore:
                 try:
                     from distr.core.chat_title_auto import schedule_chat_title_refresh
 
-                    schedule_chat_title_refresh(chat_id, emit_update=True)
+                    if is_final and not as_notice_row:
+                        schedule_chat_title_refresh(chat_id, emit_update=True)
                 except Exception:
                     logger.debug("Could not schedule chat title refresh", exc_info=True)
         except Exception as e:

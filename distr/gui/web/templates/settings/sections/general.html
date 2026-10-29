@@ -169,8 +169,8 @@
                     </label>
                 </div>
 
-                <div class="flex gap-4">
-                    <div class="flex-1">
+                <div class="audio-device-layout flex gap-4">
+                    <div class="flex-1 min-w-0">
                         <div class="flex border-b border-white/20 mb-3">
                             <button type="button" id="audio_output_tab"
                                     onclick="switchAudioTab('output')"
@@ -221,7 +221,7 @@
                         </div>
                     </div>
 
-                    <div class="flex flex-col gap-3 w-24">
+                    <div class="audio-device-actions flex flex-col gap-3 w-24">
                         <button type="button" id="audio_save_button"
                                 class="px-4 py-2 bg-[#152054] border border-white/20 text-white text-sm rounded
                                         hover:bg-white/10 transition-colors">
@@ -353,30 +353,48 @@
                         </div>
                     </div>
 
-                    <div class="voice-setup-balance-secondary border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] flex flex-col justify-center gap-6">
-                        <!-- Playback Speed -->
-                        <div>
-                            <label for="playback_speed" class="block text-sm font-semibold text-[#ececf1] mb-2">
-                                Playback Speed:
-                            </label>
-                            <div class="flex items-center gap-3">
-                                <input type="range" id="playback_speed" name="playback_speed"
-                                        min="0.5" max="2.0" value="1.0" step="0.1"
-                                        class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                                <span id="playback_speed_value" class="text-sm text-[#ececf1] w-12 text-right">1.0x</span>
-                            </div>
+                    <div class="voice-setup-balance-secondary flex flex-col gap-4">
+                        <!-- Fish Audio TTS model -->
+                        <div id="fishaudio_voice_options" class="hidden w-full border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                            <label for="fishaudio_tts_model" class="block text-sm font-semibold text-[#ececf1] mb-2">Fish Audio TTS model:</label>
+                            <select id="fishaudio_tts_model" name="fishaudio_tts_model"
+                                    class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                            focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
+                                <option value="s2.1-pro-free">s2.1-pro-free (default, fair-use)</option>
+                                <option value="s2.1-pro">s2.1-pro</option>
+                                <option value="s2-pro">s2-pro</option>
+                                <option value="s1">s1</option>
+                            </select>
+                            <p class="text-xs text-[#7a7c8c] mt-2">
+                                Uses the Fish Audio voice library. Pick a voice above after adding a key in API Keys.
+                                Speech-to-speech stays on OpenAI Realtime; this is the text-to-speech path.
+                            </p>
                         </div>
+                        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] flex flex-col justify-center gap-6 flex-1">
+                            <!-- Playback Speed -->
+                            <div>
+                                <label for="playback_speed" class="block text-sm font-semibold text-[#ececf1] mb-2">
+                                    Playback Speed:
+                                </label>
+                                <div class="flex items-center gap-3">
+                                    <input type="range" id="playback_speed" name="playback_speed"
+                                            min="0.5" max="2.0" value="1.0" step="0.1"
+                                            class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                    <span id="playback_speed_value" class="text-sm text-[#ececf1] w-12 text-right">1.0x</span>
+                                </div>
+                            </div>
 
-                        <!-- Speech Volume -->
-                        <div>
-                            <label for="speech_volume" class="block text-sm font-semibold text-[#ececf1] mb-2">
-                                Speech Volume:
-                            </label>
-                            <div class="flex items-center gap-3">
-                                <input type="range" id="speech_volume" name="speech_volume"
-                                        min="0" max="100" value="100" step="1"
-                                        class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                                <span id="speech_volume_value" class="text-sm text-[#ececf1] w-12 text-right">100%</span>
+                            <!-- Speech Volume -->
+                            <div>
+                                <label for="speech_volume" class="block text-sm font-semibold text-[#ececf1] mb-2">
+                                    Speech Volume:
+                                </label>
+                                <div class="flex items-center gap-3">
+                                    <input type="range" id="speech_volume" name="speech_volume"
+                                            min="0" max="100" value="100" step="1"
+                                            class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                    <span id="speech_volume_value" class="text-sm text-[#ececf1] w-12 text-right">100%</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -477,23 +495,6 @@
                         <p class="text-xs text-[#7a7c8c] mt-2">
                             Pixazo cloud API — each line waits on a remote round-trip. Lower steps is faster;
                             the OpenBMB repo’s “real-time” path is local GPU streaming, not this hosted endpoint.
-                        </p>
-                    </div>
-
-                    <!-- Fish Audio TTS model -->
-                    <div id="fishaudio_voice_options" class="hidden md:col-span-2 w-full border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-                        <label for="fishaudio_tts_model" class="block text-sm font-semibold text-[#ececf1] mb-2">Fish Audio TTS model:</label>
-                        <select id="fishaudio_tts_model" name="fishaudio_tts_model"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
-                                        focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
-                            <option value="s2.1-pro-free">s2.1-pro-free (default, fair-use)</option>
-                            <option value="s2.1-pro">s2.1-pro</option>
-                            <option value="s2-pro">s2-pro</option>
-                            <option value="s1">s1</option>
-                        </select>
-                        <p class="text-xs text-[#7a7c8c] mt-2">
-                            Uses the Fish Audio voice library. Pick a voice above after adding a key in API Keys.
-                            Speech-to-speech stays on OpenAI Realtime; this is the text-to-speech path.
                         </p>
                     </div>
                 </div>

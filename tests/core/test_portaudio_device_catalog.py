@@ -14,13 +14,26 @@ def test_query_macos_devices_uses_sounddevice_names_as_ids(monkeypatch):
         {"name": "MacBook Pro Microphone", "max_output_channels": 0, "max_input_channels": 1},
         {"name": "JBL TUNE510BT", "max_output_channels": 2, "max_input_channels": 0},
     ]
-    monkeypatch.setattr(audio_utils, "sd", MagicMock(query_devices=MagicMock(return_value=fake)))
+    stale_query = MagicMock(return_value=[])
+    monkeypatch.setattr(audio_utils, "sd", MagicMock(query_devices=stale_query))
+    monkeypatch.setattr('distr.core.agent.config_loader._query_devices_fresh_subprocess',
+                        lambda: [(i,d['name'],d['max_input_channels'],d['max_output_channels']) for i,d in enumerate(fake)])
 
     outputs, inputs = audio_utils.query_macos_devices()
     assert {d["name"] for d in outputs} == {"MacBook Pro Speakers", "JBL TUNE510BT"}
     assert {d["name"] for d in inputs} == {"MacBook Pro Microphone"}
     for d in outputs + inputs:
         assert d["id"] == d["name"]
+    stale_query.assert_not_called()
+
+
+def test_empty_fresh_macos_catalog_does_not_resurrect_disconnected_hardware(monkeypatch):
+    from distr.core.audio import utils
+    monkeypatch.setattr('distr.core.agent.config_loader._query_devices_fresh_subprocess',lambda: [])
+    stale=MagicMock()
+    monkeypatch.setattr(utils,'sd',MagicMock(query_devices=stale))
+    assert utils.query_macos_devices() == ([],[])
+    stale.assert_not_called()
 
 
 def test_query_windows_devices_id_is_name_not_index(monkeypatch):
@@ -47,7 +60,8 @@ def test_get_current_device_list_hash_uses_fresh_subprocess(monkeypatch):
     ]
     calls = {"n": 0}
 
-    def fake_fresh():
+    def fake_fresh(*, force_refresh=False):
+        assert force_refresh
         i = min(calls["n"], len(lists) - 1)
         calls["n"] += 1
         return lists[i]
@@ -65,6 +79,27 @@ def test_get_current_device_list_hash_uses_fresh_subprocess(monkeypatch):
     assert h1 == hashlib.md5(b"A|B").hexdigest()
     assert h2 == hashlib.md5(b"A|B|C").hexdigest()
     in_proc.assert_not_called()
+
+
+def test_monitor_refresh_bypasses_success_cache_but_keeps_failure_backoff():
+    from distr.core.agent import config_loader
+    calls = []
+
+    @config_loader._cached_probe()
+    def monitor_probe_regression():
+        calls.append(1)
+        return ['Headset'] if len(calls) == 1 else None
+
+    config_loader._PROBE_CACHE.pop('monitor_probe_regression', None)
+    try:
+        assert monitor_probe_regression() == ['Headset']
+        assert monitor_probe_regression() == ['Headset']
+        assert len(calls) == 1
+        assert monitor_probe_regression(force_refresh=True) is None
+        assert monitor_probe_regression(force_refresh=True) is None
+        assert len(calls) == 2
+    finally:
+        config_loader._PROBE_CACHE.pop('monitor_probe_regression', None)
 
 
 def test_get_audio_devices_ignores_locked_list(monkeypatch):

@@ -103,7 +103,10 @@ def max_thread_row_id(chat_id: int) -> int:
     with get_session() as session:
         root_id = thread_root_id(session, chat_id)
         rows = thread_rows(session, root_id)
-        return max((int(r.id) for r in rows), default=int(root_id))
+        # The first user turn can fill the existing empty root row. Including
+        # that placeholder in the baseline makes its reply undiscoverable.
+        return max((int(r.id) for r in rows
+                    if int(r.id) != int(root_id) or (r.input or '').strip() or (r.response or '').strip()), default=0)
 
 
 def message_payload(row, root_id: int) -> Dict[str, Any]:

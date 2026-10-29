@@ -814,33 +814,18 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
 
         if not hasattr(self, 'oracle_window') or not self.oracle_window:
             return
-
-        settings = load_settings_from_db()
-        lock_sound_enabled = settings.get('lock_sound', False)
-        locked_input = settings.get('locked_input')
-        locked_output = settings.get('locked_output')
-        has_locked_lists = bool(settings.get('locked_output_list') or settings.get('locked_input_list'))
-        uses_system_default = (
-            is_system_default_device_name(settings.get('input_device'))
-            or is_system_default_device_name(settings.get('output_device'))
-        )
-
-        if force:
-            pass  # Lid open: always re-read the device list
-        elif lock_sound_enabled and (locked_input or locked_output):
-            pass  # Remember my Audio Settings: restore named devices when they reappear
-        elif has_locked_lists:
-            pass  # Keep merged device lists fresh for the web UI
-        elif uses_system_default:
-            pass  # Follow OS default route even when the device list hash is unchanged
-        else:
+        if getattr(self, '_device_check_inflight', False):
             return
+
+        # Named devices can disappear too. Monitoring must not depend on the
+        # reconnect preference, or an unplugged headset leaves a dead stream.
 
         worker = DeviceCheckWorker()
         worker.signals.result.connect(self._on_device_check_result, type=Qt.ConnectionType.QueuedConnection)
+        self._device_check_inflight = True
         QThreadPool.globalInstance().start(worker)
 
-    def _sync_agent_audio_from_settings(self, settings: dict) -> None:
+    def _sync_agent_audio_from_settings(self, settings: dict, force_refresh: bool = False) -> None:
         """Hot-swap the running agent to the saved input/output selections."""
         input_device = settings.get('input_device', 'System Default')
         output_device = settings.get('output_device', 'System Default')
@@ -853,6 +838,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 self.agent_command_queue.put(('update_audio_devices', {
                     'input_device': input_device,
                     'output_device': output_device,
+                    'force_refresh': force_refresh,
                 }))
                 logger.info(
                     "Queued agent audio refresh: input='%s' output='%s'",
@@ -866,6 +852,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
 
     def _on_device_check_result(self, payload_raw):
         """Handle result from device check worker (runs on main thread)."""
+        self._device_check_inflight = False
         try:
             if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
                 logger.error("CRITICAL: _on_device_check_result called on wrong thread!")
@@ -886,11 +873,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 default_output_fingerprint = ''
 
             settings = load_settings_from_db()
-            uses_system_default = (
-                is_system_default_device_name(settings.get('input_device'))
-                or is_system_default_device_name(settings.get('output_device'))
-            )
-            track_defaults = uses_system_default or settings.get('lock_sound', False)
+            track_defaults = True  # Also follow the fallback route for absent named devices.
 
             if self._last_device_hash is None:
                 self._last_device_hash = device_hash or None
@@ -959,8 +942,10 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             restore_result = restore_locked_devices(settings)
             should_reload_for_macos_default_output = (
                 sys.platform == 'darwin'
-                and output_default_changed
-                and is_system_default_device_name(settings.get('output_device'))
+                and (list_changed or (
+                    output_default_changed
+                    and is_system_default_device_name(settings.get('output_device'))
+                ))
             )
             if should_reload_for_macos_default_output:
                 # PortAudio's CoreAudio registry is process-global on macOS. A
@@ -974,11 +959,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 self.selected_input_device = input_device
                 self.selected_output_device = output_device
                 logger.info(
-                    "Reloading agent to follow macOS System Default output route"
+                    "Reloading agent to refresh the macOS audio device catalog"
                 )
                 self.reload_agent_session(skip_welcome=True)
             else:
-                self._sync_agent_audio_from_settings(settings)
+                if list_changed:
+                    self._sync_agent_audio_from_settings(settings, force_refresh=True)
+                else:
+                    self._sync_agent_audio_from_settings(settings)
             logger.info(
                 "Audio monitor applied changes (list_changed=%s, default_changed=%s, restore=%s)",
                 list_changed,
@@ -1545,32 +1533,16 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 save_settings_to_db(self.settings)
             return
         
-        # Otherwise, show the popup dialog (devices saved but not found in available devices)
-        logger.info(f"Saved devices not found in available devices (input_valid={input_valid}, output_valid={output_valid}), showing device selection dialog")
-        # oracle_window might not exist yet during initialization, pass it if available
-        oracle_window = getattr(self, 'oracle_window', None)
-        dialog = DeviceSelectionDialog(oracle_window=oracle_window)
-        # Position dialog before showing to prevent flicker
-        dialog.position_at_oracle()
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.selected_input_device, self.selected_output_device = dialog.get_selection()
-            # Save the selected devices to settings
-            self.settings['input_device'] = self.selected_input_device
-            self.settings['output_device'] = self.selected_output_device
-            from distr.core.utils import save_settings_to_db
-            save_settings_to_db(self.settings)
-            logger.info(f"Saved selected devices - Input: {self.selected_input_device}, Output: {self.selected_output_device}")
-        else:
-            # Fallback to defaults if dialog is cancelled
-            self.selected_input_device = input_devices[0] if input_devices else None
-            self.selected_output_device = output_devices[0] if output_devices else None
-            # Save defaults to settings
-            if self.selected_input_device:
-                self.settings['input_device'] = self.selected_input_device
-            if self.selected_output_device:
-                self.settings['output_device'] = self.selected_output_device
-            from distr.core.utils import save_settings_to_db
-            save_settings_to_db(self.settings)
+        # A saved Bluetooth/USB device may be temporarily disconnected. Keep
+        # its identity for reconnect, and let the transport use system default.
+        # Reopening the first-run picker here blocks the entire agent startup.
+        self.selected_input_device = saved_input_device
+        self.selected_output_device = saved_output_device
+        logger.info(
+            "Saved audio device temporarily unavailable; starting with fallback "
+            "(input_available=%s, output_available=%s)",
+            input_valid, output_valid,
+        )
 
 
     def update_agent_audio_devices(self, input_device, output_device):

@@ -60,7 +60,34 @@ def test_prunes_deprecated_rube_server(tmp_path, monkeypatch):
 
     servers = json.loads((cursor_dir / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert "rube" not in servers
-    assert servers["composio"]["headers"]["x-api-key"] == "test-composio-key"
+    assert servers["composio"]["headers"]["x-consumer-api-key"] == "test-composio-key"
+
+
+def test_native_composio_installs_and_refreshes_key_without_duplicates(tmp_path, monkeypatch):
+    from distr.core.composio_pack import composio_mcp_recommendations
+    from distr.core.mcp_harness import _merge_decisions_mcp
+    from distr.core.mcp.config import load_mcp_config
+
+    monkeypatch.setenv("COMPOSIO_API_KEY", "first-consumer-key")
+    catalog = composio_mcp_recommendations()
+    assert _merge_decisions_mcp(tmp_path, catalog) == ["composio"]
+    monkeypatch.setenv("COMPOSIO_API_KEY", "rotated-consumer-key")
+    assert _merge_decisions_mcp(tmp_path, catalog) == ["composio:headers"]
+    assert _merge_decisions_mcp(tmp_path, catalog) == []
+    servers = load_mcp_config(tmp_path / ".decisions/models/mcp_config.json").servers
+    assert len(servers) == 1
+    assert dict(servers[0].headers) == {"x-consumer-api-key": "rotated-consumer-key"}
+
+
+def test_consumer_key_replaces_invalid_legacy_headers(monkeypatch):
+    from distr.core.mcp_harness import _apply_settings_api_key
+    from distr.core.composio_pack import composio_mcp_recommendations
+
+    monkeypatch.setenv("COMPOSIO_API_KEY", "consumer-key")
+    cfg = {"url": "https://connect.composio.dev/mcp", "headers": {"x-api-key": "old", "Authorization": "Bearer wrong", "custom": "preserve"}}
+    result = _apply_settings_api_key(cfg, composio_mcp_recommendations()["composio_connect"])
+    assert result["headers"] == {"x-consumer-api-key": "consumer-key", "custom": "preserve"}
+    assert cfg["headers"]["x-api-key"] == "old"
 
 
 def test_composio_pack_projects_skill(tmp_path, monkeypatch):

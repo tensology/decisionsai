@@ -21,7 +21,7 @@ Never invent toolkit slugs or tool names — only use values returned by search.
 
 ## API key
 
-Set your Composio project API key in **Decisions → Settings → API Keys → Composio**. Decisions encrypts it and injects it into the `composio` MCP entry on harness recalibrate.
+Set your Composio Connect consumer API key (`ck_`) in **Decisions → Settings → API Keys → Composio**. Copy it from **Composio For You → Settings → Sessions & API Key**. Decisions encrypts it and injects it into the native and IDE `composio` MCP entries as `x-consumer-api-key` on harness recalibrate. Platform project keys and IDE OAuth JWTs are not Connect consumer keys.
 
 ## Do not use Composio for
 

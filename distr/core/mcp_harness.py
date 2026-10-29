@@ -366,11 +366,11 @@ def _composio_api_key() -> str:
 
 
 def _apply_composio_api_key(cfg: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
-    """Attach x-api-key when Composio credentials are available."""
+    """Attach the Connect consumer key when credentials are available."""
     key = _composio_api_key()
     if not key or "url" not in cfg:
         return cfg
-    header_name = str(entry.get("api_key_header") or "x-api-key")
+    header_name = str(entry.get("api_key_header") or "x-consumer-api-key")
     out = dict(cfg)
     headers = dict(out.get("headers") or {})
     if not headers.get(header_name):
@@ -405,6 +405,20 @@ def _apply_settings_api_key(cfg: dict[str, Any], entry: dict[str, Any]) -> dict[
     if entry.get("preserve_env_headers"):
         return cfg
     field = entry.get("api_key_settings_field")
+    if field == "rube_token":
+        from distr.core.third_party_keys import composio_api_key
+
+        key = composio_api_key()
+        if key and "url" in cfg:
+            out = dict(cfg)
+            headers = dict(out.get("headers") or {})
+            for name in list(headers):
+                if name.lower() in ("authorization", "x-api-key", "x-consumer-api-key"):
+                    headers.pop(name)
+            headers["x-consumer-api-key"] = key
+            out["headers"] = headers
+            return out
+        return cfg
     if field == "pixazo_key":
         return _apply_pixazo_api_key(cfg, entry)
     if entry.get("api_key_env") or field:
@@ -667,12 +681,28 @@ def _merge_decisions_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
     merged: list[str] = []
     for key, entry in _iter_auto_merge_entries(catalog, agent="decisions"):
         targets = entry.get("merge_targets") or []
-        if "decisions" not in targets or key in existing:
+        if "decisions" not in targets:
             continue
         block = _agent_mcp_block(entry, key, agent="decisions")
         if not block:
             continue
         name, config = block
+        if name in existing:
+            if name != "composio":
+                continue
+            # Refresh this managed credential when the saved key changes.
+            from dataclasses import replace
+
+            updated = []
+            for server in servers:
+                if server.name == name and server.url == config.get("url"):
+                    refreshed = _apply_settings_api_key({"url": server.url, "headers": dict(server.headers)}, entry)
+                    server = replace(server, headers=frozenset(refreshed.get("headers", {}).items()))
+                updated.append(server)
+            if updated != servers:
+                servers = updated
+                merged.append(f"{name}:headers")
+            continue
         if config.get("url"):
             servers.append(MCPServerConfig(
                 name=name,

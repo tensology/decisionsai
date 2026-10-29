@@ -474,6 +474,11 @@ def _dispatch_development_automation(
         "source": "automation_import_configuration",
         "adaptive_model_routing": bool(config.get("adaptive_model_routing", True)),
     }
+    if automation.get("preset_id") == "email_action_items" and external_attachment is None:
+        from distr.core.automation.execution_policy import bounded_email_instruction
+
+        instruction = bounded_email_instruction(instruction)
+        routing_assessment["bounded_automation"] = "email_action_items"
     event_ids: list[int] = []
     started_event_id = emit_event(
         automation=automation,
