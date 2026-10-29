@@ -1,10 +1,29 @@
 /**
- * Automations page: left list always visible; right panel is editor or schedule calendar.
+ * Automations page: split workspace on desktop, list and detail views on compact screens.
  */
 (function () {
     "use strict";
 
     var currentAutomationId = null;
+    var workspace = document.getElementById("automations-workspace");
+    var backButton = document.getElementById("automation-back");
+
+    function compactLayout() { return window.matchMedia("(max-width: 1023px)").matches; }
+
+    function showWorkspaceDetail() {
+        if (workspace) workspace.dataset.view = "detail";
+        var target = mainView === "calendar" ? document.getElementById("automation-calendar-back") : backButton;
+        if (compactLayout() && target) target.focus();
+    }
+
+    function backToAutomations() {
+        setMainView("automations");
+        if (workspace) workspace.dataset.view = "list";
+        var selected = Array.prototype.find.call(document.querySelectorAll(".automation-item"), function(item) {
+            return item.getAttribute("data-id") === currentAutomationId;
+        });
+        (selected || document.getElementById("automation-new")).focus();
+    }
     var automationsData = [];
     var automationPresets = [];
     var isCreating = false;
@@ -985,6 +1004,7 @@
             calBtn.setAttribute("aria-selected", mainView === "calendar" ? "true" : "false");
         }
         renderMainWorkspace();
+        if (mainView === "calendar") showWorkspaceDetail();
     }
 
     function renderMainWorkspace() {
@@ -1213,6 +1233,7 @@
 
     function showDetail() {
         renderMainWorkspace();
+        showWorkspaceDetail();
     }
 
     function setValue(id, value) {
@@ -1306,6 +1327,11 @@
             showEmpty();
             return;
         }
+        if (compactLayout() && workspace && workspace.dataset.view === "list" && currentAutomationId === id) {
+            setMainView("automations");
+            showDetail();
+            return;
+        }
         if (mainView === "calendar") {
             setMainView("automations");
         }
@@ -1322,6 +1348,10 @@
 
     function createNewAutomation() {
         setMainView("automations");
+        if (isCreating && compactLayout() && workspace && workspace.dataset.view === "list") {
+            showDetail();
+            return;
+        }
         currentAutomationId = null;
         isCreating = true;
         fillForm(emptyAutomation());
@@ -1424,7 +1454,9 @@
                     renderMainWorkspace();
                     return;
                 }
-                if (currentAutomationId && automationsData.some(function(a) { return a.id === currentAutomationId; })) {
+                if (compactLayout() && workspace && workspace.dataset.view === "list") {
+                    renderMainWorkspace();
+                } else if (currentAutomationId && automationsData.some(function(a) { return a.id === currentAutomationId; })) {
                     selectAutomation(currentAutomationId);
                 } else if (!skipAutoSelect && automationsData.length) {
                     selectAutomation(automationsData[0].id);
@@ -1560,6 +1592,7 @@
         var onceAt = document.getElementById("automation-once-at");
         if (!kindEl || !timeWrap || !onceWrap || !intervalWrap) return;
         var kind = kindEl.value || "daily";
+        kindEl.classList.toggle("is-interval", kind === "interval");
         var showTime = kind === "daily" || kind === "weekly" || kind === "monthly";
         timeWrap.classList.toggle("hidden", !showTime);
         onceWrap.classList.toggle("hidden", kind !== "once");
@@ -1575,6 +1608,9 @@
     }
 
     function bind() {
+        if (backButton) backButton.addEventListener("click", backToAutomations);
+        var calendarBack = document.getElementById("automation-calendar-back");
+        if (calendarBack) calendarBack.addEventListener("click", backToAutomations);
         var listViewBtn = document.getElementById("automation-view-list");
         var calendarViewBtn = document.getElementById("automation-view-calendar");
         if (listViewBtn) listViewBtn.addEventListener("click", function() { setMainView("automations"); });

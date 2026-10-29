@@ -6,6 +6,31 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 
+def test_code_text_and_diagram_payload_preserve_operators_without_html():
+    root = Path(__file__).resolve().parents[2]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content('<div id="chatMessages"></div>')
+            page.add_script_tag(path=str(root / 'distr/gui/web/static/chat/js/chat.js'))
+            result = page.evaluate('''() => {
+                const plain = document.createElement('div');
+                plain.innerHTML = formatMessage('```js' + String.fromCharCode(10) + 'if (a < b && c > d) {}' + String.fromCharCode(10) + '```');
+                const raw = 'flowchart TD' + String.fromCharCode(10) + ' A[<img src=x onerror=alert(1)> &lt;] --> B[Verify]';
+                const diagram = document.createElement('div');
+                diagram.innerHTML = formatMessage('```mermaid' + String.fromCharCode(10) + raw + String.fromCharCode(10) + '```');
+                return {plain: plain.querySelector('code').textContent,
+                    payload: decodeURIComponent(diagram.querySelector('[data-mermaid-code]').dataset.mermaidCode),
+                    unsafe: diagram.querySelectorAll('img,script').length, raw};
+            }''')
+            assert result['plain'] == 'if (a < b && c > d) {}'
+            assert result['payload'] == result['raw']
+            assert result['unsafe'] == 0
+        finally:
+            browser.close()
+
+
 @pytest.mark.parametrize("mode", ["started", "tokens_only", "finished_only"])
 def test_stream_stays_after_history_through_completion(mode):
     root = Path(__file__).resolve().parents[2]

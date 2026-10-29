@@ -213,11 +213,11 @@ export function createAutomations({ context, actions, el }) {
                 <span class="scheduled-row-what" title="${esc(whatItDoes(automation, 400))}">${esc(whatItDoes(automation))}</span>
                 ${ident ? `<span class="scheduled-row-ident">${esc(ident)}</span>` : ''}
             </div>
-            <span class="scheduled-cell" role="cell">${esc(automationScheduleLabel(automation))}</span>
-            <span class="scheduled-cell scheduled-cell-next" role="cell" title="${esc(nextCell.title)}"><span class="scheduled-pill ${group}">${statusLabel}</span><span class="scheduled-next-when">${esc(nextCell.text)}</span></span>
-            <span class="scheduled-cell" role="cell" title="${esc(lastCell.title)}">${esc(lastCell.text)}</span>
-            <span class="scheduled-cell" role="cell">${esc(automationProject(automation))}</span>
-            <span class="scheduled-cell actions" role="cell">${rowActionsHtml(automation, group)}</span>
+            <span class="scheduled-cell" role="cell" data-label="Schedule">${esc(automationScheduleLabel(automation))}</span>
+            <span class="scheduled-cell scheduled-cell-next" role="cell" data-label="Next run" title="${esc(nextCell.title)}"><span class="scheduled-pill ${group}">${statusLabel}</span><span class="scheduled-next-when">${esc(nextCell.text)}</span></span>
+            <span class="scheduled-cell" role="cell" data-label="Last run" title="${esc(lastCell.title)}">${esc(lastCell.text)}</span>
+            <span class="scheduled-cell" role="cell" data-label="Project">${esc(automationProject(automation))}</span>
+            <span class="scheduled-cell actions" role="cell" data-label="Actions">${rowActionsHtml(automation, group)}</span>
         </div>`;
     }
 

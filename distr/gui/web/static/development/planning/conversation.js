@@ -2,7 +2,7 @@ import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './
 import { createThreadsTranscript } from '../threads/transcript/index.js';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
-import { layoutConnectedSitemap, pageAccessGroup, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261003-sitemap-groups';
+import { layoutConnectedSitemap, pageAccessGroup, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261028-responsive';
 import { pageCaptureFor } from './page-captures.js?v=20261003-sitemap-groups';
 import { planningProviderLabel } from './routes.js';
 

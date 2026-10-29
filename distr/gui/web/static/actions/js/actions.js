@@ -357,13 +357,17 @@
             .catch(function(e) { showSnackbar(e.message || "Play requires the desktop app", "error"); });
     }
 
-    function startRecording() {
-        isRecording = true;
-        backButton.disabled = true;
+    function setRecordingState(active) {
+        isRecording = active;
+        backButton.disabled = active;
         var recDetail = document.getElementById("detail-record-btn");
         var stopDetail = document.getElementById("detail-stop-btn");
-        if (recDetail) recDetail.classList.add("hidden");
-        if (stopDetail) stopDetail.classList.remove("hidden");
+        if (recDetail) recDetail.classList.toggle("hidden", active);
+        if (stopDetail) stopDetail.classList.toggle("hidden", !active);
+    }
+
+    function startRecording() {
+        setRecordingState(true);
         var body = currentActionId ? { action_id: currentActionId } : {};
         fetch("/api/actions/start-recording", {
             method: "POST",
@@ -372,22 +376,17 @@
         })
             .then(function(r) {
                 if (r.ok) showSnackbar("Recording started (desktop app). Stop when done.", "success");
-                else r.json().then(function(e) { showSnackbar(e.detail || "Start recording failed", "error"); });
+                else return r.json().then(function(e) { throw new Error(e.detail || "Start recording failed"); });
             })
-            .catch(function() { showSnackbar("Start recording failed", "error"); isRecording = false; backButton.disabled = false; });
+            .catch(function(e) { showSnackbar(e.message || "Start recording failed", "error"); setRecordingState(false); });
     }
 
     function stopRecording() {
         if (!isRecording) return;
-        isRecording = false;
-        backButton.disabled = false;
-        var recDetail = document.getElementById("detail-record-btn");
-        var stopDetail = document.getElementById("detail-stop-btn");
-        if (recDetail) recDetail.classList.remove("hidden");
-        if (stopDetail) stopDetail.classList.add("hidden");
         fetch("/api/actions/stop-recording", { method: "POST" })
             .then(function(r) {
                 if (r.ok) {
+                    setRecordingState(false);
                     showSnackbar("Recording stopped", "success");
                     if (currentActionId) { loadActions(true).then(function() { selectAction(currentActionId, true); }); }
                 } else {

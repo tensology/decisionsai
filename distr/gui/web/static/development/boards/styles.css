@@ -105,6 +105,9 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
 .kanban-ticket-dialog input:not(:disabled), .kanban-ticket-dialog select:not(:disabled), .kanban-ticket-dialog textarea:not(:disabled) { color: #f8fafc; }
 .kanban-ticket-dialog input::placeholder, .kanban-ticket-dialog textarea::placeholder { color: var(--studio-dim); }
 .kanban-ticket-dialog textarea { resize: vertical; }
+.development-kanban-card strong { font-size: 14px; }
+.development-kanban-card p, .development-kanban-list-description { font-size: 12px; line-height: 1.45; }
+.development-kanban-card-head span > span, .development-kanban-card footer, .development-kanban-card-meta { font-size: 12px; }
 .kanban-ticket-dialog menu a.secondary-button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .kanban-ticket-material { display: grid; gap: 8px; margin: 12px 16px 0; }
 .kanban-ticket-material-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -143,7 +146,7 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
     .kanban-ticket-dialog menu .menu-spacer { display: none; }
     .kanban-ticket-dialog menu .primary-button, .kanban-ticket-dialog menu .secondary-button, .kanban-ticket-dialog menu .danger-button { flex: 1 1 auto; padding: 0 0.75rem; }
 }
-@media (max-width: 680px) {
+@media (max-width: 980px) {
     .development-kanban-header { min-height: 54px; gap: 6px; padding: 0 8px; }
     .development-kanban-header .development-kanban-breadcrumb { min-width: 0; }
     .development-kanban-header .development-kanban-breadcrumb strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

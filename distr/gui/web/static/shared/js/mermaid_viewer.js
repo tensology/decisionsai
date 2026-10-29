@@ -262,7 +262,7 @@
     async function renderInto(canvasEl, code) {
         var mermaid = await loadMermaid();
         var renderId = "mermaid-" + randomKey().replace(/[^a-zA-Z0-9]/g, "");
-        var result = await mermaid.render(renderId, code);
+        var result = await mermaid.render(renderId, code, canvasEl);
         canvasEl.innerHTML = result.svg;
         return canvasEl.querySelector("svg");
     }

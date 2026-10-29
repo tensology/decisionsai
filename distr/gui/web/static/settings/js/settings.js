@@ -64,7 +64,12 @@ function switchTab(tabName) {
         panel.style.setProperty('display', 'block', 'important');
     }
     var btn = document.querySelector('.tab-button[data-tab="' + tab + '"]');
-    if (btn) btn.classList.add('active');
+    if (btn) {
+        btn.classList.add('active');
+        if (window.matchMedia('(max-width: 860px)').matches) {
+            btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+    }
     var wrapper = document.querySelector('.settings-tab-inner') && document.querySelector('.settings-tab-inner').parentElement;
     if (wrapper) {
         if (tab === 'logs' || tab === 'downloads' || tab === 'mermaid') wrapper.classList.add('logs-tab-active');

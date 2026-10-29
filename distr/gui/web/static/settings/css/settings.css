@@ -140,7 +140,7 @@ select option {
     margin: 0.625rem 0.75rem;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 860px) {
     .settings-shell {
         flex-direction: column;
         gap: 1rem;
@@ -158,12 +158,14 @@ select option {
         gap: 0.375rem;
         overflow-x: auto;
         padding-bottom: 0.25rem;
+        scrollbar-width: thin;
     }
 
     #settings-nav .tab-button {
         width: auto;
         flex: 0 0 auto;
         padding: 0.625rem 0.75rem;
+        min-height: 44px;
     }
 
     #settings-nav .settings-nav-divider {
@@ -173,6 +175,148 @@ select option {
     .settings-content {
         width: 100%;
         padding: 1rem;
+    }
+}
+
+@media (max-width: 860px) {
+    #tab-shortcuts .settings-shortcuts-primary,
+    #tab-shortcuts .settings-shortcuts-oracle {
+        flex-wrap: wrap;
+    }
+
+    #tab-shortcuts .settings-shortcuts-primary > .flex-1 {
+        flex-basis: calc(33.333% - 0.75rem);
+    }
+
+    #tab-shortcuts .settings-shortcuts-oracle > .flex-1 {
+        flex-basis: calc(33.333% - 0.75rem);
+    }
+
+    #tab-shortcuts .settings-shortcuts-oracle > [aria-hidden="true"] {
+        display: none;
+    }
+}
+
+@media (max-width: 640px) {
+    #tab-general [data-general-panel="devices"] .grid-cols-2 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    #tab-shortcuts .settings-shortcuts-primary > .flex-1 {
+        flex-basis: 100%;
+    }
+
+    #tab-shortcuts .settings-shortcuts-oracle > .flex-1 {
+        flex-basis: calc(50% - 0.5rem);
+    }
+
+    .settings-content input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+    .settings-content select,
+    .settings-content textarea {
+        font-size: 16px;
+    }
+
+    #tab-downloads .downloads-file-name {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+    }
+
+    #tab-llms #llms_exec_routes {
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: thin;
+    }
+
+    #tab-llms #llms_exec_routing_scroll_hint {
+        display: block;
+    }
+
+    #tab-llms #llms_exec_routes .wf-exec-grid {
+        min-width: 32rem;
+    }
+
+    #tab-initiative #initiative-health {
+        min-width: 0;
+        max-width: 100%;
+        flex-shrink: 1;
+    }
+
+    #tab-initiative #initiative-health-badge {
+        min-width: 0;
+        max-width: 100%;
+        white-space: normal;
+    }
+
+    #tab-initiative #initiative-health-label {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    #tab-advanced [data-advanced-panel="directories"] .flex.items-center.gap-4.pt-2 {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    #tab-advanced #exclude_types {
+        min-width: 0;
+        width: 100%;
+    }
+
+    #tab-advanced #reindex_button {
+        width: 100%;
+    }
+}
+
+@media (min-width: 641px) {
+    #tab-llms #llms_exec_routing_scroll_hint {
+        display: none;
+    }
+}
+
+@media (max-width: 860px) {
+    .settings-content input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+    .settings-content select,
+    .settings-content textarea,
+    .settings-content input[type="range"],
+    .settings-content button,
+    .settings-toggle {
+        min-height: 44px;
+    }
+
+    #tab-shortcuts .hotkey-display {
+        min-height: 44px;
+        padding-right: 52px;
+    }
+
+    #tab-shortcuts .hotkey-clear,
+    #tab-downloads .downloads-icon-btn {
+        width: 44px;
+        height: 44px;
+        right: 0;
+    }
+
+    .audio-helper-info__button,
+    .mermaid-action-btn {
+        width: 44px;
+        height: 44px;
+    }
+}
+
+@media (max-width: 860px) {
+    #tab-logs #logs_content {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+        line-height: 1.5;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
     }
 }
 
@@ -868,6 +1012,7 @@ textarea:focus-visible {
         padding: 0.52rem 0.72rem 0.48rem;
         font-size: 0.68rem;
         white-space: nowrap;
+        min-height: 44px;
     }
 }
 

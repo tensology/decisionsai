@@ -5,13 +5,27 @@
 .reports-tab { border: 1px solid var(--studio-line); background: transparent; color: var(--studio-muted); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
 .reports-tab.is-active { color: var(--studio-text); border-color: var(--studio-accent, var(--studio-line)); background: var(--studio-panel); }
 .reports-filters { display: flex; flex-wrap: wrap; gap: 16px; }
+.reports-filters[hidden] { display: none; }
 .reports-filters label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .reports-filters select { border: 1px solid var(--studio-line); border-radius: 6px; padding: 6px; background: var(--studio-panel); }
 .reports-table-scroll { overflow: auto; }
-.reports-workspace table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.reports-workspace table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.reports-workspace th { font-size: 12px; font-weight: 600; }
+.reports-workspace td { overflow-wrap: anywhere; }
+.reports-workspace [data-label="Duration"], .reports-workspace [data-label="Cost"], .reports-workspace [data-label="Total"], .reports-workspace [data-label$=" USD"] { text-align: right; font-variant-numeric: tabular-nums; }
 .reports-workspace th, .reports-workspace td { text-align: left; padding: 12px 8px; border-bottom: 1px solid var(--studio-line-soft); vertical-align: top; }
 .reports-workspace td small { display: block; margin-top: 4px; color: var(--studio-muted); }
 .reports-workspace td a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .reports-cost-summary { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; font-size: 12px; }
 .reports-cost-summary span { border: 1px solid var(--studio-line-soft); border-radius: 6px; padding: 6px 10px; background: var(--studio-panel); }
-@media (max-width:680px) { .reports-workspace table { min-width: 600px; } }
+@media (max-width: 980px) {
+    .reports-table-scroll { overflow: visible; }
+    .reports-workspace table, .reports-workspace tbody { display: block; min-width: 0; }
+    .reports-workspace thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .reports-workspace tbody tr { display: grid; padding: 12px 0; border-bottom: 1px solid var(--studio-line-soft); }
+    .reports-workspace td { display: grid; grid-template-columns: minmax(96px, .7fr) minmax(0, 1.3fr); gap: 4px 12px; padding: 6px 0; border: 0; text-align: left !important; }
+    .reports-workspace td::before { content: attr(data-label); grid-column: 1; grid-row: 1 / span 2; color: var(--studio-muted); font-size: 12px; }
+    .reports-workspace td > small { grid-column: 2; margin: 0; }
+    .reports-filters label { flex: 1; justify-content: space-between; }
+    .reports-filters select { min-width: 0; max-width: 100%; }
+}

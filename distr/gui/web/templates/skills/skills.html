@@ -2,8 +2,36 @@
 
 {% block title %}Skills{% endblock %}
 
+{% block head_styles %}
+{{ super() }}
+<style>
+.skill-card > .mt-3 { flex-wrap: wrap; }
+.skill-card > .mt-3 button { flex: 1 1 8rem; min-height: 44px; font-size: 0.875rem; }
+.skill-card > .mt-3 button span { white-space: normal; overflow: visible; }
+.skill-card > .mb-2 { padding-right: 2rem; }
+.skill-card .copy-btn { min-width: 44px; min-height: 44px; top: 0; right: 0; }
+.skill-card > p { font-size: 0.875rem; }
+#skill-modal-dialog { min-height: 0; }
+#skill-modal-close, #skill-editor-close { min-width: 44px; min-height: 44px; }
+@media (max-width: 759px) {
+    #skills-workspace { padding: 1rem; }
+    #skills-workspace > div > div { padding: 1rem; min-width: 0; }
+    #skills-workspace input, #skill-modal textarea, #skill-modal select,
+    #skill-editor-modal input, #skill-editor-modal textarea { font-size: 16px; min-height: 44px; }
+    #skills-workspace button, #skill-modal button, #skill-editor-modal button { min-height: 44px; }
+    #skills-pagination { flex-wrap: wrap; gap: 1rem; }
+    #skill-modal, #skill-editor-modal { padding: 0.5rem; }
+    #skill-modal-dialog { max-height: calc(100dvh - 1rem); overflow-y: auto; }
+    #skill-modal-dialog > .flex-1 { flex: none; }
+    #skill-modal-dialog > .p-4 { flex-shrink: 0; }
+    #skill-modal-dialog .items-end { flex-direction: column; align-items: stretch; }
+    #skill-modal-content { overflow-wrap: anywhere; }
+}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="w-full px-6 py-8">
+<div id="skills-workspace" class="w-full px-6 py-8">
     <div class="flex gap-6">
         <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-8">
             <div class="mb-6 pb-4 border-b border-white/20 grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 md:items-center">
@@ -59,7 +87,7 @@
                 <h3 class="text-lg font-semibold text-white" id="skill-modal-title"></h3>
                 <p id="skill-modal-description" class="text-sm text-[#fb923c] mt-1 leading-relaxed"></p>
             </div>
-            <button type="button" id="skill-modal-close" class="p-2 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0 ml-4">
+            <button type="button" id="skill-modal-close" aria-label="Close skill" class="p-2 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0 ml-4">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
@@ -107,7 +135,7 @@
     <div class="bg-[#1a1f3a] border border-white/20 rounded-lg w-full max-w-3xl max-h-[90vh] flex flex-col shadow-xl">
         <div class="flex items-center justify-between p-6 border-b border-white/20">
             <h3 class="text-lg font-semibold text-white" id="skill-editor-title">Create Skill</h3>
-            <button type="button" id="skill-editor-close" class="p-2 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors">
+            <button type="button" id="skill-editor-close" aria-label="Close skill editor" class="p-2 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
@@ -151,5 +179,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/skills/static/js/skills.js"></script>
+<script src="/skills/static/js/skills.js?v=20261028-responsive"></script>
 {% endblock %}

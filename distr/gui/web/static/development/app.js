@@ -1,5 +1,5 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261022-tips2';
-import { createReports } from './reports/index.js';
+import { createReports } from './reports/index.js?v=20261028-responsive';
 import { createThreadLiveUpdates } from './threads/live.js?v=20261027f';
 import { createThreadSession } from './threads/session.js?v=20261022-composer6';
 import { createCatalogLoader } from './shell/catalog.js';
@@ -9,9 +9,9 @@ import { createPlanning } from './planning/index.js?v=20261003-sitemap-groups';
 
 import { createSidebar } from './sidebar/index.js?v=20261024-sidebar-wfadd';
 
-import { createAutomations } from './automations/index.js?v=20261024-autolist3';
+import { createAutomations } from './automations/index.js?v=20261028-responsive';
 
-import { createIncoming } from './incoming/index.js?v=20261022-incomingpad';
+import { createIncoming } from './incoming/index.js?v=20261028-responsive';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 

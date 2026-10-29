@@ -238,6 +238,7 @@
     max-width: 100%;
     height: auto;
 }
+.mermaid-viewer-canvas:empty { visibility: hidden; }
 
 .mermaid-viewer-side {
     border-left: 1px solid rgba(255, 255, 255, 0.1);
@@ -287,6 +288,9 @@
 
 /* Inline chat affordance for mermaid blocks */
 .mermaid-inline-block {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
     margin: 10px 0;
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 8px;
@@ -334,3 +338,17 @@
 /* req 2026-10-22: Reports layout standard — 24px gutter, no width cap */
 .mermaid-viewer-body #mermaid-viewer-root { box-sizing: border-box; width: 100%; max-width: none; flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 24px; }
 @media (max-width: 680px) { .mermaid-viewer-body #mermaid-viewer-root { padding: 16px; } }
+
+.mermaid-viewer-history-title { overflow-wrap: anywhere; }
+.mermaid-viewer-history-time, .mermaid-viewer-history-empty { color: #9ca3af; font-size: 12px; }
+@media (max-width: 759px) {
+    .mermaid-viewer-toolbar { flex-wrap: wrap; }
+    .mermaid-viewer-title { flex-basis: 100%; }
+    .mermaid-viewer-actions { justify-content: flex-start; }
+    .mermaid-viewer-btn { min-height: 44px; font-size: 14px; }
+    .mermaid-viewer-delete-btn, .mermaid-action-btn { width: 44px; height: 44px; }
+    .mermaid-viewer-code { font-size: 16px; }
+    .mermaid-viewer-main { grid-template-rows: minmax(240px, 45vh) auto; }
+    .mermaid-inline-header { flex-wrap: wrap; }
+    .mermaid-inline-open { min-height: 44px; font-size: 14px; }
+}

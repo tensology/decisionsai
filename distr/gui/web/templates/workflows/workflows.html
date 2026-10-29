@@ -2763,6 +2763,11 @@ body.wf-board-pointer-dragging * {
     .wf-cli-workspace {
         grid-template-columns: 1fr;
     }
+    .wf-cli-input-main { flex-wrap: wrap; }
+    .wf-cli-input-main #wf-cli-input { flex: 1 1 12rem; }
+    .wf-cli-workspace { overflow-y: auto; }
+    .wf-cli-terminal-wrap { flex: 1 0 10rem; min-height: 10rem; }
+    .wf-cli-workspace:not(.wf-cli-workspace--inspector-collapsed) .wf-cli-inspector { flex: 0 1 16rem; max-height: 16rem; }
     .wf-cli-backend-shell {
         width: 100%;
         flex-basis: auto;
@@ -3513,6 +3518,37 @@ body.wf-split-dragging {
 body.wf-split-dragging * {
     cursor: col-resize !important;
 }
+.wf-compact-nav-label { display: none; }
+.wf-routing-scroll-hint { display: none; }
+@media (max-width: 1023px) {
+    .wf-page-shell { height: calc(100dvh - 4rem); }
+    #wf-split-layout { display: block; }
+    #wf-split-left { width: 100% !important; max-width: none; min-width: 0; height: 100%; }
+    #wf-split-right { display: none; min-width: 0; height: 100%; }
+    #wf-split-resizer { display: none; }
+    #wf-split-layout.wf-board-panel-collapsed #wf-split-left { display: none; }
+    #wf-split-layout.wf-board-panel-collapsed #wf-split-right { display: flex; }
+    .wf-page-shell button, .kb-modal-overlay button, #sr-llm-modal button { min-height: 44px; }
+    .wf-page-shell input, .wf-page-shell select, .kb-modal-overlay input,
+    .kb-modal-overlay select, .kb-modal-overlay textarea { font-size: 16px; min-height: 44px; }
+    .wf-page-shell .wf-cli-inspector-toggle { min-width: 44px; }
+    .wf-page-shell .wf-board-pane-toggle-compact { width: auto; padding: 0 0.5rem; gap: 0.375rem; }
+    .wf-compact-nav-label { display: inline; font-size: 0.875rem; }
+    #wf-detail > .flex { flex-wrap: wrap; }
+    #wf-empty { padding: 1.5rem; }
+    #wf-global-config-tabs { overflow-x: auto; gap: 1rem; }
+    #wf-global-config-tabs button { flex-shrink: 0; }
+    .kb-modal-overlay .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
+    #sr-llm-modal input:not([type="checkbox"]), #sr-llm-modal select { min-height: 44px; font-size: 16px; }
+    #sr-llm-modal .wf-config-checkbox { min-height: 44px; }
+    #sr-llm-modal #wf-global-exec-routes { overflow-x: auto; max-width: 100%; overscroll-behavior-x: contain; }
+    #sr-llm-modal #wf-global-exec-routes .wf-exec-grid { min-width: 36rem; }
+    .wf-routing-scroll-hint { display: block; color: #9ca3af; font-size: 0.75rem; margin: 0.5rem 0; }
+}
+@media (max-width: 759px) {
+    .wf-page-shell { height: calc(100dvh - 3.5rem); }
+    #sr-llm-modal .wf-config-field-row { grid-template-columns: minmax(0, 1fr); }
+}
 </style>
 {% endblock %}
 
@@ -3525,6 +3561,7 @@ body.wf-split-dragging * {
                 <div class="mb-1 flex items-center justify-between gap-2">
                     <p class="text-xs uppercase tracking-wide text-gray-500">Board Tickets</p>
                     <button type="button" id="wf-board-pane-toggle-header" class="wf-cli-inspector-toggle wf-board-pane-toggle-compact wf-board-pane-toggle-header-raised flex-shrink-0" title="Collapse board tickets" aria-label="Collapse board tickets">
+                        <span class="wf-compact-nav-label">Workflows</span>
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
                         </svg>
@@ -3556,6 +3593,7 @@ body.wf-split-dragging * {
             <div class="wf-workflow-tabbar flex items-stretch flex-shrink-0 border-b border-white/20">
                 <div id="wf-board-pane-reopen-wrap" class="hidden flex-shrink-0 flex items-center ml-2 pr-0.5">
                     <button type="button" id="wf-board-pane-reopen" class="wf-cli-inspector-toggle wf-board-pane-toggle-compact" title="Expand board tickets" aria-label="Expand board tickets">
+                        <span class="wf-compact-nav-label">Board tickets</span>
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
                         </svg>
@@ -4342,7 +4380,8 @@ body.wf-split-dragging * {
         '</div>',
         '<p class="wf-config-section-label mt-1">Complexity routing</p>',
         '<p class="wf-config-section-hint">Low / medium / high routes for tickets and workflow steps (steps use their rated tier, otherwise Medium). This is the only place routing is edited.</p>',
-        '<div id="wf-global-exec-routes" class="space-y-3"></div>',
+        '<p class="wf-routing-scroll-hint">Scroll horizontally to see all routing columns.</p>',
+        '<div id="wf-global-exec-routes" class="space-y-3" role="region" tabindex="0" aria-label="Complexity routing options, scroll horizontally to view all columns"></div>',
         '</div>',
         '</div>',
         '<div id="wf-global-config-footer" class="flex gap-2 justify-end px-4 py-2 border-t border-white/10 flex-shrink-0">',

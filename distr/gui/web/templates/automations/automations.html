@@ -60,6 +60,7 @@
 .automation-interval-unit {
     min-width: 9.5rem;
 }
+.automation-schedule-kind.is-interval { min-width: 12em; }
 .automation-schedule-detail-panel {
     min-width: 0;
 }
@@ -1002,13 +1003,50 @@ body.sched-calendar-interacting .sched-block-resize-handle {
     text-transform: uppercase;
     color: #9ca3af;
 }
+#automations-workspace { height: calc(100dvh - 4rem); }
+.automation-back { display: none; }
+@media (max-width: 1023px) {
+    #automations-workspace { padding: 12px; gap: 0; min-height: 0; }
+    #automations-sidebar, #automations-editor { width: 100%; min-width: 0; }
+    #automations-workspace[data-view="list"] #automations-editor,
+    #automations-workspace[data-view="detail"] #automations-sidebar { display: none; }
+    .automation-back { display: inline-flex; align-items: center; flex-shrink: 0; padding: 0 12px; }
+    .automation-title { flex: 1; min-width: 0; }
+    #automation-detail { overflow-y: auto; }
+    #automation-detail > div { flex-shrink: 0; padding: 16px; }
+    #automation-detail > div:first-of-type { flex-wrap: wrap; gap: 12px; }
+    #automation-detail-title { overflow-wrap: anywhere; }
+    #automation-tab-details { flex: none; }
+    .automation-fields-row > div { min-width: 0; max-width: 100%; }
+    .automation-fields-row .automation-name-field { flex-basis: 100%; }
+    #automations-workspace #automation-instruction { min-height: 192px; }
+    #automations-workspace button, #sched-export-modal button, #sched-block-modal button { min-height: 44px; }
+    #automations-workspace button:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+    #automations-workspace input:not([type="hidden"]):not([type="checkbox"]),
+    #automations-workspace select, #automations-workspace textarea { min-height: 44px; font-size: 16px; }
+    #automation-list .automation-item span { white-space: normal; overflow-wrap: anywhere; }
+    #automation-calendar-panel { padding: 12px; }
+    #automation-calendar-panel > div:first-child,
+    #automation-calendar-panel > div:nth-child(2) { flex-wrap: wrap; justify-content: flex-start; }
+    #automation-calendar-panel > div:first-child > div:last-child { justify-content: flex-start; }
+    #automation-cal-title { min-width: 0; flex: 1; }
+    #automation-calendar { overflow-x: auto; }
+    .automation-cal-help { max-height: 80px; overflow-y: auto; }
+    .automation-cal-weekdays, .automation-cal-month-grid { min-width: 630px; }
+    #sched-export-modal > div, #sched-block-modal > div { max-height: calc(100dvh - 32px); overflow-y: auto; }
+    #sched-block-modal input, #sched-block-modal select { min-width: 0; min-height: 44px; font-size: 16px; }
+    #sched-block-modal .grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 639px) {
+    #automations-workspace { height: calc(100dvh - 3.5rem); }
+}
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="w-full px-6 py-4 flex gap-6 h-[calc(100vh-4rem)]">
+<div id="automations-workspace" data-view="list" class="w-full px-6 py-4 flex gap-6 h-[calc(100vh-4rem)]">
     <!-- Left panel: view toggle + automation list + Add -->
-    <div class="w-80 flex-shrink-0 flex flex-col gap-4">
+    <div id="automations-sidebar" class="w-80 flex-shrink-0 flex flex-col gap-4">
         <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
             <div class="flex gap-2" role="tablist" aria-label="Automation main views">
                 <button type="button" id="automation-view-list" class="automation-left-view-btn is-active" role="tab" aria-selected="true">Automations</button>
@@ -1032,7 +1070,7 @@ body.sched-calendar-interacting .sched-block-resize-handle {
     </div>
 
     <!-- Right panel: automation editor or schedule calendar -->
-    <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
+    <div id="automations-editor" class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
         <div id="automation-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
             <p class="text-gray-400 text-sm max-w-md mb-2">Quick, repeatable actions and schedules live here.</p>
             <p class="text-gray-500 text-xs max-w-md mb-6">Use Workflows for structured project execution, tickets, and agent handoffs.</p>
@@ -1043,7 +1081,8 @@ body.sched-calendar-interacting .sched-block-resize-handle {
             <input type="hidden" id="automation-id">
             <input type="hidden" id="automation-preset-id" value="">
             <div class="border-b border-white/20 px-6 py-4 flex items-center justify-between">
-                <div>
+                <button type="button" id="automation-back" class="automation-back rounded text-white border border-white/20" aria-label="Back to automations">Back</button>
+                <div class="automation-title">
                     <h2 id="automation-detail-title" class="text-lg font-semibold text-white">Automation</h2>
                     <p id="automation-detail-meta" class="text-xs text-gray-500 mt-1">Not saved yet</p>
                 </div>
@@ -1138,7 +1177,8 @@ body.sched-calendar-interacting .sched-block-resize-handle {
 
         <div id="automation-calendar-panel" class="hidden flex-1 min-h-0 flex flex-col p-6">
             <div class="flex items-center justify-between gap-3 mb-4 flex-shrink-0">
-                <div>
+                <button type="button" id="automation-calendar-back" class="automation-back rounded text-white border border-white/20" aria-label="Back to automations">Back</button>
+                <div class="automation-title">
                     <h2 class="text-lg font-semibold text-white">Schedule calendar</h2>
                 </div>
                 <div class="flex items-center gap-2 flex-wrap justify-end">
@@ -1263,5 +1303,5 @@ body.sched-calendar-interacting .sched-block-resize-handle {
 <script src="/static/shared/js/api.js"></script>
 <script src="/tickets/static/js/kanban_custom_select.js"></script>
 <script src="/automations/static/js/calendar_blocks.js"></script>
-<script src="/automations/static/js/automations.js"></script>
+<script src="/automations/static/js/automations.js?v=20261028-responsive"></script>
 {% endblock %}

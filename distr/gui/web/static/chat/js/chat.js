@@ -4401,7 +4401,9 @@ function formatMessage(text) {
     
     // Mermaid diagrams — preview + open in freestanding viewer
     html = html.replace(/```mermaid\s*\n([\s\S]*?)```/g, (match, code) => {
-        const trimmed = code.trim();
+        const decoded = document.createElement('textarea');
+        decoded.innerHTML = code;
+        const trimmed = decoded.value.trim();
         const encoded = encodeURIComponent(trimmed);
         return (
             '<div class="mermaid-inline-block" data-mermaid-code="' + encoded + '">' +
@@ -4416,7 +4418,7 @@ function formatMessage(text) {
     
     // Format code blocks (non-mermaid)
     html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-        return `<pre><code>${escapeHtml(code.trim())}</code></pre>`;
+        return `<pre><code>${code.trim()}</code></pre>`;
     });
     
     // Format inline code

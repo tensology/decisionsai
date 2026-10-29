@@ -16,7 +16,7 @@ body {
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
-    height: 100vh;
+    height: 100dvh;
     width: 100%;
     max-width: var(--page-max-width, none);
     margin: 0;
@@ -29,12 +29,18 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    min-width: 0;
     margin-bottom: 20px;
     padding-bottom: 20px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .board-title {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    flex: 1 1 220px;
     font-size: 28px;
     font-weight: 600;
     color: #ffffff;
@@ -42,6 +48,8 @@ body {
 
 .board-actions {
     display: flex;
+    flex-wrap: wrap;
+    max-width: 100%;
     gap: 10px;
 }
 
@@ -88,6 +96,8 @@ body {
 
 .board-content {
     flex: 1;
+    min-width: 0;
+    min-height: 0;
     overflow-x: auto;
     overflow-y: hidden;
     padding: 10px 0;
@@ -330,6 +340,13 @@ body {
 
 .ticket-edit-icon,
 .ticket-send-icon {
+    display: grid;
+    min-width: 28px;
+    min-height: 28px;
+    place-items: center;
+    border: 0;
+    background: transparent;
+    color: inherit;
     cursor: pointer;
     font-size: 14px;
     opacity: 0.6;
@@ -475,6 +492,13 @@ body {
 }
 
 .close {
+    display: grid;
+    min-width: 32px;
+    min-height: 32px;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
     color: rgba(255, 255, 255, 0.6);
     font-size: 28px;
     font-weight: bold;
@@ -544,6 +568,23 @@ select.form-control {
 
 .modal-actions .spacer {
     flex: 1;
+}
+
+@media (max-width: 680px) {
+    .board-title { font-size: 20px; }
+    .board-actions { width: 100%; }
+    .btn, .close, .column-menu-btn, .add-ticket-btn { min-height: 44px; }
+    .close, .column-menu-btn { min-width: 44px; }
+    .modal-content { width: calc(100% - 24px); max-height: calc(100dvh - 24px); }
+    .modal-header, .modal-body { padding: 16px; }
+    .form-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .form-control { font-size: 16px; }
+    .modal-actions { flex-wrap: wrap; }
+    .modal-actions .spacer { display: none; }
+    .modal-actions .btn { flex: 1; justify-content: center; }
+    .ticket-actions { position: static; justify-content: flex-end; margin-bottom: 4px; }
+    .ticket-edit-icon, .ticket-send-icon { min-width: 44px; min-height: 44px; }
+    .ticket-title { padding-right: 0; }
 }
 
 .icon {

@@ -133,3 +133,13 @@
     .terminal-session { height: 320px; }
     .terminal-session-tab-shell { min-width: 145px; }
 }
+.terminal-project-command code, .terminal-project-metric, .terminal-project-open,
+.terminal-running-count, .terminal-command-row input, .terminal-session-tab code,
+.terminal-process-row code, .terminal-process-row small, .terminal-output-fallback code,
+.terminal-output-fallback span, .terminal-session-empty span { font-size: 12px; line-height: 1.45; }
+.terminal-project-metric { white-space: normal; }
+@media (max-width: 680px) {
+    .terminal-process-row { grid-template-columns: 7px minmax(0, 1fr) auto 44px; }
+    .terminal-process-row button, .terminal-tab-stop { min-width: 44px; min-height: 44px; }
+    .terminal-command-row input { font-size: 16px; }
+}

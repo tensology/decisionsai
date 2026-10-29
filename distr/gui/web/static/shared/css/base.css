@@ -1,6 +1,15 @@
 /* Custom styles for settings page - website styling (#0d1642, #1a237e, orange accent) */
 
 /* Navigation */
+.app-brand-bolt {
+    width: 40px;
+    height: 55px;
+    max-width: none;
+}
+
+/* Secondary copy must remain readable against the shared dark surfaces. */
+.text-gray-500 { color: #9ca3af; }
+
 #settings-nav .tab-button.active {
     background-color: #f97316 !important;
     color: #ffffff !important;
@@ -104,6 +113,8 @@
         overflow-x: auto;
         overflow-y: hidden;
         scrollbar-width: none;
+        margin-left: 0 !important;
+        gap: 0 !important;
     }
 
     .primary-nav::-webkit-scrollbar {
@@ -112,6 +123,9 @@
 
     .primary-nav .nav-tab {
         flex: 0 0 auto;
+        width: 44px;
+        min-height: 44px;
+        justify-content: center;
         padding: 0.5rem !important;
         gap: 0 !important;
     }
@@ -126,7 +140,13 @@
     }
 
     .app-nav-right > a {
-        padding: 0.4rem !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        min-height: 44px;
+        padding: 6px !important;
+        margin-left: 0 !important;
     }
 }
 

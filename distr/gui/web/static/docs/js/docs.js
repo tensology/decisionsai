@@ -11,13 +11,26 @@
   var tryModalResult = document.getElementById('try-modal-result');
   var tryModalResponse = document.getElementById('try-modal-response');
   var currentEndpoint = null;
+  var modalTrigger = null;
 
   // Close modal
   document.getElementById('try-modal-close').onclick = closeModal;
   function closeModal() {
     tryModal.classList.add('hidden');
     currentEndpoint = null;
+    if (modalTrigger) modalTrigger.focus();
   }
+  tryModal.addEventListener('click', function(event) {
+    if (!event.target.closest('#try-modal-dialog')) closeModal();
+  });
+  tryModal.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') { event.preventDefault(); closeModal(); }
+    if (event.key !== 'Tab') return;
+    var controls = Array.from(tryModal.querySelectorAll('button, input, textarea')).filter(function(node) { return !node.disabled && node.getClientRects().length; });
+    var first = controls[0], last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
 
   // Fetch and render
   fetch('/docs/api/endpoints')
@@ -64,12 +77,18 @@
     // Header (clickable to expand)
     var header = document.createElement('div');
     header.className = 'endpoint-header';
+    header.setAttribute('role', 'button');
+    header.tabIndex = 0;
+    header.setAttribute('aria-expanded', 'false');
     header.innerHTML =
       '<span class="endpoint-chevron">&#9654;</span>' +
       '<span class="method-badge method-' + ep.method + '">' + ep.method + '</span>' +
       '<span class="endpoint-path">' + escHtml(ep.path) + '</span>' +
       '<span class="endpoint-summary">' + escHtml(ep.summary) + '</span>';
-    header.onclick = function() { card.classList.toggle('open'); };
+    header.onclick = function() { header.setAttribute('aria-expanded', String(card.classList.toggle('open'))); };
+    header.onkeydown = function(event) {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); header.click(); }
+    };
     card.appendChild(header);
 
     // Body
@@ -143,10 +162,10 @@
   function buildSchemaTable(rows) {
     var table = document.createElement('table');
     table.className = 'schema-table';
-    var thead = '<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>';
+    var thead = '<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Required</th><th scope="col">Description</th></tr>';
     var tbody = rows.map(function(r) {
       var req = r.required ? '<span class="required-badge">required</span>' : 'optional';
-      return '<tr><td><code>' + escHtml(r.name) + '</code></td><td>' + escHtml(r.type) + '</td><td>' + req + '</td><td>' + escHtml(r.description) + '</td></tr>';
+      return '<tr><td data-label="Name"><code>' + escHtml(r.name) + '</code></td><td data-label="Type">' + escHtml(r.type) + '</td><td data-label="Required">' + req + '</td><td data-label="Description">' + escHtml(r.description) + '</td></tr>';
     }).join('');
     table.innerHTML = '<thead>' + thead + '</thead><tbody>' + tbody + '</tbody>';
     return table;
@@ -177,6 +196,7 @@
   // ── Try-it modal ──────────────────────────────────────────────
 
   function openTryModal(ep) {
+    modalTrigger = document.activeElement;
     currentEndpoint = ep;
     tryModalTitle.textContent = ep.method + ' ' + ep.path;
     tryModalParams.innerHTML = '';
@@ -209,6 +229,7 @@
     }
 
     tryModal.classList.remove('hidden');
+    document.getElementById('try-modal-close').focus();
   }
 
   function buildField(id, label, hint, required, textarea) {

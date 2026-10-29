@@ -781,7 +781,10 @@
       if (e.target === this) closeSkillModal();
     });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") closeSkillModal();
+      if (e.key === "Escape") {
+        if (editorModal && !editorModal.classList.contains("hidden")) closeSkillEditor();
+        else closeSkillModal();
+      }
     });
 
     // Push button

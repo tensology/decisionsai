@@ -3,7 +3,7 @@
 {% block title %}API Documentation{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="/docs/static/css/docs.css">
+<link rel="stylesheet" href="/docs/static/css/docs.css?v=20261028-responsive">
 {% endblock %}
 
 {% block content %}
@@ -24,10 +24,10 @@
 <div id="try-modal" class="fixed inset-0 z-[100] hidden">
     <div class="absolute inset-0 bg-black/60" id="try-modal-backdrop"></div>
     <div class="absolute inset-0 flex items-center justify-center p-4">
-        <div class="bg-[#1a1f3a] border border-white/20 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
+        <div id="try-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="try-modal-title" class="bg-[#1a1f3a] border border-white/20 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
             <div class="flex items-center justify-between px-6 py-4 border-b border-white/20">
                 <h3 id="try-modal-title" class="text-lg font-semibold text-white"></h3>
-                <button id="try-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+                <button id="try-modal-close" aria-label="Close request preview" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
             </div>
             <div class="flex-1 overflow-y-auto p-6 space-y-4">
                 <div id="try-modal-params"></div>
@@ -44,5 +44,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/docs/static/js/docs.js"></script>
+<script src="/docs/static/js/docs.js?v=20261028-responsive"></script>
 {% endblock %}

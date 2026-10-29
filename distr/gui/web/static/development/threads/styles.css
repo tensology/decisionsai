@@ -1195,3 +1195,15 @@
     .thread-workflow-live-feedback { flex-wrap: wrap; }
     .thread-workflow-live-feedback time { margin-left: 15px; }
 }
+
+/* Keep revision status distinct from its version label at every inspector width. */
+.plan-revision + .plan-revision { margin-top: 16px; }
+.plan-revision > header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+
+/* A wide sketch must leave room for the dialog actions; preserve the canvas ratio. */
+.visual-plan-dialog { overflow-y: auto; }
+.visual-plan-dialog > header, .visual-plan-dialog > .visual-plan-toolbar, .visual-plan-dialog > footer { flex-shrink: 0; }
+#visual-plan-canvas { align-self: center; width: auto; max-width: calc(100% - 32px); max-height: min(540px, calc(100dvh - 300px)); margin-inline: auto; }
+/* The Files inspector can narrow a desktop composer to phone width. */
+.composer-toolbar .model-button { flex-shrink: 1; overflow: hidden; }
+.composer-toolbar .tool-button, .composer-toolbar .permission-control, .composer-toolbar .send-button { flex-shrink: 0; }

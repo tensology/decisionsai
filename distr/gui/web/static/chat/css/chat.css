@@ -1806,6 +1806,8 @@
 }
 
 .message-text {
+    min-width: 0;
+    max-width: 100%;
     font-size: 14px;
     line-height: 1.6;
     color: rgba(255, 255, 255, 0.9);
@@ -2920,3 +2922,30 @@
 .chat-shell .input-container.chat-image-dragover .input-wrapper { border-color: #f97316; border-style: dashed; }
 .chat-message-image { display: block; margin-bottom: 8px; }
 .chat-message-image img { max-width: 240px; max-height: 240px; border-radius: 8px; display: block; }
+
+@media (max-width: 1023px) {
+    .chat-messages, .empty-state { background-image: none; }
+    .input-footer { display: flex; align-items: center; gap: 12px; }
+    .input-footer .disclaimer { flex: 1; }
+    .input-footer .llama-click-target { position: static; flex-shrink: 0; width: 44px; height: 44px; border: 0; background: url('/assets/img/llama.png') center / contain no-repeat; opacity: 1; }
+    .input-footer .llama-click-target:hover { opacity: 0.85; }
+    .chat-settings-title-wrap--marquee { mask-image: none; }
+    .chat-settings-title--marquee { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; animation: none; transform: none; }
+}
+@media (max-width: 759px) {
+    .empty-state { padding: 16px; min-height: 0; overflow-y: auto; align-items: flex-start; background-image: none; }
+    .empty-state-content { padding: 0; }
+    .empty-state-form { padding: 16px; }
+    .empty-state-section-header { flex-wrap: wrap; }
+    .empty-state-section-actions { top: 0; flex-wrap: wrap; width: 100%; margin: 8px 0; }
+    .empty-state-kilo-chat-bubble { position: static; display: block; transform: none; white-space: normal; margin-bottom: 8px; }
+    .empty-state-kilo-chat-bubble::after { display: none; }
+    .empty-state-row { flex-direction: column; align-items: stretch; }
+    .empty-state-row .form-control-select, .modal .form-control { font-size: 16px; min-height: 44px; }
+    .empty-state-key-hint { white-space: normal; }
+    .empty-state-key-hint-tooltip { left: 0; transform: none; width: min(280px, 75vw); }
+    .empty-state-action-btn, .speaker-toggle, .send-button,
+    .header-icon-btn, .context-ring, .modal-close, .modal .btn { min-width: 44px; min-height: 44px; }
+    .modal-row { flex-direction: column; }
+    .modal-row .form-group { width: 100%; }
+}

@@ -8,6 +8,7 @@ export function createIncoming({ context, actions, el }) {
         incomingLoad: null,
         incomingLoadedAt: 0,
         incomingFilter: 'whatsapp',
+        incomingMobileDetail: false,
         selectedTelegramThreadKey: '',
         selectedIncomingConversationKey: '',
         incomingLinkConversationKey: '',
@@ -182,7 +183,7 @@ export function createIncoming({ context, actions, el }) {
 
     function gmailReaderHtml(conversation) {
         if (!conversation)
-            return '<div class="incoming-reader-empty"><strong>Select a Gmail thread</strong><p>Choose an inbox thread on the left to read it here.</p></div>';
+            return '<div class="incoming-reader-empty"><strong>Select a conversation</strong><p>Choose a conversation on the left to read it here.</p></div>';
         const latest = conversation.latest || {};
         let actionHtml = '';
         if (latest.ticket_id) {
@@ -227,6 +228,7 @@ export function createIncoming({ context, actions, el }) {
     function renderIncomingWorkspace() {
         const list = el('incoming-list');
         if (!list) return;
+        el('incoming-workspace').classList.toggle('incoming-detail-open', state.incomingMobileDetail);
         document.querySelectorAll('[data-incoming-filter]').forEach((button) => {
             const selected = button.dataset.incomingFilter === state.incomingFilter;
             button.classList.toggle('active', selected);
@@ -258,6 +260,7 @@ export function createIncoming({ context, actions, el }) {
         list.querySelectorAll('[data-incoming-conversation]').forEach((button) => {
             button.addEventListener('click', () => {
                 state.selectedIncomingConversationKey = button.dataset.incomingConversation || '';
+                state.incomingMobileDetail = true;
                 renderIncomingWorkspace();
             });
             button.addEventListener('contextmenu', (event) => {
@@ -288,6 +291,7 @@ export function createIncoming({ context, actions, el }) {
         gmailList.querySelectorAll('[data-incoming-gmail-thread]').forEach((button) =>
             button.addEventListener('click', () => {
                 state.selectedGmailThreadKey = button.dataset.incomingGmailThread || '';
+                state.incomingMobileDetail = true;
                 renderIncomingWorkspace();
             })
         );
@@ -315,6 +319,7 @@ export function createIncoming({ context, actions, el }) {
         mailshotList.querySelectorAll('[data-incoming-mailshot-thread]').forEach((button) =>
             button.addEventListener('click', () => {
                 state.selectedMailshotThreadKey = button.dataset.incomingMailshotThread || '';
+                state.incomingMobileDetail = true;
                 renderIncomingWorkspace();
             })
         );
@@ -345,6 +350,7 @@ export function createIncoming({ context, actions, el }) {
             telegramList.querySelectorAll('[data-incoming-telegram-thread]').forEach((button) =>
                 button.addEventListener('click', () => {
                     state.selectedTelegramThreadKey = button.dataset.incomingTelegramThread || '';
+                    state.incomingMobileDetail = true;
                     renderIncomingWorkspace();
                 })
             );
@@ -687,6 +693,7 @@ export function createIncoming({ context, actions, el }) {
                         upsertRow(el('incoming-list'), `[data-incoming-conversation="${CSS.escape(conversation.key)}"]`, incomingConversationRowHtml(conversation), (row) => {
                             row.addEventListener('click', () => {
                                 state.selectedIncomingConversationKey = row.dataset.incomingConversation || '';
+                                state.incomingMobileDetail = true;
                                 renderIncomingWorkspace();
                             });
                             row.addEventListener('contextmenu', (event) => {
@@ -704,6 +711,7 @@ export function createIncoming({ context, actions, el }) {
                     upsertRow(el(config.list), `[${config.attr}="${CSS.escape(conversation.key)}"]`, mailThreadButtonHtml(conversation, state[config.stateKey], config.attr), (row) => {
                         row.addEventListener('click', () => {
                             state[config.stateKey] = row.dataset[config.dataKey] || '';
+                            state.incomingMobileDetail = true;
                             renderIncomingWorkspace();
                         });
                     });
@@ -839,9 +847,15 @@ export function createIncoming({ context, actions, el }) {
         document.querySelectorAll('[data-incoming-filter]').forEach((button) =>
             button.addEventListener('click', () => {
                 state.incomingFilter = button.dataset.incomingFilter || 'all';
+                state.incomingMobileDetail = false;
                 renderIncomingWorkspace();
             })
         );
+        document.querySelectorAll('[data-incoming-back]').forEach((button) => button.addEventListener('click', () => {
+            state.incomingMobileDetail = false;
+            el('incoming-workspace').classList.remove('incoming-detail-open');
+            el(`incoming-panel-${state.incomingFilter}`)?.querySelector('.selected')?.focus();
+        }));
         el('incoming-resync')?.addEventListener('click', () => refreshIncomingData({ force: true }));
         startIncomingAutoRefresh();
         el('incoming-link-form').addEventListener('submit', (event) => {

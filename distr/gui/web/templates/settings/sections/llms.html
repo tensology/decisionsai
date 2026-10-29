@@ -195,7 +195,8 @@
             <div class="rounded-lg border border-[#565869] bg-[#20264a] p-5 llm-settings-routing">
                 <h4 class="mb-4 text-center text-base font-semibold text-white">Complexity routing</h4>
                 <div id="llms_exec_routing" class="llms-exec-routing">
-                    <div id="llms_exec_routes" class="llms-exec-routes"><p class="text-center text-sm text-gray-400">Loading...</p></div>
+                    <p id="llms_exec_routing_scroll_hint" class="mb-2 text-xs text-gray-400">Scroll horizontally to see all routing columns.</p>
+                    <div id="llms_exec_routes" class="llms-exec-routes" role="region" tabindex="0" aria-label="Complexity routing options, scroll horizontally to view all columns"><p class="text-center text-sm text-gray-400">Loading...</p></div>
                     <div class="mt-4 flex flex-col items-center gap-2">
                         <button type="button" id="llms_exec_routing_save" class="px-4 py-1.5 rounded-md text-sm font-medium bg-[#10a37f] text-white hover:bg-[#0d8f70] disabled:opacity-40 disabled:cursor-not-allowed" disabled>Save routing</button>
                         <p id="llms_exec_routing_status" class="min-h-4 text-center text-xs text-gray-500" aria-live="polite"></p>

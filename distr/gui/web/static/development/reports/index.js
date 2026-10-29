@@ -164,6 +164,14 @@ export function createReports({ api, root, escapeHtml }) {
         if (tab === 'time') renderTime();
         else if (tab === 'costs') renderCosts();
         else renderRuns();
+        const headers = [...result.querySelectorAll('th')];
+        headers.forEach((header) => {
+            header.setAttribute('scope', 'col');
+            header.dataset.label = header.textContent;
+        });
+        result.querySelectorAll('tbody tr').forEach((row) => {
+            [...row.cells].forEach((cell, index) => { cell.dataset.label = headers[index].textContent; });
+        });
     }
 
     async function load() {

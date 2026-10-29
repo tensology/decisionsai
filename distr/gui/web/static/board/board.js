@@ -2,6 +2,7 @@
 let boardData = null;
 let isLocalProvider = true;
 let projectId = null;
+let modalTrigger = null;
 
 // Get project_id from URL query params
 function getProjectId() {
@@ -78,6 +79,14 @@ function setupEventListeners() {
 
     closeBtn.addEventListener('click', closeModal);
     cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeModal();
+        if (event.key !== 'Tab') return;
+        const controls = [...modal.querySelectorAll('button, input, textarea, select')].filter((node) => !node.disabled && node.getClientRects().length);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
 
     // Close modal when clicking outside
     window.addEventListener('click', (e) => {
@@ -152,7 +161,7 @@ function apiCall(endpoint, method = 'GET', data = null) {
 }
 
 // Load board from API
-async function loadBoard() {
+async function loadBoard(event) {
     console.log('Loading board...');
     console.log('Current location:', window.location.href);
     console.log('Project ID:', projectId);
@@ -187,7 +196,7 @@ async function loadBoard() {
         console.log('Rendering board...');
         renderBoard();
         console.log('Board rendered successfully');
-        showSnackbar('Board refreshed');
+        if (event?.type === 'click') showSnackbar('Board refreshed');
     } catch (error) {
         console.error('Failed to load board:', error);
         console.error('Error stack:', error.stack);
@@ -329,8 +338,8 @@ function createTicketHtml(ticket) {
     return `
         <div class="ticket-card ${priorityClass}" data-ticket-id="${ticket.id}" data-priority="${ticket.priority || ''}" ondblclick="showEditTicketModal('${ticket.id}')" oncontextmenu="event.preventDefault(); showTicketContextMenu(event, '${ticket.id}')">
             <div class="ticket-actions">
-                <div class="ticket-edit-icon" data-ticket-id="${ticket.id}" onclick="event.stopPropagation(); showEditTicketModal('${ticket.id}')" title="Edit ticket">✏️</div>
-                <div class="ticket-send-icon" data-ticket-id="${ticket.id}" onclick="event.stopPropagation(); sendTicketToProject('${ticket.id}')" title="Send to project">📤</div>
+                <button type="button" class="ticket-edit-icon" data-ticket-id="${ticket.id}" onclick="event.stopPropagation(); showEditTicketModal('${ticket.id}')" aria-label="Edit ticket" title="Edit ticket">✏️</button>
+                <button type="button" class="ticket-send-icon" data-ticket-id="${ticket.id}" onclick="event.stopPropagation(); sendTicketToProject('${ticket.id}')" aria-label="Send ticket to project" title="Send to project">📤</button>
             </div>
             <div class="ticket-title">${escapeHtml(ticket.title)}</div>
             <div class="ticket-meta">
@@ -516,6 +525,7 @@ function initializeColumnDragAndDrop() {
 
 // Show add ticket modal
 function showAddTicketModal(columnId) {
+    modalTrigger = document.activeElement;
     const modal = document.getElementById('ticketModal');
     document.getElementById('modalTitle').textContent = 'Create Ticket';
     document.getElementById('ticketId').value = '';
@@ -524,12 +534,15 @@ function showAddTicketModal(columnId) {
 
     // Reset form
     document.getElementById('ticketForm').reset();
+    window.DecisionsDateTime?.refreshInput(document.getElementById('ticketDueDate'));
 
     modal.classList.add('active');
+    document.getElementById('ticketTitle').focus();
 }
 
 // Show edit ticket modal
 async function showEditTicketModal(ticketId) {
+    modalTrigger = document.activeElement;
     // Show loading spinner on the edit icon
     const editIcon = document.querySelector(`.ticket-edit-icon[data-ticket-id="${ticketId}"]`);
     let originalIcon = null;
@@ -554,10 +567,12 @@ async function showEditTicketModal(ticketId) {
         document.getElementById('ticketAssignee').value = ticket.assignee || '';
         document.getElementById('ticketPriority').value = ticket.priority || '';
         document.getElementById('ticketDueDate').value = ticket.due_date ? ticket.due_date.split('T')[0] : '';
+        window.DecisionsDateTime?.refreshInput(document.getElementById('ticketDueDate'));
         document.getElementById('ticketTags').value = ticket.tags ? ticket.tags.join(', ') : '';
         document.getElementById('ticketTimeEstimate').value = ticket.time_estimate || '';
 
         modal.classList.add('active');
+        document.getElementById('ticketTitle').focus();
     } catch (error) {
         console.error('Failed to load ticket:', error);
         showSnackbar('Failed to load ticket', true);
@@ -575,6 +590,7 @@ function closeModal() {
     const modal = document.getElementById('ticketModal');
     modal.classList.remove('active');
     document.getElementById('ticketForm').reset();
+    modalTrigger?.focus();
 }
 
 // Handle ticket form submission

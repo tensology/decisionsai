@@ -22,7 +22,7 @@
         #actions-workspace button { min-height: 44px; }
         .action-item-delete { min-width: 44px; }
         .action-item { overflow-wrap: anywhere; }
-        #actions-workspace input, #actions-workspace textarea { font-size: 16px; }
+        #actions-workspace input, #actions-workspace textarea { font-size: 16px; min-height: 44px; }
         #actions-search { min-height: 44px; }
         #actions-workspace button:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
     }
@@ -136,5 +136,5 @@
 
 {% block extra_scripts %}
 <script src="/static/shared/js/api.js"></script>
-<script src="/actions/static/js/actions.js"></script>
+<script src="/actions/static/js/actions.js?v=20261028-responsive"></script>
 {% endblock %}

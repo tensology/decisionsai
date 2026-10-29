@@ -7,7 +7,7 @@
     <link rel="icon" href="/assets/icons/favicon.png" type="image/png">
     <title>{% if diagram_title %}{{ diagram_title }}{% else %}Diagram{% endif %} - Decisions AI</title>
     <link href="/static/vendor/quicksand.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261022-req">
+    <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 </head>
 <body>
     <div id="mermaid-viewer-root"></div>
@@ -32,7 +32,7 @@
     })();
     </script>
     <script src="/static/shared/js/api.js"></script>
-    <script src="/static/shared/js/mermaid_viewer.js"></script>
+    <script src="/static/shared/js/mermaid_viewer.js?v=20261028-contained-render"></script>
     <script>
     document.addEventListener('DOMContentLoaded', function() {
       if (window.DecisionsMermaid) window.DecisionsMermaid.initPage();

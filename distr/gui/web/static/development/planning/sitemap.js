@@ -155,10 +155,11 @@ export function layoutConnectedSitemap(model, screens = []) {
     const placed = [];
     let width = SITEMAP_NODE.width;
     let height = SITEMAP_NODE.height;
+    const firstColumn = columns.size ? Math.min(...columns.keys()) : 0;
     for (const column of [...columns.keys()].sort((a, b) => a - b)) {
         const rows = columns.get(column).slice().sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
         rows.forEach((node, index) => {
-            const x = column * (SITEMAP_NODE.width + SITEMAP_NODE.gapX);
+            const x = (column - firstColumn) * (SITEMAP_NODE.width + SITEMAP_NODE.gapX);
             const y = index * (SITEMAP_NODE.height + SITEMAP_NODE.gapY);
             placed.push({ ...node, x, y, w: SITEMAP_NODE.width, h: SITEMAP_NODE.height });
             width = Math.max(width, x + SITEMAP_NODE.width);
