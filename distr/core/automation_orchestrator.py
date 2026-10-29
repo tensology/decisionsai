@@ -769,6 +769,19 @@ def dispatch_automation_to_current_chat(
             "event_ids": [],
         }
 
+    # gap2 2026-10-29: read-only automations may only run a read-only-capable tool;
+    # a free-form instruction would hand the agent its full (writing) toolset.
+    _ac = automation.get("action_config") if isinstance(automation.get("action_config"), dict) else {}
+    if _ac.get("read_only"):
+        from distr.core.automation_tool_runner import READ_ONLY_CAPABLE_TOOLS, _normalize_tool_name
+
+        if _normalize_tool_name(tool_name) not in READ_ONLY_CAPABLE_TOOLS:
+            return {
+                "status": "failed",
+                "summary": "Read-only mode: this automation must use a read-only-capable tool; refused.",
+                "workflow_run_id": None,
+                "event_ids": [],
+            }
     event_fn = emit_event or emit_automation_event
     invocation = automation.get("_invocation_context")
     has_untrusted_external_input = bool(

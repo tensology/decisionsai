@@ -267,7 +267,7 @@ def _execute_tool_automation(
     *,
     manual: bool,
 ) -> tuple[bool, str, str]:
-    from distr.core.automation_tool_runner import run_automation_tool
+    from distr.core.automation_tool_runner import run_automation_tool_for
     from distr.core.engagement_gates import proactive_delivery_blocked
 
     action_config = automation.get("action_config") if isinstance(automation.get("action_config"), dict) else {}
@@ -288,7 +288,9 @@ def _execute_tool_automation(
         }.get(reason, "Skipped by engagement policy.")
         return False, summary, ""
 
-    tool_result = run_automation_tool(tool_name, tool_args)
+    tool_result = run_automation_tool_for(automation, tool_name, tool_args)
+    # gap3: keep the raw tool payload for notification_policy delivery.
+    automation["_last_tool_raw"] = tool_result.get("raw") if isinstance(tool_result.get("raw"), dict) else {}
     output = str(tool_result.get("output") or "").strip()
     spoken = str(tool_result.get("spoken_summary") or output).strip()
     success = bool(tool_result.get("success"))
@@ -385,7 +387,18 @@ def _automation_worker(
                 )
                 return
 
+            # gap3 2026-10-29: honour notification_policy (in-app + macOS only; quiet when nothing new).
+            notice: dict[str, Any] = {}
+            if success:
+                try:
+                    from distr.core.automation.notify import deliver as _deliver_notice
+
+                    notice = _deliver_notice({**automation, "thread_chat_id": chat_id}, automation.get("_last_tool_raw"), emit_event=emit_event)
+                except Exception:
+                    logger.debug("Automation notification delivery failed", exc_info=True)
             channel, channel_detail = ("none", "saved in run history")
+            if notice.get("notified"):
+                channel, channel_detail = "notification", ", ".join(notice.get("channels") or [])
             if success and speech_text and origin_surface == "telegram":
                 channel, channel_detail = _deliver_automation_speech(
                     speech_text,

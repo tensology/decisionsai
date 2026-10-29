@@ -101,3 +101,25 @@ def cron_to_calendar_schedule(cron: str) -> dict[str, Any]:
     else:
         raise ScheduleValidationError(f"Cron {cron!r} has no calendar equivalent")
     return validate_calendar_schedule(out)
+
+
+def validate_cron_expression(expr: Any, timezone: Any = None) -> str:
+    """gap1 2026-10-29: validate a raw 5-field cron (ranges, lists, steps) and its timezone."""
+    text = " ".join(str(expr or "").split())
+    if len(text.split()) != 5:
+        raise ScheduleValidationError(f"Cron must have 5 fields: {expr!r}")
+    try:
+        from croniter import croniter
+    except ImportError as exc:  # pragma: no cover
+        raise ScheduleValidationError("croniter is not installed") from exc
+    if not croniter.is_valid(text):
+        raise ScheduleValidationError(f"Invalid cron expression: {expr!r}")
+    tz = str(timezone or "").strip()
+    if tz:
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(tz)
+        except Exception as exc:
+            raise ScheduleValidationError(f"Unknown timezone: {tz!r}") from exc
+    return text

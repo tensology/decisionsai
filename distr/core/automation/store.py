@@ -99,7 +99,7 @@ def normalize_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
     if kind == "weekdays":
         kind = "weekly"
         schedule = {**schedule, "kind": "weekly", "days": "1,2,3,4,5"}
-    if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly", "monthly", "yearly"}:
+    if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly", "monthly", "yearly", "cron"}:
         if strict:
             raise AutomationStoreError(f"Unsupported schedule kind: {kind or 'empty'}")
         kind = "daily"
@@ -124,6 +124,18 @@ def normalize_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
             if strict:
                 raise AutomationStoreError(str(exc)) from exc
             time_value = "09:00"
+    cron_expr = ""
+    if kind == "cron":
+        # gap1 2026-10-29: raw 5-field cron evaluated in the schedule's timezone
+        # (e.g. "1-51/10 7-19 * * *" + Africa/Johannesburg = every 10 min 07:01-19:51).
+        from distr.core.automation.schedule_cron import validate_cron_expression
+
+        try:
+            cron_expr = validate_cron_expression(schedule.get("cron") or schedule.get("expression") or "", schedule.get("timezone"))
+        except ValueError as exc:
+            if strict:
+                raise AutomationStoreError(str(exc)) from exc
+            cron_expr = ""
     run_at = str(schedule.get("run_at") or "").strip()
     if kind == "once" and strict:
         if not run_at:
@@ -166,6 +178,7 @@ def normalize_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
         "month": str(schedule.get("month") or "1") if kind == "yearly" else "",
         "timezone": str(schedule.get("timezone") or ""),
         "ignored_occurrences": _normalize_ignored(schedule.get("ignored_occurrences")),
+        **({"cron": cron_expr} if kind == "cron" else {}),
     }
 
 
@@ -200,6 +213,10 @@ def _compute_next_run_raw(schedule: dict[str, Any]) -> datetime | None:
             from distr.core.automation.schedule_cron import calendar_schedule_to_cron
 
             return _next_run_from_cron(calendar_schedule_to_cron(schedule), utc_now(), schedule.get("timezone"), allow_current_minute=True)
+        if schedule.get("kind") == "cron":
+            if not schedule.get("cron"):
+                return None
+            return _next_run_from_cron(schedule["cron"], utc_now(), schedule.get("timezone"), allow_current_minute=True)
         schedule_time = schedule.get("time")
         if schedule.get("kind") == "once":
             schedule_time = schedule.get("run_at")
@@ -224,6 +241,8 @@ def apply_schedule_to_row(row: Automation, schedule: dict[str, Any]) -> None:
         row.schedule_time = schedule.get("run_at")
     elif schedule["kind"] == "interval":
         row.schedule_time = f"{schedule.get('interval')}:{schedule.get('interval_unit')}"
+    elif schedule["kind"] == "cron":
+        row.schedule_time = schedule.get("cron")
     else:
         row.schedule_time = schedule.get("time")
     row.schedule_days = schedule.get("days") or "1"
@@ -290,6 +309,7 @@ def serialize_automation(row: Automation) -> dict[str, Any]:
             "month": schedule.get("month") or "",
             "timezone": schedule.get("timezone") or "",
             "ignored_occurrences": list(schedule.get("ignored_occurrences") or []),
+            **({"cron": schedule.get("cron") or ""} if schedule["kind"] == "cron" else {}),
         },
         "created_at": iso(row.created_date),
         "updated_at": iso(row.modified_date),

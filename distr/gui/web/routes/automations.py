@@ -366,6 +366,9 @@ def create_routes() -> APIRouter:
             action_config.pop("development_chat_id", None)
             if payload.source_config:
                 action_config["source_config"] = dict(payload.source_config)
+            # gap3 2026-10-29: notification_policy was accepted and dropped; persist it.
+            if payload.notification_policy:
+                action_config["notification_policy"] = dict(payload.notification_policy)
             if payload.linked_project_id is not None:
                 action_config.setdefault("linked_project_id", int(payload.linked_project_id))
             if payload.optional_workflow_id is not None:
@@ -442,6 +445,9 @@ def create_routes() -> APIRouter:
             action_config = dict(existing.get("action_config") or {})
         if isinstance(data.get("source_config"), dict):
             action_config["source_config"] = data.pop("source_config")
+        notification_policy_set = isinstance(data.get("notification_policy"), dict)
+        if notification_policy_set:
+            action_config["notification_policy"] = data.pop("notification_policy")
         # The persisted first-class relation is authoritative. A PUT cannot
         # rebind an automation to a client-selected chat.
         owned_chat_id = existing.get("thread_chat_id")
@@ -449,7 +455,7 @@ def create_routes() -> APIRouter:
             action_config["development_chat_id"] = int(owned_chat_id)
         else:
             action_config.pop("development_chat_id", None)
-        if isinstance(incoming_action_config, dict) or "source_config" in payload.model_fields_set:
+        if isinstance(incoming_action_config, dict) or "source_config" in payload.model_fields_set or notification_policy_set:
             data["action_config"] = action_config
         # These are first-class ownership fields, not incidental JSON options.
         if "linked_board_id" in data:

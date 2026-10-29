@@ -27,7 +27,12 @@ def advance_next_run_for_automation(row: Automation) -> None:
             base = datetime.utcnow()
             row.next_run_at = base + interval_timedelta(value, unit)
             return
-    if preset == "yearly":
+    if preset == "cron":
+        # gap1: raw cron + timezone lives in schedule_config.
+        from distr.core.automation.store import schedule_dict_from_row
+
+        cron = schedule_dict_from_row(row).get("cron") or None
+    elif preset == "yearly":
         # autocog: yearly lives only in schedule_config (needs the month).
         from distr.core.automation.schedule_cron import calendar_schedule_to_cron
         from distr.core.automation.store import schedule_dict_from_row
