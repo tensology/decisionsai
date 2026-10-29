@@ -44,6 +44,33 @@ _OWNER_RULES = [
 ]
 
 
+_RUN_RE = re.compile(r"(?<![A-Za-z])runs?\s+#?(\d+)", re.I)
+_ID_LIST_RE = re.compile(r"\(\s*(\d+(?:\s*,\s*\d+)*)\s*\)")
+_TICKET_RE = re.compile(r"#(\d+)")
+
+
+def seeded_stale_keys(stale_proposals: Any) -> list[str]:
+    """Map already-reported stale proposals from the Grok Bot state file to this tool's stale keys.
+
+    Read-only: only text such as ``run 166``, ``(158,159)`` or ``#227`` is recognised. Items without a
+    recognisable id (for example an email-based proposal) are ignored, so they are never silently dropped.
+    """
+    keys: set[str] = set()
+    for entry in stale_proposals or []:
+        text = str(entry.get("item", "")) if isinstance(entry, dict) else str(entry)
+        for m in _RUN_RE.finditer(text):
+            keys.add(f"run:{m.group(1)}")
+        for m in _ID_LIST_RE.finditer(text):
+            keys.update(f"ticket:{n}" for n in re.findall(r"\d+", m.group(1)))
+        for m in _TICKET_RE.finditer(text):
+            keys.add(f"ticket:{m.group(1)}")
+    return sorted(keys)
+
+
+def plain_headline(text: str) -> str:
+    return text.replace("**", "").replace("*", "").strip()
+
+
 def _owner(text: str) -> str:
     for rx, owner in _OWNER_RULES:
         if rx.search(text or ""):
@@ -133,6 +160,9 @@ class SupportMonitor:
             src = json.loads(self.seed_state_file.read_text())
             seed = {k: src[k] for k in ("last_seen", "outstanding", "proposal_sources") if k in src}
             seed["seeded_from"] = str(self.seed_state_file.name)
+            reported = seeded_stale_keys(src.get("stale_proposals"))
+            if reported:
+                seed["stale_reported"] = reported
         seed.setdefault("last_seen", {})
         return seed
 
@@ -367,9 +397,9 @@ class SupportMonitor:
             "success": True,
             "notify": notify,
             "needs_action": need > 0,
-            "headline": lines[0].strip("*"),
+            "headline": plain_headline(lines[0]),
             "markdown": markdown,
-            "spoken_summary": lines[0].strip("*") if notify else "Support monitor: nothing new.",
+            "spoken_summary": plain_headline(lines[0]) if notify else "Support monitor: nothing new.",
             "new_items": len(new_items),
             "newly_stale": len(newly_stale),
             "channel_status": dict(self.channel_status),
