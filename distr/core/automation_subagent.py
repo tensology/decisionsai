@@ -387,6 +387,8 @@ def _automation_worker(
                 )
                 return
 
+            # Every automation posts its result visibly into its own thread chat
+            # so it shows up in Recent, regardless of project.
             # gap3 2026-10-29: honour notification_policy (in-app + macOS only; quiet when nothing new).
             notice: dict[str, Any] = {}
             if success:
@@ -399,6 +401,14 @@ def _automation_worker(
             channel, channel_detail = ("none", "saved in run history")
             if notice.get("notified"):
                 channel, channel_detail = "notification", ", ".join(notice.get("channels") or [])
+            if chat_id and summary and not notice.get("quiet") and not notice.get("notified"):
+                try:
+                    from distr.core.chat import ChatService
+
+                    if ChatService.append_assistant_notice(int(chat_id), summary):
+                        channel, channel_detail = "thread", f"posted to chat {chat_id}"
+                except Exception:
+                    logger.debug("Automation thread post failed", exc_info=True)
             if success and speech_text and origin_surface == "telegram":
                 channel, channel_detail = _deliver_automation_speech(
                     speech_text,

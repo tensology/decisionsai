@@ -105,6 +105,30 @@ def _utc_naive(text: Any) -> datetime | None:
         return None
 
 
+def _parse_iso(text: Any) -> datetime | None:
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _latest_activity(row: dict[str, Any]) -> datetime | None:
+    """Newest timestamp we can find on a Tensology work-request (top level, else evidence)."""
+    for key in ("created_at", "updated_at", "last_activity", "updated", "created"):
+        at = _parse_iso(row.get(key))
+        if at:
+            return at
+    times = [
+        at
+        for ev in (row.get("evidence") or [])
+        if isinstance(ev, dict) and (at := _parse_iso(ev.get("sent_at")))
+    ]
+    return max(times) if times else None
+
+
 def _ro_db(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
     con.row_factory = sqlite3.Row
@@ -139,6 +163,7 @@ class SupportMonitor:
         now: datetime | None = None,
         gmail_service: Any = None,
         mailshot_fetch: Callable[[], list[dict[str, Any]]] | None = None,
+        tensology_fetch: Callable[[], list[dict[str, Any]]] | None = None,
         port_check: Callable[[], bool] | None = None,
     ) -> None:
         self.db_path = Path(db_path)
@@ -148,6 +173,7 @@ class SupportMonitor:
         self.gmail_service = gmail_service
         self.gmail_error = ""
         self.mailshot_fetch = mailshot_fetch
+        self.tensology_fetch = tensology_fetch
         self.port_check = port_check or (lambda: port_open(TUNNEL_PORT))
         self.channel_status: dict[str, str] = {}
 
@@ -309,6 +335,68 @@ class SupportMonitor:
             pass
         return out
 
+    def _tensology_proposals(self, con: sqlite3.Connection) -> list[dict[str, Any]]:
+        """Client proposals awaiting a decision, from the Tensology site API (read-only).
+
+        Generic by design: whatever the API reports as pending is what we watch.
+        No board, project or ticket names are hardcoded here.
+        """
+        if self.tensology_fetch is not None:
+            try:
+                rows = self.tensology_fetch() or []
+            except Exception as exc:
+                self.channel_status["tensology"] = f"error: {type(exc).__name__}"
+                return []
+        else:
+            try:
+                row = con.execute(
+                    "select tensology_enabled, tensology_url, tensology_key from settings limit 1"
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self.channel_status["tensology"] = f"error: {exc}"
+                return []
+            if not row or not row["tensology_enabled"] or not str(row["tensology_key"] or "").strip():
+                self.channel_status["tensology"] = "not configured"
+                return []
+            try:
+                from distr.core.tensology_client import TensologyClient
+                from distr.core.utils import _decrypt_secret
+
+                # The key is stored encrypted; decrypt the read-only value rather than
+                # open a second (writable) settings session, which read-only forbids.
+                raw_key = str(row["tensology_key"])
+                client = TensologyClient(
+                    base_url=str(row["tensology_url"] or "https://www.tensology.com"),
+                    api_key=_decrypt_secret(raw_key) or raw_key,
+                    source="decisionsai-support-monitor",
+                )
+                data = client.get("work-requests", query={"status": "pending"})
+                rows = data if isinstance(data, list) else []
+            except Exception as exc:
+                self.channel_status["tensology"] = f"error: {type(exc).__name__}"
+                return []
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            at = _latest_activity(r) or self.now
+            wd = working_days_between(at, self.now)
+            project = (r.get("project") or {}).get("name") if isinstance(r.get("project"), dict) else ""
+            title = " ".join(str(r.get("title") or "").split())[:70]
+            label = f"Tensology proposal {r.get('id')}" + (f" ({project})" if project else "")
+            stale = wd > 2
+            out.append({
+                "key": f"tensology-proposal:{r.get('id')}",
+                "item": f"{label} {title}".strip(),
+                "lane": str(r.get("status") or "pending"),
+                "last": _sast(at),
+                "stuck": f"{wd:.1f} working days",
+                "rule": "proposal waiting >2 working days" if stale else "proposal awaiting a decision",
+                "next": "Paul/Jupiter: queue, send to Decisions, or dismiss",
+            })
+        self.channel_status["tensology"] = f"ok ({len(rows)} pending proposal(s))"
+        return out
+
     # ------------------------------------------------------------------ run
     def run(self, *, write_state: Callable[[dict], Any] | None = None, force: bool = False) -> dict[str, Any]:
         local = self.now.astimezone(SAST)
@@ -330,6 +418,7 @@ class SupportMonitor:
                 except sqlite3.Error as exc:
                     self.channel_status[name] = f"error: {exc}"
             stale = self.stale(con)
+            stale += self._tensology_proposals(con)
         finally:
             con.close()
         # dedupe: same sender + subject within 24h is one item

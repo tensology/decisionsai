@@ -428,6 +428,57 @@ def test_legacy_planner_proactive_tasks_disabled_on_seed(tmp_path, monkeypatch):
     assert names.get("Day Planner") is False
 
 
+def test_tool_automation_posts_result_into_its_thread(tmp_path, monkeypatch):
+    import json
+
+    from distr.core.db import Chat, get_session, init_db
+    from distr.core.db.automation import Automation, AutomationRun
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'thread_post.sqlite3'}")
+    init_db()
+
+    with get_session() as session:
+        chat = Chat(title="Thread post", created_date=datetime.utcnow(), modified_date=datetime.utcnow())
+        session.add(chat)
+        session.flush()
+        chat_id = chat.id
+        auto = Automation(
+            name="Thread post",
+            automation_type="tool_action",
+            status="active",
+            action_config=json.dumps({"tool": "proactive_orchestrator"}),
+        )
+        session.add(auto)
+        session.flush()
+        run = AutomationRun(automation_id=auto.id, status="running", run_data="{}")
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    monkeypatch.setattr(
+        "distr.core.automation_tool_runner.run_automation_tool",
+        lambda tool, args: {"success": True, "output": "Plan ready.", "spoken_summary": "Plan ready.", "raw": {}},
+    )
+
+    from distr.core.automation_subagent import _automation_worker
+
+    _automation_worker(
+        automation={"id": "auto_1", "name": "Thread post", "action_config": {"tool": "proactive_orchestrator", "args": {}}},
+        run_id=run_id,
+        manual=False,
+        chat_id=chat_id,
+        speak=False,
+        schedule_metadata=None,
+        emit_event=None,
+    )
+
+    with get_session() as session:
+        children = session.query(Chat).filter(Chat.parent_id == chat_id).all()
+        assert any((c.response or "") == "Plan ready." for c in children)
+        posted = session.query(AutomationRun).filter(AutomationRun.id == run_id).one()
+        assert json.loads(posted.run_data)["delivery_channel"] == "thread"
+
+
 def test_automations_presets_api():
     from distr.gui.web.routes.automations import create_routes
 
