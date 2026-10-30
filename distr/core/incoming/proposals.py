@@ -199,11 +199,35 @@ def _proposal_prompt(proposal: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _tensology_id(proposal_id: Any) -> int | None:
+    """Extract the numeric Tensology proposal id from an ``id`` like ``tensology:45``."""
+    raw = str(proposal_id or "")
+    if not raw.startswith("tensology:"):
+        return None
+    tail = raw.split(":", 1)[1]
+    return int(tail) if tail.isdigit() else None
+
+
+def dismiss_proposal(proposal: dict[str, Any]) -> bool:
+    """Dismiss a proposal. On Tensology this clears it so it stops being proposed."""
+    proposal_id = _tensology_id(proposal.get("id"))
+    if proposal_id is None:
+        return False  # local proposals have no upstream record to dismiss
+    from distr.core.tensology_client import decide_work_request
+
+    decide_work_request(proposal_id, "dismiss")
+    return True
+
+
 def create_proposal_thread(proposal: dict[str, Any]) -> int:
     """Create a Development thread for an Incoming proposal.
 
     Uses the same path as the studio task route (``ChatService.create_new_chat``),
     so a pushed proposal lands in a normal thread tied to its project.
+
+    When the proposal also lives on Tensology, it is actioned there
+    (``send_to_decisions``) so it drops off the pending list and is never
+    proposed twice.
     """
     from distr.core.chat import ChatService
     from distr.core.settings import load_settings_from_db
@@ -227,6 +251,20 @@ def create_proposal_thread(proposal: dict[str, Any]) -> int:
         autonomy_level="goal",
         activate=False,
     )
+    # Write back to Tensology so the same proposal is not shown twice: pushing a
+    # thread here is the same decision as "Send to Decisions" on the site.
+    proposal_id = _tensology_id(proposal.get("id"))
+    if proposal_id is not None:
+        try:
+            from distr.core.tensology_client import decide_work_request
+
+            decide_work_request(proposal_id, "send_to_decisions")
+        except Exception:  # never fail the local thread because the site is down
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Tensology write-back failed for proposal %s", proposal_id, exc_info=True
+            )
     return int(chat_id)
 
 

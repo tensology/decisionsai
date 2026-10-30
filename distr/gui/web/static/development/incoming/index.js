@@ -236,15 +236,31 @@ export function createIncoming({ context, actions, el }) {
                 : '';
         const origin = proposal.origin === 'tensology' ? 'Synced' : 'Detected';
         const status = String(proposal.status || '').replace(/_/g, ' ');
+        const proposalId = actions.escapeHtml(proposal.id || '');
         const push = proposal.project_id
-            ? `<button type="button" class="incoming-proposal-push" data-incoming-proposal-thread="${actions.escapeHtml(proposal.id || '')}" title="Create a Development thread for this proposal">Create Thread</button>`
+            ? `<button type="button" class="incoming-proposal-push" data-incoming-proposal-thread="${proposalId}" title="Create a Development thread for this proposal">Create Thread</button>`
             : `<span class="incoming-proposal-push muted" title="Link this conversation to a project first">No project</span>`;
+        const dismiss = `<button type="button" class="incoming-proposal-push ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
         return `<div class="incoming-proposal-row">
             <span class="incoming-avatar" aria-hidden="true">${actions.escapeHtml(incomingInitials(proposal.participant || proposal.title || 'P'))}</span>
             <span class="incoming-proposal-main"><strong>${actions.escapeHtml(proposal.title || 'Proposal')}</strong><small>${actions.escapeHtml(source)} · ${actions.escapeHtml(project)} · ${actions.escapeHtml(status)}${actions.escapeHtml(amount)}</small></span>
             <span class="incoming-proposal-origin">${actions.escapeHtml(origin)}</span>
-            ${push}
+            ${push}${dismiss}
         </div>`;
+    }
+
+    async function dismissProposal(proposalId, button) {
+        const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
+        if (!proposal) return;
+        button.disabled = true;
+        try {
+            await actions.api('/workflows/studio/incoming/proposals/dismiss', { method: 'POST', body: { proposal } });
+            state.incomingProposals = (state.incomingProposals || []).filter((row) => String(row.id) !== String(proposalId));
+            renderIncomingWorkspace();
+        } catch (error) {
+            actions.toast(error.message || 'Could not dismiss the proposal.', 'error');
+            button.disabled = false;
+        }
     }
 
     async function pushProposalToThread(proposalId, button) {
@@ -260,7 +276,10 @@ export function createIncoming({ context, actions, el }) {
             });
             if (result && result.chat_id) {
                 actions.toast('Thread created.', 'success');
+                // The proposal is actioned (and cleared on Tensology) — drop it from the list.
+                state.incomingProposals = (state.incomingProposals || []).filter((row) => String(row.id) !== String(proposalId));
                 if (actions.openThreadDialog) actions.openThreadDialog(result.chat_id);
+                else renderIncomingWorkspace();
             }
         } catch (error) {
             actions.toast(error.message || 'Could not create the thread.', 'error');
@@ -304,6 +323,9 @@ export function createIncoming({ context, actions, el }) {
                   : '<div class="development-empty">No proposals right now.</div>';
             proposalsList.querySelectorAll('[data-incoming-proposal-thread]').forEach((button) =>
                 button.addEventListener('click', () => pushProposalToThread(button.dataset.incomingProposalThread, button))
+            );
+            proposalsList.querySelectorAll('[data-incoming-proposal-dismiss]').forEach((button) =>
+                button.addEventListener('click', () => dismissProposal(button.dataset.incomingProposalDismiss, button))
             );
         }
         if (!whatsappConversations.some((conversation) => conversation.key === state.selectedIncomingConversationKey)) {

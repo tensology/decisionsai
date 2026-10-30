@@ -65,6 +65,26 @@ def register_routes(router, templates):
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+    @router.post("/workflows/studio/incoming/proposals/dismiss")
+    async def workflow_studio_proposal_dismiss(request: Request):
+        """Dismiss an Incoming proposal (clears it on Tensology too when it exists there)."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        proposal = (body or {}).get("proposal") if isinstance(body, dict) else None
+        if not isinstance(proposal, dict):
+            return JSONResponse({"success": False, "error": "A proposal is required."}, status_code=422)
+        try:
+            from distr.core.incoming.proposals import dismiss_proposal
+
+            dismissed = await asyncio.to_thread(dismiss_proposal, proposal)
+            return JSONResponse({"success": True, "dismissed": dismissed})
+        except Exception as e:
+            logger.error("Proposal dismiss failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
     @router.post("/workflows/intake/inbox/{event_id}/action")
     async def workflow_intake_inbox_action(event_id: int, request: Request):
         """Continue / stop / steer / push / dismiss an inbox item."""

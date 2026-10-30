@@ -213,3 +213,4 @@
 .incoming-proposal-push { margin-left: auto; white-space: nowrap; font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(128,128,128,.35); background: transparent; cursor: pointer; }
 .incoming-proposal-push:hover { background: rgba(128,128,128,.12); }
 .incoming-proposal-push.muted { opacity: .5; cursor: default; border-style: dashed; }
+.incoming-proposal-push.ghost { opacity: .7; }
