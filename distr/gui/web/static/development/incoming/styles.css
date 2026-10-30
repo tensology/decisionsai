@@ -214,3 +214,22 @@
 .incoming-proposal-push:hover { background: rgba(128,128,128,.12); }
 .incoming-proposal-push.muted { opacity: .5; cursor: default; border-style: dashed; }
 .incoming-proposal-push.ghost { opacity: .7; }
+
+/* Proposals — cards matching Tensology's New Tickets cards (project name + source pill). */
+.proposal-cards { display: grid; gap: 12px; align-content: start; padding: 12px 16px; max-height: min(68vh, 700px); overflow: auto; }
+@media (min-width: 1000px) { .proposal-cards { grid-template-columns: 1fr 1fr; } }
+.proposal-card { border: 1px solid #fde68a; border-radius: 12px; background: #fff; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.proposal-head { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2px 12px; align-items: center; }
+.proposal-project { grid-column: 1; grid-row: 1; margin: 0; font-size: 12px; font-weight: 600; color: #047857; }
+.proposal-project.none { color: #b45309; }
+.proposal-title { grid-column: 1; grid-row: 2; margin: 0; font-size: 14px; font-weight: 600; color: #111827; }
+.proposal-source { grid-column: 2; grid-row: 1 / span 2; align-self: start; display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; background: #f3f4f6; padding: 6px 10px; font-size: 11px; font-weight: 600; color: #374151; white-space: nowrap; }
+.proposal-source-icon { font-size: 12px; line-height: 1; }
+.proposal-desc { margin: 8px 0 0; font-size: 12px; line-height: 1.45; color: #4b5563; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.proposal-actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.proposal-btn { border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+.proposal-btn.primary { background: #059669; color: #fff; }
+.proposal-btn.primary:hover { background: #047857; }
+.proposal-btn.ghost { background: transparent; border-color: #d1d5db; color: #4b5563; }
+.proposal-btn.ghost:hover { background: #f9fafb; }
+.proposal-btn.muted { border-style: dashed; border-color: #d1d5db; color: #9ca3af; cursor: default; }

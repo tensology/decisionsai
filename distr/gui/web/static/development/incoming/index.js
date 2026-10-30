@@ -227,26 +227,32 @@ export function createIncoming({ context, actions, el }) {
         );
     }
 
+    function incomingSourceGlyph(source) {
+        const glyphs = { whatsapp: '◫', gmail: '✉', mailshot: '✉', telegram: '✈' };
+        return `<span class="proposal-source-icon" aria-hidden="true">${glyphs[String(source || '').toLowerCase()] || '•'}</span>`;
+    }
+
+    // Card mirrors Tensology's proposal card: project name (emerald) top-left, title,
+    // source pill top-right, 3-line description, then the actions. No pricing.
     function incomingProposalRowHtml(proposal) {
         const source = String(proposal.source_label || proposal.source || '').trim();
-        const project = proposal.project_name || (proposal.project_id ? `Project ${proposal.project_id}` : 'No project yet');
-        const amount =
-            proposal.estimated_amount != null && proposal.estimated_amount !== ''
-                ? ` · R${Number(proposal.estimated_amount).toFixed(2)}`
-                : '';
-        const origin = proposal.origin === 'tensology' ? 'Synced' : 'Detected';
-        const status = String(proposal.status || '').replace(/_/g, ' ');
+        const project = String(proposal.project_name || (proposal.project_id ? `Project ${proposal.project_id}` : '')).trim();
+        const origin = proposal.origin === 'tensology' ? 'Synced from Tensology' : 'Detected here';
+        const description = String(proposal.description || proposal.rationale || '').trim();
         const proposalId = actions.escapeHtml(proposal.id || '');
         const push = proposal.project_id
-            ? `<button type="button" class="incoming-proposal-push" data-incoming-proposal-thread="${proposalId}" title="Create a Development thread for this proposal">Create Thread</button>`
-            : `<span class="incoming-proposal-push muted" title="Link this conversation to a project first">No project</span>`;
-        const dismiss = `<button type="button" class="incoming-proposal-push ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
-        return `<div class="incoming-proposal-row">
-            <span class="incoming-avatar" aria-hidden="true">${actions.escapeHtml(incomingInitials(proposal.participant || proposal.title || 'P'))}</span>
-            <span class="incoming-proposal-main"><strong>${actions.escapeHtml(proposal.title || 'Proposal')}</strong><small>${actions.escapeHtml(source)} · ${actions.escapeHtml(project)} · ${actions.escapeHtml(status)}${actions.escapeHtml(amount)}</small></span>
-            <span class="incoming-proposal-origin">${actions.escapeHtml(origin)}</span>
-            ${push}${dismiss}
-        </div>`;
+            ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}" title="Creates the thread and hands it to Decisions, like Send to Decisions.">Create Thread</button>`
+            : `<span class="proposal-btn muted" title="Link this conversation to a project first">No project</span>`;
+        const dismiss = `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
+        return `<article class="proposal-card">
+            <div class="proposal-head">
+                <p class="proposal-project${project ? '' : ' none'}">${actions.escapeHtml(project || 'Not linked to a project')}</p>
+                <h3 class="proposal-title">${actions.escapeHtml(proposal.title || 'Proposal')}</h3>
+                <span class="proposal-source" title="${actions.escapeHtml(origin)} · ${actions.escapeHtml(source)}">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span>
+            </div>
+            ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
+            <div class="proposal-actions">${push}${dismiss}</div>
+        </article>`;
     }
 
     async function dismissProposal(proposalId, button) {
