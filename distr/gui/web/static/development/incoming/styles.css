@@ -9,9 +9,8 @@
 .incoming-folder-tabs button > small { min-width: 18px; color: var(--studio-muted); font-size: 9px; text-align: right; }
 .incoming-folder-containers { min-width: 0; overflow: hidden; border: 1px solid var(--studio-line); border-radius: 0 10px 10px 10px; background: rgba(13,21,55,.38); }
 .incoming-folder-panel { min-width: 0; padding: 12px; }
-.incoming-folder-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.incoming-folder-header h2 { margin: 0; font-size: 13px; }
-.incoming-folder-header p { margin: 3px 0 0; color: var(--studio-muted); font-size: 10px; line-height: 1.4; }
+/* No panel title: the left nav already names the folder. Header only carries the mobile back button. */
+.incoming-folder-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .incoming-whatsapp-layout { display: grid; min-height: 540px; grid-template-columns: minmax(230px, 34%) minmax(0, 1fr); overflow: hidden; border: 1px solid var(--studio-line); border-radius: 8px; background: rgba(8,14,41,.42); }
 .incoming-list { max-height: min(68vh, 700px); overflow: auto; border-right: 1px solid var(--studio-line); }
 .incoming-channel-section { display: grid; gap: 8px; }
@@ -192,6 +191,7 @@
     #incoming-workspace:not(.incoming-detail-open) .incoming-whatsapp-reader, #incoming-workspace:not(.incoming-detail-open) .incoming-gmail-reader { display: none; }
     #incoming-workspace.incoming-detail-open .incoming-list, #incoming-workspace.incoming-detail-open .incoming-gmail-list { display: none; }
     #incoming-workspace.incoming-detail-open .incoming-back { display: inline-flex; align-items: center; min-height: 44px; }
+    #incoming-workspace.incoming-detail-open .incoming-folder-header { margin-bottom: 12px; }
     #incoming-workspace.incoming-detail-open .incoming-folder-header > div { display: none; }
     #incoming-workspace > .scheduled-workspace-inner { height: 100%; overflow: hidden; }
     .incoming-whatsapp-reader-header { grid-template-columns: 40px minmax(0, 1fr) 44px; }
