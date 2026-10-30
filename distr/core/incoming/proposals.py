@@ -126,10 +126,62 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
         "status": str(row.get("status") or "pending"),
         "created_at": at.isoformat() if at else "",
         "message_ids": [str(ev.get("id")) for ev in (row.get("evidence") or []) if isinstance(ev, dict) and ev.get("id")],
-        "attachments": [dict(item) for item in (row.get("attachments") or []) if isinstance(item, dict)],
+        "evidence": [
+            {
+                "id": str(ev.get("id") or ""),
+                "body": str(ev.get("body") or ""),
+                "sent_at": str(ev.get("sent_at") or ""),
+                "sender_name": str(ev.get("sender_name") or ""),
+                "sender_address": str(ev.get("sender_address") or ""),
+                "direction": str(ev.get("direction") or ""),
+            }
+            for ev in (row.get("evidence") or [])
+            if isinstance(ev, dict)
+        ],
+        "attachments": [
+            {
+                "name": str(a.get("name") or "attachment"),
+                "mime_type": str(a.get("mime_type") or a.get("type") or ""),
+                "kind": str(a.get("kind") or ""),
+                "caption": str(a.get("caption") or ""),
+                "transcript": str(a.get("transcript") or ""),
+                "api_path": str(a.get("api_path") or ""),
+            }
+            for a in (row.get("attachments") or [])
+            if isinstance(a, dict)
+        ],
+        "tickets": row.get("tickets") or [],
+        "source_conversation": conversation,
         "decisions_project_id": row.get("decisions_project_id"),
         "can_push_to_thread": True,
     }
+
+
+def fetch_attachment(api_path: str) -> tuple[bytes, str]:
+    """Fetch one Tensology attachment with the API key kept server-side.
+
+    Only work-request and ticket attachment paths are allowed, so the proxy cannot be
+    pointed at an arbitrary upstream URL.
+    """
+    import urllib.request
+
+    path = str(api_path or "").strip().lstrip("/")
+    if not (path.startswith("work-requests/") or path.startswith("tickets/")):
+        raise ValueError("Unsupported attachment path.")
+    from distr.core.tensology_client import configured_tensology_client
+
+    client = configured_tensology_client(source="decisionsai-incoming-attachment")
+    url = f"{client.base_url.rstrip('/')}/api/integrations/v1/{path}"
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {client.api_key}", "X-Tensology-Source": client.source, "Accept": "*/*"},
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - fixed Tensology host
+        data = response.read(15 * 1024 * 1024 + 1)
+    if len(data) > 15 * 1024 * 1024:
+        raise ValueError("Attachment is too large to preview.")
+    return data, str(response.headers.get("Content-Type") or "application/octet-stream")
 
 
 # ---------------------------------------------------------------- LLM triage

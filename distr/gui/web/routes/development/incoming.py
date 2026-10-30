@@ -1,6 +1,6 @@
 """Incoming HTTP boundary. Existing URLs remain compatible."""
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 import asyncio
 import logging
 
@@ -43,6 +43,19 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Incoming proposals load failed: %s", e, exc_info=True)
             return JSONResponse({"proposals": [], "counts": {}, "error": str(e)}, status_code=500)
+
+
+    @router.get("/workflows/studio/incoming/proposals/attachment")
+    async def workflow_studio_proposal_attachment(path: str = ""):
+        """Proxy a Tensology proposal attachment (image/PDF) so the API key stays server-side."""
+        try:
+            from distr.core.incoming.proposals import fetch_attachment
+
+            data, mime = await asyncio.to_thread(fetch_attachment, path)
+            return Response(content=data, media_type=mime, headers={"Cache-Control": "private, max-age=600"})
+        except Exception as e:
+            logger.warning("Proposal attachment fetch failed: %s", e)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=404)
 
 
     @router.post("/workflows/studio/incoming/proposals/thread")
