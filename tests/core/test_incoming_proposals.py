@@ -17,7 +17,7 @@ def _tensology_row(pid, thread_id, source, title):
     }
 
 
-def _incoming_item(source, thread_id, text, label="Client"):
+def _incoming_item(source, thread_id, text, label="Client", project_id=None, project_name=""):
     return {
         "key": f"{source}:{thread_id}",
         "source": source,
@@ -25,6 +25,8 @@ def _incoming_item(source, thread_id, text, label="Client"):
         "conversation_label": label,
         "sender": label,
         "text": text,
+        "project_id": project_id,
+        "project_name": project_name,
         "created_at": "2026-10-29T08:00:00+00:00",
     }
 
@@ -46,7 +48,10 @@ def test_tensology_proposals_kept_and_local_deduped(monkeypatch):
         lambda limit=100: {
             "items": [
                 _incoming_item("whatsapp", shared, "Please fix the shipping cost calculation"),
-                _incoming_item("gmail", "thread-new", "Can you please send the invoice?", label="Acme"),
+                _incoming_item(
+                    "gmail", "thread-new", "Can you please send the invoice?",
+                    label="Acme", project_id=7, project_name="Acme",
+                ),
             ]
         },
     )

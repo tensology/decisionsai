@@ -24,17 +24,31 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-# A conversation looks like work when it asks for something or reports a problem.
-# Kept intentionally close to Tensology's "is_actionable" intent; the LLM triage
-# phase (matching Tensology field-for-field) refines this later.
-_ACTIONABLE_RE = re.compile(
-    r"\?|please|can you|could you|would you|need(?:s|ed)?\b|require|fix|broken|error|bug|"
-    r"invoice|payment|paid|quote|proposal|deadline|urgent|asap|not working|doesn'?t work|"
-    r"\bdown\b|outage|issue|investigate|check|update|change|wrong|incorrect|missing|"
-    r"add\b|remove\b|refund|verify|reverify|expire|failed|chase|follow up",
+# A local candidate must be *work*: an explicit request or a reported problem.
+# Matches Tensology's "is_actionable" intent; the LLM triage phase makes it exact.
+_REQUEST_RE = re.compile(
+    r"\?|please|can you|could you|would you|need(?:s|ed)?\b|require|fix|broken|"
+    r"\berror\b|\bbug\b|not working|doesn'?t work|investigate|quote|proposal|invoice|"
+    r"payment|deadline|urgent|asap|wrong|incorrect|missing|reverify|expire|failed|"
+    r"outage|\bdown\b|follow up|chase|refund|reconnect|push\b",
     re.I,
 )
-_NOISE_RE = re.compile(r"no-?reply|newsletter|notification|digest|marketing|mailer", re.I)
+# Newsletters, bots and digests are never client work.
+_NOISE_RE = re.compile(
+    r"no-?reply|donotreply|newsletter|digest|daily\.dev|informer@|notification|"
+    r"marketing|mailer|automated",
+    re.I,
+)
+# Our own messages (Paul), and simulated test traffic.
+_SELF_RE = re.compile(r"(^|\W)paul(\W|$)|paulvonhoesslin|paulhoft", re.I)
+_TEST_RE = re.compile(r"\bE2E\b|simulated|fake jid|test e2e", re.I)
+# A conversation that only ends in "thanks"/"ok" has no work left in it.
+_ACK_RE = re.compile(
+    r"^\W*(?:thanks?(?: you)?|thankyou|appreciate[ds]?|ok(?:ay)?|sure|great|perfect|"
+    r"regards|cheers|noted|will do|see you|sounds good|as long as|take (?:all )?the time|"
+    r"no worries|got it|understood|i understand|awesome|nice|cool|morning team)\b",
+    re.I,
+)
 _CHANNELS = {"whatsapp", "gmail", "mailshot", "telegram"}
 
 
@@ -122,13 +136,27 @@ def _local_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows = sorted(bucket["items"], key=lambda row: str(row.get("created_at") or ""))
         latest = rows[-1]
         sender = str(latest.get("sender") or "")
-        if _NOISE_RE.search(sender):
-            continue
-        text = " ".join(str(row.get("text") or "") for row in rows[-6:])
         label = str(bucket["label"] or latest.get("subject") or "").strip()
-        if not _ACTIONABLE_RE.search(f"{label} {text}"):
+        text = " ".join(str(row.get("text") or "") for row in rows[-6:])
+        latest_text = str(latest.get("text") or "").strip()
+        # 1. never our own outbound messages
+        if latest.get("from_me") or str(latest.get("direction") or "").lower() == "outbound":
             continue
-        title = " ".join((label or str(latest.get("text") or "")).split())[:120] or "Incoming request"
+        # 2. never newsletters/bots, our own identity, or simulated tests
+        if _NOISE_RE.search(sender) or _NOISE_RE.search(str(latest.get("addr") or "")):
+            continue
+        if _SELF_RE.search(sender) or _TEST_RE.search(f"{sender} {label} {text}"):
+            continue
+        # 3. a conversation whose latest message is an acknowledgement is concluded, not work
+        if _ACK_RE.match(latest_text):
+            continue
+        # 4. must contain a real request or problem
+        if not _REQUEST_RE.search(f"{label} {text}"):
+            continue
+        # 5. Tensology ties every proposal to a project; so do we
+        if not (bucket["project_id"] or bucket["project_name"]):
+            continue
+        title = " ".join((label or latest_text).split())[:120] or "Incoming request"
         out.append(
             {
                 "id": f"local:{source}:{thread_id}",
