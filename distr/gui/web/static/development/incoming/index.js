@@ -237,7 +237,7 @@ export function createIncoming({ context, actions, el }) {
         const origin = proposal.origin === 'tensology' ? 'Synced' : 'Detected';
         const status = String(proposal.status || '').replace(/_/g, ' ');
         const push = proposal.project_id
-            ? `<button type="button" class="incoming-proposal-push" data-incoming-proposal-thread="${actions.escapeHtml(proposal.id || '')}">Push to thread</button>`
+            ? `<button type="button" class="incoming-proposal-push" data-incoming-proposal-thread="${actions.escapeHtml(proposal.id || '')}" title="Create a Development thread for this proposal">Create Thread</button>`
             : `<span class="incoming-proposal-push muted" title="Link this conversation to a project first">No project</span>`;
         return `<div class="incoming-proposal-row">
             <span class="incoming-avatar" aria-hidden="true">${actions.escapeHtml(incomingInitials(proposal.participant || proposal.title || 'P'))}</span>
