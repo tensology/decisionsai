@@ -1,6 +1,31 @@
 import json
 from datetime import timedelta
 
+import pytest
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({"automation_cli_backend": "pi", "automation_cli_model_provider": "ollama",
+      "automation_cli_model": "deepseek-v4.1-flash:cloud"},
+     ("ollama", "deepseek-v4.1-flash:cloud")),
+    ({"automation_cli_backend": "pi", "automation_cli_model_provider": "openrouter",
+      "automation_cli_model": "deepseek/deepseek-v4.1-flash"},
+     ("openrouter", "deepseek/deepseek-v4.1-flash")),
+    ({}, ("", "")),
+])
+def test_import_picker_uses_saved_automation_default(monkeypatch, settings, expected):
+    from distr.core.automation import imports
+    from distr.core import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "load_settings_from_db", lambda: settings)
+    monkeypatch.setattr(imports, "list_automations", lambda: [])
+    monkeypatch.setattr(imports, "discover_imports", lambda source: [])
+
+    defaults = imports.import_status()["routing_defaults"]
+    assert (defaults["model_provider"], defaults["model"]) == expected
+    assert defaults["adaptive_model_routing"] is False
+    assert defaults["allow_provider_failover"] is False
+
 
 def test_codex_rrule_translation_preserves_time_timezone_and_weekdays():
     from distr.core.automation.imports import schedule_from_rrule

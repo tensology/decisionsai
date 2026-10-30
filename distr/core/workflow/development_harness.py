@@ -858,21 +858,24 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
 
             row = db.get(ProjectExecutionSession, int(session_id))
             if row is not None and execution.get("status") != "cancelled":
+                row_status = str(row.status or "").lower()
+                # Provider completion precedes saving the reply and completing
+                # the chat turn. Only the owning finalizer can publish success.
+                finalizing = row_status == "completed" and persisted_status in ACTIVE_EXECUTION_STATUSES
                 execution.update(
                     {
-                        "status": row.status or execution.get("status") or "queued",
+                        "status": persisted_status if row_status == "completed" and persisted_status else row.status or execution.get("status") or "queued",
                         "backend_id": row.route_backend or execution.get("backend_id") or "",
                         "model": row.selected_model or execution.get("model") or "auto",
                         "started_at": row.started_at.isoformat() if row.started_at else execution.get("started_at"),
-                        "completed_at": row.completed_at.isoformat() if row.completed_at else execution.get("completed_at"),
+                        "completed_at": None if finalizing else row.completed_at.isoformat() if row.completed_at else execution.get("completed_at"),
                         "error": row.error or execution.get("error") or "",
                     }
                 )
                 output = _json(row.output_packet)
                 if output:
                     execution["output_packet"] = output
-                row_status = str(row.status or "").lower()
-                if row_status in {"completed", "failed", "cancelled"} and row_status != persisted_status:
+                if row_status in {"failed", "cancelled"} and row_status != persisted_status:
                     terminal_reconciliation = {
                         "status": row_status,
                         "backend_id": row.route_backend or execution.get("backend_id") or "",
@@ -1308,7 +1311,9 @@ def _safe_turn_attachments(
         if not isinstance(raw, dict) or not raw.get("path"):
             continue
         path = Path(str(raw["path"])).expanduser().resolve(strict=False)
-        if path in seen or not path.is_file() or not any(root == path or root in path.parents for root in roots):
+        snapshots = (Path.home() / '.decisions/workspaces/boards').resolve(strict=False)
+        is_snapshot = path.is_relative_to(snapshots) and len(path.relative_to(snapshots).parts) > 2 and path.relative_to(snapshots).parts[1] == 'intake'
+        if path in seen or not path.is_file() or not (is_snapshot or any(root == path or root in path.parents for root in roots)):
             continue
         seen.add(path)
         attachments.append(
@@ -1474,6 +1479,7 @@ async def _run_execution(
                 native_tool_events.pop(call_id),
                 success=native_status != "error",
                 summary=summary,
+                detail=str(event.details.get("output") or ""),
                 metadata=event.details,
             )
         elif event.kind.value == "tool_completed" and event.tool_name:
@@ -1491,6 +1497,7 @@ async def _run_execution(
                     native_event_id,
                     success=native_status != "error",
                     summary=summary,
+                    detail=str(event.details.get("output") or ""),
                     metadata=event.details,
                 )
         elif event.kind.value == "context_compacted":
@@ -2033,6 +2040,9 @@ def dispatch_development_prompt(
     if not clean:
         raise ValueError("A development instruction is required.")
     project, metadata, ticket_id, board_id = _project_and_scope(int(chat_id))
+    from distr.core.incoming.media import required_thread_attachments
+
+    source_attachments = required_thread_attachments(int(chat_id))
     if metadata.get("source_type") == "plan_workspace":
         raise ValueError("Use the Plan conversation for planning edits. Plan threads cannot dispatch application code changes.")
     with get_session() as db:
@@ -2166,6 +2176,7 @@ def dispatch_development_prompt(
             pinned_backend = "pi"
         routed_backend, routed_model, routed_options, routed_complexity = _route(project, metadata, assessment)
         run_metadata = {
+            'turn_attachments': source_attachments,
             "routing_assessment": assessment,
             "execution_mode_decision": execution_mode,
             "skill_ids": list(skill_ids or []),
@@ -2231,6 +2242,7 @@ def dispatch_development_prompt(
             "workflow_generated": existing_workflow_id is None,
         }
     persistent_attachments = _linked_ticket_attachments(ticket_id)
+    persistent_attachments.extend(source_attachments)
     turn_attachments = _safe_turn_attachments(
         [*(attachments or []), *persistent_attachments],
         project_folder=str(project.folder_location or ""),

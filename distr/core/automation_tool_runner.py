@@ -10,6 +10,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _TOOL_BINDINGS: dict[str, tuple[str, str]] = {
+    "hetzner_availability": (
+        "distr.core.automation.hetzner_availability",
+        "HetznerAvailabilityTool",
+    ),
     "proactive_orchestrator": (
         "distr.core.agent.tools.system.proactive_orchestrator",
         "ProactiveOrchestratorTool",

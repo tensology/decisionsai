@@ -12,6 +12,7 @@ class WorkIntakeSource(str, Enum):
     TELEGRAM = "telegram"
     WHATSAPP = "whatsapp"
     GMAIL = "gmail"
+    MAILSHOT = "mailshot"
     SLACK = "slack"
     WEB = "web"
     BOARD = "board"

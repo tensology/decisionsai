@@ -66,3 +66,13 @@ def test_proposal_decision_reply_out_of_range_and_no_pending():
 def test_proposal_decision_reply_ignores_other_text():
     assert tc.handle_proposal_decision_reply("continue") is None
     assert tc.handle_proposal_decision_reply("what's actually waiting?") is None
+
+
+def test_telegram_create_ticket_preserves_approval_source():
+    with (
+        patch.object(tc, "fetch_pending_work_requests", return_value=[{"id":7,"title":"Check database"}]),
+        patch.object(tc, "decide_work_request") as decide,
+    ):
+        reply = tc.handle_proposal_decision_reply("create ticket 1", source="telegram")
+    decide.assert_called_once_with(7, "send_to_decisions", source="telegram")
+    assert "Check database" in reply

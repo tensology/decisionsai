@@ -17,6 +17,21 @@ export function minutesToTime(minutes) {
 export function topForMinutes(minutes, hourPx) {
     return (minutes * hourPx) / 60;
 }
+
+// Group by rendered footprint, including nearby start times, so readable chips
+// never collide. Keep every occurrence in the group for the expanded list.
+export function groupCalendarEvents(events, hourPx, height = 36, gap = 4) {
+    const groups = [];
+    for (const event of [...events].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time))) {
+        const top = topForMinutes(timeToMinutes(event.time), hourPx);
+        const previous = groups[groups.length - 1];
+        if (previous && top < previous.end + gap) {
+            previous.events.push(event);
+            previous.end = top + height;
+        } else groups.push({ top, end: top + height, events: [event] });
+    }
+    return groups;
+}
 function parseKey(dayKey) {
     const [y, mo, d] = String(dayKey).split('-').map(Number);
     return new Date(y, mo - 1, d);

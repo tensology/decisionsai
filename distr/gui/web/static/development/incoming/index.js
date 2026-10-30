@@ -1045,6 +1045,15 @@ export function createIncoming({ context, actions, el }) {
     }
 
     function handleIncomingPush(message) {
+        if (message?.type === 'proposal_changed' || message?.type === 'development_changed') {
+            clearTimeout(incomingPushTimer);
+            incomingPushTimer = setTimeout(() => {
+                state.incomingLoadedAt = 0;
+                actions.refreshShell({ preserveConversation: true, background: true });
+                if (context.workspaceMode === 'incoming') refreshIncomingData({ force: true });
+            }, 250);
+            return;
+        }
         if (message?.type !== 'incoming_message') return;
         const id = `${message.channel || ''}:${message.message_id ?? ''}`;
         if (message.message_id != null && seenPushedMessages.has(id)) return;
@@ -1063,6 +1072,10 @@ export function createIncoming({ context, actions, el }) {
         socket.onopen = () => {
             incomingSocketDelay = 2000;
             socket.send(JSON.stringify({ subscribe_topic: 'incoming' }));
+            // Reconcile decisions made while this browser was disconnected.
+            state.incomingLoadedAt = 0;
+            if (context.workspaceMode === 'incoming') refreshIncomingData({ force: true });
+            actions.refreshShell({ preserveConversation: true, background: true });
         };
         socket.onmessage = (event) => {
             try {
@@ -1157,6 +1170,7 @@ export function createIncoming({ context, actions, el }) {
     }
 
     function bindEvents() {
+        connectIncomingPush();
         document.querySelectorAll('[data-incoming-filter]').forEach((button) =>
             button.addEventListener('click', () => {
                 state.incomingFilter = button.dataset.incomingFilter || 'all';

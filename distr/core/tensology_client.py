@@ -202,7 +202,7 @@ def fetch_pending_work_requests() -> list[dict[str, Any]]:
     return [item for item in (data if isinstance(data, list) else []) if isinstance(item, dict)]
 
 
-def decide_work_request(proposal_id: int, action: str) -> dict[str, Any]:
+def decide_work_request(proposal_id: int, action: str, *, source: str = "") -> dict[str, Any]:
     """Queue, send to Decisions, or dismiss one pending Tensology proposal."""
     normalized = str(action or "").strip().lower()
     aliases = {"run": "send_to_decisions", "ticket": "queue", "queue": "queue",
@@ -213,12 +213,12 @@ def decide_work_request(proposal_id: int, action: str) -> dict[str, Any]:
     client = configured_tensology_client()
     return client.post(
         f"work-requests/{int(proposal_id)}/action",
-        {"action": resolved},
+        {"action": resolved, **({"source": "telegram"} if source == "telegram" else {})},
         idempotency_key=f"work-request-{int(proposal_id)}-{resolved}",
     )
 
 
-_PROPOSAL_DECISION_RE = re.compile(r"^\s*(run|queue|dismiss|send)\s+(all|\d+)\s*$", re.IGNORECASE)
+_PROPOSAL_DECISION_RE = re.compile(r"^\s*(create\s+(?:a\s+)?ticket|run|queue|dismiss|send)\s+(all|\d+)\s*$", re.IGNORECASE)
 _PROPOSAL_VERB_ACTION = {
     "run": "send_to_decisions",
     "send": "send_to_decisions",
@@ -232,7 +232,7 @@ _PROPOSAL_ACTION_PHRASE = {
 }
 
 
-def handle_proposal_decision_reply(text: str) -> str | None:
+def handle_proposal_decision_reply(text: str, *, source: str = "") -> str | None:
     """Resolve a plain "run 1", "queue 2" or "dismiss all" reply against pending proposals.
 
     Returns a short human acknowledgement, or None when the text is not a proposal
@@ -241,7 +241,8 @@ def handle_proposal_decision_reply(text: str) -> str | None:
     match = _PROPOSAL_DECISION_RE.match(str(text or ""))
     if not match:
         return None
-    action = _PROPOSAL_VERB_ACTION[match.group(1).lower()]
+    verb = match.group(1).lower()
+    action = "send_to_decisions" if verb.startswith("create") else _PROPOSAL_VERB_ACTION[verb]
     target = match.group(2).lower()
 
     proposals = fetch_pending_work_requests()
@@ -259,7 +260,9 @@ def handle_proposal_decision_reply(text: str) -> str | None:
     for proposal in chosen:
         title = " ".join(str(proposal.get("title") or "").split()) or f"proposal {proposal.get('id')}"
         try:
-            decide_work_request(int(proposal["id"]), action)
+            decide_work_request(int(proposal["id"]), action, **({"source": "telegram"} if source == "telegram" else {}))
+            from distr.core.incoming.events import publish_incoming_change
+            publish_incoming_change(request_id=int(proposal["id"]), status="dismissed" if action == "dismiss" else "accepted")
             applied.append(title)
         except Exception as exc:
             failed.append(f"{title} ({exc})")
@@ -457,6 +460,11 @@ def _existing_tensology_thread(ticket: dict[str, Any]) -> int | None:
         row = db.query(DevelopmentWorkItem).filter(
             DevelopmentWorkItem.identity_key == identity
         ).first()
+        proposal_id = (ticket.get('source_metadata') or {}).get('incoming_proposal_id')
+        if row is None and str(proposal_id or '').isdigit():
+            row = db.query(DevelopmentWorkItem).filter(
+                DevelopmentWorkItem.identity_key == f'source:incoming_proposal:tensology:{int(proposal_id)}'
+            ).first()
         return int(row.chat_id) if row else None
 
 
@@ -829,7 +837,7 @@ def _ensure_tensology_kanban_ticket(
 ) -> int:
     """Mirror an external Tensology ticket so workflow context survives compaction."""
     from distr.core.db import get_session
-    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, KanbanTicketFile
 
     reference = str(ticket.get("reference") or "").strip()
     if not reference:
@@ -918,6 +926,10 @@ def _ensure_tensology_kanban_ticket(
             mirrored.linked_project_id = int(project["id"])
             mirrored.title = str(ticket.get("title") or mirrored.title)
             mirrored.description = str(ticket.get("description") or mirrored.description or "")
+        for attachment in _tensology_thread_files(ticket):
+            record = db.query(KanbanTicketFile).filter_by(ticket_id=mirrored.id, file_path=attachment['path']).first()
+            if record is None:
+                db.add(KanbanTicketFile(ticket_id=mirrored.id, filename=attachment['name'], file_path=attachment['path'], description='Tensology source attachment'))
         db.commit()
         return int(mirrored.id)
 
@@ -954,6 +966,7 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
         "workflows/studio/tasks",
         {
             "prompt": prompt,
+            "attachments": _tensology_thread_files(ticket),
             "title": f"{ticket.get('reference')} - {ticket.get('title')}",
             "project_id": project["id"],
             "workflow_id": workflow_id,
@@ -1160,13 +1173,22 @@ def _has_download_location(item: dict[str, Any]) -> bool:
     return any(str(item.get(key) or "").strip() for key in ("api_path", "absolute_url", "url"))
 
 
+def _tensology_thread_files(ticket: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = [ticket.get('attachments') or []]
+    groups.extend(message.get('attachments') or [] for message in ticket.get('discussion') or [] if isinstance(message, dict))
+    return [{'name': item.get('name') or item.get('filename') or Path(item['local_path']).name,
+             'path': item['local_path'], 'mime_type': item.get('mime_type') or item.get('type') or 'application/octet-stream',
+             'size': item.get('size') or Path(item['local_path']).stat().st_size}
+            for group in groups for item in group if isinstance(item, dict) and item.get('local_path') and Path(item['local_path']).is_file()]
+
+
 def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     """Download ticket and discussion attachments (images, voice notes, documents).
 
     Voice notes and images arrive from incoming WhatsApp proposals; audio is downloaded
     so the Development thread keeps the original recording alongside its transcript.
-    Failures (404, too large, unreachable) are logged and recorded on the attachment as
-    ``download_error``; they never block ticket processing.
+    Failures are recorded as ``download_error`` so execution can stop before
+    starting work with incomplete source evidence.
     """
     import copy
     import logging
@@ -1182,7 +1204,7 @@ def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, A
     files = [
         item for group in groups
         for item in group
-        if isinstance(item, dict) and _has_download_location(item)
+        if isinstance(item, dict)
     ]
     ticket["local_image_paths"] = []
     ticket["local_attachment_paths"] = []
@@ -1202,13 +1224,8 @@ def _localize_tensology_attachments(client: TensologyClient, ticket: dict[str, A
         used.add(name)
         destination = root / name
         is_image = _is_image_attachment(item)
-        if destination.is_file() and destination.stat().st_size > 0:
-            item["local_path"] = str(destination)
-            item["download_status"] = "cached"
-            local_paths.append(str(destination))
-            if is_image:
-                image_paths.append(str(destination))
-            continue
+        item.pop('download_error', None)
+        item.pop('local_path', None)
         locations: list[str] = []
         for key in ("api_path", "absolute_url", "url"):
             value = str(item.get(key) or "").strip()
@@ -1243,6 +1260,8 @@ def _sync_tensology_ticket_state(client: TensologyClient, ticket: dict[str, Any]
 
     execution = development_execution_state(chat_id)
     remote_status = _remote_execution_status(str(execution.get("status") or ""), execution)
+    from distr.core.incoming.telegram_updates import queue_execution_update
+    queue_execution_update(ticket, chat_id, execution, remote_status)
     if remote_status == str(ticket.get("execution_status") or ""):
         return False
     detail = str(execution.get("summary") or execution.get("error") or "")[:500]
@@ -1281,13 +1300,24 @@ def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -
         "provider": str(ticket.get("decisions_provider") or ""),
         "model": str(ticket.get("decisions_model") or ""),
     }
+    try:
+        ticket = _localize_tensology_attachments(client, ticket, project)
+    except Exception:
+        client.patch(f"tickets/{int(ticket['id'])}/execution", {
+            'status': 'failed', 'detail': 'Media could not be stored locally. Restore source access and retry.'
+        }, idempotency_key=f"tensology-ticket-{int(ticket['id'])}-media-storage-failed")
+        return False
+    groups = [ticket.get('attachments') or []] + [message.get('attachments') or [] for message in ticket.get('discussion') or [] if isinstance(message, dict)]
+    missing = [item.get('name') or item.get('filename') or 'attachment' for group in groups for item in group if isinstance(item, dict) and item.get('download_error')]
+    if missing:
+        client.patch(f"tickets/{int(ticket['id'])}/execution", {
+            'status': 'failed', 'detail': 'Media transfer incomplete: '+', '.join(missing)+'. Restore the files and retry.'
+        }, idempotency_key=f"tensology-ticket-{int(ticket['id'])}-media-incomplete")
+        return False
+    if chat_id is not None:
+        from distr.core.incoming.media import register_thread_attachments
+        register_thread_attachments(chat_id, _tensology_thread_files(ticket))
     if chat_id is None:
-        try:
-            ticket = _localize_tensology_attachments(client, ticket, project)
-        except Exception as exc:  # never block a ticket on its images
-            import logging
-
-            logging.getLogger(__name__).warning("Tensology ticket %s images skipped: %s", ticket.get("reference"), exc)
         try:
             chat_id, route = _create_tensology_thread(ticket, project)
         except TensologyRouteError as exc:
@@ -1322,6 +1352,8 @@ def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -
         ])
     else:
         _sync_tensology_ticket_state(client, ticket, chat_id)
+    from distr.core.incoming.events import publish_incoming_change
+    publish_incoming_change(event="development_changed", chat_id=chat_id)
     return True
 
 
@@ -1430,6 +1462,8 @@ def sync_tensology_execution_states(*, force: bool = False) -> int:
     if not force and now - _LAST_STATE_SYNC < STATE_SYNC_SECONDS:
         return 0
     _LAST_STATE_SYNC = now
+    from distr.core.incoming.telegram_updates import flush_execution_updates
+    flush_execution_updates()
     with _TENSOLOGY_TICKETS_LOCK:
         known = [dict(ticket) for ticket in _TENSOLOGY_TICKETS.values()]
     claimed = [ticket for ticket in known if str(ticket.get("decisions_thread_id") or "").strip()]

@@ -1770,8 +1770,11 @@
         }
         connectAutomationUpdatesSocket();
         loadAutomationPresets().finally(function() {
-            loadAutomations(location.hash === "#calendar").then(function() {
-                if (location.hash === "#calendar") {
+            var requestedAutomation = new URLSearchParams(location.search).get("automation");
+            loadAutomations(Boolean(requestedAutomation) || location.hash === "#calendar").then(function() {
+                if (requestedAutomation) {
+                    selectAutomation(requestedAutomation);
+                } else if (location.hash === "#calendar") {
                     setMainView("calendar");
                 }
             });

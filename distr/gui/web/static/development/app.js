@@ -9,9 +9,9 @@ import { createPlanning } from './planning/index.js?v=20261003-sitemap-groups';
 
 import { createSidebar } from './sidebar/index.js?v=20261024-sidebar-wfadd';
 
-import { createAutomations } from './automations/index.js?v=20261028-responsive';
+import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
-import { createIncoming } from './incoming/index.js?v=20261028-responsive';
+import { createIncoming } from './incoming/index.js?v=20261030-proposal-live-sync';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
@@ -19,7 +19,7 @@ import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261023-terminal-parity1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261023-workflowwatch1';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261030-activity-disclosure';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261023-steering1';
 

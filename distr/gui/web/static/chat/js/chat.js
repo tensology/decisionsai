@@ -2,6 +2,10 @@
 
 const API_BASE = '/api';
 let primaryAgentData = null;
+let primaryAgentUnread = false;
+let primaryAgentWorking = false;
+let primaryActivityRevision = 0;
+let primaryBadgePollInFlight = false;
 let primaryAvatarSaving = false;
 let currentChatId = null;   // chat currently displayed (view)
 let loadedChatId = null;   // chat that is "loaded" - messages go here, input shown (matches native chat.py)
@@ -1693,6 +1697,7 @@ function repairMissingUserMessageForStream(chatId) {
 }
 
 function handleChatEventStreamStarted(msg) {
+    updatePrimaryAgentActivity(msg.chat_id, true);
     if (Number(msg.chat_id) !== Number(currentChatId)) return;
     const preview = document.getElementById('transcriptionStatus');
     // Realtime can create the response before input transcription completes.
@@ -1719,6 +1724,7 @@ let _streamTextBuffer = '';
 let _streamRafPending = false;
 
 function handleChatEventStreamToken(msg) {
+    updatePrimaryAgentActivity(msg.chat_id, true);
     if (Number(msg.chat_id) !== Number(currentChatId)) return;
     if (!msg.token) return;
     // Render synchronously. This used to buffer into requestAnimationFrame, which
@@ -1741,6 +1747,7 @@ function handleChatEventStreamToken(msg) {
 }
 
 function handleChatEventStreamFinished(msg) {
+    updatePrimaryAgentActivity(msg.chat_id, false);
     if (Number(msg.chat_id) !== Number(currentChatId)) return;
     // Flush any buffered stream tokens before finalizing
     _streamTextBuffer = '';
@@ -1837,6 +1844,7 @@ function handleChatEventStreamFinished(msg) {
 }
 
 function handleChatEventStreamError(msg) {
+    updatePrimaryAgentActivity(msg.chat_id, false);
     if (msg.chat_id != null && Number(msg.chat_id) !== Number(currentChatId)) return;
     _streamTextBuffer = '';
     _streamRafPending = false;
@@ -2284,6 +2292,10 @@ async function acknowledgeChatRead(chatId, replyId) {
         if (!response.ok) throw new Error('Could not save read state');
         const saved = await response.json();
         document.querySelector(`.chat-item[data-chat-id="${chatId}"] .chat-unread-dot`)?.toggleAttribute('hidden', !saved.unread);
+        if (Number(chatId) === Number(primaryAgentData?.main_conversation_id)) {
+            primaryAgentUnread = Boolean(saved.unread);
+            renderPrimaryAgentBadge();
+        }
     } catch (e) { console.warn('Chat read state failed:', e); }
     finally { if (sidebarReadRequest === key) sidebarReadRequest = null; }
 }
@@ -2316,7 +2328,10 @@ async function loadChats() {
         } catch (error) { console.warn('Primary agent unavailable:', error); }
         if (sequence !== sidebarLoadSequence) return data;
         primaryAgentData = nextPrimary;
+        const primaryRow = chats.find(chat => chat.id === primaryAgentData?.main_conversation_id);
+        primaryAgentUnread = Boolean(primaryRow?.unread);
         renderPrimaryAgent();
+        refreshPrimaryAgentActivity();
         renderChatList(chats.filter(chat => chat.id !== primaryAgentData?.main_conversation_id));
         applyChatsData(data);
         const viewed = chats.find(chat => chat.id === currentChatId);
@@ -3753,6 +3768,7 @@ function scheduleTurnElapsedUpdates() {
 function renderTurnState(activeTurn, turns) {
     chatTurnStateById.clear();
     currentActiveTurn = activeTurn && !turnIsTerminal(activeTurn) ? activeTurn : null;
+    updatePrimaryAgentActivity(currentChatId, Boolean(currentActiveTurn));
     const durableTurns = Array.isArray(turns) ? turns : [];
     durableTurns.forEach(turn => {
         chatTurnStateById.set(Number(turn.turn_id), turn);
@@ -3801,6 +3817,7 @@ function handleChatTurnEvent(msg) {
         currentActiveTurn = turn;
     }
     chatTurnStateById.set(Number(turn.turn_id), turn);
+    updatePrimaryAgentActivity(msg.chat_id, !turnIsTerminal(turn));
     upsertTurnPanel(turn);
     updateTurnComposerState();
     scheduleTurnElapsedUpdates();
@@ -6789,11 +6806,60 @@ function primaryAvatarMedia(skinName) {
     }
     const video = /\.webm$/i.test(file);
     const media = document.createElement(video ? 'video' : 'img');
+    media.className = `assistant-avatar-image ${skin.type === 'oracle' ? 'oracle' : 'avatar'}`;
+    media.style.setProperty('--assistant-image-scale', Math.max(0.1, Number(skin.image_scale) || 1));
+    media.style.setProperty('--assistant-image-offset-x', `${((Number(skin.image_offset_x) || 0) / 128) * 100}%`);
+    media.style.setProperty('--assistant-image-offset-y', `${((Number(skin.image_offset_y) || 0) / 128) * 100}%`);
     media.src = `/api/skins/${encodeURIComponent(skinName)}/preview/${encodeURIComponent(file)}`;
     if (video) { media.autoplay = true; media.muted = true; media.loop = true; media.playsInline = true; }
     else media.alt = '';
     return media;
 }
+
+function renderPrimaryAgentBadge() {
+    const badge = document.querySelector('.primary-agent-badge');
+    if (!badge) return;
+    const state = primaryAgentWorking ? 'working' : primaryAgentUnread ? 'unread' : 'idle';
+    badge.dataset.state = state;
+    badge.textContent = state === 'idle' ? '★' : '';
+    const label = state === 'working' ? 'Primary agent is working' : state === 'unread' ? 'Primary agent has unread replies' : 'Primary agent';
+    badge.removeAttribute('aria-hidden');
+    badge.setAttribute('role', 'status');
+    badge.setAttribute('aria-label', label);
+    badge.title = label;
+}
+
+function updatePrimaryAgentActivity(chatId, working) {
+    if (chatId == null || Number(chatId) !== Number(primaryAgentData?.main_conversation_id)) return;
+    ++primaryActivityRevision;
+    primaryAgentWorking = working;
+    renderPrimaryAgentBadge();
+}
+
+async function refreshPrimaryAgentActivity() {
+    const chatId = primaryAgentData?.main_conversation_id;
+    if (!chatId || primaryBadgePollInFlight) return;
+    primaryBadgePollInFlight = true;
+    const revision = primaryActivityRevision;
+    try {
+        const response = await fetch(`${API_BASE}/chats/${chatId}/turns?limit=1`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (revision !== primaryActivityRevision || chatId !== primaryAgentData?.main_conversation_id) return;
+        primaryAgentWorking = (data.turns || []).some(turn => turn.active && !turn.done);
+        renderPrimaryAgentBadge();
+    } catch (error) { console.warn('Primary agent activity unavailable:', error); }
+    finally { primaryBadgePollInFlight = false; }
+}
+
+// The socket follows the viewed conversation. Refresh the primary's durable
+// activity/read state as well when a different agent is open or after reconnect.
+let primaryRosterPollInFlight = false;
+setInterval(async () => {
+    if (document.visibilityState !== 'visible' || !primaryAgentData || primaryRosterPollInFlight) return;
+    primaryRosterPollInFlight = true;
+    try { await loadChats(); } finally { primaryRosterPollInFlight = false; }
+}, 5000);
 
 function renderPrimaryAgent() {
     const card = document.getElementById('primaryAgentCard');
@@ -6802,8 +6868,15 @@ function renderPrimaryAgent() {
     if (!primaryAgentData) return;
     document.getElementById('primaryAgentName').textContent = primaryAgentData.name;
     document.getElementById('primaryAgentName').setAttribute('aria-label', `Open primary agent ${primaryAgentData.name}`);
-    document.getElementById('primaryAgentImage').replaceChildren(primaryAvatarMedia(primaryAgentData.skin_name));
+    const image = document.getElementById('primaryAgentImage');
+    const skin = (sidebarSkins || []).find(item => item.folder_name === primaryAgentData.skin_name);
+    if (image.dataset.skin !== primaryAgentData.skin_name || !image.firstChild ||
+        ((skin?.preview_image || skin?.idle_animation) && !image.querySelector('img, video'))) {
+        image.replaceChildren(primaryAvatarMedia(primaryAgentData.skin_name));
+        image.dataset.skin = primaryAgentData.skin_name;
+    }
     card.classList.toggle('active', currentChatId === primaryAgentData.main_conversation_id);
+    renderPrimaryAgentBadge();
 }
 
 async function showPrimaryAvatarPicker() {

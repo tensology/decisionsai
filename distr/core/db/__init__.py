@@ -28,6 +28,7 @@ class Settings(Base):
     show_splash_video = Column(Boolean, default=True)
     show_about = Column(Boolean, default=True)
     notification_sound = Column(String, default='bell')
+    incoming_proposal_sound_enabled = Column(Boolean, default=True)
     welcome_greet_me = Column(Boolean, default=True)
     telegram_send_online_notice = Column(Boolean, default=False)
     load_on_startup = Column(Boolean, default=True)
@@ -811,6 +812,7 @@ try:
                 ("show_splash_video", "BOOLEAN DEFAULT 1"),
                 # Notification sound choice (see distr.core.notification_sounds)
                 ("notification_sound", "VARCHAR DEFAULT 'bell'"),
+                ("incoming_proposal_sound_enabled", "BOOLEAN DEFAULT 1"),
                 # Monk Mode
                 ("monk_mode_enabled", "BOOLEAN DEFAULT 0"),
                 ("monk_sites", "TEXT DEFAULT '[]'"),

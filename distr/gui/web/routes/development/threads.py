@@ -13,6 +13,22 @@ from .models import StudioRoutingAssessmentRequest, StudioSkillCaptureRequest, S
 
 
 def register_routes(router, templates):
+    @router.get("/workflows/studio/tasks/{chat_id}/attachments/{attachment_id}")
+    async def studio_thread_attachment(chat_id: int, attachment_id: str):
+        from fastapi import HTTPException
+        from fastapi.responses import FileResponse
+        from distr.core.incoming.media import resolve_thread_attachment
+
+        try:
+            path, record = await asyncio.to_thread(resolve_thread_attachment, chat_id, attachment_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        mime = str(record['mime_type']).split(';', 1)[0].strip().lower()
+        inline = mime in {'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf'} or mime.startswith(('audio/', 'video/'))
+        return FileResponse(path, media_type=mime, filename=record['name'],
+                            content_disposition_type='inline' if inline else 'attachment',
+                            headers={'X-Content-Type-Options': 'nosniff'})
+
     @router.post("/workflows/studio/attachments")
     async def upload_studio_attachment(file: UploadFile = File(...), project_id: Optional[int] = Form(None)):
         """Store a bounded chat attachment where the local development harness can read it."""
@@ -224,6 +240,12 @@ def register_routes(router, templates):
                 activate=False,
             )
             from distr.core.workflow.development_threads import mark_development_thread
+
+            if data.attachments:
+                from distr.core.workflow.development_harness import _safe_turn_attachments
+                from distr.core.incoming.media import register_thread_attachments
+
+                await asyncio.to_thread(register_thread_attachments, int(chat_id), _safe_turn_attachments(data.attachments))
 
             await asyncio.to_thread(
                 mark_development_thread,

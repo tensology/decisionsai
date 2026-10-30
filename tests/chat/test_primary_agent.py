@@ -145,6 +145,18 @@ def test_primary_card_picker_and_switching(width, primary_app, tmp_path):
         }''')
         card=page.get_by_role('region',name='Primary agent',exact=True)
         assert card.is_visible()
+        assert page.locator('#primaryAgentAvatar').evaluate('e => getComputedStyle(e).borderRadius') == '50%'
+        assert page.locator('#primaryAgentImage').evaluate('e => getComputedStyle(e).borderRadius') == '50%'
+        # Skin transforms must reach the primary renderer as they do roster avatars.
+        media_style = page.evaluate('''() => {
+            sidebarSkins.push({folder_name:'scaled-oracle', type:'oracle', idle_animation:'0.webm',
+                image_scale:1.55, image_offset_x:8, image_offset_y:-16});
+            const media = primaryAvatarMedia('scaled-oracle');
+            return {classes:media.className, scale:media.style.getPropertyValue('--assistant-image-scale'),
+                x:media.style.getPropertyValue('--assistant-image-offset-x'),
+                y:media.style.getPropertyValue('--assistant-image-offset-y')};
+        }''')
+        assert media_style == {'classes':'assistant-avatar-image oracle', 'scale':'1.55', 'x':'6.25%', 'y':'-12.5%'}
         assert page.locator(f'#chatList .chat-item[data-chat-id="{first}"]').count()==0
         assert page.locator(f'#chatList .chat-item[data-chat-id="{second}"]').count()==1
         page.screenshot(path=str(tmp_path/f'primary-roster-{width}.png'))

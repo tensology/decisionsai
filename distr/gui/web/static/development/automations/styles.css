@@ -345,7 +345,7 @@
 #scheduled-workspace .scheduled-layout, #scheduled-workspace .scheduled-layout.detail-open { grid-template-columns: minmax(0, 1fr); }
 .scheduled-row.readonly, .scheduled-row-head { grid-template-columns: minmax(160px, 2.2fr) repeat(4, minmax(0, 1fr)) 150px; }
 .scheduled-row-main { cursor: default; }
-.scheduled-row-icons { display: inline-flex; gap: 4px; justify-content: flex-end; }
+.scheduled-row-icons { display: inline-flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
 .scheduled-icon-button { display: inline-grid; width: 30px; height: 30px; place-items: center; padding: 0; border: 1px solid var(--studio-line); border-radius: 7px; background: transparent; color: #cbd5e1; cursor: pointer; }
 .scheduled-icon-button svg { width: 16px; height: 16px; fill: currentColor; }
 .scheduled-icon-button svg[fill="none"] { fill: none; }
@@ -397,7 +397,7 @@
 .scheduled-model-cell.inherit { color: var(--studio-muted); }
 
 /* autocog 2026-10-22: harness/model column removed from rows; cog + schedule modals. */
-.scheduled-row.readonly, .scheduled-row-head { grid-template-columns: minmax(220px, 2.4fr) minmax(110px, 1fr) minmax(90px, .8fr) minmax(90px, .8fr) minmax(80px, .7fr) 206px; gap: 10px; }
+.scheduled-row.readonly, .scheduled-row-head { grid-template-columns: minmax(220px, 2.4fr) minmax(110px, 1fr) minmax(90px, .8fr) minmax(90px, .8fr) minmax(80px, .7fr) 240px; gap: 10px; }
 .scheduled-edit-dialog { width: min(560px, 100%); }
 .scheduled-edit-field { display: grid; gap: 4px; flex: 1 1 150px; min-width: 0; color: #a8b3cf; font-size: 12px; }
 .scheduled-edit-field[hidden], .scheduled-weekday-picker[hidden] { display: none; }
@@ -487,6 +487,27 @@
 .cal-tg-col { min-width: 0; overflow: hidden; }
 .scheduled-calendar-event.cal-tg-event { box-sizing: border-box; min-width: 0; max-width: calc(100% - 4px); overflow: hidden; }
 
+/* Dense schedules stay readable: one full-width summary per collision group. */
+#scheduled-workspace .scheduled-calendar.cal-has-timegrid { overflow-x: auto; }
+.cal-timegrid.week { min-width: 896px; }
+.cal-tg-allday-cell { min-width: 0; overflow: hidden; align-items: center; }
+.cal-tg-allday .cal-tg-gutter { padding: 8px 4px; font-size: 9px; }
+.cal-event-group, .cal-recurring-group { border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-accent-soft, rgba(249,115,22,.12)); color: var(--studio-text); cursor: pointer; box-sizing: border-box; }
+.cal-event-group { position: absolute; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 1px; padding: 3px 6px; overflow: hidden; z-index: 2; }
+.cal-event-group time { color: var(--studio-muted); font-size: 10px; line-height: 12px; white-space: nowrap; }
+.cal-event-group strong { font-size: 12px; line-height: 14px; font-weight: 500; white-space: nowrap; }
+.cal-recurring-group { width: 100%; padding: 5px 6px; font-size: 11px; text-align: left; }
+.cal-event-group:hover, .cal-recurring-group:hover { border-color: var(--studio-accent); }
+.cal-event-group:focus-visible, .cal-recurring-group:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
+.scheduled-calendar-event.cal-tg-event .cal-title-inner { display: block; overflow: hidden; text-overflow: ellipsis; }
+.scheduled-calendar-event.cal-tg-event time { line-height: 12px; }
+.scheduled-calendar-event.cal-tg-event .cal-title { line-height: 14px; }
+.scheduled-day-popover { width: min(440px, calc(100vw - 32px)); max-height: min(480px, calc(100dvh - 32px)); box-sizing: border-box; }
+.scheduled-day-popover .scheduled-calendar-event.compact { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 8px; min-width: 0; min-height: 44px; text-align: left; }
+.scheduled-day-popover .scheduled-calendar-event.compact time { white-space: normal; overflow-wrap: anywhere; color: var(--studio-muted); font-size: 12px; line-height: 16px; }
+.scheduled-day-popover .scheduled-calendar-event span.cal-title,
+.scheduled-day-popover .scheduled-calendar-event span.cal-title > span.cal-title-inner { display: block; white-space: normal; overflow-wrap: anywhere; animation: none; transform: none; font-size: 14px; line-height: 20px; }
+
 /* Keep every automation field readable when the sidebar leaves too little room for columns. */
 @media (max-width: 1180px) {
     .scheduled-row-head { display: none; }
@@ -510,7 +531,8 @@
 }
 @media (max-width: 980px) {
     #scheduled-workspace .scheduled-calendar { overflow-x: auto; }
-    .cal-timegrid.week, .scheduled-calendar-weekdays, .scheduled-calendar-month { min-width: 700px; }
+    .cal-timegrid.week { min-width: 896px; }
+    .scheduled-calendar-weekdays, .scheduled-calendar-month { min-width: 700px; }
 }
 /* 2026-10-22 uiclean: calendar toolbar: nav sits right beside Status (filter's margin-right:auto centred it). */
 .scheduled-calendar-toolbar:not(.list-mode) > .scheduled-status-filter { margin-right: 0; }

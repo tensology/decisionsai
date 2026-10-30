@@ -98,6 +98,15 @@ def handle_work_request_signal(event: Any) -> None:
     """
     if not isinstance(event, dict):
         event = {"request_id": event}
+    from distr.core.incoming.events import publish_incoming_change
+
+    publish_incoming_change(request_id=event.get("request_id"), status=event.get("status") or "pending")
+    kind = str(event.get("event") or "proposal_created")
+    if kind != "proposal_created" or str(event.get("status") or "pending") != "pending":
+        return
+    from distr.core.tensology_notify import notify_proposal_created
+
+    notify_proposal_created(event)
     summary = work_request_summary(event)
     try:
         from distr.core.orchestration_events import emit_orchestration_event

@@ -6,6 +6,8 @@ import json
 import logging
 import platform
 import time
+import threading
+from concurrent.futures import Future
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -20,6 +22,19 @@ from distr.core.db.workflow import AutoWorkflowRun, DevelopmentTimeEntry, Develo
 
 logger = logging.getLogger(__name__)
 PINNED_PROJECTS_SETTING = "development_hot_corner_pinned_project_ids"
+
+
+def load_desktop_proposals():
+    from distr.core.incoming.proposals import list_incoming_proposals
+
+    # Opening desktop navigation must never launch a local triage model.
+    return list_incoming_proposals(limit=100, refresh_local=False)
+
+
+def start_desktop_proposal(proposal):
+    from distr.core.incoming.proposals import create_proposal_thread
+
+    return create_proposal_thread(proposal, start_work=True)
 
 
 def load_pinned_projects() -> list[int]:
@@ -499,13 +514,24 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._section_expanded = {
             "recent": False,
             "projects": self._view_settings.value("sidebar/projectsExpanded", True, type=bool),
+            "proposals": self._view_settings.value("sidebar/proposalsExpanded", False, type=bool),
         }
+        self._proposals = []
+        self._proposal_error = ''
+        self._proposal_loading = False
+        self._proposal_busy = set()
+        self._proposal_last_refresh = 0.0
+        self._proposal_change_version = 0
+        self._proposal_tasks = {}
         self._project_expanded: dict[int | None, bool] = {}
         self._context_menu: QtWidgets.QMenu | None = None
         self._rendered_at = time.monotonic()
         self._last_live_sync = self._rendered_at
 
         self._build_ui()
+        self._proposal_task_timer = QtCore.QTimer(self)
+        self._proposal_task_timer.setInterval(50)
+        self._proposal_task_timer.timeout.connect(self._poll_proposal_tasks)
 
         self._slide = QtCore.QPropertyAnimation(self, b"geometry", self)
         self._slide.setDuration(240)
@@ -756,6 +782,13 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         now = time.monotonic()
 
         if self.isVisible():
+            from distr.core.incoming.events import proposal_change_version
+            version = proposal_change_version()
+            if version != self._proposal_change_version:
+                self._proposal_change_version = version
+                self._proposal_last_refresh = 0.0
+            if now - self._proposal_last_refresh >= 60:
+                self._refresh_proposals()
             self._refresh_thread_title_widgets(now)
             if now - self._last_live_sync >= 1:
                 self._sync_live_state(now)
@@ -798,6 +831,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
 
     def _show_for_screen(self, screen: QtGui.QScreen) -> None:
         self._refresh_threads()
+        self._refresh_proposals()
         available = screen.availableGeometry()
         width = min(self.WIDTH, available.width())
         end = QtCore.QRect(available.left(), available.top(), width, available.height())
@@ -903,6 +937,173 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             empty.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
             empty.setForeground(0, QtGui.QColor("#8f949e"))
             self.tree.addTopLevelItem(empty)
+        self._render_proposals()
+
+    def _run_proposal_task(self, operation, callback):
+        future = Future()
+        self._proposal_tasks[future] = callback
+        def run():
+            try:
+                future.set_result(operation())
+            except Exception as exc:
+                future.set_exception(exc)
+        threading.Thread(target=run, name='desktop-proposal', daemon=True).start()
+        self._proposal_task_timer.start()
+
+    def _poll_proposal_tasks(self):
+        # Workers never touch Qt objects. The widget-owned timer disappears with
+        # the panel, even if a source request is still finishing in the background.
+        for future, callback in list(self._proposal_tasks.items()):
+            if not future.done():
+                continue
+            self._proposal_tasks.pop(future)
+            try:
+                result, error = future.result(), None
+            except Exception as exc:
+                result, error = None, str(exc)
+            callback(result, error)
+        if not self._proposal_tasks:
+            self._proposal_task_timer.stop()
+
+    def _refresh_proposals(self):
+        if self._proposal_loading:
+            return
+        self._proposal_loading = True
+        self._proposal_last_refresh = time.monotonic()
+        self._render_proposals()
+        self._run_proposal_task(load_desktop_proposals, self._proposals_loaded)
+
+    def _proposals_loaded(self, result, error):
+        self._proposal_loading = False
+        self._proposal_error = error or ''
+        if not error:
+            self._proposal_error = str((result or {}).get('tensology', {}).get('error') or '')
+            incoming = list((result or {}).get('proposals') or [])
+            self._proposals = list({str(row.get('id')): row for row in (self._proposals if self._proposal_error else []) + incoming}.values())
+        self._render_proposals()
+
+    def _render_proposals(self):
+        section = self._section_rows.get('proposals')
+        if section is None:
+            section = QtWidgets.QTreeWidgetItem(['Proposals'])
+            section.setData(0, QtCore.Qt.ItemDataRole.UserRole, {'kind': 'section', 'key': 'proposals'})
+            section.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            font = section.font(0)
+            font.setBold(True)
+            font.setUnderline(True)
+            font.setPixelSize(14)
+            section.setFont(0, font)
+            section.setForeground(0, QtGui.QColor('#c6cad1'))
+            self.tree.addTopLevelItem(section)
+            self._section_rows['proposals'] = section
+            section.setExpanded(self._section_expanded['proposals'])
+        section.setText(0, f"{'▾' if section.isExpanded() else '▸'} Proposals ({len(self._proposals)})")
+        for index in range(section.childCount()):
+            widget = self.tree.itemWidget(section.child(index), 0)
+            if widget:
+                widget.hide()
+                widget.deleteLater()
+        section.takeChildren()
+        if self._proposal_error or not self._proposals:
+            text = self._proposal_error or ('Loading proposals...' if self._proposal_loading else 'No proposals right now.')
+            item = QtWidgets.QTreeWidgetItem([text])
+            item.setToolTip(0, text)
+            section.addChild(item)
+            item.setFirstColumnSpanned(True)
+            if self._proposal_error:
+                item.setText(0, '')
+                error_row = QtWidgets.QWidget()
+                error_layout = QtWidgets.QVBoxLayout(error_row)
+                error_layout.setContentsMargins(8, 8, 8, 8)
+                error_label = QtWidgets.QLabel(text)
+                error_label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+                error_label.setWordWrap(True)
+                error_label.setStyleSheet('color: #ff8585; font-size: 12px;')
+                error_layout.addWidget(error_label)
+                retry = QtWidgets.QPushButton('Retry')
+                retry.setStyleSheet('QPushButton { background: #e7e9ed; color: #08090b; border: 0; border-radius: 4px; padding: 6px 12px; font-size: 12px; }')
+                retry.setAccessibleName('Retry loading proposals')
+                retry.clicked.connect(self._refresh_proposals)
+                error_layout.addWidget(retry, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+                error_label.ensurePolished()
+                width = max(200, min(self.WIDTH, self.width()) - 40)
+                height = QtGui.QFontMetrics(error_label.font()).boundingRect(QtCore.QRect(0, 0, width, 2000), QtCore.Qt.TextFlag.TextWordWrap, text).height()
+                item.setSizeHint(0, QtCore.QSize(200, max(72, height + 58)))
+                self.tree.setItemWidget(item, 0, error_row)
+        for proposal in self._proposals:
+            item = QtWidgets.QTreeWidgetItem()
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {'kind': 'proposal', 'proposal': proposal})
+            section.addChild(item)
+            item.setFirstColumnSpanned(True)
+            row = QtWidgets.QWidget()
+            box = QtWidgets.QVBoxLayout(row)
+            box.setContentsMargins(8, 8, 8, 8)
+            box.setSpacing(4)
+            title = QtWidgets.QLabel(str(proposal.get('title') or 'Proposal'))
+            title.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+            title.setWordWrap(True)
+            title.setStyleSheet('color: #e7e9ed; font-size: 13px;')
+            box.addWidget(title)
+            controls = QtWidgets.QHBoxLayout()
+            linked_project = next((group for _, group in self._project_rows if group['project_id'] == proposal.get('project_id') and group['project_id'] is not None), None)
+            project = QtWidgets.QLabel(str(linked_project['name'] if linked_project else proposal.get('project_name') or 'Link a project'))
+            project.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+            project.setMaximumWidth(200)
+            project.setObjectName('proposalProjectBadge')
+            project.setWordWrap(False)
+            project.setStyleSheet('background: #253958; color: #dce0e5; border-radius: 4px; padding: 4px 8px; font-size: 12px;')
+            project.ensurePolished()
+            project.setToolTip(project.text())
+            project.setText(QtGui.QFontMetrics(project.font()).elidedText(project.text(), QtCore.Qt.TextElideMode.ElideRight, 180))
+            project.setMinimumWidth(min(200, QtGui.QFontMetrics(project.font()).horizontalAdvance(project.text()) + 16))
+            controls.addWidget(project)
+            controls.addStretch()
+            busy = str(proposal.get('id')) in self._proposal_busy
+            button = QtWidgets.QPushButton('Starting...' if busy else 'Create thread')
+            button.setAccessibleName(f"Create thread for {proposal.get('title') or 'proposal'}")
+            button.setEnabled(bool(linked_project) and not self._proposal_busy)
+            if not linked_project:
+                button.setToolTip('Assign this proposal to a project in Incoming before starting work.')
+            button.setStyleSheet('QPushButton { background: #e7e9ed; color: #08090b; border: 0; border-radius: 4px; padding: 6px 8px; font-size: 12px; } QPushButton:disabled { color: #747b87; background: #292e35; }')
+            button.clicked.connect(lambda _checked=False, selected=dict(proposal): self._start_proposal(selected))
+            controls.addWidget(button)
+            box.addLayout(controls)
+            title_width = max(200, min(self.WIDTH, self.width()) - 40)
+            title.ensurePolished()
+            height = QtGui.QFontMetrics(title.font()).boundingRect(QtCore.QRect(0, 0, title_width, 2000), QtCore.Qt.TextFlag.TextWordWrap, title.text()).height()
+            item.setSizeHint(0, QtCore.QSize(200, max(72, height + 52)))
+            self.tree.setItemWidget(item, 0, row)
+
+    def _start_proposal(self, proposal):
+        key = str(proposal.get('id'))
+        if self._proposal_busy:
+            return
+        self._proposal_busy.add(key)
+        self._proposal_error = ''
+        self._render_proposals()
+        def finished(chat_id, error):
+            self._proposal_busy.discard(key)
+            self._proposal_error = error or ''
+            if error:
+                self._render_proposals()
+                return
+            self._proposals = [row for row in self._proposals if str(row.get('id')) != key]
+            self._selected_chat_id = int(chat_id)
+            self._selected_item_key = ('thread', int(chat_id))
+            self._project_expanded[int(proposal['project_id'])] = True
+            self._refresh_threads()
+            for item, group in self._project_rows:
+                if group['project_id'] == int(proposal['project_id']):
+                    item.setExpanded(True)
+                    if item.parent():
+                        item.parent().setExpanded(True)
+            for item, thread in self._thread_rows:
+                if int(thread['chat_id']) == int(chat_id):
+                    self.tree.setCurrentItem(item)
+                    self.tree.scrollToItem(item)
+                    break
+            self._open_path(f'/development/threads/{int(chat_id)}/')
+        self._run_proposal_task(lambda: start_desktop_proposal(proposal), finished)
 
     def _add_recent_row(
         self,
@@ -1060,6 +1261,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             for group in fresh_groups
             for thread in group["threads"]
         }
+        if set(fresh_threads) != {int(thread["chat_id"]) for _, thread in self._thread_rows}:
+            self._refresh_threads()
+            return
         for item, group in self._project_rows:
             fresh_group = fresh_by_project.get(group["project_id"])
             if fresh_group is None:
@@ -1173,8 +1377,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             key = value.get("key")
             if key in self._section_expanded:
                 self._section_expanded[key] = item.isExpanded()
-                if key == "projects":
-                    self._view_settings.setValue("sidebar/projectsExpanded", item.isExpanded())
+                if key in {"projects", "proposals"}:
+                    self._view_settings.setValue(f"sidebar/{key}Expanded", item.isExpanded())
+                if key == 'proposals':
+                    item.setText(0, f"{'▾' if item.isExpanded() else '▸'} Proposals ({len(self._proposals)})")
 
     def _toggle_section(self, index: QtCore.QPersistentModelIndex, key: str | None) -> None:
         if not index.isValid():

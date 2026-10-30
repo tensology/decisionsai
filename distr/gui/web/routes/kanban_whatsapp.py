@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import os
+import re
 import tempfile
 import subprocess
 import shutil
@@ -71,6 +72,37 @@ def _remember_missing_wa_media(
 
 
 def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_identity):
+    @router.get("/tickets/whatsapp/profile-picture")
+    async def whatsapp_profile_picture(jid: str = ""):
+        import httpx
+
+        if not re.fullmatch(r"(?:\d+(?::\d+)?@(?:s\.whatsapp\.net|lid)|\d+(?:-\d+)?@g\.us)", jid):
+            return Response(status_code=400)
+        base_url = _whatsapp_relay_base_url()
+        headers, params = await _get_media_auth(base_url, photo_jid=jid)
+        if not headers and not params:
+            return Response(status_code=503)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                async with client.stream("GET", f"{base_url}/profile-picture", headers=headers, params={**params, "jid": jid}) as upstream:
+                    if upstream.status_code != 200:
+                        return Response(status_code=upstream.status_code if upstream.status_code in (401, 403, 404, 503, 504) else 502)
+                    mime = upstream.headers.get("content-type", "").split(";")[0]
+                    if mime not in ("image/jpeg", "image/png", "image/webp"):
+                        return Response(status_code=502)
+                    body = bytearray()
+                    async for chunk in upstream.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > 1024 * 1024:
+                            return Response(status_code=502)
+                    if not body:
+                        return Response(status_code=404)
+            return Response(bytes(body), media_type=mime, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+        except httpx.TimeoutException:
+            return Response(status_code=504)
+        except httpx.HTTPError:
+            return Response(status_code=503)
+
     def _whatsapp_relay_base_url() -> str:
         """
         Resolve WhatsApp relay API base URL.
@@ -134,7 +166,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         return block if not out else block + "\n" + "\n".join(out).strip()
 
     """Attach WhatsApp-centric routes to the provided router."""
-    async def _get_media_auth(base_url: str) -> tuple[dict, dict]:
+    async def _get_media_auth(base_url: str, *, photo_jid: str = "") -> tuple[dict, dict]:
         """Return (headers, params) for relay media fetch auth.
 
         Priority:
@@ -147,7 +179,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         try:
             import httpx
 
-            relay_payload = {"app_user_id": "local-ui", "subscribe_phones": []}
+            relay_payload = {"app_user_id": "local-ui", "subscribe_phones": [photo_jid] if photo_jid else []}
             ident = load_or_create_device_identity()
             priv_raw = base64.b64decode(str(ident.get("private_key") or "").encode())
             priv = Ed25519PrivateKey.from_private_bytes(priv_raw)
@@ -824,25 +856,13 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         try:
             media_dir_path = os.path.join(DB_DIR, "whatsapp_media")
             os.makedirs(media_dir_path, exist_ok=True)
-            ext_map = {
-                "image/jpeg": ".jpg",
-                "image/png": ".png",
-                "image/webp": ".webp",
-                "audio/ogg": ".ogg",
-                "audio/mpeg": ".mp3",
-                "audio/mp4": ".m4a",
-                "audio/webm": ".webm",
-                "audio/opus": ".opus",
-                "video/mp4": ".mp4",
-                "video/webm": ".webm",
-                "application/pdf": ".pdf",
-            }
-            ext = ext_map.get(content_type.split(";")[0], ".bin")
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"whatsapp_{msg_media_type or 'media'}_{ts}{ext}"
-            dest = os.path.join(media_dir_path, filename)
-            with open(dest, "wb") as f:
-                f.write(media_bytes)
+            from distr.core.integrations.whatsapp.paths import store_whatsapp_media
+
+            dest = store_whatsapp_media(
+                media_bytes, message_id=ack_wa_id or str(message_id),
+                media_type=msg_media_type or 'media', mime_type=content_type,
+            )
+            filename = os.path.basename(dest)
             media_headers, media_params = await _get_media_auth(relay_base)
             with get_session() as upd_s:
                 db_msg = upd_s.query(WhatsAppMessage).get(message_id)

@@ -2,6 +2,23 @@ import { bindWorkflowStepNumbers, nextWorkflowLoopId, workflowLoopHtml, workflow
 import { shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
+    const activityDisclosureState = new Map();
+    function activityKey(value) {
+        return `${context.currentChat?.id || ''}:${value}`;
+    }
+    function captureActivityState(root) {
+        root.querySelectorAll('details[data-activity-key]').forEach((node) => activityDisclosureState.set(node.dataset.activityKey, node.open));
+        const focused = document.activeElement;
+        return focused?.tagName === 'SUMMARY' ? focused.parentElement?.dataset.activityKey : null;
+    }
+    function restoreActivityState(root, focusedKey) {
+        let focusTarget = null;
+        root.querySelectorAll('details[data-activity-key]').forEach((node) => {
+            node.open = activityDisclosureState.get(node.dataset.activityKey) || false;
+            if (focusedKey === node.dataset.activityKey) focusTarget = node.querySelector(':scope > summary');
+        });
+        focusTarget?.focus({ preventScroll: true });
+    }
     function messageTime(timestamp) {
         if (!timestamp) return '';
         const date = new Date(timestamp);
@@ -381,7 +398,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             return 'tests';
         if (/replace_text|write_file|file_change|file_edit|edit|patch|apply_patch/.test(toolName)) return 'edits';
         if (/view_image|screenshot|browser|playwright|chrome|web_search|smart_open|open_page|open_url/.test(toolName)) return 'browser';
-        if (/run_command|terminal|shell|command|exec/.test(toolName)) return 'commands';
+        if (/run_command|terminal|shell|command|exec|^bash$|^sh$|^zsh$/.test(toolName)) return 'commands';
         if (/read_file|list_files|search_files|search|read|list|\brg\b/.test(toolName)) return 'inspection';
         if (/harness_skill|skill|guide/.test(toolName)) return 'skills';
         return 'other';
@@ -625,8 +642,10 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
 
     function turnEventRowsHtml(events, { includeRunning = false, active = false } = {}) {
         return mergeWorkerLifecycleEvents(events)
-            .filter((event) => !isRoutineShellStep(event) || isFailedStep(event))
-            .map(turnEventPresentation)
+            .map((event, index) => {
+                const item = turnEventPresentation(event);
+                return item ? { ...item, key: activityKey(`event:${event.event_id || event.metadata?.call_id || index}`) } : null;
+            })
             .filter((item) => item && (includeRunning || !item.running))
             .reduce(collapseRepeatedEventItems, [])
             .map((item) => {
@@ -634,7 +653,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 const classes = `turn-activity-block turn-event-row event-${item.kind}${item.failed ? ' failed' : ''}${item.running ? ' running' : ''}${active ? ' active-turn-action' : ''}`;
                 const main = `<span class="turn-activity-icon" aria-hidden="true">${turnEventIconSvg(item.kind)}</span><span class="turn-event-copy"><strong>${actions.escapeHtml(item.title)}</strong>${item.preview && item.preview !== item.title ? `<span class="turn-event-preview${['commands', 'tests'].includes(item.kind) ? ' code' : ''}">${actions.escapeHtml(item.preview)}</span>` : ''}${turnEventFilesHtml(item.files)}</span><small class="turn-event-status">${actions.escapeHtml(item.status)}</small>`;
                 if (!item.detail) return `<div class="${classes}"><div class="turn-event-main">${main}</div></div>`;
-                return `<details class="${classes}"><summary>${main}<span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="turn-activity-content"><pre>${actions.escapeHtml(item.detail)}</pre></div></details>`;
+                return `<details class="${classes}" data-activity-key="${actions.escapeHtml(item.key)}"><summary>${main}<span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="turn-activity-content"><pre>${actions.escapeHtml(item.detail)}</pre></div></details>`;
             })
             .join('');
     }
@@ -647,18 +666,24 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const failed =
             ['failed', 'cancelled'].includes(status) ||
             events.some((event) => ['tool_failed', 'turn_failed'].includes(String(event?.event_type || '').toLowerCase()));
-        return `<section class="turn-activity-timeline turn-event-stream${failed ? ' failed' : ''}" aria-label="Activity for this response">${rows}</section>`;
+        return `<details class="turn-activity-disclosure turn-activity-timeline${failed ? ' failed' : ''}" data-activity-key="${actions.escapeHtml(activityKey(`turn:${turn.turn_id}`))}"><summary>${failed ? 'View activity and errors' : 'View activity'}<span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="turn-event-stream">${rows}</div></details>`;
     }
 
     function messageHtml(message, index, latestAssistantIndex, turnActivity = null, instruction = '', durableActivityKeys = new Set(), messages = []) {
         const role = message.role || 'assistant';
         if (role === 'user') {
             const presentation = userMessagePresentation(message);
-            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}</div></article>`;
+            const media = (message.attachments || []).filter(item => /^\/api\/workflows\/studio\/tasks\/\d+\/attachments\/[a-f0-9]+$/.test(item.url || '')).map(item => {
+                const url = actions.escapeHtml(item.url);
+                const name = actions.escapeHtml(item.name || 'Attachment');
+                return `<a class="thread-source-file" href="${url}" target="_blank" rel="noopener">${String(item.mime_type || '').startsWith('image/') ? `<img src="${url}" alt="${name}" loading="lazy">` : ''}<span>${name}</span></a>`;
+            }).join('');
+            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}${media ? `<div class="thread-source-files" aria-label="Source attachments">${media}</div>` : ''}</div></article>`;
         }
         if (role === 'tool') {
             const tool = message.tool_event || {};
             if (isDurableActivityDuplicate(tool, durableActivityKeys)) return '';
+            if (liveLegacyActivityEvents(context.currentChat).some(event => event.legacyIndex === index)) return '';
             return `<div class="activity-group">${activityHtml(Object.assign({}, tool, { timestamp: message.timestamp }))}</div>`;
         }
         if (role === 'workflow') {
@@ -997,12 +1022,27 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         });
     }
 
+    function liveLegacyActivityEvents(chat) {
+        if (!['initializing', 'queued', 'running'].includes(String(context.currentRun?.status || '').toLowerCase())) return [];
+        const messages = chat?.messages || [];
+        let lastUser = -1;
+        messages.forEach((message, index) => { if (message.role === 'user') lastUser = index; });
+        return messages.flatMap((message, index) => {
+            if (index <= lastUser || message.role !== 'tool') return [];
+            const tool = message.tool_event || {};
+            const status = String(tool.status || '').toLowerCase();
+            return [{...tool, legacyIndex: index, event_id: `legacy:${index}`,
+                event_type: status === 'failed' ? 'tool_failed' : status === 'running' ? 'tool_started' : 'tool_completed',
+                detail: tool.detail || tool.result_detail || '', metadata: {...tool.metadata, tool_name: tool.tool_name || tool.title || 'tool'}}];
+        });
+    }
+
     function durableTurnActivity(chat) {
         const active = chat.active_turn;
         const run = context.currentRun || {};
         const runStatus = String(run.status || '').toLowerCase();
         const runActive = ['initializing', 'queued', 'running'].includes(runStatus);
-        const activeEvents = Array.isArray(active?.events) ? active.events : [];
+        const activeEvents = [...(Array.isArray(active?.events) ? active.events : []), ...liveLegacyActivityEvents(chat)];
         if (!runActive) return '';
         const reportedPaths = [
             ...gitStatusEntries(run.git_status_after || run.git_status_current),
@@ -1046,14 +1086,15 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
         return `<article class="studio-message active-turn"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">
             ${draft ? `<div class="active-turn-draft message-markdown">${assistantMarkdown(draft)}</div>` : ''}
-            ${completedTurnActionsHtml(activeEvents)}
-            <div class="active-turn-summary" role="status" aria-live="polite"><div class="loading-message ${label.toLowerCase()}"><span>${currentLabel} <small>${currentDetail}</small></span></div>${currentCommand ? `<code class="active-command" title="${actions.escapeHtml(currentCommand)}">${actions.escapeHtml(currentCommand)}</code>` : ''}</div>
+            ${activeEvents.filter(event => event?.metadata?.approval_request?.status === 'pending').map(event => approvalCardHtml(event.metadata.approval_request)).join('')}
+            <details class="turn-activity-disclosure live-activity" data-activity-key="${actions.escapeHtml(activityKey(`turn:${active?.turn_id || run.turn_id || 'live'}`))}"><summary class="active-turn-summary"><span class="loading-message ${label.toLowerCase()}" role="status" aria-live="polite"><span>${currentLabel} <small>${currentDetail}</small></span></span><span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="turn-event-stream">${turnEventRowsHtml(activeEvents.filter(event => !event?.metadata?.approval_request), { includeRunning: true, active: true }) || '<p class="activity-empty">Waiting for the first activity update.</p>'}${currentCommand ? `<code class="active-command">${actions.escapeHtml(currentCommand)}</code>` : ''}</div></details>
         </div></article>`;
     }
 
     function syncDurableTurnActivity() {
         if (!context.currentChat) return;
         const list = el('message-list'); list.__lastRenderedHtml = null; // in-place edit: next full render must not be skipped
+        const focusedKey = captureActivityState(list);
         const current = list.querySelector('.active-turn');
         const html = durableTurnActivity(context.currentChat);
         if (!html) {
@@ -1063,6 +1104,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         } else {
             list.insertAdjacentHTML('beforeend', html);
         }
+        restoreActivityState(list, focusedKey);
         syncLiveWorkflowRunner();
     }
 
@@ -1089,6 +1131,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
     function renderConversation(chat) {
         el('studio-empty').classList.add('hidden');
         const list = el('message-list');
+        const focusedKey = captureActivityState(list);
         const messages = (chat.messages || [])
             .filter((message) => !isDevelopmentConversationNoise(message, chat))
             .slice(-140);
@@ -1126,6 +1169,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         if (list.__lastRenderedHtml === nextHtml && list.childElementCount && !list.classList.contains('hidden')) return;
         list.__lastRenderedHtml = nextHtml;
         list.innerHTML = nextHtml;
+        restoreActivityState(list, focusedKey);
         list.classList.remove('hidden');
         actions.bindConversationActions(list, messages);
         bindWorkflowStepRails(list);
@@ -1138,7 +1182,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 if (!runner.isConnected) return;
                 conversation.scrollTop += runner.getBoundingClientRect().top - conversation.getBoundingClientRect().top - 8;
             }, 80);
-        } else if (!runner) {
+        } else if (!runner && !list.querySelector('.turn-activity-disclosure[open]')) {
             window.requestAnimationFrame(() => {
                 conversation.scrollTop = conversation.scrollHeight;
             });

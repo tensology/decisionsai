@@ -219,7 +219,7 @@ class GoogleWorkspaceConnector:
                 'grant_type': 'refresh_token'
             }
             
-            response = requests.post(token_uri, data=token_data)
+            response = requests.post(token_uri, data=token_data, timeout=(3, 8))
             response.raise_for_status()
             tokens = response.json()
             

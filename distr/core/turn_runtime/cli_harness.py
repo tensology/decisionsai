@@ -312,11 +312,16 @@ class CliHarnessTurnRuntime:
                 title = tool_name.replace("_", " ").title()
                 call_id = str(raw.get("toolCallId") or raw.get("call_id") or raw.get("id") or tool_name)
                 started = raw_type.endswith("start")
+                args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
+                result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
+                output = "\n".join(str(part.get("text") or "") for part in result.get("content", [])
+                                   if isinstance(part, dict) and part.get("type") == "text")
+                failed = bool(raw.get("isError")) or bool(result.get("isError"))
                 if on_event:
                     on_event(
                         TurnEvent(
                             kind=TurnEventKind.TOOL_STARTED if started else TurnEventKind.TOOL_COMPLETED,
-                            status=TurnStatus.WORKING if started else TurnStatus.UPDATING,
+                            status=TurnStatus.WORKING if started else TurnStatus.FAILED if failed else TurnStatus.UPDATING,
                             summary=str(raw.get("summary") or f"{title} {'started' if started else 'finished'}."),
                             runtime_id=self.runtime_id,
                             tool_name=tool_name,
@@ -328,8 +333,10 @@ class CliHarnessTurnRuntime:
                             details={
                                 "call_id": call_id,
                                 "title": title,
-                                "status": "running" if started else "success",
+                                "status": "running" if started else "error" if failed else "success",
                                 "backend": str(request.route.backend_id or ""),
+                                **({"command": str(args["command"])[:8000]} if args.get("command") else {}),
+                                **({"output": output[:8000]} if output else {}),
                             },
                         )
                     )

@@ -117,7 +117,7 @@ function showSnackbar(message, type, opts) {
         if (existing) existing.remove();
 
         return new Promise(function(resolve) {
-            var overlay = document.createElement("div");
+            var overlay = document.createElement("dialog");
             overlay.id = "decisions-confirm-modal";
             overlay.className = "decisions-confirm-overlay";
             overlay.setAttribute("role", "dialog");
@@ -148,6 +148,7 @@ function showSnackbar(message, type, opts) {
                 if (settled) return;
                 settled = true;
                 document.removeEventListener("keydown", onKeyDown, true);
+                overlay.close();
                 overlay.remove();
                 if (previousActive && typeof previousActive.focus === "function" && document.contains(previousActive)) {
                     previousActive.focus();
@@ -162,6 +163,19 @@ function showSnackbar(message, type, opts) {
 
             function onKeyDown(evt) {
                 if (!document.getElementById("decisions-confirm-modal")) return;
+                if (evt.key === "Tab") {
+                    var controls = overlay.querySelectorAll('button:not(:disabled), input:not(:disabled)');
+                    var first = controls[0];
+                    var last = controls[controls.length - 1];
+                    if (evt.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+                        evt.preventDefault();
+                        last.focus();
+                    } else if (!evt.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+                        evt.preventDefault();
+                        first.focus();
+                    }
+                    return;
+                }
                 if (evt.key === "Escape") {
                     evt.preventDefault();
                     evt.stopPropagation();
@@ -178,9 +192,14 @@ function showSnackbar(message, type, opts) {
             overlay.addEventListener("click", function(evt) {
                 if (evt.target === overlay) close(false);
             });
+            overlay.addEventListener("cancel", function(evt) {
+                evt.preventDefault();
+                close(false);
+            });
             if (cancelBtn) cancelBtn.addEventListener("click", function() { close(false); });
             if (okBtn) okBtn.addEventListener("click", function() { close(true); });
             document.addEventListener("keydown", onKeyDown, true);
+            overlay.showModal();
             if (okBtn) okBtn.focus();
         });
     }

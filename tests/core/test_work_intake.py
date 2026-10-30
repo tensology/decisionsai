@@ -946,7 +946,7 @@ def test_numbered_batch_does_not_treat_ticket_sentences_as_group_controls():
     ]
 
 
-@pytest.mark.parametrize("source", ["whatsapp", "gmail"])
+@pytest.mark.parametrize("source", ["whatsapp", "gmail", "mailshot"])
 def test_shared_channel_request_creates_one_project_ticket_with_source_trace(intake_db, source, monkeypatch):
     from distr.core.db.kanban import KanbanTicket
 

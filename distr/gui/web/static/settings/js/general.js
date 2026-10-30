@@ -67,6 +67,8 @@ async function loadGeneralSettings() {
         document.getElementById('load_on_startup').checked = settings.load_on_startup || false;
         const soundSelect = document.getElementById('notification_sound');
         if (soundSelect) soundSelect.value = settings.notification_sound || 'bell';
+        const proposalSound = document.getElementById('incoming_proposal_sound_enabled');
+        if (proposalSound) proposalSound.checked = settings.incoming_proposal_sound_enabled !== false;
         const defaultEditor = document.getElementById('default_project_editor');
         if (defaultEditor) defaultEditor.value = settings.default_project_editor || 'codex';
 
@@ -193,6 +195,7 @@ async function saveGeneralSettings() {
             telegram_send_online_notice: document.getElementById('telegram_send_online_notice').checked,
             load_on_startup: document.getElementById('load_on_startup').checked,
             notification_sound: (document.getElementById('notification_sound') || {}).value || 'bell',
+            incoming_proposal_sound_enabled: document.getElementById('incoming_proposal_sound_enabled')?.checked !== false,
             default_project_editor: (document.getElementById('default_project_editor') || {}).value || 'codex',
             listening_state: listeningState,
             voice_provider: voiceProvider,

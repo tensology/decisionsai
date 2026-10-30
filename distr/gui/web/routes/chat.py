@@ -1347,6 +1347,13 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 rows = session.execute(thread_query, {"root_id": root_id}).fetchall()
 
                 messages = _merge_thread_rows_with_tool_and_workflow_events(rows, root_chat)
+                if owned_by_development:
+                    from distr.core.incoming.media import public_thread_attachments
+
+                    media = public_thread_attachments(int(root_chat.id))
+                    first_user = next((message for message in messages if message.get('role') == 'user'), None)
+                    if media and first_user is not None:
+                        first_user['attachments'] = media
 
                 from distr.core.chat_turns import get_turns
 

@@ -59,6 +59,10 @@ class TelegramMessagesMixin:
     def _handle_telegram_message(self, wrapper_data: Dict[str, Any]):
         """Logic extracted from old implementation to process inbound messages."""
         inner_data = wrapper_data.get("data", {})
+        # Old relay versions may still forward an already-handled Tensology
+        # button. Never send its bearer-like approval token into an LLM prompt.
+        if str(inner_data.get("callback_data") or "").startswith("tns:"):
+            return
         if not inner_data.get("text") and inner_data.get("callback_data"):
             # Relay callback queries use the same deterministic interaction
             # resolver as typed replies.
@@ -381,7 +385,7 @@ class TelegramMessagesMixin:
             try:
                 from distr.core.tensology_client import handle_proposal_decision_reply
 
-                proposal_reply = handle_proposal_decision_reply(text)
+                proposal_reply = handle_proposal_decision_reply(text, source="telegram")
                 if proposal_reply:
                     self.send_to_telegram(proposal_reply)
                     return

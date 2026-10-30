@@ -97,7 +97,7 @@ def register_routes(router, templates):
         try:
             from distr.core.incoming.proposals import create_proposal_thread
 
-            chat_id = await asyncio.to_thread(create_proposal_thread, proposal)
+            chat_id = await asyncio.to_thread(create_proposal_thread, proposal, start_work=True)
             return JSONResponse({"success": True, "chat_id": chat_id})
         except Exception as e:
             logger.error("Proposal thread creation failed: %s", e, exc_info=True)

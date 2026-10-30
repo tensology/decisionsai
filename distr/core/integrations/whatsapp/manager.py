@@ -785,25 +785,12 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             save_dir = Path(DB_DIR) / "whatsapp_media"
             save_dir.mkdir(parents=True, exist_ok=True)
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # Determine extension from mime type
-            ext_map = {
-                "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
-                "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
-                "audio/opus": ".opus",
-                "video/mp4": ".mp4", "video/3gpp": ".3gp",
-                "application/pdf": ".pdf",
-                "application/octet-stream": ".bin",
-            }
-            ext = ext_map.get(mime_type, ".bin")
-            if filename and "." in filename:
-                ext = ""
-            dest = save_dir / f"whatsapp_{media_type}_{timestamp}{ext}"
+            from distr.core.integrations.whatsapp.paths import store_whatsapp_media
 
-            with open(dest, "wb") as f:
-                f.write(media_bytes)
-
-            abs_saved = str(dest)
+            abs_saved = store_whatsapp_media(
+                media_bytes, message_id=message_id, media_type=media_type, mime_type=mime_type,
+            )
+            dest = Path(abs_saved)
             from distr.core.integrations.whatsapp.paths import media_path_for_database
 
             path_for_db = media_path_for_database(abs_saved)

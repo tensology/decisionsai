@@ -944,12 +944,12 @@ class OrchestratorIntakeService:
                 self._record_whatsapp_lifecycle(intake, decision)
             except Exception:
                 logger.debug("Could not persist WhatsApp work lifecycle from intake", exc_info=True)
-        elif str(getattr(intake.source, "value", intake.source) or "").lower() == "gmail":
+        elif intake.source.value in {"gmail", "mailshot"}:
             try:
                 from distr.core.kanban.jira_work_lifecycle import record_ticket_created
 
                 meta = dict(intake.metadata or {})
-                email_provider = str(meta.get("email_provider") or "gmail").strip().lower()
+                email_provider = str(meta.get("email_provider") or intake.source.value).strip().lower()
                 record_ticket_created(
                     ticket_id=int(decision.ticket_id),
                     board_id=int(decision.board_id) if decision.board_id is not None else None,

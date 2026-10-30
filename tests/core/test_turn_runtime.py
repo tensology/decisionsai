@@ -167,6 +167,28 @@ def test_cli_harness_projects_codex_items_into_typed_turn_events(monkeypatch):
     assert events[3].summary == "4 passed"
 
 
+
+def test_pi_tool_activity_keeps_command_output_and_failure_without_private_reasoning(monkeypatch):
+    events = []
+
+    async def fake_dispatch(context):
+        context.on_event({"type": "tool_execution_start", "toolCallId": "shell-1", "toolName": "bash",
+                          "args": {"command": "check-local-import"}})
+        context.on_event({"type": "tool_execution_end", "toolCallId": "shell-1", "toolName": "bash",
+                          "isError": True,
+                          "result": {"content": [{"type": "thinking", "text": "private thought"},
+                                                  {"type": "text", "text": "pg_dump not found"}]}})
+        return SimpleNamespace(execution_session_id=23, evidence={},
+                               result=SimpleNamespace(success=False, output="", error="Tool failed", waits_for_human=False))
+
+    monkeypatch.setattr("distr.core.project_cli_backends.harness.dispatch_harness", fake_dispatch)
+    asyncio.run(CliHarnessTurnRuntime().execute(_request(), on_event=events.append))
+    assert events[0].details["command"] == "check-local-import"
+    assert events[1].details["output"] == "pg_dump not found"
+    assert events[1].status == TurnStatus.FAILED
+    assert events[1].details["status"] == "error"
+    assert "private thought" not in str(events)
+
 def test_tool_observation_contract_is_deterministic():
     observation = ToolObservation(
         status="success",

@@ -1,9 +1,7 @@
-// Owns the read-only Automations page. An automation is a scheduled action:
-// what it does, an optional project, and a schedule. Creation and editing
-// belong to the orchestrator (Laya) in threads; this page only displays what
-// exists (list or read-only calendar) with Run now and Pause/Resume.
+// Development automation list/calendar. Full edits use the shared Automations
+// editor so execution bindings and schedule metadata have one save path.
 import { displayModelName, shortModelName } from '../../shared/model_variant.js?v=20261022-automodel';
-import { SNAP_MINUTES, snapMinutes, timeToMinutes, minutesToTime, topForMinutes, shiftSchedule } from './calendar_drag.js?v=20261022-calendar';
+import { SNAP_MINUTES, snapMinutes, timeToMinutes, minutesToTime, topForMinutes, shiftSchedule, groupCalendarEvents } from './calendar_drag.js?v=20261030-calendar-groups';
 import { loadInstalledHarnesses, harnessSelectOptions, harnessLabel } from '../../shared/harnesses.js?v=20261022-harnesssrc';
 
 export function createAutomations({ context, actions, el }) {
@@ -54,6 +52,7 @@ export function createAutomations({ context, actions, el }) {
         const value = automation?.schedule || {};
         const times = scheduleTimes(value);
         const at = times.length ? times.join(', ') : '09:00';
+        if (value.kind === 'cron') return `Cron: ${value.cron || value.expression || 'custom schedule'}`;
         if (value.kind === 'interval') return `Every ${value.interval || 30} ${value.interval_unit || 'minutes'}`;
         if (value.kind === 'hourly') return 'Every hour';
         if (value.kind === 'once') return value.run_at ? `Once, ${actions.formatDateTime(value.run_at)}` : 'Once';
@@ -254,10 +253,21 @@ export function createAutomations({ context, actions, el }) {
                 else if (action === 'run') runAutomation(automationId);
                 else if (action === 'pause' || action === 'resume') toggleAutomation(automationId, action);
                 else if (action === 'history') openHistoryModal(automationId);
+                else if (action === 'edit') openAutomationEditor(automationId);
                 else if (action === 'settings') openRouteModal(automationId);
                 else if (action === 'schedule') openScheduleModal(automationId);
             })
         );
+        list.querySelectorAll('[data-scheduled-row]').forEach((row) => {
+            row.addEventListener('dblclick', (event) => {
+                if (!event.target.closest('button, a, input, select')) openAutomationEditor(row.dataset.scheduledRow);
+            });
+            row.addEventListener('contextmenu', (event) => {
+                if (event.target.closest('button, a, input, select')) return;
+                event.preventDefault();
+                openScheduledRowMenu(row.dataset.scheduledRow, event.clientX, event.clientY);
+            });
+        });
         ensureRouteNames();
     }
 
@@ -338,7 +348,7 @@ export function createAutomations({ context, actions, el }) {
 
     // ---------- calendar ----------
     // ---------- calendar 2026-10-22: time grid (Day/Week), drag to reschedule, ignore ----------
-    const HOUR_PX = 48;
+    const HOUR_PX = 64;
     function occurrenceKey(dayKey, time) {
         return `${dayKey}T${time}`;
     }
@@ -362,16 +372,19 @@ export function createAutomations({ context, actions, el }) {
             state.calendarDays[key] = events;
             const untimed = events.filter((e) => !isTimedKind(e.automation));
             const timed = events.filter((e) => isTimedKind(e.automation));
-            allDay += `<div class="cal-tg-allday-cell" data-cal-day="${key}">${untimed.map((e) => eventHtml(e, true, key)).join('')}</div>`;
-            const byStart = {};
-            timed.forEach((e) => { (byStart[e.time] = byStart[e.time] || []).push(e); });
-            const blocks = timed
-                .map((e) => {
-                    const group = byStart[e.time];
-                    const index = group.indexOf(e);
-                    const top = topForMinutes(timeToMinutes(e.time), HOUR_PX);
-                    const style = `top:${top}px;height:${Math.max(HOUR_PX / 2, 22)}px;left:calc(${(100 / group.length) * index}% + 2px);width:calc(${100 / group.length}% - 4px)`;
-                    return eventHtml(e, false, key, style);
+            const recurringKey = `${key}:recurring`;
+            state.calendarClusters[recurringKey] = untimed;
+            allDay += `<div class="cal-tg-allday-cell" data-cal-day="${key}">${untimed.length ? `<button type="button" class="cal-recurring-group" data-cal-cluster="${recurringKey}" aria-label="${untimed.length} recurring automations on ${key}">${untimed.length} recurring</button>` : ''}</div>`;
+            const blocks = groupCalendarEvents(timed, HOUR_PX, 44)
+                .map((group, index) => {
+                    const style = `top:${group.top}px;height:44px;left:2px;width:calc(100% - 4px)`;
+                    if (group.events.length === 1) return eventHtml(group.events[0], false, key, style);
+                    const groupKey = `${key}:${index}`;
+                    state.calendarClusters[groupKey] = group.events;
+                    const first = group.events[0].time;
+                    const last = group.events[group.events.length - 1].time;
+                    const range = first === last ? first : `${first} - ${last}`;
+                    return `<button type="button" class="cal-event-group" style="${style}" data-cal-cluster="${groupKey}" aria-label="${group.events.length} automations, ${range}, ${key}"><time>${esc(range)}</time><strong>${group.events.length} automations</strong></button>`;
                 })
                 .join('');
             const now = key === todayKey ? `<div class="cal-now-line" data-cal-now style="top:${topForMinutes(new Date().getHours() * 60 + new Date().getMinutes(), HOUR_PX)}px"><span></span></div>` : '';
@@ -381,7 +394,7 @@ export function createAutomations({ context, actions, el }) {
         const lines = Array.from({ length: 48 }, (_, i) => `<div class="cal-tg-line${i % 2 ? ' half' : ''}" style="top:${(i * HOUR_PX) / 2}px"></div>`).join('');
         return `<div class="cal-timegrid ${cols === 1 ? 'day' : 'week'}" style="--cal-cols:${cols};--hour-px:${HOUR_PX}px">
             <div class="cal-tg-head"><div class="cal-tg-gutter"></div>${head}</div>
-            <div class="cal-tg-allday"><div class="cal-tg-gutter">All day</div>${allDay}</div>
+            <div class="cal-tg-allday"><div class="cal-tg-gutter">Recurring</div>${allDay}</div>
             <div class="cal-tg-scroll" data-cal-scroll><div class="cal-tg-body" style="height:${24 * HOUR_PX}px">
                 <div class="cal-tg-times">${labels}</div>
                 <div class="cal-tg-lines">${lines}</div>
@@ -500,17 +513,20 @@ export function createAutomations({ context, actions, el }) {
         const automation = (context.automations || []).find((item) => String(item.id) === String(button.dataset.scheduledCalendarEvent));
         const day = button.dataset.calOccDay;
         const time = button.dataset.calOccTime;
-        if (!automation || !day || !time || !['daily', 'weekly', 'monthly', 'yearly'].includes(String(automation.schedule?.kind || ''))) return false;
+        if (!automation) return false;
+        const canIgnore = day && time && ['daily', 'weekly', 'monthly', 'yearly'].includes(String(automation.schedule?.kind || ''));
         const ignored = isIgnored(automation, day, time);
         const menu = document.createElement('div');
         menu.id = 'scheduled-cal-menu';
         menu.className = 'scheduled-cal-menu';
         menu.setAttribute('role', 'menu');
-        menu.innerHTML = `<button type="button" role="menuitem" data-cal-ignore="${ignored ? '0' : '1'}">${ignored ? 'Un-ignore' : 'Ignore'}</button>`;
+        menu.innerHTML = '<button type="button" role="menuitem" data-cal-edit>Edit automation</button>'
+            + (canIgnore ? `<button type="button" role="menuitem" data-cal-ignore="${ignored ? '0' : '1'}">${ignored ? 'Un-ignore' : 'Ignore'}</button>` : '');
         document.body.appendChild(menu);
         menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 8)}px`;
         menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 8)}px`;
-        menu.querySelector('[data-cal-ignore]').addEventListener('click', async (event) => {
+        menu.querySelector('[data-cal-edit]').addEventListener('click', () => openAutomationEditor(automation.id));
+        menu.querySelector('[data-cal-ignore]')?.addEventListener('click', async (event) => {
             const ignore = event.currentTarget.dataset.calIgnore === '1';
             closeCalendarMenu();
             const occurrence = occurrenceKey(day, time);
@@ -585,6 +601,7 @@ export function createAutomations({ context, actions, el }) {
         if (kind === 'yearly') return date.getMonth() + 1 === Number(schedule.month || 1) && scheduleDays(schedule).includes(date.getDate()) ? atTimes() : [];
         if (kind === 'hourly') return [{ time: '00:00', label: 'Hourly' }];
         if (kind === 'interval') return [{ time: '00:00', label: `Every ${schedule.interval || 30} ${String(schedule.interval_unit || 'minutes').replace(/s$/, '')}s` }];
+        if (kind === 'cron') return [{ time: '', label: automationScheduleLabel(automation) }];
         return atTimes();
     }
 
@@ -605,7 +622,8 @@ export function createAutomations({ context, actions, el }) {
         const ignored = timed && isIgnored(automation, dayKey, event.time);
         const occ = timed ? ` data-cal-occ-day="${esc(dayKey)}" data-cal-occ-time="${esc(event.time)}" data-cal-draggable="1"` : '';
         const tip = `${event.label} · ${name}${ignored ? ' (ignored — this run is skipped)' : ''} — ${whatItDoes(automation, 200)}`;
-        return `<button type="button" class="scheduled-calendar-event${paused ? ' paused' : ''}${compact ? ' compact' : ''}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${style ? ' cal-tg-event' : ''}"${style ? ` style="${style}"` : ''}${occ} data-scheduled-calendar-event="${esc(automation.id)}" title="${esc(tip)}">${style ? "" : `<time>${esc(event.label)}</time>`}<span class="cal-title"><span class="cal-title-inner">${esc(name)}</span></span></button>`;
+        const showTime = !(compact && dayKey && !isTimedKind(automation));
+        return `<button type="button" class="scheduled-calendar-event${paused ? ' paused' : ''}${compact ? ' compact' : ''}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${style ? ' cal-tg-event' : ''}"${style ? ` style="${style}"` : ''}${occ} data-scheduled-calendar-event="${esc(automation.id)}" title="${esc(tip)}">${showTime ? `<time>${esc(event.label)}</time>` : ''}<span class="cal-title"><span class="cal-title-inner">${esc(name)}</span></span></button>`;
     }
 
     function dayCellClass(date, events, anchorMonth) {
@@ -627,6 +645,7 @@ export function createAutomations({ context, actions, el }) {
         const anchor = startOfDay(state.calendarAnchor || new Date());
         let html = '';
         state.calendarDays = {};
+        state.calendarClusters = {};
         if (state.calendarMode === 'month') {
             title.textContent = anchor.toLocaleDateString([], { month: 'long', year: 'numeric' });
             const start = startOfWeek(new Date(anchor.getFullYear(), anchor.getMonth(), 1));
@@ -651,6 +670,10 @@ export function createAutomations({ context, actions, el }) {
         }
         const previousScroll = calendar.querySelector('[data-cal-scroll]')?.scrollTop;
         calendar.innerHTML = html;
+        calendar.querySelectorAll('[data-cal-cluster]').forEach((button) => button.addEventListener('click', () => {
+            const group = state.calendarClusters[button.dataset.calCluster] || [];
+            openDayPopover(button.closest('[data-cal-day]').dataset.calDay, button, group);
+        }));
         calendar.classList.toggle('cal-has-timegrid', state.calendarMode !== 'month');
         const scroller = calendar.querySelector('[data-cal-scroll]');
         if (scroller) scroller.scrollTop = previousScroll ?? Math.max(0, (new Date().getHours() - 2) * HOUR_PX);
@@ -674,14 +697,29 @@ export function createAutomations({ context, actions, el }) {
         root?.querySelectorAll('[data-scheduled-calendar-event]').forEach((button) => {
             if (button.dataset.bound) return;
             button.dataset.bound = '1';
-            button.addEventListener('click', () => {
-                if (state.suppressClick) return;
-                openHistoryModal(button.dataset.scheduledCalendarEvent);
-            });
+            bindCalendarOpen(button);
             if (button.dataset.calDraggable) bindDrag(button);
             button.addEventListener('contextmenu', (event) => {
                 if (openCalendarMenu(button, event.clientX, event.clientY)) event.preventDefault();
             });
+        });
+    }
+
+    function bindCalendarOpen(button, fromPopover = false) {
+        let clickTimer;
+        button.addEventListener('click', (event) => {
+            if (state.suppressClick) return;
+            window.clearTimeout(clickTimer);
+            const open = () => {
+                if (fromPopover) closeDayPopover();
+                openHistoryModal(button.dataset.scheduledCalendarEvent);
+            };
+            if (event.detail === 0) open();
+            else if (event.detail === 1) clickTimer = window.setTimeout(open, 300);
+        });
+        button.addEventListener('dblclick', () => {
+            window.clearTimeout(clickTimer);
+            openAutomationEditor(button.dataset.scheduledCalendarEvent);
         });
     }
 
@@ -712,33 +750,28 @@ export function createAutomations({ context, actions, el }) {
         });
     }
 
-    // Marquee only titles that actually overflow; reduced motion keeps an ellipsis (CSS).
+    // Keep calendar labels still; expanded groups show the full wrapped names.
     function applyMarquee(root) {
-        root?.querySelectorAll('.cal-title').forEach((outer) => {
-            const inner = outer.firstElementChild;
-            if (!inner) return;
-            outer.classList.remove('marquee');
-            const overflow = inner.scrollWidth - outer.clientWidth;
-            if (overflow > 2) {
-                outer.classList.add('marquee');
-                outer.style.setProperty('--marquee-shift', `-${overflow + 6}px`);
-                outer.style.setProperty('--marquee-duration', `${Math.max(4, (overflow + 6) / 18)}s`);
-            }
-        });
+        root?.querySelectorAll('.cal-title').forEach((outer) => outer.classList.remove('marquee'));
     }
 
     function closeDayPopover() {
-        document.getElementById('scheduled-day-popover')?.remove();
+        const pop = document.getElementById('scheduled-day-popover');
+        const returnFocus = pop?.returnFocus;
+        pop?.remove();
+        if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
     }
 
-    function openDayPopover(dayKey, anchorEl) {
+    function openDayPopover(dayKey, anchorEl, group = null) {
         closeDayPopover();
-        const events = (state.calendarDays || {})[dayKey] || [];
+        const events = group || (state.calendarDays || {})[dayKey] || [];
         const pop = document.createElement('div');
         pop.id = 'scheduled-day-popover';
         pop.className = 'scheduled-day-popover';
         pop.setAttribute('role', 'dialog');
+        pop.returnFocus = anchorEl;
         const label = new Date(`${dayKey}T00:00:00`).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+        pop.setAttribute('aria-label', `Automations for ${label}`);
         pop.innerHTML = `<header><strong>${esc(label)}</strong><button type="button" aria-label="Close" data-pop-close>×</button></header><div>${events.map((event) => eventHtml(event, true)).join('')}</div>`;
         document.body.appendChild(pop);
         const rect = anchorEl.getBoundingClientRect();
@@ -747,13 +780,9 @@ export function createAutomations({ context, actions, el }) {
         pop.style.left = `${left}px`;
         pop.style.top = `${top}px`;
         pop.querySelector('[data-pop-close]').addEventListener('click', closeDayPopover);
-        pop.querySelectorAll('[data-scheduled-calendar-event]').forEach((button) =>
-            button.addEventListener('click', () => {
-                closeDayPopover();
-                openHistoryModal(button.dataset.scheduledCalendarEvent);
-            })
-        );
+        bindCalendarEvents(pop);
         applyMarquee(pop);
+        pop.querySelector('[data-pop-close]').focus({ preventScroll: true });
     }
 
     // ---------- page ----------
@@ -787,6 +816,7 @@ export function createAutomations({ context, actions, el }) {
     }
 
     const ICONS = {
+        edit: '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12.5 3.5 4 4M3 17l4.5-1L17 6.5 13.5 3 4 12.5 3 17z"/></svg>',
         pause: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="4" width="3.2" height="12" rx="1"/><rect x="11.8" y="4" width="3.2" height="12" rx="1"/></svg>',
         resume: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 2 4 11.5h5L8 18l8-10h-5l1-6z"/></svg>',
         // autocog: Run now and Resume swapped icons (run = play triangle, resume = bolt); history = list, schedule = clock, settings = cog.
@@ -803,7 +833,7 @@ export function createAutomations({ context, actions, el }) {
         const button = (action, label, extra = '') =>
             `<button type="button" class="scheduled-icon-button ${action}${extra}" data-row-action="${action}" data-automation-id="${id}" title="${label}" aria-label="${label} ${name}">${ICONS[action]}</button>`;
         const toggle = group === 'completed' ? '' : group === 'paused' ? button('resume', 'Resume') : button('pause', 'Pause');
-        return `<span class="scheduled-row-icons">${button('run', 'Run now')}${toggle}${button('history', 'Run history')}${isMessageTriggered(automation) ? '' : button('schedule', 'Edit schedule')}${button('settings', 'Harness and model')}${button('delete', 'Delete', ' danger')}</span>`;
+        return `<span class="scheduled-row-icons">${button('edit', 'Edit automation')}${button('run', 'Run now')}${toggle}${button('history', 'Run history')}${isMessageTriggered(automation) ? '' : button('schedule', 'Edit schedule')}${button('settings', 'Harness and model')}${button('delete', 'Delete', ' danger')}</span>`;
     }
 
     async function loadRuns(automationId, force) {
@@ -1227,12 +1257,13 @@ export function createAutomations({ context, actions, el }) {
         });
         document.addEventListener('click', (event) => {
             const pop = document.getElementById('scheduled-day-popover');
-            if (pop && !pop.contains(event.target) && !event.target.closest('.cal-more')) closeDayPopover();
+            if (pop && !pop.contains(event.target) && !event.target.closest('.cal-more, [data-cal-cluster]')) closeDayPopover();
             const menu = document.getElementById('scheduled-cal-menu');
             if (menu && !menu.contains(event.target)) closeCalendarMenu();
         });
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
+                closeScheduledRowMenu();
                 closeDayPopover();
                 closeHistoryModal();
                 closeEditModal();
@@ -1265,7 +1296,36 @@ export function createAutomations({ context, actions, el }) {
         );
     }
 
-    function closeScheduledRowMenu() {}
+    function openAutomationEditor(automationId) {
+        closeScheduledRowMenu();
+        window.location.assign(`/automations/?automation=${encodeURIComponent(automationId)}`);
+    }
+
+    function closeScheduledRowMenu() {
+        const menu = document.getElementById('scheduled-row-menu');
+        const returnFocus = menu?.returnFocus;
+        menu?.remove();
+        returnFocus?.focus();
+    }
+
+    function openScheduledRowMenu(automationId, x, y) {
+        closeScheduledRowMenu();
+        const menu = document.createElement('div');
+        menu.id = 'scheduled-row-menu';
+        menu.returnFocus = [...(el('scheduled-list')?.querySelectorAll('[data-row-action="edit"]') || [])]
+            .find((button) => button.dataset.automationId === String(automationId));
+        menu.className = 'scheduled-cal-menu';
+        menu.setAttribute('role', 'menu');
+        menu.innerHTML = '<button type="button" role="menuitem">Edit automation</button>';
+        document.body.appendChild(menu);
+        menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+        menu.querySelector('button').addEventListener('click', () => openAutomationEditor(automationId));
+        menu.querySelector('button').addEventListener('keydown', (event) => {
+            if (event.key === 'Tab') closeScheduledRowMenu();
+        });
+        menu.querySelector('button').focus();
+    }
     function closeAutomationImportMenu() {}
 
     return {

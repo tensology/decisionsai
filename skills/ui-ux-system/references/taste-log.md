@@ -152,3 +152,19 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-10-29 | Did: Led agent creation with required name and scope, hiding voice/model choices | Wanted: Voice first, then LLM; Advanced holds optional custom name and Agent scope, with blank custom name using selected voice display name | Why: Voice is the primary agent identity choice and a custom name is an override
 
 2026-10-29 | Did: Put avatar choices under Advanced in Create agent | Wanted: An always-visible, vertically scrolling avatar selector on the left, with the voice/LLM form to its right | Why: Choosing the character is a primary part of agent creation and should not be hidden behind Advanced
+2026-10-30 | Did: Rendered primary Decisions agent avatar in a rounded-square inset without skin scale | Wanted: Round avatar with the skin scale and positioning respected | Why: Paul expects the first agent avatar to look correct in the chat UI
+2026-10-30 | Did: Kept grey active card behind primary agent and star at bottom-right | Wanted: Only round avatar with name underneath and star over top of avatar | Why: Explicit user correction to primary agent presentation
+
+2026-10-30 | Did: Styled Incoming Resync like a folder tab and exposed Telegram in Incoming | Wanted: Resync must visibly read as a button; remove Telegram from this screen and tighten Proposals, WhatsApp, Gmail and Mailshot | Why: Paul explicitly identified Resync as an action and said Telegram is not needed here
+
+2026-10-30 | Did: Styled Incoming Resync like a folder tab and exposed Telegram in Incoming | Wanted: Resync must visibly read as a button; remove Telegram from this screen and tighten Proposals, WhatsApp, Gmail and Mailshot | Why: Paul explicitly identified Resync as an action and said Telegram is not needed here
+
+2026-10-30 | Did: Showed a body-overlay confirmation behind Incoming native project-link modal | Wanted: Removal confirmation visibly above the active modal, with cancellation preserving the project-link context | Why: Native dialog top-layer ordering made the action unreachable
+
+2026-10-30 | Did: Showed a body-overlay confirmation behind Incoming native project-link modal | Wanted: Removal confirmation visibly above the active modal, with cancellation preserving the project-link context | Why: Native dialog top-layer ordering made the action unreachable
+
+2026-10-30 | Did: Kept Development automation contents read-only while offering separate schedule and model controls | Wanted: Double-click and Edit both open the automation settings editor | Why: Paul explicitly wants to edit automations directly from Development
+
+2026-10-30 | Did: Squeezed simultaneous automations into narrow calendar columns and let nearby event labels overlap | Wanted: Group crowded events and open the full list | Why: Paul rejected the unreadable calendar screenshot and explicitly chose grouped events
+
+2026-10-30 | Did: Exposed Updated files, Edit finished and finished rows as the main response in Development | Wanted: A useful final response with one expandable Thinking or Running commands activity area for command output and progress | Why: Routine tool status adds noise and must not substitute for the result

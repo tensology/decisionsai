@@ -239,6 +239,10 @@ def discover_imports(source: str) -> list[dict[str, Any]]:
 
 
 def import_status() -> dict[str, Any]:
+    from distr.core.settings import load_settings_from_db
+    from distr.core.automation.model_route import automation_global_default
+
+    default_route = automation_global_default(load_settings_from_db())
     existing_keys = {
         _clean((item.get("action_config") or {}).get("import_key"))
         for item in list_automations()
@@ -258,12 +262,13 @@ def import_status() -> dict[str, Any]:
     return {
         "sources": sources,
         "routing_defaults": {
-            "model_provider": "ollama",
-            "model": "muse-glimmer:30b-mlx",
+            "model_provider": default_route.get("model_provider", ""),
+            "model": default_route.get("model", ""),
             "reasoning_effort": "medium",
             "complexity": "medium",
             "execution_environment": "local",
-            "adaptive_model_routing": True,
+            "adaptive_model_routing": False,
+            "allow_provider_failover": False,
             "update_existing": True,
         },
     }

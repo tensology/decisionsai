@@ -1,6 +1,12 @@
 
 
 #thread-context-terminal-toggle { display: flex; align-items: center; gap: 7px; }
+.thread-source-files { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 12px; white-space: normal; }
+.thread-source-file { display: flex; width: fit-content; min-width: 0; max-width: 100%; min-height: 36px; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-raised); }
+.thread-source-file img { display: block; max-width: min(240px, 100%); max-height: 180px; object-fit: contain; border-radius: 4px; }
+.thread-source-file span { overflow-wrap: anywhere; font-size: 12px; }
+.thread-source-file:hover { background: var(--studio-raised-2); }
+@media (max-width: 680px) { .thread-source-file { min-height: 44px; } }
 
 #thread-context-terminal-toggle svg { width: 13px; height: 13px; flex: 0 0 13px; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; color: var(--studio-muted); }
 
@@ -459,6 +465,21 @@
 .turn-activity-timeline { margin: 0 0 15px; padding: 1px 0 10px; border-bottom: 1px solid rgba(255,255,255,.07); }
 
 .turn-event-stream { display: grid; gap: 2px; }
+
+.turn-activity-disclosure { min-width: 0; margin: 0 0 12px; border: 0; }
+.turn-activity-disclosure > summary { display: flex; min-height: 36px; width: fit-content; max-width: 100%; align-items: center; gap: 8px; padding: 4px 0; color: var(--studio-muted); font-size: 14px; list-style: none; cursor: pointer; }
+.turn-activity-disclosure > summary::-webkit-details-marker { display: none; }
+.turn-activity-disclosure > summary:hover { color: var(--studio-text); }
+.turn-activity-disclosure > summary.active-turn-summary { flex-direction: row; align-items: center; }
+.turn-activity-disclosure > summary:focus-visible { outline: 2px solid var(--studio-accent-light); outline-offset: 4px; border-radius: 4px; }
+.turn-activity-disclosure[open] > summary > .turn-activity-chevron { transform: rotate(90deg); }
+.turn-activity-disclosure > .turn-event-stream { margin: 8px 0 12px; }
+.turn-activity-disclosure .turn-event-copy strong { font-size: 14px; font-weight: 500; white-space: normal; overflow-wrap: anywhere; }
+.turn-activity-disclosure .turn-event-preview, .turn-activity-disclosure .turn-event-status, .turn-activity-disclosure .turn-event-file { font-size: 12px; }
+.turn-activity-disclosure .turn-event-preview { white-space: normal; overflow-wrap: anywhere; }
+.turn-activity-disclosure .turn-activity-content pre { max-height: 320px; font-size: 12px; }
+.activity-empty { margin: 8px 0; color: var(--studio-muted); font-size: 14px; }
+@media (max-width: 680px) { .turn-activity-disclosure > summary { min-height: 44px; } }
 
 .turn-event-row { min-width: 0; color: var(--studio-muted); }
 

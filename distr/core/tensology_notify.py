@@ -16,6 +16,8 @@ import os
 import subprocess
 import sys
 import threading
+import collections
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 SOUND_FILENAME = "blip.mp3"
 TITLE = "DecisionsAI"
+_proposal_seen = collections.OrderedDict()
+_proposal_lock = threading.Lock()
+_proposal_last_sound = 0.0
 
 
 def _notifications_disabled() -> bool:
@@ -44,11 +49,11 @@ def _sound_path() -> Path:
     return _project_root() / "assets" / "sounds" / SOUND_FILENAME
 
 
-def play_incoming_sound() -> None:
+def play_incoming_sound(*, sound_path=None) -> None:
     """Play the short incoming chime in a background thread. Never raises."""
     if _notifications_disabled():
         return
-    sound = _sound_path()
+    sound = Path(sound_path) if sound_path is not None else _sound_path()
     if not sound.is_file():
         logger.debug("Incoming sound missing: %s", sound)
         return
@@ -84,6 +89,34 @@ def play_incoming_sound() -> None:
             logger.debug("Incoming sound could not be played", exc_info=True)
 
     threading.Thread(target=_play, daemon=True).start()
+
+
+def notify_proposal_created(event: dict[str, Any]) -> None:
+    """One configured chime per new proposal, independent of open browser tabs."""
+    global _proposal_last_sound
+    key = str(event.get("request_id") or "")
+    if not key:
+        return
+    with _proposal_lock:
+        if key in _proposal_seen:
+            return
+        _proposal_seen[key] = True
+        while len(_proposal_seen) > 1024:
+            _proposal_seen.popitem(last=False)
+        now = time.monotonic()
+        play = now - _proposal_last_sound >= 1.2
+        if play:
+            _proposal_last_sound = now
+    from distr.core.settings import load_settings_from_db
+    from distr.core.notification_sounds import normalize, NOTIFICATION_SOUNDS, sounds_dir
+
+    settings = load_settings_from_db()
+    if not settings.get("incoming_proposal_sound_enabled", True) or not play:
+        return
+    slug = normalize(settings.get("notification_sound"))
+    chosen = next(item for item in NOTIFICATION_SOUNDS if item["slug"] == slug)
+    if chosen["file"]:
+        play_incoming_sound(sound_path=sounds_dir() / chosen["file"])
 
 
 def _osascript_escape(value: str) -> str:

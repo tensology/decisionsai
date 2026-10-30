@@ -659,6 +659,13 @@ textarea:focus-visible {
 .decisions-confirm-overlay {
     position: fixed;
     inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    box-sizing: border-box;
     z-index: 10000;
     display: flex;
     align-items: center;
@@ -667,6 +674,7 @@ textarea:focus-visible {
     background: rgba(0, 0, 0, 0.64);
     backdrop-filter: blur(4px);
 }
+.decisions-confirm-overlay::backdrop { background: transparent; }
 
 .decisions-confirm-modal {
     width: min(100%, 420px);

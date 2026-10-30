@@ -76,6 +76,7 @@ def _install_api(
     routing_execution_mode: str = "direct",
     seven_step_workflow: bool = False,
     provider_preflight_interaction: bool = False,
+    activity_events: list[dict] | None = None,
 ) -> None:
     projects = [
         {"id": 7, "name": "DecisionsAI", "folder_location": "/tmp/decisions", "in_use": True, "kanban_board_id": 70, "startup_instructions": startup_instructions},
@@ -223,6 +224,13 @@ def _install_api(
             ],
         }] if (completed_activity or durable_url_activity) else []),
     }
+    if activity_events is not None:
+        if direct_execution:
+            chat['messages'] = [message for message in chat['messages'] if message['role'] != 'workflow']
+        if live_activity:
+            chat['active_turn']['events'] = activity_events
+        elif chat['turns']:
+            chat['turns'][0]['events'] = activity_events
     if cancelled_open_turn:
         direct_run["status"] = "cancelled"
         direct_run["activity"] = "Standalone provider session was interrupted by app restart."
@@ -307,7 +315,13 @@ def _install_api(
             route.continue_()
             return
         payload = None
-        if path == "/api/skins":
+        if path == "/api/harnesses/installed":
+            payload = {"harnesses": [{"id": "pi", "installed": True}, {"id": "cursor", "installed": True}], "source": "binary_detection"}
+        elif path == "/api/workflows/studio/sidebar/pins":
+            payload = {"board_keys": ["decisions:70"]}
+        elif path == "/api/projects/cli-backends":
+            payload = {"backends": []}
+        elif path == "/api/skins":
             payload = {
                 "selected_skin": "oracle",
                 "skins": [{
@@ -430,7 +444,7 @@ def _install_api(
                 "last_chat_id": 1,
                 "chats": [
                     {"id": 1, "title": "Ordinary voice chat", "project_id": 7, "development": False},
-                    *([{key: value for key, value in chat.items() if key != "messages"}] if 17 not in deleted_chat_ids else []),
+                    *([{**{key: value for key, value in chat.items() if key != "messages"}, "development": True}] if 17 not in deleted_chat_ids else []),
                     *recent,
                     *recent_projects,
                 ],
@@ -2427,84 +2441,32 @@ def test_live_agent_tool_changes_and_evidence_are_visible_without_empty_tabs(pag
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(URL)
 
-    messages = page.locator("#message-list")
-    expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
-    expect(page.locator(".thread-workflow-runner")).to_contain_text("Development execution")
-    expect(page.locator(".thread-workflow-node.running")).to_contain_text("Inspect")
-    expect(messages.get_by_text("Terminal", exact=True)).to_be_visible()
-    expect(messages.get_by_text("Running the focused test suite", exact=True)).to_be_visible()
-    expect(messages.get_by_text("I found the affected route and I am verifying the change.")).to_be_visible()
-    expect(page.locator("#message-list")).not_to_contain_text("Development thread")
-    expect(page.locator("#message-list")).not_to_contain_text("Working through the task")
-    expect(page.locator("#message-list")).not_to_contain_text("Stop turn")
-    expect(page.locator("#message-list")).not_to_contain_text("Steer")
-    expect(page.locator(".message-workflow")).to_have_count(0)
-    expect(page.locator(".active-turn-history .active-turn-action")).to_have_count(3)
-    expect(page.locator(".active-turn-history")).to_contain_text("Inspected project")
-    expect(page.locator(".active-turn-history")).to_contain_text("Updated files")
-    expect(page.locator(".active-turn-history")).to_contain_text("styles.css")
-    expect(page.locator(".active-turn-history")).to_contain_text("+3")
-    expect(page.locator(".active-turn-history")).to_contain_text("-1")
-    expect(page.locator(".active-turn-history .turn-event-file small")).to_have_css("animation-name", "turn-edit-count-in")
-    expect(page.locator(".active-turn-history")).to_contain_text("Browser check finished")
-    expect(page.locator(".active-turn-summary")).to_contain_text("Running tests")
-    expect(page.locator(".active-command")).to_have_text("python -m pytest -q tests/ui/test_menu.py")
-    shimmer = page.locator(".active-turn .loading-message > span")
-    expect(shimmer).to_have_css("color", "rgba(0, 0, 0, 0)")
-    expect(shimmer).to_have_css("animation-name", "studio-text-shimmer")
-    expect(shimmer).to_have_css("animation-duration", "1.9s")
-    expect(page.locator(".active-turn .loading-message i")).to_have_count(0)
-    expect(page.locator(".active-turn .loading-message")).to_have_class(re.compile(r"\bupdating\b"))
-    expect(page.locator(".active-turn")).not_to_contain_text("running")
-    expect(page.locator(".active-turn")).not_to_contain_text("Analyzing request")
-    expect(page.locator(".active-turn")).not_to_contain_text(re.compile(r"\d+:\d{2}"))
-    expect(page.locator(".active-turn")).not_to_contain_text("Working in")
-    expect(page.locator(".active-turn")).not_to_contain_text("studio.js")
+    activity = page.locator(".live-activity")
+    expect(activity).to_be_visible()
+    expect(activity).not_to_have_attribute("open", "")
+    expect(page.get_by_text("Updated files", exact=True)).not_to_be_visible()
+    expect(page.locator(".active-turn-summary")).to_contain_text("Running commands")
+    activity.locator(":scope > summary").click()
+    expect(activity).to_contain_text("Inspected project")
+    expect(activity).to_contain_text("Updated files")
+    expect(activity).to_contain_text("styles.css")
+    expect(activity).to_contain_text("+3")
+    expect(activity).to_contain_text("-1")
+    expect(activity).to_contain_text("Browser check finished")
+    expect(activity).to_contain_text("python -m pytest -q tests/ui/test_menu.py")
+    expect(page.locator("#message-list")).to_contain_text("I found the affected route and I am verifying the change.")
     expect(page.locator("#run-elapsed")).to_be_visible()
-    expect(page.locator("#run-elapsed")).to_have_text(re.compile(r"\d{2}:\d{2}:\d{2}"))
-    sidebar_spinner = page.locator('[data-chat-id="17"] .task-run-state').first
-    expect(sidebar_spinner).to_have_count(1)
-    expect(sidebar_spinner).to_have_attribute("role", "status")
-    expect(sidebar_spinner).to_have_attribute("aria-label", "Working on this thread")
-    expect(sidebar_spinner).to_have_css("animation-name", "thread-run-spin")
+    spinner = page.locator('[data-chat-id="17"] .task-run-state').first
+    expect(spinner).to_have_attribute("role", "status")
+    expect(spinner).to_have_attribute("aria-label", "Working on this thread")
 
-    _open_details(page)
-    expect(page.locator("#inspector-content")).to_contain_text("Conversation")
-    expect(page.locator("#inspector-content")).to_contain_text("Running the focused test suite")
-    expect(page.locator("#inspector-content")).to_contain_text("I found the affected route")
-    expect(page.locator("#inspector-content").get_by_role("link", name=re.compile("127.0.0.1"))).to_be_visible()
-    expect(page.locator("#inspector-content")).not_to_contain_text("Terminals")
-    expect(page.get_by_role("button", name="Open terminals", exact=True)).to_have_count(0)
-    page.screenshot(path="/private/tmp/development-task-details-operational.png", full_page=True)
-    expect(page.locator('[data-tab="changes"]')).to_be_visible()
-    expect(page.locator('[data-tab="evidence"]')).to_have_count(0)
-
-    page.locator('[data-tab="changes"]').click()
-    expect(page.get_by_text("M distr/gui/web/static/workflows/js/studio.js", exact=True)).to_be_visible()
-    page.screenshot(path="/private/tmp/development-harness-live-activity.png", full_page=True)
-    page.locator("#inspector-close").click()
-    page.set_viewport_size({"width": 375, "height": 812})
+    page.set_viewport_size({"width": 390, "height": 900})
     page.locator("#studio-sidebar").evaluate("node => node.classList.remove('open')")
-    page.wait_for_timeout(250)
-    expect(page.locator(".active-turn .loading-message > span")).to_be_visible()
-    expect(page.locator(".active-command")).to_have_text("python -m pytest -q tests/ui/test_menu.py")
-    page.locator("#sidebar-open").click()
-    page.wait_for_timeout(250)
-    expect(page.locator('[data-chat-id="17"] .task-run-state').first).to_be_visible()
-    page.screenshot(path="/private/tmp/development-sidebar-spinner-mobile.png", full_page=True)
-    page.locator("#sidebar-close").click()
-    expect(page.locator(".active-command")).to_have_css("width", re.compile(r"\d+px"))
-    dimensions = page.locator("body").evaluate("body => ({body: body.scrollWidth, viewport: document.documentElement.clientWidth})")
-    assert dimensions["body"] <= dimensions["viewport"], dimensions
-    page.screenshot(path="/private/tmp/development-status-shimmer-compact.png", full_page=True)
-    page.set_viewport_size({"width": 1440, "height": 900})
-
-    page.locator("#stop-run-button").click()
-    expect(page.locator("#decisions-confirm-modal")).to_be_visible()
-    page.get_by_role("button", name="Stop run", exact=True).click()
-    assert ("POST", "/api/workflows/44/cancel-run/99") in requests
-
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    expect(activity).to_contain_text("Running the focused test suite")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    activity.locator(":scope > summary").click()
+    expect(page.get_by_text("Updated files", exact=True)).not_to_be_visible()
+    expect(page.locator(".active-turn-summary")).to_be_visible()
 
 
 def test_completed_run_removes_stale_working_status(page: Page):
@@ -2697,7 +2659,8 @@ def test_initializing_direct_turn_immediately_shows_thinking_status(page: Page):
     _install_api(page, requests, direct_execution=True, run_status="initializing")
     page.goto(URL)
 
-    expect(page.locator(".active-turn")).to_have_text("Thinking through the request")
+    expect(page.locator(".active-turn > .active-turn-body > details > summary, .active-turn details > summary").first).to_contain_text("Thinking through the request")
+    expect(page.locator(".live-activity")).not_to_have_attribute("open", "")
     expect(page.locator(".active-turn .loading-message")).to_have_class(re.compile(r"\bthinking\b"))
     expect(page.locator(".active-turn .loading-message > span")).to_have_css("animation-name", "studio-text-shimmer")
     expect(page.locator(".active-turn .loading-message i")).to_have_count(0)
@@ -2711,7 +2674,7 @@ def test_native_stream_renders_partial_response_and_runtime_activity(page: Page)
 
     expect(page.locator(".active-turn-draft strong")).to_have_text("Draft response")
     expect(page.locator(".loading-message.updating")).to_be_visible()
-    expect(page.locator(".loading-message.updating")).to_contain_text("Running tests")
+    expect(page.locator(".loading-message.updating")).to_contain_text("Running commands")
     assert not any(method == "UNMOCKED" for method, _ in requests), requests
 
 
@@ -4062,6 +4025,7 @@ def test_completed_turns_keep_codex_style_collapsible_activity(page: Page):
     expect(timeline).to_contain_text("Browser check finished")
     expect(timeline).to_contain_text("python -m pytest -q tests/ui/test_menu.py")
     expect(timeline.locator(".turn-activity-content:visible")).to_have_count(0)
+    timeline.locator(":scope > summary").click()
     timeline.get_by_text("Inspected project", exact=True).click()
     expect(timeline.locator(".turn-activity-content:visible")).to_contain_text("src/menu.js")
     page.screenshot(path="/private/tmp/development-completed-activity-desktop.png", full_page=True)

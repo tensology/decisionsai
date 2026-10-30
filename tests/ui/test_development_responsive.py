@@ -54,8 +54,14 @@ def capture(page, name, width):
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
 def test_incoming_list_detail_back_and_channel_switch(page: Page, width):
     install_responsive_api(page)
+    page.route('**/api/workflows/studio/incoming/proposals*', lambda route: route.fulfill(json={'proposals': [{'id': 'test-proposal', 'title': 'Review the menu launch', 'project_name': 'DecisionsAI', 'project_id': 7, 'source': 'whatsapp', 'source_label': 'WhatsApp', 'description': 'Review the launch copy and vegetarian menu filters before publishing.'}]}))
     page.set_viewport_size({'width': width, 'height': 900})
     page.goto(BASE + '/development/incoming/')
+    expect(page.locator('[data-incoming-filter]')).to_have_count(4)
+    expect(page.locator('#incoming-folder-telegram')).to_have_count(0)
+    expect(page.locator('.proposal-card')).to_be_visible()
+    capture(page, 'incoming-proposals', width)
+    page.locator('[data-incoming-filter="whatsapp"]').click()
     expect(page.locator('[data-incoming-conversation]').first).to_be_visible()
     compact = width <= 980
     if compact:
@@ -71,8 +77,9 @@ def test_incoming_list_detail_back_and_channel_switch(page: Page, width):
         expect(page.locator('#incoming-list')).to_be_visible()
         expect(page.locator('#incoming-list .selected')).to_be_focused()
         page.locator('#incoming-list .selected').click()
+    assert page.locator('#incoming-whatsapp-reader > footer').evaluate('node => node.getBoundingClientRect().bottom <= node.closest(".incoming-folder-containers").getBoundingClientRect().bottom')
     capture(page, 'incoming-detail', width)
-    for channel in ['gmail', 'mailshot', 'telegram']:
+    for channel in ['gmail', 'mailshot']:
         page.locator(f'[data-incoming-filter="{channel}"]').click()
         panel = page.locator(f'#incoming-panel-{channel}')
         expect(panel).to_be_visible()
@@ -82,6 +89,7 @@ def test_incoming_list_detail_back_and_channel_switch(page: Page, width):
         if row.count():
             row.click()
             expect(page.locator(f'#incoming-{channel}-reader')).to_be_visible()
+            assert page.locator(f'#incoming-{channel}-reader > footer').evaluate('node => node.getBoundingClientRect().bottom <= node.closest(".incoming-folder-containers").getBoundingClientRect().bottom')
             capture(page, f'incoming-{channel}-detail', width)
             if compact:
                 panel.locator('[data-incoming-back]').click()
@@ -89,6 +97,37 @@ def test_incoming_list_detail_back_and_channel_switch(page: Page, width):
         else:
             capture(page, f'incoming-{channel}-empty', width)
     assert page.locator('#incoming-resync').evaluate('(node) => node.getBoundingClientRect().right <= innerWidth')
+
+
+@pytest.mark.parametrize('width', [390, 1440])
+def test_incoming_resync_busy_error_and_recovery(page: Page, width):
+    install_responsive_api(page)
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.add_init_script('''const incomingFetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+            if (String(args[0]).includes('/studio/incoming')) await new Promise(resolve => setTimeout(resolve, 400));
+            return incomingFetch(...args);
+        };''')
+    page.route('**/api/workflows/studio/incoming/proposals*', lambda route: route.fulfill(json={'proposals': []}))
+    page.goto(BASE + '/development/incoming/')
+    resync = page.locator('#incoming-resync')
+    expect(resync).to_be_enabled()
+    page.locator('#incoming-folder-gmail').click()
+    page.route('**/api/workflows/studio/incoming?*', lambda route: route.fulfill(status=503, json={'detail': 'Temporary inbox outage'}))
+    resync.click()
+    expect(resync).to_be_disabled()
+    expect(resync).to_have_attribute('aria-busy', 'true')
+    capture(page, 'incoming-resync-busy', width)
+    expect(page.locator('#incoming-gmail-list')).to_contain_text('Incoming is temporarily unavailable')
+    expect(resync).to_be_enabled()
+    capture(page, 'incoming-error', width)
+    page.unroute('**/api/workflows/studio/incoming?*')
+    resync.click()
+    expect(page.locator('#incoming-gmail-list .incoming-gmail-thread')).to_have_count(1)
+    expect(resync).to_be_enabled()
+    page.locator('#incoming-folder-proposals').click()
+    expect(page.locator('#incoming-proposals-list')).to_contain_text('No proposals right now.')
+    capture(page, 'incoming-proposals-empty', width)
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])

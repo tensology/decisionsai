@@ -44,6 +44,7 @@ DEFAULT_SETTINGS = {
 
     'show_splash_video': True,
     'notification_sound': 'bell',
+    'incoming_proposal_sound_enabled': True,
     'show_about': False,
     'welcome_greet_me': True,
     'telegram_send_online_notice': False,

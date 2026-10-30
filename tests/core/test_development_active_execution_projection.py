@@ -250,6 +250,44 @@ def test_execution_state_persists_terminal_provider_status_to_chat_and_ticket(mo
         assert db.get(KanbanTicket, ticket_id).workflow_status == "cancelled"
 
 
+def test_completed_provider_does_not_publish_success_before_reply_is_saved(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(development_harness, "get_session", lambda: _session(factory))
+    monkeypatch.setattr(development_harness, "_notify", lambda: None)
+    with factory() as db:
+        session = ProjectExecutionSession(
+            project_id=7, route_type="project_cli", route_backend="pi",
+            selected_model="deepseek-v4.1-flash:cloud", status="completed",
+            output_packet=json.dumps({"output": "Executed successfully."}),
+        )
+        db.add(session)
+        db.flush()
+        chat = Chat(title="Finalizing", params=json.dumps({"development": {"execution": {
+            "status": "running", "job_id": "finalizing-job",
+            "execution_session_id": session.id,
+        }}}))
+        db.add(chat)
+        db.commit()
+        chat_id = chat.id
+    state = development_harness.development_execution_state(chat_id)
+    assert state["status"] == "running"
+    assert state["completed_at"] is None
+    with factory() as db:
+        assert json.loads(db.get(Chat, chat_id).params)["development"]["execution"]["status"] == "running"
+    development_harness._update_execution(
+        chat_id, job_id="finalizing-job", status="completed", summary="Executed successfully.",
+    )
+    state = development_harness.development_execution_state(chat_id)
+    assert state["status"] == "completed"
+    assert state["summary"] == "Executed successfully."
+    # A provider succeeding cannot override a finalization error or no-op audit.
+    for status in ("failed", "completed_noop"):
+        development_harness._update_execution(chat_id, job_id="finalizing-job", status=status)
+        assert development_harness.development_execution_state(chat_id)["status"] == status
+
+
 def test_development_execution_state_projects_terminal_workflow_run(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

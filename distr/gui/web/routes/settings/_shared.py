@@ -156,6 +156,7 @@ class VoiceSelectionUpdate(BaseModel):
 class GeneralSettings(BaseModel):
     show_splash_video: bool = False
     notification_sound: str = "bell"
+    incoming_proposal_sound_enabled: bool = True
     show_about: bool = False
     welcome_greet_me: bool = False
     telegram_send_online_notice: bool = False

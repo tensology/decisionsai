@@ -387,7 +387,7 @@ def test_new_thread_gets_localized_ticket_and_claims_remote():
     assert client.post.call_args.kwargs["idempotency_key"] == "tensology-ticket-17-thread-42"
 
 
-def test_image_failure_does_not_block_thread_creation():
+def test_image_failure_blocks_incomplete_thread_creation():
     client = MagicMock()
     with (
         patch("distr.core.tensology_client._resolve_tensology_project", return_value={"id": 8, "name": "Snuza"}),
@@ -395,8 +395,9 @@ def test_image_failure_does_not_block_thread_creation():
         patch("distr.core.tensology_client._localize_tensology_attachments", side_effect=OSError("disk full")),
         patch("distr.core.tensology_client._create_tensology_thread", return_value=(42, {})) as create,
     ):
-        assert tc._process_tensology_ticket(client, _ticket()) is True
-    create.assert_called_once()
+        assert tc._process_tensology_ticket(client, _ticket()) is False
+    create.assert_not_called()
+    assert client.patch.call_args.args[1]['status'] == 'failed'
 
 
 # ── local state sync (replaces the poll's status mirror) ───────────────────

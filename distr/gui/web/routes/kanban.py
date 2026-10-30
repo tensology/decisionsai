@@ -6717,6 +6717,14 @@ source: kanban_ticket_{t.id}
                 snapshot_group=snapshot_group,
             )
             chat_id = thread_result["chat_id"]
+            if chat_id:
+                from distr.core.incoming.media import register_thread_attachments
+
+                register_thread_attachments(int(chat_id), [
+                    {'name': item['filename'], 'path': item['path'],
+                     'mime_type': mimetypes.guess_type(item['filename'])[0] or 'application/octet-stream'}
+                    for item in snapshot_files
+                ])
             try:
                 from distr.core.kanban.whatsapp_work_lifecycle import record_ticket_created
 
