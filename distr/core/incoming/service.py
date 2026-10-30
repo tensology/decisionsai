@@ -153,8 +153,12 @@ def _load_mailshot_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dic
         return [], {"connected": False, "error": "Connect Tensology in Settings to load Mailshot."}
 
 
-def list_development_incoming(*, limit: int = 100) -> dict[str, Any]:
-    """Return incoming channel messages, board links, and channel health."""
+def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict[str, Any]:
+    """Return incoming channel messages, board links, and channel health.
+
+    ``network=False`` skips the slow remote channels (Gmail, Mailshot) and returns
+    only the locally-stored channels. Proposals use this so the list is fast.
+    """
     requested = max(1, min(int(limit or 100), 250))
     items: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
@@ -242,7 +246,7 @@ def list_development_incoming(*, limit: int = 100) -> dict[str, Any]:
             })
 
     gmail_message_ids: set[str] = set()
-    gmail_rows, gmail_status = _load_gmail_inbox(max_results=requested)
+    gmail_rows, gmail_status = _load_gmail_inbox(max_results=requested) if network else ([], {"connected": False, "error": "skipped"})
     for row in gmail_rows:
         message_id = str(row.get("id") or "").strip()
         thread_id = str(row.get("threadId") or row.get("thread_id") or message_id).strip()
@@ -276,7 +280,7 @@ def list_development_incoming(*, limit: int = 100) -> dict[str, Any]:
             "can_snapshot": False,
         })
 
-    mailshot_rows, mailshot_status = _load_mailshot_inbox(max_results=requested)
+    mailshot_rows, mailshot_status = _load_mailshot_inbox(max_results=requested) if network else ([], {"connected": False, "error": "skipped"})
     for row in mailshot_rows:
         message_id = str(row.get("id") or "").strip()
         thread_id = str(row.get("thread_id") or message_id).strip()

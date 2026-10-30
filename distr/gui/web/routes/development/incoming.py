@@ -45,6 +45,26 @@ def register_routes(router, templates):
             return JSONResponse({"proposals": [], "counts": {}, "error": str(e)}, status_code=500)
 
 
+    @router.post("/workflows/studio/incoming/proposals/thread")
+    async def workflow_studio_proposal_thread(request: Request):
+        """Push an Incoming proposal into a Development thread."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        proposal = (body or {}).get("proposal") if isinstance(body, dict) else None
+        if not isinstance(proposal, dict) or not str(proposal.get("title") or "").strip():
+            return JSONResponse({"success": False, "error": "A proposal with a title is required."}, status_code=422)
+        try:
+            from distr.core.incoming.proposals import create_proposal_thread
+
+            chat_id = await asyncio.to_thread(create_proposal_thread, proposal)
+            return JSONResponse({"success": True, "chat_id": chat_id})
+        except Exception as e:
+            logger.error("Proposal thread creation failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
     @router.post("/workflows/intake/inbox/{event_id}/action")
     async def workflow_intake_inbox_action(event_id: int, request: Request):
         """Continue / stop / steer / push / dismiss an inbox item."""

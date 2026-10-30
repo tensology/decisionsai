@@ -45,7 +45,7 @@ def test_tensology_proposals_kept_and_local_deduped(monkeypatch):
     # Local: one item on the shared thread (suppress) + one new thread (keep).
     monkeypatch.setattr(
         "distr.core.incoming.service.list_development_incoming",
-        lambda limit=100: {
+        lambda limit=100, **kwargs: {
             "items": [
                 _incoming_item("whatsapp", shared, "Please fix the shipping cost calculation"),
                 _incoming_item(
@@ -69,7 +69,7 @@ def test_local_candidate_skips_noise_and_non_actionable(monkeypatch):
     monkeypatch.setattr("distr.core.tensology_client.fetch_pending_work_requests", lambda: [])
     monkeypatch.setattr(
         "distr.core.incoming.service.list_development_incoming",
-        lambda limit=100: {
+        lambda limit=100, **kwargs: {
             "items": [
                 _incoming_item("gmail", "t1", "Weekly newsletter digest", label="newsletter@x.com"),
                 _incoming_item("gmail", "t2", "Thanks, see you then", label="Friend"),

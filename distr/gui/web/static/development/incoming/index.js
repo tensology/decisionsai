@@ -234,13 +234,40 @@ export function createIncoming({ context, actions, el }) {
             proposal.estimated_amount != null && proposal.estimated_amount !== ''
                 ? ` · R${Number(proposal.estimated_amount).toFixed(2)}`
                 : '';
-        const origin = proposal.origin === 'tensology' ? 'Tensology' : 'Local';
+        const origin = proposal.origin === 'tensology' ? 'Synced' : 'Detected';
         const status = String(proposal.status || '').replace(/_/g, ' ');
-        return `<button type="button" class="incoming-proposal-row" data-incoming-proposal="${actions.escapeHtml(proposal.id || '')}">
+        const push = proposal.project_id
+            ? `<button type="button" class="incoming-proposal-push" data-incoming-proposal-thread="${actions.escapeHtml(proposal.id || '')}">Push to thread</button>`
+            : `<span class="incoming-proposal-push muted" title="Link this conversation to a project first">No project</span>`;
+        return `<div class="incoming-proposal-row">
             <span class="incoming-avatar" aria-hidden="true">${actions.escapeHtml(incomingInitials(proposal.participant || proposal.title || 'P'))}</span>
             <span class="incoming-proposal-main"><strong>${actions.escapeHtml(proposal.title || 'Proposal')}</strong><small>${actions.escapeHtml(source)} · ${actions.escapeHtml(project)} · ${actions.escapeHtml(status)}${actions.escapeHtml(amount)}</small></span>
             <span class="incoming-proposal-origin">${actions.escapeHtml(origin)}</span>
-        </button>`;
+            ${push}
+        </div>`;
+    }
+
+    async function pushProposalToThread(proposalId, button) {
+        const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
+        if (!proposal) return;
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Creating…';
+        try {
+            const result = await actions.api('/workflows/studio/incoming/proposals/thread', {
+                method: 'POST',
+                body: { proposal }
+            });
+            if (result && result.chat_id) {
+                actions.toast('Thread created.', 'success');
+                if (actions.openThreadDialog) actions.openThreadDialog(result.chat_id);
+            }
+        } catch (error) {
+            actions.toast(error.message || 'Could not create the thread.', 'error');
+        } finally {
+            button.disabled = false;
+            button.textContent = original;
+        }
     }
 
     function renderIncomingWorkspace() {
@@ -275,6 +302,9 @@ export function createIncoming({ context, actions, el }) {
                 : (state.incomingProposals || []).length
                   ? (state.incomingProposals || []).map(incomingProposalRowHtml).join('')
                   : '<div class="development-empty">No proposals right now.</div>';
+            proposalsList.querySelectorAll('[data-incoming-proposal-thread]').forEach((button) =>
+                button.addEventListener('click', () => pushProposalToThread(button.dataset.incomingProposalThread, button))
+            );
         }
         if (!whatsappConversations.some((conversation) => conversation.key === state.selectedIncomingConversationKey)) {
             state.selectedIncomingConversationKey =
@@ -828,12 +858,25 @@ export function createIncoming({ context, actions, el }) {
         const load = (async () => {
             let data = null;
             let failed = false;
-            try {
-                data = await actions.api(`/workflows/studio/incoming?limit=150&_=${Date.now()}`, { cache: 'no-store' });
-            } catch (_error) {
+            // Fetch the channel list and the proposals in parallel so Proposals
+            // is not gated on the slower channel load.
+            const [incomingResult, proposalResult] = await Promise.allSettled([
+                actions.api(`/workflows/studio/incoming?limit=150&_=${Date.now()}`, { cache: 'no-store' }),
+                actions.api(`/workflows/studio/incoming/proposals?limit=150&_=${Date.now()}`, { cache: 'no-store' })
+            ]);
+            if (seq !== incomingLoadSeq) return;
+            if (incomingResult.status === 'fulfilled') {
+                data = incomingResult.value;
+            } else {
                 failed = true;
             }
-            if (seq !== incomingLoadSeq) return;
+            if (proposalResult.status === 'fulfilled') {
+                state.incomingProposals = proposalResult.value.proposals || [];
+                state.incomingProposalsError = proposalResult.value.error || '';
+            } else {
+                state.incomingProposals = [];
+                state.incomingProposalsError = 'Proposals are temporarily unavailable.';
+            }
             if (failed) {
                 state.incoming = [];
                 state.incomingLinks = [];
@@ -844,14 +887,6 @@ export function createIncoming({ context, actions, el }) {
                 state.incomingLinks = data.links || [];
                 state.incomingChannels = data.channels || {};
                 state.incomingError = '';
-            }
-            try {
-                const proposals = await actions.api(`/workflows/studio/incoming/proposals?limit=150&_=${Date.now()}`, { cache: 'no-store' });
-                state.incomingProposals = proposals.proposals || [];
-                state.incomingProposalsError = proposals.error || '';
-            } catch (_proposalError) {
-                state.incomingProposals = [];
-                state.incomingProposalsError = 'Proposals are temporarily unavailable.';
             }
             state.incomingLoadedAt = Date.now();
             state.incomingLoad = null;

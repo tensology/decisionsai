@@ -184,6 +184,52 @@ def _local_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _proposal_prompt(proposal: dict[str, Any]) -> str:
+    lines = [str(proposal.get("title") or "Incoming request").strip()]
+    description = str(proposal.get("description") or "").strip()
+    if description:
+        lines += ["", description]
+    tasks = [str(task).strip() for task in (proposal.get("tasks") or []) if str(task).strip()]
+    if tasks:
+        lines += ["", "Tasks:"] + [f"- {task}" for task in tasks]
+    source = str(proposal.get("source_label") or proposal.get("source") or "").strip()
+    participant = str(proposal.get("participant") or "").strip()
+    if source:
+        lines += ["", f"Source: {source}" + (f" — {participant}" if participant else "")]
+    return "\n".join(lines)
+
+
+def create_proposal_thread(proposal: dict[str, Any]) -> int:
+    """Create a Development thread for an Incoming proposal.
+
+    Uses the same path as the studio task route (``ChatService.create_new_chat``),
+    so a pushed proposal lands in a normal thread tied to its project.
+    """
+    from distr.core.chat import ChatService
+    from distr.core.settings import load_settings_from_db
+
+    settings = load_settings_from_db()
+    provider = str(
+        settings.get("conversational_llm_provider") or settings.get("agent_provider") or "ollama"
+    ).strip()
+    model_name = str(
+        settings.get("conversational_llm_model") or settings.get("agent_model") or ""
+    ).strip()
+    project_id = proposal.get("project_id")
+    chat_id, _ = ChatService.create_new_chat(
+        llm_provider=provider,
+        llm_model=model_name,
+        title=str(proposal.get("title") or "Incoming proposal")[:120],
+        starting_question=_proposal_prompt(proposal),
+        project_id=int(project_id) if project_id else None,
+        route_mode="auto",
+        execution_profile="code",
+        autonomy_level="goal",
+        activate=False,
+    )
+    return int(chat_id)
+
+
 def list_incoming_proposals(*, limit: int = 100) -> dict[str, Any]:
     """Return the Incoming proposal list: Tensology (canonical) first, then local.
 
@@ -210,7 +256,7 @@ def list_incoming_proposals(*, limit: int = 100) -> dict[str, Any]:
         tensology_error = str(exc)[:200]
 
     try:
-        incoming = list_development_incoming(limit=limit)
+        incoming = list_development_incoming(limit=limit, network=False)  # local channels only: fast
         for proposal in _local_candidates(incoming.get("items") or []):
             if proposal["dedupe_key"] in seen:
                 continue  # already on Tensology — no duplicate
