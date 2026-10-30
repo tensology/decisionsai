@@ -78,8 +78,22 @@ def _latest_activity(row: dict[str, Any]) -> datetime | None:
     return max(times) if times else None
 
 
-def _from_tensology(row: dict[str, Any]) -> dict[str, Any] | None:
-    """Map a Tensology work-request onto the Incoming proposal shape."""
+def _project_map() -> dict[str, int]:
+    """Decisions projects by lowercased name, for mapping a Tensology project onto a local one."""
+    from distr.core.db import get_session
+    from distr.core.db.projects import Project
+
+    with get_session() as session:
+        return {str(row.name).strip().lower(): int(row.id) for row in session.query(Project).all()}
+
+
+def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = None) -> dict[str, Any] | None:
+    """Map a Tensology work-request onto the Incoming proposal shape.
+
+    The Tensology project name is resolved to a Decisions project so Create Thread and the
+    project label use the local project, while the Tensology name is kept for display when
+    no local project matches yet.
+    """
     if not isinstance(row, dict) or row.get("id") in (None, ""):
         return None
     conversation = row.get("source_conversation") if isinstance(row.get("source_conversation"), dict) else {}
@@ -87,6 +101,8 @@ def _from_tensology(row: dict[str, Any]) -> dict[str, Any] | None:
     source = str(row.get("source") or "tensology").strip().lower() or "tensology"
     thread_id = str(conversation.get("thread_id") or "").strip()
     at = _latest_activity(row)
+    tensology_project_name = str(project.get("name") or "").strip()
+    local_project_id = (project_map or {}).get(tensology_project_name.lower())
     return {
         "id": f"tensology:{row.get('id')}",
         "origin": "tensology",
@@ -99,8 +115,10 @@ def _from_tensology(row: dict[str, Any]) -> dict[str, Any] | None:
         "estimated_amount": row.get("estimated_amount"),
         "confidence": row.get("confidence"),
         "rationale": str(row.get("rationale") or "").strip(),
-        "project_id": project.get("id"),
-        "project_name": str(project.get("name") or ""),
+        "project_id": local_project_id,
+        "project_name": tensology_project_name,
+        "tensology_project_id": project.get("id"),
+        "tensology_project_name": tensology_project_name,
         "source": source,
         "source_label": source.title(),
         "source_thread_id": thread_id,
@@ -108,6 +126,8 @@ def _from_tensology(row: dict[str, Any]) -> dict[str, Any] | None:
         "status": str(row.get("status") or "pending"),
         "created_at": at.isoformat() if at else "",
         "message_ids": [str(ev.get("id")) for ev in (row.get("evidence") or []) if isinstance(ev, dict) and ev.get("id")],
+        "attachments": [dict(item) for item in (row.get("attachments") or []) if isinstance(item, dict)],
+        "decisions_project_id": row.get("decisions_project_id"),
         "can_push_to_thread": True,
     }
 
@@ -371,35 +391,46 @@ def dismiss_proposal(proposal: dict[str, Any]) -> bool:
 def create_proposal_thread(proposal: dict[str, Any]) -> int:
     """Create a Development thread for an Incoming proposal.
 
-    Uses the same path as the studio task route (``ChatService.create_new_chat``),
-    so a pushed proposal lands in a normal thread tied to its project.
+    Uses the authoritative Development thread lifecycle so the result belongs
+    to Development and repeated actions resolve to the same project thread.
 
     When the proposal also lives on Tensology, it is actioned there
     (``send_to_decisions``) so it drops off the pending list and is never
     proposed twice.
     """
-    from distr.core.chat import ChatService
-    from distr.core.settings import load_settings_from_db
+    from distr.core.workflow.development_threads import ensure_development_thread
+    from distr.core.incoming.media import proposal_attachments, register_thread_attachments
 
-    settings = load_settings_from_db()
-    provider = str(
-        settings.get("conversational_llm_provider") or settings.get("agent_provider") or "ollama"
-    ).strip()
-    model_name = str(
-        settings.get("conversational_llm_model") or settings.get("agent_model") or ""
-    ).strip()
     project_id = proposal.get("project_id")
-    chat_id, _ = ChatService.create_new_chat(
-        llm_provider=provider,
-        llm_model=model_name,
+    proposal_id = _tensology_id(proposal.get("id"))
+    client = None
+    if proposal_id is not None:
+        from distr.core.tensology_client import configured_tensology_client, _resolve_tensology_project
+
+        client = configured_tensology_client(source="incoming-proposal-media")
+        # The browser may have an old proposal. Refetch the authoritative media set.
+        authoritative = client.get(f"work-requests/{proposal_id}")
+        if not isinstance(authoritative, dict) or 'attachments' not in authoritative:
+            raise ValueError("Tensology did not supply a media manifest. Update its media handoff API before pushing this proposal.")
+        proposal = _from_tensology(authoritative)
+        if proposal is None:
+            raise ValueError("The source proposal is unavailable. Refresh Incoming and retry.")
+        project = _resolve_tensology_project({
+            "decisions_project_id": proposal.get("decisions_project_id"),
+            "project_name": proposal.get("project_name"),
+        })
+        if project is None:
+            raise ValueError("Link the Tensology proposal to a local project before creating its thread.")
+        project_id = project["id"]
+    attachments = proposal_attachments(proposal, int(project_id) if project_id else None, client=client)
+    chat_id = ensure_development_thread(
         title=str(proposal.get("title") or "Incoming proposal")[:120],
         starting_question=_proposal_prompt(proposal),
         project_id=int(project_id) if project_id else None,
-        route_mode="auto",
-        execution_profile="code",
-        autonomy_level="goal",
-        activate=False,
+        source_type="incoming_proposal",
+        source_ref=str(proposal.get("id") or proposal.get("dedupe_key") or "").strip() or None,
     )
+    register_thread_attachments(chat_id, attachments)
     # Write back to Tensology so the same proposal is not shown twice: pushing a
     # thread here is the same decision as "Send to Decisions" on the site.
     proposal_id = _tensology_id(proposal.get("id"))
@@ -435,8 +466,9 @@ def list_incoming_proposals(*, limit: int = 100) -> dict[str, Any]:
     try:
         from distr.core.tensology_client import fetch_pending_work_requests
 
+        project_map = _project_map()
         for row in fetch_pending_work_requests():
-            proposal = _from_tensology(row)
+            proposal = _from_tensology(row, project_map)
             if proposal:
                 # Tensology is canonical: keep every one (several proposals can
                 # share a conversation).
