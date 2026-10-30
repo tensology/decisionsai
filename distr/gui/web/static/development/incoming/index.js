@@ -4,10 +4,12 @@ export function createIncoming({ context, actions, el }) {
         incoming: [],
         incomingLinks: [],
         incomingChannels: {},
+        incomingProposals: [],
+        incomingProposalsError: '',
         incomingError: '',
         incomingLoad: null,
         incomingLoadedAt: 0,
-        incomingFilter: 'whatsapp',
+        incomingFilter: 'proposals',
         incomingMobileDetail: false,
         selectedTelegramThreadKey: '',
         selectedIncomingConversationKey: '',
@@ -225,6 +227,22 @@ export function createIncoming({ context, actions, el }) {
         );
     }
 
+    function incomingProposalRowHtml(proposal) {
+        const source = String(proposal.source_label || proposal.source || '').trim();
+        const project = proposal.project_name || (proposal.project_id ? `Project ${proposal.project_id}` : 'No project yet');
+        const amount =
+            proposal.estimated_amount != null && proposal.estimated_amount !== ''
+                ? ` · R${Number(proposal.estimated_amount).toFixed(2)}`
+                : '';
+        const origin = proposal.origin === 'tensology' ? 'Tensology' : 'Local';
+        const status = String(proposal.status || '').replace(/_/g, ' ');
+        return `<button type="button" class="incoming-proposal-row" data-incoming-proposal="${actions.escapeHtml(proposal.id || '')}">
+            <span class="incoming-avatar" aria-hidden="true">${actions.escapeHtml(incomingInitials(proposal.participant || proposal.title || 'P'))}</span>
+            <span class="incoming-proposal-main"><strong>${actions.escapeHtml(proposal.title || 'Proposal')}</strong><small>${actions.escapeHtml(source)} · ${actions.escapeHtml(project)} · ${actions.escapeHtml(status)}${actions.escapeHtml(amount)}</small></span>
+            <span class="incoming-proposal-origin">${actions.escapeHtml(origin)}</span>
+        </button>`;
+    }
+
     function renderIncomingWorkspace() {
         const list = el('incoming-list');
         if (!list) return;
@@ -246,6 +264,18 @@ export function createIncoming({ context, actions, el }) {
         el('incoming-panel-mailshot').classList.toggle('hidden', state.incomingFilter !== 'mailshot');
         const telegramPanel = el('incoming-panel-telegram');
         if (telegramPanel) telegramPanel.classList.toggle('hidden', state.incomingFilter !== 'telegram');
+        const proposalsPanel = el('incoming-panel-proposals');
+        if (proposalsPanel) proposalsPanel.classList.toggle('hidden', state.incomingFilter !== 'proposals');
+        const proposalsCount = el('incoming-proposals-count');
+        if (proposalsCount) proposalsCount.textContent = String((state.incomingProposals || []).length);
+        const proposalsList = el('incoming-proposals-list');
+        if (proposalsList) {
+            proposalsList.innerHTML = state.incomingProposalsError
+                ? `<div class="development-empty">${actions.escapeHtml(state.incomingProposalsError)}</div>`
+                : (state.incomingProposals || []).length
+                  ? (state.incomingProposals || []).map(incomingProposalRowHtml).join('')
+                  : '<div class="development-empty">No proposals right now.</div>';
+        }
         if (!whatsappConversations.some((conversation) => conversation.key === state.selectedIncomingConversationKey)) {
             state.selectedIncomingConversationKey =
                 whatsappConversations.find((conversation) => conversation.links.length)?.key || whatsappConversations[0]?.key || '';
@@ -814,6 +844,14 @@ export function createIncoming({ context, actions, el }) {
                 state.incomingLinks = data.links || [];
                 state.incomingChannels = data.channels || {};
                 state.incomingError = '';
+            }
+            try {
+                const proposals = await actions.api(`/workflows/studio/incoming/proposals?limit=150&_=${Date.now()}`, { cache: 'no-store' });
+                state.incomingProposals = proposals.proposals || [];
+                state.incomingProposalsError = proposals.error || '';
+            } catch (_proposalError) {
+                state.incomingProposals = [];
+                state.incomingProposalsError = 'Proposals are temporarily unavailable.';
             }
             state.incomingLoadedAt = Date.now();
             state.incomingLoad = null;

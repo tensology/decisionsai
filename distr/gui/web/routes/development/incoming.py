@@ -33,6 +33,18 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=500)
 
 
+    @router.get("/workflows/studio/incoming/proposals")
+    async def workflow_studio_incoming_proposals(limit: int = 100):
+        """Incoming proposals: Tensology (canonical) reconciled with local channel candidates."""
+        try:
+            from distr.core.incoming.proposals import list_incoming_proposals
+
+            return JSONResponse(await asyncio.to_thread(list_incoming_proposals, limit=limit))
+        except Exception as e:
+            logger.error("Incoming proposals load failed: %s", e, exc_info=True)
+            return JSONResponse({"proposals": [], "counts": {}, "error": str(e)}, status_code=500)
+
+
     @router.post("/workflows/intake/inbox/{event_id}/action")
     async def workflow_intake_inbox_action(event_id: int, request: Request):
         """Continue / stop / steer / push / dismiss an inbox item."""

@@ -202,3 +202,11 @@
 }
 .incoming-folder-tabs button.incoming-resync.loading > span { display: inline-block; animation: incoming-resync-spin .8s linear infinite; }
 @keyframes incoming-resync-spin { to { transform: rotate(360deg); } }
+
+/* Incoming → Proposals (first folder). */
+.incoming-proposal-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; border: 0; border-bottom: 1px solid rgba(128,128,128,.18); background: transparent; cursor: pointer; }
+.incoming-proposal-row:hover { background: rgba(128,128,128,.08); }
+.incoming-proposal-main { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px; }
+.incoming-proposal-main strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.incoming-proposal-main small { opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.incoming-proposal-origin { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; white-space: nowrap; }
