@@ -58,6 +58,32 @@ def register_routes(router, templates):
             return JSONResponse({"success": False, "error": str(e)}, status_code=404)
 
 
+    @router.post("/workflows/studio/incoming/proposals/merge")
+    async def workflow_studio_proposal_merge(request: Request):
+        """Rebuild two same-project proposals into one ticket (AI merge)."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        first = (body or {}).get("first") if isinstance(body, dict) else None
+        second = (body or {}).get("second") if isinstance(body, dict) else None
+        if not (isinstance(first, dict) and isinstance(second, dict)):
+            return JSONResponse({"success": False, "error": "Two proposals are required."}, status_code=422)
+        if not first.get("project_id") or str(first.get("project_id")) != str(second.get("project_id")):
+            return JSONResponse(
+                {"success": False, "error": "Only proposals on the same project can be merged."},
+                status_code=422,
+            )
+        try:
+            from distr.core.incoming.proposals import merge_proposals
+
+            result = await asyncio.to_thread(merge_proposals, first, second)
+            return JSONResponse({"success": True, **result})
+        except Exception as e:
+            logger.error("Proposal merge failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
     @router.post("/workflows/studio/incoming/proposals/thread")
     async def workflow_studio_proposal_thread(request: Request):
         """Push an Incoming proposal into a Development thread."""

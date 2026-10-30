@@ -107,3 +107,65 @@ def test_triage_skips_own_messages_before_calling_the_model(monkeypatch):
     items = [dict(_incoming_item("whatsapp", "t1", "ok", label="Paul Hoft"), from_me=True)]
     out = proposals_mod._triage_conversations(items, {}, complete=lambda *a, **k: called.append(1) or "{}")
     assert out == [] and called == []
+
+
+def test_proposal_thread_preserves_project_prompt_and_actions_upstream(monkeypatch):
+    calls = []
+    writes = []
+    monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {
+        'conversational_llm_provider': 'ollama', 'conversational_llm_model': 'local-test'})
+    monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', lambda **kwargs: (calls.append(kwargs) or 123))
+    monkeypatch.setattr('distr.core.tensology_client.decide_work_request', lambda *args: writes.append(args))
+    proposal = {'id': 'tensology:45', 'title': 'Review launch copy', 'description': 'Review the final menu.',
+                'tasks': ['Check spelling'], 'project_id': 7, 'source': 'gmail', 'participant': 'Client'}
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {**proposal, 'id': 45, 'project': {'id': 70, 'name': 'Merrypak'}, 'attachments': []}
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: client)
+    monkeypatch.setattr('distr.core.tensology_client._resolve_tensology_project', lambda payload: {'id': 7})
+    assert proposals_mod.create_proposal_thread(proposal) == 123
+    assert calls[0]['project_id'] == 7
+    assert calls[0]['source_type'] == 'incoming_proposal'
+    assert calls[0]['source_ref'] == 'tensology:45'
+    assert calls[0]['title'] == proposal['title']
+    assert proposal['description'] in calls[0]['starting_question']
+    assert 'Check spelling' in calls[0]['starting_question']
+    assert writes == [(45, 'send_to_decisions')]
+
+
+def test_missing_authoritative_evidence_stops_before_thread_or_source_action(monkeypatch):
+    from unittest.mock import Mock
+    import pytest
+    from distr.core.tensology_client import TensologyApiError
+
+    client = Mock()
+    client.get.side_effect = TensologyApiError('Restore source messages.', status=409, code='proposal_evidence_missing')
+    create, action = Mock(), Mock()
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: client)
+    monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', create)
+    monkeypatch.setattr('distr.core.tensology_client.decide_work_request', action)
+    with pytest.raises(TensologyApiError, match='Restore source messages'):
+        proposals_mod.create_proposal_thread({'id': 'tensology:45', 'title': 'Missing original evidence'})
+    create.assert_not_called()
+    action.assert_not_called()
+
+
+def test_merge_rebuilds_two_proposals_into_one(monkeypatch):
+    created = {}
+    monkeypatch.setattr("distr.core.chat.ChatService.create_new_chat", lambda **kwargs: (created.setdefault("kwargs", kwargs) and 0) or (501, None))
+    monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
+    dismissed = []
+    monkeypatch.setattr("distr.core.tensology_client.decide_work_request", lambda pid, action: dismissed.append((pid, action)))
+
+    first = {"id": "tensology:45", "title": "Check shipping cost", "project_id": 2, "project_name": "Merrypak", "tasks": ["a"]}
+    second = {"id": "tensology:46", "title": "Investigate shipping calc", "project_id": 2, "project_name": "Merrypak", "tasks": ["b"]}
+
+    def fake_complete(provider, model, messages, settings):
+        return '{"title": "Fix shipping cost calculation", "description": "combined", "tasks": ["a", "b"], "priority": "high"}'
+
+    result = proposals_mod.merge_proposals(first, second, complete=fake_complete)
+    assert result["chat_id"] == 501
+    assert result["merged"]["title"] == "Fix shipping cost calculation"
+    assert result["merged"]["tasks"] == ["a", "b"]
+    assert created["kwargs"]["project_id"] == 2
+    assert dismissed == [(45, "dismiss"), (46, "dismiss")]

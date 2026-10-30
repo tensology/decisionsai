@@ -279,7 +279,8 @@ export function createIncoming({ context, actions, el }) {
             messageCount ? `${messageCount} message${messageCount === 1 ? '' : 's'}` : '',
             mediaCount ? `${mediaCount} attachment${mediaCount === 1 ? '' : 's'}` : ''
         ].filter(Boolean).join(' · ');
-        return `<article class="proposal-card" data-incoming-proposal-open="${proposalId}" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
+        const projectKey = actions.escapeHtml(String(proposal.project_id || ''));
+        return `<article class="proposal-card" data-incoming-proposal-open="${proposalId}" data-proposal-project="${projectKey}" draggable="true" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
             <div class="proposal-head">
                 <p class="proposal-project${project ? '' : ' none'}">${actions.escapeHtml(project || 'Not linked to a project')}</p>
                 <h3 class="proposal-title">${actions.escapeHtml(proposal.title || 'Proposal')}</h3>
@@ -287,8 +288,40 @@ export function createIncoming({ context, actions, el }) {
             </div>
             ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
             ${meta ? `<p class="proposal-meta">${actions.escapeHtml(meta)}</p>` : ''}
-            <div class="proposal-actions">${push}${dismiss}</div>
+            <div class="proposal-actions">${push}${dismiss}<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span></div>
         </article>`;
+    }
+
+    let dragProposalId = '';
+
+    function proposalById(proposalId) {
+        return (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId)) || null;
+    }
+
+    async function mergeProposalCards(targetId, sourceId) {
+        const first = proposalById(sourceId);
+        const second = proposalById(targetId);
+        if (!first || !second || String(first.id) === String(second.id)) return;
+        if (!first.project_id || String(first.project_id) !== String(second.project_id)) {
+            actions.toast('Only proposals on the same project can be merged.', 'error');
+            return;
+        }
+        try {
+            const result = await actions.api('/workflows/studio/incoming/proposals/merge', {
+                method: 'POST',
+                body: { first, second }
+            });
+            if (result && result.chat_id) {
+                actions.toast('Merged into one ticket.', 'success');
+                state.incomingProposals = (state.incomingProposals || []).filter(
+                    (row) => String(row.id) !== String(sourceId) && String(row.id) !== String(targetId)
+                );
+                renderIncomingWorkspace();
+                if (actions.openThreadDialog) actions.openThreadDialog(result.chat_id);
+            }
+        } catch (error) {
+            actions.toast(error.message || 'Could not merge the proposals.', 'error');
+        }
     }
 
     function proposalEvidenceHtml(proposal) {
@@ -479,6 +512,37 @@ export function createIncoming({ context, actions, el }) {
                     }
                 })
             );
+            // Drag one proposal onto another on the same project to merge them.
+            proposalsList.querySelectorAll('.proposal-card[data-proposal-project]').forEach((node) => {
+                node.addEventListener('dragstart', (event) => {
+                    dragProposalId = node.dataset.incomingProposalOpen || '';
+                    if (event.dataTransfer) {
+                        event.dataTransfer.effectAllowed = 'move';
+                        try { event.dataTransfer.setData('text/plain', dragProposalId); } catch (_) { /* ignore */ }
+                    }
+                    node.classList.add('dragging');
+                });
+                node.addEventListener('dragend', () => {
+                    node.classList.remove('dragging');
+                    proposalsList.querySelectorAll('.proposal-card.drop-target').forEach((n) => n.classList.remove('drop-target'));
+                });
+                node.addEventListener('dragover', (event) => {
+                    const source = proposalById(dragProposalId);
+                    if (!source || !source.project_id || String(source.project_id) !== String(node.dataset.proposalProject)) return;
+                    event.preventDefault();
+                    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+                    node.classList.add('drop-target');
+                });
+                node.addEventListener('dragleave', () => node.classList.remove('drop-target'));
+                node.addEventListener('drop', (event) => {
+                    event.preventDefault();
+                    node.classList.remove('drop-target');
+                    const sourceId = dragProposalId || (event.dataTransfer ? event.dataTransfer.getData('text/plain') : '');
+                    if (sourceId && sourceId !== node.dataset.incomingProposalOpen) {
+                        mergeProposalCards(node.dataset.incomingProposalOpen, sourceId);
+                    }
+                });
+            });
         }
         if (!whatsappConversations.some((conversation) => conversation.key === state.selectedIncomingConversationKey)) {
             state.selectedIncomingConversationKey =

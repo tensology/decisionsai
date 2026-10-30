@@ -338,3 +338,8 @@
 .proposal-message p { margin: 6px 0 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .proposal-message p.muted, .proposal-empty { color: var(--studio-dim); font-style: italic; }
 .proposal-modal > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--studio-line); }
+
+/* Merge-by-drag affordances. */
+.proposal-drag { margin-left: auto; padding: 0 4px; color: var(--studio-dim); cursor: grab; font-size: 16px; line-height: 1; }
+.proposal-card.dragging { opacity: .45; }
+.proposal-card.drop-target { border-color: var(--studio-accent-light); box-shadow: 0 0 0 2px var(--studio-accent-light); }
