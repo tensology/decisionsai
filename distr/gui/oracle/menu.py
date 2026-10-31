@@ -1455,18 +1455,29 @@ class MenuTrayMixin:
             logger.info("Tray icon clicked right after stopping recording - ignoring (no menu shown)")
             self._recording_just_stopped = False
             original_menu = self.tray_icon.contextMenu()
-            self.tray_icon.setContextMenu(None)
-            QTimer.singleShot(100, lambda: self.tray_icon.setContextMenu(original_menu) if original_menu else None)
+            # macOS: defer menu manipulation out of the activation handler to avoid AppKit abort
+            if sys.platform == 'darwin':
+                QTimer.singleShot(0, lambda: self.tray_icon.setContextMenu(None))
+                QTimer.singleShot(100, lambda: self.tray_icon.setContextMenu(original_menu) if original_menu else None)
+            else:
+                self.tray_icon.setContextMenu(None)
+                QTimer.singleShot(100, lambda: self.tray_icon.setContextMenu(original_menu) if original_menu else None)
             return
 
         # If recording is active, stop it on ANY click (left or right)
         if self._is_recording_active():
             logger.info("Tray icon clicked while recording - stopping recording (no menu shown)")
             original_menu = self.tray_icon.contextMenu()
-            self.tray_icon.setContextMenu(None)
-            self.stop_recording_action_handler()
-            self._recording_just_stopped = True
-            QTimer.singleShot(100, lambda: self.tray_icon.setContextMenu(original_menu) if original_menu else None)
+            if sys.platform == 'darwin':
+                QTimer.singleShot(0, lambda: self.tray_icon.setContextMenu(None))
+                self.stop_recording_action_handler()
+                self._recording_just_stopped = True
+                QTimer.singleShot(100, lambda: self.tray_icon.setContextMenu(original_menu) if original_menu else None)
+            else:
+                self.tray_icon.setContextMenu(None)
+                self.stop_recording_action_handler()
+                self._recording_just_stopped = True
+                QTimer.singleShot(100, lambda: self.tray_icon.setContextMenu(original_menu) if original_menu else None)
             return
 
         # Windows: left-click on tray should also show the context menu
