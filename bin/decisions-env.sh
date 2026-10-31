@@ -25,3 +25,6 @@ export WORKON_HOME="${WORKON_HOME:-$HOME/.virtualenvs}"
 export VIRTUALENVWRAPPER_PYTHON="${VIRTUALENVWRAPPER_PYTHON:-$HOME/.virtualenvs/decisions/bin/python}"
 export DECISIONS_PYTHON="${DECISIONS_PYTHON:-$VIRTUALENVWRAPPER_PYTHON}"
 export DECISIONS_DB_DIR="${DECISIONS_DB_DIR:-}"
+
+# Private installer runtime (audio tools and libraries).
+export PATH="$HOME/.decisions/runtime/system/bin:$HOME/.decisions/runtime/bin:$PATH"

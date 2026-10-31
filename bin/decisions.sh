@@ -68,6 +68,8 @@ if not legacy.exists():
     raise SystemExit(0)
 
 for src in sorted(legacy.rglob("*"), key=lambda p: len(p.parts)):
+    if src.relative_to(legacy).parts[0] in {"decisionsai", "runtime"}:
+        continue
     rel = src.relative_to(legacy)
     dst = canonical / rel
     if src.is_dir():
@@ -134,82 +136,19 @@ if [ -n "$GIT_HASH" ]; then
 fi
 echo ""
 
-# Require python3.12 - PyTorch and PyQt6 need 3.12 (3.13+ not supported)
-# IMPORTANT: On macOS, prefer the python.org framework build over Homebrew.
-# PyTorch wheels on PyPI are compiled against the python.org framework which
-# exports _PyDict_GetItemRef. Homebrew's build does NOT export this symbol,
-# causing every torch version to fail with "symbol not found in flat namespace".
+# Bootstrap a private Python and native dependencies on macOS.
 PYTHON_CMD=""
-
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS: prefer python.org framework build (required for PyTorch)
-    FRAMEWORK_PYTHON="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
-    if [ -x "$FRAMEWORK_PYTHON" ]; then
-        # Verify it's 3.12.8+ (has _PyDict_GetItemRef backport)
-        FRAMEWORK_VER=$("$FRAMEWORK_PYTHON" -c "import sys; print(f'{sys.version_info.minor}.{sys.version_info.micro}')" 2>/dev/null)
-        FRAMEWORK_MICRO=$(echo "$FRAMEWORK_VER" | cut -d. -f2)
-        if [ "$FRAMEWORK_MICRO" -ge 8 ] 2>/dev/null; then
-            PYTHON_CMD="$FRAMEWORK_PYTHON"
-            echo -e "${GREEN}✓${NC} Python found (framework): $($PYTHON_CMD --version)"
-        else
-            echo -e "${YELLOW}python.org Python 3.12 found but version too old ($FRAMEWORK_VER). Need 3.12.8+${NC}"
-            echo -e "${YELLOW}Download from: https://www.python.org/downloads/release/python-31210/${NC}"
-        fi
-    fi
-
-    # Fallback: try Homebrew python3.12 (may not work with torch)
-    if [ -z "$PYTHON_CMD" ] && command -v python3.12 &> /dev/null; then
-        PYTHON_CMD="python3.12"
-        echo -e "${YELLOW}⚠${NC}  Using Homebrew Python ($($PYTHON_CMD --version))"
-        echo -e "${YELLOW}   PyTorch/F5-TTS may not work. For full support, install python.org Python 3.12.10+:${NC}"
-        echo -e "${YELLOW}   https://www.python.org/downloads/release/python-31210/${NC}"
-    fi
-
-    # Not found at all — install via Homebrew as last resort
-    if [ -z "$PYTHON_CMD" ]; then
-        echo -e "${YELLOW}python3.12 not found. Installing via Homebrew...${NC}"
-        if command -v brew &> /dev/null; then
-            brew install python@3.12
-            if [ -d "/opt/homebrew/bin" ]; then
-                export PATH="/opt/homebrew/bin:/opt/homebrew/opt/python@3.12/bin:$PATH"
-            fi
-            hash -r 2>/dev/null
-            if command -v python3.12 &> /dev/null; then
-                PYTHON_CMD="python3.12"
-                echo -e "${GREEN}✓${NC} Python installed: $($PYTHON_CMD --version)"
-                echo -e "${YELLOW}⚠${NC}  Homebrew Python installed. PyTorch may not work."
-                echo -e "${YELLOW}   For full support, install python.org Python 3.12.10+:${NC}"
-                echo -e "${YELLOW}   https://www.python.org/downloads/release/python-31210/${NC}"
-            fi
-        else
-            echo -e "${RED}Error: Homebrew not found. Install Python 3.12.10+ from:${NC}"
-            echo "  https://www.python.org/downloads/release/python-31210/"
-            exit 1
-        fi
-    fi
+if [[ "$OSTYPE" == darwin* ]]; then
+    source "$SCRIPT_DIR/bin/bootstrap-macos.sh" || exit 1
 else
-    # Linux/other: use python3.12 from PATH
-    if command -v python3.12 &> /dev/null; then
-        PYTHON_CMD="python3.12"
-        echo -e "${GREEN}✓${NC} Python found: $(python3.12 --version)"
-    else
-        echo -e "${RED}Error: python3.12 not found. Please install Python 3.12:${NC}"
-        echo "  # Use pyenv: curl https://pyenv.run | bash && pyenv install 3.12.10"
-        echo "  # Or download from: https://www.python.org/downloads/"
-        exit 1
-    fi
-fi
-
-if [ -z "$PYTHON_CMD" ]; then
-    echo -e "${RED}Error: Could not find or install Python 3.12. Exiting.${NC}"
-    exit 1
+    PYTHON_CMD=$(command -v python3.12) || { echo "Python 3.12 is required" >&2; exit 1; }
 fi
 
 migrate_legacy_decisions_home
 
 # Idempotently repair local Codex/Cursor/Claude harness surfaces when present.
 # This must never block Decisions startup or complain when those tools are absent.
-if [ -f "$SCRIPT_DIR/scripts/verify_agent_harness_setup.py" ]; then
+if [ "${DECISIONS_INSTALL_IDE_PLUGINS:-0}" = 1 ] && [ -f "$SCRIPT_DIR/scripts/verify_agent_harness_setup.py" ]; then
     "$PYTHON_CMD" "$SCRIPT_DIR/scripts/verify_agent_harness_setup.py" --root "$SCRIPT_DIR" --quiet >/dev/null 2>&1 || true
 fi
 
@@ -242,7 +181,7 @@ install_system_deps() {
     if ! pkg-config --exists portaudio-2.0 2>/dev/null; then
         # Try alternative check methods
         if [[ "$OS_TYPE" == "macos" ]]; then
-            if ! brew list portaudio &>/dev/null 2>&1; then
+            if [ ! -f "$HOME/.decisions/runtime/system/lib/libportaudio.dylib" ] && ! brew list portaudio &>/dev/null 2>&1; then
                 NEED_INSTALL=true
             fi
         elif [[ "$OS_TYPE" == "linux"* ]] || [[ "$OS_TYPE" == "debian" ]] || [[ "$OS_TYPE" == "redhat" ]]; then
@@ -262,7 +201,7 @@ install_system_deps() {
     
     # Check for zlib (required for librosa/llvmlite)
     if [[ "$OS_TYPE" == "macos" ]]; then
-        if ! brew list zlib &>/dev/null 2>&1; then
+        if [ ! -f /usr/lib/libz.1.dylib ] && [ ! -d "$HOME/.decisions/runtime/system" ] && ! brew list zlib &>/dev/null 2>&1; then
             NEED_INSTALL=true
         fi
     elif [[ "$OS_TYPE" == "linux"* ]] || [[ "$OS_TYPE" == "debian" ]] || [[ "$OS_TYPE" == "redhat" ]]; then
@@ -399,7 +338,11 @@ install_system_deps() {
     fi
 }
 
-install_system_deps
+if [[ "$OSTYPE" == darwin* ]] && [ -x "$HOME/.decisions/runtime/system/bin/ffmpeg" ]; then
+    echo "✓ Private system dependencies available"
+else
+    install_system_deps
+fi
 
 # Virtual environment - always use ~/.virtualenvs/decisions with python3.12
 VENV_DIR="$HOME/.virtualenvs/decisions"
@@ -445,6 +388,20 @@ else
     echo -e "${YELLOW}Warning: Could not determine pip version${NC}"
 fi
 
+# Conda PortAudio uses @rpath; make the PyAudio wheel point to our private library.
+repair_private_audio() {
+    local audio_lib="$HOME/.decisions/runtime/system/lib/libportaudio.dylib"
+    [ -f "$audio_lib" ] || return 0
+    local extension
+    while IFS= read -r extension; do
+        install_name_tool -change @rpath/libportaudio.dylib "$audio_lib" "$extension" || return 1
+        codesign --force --sign - "$extension" 2>/dev/null || return 1
+    done < <(find "$VENV_DIR/lib" -path '*/pyaudio/_portaudio*.so' -type f)
+}
+if [[ "$OSTYPE" == darwin* ]]; then
+    repair_private_audio || exit 1
+fi
+
 # Install requirements if not already installed
 # Use a marker file in the installer folder to track installation
 REQUIREMENTS_MARKER="installer/.requirements_installed_external"
@@ -485,7 +442,8 @@ if [ ! -f "$REQUIREMENTS_MARKER" ] || ! check_dependencies_installed; then
         rm -f "$REQUIREMENTS_MARKER"
     fi
     
-    "$VENV_DIR/bin/pip" install -r requirements.txt
+    # Native package builds expect DEBUG to be numeric (the app uses FALSE).
+    DEBUG=0 "$VENV_DIR/bin/pip" install -r requirements.txt
     if [ $? -ne 0 ]; then
         echo -e "${RED}Error: pip install failed. Please check the output above.${NC}"
         exit 1
@@ -499,6 +457,10 @@ if [ ! -f "$REQUIREMENTS_MARKER" ] || ! check_dependencies_installed; then
         }
     fi
     
+    if [[ "$OSTYPE" == darwin* ]]; then
+        repair_private_audio || exit 1
+    fi
+
     # Ensure installer directory exists
     mkdir -p installer
     touch "$REQUIREMENTS_MARKER"
@@ -619,8 +581,8 @@ fi
 # Local STT/TTS caches (Vosk dir, Whisper gguf warm) — same idea as Whisper’s lazy download, but up front.
 # Opt out: DECISIONS_AI_SKIP_MODEL_PREFETCH=1 ./bin/decisions.sh
 prefetch_local_models_bootstrap() {
-    if [ "${DECISIONS_AI_SKIP_MODEL_PREFETCH:-}" = "1" ]; then
-        echo -e "${YELLOW}Skipping local model prefetch (DECISIONS_AI_SKIP_MODEL_PREFETCH=1).${NC}"
+    if [ "${DECISIONS_PREFETCH_MODELS:-0}" != 1 ] || [ "${DECISIONS_AI_SKIP_MODEL_PREFETCH:-}" = "1" ]; then
+        echo -e "${YELLOW}Optional model preloading skipped; set DECISIONS_PREFETCH_MODELS=1 to enable.${NC}"
         return 0
     fi
     echo -e "${YELLOW}Prefetching local STT/TTS model caches (Vosk, Whisper)...${NC}"
@@ -635,7 +597,7 @@ prefetch_local_models_bootstrap
 
 # macOS: keep login shells on arm64 so Django/psycopg2 venvs match pip wheels.
 if [[ "$OSTYPE" == darwin* ]]; then
-    bash "$SCRIPT_DIR/bin/setup_macos_dev_shell.sh" 2>/dev/null || true
+    : # Keep installation scoped to DecisionsAI; do not rewrite global shell settings.
 fi
 
 # On macOS ARM (Sequoia+), the kernel's code signing monitor (codeSigningMonitor:2)
@@ -677,24 +639,10 @@ if [[ "$OSTYPE" == "darwin"* ]] && [ ! -f "$RESIGN_MARKER" ]; then
     echo -e "${GREEN}✓${NC} Re-signed $RESIGN_COUNT native extension(s)"
 fi
 
-# Check if models are installed
-MODELS_DIR="./distr/core/agent/models"
-KOKORO_MODEL="$MODELS_DIR/kokoro-v1.0.onnx"
-KOKORO_VOICES="$MODELS_DIR/voices-v1.0.bin"
-
-MODELS_EXIST=true
-
-if [ ! -f "$KOKORO_MODEL" ] || [ ! -f "$KOKORO_VOICES" ]; then
-    MODELS_EXIST=false
-fi
-
-# Run setup.py if models don't exist
-if [ "$MODELS_EXIST" = false ]; then
-    echo -e "${YELLOW}Models not found. Running setup...${NC}"
-    "$VENV_DIR/bin/python" bin/setup.py
-    echo -e "${GREEN}✓${NC} Setup complete"
-else
-    echo -e "${GREEN}✓${NC} Models already installed"
+# Required default TTS assets; optional fallback/voice models remain opt-in.
+MODELS_DIR="$SCRIPT_DIR/distr/core/agent/models"
+if [ ! -s "$MODELS_DIR/kokoro-v1.0.onnx" ] || [ ! -s "$MODELS_DIR/voices-v1.0.bin" ] || [ "${DECISIONS_PREFETCH_MODELS:-0}" = 1 ]; then
+    "$VENV_DIR/bin/python" bin/setup.py || exit 1
 fi
 
 # Playwright: ONE shared browser cache; never download per-venv copies
@@ -959,14 +907,14 @@ check_project_cli_presence() {
 
     if command -v cursor >/dev/null 2>&1 || [ -d "$HOME/.cursor" ]; then
         echo -e "${GREEN}✓${NC} Cursor environment detected"
-        check_cursor_plugin_setup
+        [ "${DECISIONS_INSTALL_IDE_PLUGINS:-0}" = 1 ] && check_cursor_plugin_setup
     else
         echo -e "${YELLOW}Note: Cursor IDE is not detected. Cursor plugin setup skipped.${NC}"
     fi
 
     if command -v codex >/dev/null 2>&1 || [ -d "$HOME/.codex" ] || [ -d "$HOME/.agents" ]; then
         echo -e "${GREEN}✓${NC} Codex environment detected"
-        check_codex_plugin_setup
+        [ "${DECISIONS_INSTALL_IDE_PLUGINS:-0}" = 1 ] && check_codex_plugin_setup
     else
         echo -e "${YELLOW}Note: Codex is not detected. Codex plugin setup skipped.${NC}"
     fi
@@ -1006,53 +954,8 @@ check_project_cli_presence() {
 
 check_project_cli_presence
 
-# Check EULA acceptance before boot
-check_eula_acceptance() {
-    local eula_state=""
-    eula_state=$("$VENV_DIR/bin/python" - <<'PY'
-from distr.core.utils import load_settings_from_db
-settings = load_settings_from_db() or {}
-print("1" if bool(settings.get("accepted_eula")) else "0")
-PY
-)
-
-    if [ "$eula_state" = "1" ]; then
-        echo -e "${GREEN}✓${NC} EULA already accepted"
-        return 0
-    fi
-
-    echo ""
-    echo -e "${YELLOW}EULA acceptance is required before DecisionsAI can start.${NC}"
-    echo -e "${YELLOW}Please review LICENSE.md in the project root if you have not read it yet.${NC}"
-    echo ""
-    printf "Do you agree to the EULA? (yes/no): "
-    read -r eula_answer
-    eula_answer=$(printf "%s" "$eula_answer" | tr '[:upper:]' '[:lower:]')
-
-    if [ "$eula_answer" = "yes" ] || [ "$eula_answer" = "y" ]; then
-        if "$VENV_DIR/bin/python" - <<'PY'
-from distr.core.utils import load_settings_from_db, save_settings_to_db
-settings = load_settings_from_db() or {}
-settings["accepted_eula"] = True
-save_settings_to_db(settings)
-print("EULA accepted and saved.")
-PY
-        then
-            echo -e "${GREEN}✓${NC} EULA accepted"
-            return 0
-        else
-            echo -e "${RED}Error: Could not save EULA acceptance. Aborting startup.${NC}"
-            return 1
-        fi
-    fi
-
-    echo -e "${YELLOW}EULA not accepted. Startup aborted.${NC}"
-    return 1
-}
-
-if ! check_eula_acceptance; then
-    exit 1
-fi
+# The desktop app displays its license dialog before initializing the agent.
+# Keep piped installation non-interactive; acceptance stays in that dialog.
 
 # ── Launch app (detached by default) ─────────────────────────────────────────
 if [ "$DECISIONS_FOREGROUND" = "1" ]; then

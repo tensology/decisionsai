@@ -473,7 +473,8 @@ if __name__ == "__main__":
     try:
         from distr.core.harness_stack import schedule_harness_stack_setup
 
-        schedule_harness_stack_setup()
+        if os.environ.get("DECISIONS_INSTALL_IDE_PLUGINS") == "1":
+            schedule_harness_stack_setup()
     except Exception:
         pass
     run()

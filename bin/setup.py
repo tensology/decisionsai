@@ -149,7 +149,7 @@ def _download_hf_model(repo_id: str, local_dir: str, label: str = "model"):
 
 def _prefetch_decisions_local_stt_caches() -> None:
     """Run ``scripts/prefetch_local_models.py`` so STT behaves like Whisper (weights cached before first mic)."""
-    if (os.environ.get("DECISIONS_AI_SKIP_MODEL_PREFETCH") or "").strip() == "1":
+    if os.environ.get("DECISIONS_PREFETCH_MODELS") != "1" or (os.environ.get("DECISIONS_AI_SKIP_MODEL_PREFETCH") or "").strip() == "1":
         print("")
         print("Skipping local STT/TTS prefetch (DECISIONS_AI_SKIP_MODEL_PREFETCH=1).")
         return
@@ -631,13 +631,15 @@ def setup(skip_model_pull=False, install_optional=False):
         print(f"⚠ Playwright check error: {e}")
 
     # Pre-download Kanade voice cloning models (avoids long wait on first custom voice play)
-    setup_kanade_models()
+    if os.environ.get("DECISIONS_PREFETCH_MODELS") == "1":
+        setup_kanade_models()
 
     # Local STT/TTS (Vosk tree, Whisper gguf warm)
     _prefetch_decisions_local_stt_caches()
 
     # --- pi CLI Setup ---
-    setup_pi_cli(ram_gb, rec)
+    if os.environ.get("DECISIONS_INSTALL_IDE_PLUGINS") == "1":
+        setup_pi_cli(ram_gb, rec)
 
     # --- Harness stack (ECC + Ponytail/Fallow + browser/content + RTK) ---
     print("")
@@ -647,7 +649,7 @@ def setup(skip_model_pull=False, install_optional=False):
     try:
         from distr.core.harness_stack import ensure_harness_stack_setup
 
-        stack = ensure_harness_stack_setup(run_full=True)
+        stack = ensure_harness_stack_setup(run_full=True) if os.environ.get("DECISIONS_INSTALL_IDE_PLUGINS") == "1" else {}
         for pack_name in ("ecc", "competition", "capabilities", "design_references", "agent_reach", "community_skills", "visual_plan", "yt_dlp", "mcp"):
             result = stack.get(pack_name) or {}
             if not result:
