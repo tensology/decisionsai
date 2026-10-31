@@ -297,3 +297,8 @@ def test_create_and_start_uses_project_flash_route_retries_failure_and_starts_on
     with get_session() as db:
         item=db.query(DevelopmentWorkItem).filter_by(chat_id=cid).one()
         assert item.project_id==project_id
+    from distr.core.workflow.development_threads import thread_execution_route
+    pinned = thread_execution_route(cid)
+    assert pinned['route_mode'] == 'manual'
+    assert pinned['model'] == 'deepseek-v4.1-flash:cloud'
+    assert pinned['model_provider'] == 'ollama'

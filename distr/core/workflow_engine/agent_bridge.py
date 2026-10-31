@@ -124,6 +124,14 @@ class WorkflowAgentBridge:
         else:
             status_line = "I couldn't finish this one."
 
+        packet = run_result.get("result_packet") or {}
+        if success and not cancelled and isinstance(packet, dict) and packet.get("human_summary"):
+            # This is the worker's public answer, not its execution transcript.
+            # Keep the substantive result instead of replacing it with step status.
+            from distr.core.chat_turns import redact_text
+
+            return redact_text(packet["human_summary"], limit=6000, preserve_paths=True)
+
         # Failed steps retain a useful error clue. Completed steps are summarized
         # so chat follow-ups do not receive CLI transcripts or callback payloads.
         _PASS_SNIPPET = 600
@@ -186,6 +194,10 @@ class WorkflowAgentBridge:
 
     @staticmethod
     def _human_step_result(result: str, *, ok: bool = True) -> str:
+        if ok:
+            public_result = WorkflowAgentBridge.public_project_cli_result(result)
+            if public_result:
+                return public_result
         clean = re.sub(r"\s+", " ", str(result or "")).strip()
         if re.search(r"(?i)\bvoice note sent\b", clean):
             return "It sent a Telegram voice note with the requested message."
@@ -197,6 +209,43 @@ class WorkflowAgentBridge:
         if re.search(r"(?i)\bgreen\b.*\bvalidation passed\b|\bvalidation passed\b", clean):
             return "Green evidence was recorded."
         return clean
+
+    @staticmethod
+    def public_project_cli_result(result: str) -> str:
+        """Read only the public answer after the canonical project-worker header.
+
+        Raw CLI logs and protocol messages deliberately keep the existing compact
+        fallback. Reasoning/tool blocks are never promoted into a user reply.
+        """
+        match = re.match(
+            r"\AProject CLI backend:\s*([A-Za-z0-9_-]+)\s*\n"
+            r"Project:\s*[^\n]+\nStatus:\s*(?:completed|passed|success)\s*\n\s*\n(?P<body>.*)\Z",
+            str(result or "").strip(), re.DOTALL | re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        body = match.group("body")
+        for tag in ("think", "analysis", "tool_call", "tool_result"):
+            body = re.sub(rf"<{tag}\b[^>]*>.*?</{tag}\s*>", "", body, flags=re.DOTALL | re.IGNORECASE)
+            body = re.sub(rf"<{tag}\b[^>]*>.*", "", body, flags=re.DOTALL | re.IGNORECASE)
+        if re.search(r"(?im)^\s*(?:Reading additional input from stdin|OpenAI Codex v|callback_url\s*=|\{\s*\"(?:type|method|jsonrpc)\")", body):
+            return ""
+        body = re.sub(r"\[DECISIONS_STAGE:\s*[^\]]+\]", "", body, flags=re.IGNORECASE).strip()
+        contract = re.search(
+            r"(?ims)^Status:\s*(?:completed|passed|success)\s*\nSummary:.*\nFiles changed:.*\nCommands run:.*\nBlockers:[^\n]*(?:\n\s*)?\Z",
+            body,
+        )
+        if contract and body[:contract.start()].strip():
+            # The public answer is already above this machine handoff footer.
+            body = body[:contract.start()].strip()
+        if not body:
+            return ""
+        from distr.core.chat_turns import redact_text
+        from distr.core.workflow.context_limits import compact_execution_result
+
+        backend = match.group(1).replace("_", " ").title()
+        safe = redact_text(body, limit=len(body) + 1, preserve_paths=True)
+        return f"{backend}: {compact_execution_result(safe, max_chars=5500)}"
 
     @staticmethod
     def _summarize_project_cli_result(clean: str, *, ok: bool = True) -> str:

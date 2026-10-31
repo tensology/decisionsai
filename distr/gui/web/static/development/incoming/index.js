@@ -269,16 +269,10 @@ export function createIncoming({ context, actions, el }) {
         const description = String(proposal.description || proposal.rationale || '').trim();
         const proposalId = actions.escapeHtml(proposal.id || '');
         const tooltip = proposalFirstMessage(proposal) || `${origin} · ${source}`;
-        const messageCount = (proposal.evidence || []).length;
-        const mediaCount = (proposal.attachments || []).length;
         const push = proposal.project_id
             ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}" title="Creates the thread and hands it to Decisions, like Send to Decisions.">Create Thread</button>`
             : `<span class="proposal-btn muted" title="Link this conversation to a project first">No project</span>`;
         const dismiss = `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
-        const meta = [
-            messageCount ? `${messageCount} message${messageCount === 1 ? '' : 's'}` : '',
-            mediaCount ? `${mediaCount} attachment${mediaCount === 1 ? '' : 's'}` : ''
-        ].filter(Boolean).join(' · ');
         const projectKey = actions.escapeHtml(String(proposal.project_id || ''));
         return `<article class="proposal-card" data-incoming-proposal-open="${proposalId}" data-proposal-project="${projectKey}" draggable="true" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
             <div class="proposal-head">
@@ -287,7 +281,6 @@ export function createIncoming({ context, actions, el }) {
                 <span class="proposal-source" title="${actions.escapeHtml(tooltip)}" data-incoming-proposal-open="${proposalId}">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span>
             </div>
             ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
-            ${meta ? `<p class="proposal-meta">${actions.escapeHtml(meta)}</p>` : ''}
             <div class="proposal-actions">${push}${dismiss}<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span></div>
         </article>`;
     }
@@ -487,11 +480,17 @@ export function createIncoming({ context, actions, el }) {
         if (proposalsCount) proposalsCount.textContent = String((state.incomingProposals || []).length);
         const proposalsList = el('incoming-proposals-list');
         if (proposalsList) {
-            proposalsList.innerHTML = state.incomingProposalsError
-                ? `<div class="development-empty">${actions.escapeHtml(state.incomingProposalsError)}</div>`
-                : (state.incomingProposals || []).length
-                  ? (state.incomingProposals || []).map(incomingProposalRowHtml).join('')
-                  : '<div class="development-empty">No proposals right now.</div>';
+            const hasProposals = (state.incomingProposals || []).length > 0;
+            const loading = state.incomingProposalsLoading;
+            proposalsList.classList.toggle('proposal-cards-status', !hasProposals || !!state.incomingProposalsError);
+            proposalsList.setAttribute('aria-busy', loading ? 'true' : 'false');
+            proposalsList.innerHTML = loading && !hasProposals
+                ? '<div class="proposal-list-status" role="status"><span class="proposal-loading-spinner" aria-hidden="true"></span><span>Loading proposals...</span></div>'
+                : state.incomingProposalsError
+                  ? `<div class="proposal-list-status" role="status">${actions.escapeHtml(state.incomingProposalsError)}</div>`
+                  : hasProposals
+                    ? (state.incomingProposals || []).map(incomingProposalRowHtml).join('')
+                    : '<div class="proposal-list-status" role="status">No proposals right now.</div>';
             proposalsList.querySelectorAll('[data-incoming-proposal-thread]').forEach((button) =>
                 button.addEventListener('click', () => pushProposalToThread(button.dataset.incomingProposalThread, button))
             );
@@ -1096,6 +1095,9 @@ export function createIncoming({ context, actions, el }) {
     // 2026-10-22 resync: latest-wins loader. A forced refresh supersedes an in-flight one; stale responses are dropped.
     let incomingLoadSeq = 0;
     function setResyncBusy(busy) {
+        state.incomingProposalsLoading = busy;
+        el('incoming-proposals-list')?.setAttribute('aria-busy', busy ? 'true' : 'false');
+        if (busy && !(state.incomingProposals || []).length && context.workspaceMode === 'incoming') renderIncomingWorkspace();
         const button = el('incoming-resync');
         if (!button) return;
         button.disabled = busy;

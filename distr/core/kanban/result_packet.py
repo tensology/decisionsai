@@ -451,6 +451,15 @@ def append_workflow_step_to_packet(
     change_summary = list(changes.get("change_summary") or [])
 
     trimmed_result = (step_result or "").strip()
+    if str(step_status or "").lower() in {"completed", "passed"}:
+        from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
+
+        public_result = WorkflowAgentBridge.public_project_cli_result(trimmed_result)
+        # Review/audit steps can confirm a result without replacing the user's
+        # actual deliverable with a long internal review report.
+        review_step = bool(re.search(r"\breview\b|\baudit\b|\bverification\b", str(step_name or ""), re.IGNORECASE))
+        if public_result and (not updated.get("human_summary") or not review_step):
+            updated["human_summary"] = public_result
     snippet = trimmed_result[:220] + ("..." if len(trimmed_result) > 220 else "")
     line = f"{step_name or 'Step'}: {step_status}" + (f" ({snippet})" if snippet else "")
     change_summary.append(line)

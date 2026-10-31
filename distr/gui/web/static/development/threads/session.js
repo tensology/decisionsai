@@ -25,10 +25,20 @@ export function createThreadSession({ api, workflowForChat, runForWorkflow, dire
             if (!current()) return null;
             if (chat && chat.development !== true && (!chat.development || typeof chat.development !== 'object'))
                 throw new Error('This conversation belongs to Chat, not Development.');
-            let run = directExecutionForChat(execution) || (workflow ? runForWorkflow(workflow.id) : null);
+            // A workflow definition can be shared by many chats. The task's
+            // execution endpoint owns its run identity and terminal state.
+            const workflowExecution = execution?.direct === false && workflow
+                && Number(execution.workflow_id) === Number(workflow.id)
+                && (!execution.chat_id || Number(execution.chat_id) === Number(chatId))
+                ? { ...execution, chat_id: Number(chatId) }
+                : null;
+            let run = directExecutionForChat(execution) || (workflowExecution
+                ? { ...(runForWorkflow(workflow.id, chatId, workflowRunId(workflowExecution)) || {}), ...workflowExecution }
+                : workflow ? runForWorkflow(workflow.id, chatId) : null);
             if (workflow && !run) {
-                const history = await get(`/workflows/${workflow.id}/runs?limit=1`);
-                run = (Array.isArray(history) ? history : history.runs || [])[0] || null;
+                const history = await get(`/workflows/${workflow.id}/runs?limit=20`);
+                run = (Array.isArray(history) ? history : history.runs || [])
+                    .find((item) => Number(item.chat_id) === Number(chatId)) || null;
             }
             const query = new URLSearchParams({ chat_id: String(chatId) });
             const runId = workflowRunId(run);

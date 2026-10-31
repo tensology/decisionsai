@@ -1014,12 +1014,33 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 ? context.currentRun
                 : { status: event.status, current_step_id: event.step_id, step_id: event.step_id };
         const done = !['initializing', 'queued', 'running', 'waiting', 'paused'].includes(String(matchingRun.status || event.status || '').toLowerCase());
-        return workflowRunnerHtml({
+        const runner = workflowRunnerHtml({
             workflow: workflow || { name: event.workflow_name || 'Workflow', steps: [] },
             run: matchingRun,
             event,
             mode: done ? 'done' : 'live'
         });
+        return done
+            ? `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${eventRunId || index}`))}"><summary>View workflow<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}</details>`
+            : runner;
+    }
+
+    function completedWorkflowHistoryHtml(chat, messages) {
+        const run = context.currentRun;
+        const workflow = context.currentWorkflow;
+        const runId = Number(actions.workflowRunId?.(run) || 0);
+        if (!runId || !workflow || run.direct || Number(run.chat_id) !== Number(chat.id)
+            || !['completed', 'failed', 'cancelled'].includes(String(run.status || '').toLowerCase())) return '';
+        if (messages.some((message) => message.role === 'workflow' && Number(message.workflow_event?.run_id) === runId)) return '';
+        // Some chats expose workflow events only in root metadata, not as
+        // transcript messages. Keep the completed own run inspectable anyway.
+        const runner = workflowRunnerHtml({
+            workflow, run: { ...run, summary: '', last_output: '' }, mode: 'done'
+        });
+        const result = run.summary
+            ? `<section class="thread-workflow-feedback message-body" data-workflow-run-result="${runId}"><strong>Run result</strong><div class="message-markdown">${assistantMarkdown(run.summary)}</div></section>`
+            : '';
+        return `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${runId}`))}"><summary>View workflow<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}${result}</details>`;
     }
 
     function liveLegacyActivityEvents(chat) {
@@ -1158,12 +1179,13 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 .filter((message) => message.role === 'user' && message.chat_row_id != null)
                 .map((message) => [String(message.chat_row_id), userMessagePresentation(message).content])
         );
+        const completedWorkflowHistory = completedWorkflowHistoryHtml(chat, messages);
         const nextHtml = `${messages
             .map((message, index) => {
                 const rowId = message.chat_row_id == null ? '' : String(message.chat_row_id);
-                return messageHtml(message, index, latestAssistantIndex, turnsByRow.get(rowId), instructionsByRow.get(rowId) || '', durableActivityKeys, messages);
+                return `${index === latestAssistantIndex ? completedWorkflowHistory : ''}${messageHtml(message, index, latestAssistantIndex, turnsByRow.get(rowId), instructionsByRow.get(rowId) || '', durableActivityKeys, messages)}`;
             })
-            .join('')}${liveWorkflowRunnerHtml()}${durableTurnActivity(chat)}`;
+            .join('')}${latestAssistantIndex < 0 ? completedWorkflowHistory : ''}${liveWorkflowRunnerHtml()}${durableTurnActivity(chat)}`;
         // 2026-10-22: background polls re-render the same transcript; skip identical rebuilds so the
         // assistant avatar <video>/<img> elements are not re-created (they visibly reset each poll).
         if (list.__lastRenderedHtml === nextHtml && list.childElementCount && !list.classList.contains('hidden')) return;

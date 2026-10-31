@@ -1,7 +1,7 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261022-tips2';
 import { createReports } from './reports/index.js?v=20261028-responsive';
 import { createThreadLiveUpdates } from './threads/live.js?v=20261027f';
-import { createThreadSession } from './threads/session.js?v=20261022-composer6';
+import { createThreadSession } from './threads/session.js?v=20261030-chat-run-scope';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
@@ -11,7 +11,7 @@ import { createSidebar } from './sidebar/index.js?v=20261024-sidebar-wfadd';
 
 import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
-import { createIncoming } from './incoming/index.js?v=20261030-proposal-live-sync';
+import { createIncoming } from './incoming/index.js?v=20261031-proposal-card-cleanup';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
@@ -19,7 +19,7 @@ import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261023-terminal-parity1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261030-activity-disclosure';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261031-completed-run-history';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261023-steering1';
 
@@ -320,8 +320,10 @@ function directExecutionForChat(chat) {
     };
 }
 
-function runForWorkflow(workflowId) {
-    return state.runs.find((run) => Number(run.workflow_id) === Number(workflowId)) || null;
+function runForWorkflow(workflowId, chatId = null, runId = null) {
+    return state.runs.find((run) => Number(run.workflow_id) === Number(workflowId)
+        && (chatId == null || Number(run.chat_id) === Number(chatId))
+        && (runId == null || Number(run.run_id ?? run.id) === Number(runId))) || null;
 }
 
 function workflowRunId(run) {
@@ -347,12 +349,12 @@ function threadIsProcessing(chat) {
     const settled = Boolean(run && ['completed', 'failed', 'cancelled'].includes(String(run.status || '').toLowerCase()));
     if (settled) {
         const workflow = workflowForChat(chat?.id);
-        return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id)));
+        return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id, chat?.id)));
     }
     if (isCurrent && state.currentChat?.active_turn?.active) return true;
     if (isProcessingAgentRun(run)) return true;
     const workflow = workflowForChat(chat?.id);
-    return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id)));
+    return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id, chat?.id)));
 }
 
 function threadRowContentHtml(chat, pinned = false) {

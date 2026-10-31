@@ -108,12 +108,12 @@ def notify_proposal_created(event: dict[str, Any]) -> None:
         if play:
             _proposal_last_sound = now
     from distr.core.settings import load_settings_from_db
-    from distr.core.notification_sounds import normalize, NOTIFICATION_SOUNDS, sounds_dir
+    from distr.core.notification_sounds import resolve_slug, NOTIFICATION_SOUNDS, sounds_dir
 
     settings = load_settings_from_db()
     if not settings.get("incoming_proposal_sound_enabled", True) or not play:
         return
-    slug = normalize(settings.get("notification_sound"))
+    slug = resolve_slug(settings.get("notification_sound"))
     chosen = next(item for item in NOTIFICATION_SOUNDS if item["slug"] == slug)
     if chosen["file"]:
         play_incoming_sound(sound_path=sounds_dir() / chosen["file"])

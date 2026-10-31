@@ -833,7 +833,7 @@ def _execution_skill_ids(ticket: dict[str, Any]) -> tuple[list[str], bool]:
 def _ensure_tensology_kanban_ticket(
     ticket: dict[str, Any],
     project: dict[str, Any],
-    workflow_id: int,
+    workflow_id: int | None,
 ) -> int:
     """Mirror an external Tensology ticket so workflow context survives compaction."""
     from distr.core.db import get_session
@@ -855,7 +855,7 @@ def _ensure_tensology_kanban_ticket(
                 description=f"Board for project: {project.get('name') or project['id']}",
                 source="database",
                 default_project_id=int(project["id"]),
-                default_workflow_id=int(workflow_id),
+                default_workflow_id=int(workflow_id) if workflow_id else None,
                 in_use=True,
                 archived=False,
             )
@@ -864,7 +864,7 @@ def _ensure_tensology_kanban_ticket(
             for position, name in enumerate(("Backlog", "In Progress", "QA", "Complete")):
                 db.add(KanbanLane(board_id=int(board.id), name=name, position=position))
             db.flush()
-        elif board.default_workflow_id != int(workflow_id):
+        elif workflow_id and board.default_workflow_id != int(workflow_id):
             board.default_workflow_id = int(workflow_id)
 
         mirrored = (
@@ -915,14 +915,15 @@ def _ensure_tensology_kanban_ticket(
                 source_url=str(ticket.get("discussion_url") or ""),
                 source_label=f"Tensology {reference}",
                 context_notes=json.dumps(context, ensure_ascii=False),
-                linked_workflow_id=int(workflow_id),
+                linked_workflow_id=int(workflow_id) if workflow_id else None,
                 linked_project_id=int(project["id"]),
                 send_to_cli=True,
             )
             db.add(mirrored)
             db.flush()
         else:
-            mirrored.linked_workflow_id = int(workflow_id)
+            if workflow_id:
+                mirrored.linked_workflow_id = int(workflow_id)
             mirrored.linked_project_id = int(project["id"])
             mirrored.title = str(ticket.get("title") or mirrored.title)
             mirrored.description = str(ticket.get("description") or mirrored.description or "")
@@ -935,16 +936,9 @@ def _ensure_tensology_kanban_ticket(
 
 
 def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) -> tuple[int, dict[str, str]]:
-    from distr.core.kanban.ticket_policy import resolve_ticket_complexity
-    from distr.core.workflow.phases import route_ticket_workflow_id
+    from distr.core.workflow.execution_mode import proposal_execution_scope, choose_proposal_execution_mode
 
-    tasks = ticket.get("tasks") if isinstance(ticket.get("tasks"), list) else []
-    complexity = resolve_ticket_complexity(
-        str(ticket.get("title") or ""),
-        str(ticket.get("description") or ""),
-        requested=str(ticket.get("execution_complexity") or "auto"),
-        todo_count=len(tasks),
-    )
+    complexity = choose_proposal_execution_mode(ticket)["complexity"]
     # Raises TensologyRouteError before anything is created when the route is unset or local.
     route = _tensology_project_route(project)
     ops_incident = _is_ops_incident(ticket)
@@ -954,13 +948,9 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
         default_branch=_repo_default_branch(project.get("folder_location")),
         ops_incident=ops_incident,
     )
-    # Route by weight class instead of always using the retired 11-step pipeline.
-    # A migration or auth change escalates to critical; a small fix stays cheap.
-    workflow_id = route_ticket_workflow_id(
-        f"{ticket.get('title') or ''}\n\n{ticket.get('description') or ''}",
-        has_repo_target=True,
-    )
-    mirrored_ticket_id = _ensure_tensology_kanban_ticket(ticket, project, workflow_id)
+    # Automatic approvals use the same scope-only policy as native/web proposals.
+    # Attaching a workflow here would bypass that shared dispatcher entirely.
+    mirrored_ticket_id = _ensure_tensology_kanban_ticket(ticket, project, None)
     skill_ids, use_playwright = _execution_skill_ids(ticket)
     response = _local_api_post(
         "workflows/studio/tasks",
@@ -969,7 +959,7 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
             "attachments": _tensology_thread_files(ticket),
             "title": f"{ticket.get('reference')} - {ticket.get('title')}",
             "project_id": project["id"],
-            "workflow_id": workflow_id,
+            "workflow_id": None,
             "ticket_id": mirrored_ticket_id,
             "board_key": f"tensology:{int(ticket.get('project_id') or 0)}",
             "board_provider": "tensology",
@@ -986,6 +976,8 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
             "reasoning_effort": "xhigh" if complexity == "high" else "high" if complexity == "medium" else "medium",
             "service_tier": "standard",
             "routing_assessment": {
+                "proposal_scope": proposal_execution_scope(ticket),
+                "skip_human_checkpoints": True,
                 "complexity": complexity,
                 "source": "tensology_approval",
                 "reason": f"Approved ticket classified as {complexity}; routed by the project's default route.",
@@ -1323,6 +1315,14 @@ def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -
         except TensologyRouteError as exc:
             _report_tensology_route_block(client, ticket, project, exc)
             return False
+        except TensologyApiError as exc:
+            if exc.status != 409 or "already running a ticket for this project" not in str(exc):
+                raise
+            # Keep only this approved, busy-deferred ticket for the existing
+            # local state-sync tick. No network polling or extra worker is needed.
+            _remember_tensology_tickets([{**ticket, "_deferred_project_id": int(project["id"]),
+                                         "_retry_after": time.monotonic() + STATE_SYNC_SECONDS}])
+            return False
         try:
             from distr.core.tensology_notify import notify_tensology_ticket_incoming
 
@@ -1467,7 +1467,8 @@ def sync_tensology_execution_states(*, force: bool = False) -> int:
     with _TENSOLOGY_TICKETS_LOCK:
         known = [dict(ticket) for ticket in _TENSOLOGY_TICKETS.values()]
     claimed = [ticket for ticket in known if str(ticket.get("decisions_thread_id") or "").strip()]
-    if not claimed:
+    deferred = [ticket for ticket in known if ticket.get("_deferred_project_id") and not str(ticket.get("decisions_thread_id") or "").strip()]
+    if not claimed and not deferred:
         return 0
     if _ticket_push_paused():
         return 0  # paused: no ticket status PATCHes to Tensology
@@ -1483,6 +1484,54 @@ def sync_tensology_execution_states(*, force: bool = False) -> int:
             client = client or configured_tensology_client(source="decisionsai-ticket-runner")
             if _sync_tensology_ticket_state(client, ticket, chat_id):
                 changed += 1
+        # At most one approved pending item per tick, only once its project has
+        # no executing workflow. A blocked item generates no HTTP/model calls.
+        for ticket in deferred:
+            if now < float(ticket.get("_retry_after") or 0):
+                continue
+            if not _tensology_project_slot_free(int(ticket["_deferred_project_id"])):
+                continue
+            try:
+                client = client or configured_tensology_client(source="decisionsai-ticket-runner")
+                fresh_rows = client.get("tickets", query={"id": str(ticket['id']), "execution_status": TENSOLOGY_LIVE_TICKET_STATUSES})
+                fresh = next((row for row in fresh_rows if isinstance(row, dict) and _safe_int(row.get('id')) == int(ticket['id'])), None) if isinstance(fresh_rows, list) else None
+                if (
+                    fresh is None
+                    or str(fresh.get('execution_status') or '') not in TENSOLOGY_LIVE_TICKET_STATUS_SET
+                    or not (fresh.get('approved_at') or fresh.get('sent_to_decisions_at'))
+                    or _safe_int(fresh.get('project_id')) != _safe_int(ticket.get('project_id'))
+                ):
+                    with _TENSOLOGY_TICKETS_LOCK:
+                        _TENSOLOGY_TICKETS.pop(int(ticket['id']), None)
+                    break
+                if str(fresh.get('decisions_thread_id') or '').strip():
+                    _remember_tensology_tickets([fresh])
+                    break
+                project = _resolve_tensology_project(fresh)
+                if project is None or int(project['id']) != int(ticket['_deferred_project_id']):
+                    with _TENSOLOGY_TICKETS_LOCK:
+                        _TENSOLOGY_TICKETS.pop(int(ticket['id']), None)
+                    break
+                if _process_tensology_ticket(client, fresh):
+                    changed += 1
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning("Deferred Tensology ticket %s could not start", ticket.get("id"), exc_info=True)
+                with _TENSOLOGY_TICKETS_LOCK:
+                    if int(ticket['id']) in _TENSOLOGY_TICKETS:
+                        _TENSOLOGY_TICKETS[int(ticket['id'])]['_retry_after'] = now + 30
+            break
         return changed
     finally:
         _TICKET_PROCESS_LOCK.release()
+
+
+def _tensology_project_slot_free(project_id: int) -> bool:
+    """Read local execution state before retrying a busy approved ticket."""
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.dispatcher import _run_project_id, workflow_run_occupies_execution_slot
+
+    with get_session() as db:
+        runs = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.status.in_(["running", "waiting"])).all()
+        return not any(_run_project_id(run) == str(project_id) and workflow_run_occupies_execution_slot(run) for run in runs)

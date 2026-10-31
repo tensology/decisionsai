@@ -168,3 +168,7 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-10-30 | Did: Squeezed simultaneous automations into narrow calendar columns and let nearby event labels overlap | Wanted: Group crowded events and open the full list | Why: Paul rejected the unreadable calendar screenshot and explicitly chose grouped events
 
 2026-10-30 | Did: Exposed Updated files, Edit finished and finished rows as the main response in Development | Wanted: A useful final response with one expandable Thinking or Running commands activity area for command output and progress | Why: Routine tool status adds noise and must not substitute for the result
+
+2026-10-30 | Did: Left Incoming No proposals right now near the top in a single grid column | Wanted: Center it horizontally and vertically within the proposals panel, with a spinner during loading | Why: Paul explicitly requested proper centering and visible loading feedback from the screenshot
+
+2026-10-31 | Did: Displayed 1 message, 2 messages and attachment counts on Incoming proposal cards | Wanted: Keep these low-value counts in the details view, not on the cards | Why: Paul explicitly said the counts do not add value in the proposal list

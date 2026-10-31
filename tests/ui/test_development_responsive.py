@@ -131,6 +131,78 @@ def test_incoming_resync_busy_error_and_recovery(page: Page, width):
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_proposal_status_centered_loading_and_refresh(page: Page, width):
+    install_responsive_api(page)
+    page.set_viewport_size({'width': width, 'height': 900})
+    response = {'proposals': []}
+    page.route('**/api/workflows/studio/incoming/proposals*', lambda route: route.fulfill(json=response))
+    page.add_init_script('''
+        window.holdProposals = true;
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+            if (window.holdProposals && String(args[0]).includes('/studio/incoming/proposals'))
+                await new Promise(resolve => { window.releaseProposals = resolve; });
+            return originalFetch(...args);
+        };
+    ''')
+    page.goto(BASE + '/development/incoming/')
+    status = page.locator('.proposal-list-status')
+    listing = page.locator('#incoming-proposals-list')
+    resync = page.locator('#incoming-resync')
+
+    def centered():
+        assert status.evaluate('''node => {
+            const text = node.getBoundingClientRect();
+            const panel = node.closest('.incoming-folder-panel').getBoundingClientRect();
+            return Math.abs(text.x + text.width / 2 - panel.x - panel.width / 2) < 2
+                && Math.abs(text.y + text.height / 2 - panel.y - panel.height / 2) < 2;
+        }''')
+
+    def release():
+        page.wait_for_function('typeof window.releaseProposals === "function"')
+        page.evaluate('() => { window.holdProposals = false; window.releaseProposals(); delete window.releaseProposals; }')
+
+    expect(status).to_have_text('Loading proposals...')
+    expect(listing).to_have_attribute('aria-busy', 'true')
+    expect(status.locator('.proposal-loading-spinner')).to_be_visible()
+    centered()
+    capture(page, 'proposal-status-loading', width)
+    release()
+    expect(status).to_have_text('No proposals right now.')
+    expect(listing).to_have_attribute('aria-busy', 'false')
+    expect(status.locator('.proposal-loading-spinner')).to_have_count(0)
+    centered()
+    capture(page, 'proposal-status-empty', width)
+    response['error'] = 'Proposals are temporarily unavailable.'
+    resync.click()
+    expect(status).to_have_text(response['error'])
+    centered()
+    capture(page, 'proposal-status-error', width)
+    response.clear()
+    response['proposals'] = [{'id': 'status-check', 'title': 'Review the menu launch', 'project_name': 'DecisionsAI', 'project_id': 7, 'source': 'whatsapp', 'source_label': 'WhatsApp'}]
+    resync.click()
+    expect(page.locator('.proposal-card')).to_be_visible()
+    expect(resync).to_be_enabled()
+    page.evaluate('window.holdProposals = true')
+    resync.click()
+    expect(listing).to_have_attribute('aria-busy', 'true')
+    expect(page.locator('.proposal-card')).to_be_visible()
+    expect(status).to_have_count(0)
+    release()
+    expect(resync).to_be_enabled()
+    page.emulate_media(reduced_motion='reduce')
+    response['proposals'] = []
+    resync.click()
+    expect(status).to_have_text('No proposals right now.')
+    expect(resync).to_be_enabled()
+    page.evaluate('window.holdProposals = true')
+    resync.click()
+    expect(status.locator('.proposal-loading-spinner')).to_be_visible()
+    assert status.locator('.proposal-loading-spinner').evaluate('node => getComputedStyle(node).animationName') == 'none'
+    release()
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
 def test_report_views_preserve_every_column_and_filters(page: Page, width):
     install_responsive_api(page)
     page.set_viewport_size({'width': width, 'height': 900})

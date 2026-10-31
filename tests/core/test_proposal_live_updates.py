@@ -55,6 +55,32 @@ def test_non_telegram_ticket_stays_quiet(store, monkeypatch):
     send.assert_not_called()
 
 
+def test_final_update_uses_public_work_result_over_workflow_status(store, monkeypatch):
+    _, cid = store
+    send = Mock(return_value=True)
+    monkeypatch.setattr(updates, "_manager", lambda: SimpleNamespace(telegram_user_id=42, send_to_telegram=send))
+    updates.queue_execution_update(
+        {"source_metadata": {"approval_source": "telegram"}}, cid,
+        {"id": 173, "output_packet": {"human_summary": "Merrypak directory verified. TELEGRAM_PROPOSAL_E2E_OK", "summary": "Workflow run 173 finished with status: completed."}},
+        "done",
+    )
+    message = send.call_args.args[0]
+    assert "TELEGRAM_PROPOSAL_E2E_OK" in message
+    assert "Workflow run 173" not in message
+
+
+def test_failed_update_does_not_reuse_earlier_successful_public_result(store, monkeypatch):
+    _, cid = store
+    send = Mock(return_value=True)
+    monkeypatch.setattr(updates, "_manager", lambda: SimpleNamespace(telegram_user_id=42, send_to_telegram=send))
+    updates.queue_execution_update(
+        {"source_metadata": {"approval_source": "telegram"}}, cid,
+        {"id": 174, "output_packet": {"human_summary": "Earlier step succeeded.", "summary": "Final checks failed."}}, "failed",
+    )
+    assert "Final checks failed" in send.call_args.args[0]
+    assert "Earlier step succeeded" not in send.call_args.args[0]
+
+
 def test_stage_updates_and_long_final_response_are_preserved(store, monkeypatch):
     _, cid = store
     send = Mock(return_value=True)
@@ -106,7 +132,7 @@ def test_delivery_receipt_preserves_execution_updated_during_enqueue(store, monk
         {"source_metadata": {"approval_source": "telegram"}}, cid,
         {"job_id": "concurrent"}, "testing",
     )
-    def enqueue(_text):
+    def enqueue(_text, **_kwargs):
         with factory() as db:
             chat = db.get(Chat, cid)
             params = json.loads(chat.params)

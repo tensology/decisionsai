@@ -1,10 +1,10 @@
 @import './shell.css?v=20261022-composer6';
 @import './shared/components.css?v=20261022-wfui2';
-@import './threads/styles.css?v=20261030-activity-disclosure';
+@import './threads/styles.css?v=20261031-completed-run-history';
 @import './sidebar/styles.css?v=20261022-selthread';
 @import './boards/styles.css?v=20261028-responsive';
 @import './planning/styles.css?v=20261022-layout2';
-@import './incoming/styles.css?v=20261030-whatsapp-photos';
+@import './incoming/styles.css?v=20261031-proposal-card-cleanup';
 @import './automations/styles.css?v=20261030-calendar-groups';
 @import './workflows/styles.css?v=20261028-responsive';
 @import './terminals/styles.css?v=20261028-responsive';

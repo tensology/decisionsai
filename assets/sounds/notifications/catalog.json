@@ -1,0 +1,371 @@
+{
+  "source": {
+    "repository": "currencytrader.git",
+    "commit": "768e0ed0c3e47f3c09a63733e8e47c48847b291b",
+    "description": "Crossroads bell catalogue retained by currency-trader; commit message: Play a Crossroads bell when a live Telegram signal lands.",
+    "catalog_path": "apps/dashboard/src/lib/notificationSounds.catalog.ts",
+    "sound_path": "apps/dashboard/public/notification-sounds"
+  },
+  "aliases": {
+    "chime": "relaxing-chime",
+    "dong": "home-standard-dong",
+    "gentle": "gentle-alarm-notification",
+    "tone": "notification-tone",
+    "elegant": "elegant-door-announcement"
+  },
+  "sounds": [
+    {
+      "slug": "bell",
+      "label": "Bell",
+      "file": "bell.wav"
+    },
+    {
+      "slug": "achievement",
+      "label": "Achievement",
+      "file": "achievement.mp3",
+      "source_filename": "achievement.mp3",
+      "sha256": "548448e2f2af7a2e78ce46ec0ed804d48c4a0bee1be0b30406fd519e62433d70"
+    },
+    {
+      "slug": "airport-announcement",
+      "label": "Airport Announcement",
+      "file": "airport-announcement.mp3",
+      "source_filename": "airport-announcement.mp3",
+      "sha256": "9f69e50cbb032f00d84225b286efcfb69eba1d2039be4d6e88ff2de9d61e556a"
+    },
+    {
+      "slug": "alert-echo",
+      "label": "Alert Echo",
+      "file": "alert-echo.mp3",
+      "source_filename": "alert-echo.mp3",
+      "sha256": "15188b2eceecb4f0a22e893f51fbe16cf16bad7e9570bf837371f6827e4de38b"
+    },
+    {
+      "slug": "arcade-score-interface",
+      "label": "Arcade Score Interface",
+      "file": "arcade-score-interface.mp3",
+      "source_filename": "arcade-score-interface.mp3",
+      "sha256": "79d2a23bd34b2623f75fb0d798f9a397677313bbecf6b1fe76977c4614deee18"
+    },
+    {
+      "slug": "attention",
+      "label": "Attention",
+      "file": "attention.mp3",
+      "source_filename": "attention.mp3",
+      "sha256": "258f3f27d57703d258ec6636ddaf0bce264cf14adf978ed4b9561c127ca227ce"
+    },
+    {
+      "slug": "bike-magical",
+      "label": "Bike Magical",
+      "file": "bike-magical.mp3",
+      "source_filename": "bike-magical.mp3",
+      "sha256": "b11d54be56b6895db4ae836107c447564987b5be4459e422a44ee919a976f66b"
+    },
+    {
+      "slug": "bike-notification",
+      "label": "Bike Notification",
+      "file": "bike-notification.mp3",
+      "source_filename": "bike-notification.mp3",
+      "sha256": "a8af3ba650808db6c2e293cb121f9015e96b13a320d566110a52ffde8fe13fa8"
+    },
+    {
+      "slug": "bike-ring",
+      "label": "Bike Ring",
+      "file": "bike-ring.mp3",
+      "source_filename": "bike-ring.mp3",
+      "sha256": "858071da990d1996076a49ddad0bfd2188be5192aaf5e0580e38a1348f24671b"
+    },
+    {
+      "slug": "cartoon-door-melodic",
+      "label": "Cartoon Door Melodic",
+      "file": "cartoon-door-melodic.mp3",
+      "source_filename": "cartoon-door-melodic.mp3",
+      "sha256": "8be0f149ee8bbd6a230cd6a9701a2a2bd674016a9739d74cef3e676180d67fa8"
+    },
+    {
+      "slug": "casino-reward",
+      "label": "Casino Reward",
+      "file": "casino-reward.mp3",
+      "source_filename": "casino-reward.mp3",
+      "sha256": "f6a6ec7dc71ecc11b9f7f5f9119d7813ee396d4a08c7ab6b12d52d439f98e569"
+    },
+    {
+      "slug": "christmas-magic-hit",
+      "label": "Christmas Magic Hit",
+      "file": "christmas-magic-hit.mp3",
+      "source_filename": "christmas-magic-hit.mp3",
+      "sha256": "5242125378379256bdf31dab8dfac00487ed552c1979f17434a8c2d6db7319f3"
+    },
+    {
+      "slug": "church-loop",
+      "label": "Church Loop",
+      "file": "church-loop.mp3",
+      "source_filename": "church-loop.mp3",
+      "sha256": "8d48896a50470c39abcb1ea4773922b53ad42fbb9ae95bdf3294be1305c1659b"
+    },
+    {
+      "slug": "cinematic-church-hit",
+      "label": "Cinematic Church Hit",
+      "file": "cinematic-church-hit.mp3",
+      "source_filename": "cinematic-church-hit.mp3",
+      "sha256": "6e71f4be26829b3dbb7853e2786e215c368e3abc1dfc761607032234b5363d16"
+    },
+    {
+      "slug": "clock-hour-signal",
+      "label": "Clock Hour Signal",
+      "file": "clock-hour-signal.mp3",
+      "source_filename": "clock-hour-signal.mp3",
+      "sha256": "50c6ca0a0193f89be61e4fb63abae9e6026048d0467f1b84aa6102c92c369e9e"
+    },
+    {
+      "slug": "cooking",
+      "label": "Cooking",
+      "file": "cooking.mp3",
+      "source_filename": "cooking.mp3",
+      "sha256": "ab0f4e337032f5fd9a955d727535a94cc62531e8d0c8565c0f5cd1f620eba7b6"
+    },
+    {
+      "slug": "cow-sharp-hit",
+      "label": "Cow Sharp Hit",
+      "file": "cow-sharp-hit.mp3",
+      "source_filename": "cow-sharp-hit.mp3",
+      "sha256": "9183ac0c59ca6b06ed2d7e0c99f5c20f96742f6b9fc9df05fbb935701d31da31"
+    },
+    {
+      "slug": "discrete-door-announcement",
+      "label": "Discrete Door Announcement",
+      "file": "discrete-door-announcement.mp3",
+      "source_filename": "discrete-door-announcement.mp3",
+      "sha256": "95306db2b72c53e33732a55560a83cc843d5d8e333d5fcd6f0c31f89f7775f09"
+    },
+    {
+      "slug": "elegant-door-announcement",
+      "label": "Elegant Door Announcement",
+      "file": "elegant.mp3",
+      "source_filename": "elegant-door-announcement.mp3",
+      "sha256": "c924d26a55feb62269b5dc8a60550eeec46c10c4b6f0c894722354ee9ba45260"
+    },
+    {
+      "slug": "elevator-announcement",
+      "label": "Elevator Announcement",
+      "file": "elevator-announcement.mp3",
+      "source_filename": "elevator-announcement.mp3",
+      "sha256": "ecb1e91800a99aaf24462e1d2195784fa558e9c7a43ec8cbd76680384ca8470c"
+    },
+    {
+      "slug": "fairy-bless",
+      "label": "Fairy Bless",
+      "file": "fairy-bless.mp3",
+      "source_filename": "fairy-bless.mp3",
+      "sha256": "299cd778bdc8e2412a22f0380bfeff01f0f3cc2ad5a9a19b54fa81315834073d"
+    },
+    {
+      "slug": "fairy",
+      "label": "Fairy",
+      "file": "fairy.mp3",
+      "source_filename": "fairy.mp3",
+      "sha256": "2b2b96952f7efd0d74bcc3eaa2b3eeb825f6d564bfaf19f86162bce8016b3922"
+    },
+    {
+      "slug": "fantasy",
+      "label": "Fantasy",
+      "file": "fantasy.mp3",
+      "source_filename": "fantasy.mp3",
+      "sha256": "8ef877ca41d413eefe10177f192d5904b94eef002580ae1a2b694b21f1eb4e6b"
+    },
+    {
+      "slug": "gentle-alarm-notification",
+      "label": "Gentle Alarm Notification",
+      "file": "gentle.mp3",
+      "source_filename": "gentle-alarm-notification.mp3",
+      "sha256": "3da56157ee2e8eb4eeed9f90a06e05f3b1a91b36de90795d204ffec8bf48bc1b"
+    },
+    {
+      "slug": "happy-alert",
+      "label": "Happy Alert",
+      "file": "happy-alert.mp3",
+      "source_filename": "happy-alert.mp3",
+      "sha256": "1f519b266517dae9b2939c9e9aa8a341fcd6d7ca8d71f67f4e86b0a8e415905d"
+    },
+    {
+      "slug": "happy-notification",
+      "label": "Happy Notification",
+      "file": "happy-notification.mp3",
+      "source_filename": "happy-notification.mp3",
+      "sha256": "add30ca4842330696171d84028c8edb337313111227245cb05dce16d3724437a"
+    },
+    {
+      "slug": "home-standard-dong",
+      "label": "Home Standard Dong",
+      "file": "dong.mp3",
+      "source_filename": "home-standard-dong.mp3",
+      "sha256": "118a362981ef43f2da3237931eec6c2f60f9b16149b031c735e20ccb8a8a50b3"
+    },
+    {
+      "slug": "horror-cartoon-transition",
+      "label": "Horror Cartoon Transition",
+      "file": "horror-cartoon-transition.mp3",
+      "source_filename": "horror-cartoon-transition.mp3",
+      "sha256": "a0f550f3365ee03cbf3492016f3ef6acbf39342e52e897b5b1eb434b03e41e83"
+    },
+    {
+      "slug": "kids-cartoon-close",
+      "label": "Kids Cartoon Close",
+      "file": "kids-cartoon-close.mp3",
+      "source_filename": "kids-cartoon-close.mp3",
+      "sha256": "420c7b2c0efa8943d1fcb7067fb9906a1d156f46d97a1f433c2612447fa1060d"
+    },
+    {
+      "slug": "magic-glitter-or-particles",
+      "label": "Magic Glitter Or Particles",
+      "file": "magic-glitter-or-particles.mp3",
+      "source_filename": "magic-glitter-or-particles.mp3",
+      "sha256": "7c569c9cee6a0fff1060fb634ab0642da3d2f7bc0ebadbb0266840166f883298"
+    },
+    {
+      "slug": "melodic-classic-door",
+      "label": "Melodic Classic Door",
+      "file": "melodic-classic-door.mp3",
+      "source_filename": "melodic-classic-door.mp3",
+      "sha256": "1a39304dc8301f73a01e9839e4d55834915a6554e3e59ea038af4e37ee6135f4"
+    },
+    {
+      "slug": "modern-classic-door-sound",
+      "label": "Modern Classic Door Sound",
+      "file": "modern-classic-door-sound.mp3",
+      "source_filename": "modern-classic-door-sound.mp3",
+      "sha256": "4cc0f8b433e906127458b91ddce344d43e3f751b38916c88530dcf11087843a1"
+    },
+    {
+      "slug": "mystery",
+      "label": "Mystery",
+      "file": "mystery.mp3",
+      "source_filename": "mystery.mp3",
+      "sha256": "b352f5e9c109309ab908dcfe0c65b6d5e645d97e77fc56fef97b9b3f190ef781"
+    },
+    {
+      "slug": "notification-bike",
+      "label": "Notification Bike",
+      "file": "notification-bike.mp3",
+      "source_filename": "notification-bike.mp3",
+      "sha256": "0ca42222d51f299a1b5d5c4c9db15b042d985094d37b285e4851869e6e4e41fe"
+    },
+    {
+      "slug": "notification-tone",
+      "label": "Notification Tone",
+      "file": "tone.mp3",
+      "source_filename": "notification-tone.mp3",
+      "sha256": "ffab4d1763c0dd123ae8ed5326695735ce56b055792d31f5a9c5a77c1f62dedc"
+    },
+    {
+      "slug": "notification",
+      "label": "Notification",
+      "file": "notification.mp3",
+      "source_filename": "notification.mp3",
+      "sha256": "8b469945b6d6b91865d2301e3e7deefa90590e64b13d9e6549980b022dca7b94"
+    },
+    {
+      "slug": "phone-ring",
+      "label": "Phone Ring",
+      "file": "phone-ring.mp3",
+      "source_filename": "phone-ring.mp3",
+      "sha256": "e4473b68f511dbe046e6a2cd8bfa679e063742401c4b4411113fd976b798abb7"
+    },
+    {
+      "slug": "promise",
+      "label": "Promise",
+      "file": "promise.mp3",
+      "source_filename": "promise.mp3",
+      "sha256": "c05fa5b0bf398f59be90be26f80e2d6a4427c6dbcd093e551324df25475c5f78"
+    },
+    {
+      "slug": "relaxing-chime",
+      "label": "Relaxing Chime",
+      "file": "chime.mp3",
+      "source_filename": "relaxing-chime.mp3",
+      "sha256": "22645ce97890b1dda195c0ecb9241a458e9b50bd6abd09ec5dcc927243f50ba8"
+    },
+    {
+      "slug": "school-calling",
+      "label": "School Calling",
+      "file": "school-calling.mp3",
+      "source_filename": "school-calling.mp3",
+      "sha256": "786e3c67d59e89b583e78f3162d00e49298123787e9996ba7f952b4d5f115156"
+    },
+    {
+      "slug": "service-double",
+      "label": "Service Double",
+      "file": "service-double.mp3",
+      "source_filename": "service-double.mp3",
+      "sha256": "b11791dc485fd21188eb3807cde1131b7a77ab051e8ce689782f092a4c9b18a0"
+    },
+    {
+      "slug": "service",
+      "label": "Service",
+      "file": "service.mp3",
+      "source_filename": "service.mp3",
+      "sha256": "eb0afa467e501156b4e802bd3cd6f80767707bb69332e7a06b6fb3bf2781549a"
+    },
+    {
+      "slug": "shaker-alert",
+      "label": "Shaker Alert",
+      "file": "shaker-alert.mp3",
+      "source_filename": "shaker-alert.mp3",
+      "sha256": "1174c8f4d9c936d266471514957be7e874b40be6e22cac0d89b4b5fc923da118"
+    },
+    {
+      "slug": "small-door",
+      "label": "Small Door",
+      "file": "small-door.mp3",
+      "source_filename": "small-door.mp3",
+      "sha256": "efec4e4cbb29bd4e0708442a747948fcd2c0839e1b8babc0b1a642b658b78cc9"
+    },
+    {
+      "slug": "sound-with-delay",
+      "label": "Sound With Delay",
+      "file": "sound-with-delay.mp3",
+      "source_filename": "sound-with-delay.mp3",
+      "sha256": "426af337f27e0b62f73ddd792ad01af2724295e29fdb3600639a9aa3e57020c7"
+    },
+    {
+      "slug": "store-ring",
+      "label": "Store Ring",
+      "file": "store-ring.mp3",
+      "source_filename": "store-ring.mp3",
+      "sha256": "521a0aa40df894932976e65b7632d26e1f95d85ded4b3036bcb394a8884925ed"
+    },
+    {
+      "slug": "typewriter-return",
+      "label": "Typewriter Return",
+      "file": "typewriter-return.mp3",
+      "source_filename": "typewriter-return.mp3",
+      "sha256": "0d8682ae37379a137821e6e14a672a1c69435f3e6a243d444a8e63cd3222aefd"
+    },
+    {
+      "slug": "uplifting-notification",
+      "label": "Uplifting Notification",
+      "file": "uplifting-notification.mp3",
+      "source_filename": "uplifting-notification.mp3",
+      "sha256": "62a1706971c09cb860ec005671096d6c16888cb95eb98131d7ceb973bb93ba6b"
+    },
+    {
+      "slug": "whoosh-resonating-metallic-hit",
+      "label": "Whoosh Resonating Metallic Hit",
+      "file": "whoosh-resonating-metallic-hit.mp3",
+      "source_filename": "whoosh-resonating-metallic-hit.mp3",
+      "sha256": "0b8f8039c7642ad102cd802089faf338ff315ab2280d04e8056121f3ecf388ad"
+    },
+    {
+      "slug": "wooden-store-door-ring",
+      "label": "Wooden Store Door Ring",
+      "file": "wooden-store-door-ring.mp3",
+      "source_filename": "wooden-store-door-ring.mp3",
+      "sha256": "fd1bd9544019d0fb961971dd2d249a251c483b114d82437991d2e033fdad9402"
+    },
+    {
+      "slug": "none",
+      "label": "Silent",
+      "file": ""
+    }
+  ]
+}

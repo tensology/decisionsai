@@ -167,6 +167,28 @@ def _run_project_id(run: AutoWorkflowRun) -> Optional[str]:
     value = data.get("project_id") if isinstance(data, dict) else None
     return str(value) if value not in (None, "") else None
 
+
+def workflow_run_occupies_execution_slot(run: AutoWorkflowRun) -> bool:
+    """Human review of verified finished work must not hold the execution slot."""
+    if str(run.status or "") not in {"running", "waiting"}:
+        return False
+    if run.status != "waiting" or not run.completed_at:
+        return True
+    try:
+        data = json.loads(run.run_data or "{}")
+        receipt = data.get("terminal_receipt") or {}
+        audit = (receipt.get("result_packet") or {}).get("audit") or {}
+        finished = (
+            data.get("waiting_kind") == "verification_review"
+            and receipt.get("status") == "completed"
+            and receipt.get("success") is True
+            and receipt.get("has_completion_evidence") is True
+            and audit.get("final_verdict") == "pass"
+        )
+        return not finished
+    except (TypeError, ValueError, AttributeError):
+        return True
+
 from distr.core.workflow.step_validator import build_step_config, validate_before_dispatch as _validate_step  # noqa: E402
 from distr.core.workflow.step_executor import StepExecutorMixin
 from distr.core.workflow.post_execution import PostExecutionMixin
@@ -291,7 +313,14 @@ def _finalize_result_packet_for_terminal_run(
     risk_level = risk.get("level", "low")
 
     updated["status"] = status_label
-    updated["summary"] = f"Workflow run {run_id} finished with status: {status_label}."
+    if status_label in {"failed", "cancelled"}:
+        # A prior successful step is not the final outcome of a failed/stopped run.
+        updated.pop("human_summary", None)
+    updated["summary"] = (
+        str(updated.get("human_summary") or "").strip()
+        if status_label == "completed" and updated.get("human_summary")
+        else f"Workflow run {run_id} finished with status: {status_label}."
+    )
 
     artifacts = dict(updated.get("artifacts") or {})
     logs = list(artifacts.get("logs") or [])
@@ -1490,6 +1519,7 @@ def start_workflow_run(
             )
             .all()
         )
+        active_workflow_runs = [run for run in active_workflow_runs if workflow_run_occupies_execution_slot(run)]
         if run_settings["execution_mode"] == "parallel":
             if len(active_workflow_runs) >= run_settings["max_parallel_tickets"]:
                 return {"error": f"Workflow is already running {len(active_workflow_runs)} ticket(s); async limit is {run_settings['max_parallel_tickets']}"}
@@ -1518,6 +1548,8 @@ def start_workflow_run(
         # Defensive guard for heavily mocked sessions in tests: only treat a result
         # as active when it looks like an AutoWorkflowRun instance.
         if active_run is not None and isinstance(active_run, AutoWorkflowRun):
+            if not workflow_run_occupies_execution_slot(active_run):
+                return {"error": "This ticket's completed work is awaiting human verification review."}
             # If there is no live RunContext for this run, it's an orphan (e.g. from a
             # previous server session that crashed). Auto-cancel it so the ticket can
             # be pushed again — otherwise it would be blocked forever.
@@ -1612,6 +1644,10 @@ def start_workflow_run(
 
         normalized_metadata.setdefault("run_settings", run_settings)
         normalized_metadata.setdefault("workflow_id", workflow_id)
+        # Keep the submitted task durable. Result packets and ambient context
+        # must never replace it, including after a process restart or resume.
+        if (context or "").strip():
+            normalized_metadata["submitted_context"] = context.strip()
         if ticket_id is not None:
             normalized_metadata.setdefault("ticket_id", ticket_id)
             try:

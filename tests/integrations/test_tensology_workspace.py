@@ -199,7 +199,7 @@ def test_non_ui_ticket_uses_completion_protocol_without_browser_requirement():
     assert use_playwright is False
 
 
-def test_tensology_thread_attaches_routed_workflow_and_quality_contract():
+def test_tensology_thread_uses_shared_scope_routing_and_quality_contract():
     ticket = {
         "id": 17,
         "project_id": 9,
@@ -218,31 +218,22 @@ def test_tensology_thread_attaches_routed_workflow_and_quality_contract():
     local_response = {"task": {"id": 42}}
 
     with (
-        # Tickets route to a managed weight-class policy; the retired Development
-        # pipeline is no longer the canonical target.
-        patch(
-            "distr.core.workflow.phases.route_ticket_workflow_id",
-            return_value=433,
-        ),
         patch("distr.core.tensology_client._ensure_tensology_kanban_ticket", return_value=91),
-        patch(
-            "distr.core.kanban.ticket_policy.resolve_ticket_complexity",
-            return_value="medium",
-        ),
         patch("distr.core.tensology_client._local_api_post", return_value=local_response) as post,
     ):
         chat_id, route = _create_tensology_thread(ticket, project)
 
     assert chat_id == 42
     assert route == {
-        "complexity": "medium",
+        "complexity": "low",
         "backend": "cursor",
         "provider": "cursor",
         "model": "grok-4.7-medium",
     }
     path, body = post.call_args.args
     assert path == "workflows/studio/tasks"
-    assert body["workflow_id"] == 433
+    assert body["workflow_id"] is None
+    assert body["routing_assessment"]["proposal_scope"]["title"] == ticket["title"]
     assert body["ticket_id"] == 91
     assert body["skill_ids"] == ["completion-protocol", "ui-ux-principles", "ui-crud-discipline"]
     assert body["use_playwright"] is True

@@ -3616,6 +3616,7 @@ class StepExecutorMixin:
                     if run and run.run_data:
                         run_data = json.loads(run.run_data or "{}")
                         # Prefer direct column (always set) over JSON metadata field
+                        workflow_input_context = str(run_data.get("submitted_context") or "").strip()
                         ticket_id = run.ticket_id or run_data.get("ticket_id")
                         if ticket_id:
                             try:

@@ -32,9 +32,13 @@ def load_desktop_proposals():
 
 
 def start_desktop_proposal(proposal):
-    from distr.core.incoming.proposals import create_proposal_thread
+    from distr.core.tensology_client import _local_api_post
 
-    return create_proposal_thread(proposal, start_work=True)
+    # One application-owned endpoint handles both native and browser actions.
+    result = _local_api_post('workflows/studio/incoming/proposals/thread', {'proposal': proposal})
+    if not isinstance(result, dict) or not result.get('chat_id'):
+        raise ValueError('The proposal thread could not be started. Retry from Proposals.')
+    return int(result['chat_id'])
 
 
 def load_pinned_projects() -> list[int]:

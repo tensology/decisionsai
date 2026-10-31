@@ -44,22 +44,24 @@ def test_proposal_sound_toggle_save_preview_and_failure(page, width):
     toggle = page.get_by_label("Sound for new proposals", exact=True)
     expect(toggle).to_be_checked()
     select = page.locator("#notification_sound")
+    expect(select.locator("option")).to_have_count(51)
+    expect(select.locator('option[value="store-ring"]')).to_have_text("Store Ring")
     select.scroll_into_view_if_needed()
     folder = Path("/tmp/decisions-proposal-sound-settings")
     folder.mkdir(exist_ok=True)
     page.screenshot(path=str(folder / f"enabled-{width}.png"))
     toggle.locator("..").click()
     expect(toggle).not_to_be_checked()
-    select.select_option("chime")
+    select.select_option("store-ring")
     page.locator("#notification_sound_preview").click()
-    assert page.evaluate("window.__sounds") == ["/assets/sounds/notifications/chime.mp3"]
+    assert page.evaluate("window.__sounds") == ["/assets/sounds/notifications/store-ring.mp3"]
     page.locator("#btn_save").click()
     page.wait_for_function("() => document.body.innerText.includes('General & audio settings saved')")
     assert saved[-1]["incoming_proposal_sound_enabled"] is False
-    assert saved[-1]["notification_sound"] == "chime"
+    assert saved[-1]["notification_sound"] == "store-ring"
     page.reload(wait_until="domcontentloaded")
     expect(toggle).not_to_be_checked()
-    expect(select).to_have_value("chime")
+    expect(select).to_have_value("store-ring")
     select.scroll_into_view_if_needed()
     page.screenshot(path=str(folder / f"disabled-{width}.png"))
     fail_save = True
@@ -75,3 +77,16 @@ def test_proposal_sound_toggle_save_preview_and_failure(page, width):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     select.scroll_into_view_if_needed()
     page.screenshot(path=str(folder / f"error-{width}.png"))
+
+
+def test_shared_player_loads_crossroads_sound_without_opening_settings(page):
+    catalogs = []
+    page.on("request", lambda request: catalogs.append(request.url)
+            if "/sounds/notifications/catalog.json" in request.url else None)
+    page.goto("http://127.0.0.1:8765/robots.txt")
+    page.evaluate("() => { window.__sounds = []; window.Audio = class { constructor(url) { window.__sounds.push(url); } play() { return Promise.resolve(); } }; }")
+    page.add_script_tag(url="http://127.0.0.1:8765/static/shared/js/notification_sound.js")
+    page.evaluate("async () => { await DecisionsNotificationSound.play('store-ring'); await DecisionsNotificationSound.catalog(); }")
+    assert page.evaluate("window.__sounds") == ["/assets/sounds/notifications/store-ring.mp3"]
+    assert len(catalogs) == 1
+    assert page.evaluate("DecisionsNotificationSound.resolveSlug('chime')") == "relaxing-chime"

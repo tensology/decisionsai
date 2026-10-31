@@ -144,6 +144,7 @@
     border-radius: 10px;
     background: rgba(7,12,25,.58);
 }
+[data-workflow-run-result] { grid-template-columns: minmax(0, 1fr); }
 
 .thread-workflow-feedback-head, .thread-workflow-route, .thread-workflow-live-feedback { display: flex; align-items: center; gap: 10px; }
 .thread-workflow-feedback-head { justify-content: space-between; }
@@ -306,6 +307,7 @@
 
 .message-body > p { margin: 0; white-space: pre-wrap; line-height: 1.48; }
 
+.message-markdown { overflow-wrap: anywhere; }
 .message-markdown > p { margin: 0 0 7px; white-space: normal; line-height: 1.48; }
 
 .message-markdown a { color: #7db7ff; text-decoration: none; }

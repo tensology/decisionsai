@@ -22,6 +22,31 @@
     var cachedSlug = null;
     var pending = null;
     var lastPlayedAt = 0;
+    var catalogPending = null;
+    var aliases = {};
+
+    function catalog() {
+        if (catalogPending) return catalogPending;
+        catalogPending = fetch('/assets/sounds/notifications/catalog.json?v=20261030-crossroads')
+            .then(function (response) {
+                if (!response.ok) throw new Error('Notification sounds could not be loaded.');
+                return response.json();
+            })
+            .then(function (data) {
+                aliases = data.aliases || {};
+                (data.sounds || []).forEach(function (item) {
+                    FILES[item.slug] = item.file ? '/assets/sounds/notifications/' + item.file : '';
+                });
+                return data.sounds || [];
+            })
+            .catch(function (error) { catalogPending = null; throw error; });
+        return catalogPending;
+    }
+
+    function resolveSlug(slug) {
+        var key = String(slug || DEFAULT_SLUG).toLowerCase();
+        return Object.prototype.hasOwnProperty.call(aliases, key) ? aliases[key] : key;
+    }
 
     function urlFor(slug) {
         var key = String(slug || DEFAULT_SLUG).toLowerCase();
@@ -29,7 +54,14 @@
     }
 
     function play(slug) {
-        var url = urlFor(slug);
+        var key = String(slug || DEFAULT_SLUG).toLowerCase();
+        if (!Object.prototype.hasOwnProperty.call(FILES, key)) {
+            return catalog().catch(function () { return []; }).then(function () { playUrl(urlFor(key)); });
+        }
+        return playUrl(urlFor(key));
+    }
+
+    function playUrl(url) {
         if (!url) return;
         // Collapse bursts: several notices can land within a second or two.
         var now = Date.now();
@@ -66,7 +98,7 @@
         var onlyWhenHidden = !options || options.onlyWhenHidden !== false;
         if (onlyWhenHidden && typeof document !== 'undefined' && !document.hidden) return Promise.resolve();
         return current().then(function (slug) {
-            if (slug && slug !== 'none') play(slug);
+            if (slug && slug !== 'none') return play(slug);
         });
     }
 
@@ -74,6 +106,8 @@
         play: play,
         current: current,
         playCurrent: playCurrent,
+        catalog: catalog,
+        resolveSlug: resolveSlug,
         FILES: FILES
     };
 })();

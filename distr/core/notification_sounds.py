@@ -1,31 +1,24 @@
 """Notification sounds a user can choose between.
 
-Samples come from the currency-trader notification library and live under
-``assets/sounds/notifications``. Keeping a fixed catalogue means the web UI
-offers known-good choices instead of arbitrary filenames.
+The full Crossroads bell catalogue is retained in currency-trader commit
+768e0ed0c3e47f3c09a63733e8e47c48847b291b. ``catalog.json`` records its original
+labels, source filenames and SHA256 hashes. Previously saved aliases keep working.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from typing import Any
 
 from distr.core.paths import ASSETS_DIR
 
 DEFAULT_NOTIFICATION_SOUND = "bell"
 
-NOTIFICATION_SOUNDS: tuple[dict[str, str], ...] = (
-    {"slug": "bell", "label": "Bell", "file": "bell.wav"},
-    {"slug": "chime", "label": "Chime", "file": "chime.mp3"},
-    {"slug": "dong", "label": "Dong", "file": "dong.mp3"},
-    {"slug": "gentle", "label": "Gentle alarm", "file": "gentle.mp3"},
-    {"slug": "tone", "label": "Notification tone", "file": "tone.mp3"},
-    {"slug": "elegant", "label": "Elegant", "file": "elegant.mp3"},
-    {"slug": "achievement", "label": "Achievement", "file": "achievement.mp3"},
-    {"slug": "none", "label": "Silent", "file": ""},
-)
-
-_SLUGS = {item["slug"] for item in NOTIFICATION_SOUNDS}
+_CATALOG = json.loads((Path(ASSETS_DIR) / "sounds/notifications/catalog.json").read_text())
+NOTIFICATION_SOUNDS: tuple[dict[str, str], ...] = tuple(_CATALOG["sounds"])
+_ALIASES = _CATALOG["aliases"]
+_SLUGS = {item["slug"] for item in NOTIFICATION_SOUNDS} | set(_ALIASES)
 
 
 def sounds_dir() -> Path:
@@ -36,6 +29,12 @@ def normalize(value: Any) -> str:
     """Return a known slug, falling back to the default."""
     slug = str(value or "").strip().lower()
     return slug if slug in _SLUGS else DEFAULT_NOTIFICATION_SOUND
+
+
+def resolve_slug(value: Any) -> str:
+    """Resolve a saved legacy name to the canonical catalogue choice."""
+    slug = normalize(value)
+    return _ALIASES.get(slug, slug)
 
 
 def catalog() -> list[dict[str, str]]:
@@ -52,7 +51,7 @@ def catalog() -> list[dict[str, str]]:
 
 def sound_url(value: Any) -> str:
     """Return the browser URL for a saved sound, or '' for silent/missing."""
-    slug = normalize(value)
+    slug = resolve_slug(value)
     for item in NOTIFICATION_SOUNDS:
         if item["slug"] != slug:
             continue

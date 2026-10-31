@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 from typing import Any
 
 
@@ -64,8 +66,10 @@ def choose_development_execution_mode(
     assessment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Choose a direct worker or a thread-owned workflow without an LLM call."""
-    text = re.sub(r"\s+", " ", str(instruction or "")).strip().lower()
     assessment = dict(assessment or {})
+    if isinstance(assessment.get("proposal_scope"), dict):
+        return choose_proposal_execution_mode(assessment["proposal_scope"])
+    text = re.sub(r"\s+", " ", str(instruction or "")).strip().lower()
     complexity = str(assessment.get("complexity") or "medium").strip().lower()
     if complexity not in {"low", "medium", "high"}:
         complexity = "medium"
@@ -120,4 +124,52 @@ def choose_development_execution_mode(
             if needs_workflow
             else "The instruction fits one direct development-agent turn."
         ),
+    }
+
+
+def proposal_execution_scope(proposal: dict[str, Any]) -> dict[str, Any]:
+    """Only requested work participates in routing, never transport scaffolding."""
+    return {
+        "title": str(proposal.get("title") or "").strip(),
+        "description": str(proposal.get("description") or "").strip(),
+        "tasks": [str(task).strip() for task in (proposal.get("tasks") if isinstance(proposal.get("tasks"), list) else []) if str(task).strip()],
+    }
+
+
+def choose_proposal_execution_mode(proposal: dict[str, Any]) -> dict[str, Any]:
+    """Versioned, channel-independent rules for an automatic proposal handoff."""
+    from distr.core.workflow.phases import RISK_KEYWORDS, classify
+
+    scope = proposal_execution_scope(proposal)
+    original = "\n".join([scope["title"], scope["description"], *scope["tasks"]])
+    # Exclusions are constraints, not requests to perform the excluded work.
+    clauses = re.split(r"(?<=[.!?;])\s+|\n+|\b(?:but|however|instead)\b", original.lower().replace("’", "'"))
+    positive = []
+    for clause in clauses:
+        clause = re.split(r"\b(?:do not|don't|never|without)\b", clause, maxsplit=1)[0]
+        if re.match(r"\s*no\s+(?:changes?|writes?|deletions?|deployments?|restores?|restarts?|(?:database|schema|code|file|files|settings)\s+(?:changes?|writes?|edits?))\b", clause):
+            continue
+        if clause.strip():
+            positive.append(clause.strip())
+    text = "\n".join(positive)
+    risks = [word.strip() for word in RISK_KEYWORDS if word in text]
+    explicit = bool(re.search(r"\b(?:use|run|execute|create)\s+(?:(?:a|the|this|an)\s+)?workflow\b|\bindependent review\b|\bend[- ]to[- ]end\b|\bmulti[- ]step\b", text))
+    coordination = [word for word in ("architecture", "refactor", "integration", "across the project", "across the codebase", "multiple systems") if word in text]
+    complex_work = len(scope["tasks"]) >= 4 or bool(coordination) or len(text) >= 1200
+    mode = "workflow" if risks or explicit or complex_work else "direct"
+    weight = classify(text, requested="heavy" if complex_work or explicit else None) if mode == "workflow" else None
+    signals = [*(f"risk:{word}" for word in risks), *(f"scope:{word}" for word in coordination)]
+    if explicit:
+        signals.append("explicit_workflow_or_review")
+    if len(scope["tasks"]) >= 4:
+        signals.append("four_or_more_tasks")
+    if len(text) >= 1200:
+        signals.append("large_scope")
+    return {
+        "mode": mode, "complexity": "high" if mode == "workflow" else "low",
+        "workflow_class": weight, "policy": "proposal-scope-v1",
+        "scope_hash": hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest(),
+        "signals": signals,
+        "reason": ("Requested work matches fixed risk or coordinated-work rules: " + ", ".join(signals)) if mode == "workflow" else "The requested work fits one direct agent turn; no risk or coordinated-work rule matched.",
+        "scope_text": text,
     }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import threading
 
 from sqlalchemy import case, func, update
@@ -49,7 +50,8 @@ def queue_execution_update(ticket, chat_id, execution, status):
     message = f"{header}\n{_STAGES[status]}."
     if status in {"done", "failed", "blocked"}:
         packet = execution.get("output_packet") or {}
-        response = str(packet.get("output") or packet.get("summary") or execution.get("worker_question") or execution.get("summary") or execution.get("error") or "").strip()
+        public_result = packet.get("human_summary") if status == "done" else ""
+        response = str(public_result or packet.get("output") or packet.get("summary") or execution.get("worker_question") or execution.get("summary") or execution.get("error") or "").strip()
         if status == "failed" and str(execution.get("status") or "") in {"completed", "completed_noop"}:
             message += " Final verification evidence is missing. Review the result before retrying."
         if response:
@@ -87,7 +89,10 @@ def flush_execution_updates():
                 # Queue acceptance is explicit. Failed/disconnected enqueue is
                 # retried by the normal local state-sync tick, including after restart.
                 try:
-                    accepted = manager.send_to_telegram(text[offset:offset + 3500]) is True
+                    receipt_id = f"proposal-update:{chat.id}:{hashlib.sha256(pending['key'].encode()).hexdigest()[:12]}:{offset}"
+                    accepted = manager.send_to_telegram(
+                        text[offset:offset + 3500], interaction_token=receipt_id,
+                    ) is True
                 except Exception:
                     accepted = False
                 if not accepted:

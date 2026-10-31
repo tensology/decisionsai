@@ -664,9 +664,19 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
             route.pop("source", None)
             if route:
                 route.update(fallback_backend=route['backend'], fallback_model_provider=route.get('model_provider', ''), fallback_model=route.get('model', ''))
+                from distr.core.workflow.development_threads import update_development_model_route
+
+                # Persist the automatic handoff's selected model as this thread's
+                # explicit route so workflow review steps inherit it as well.
+                update_development_model_route(
+                    int(chat_id), route_mode="manual", backend=route["backend"],
+                    provider=route.get("model_provider", ""), model_name=route.get("model", ""),
+                )
             execution = dispatch_development_prompt(
                 int(chat_id), _proposal_prompt(proposal),
-                routing_assessment={"source": "incoming_proposal", "route": route, "adaptive_model_routing": False},
+                routing_assessment={"source": "incoming_proposal", "route": route, "adaptive_model_routing": False,
+                                    "skip_human_checkpoints": True,
+                                    "proposal_scope": {key: proposal.get(key) for key in ("title", "description", "tasks")}},
                 dispatch_async=True,
             )
             if execution.get("started") is False or execution.get("status") in {"failed", "cancelled", "blocked"}:

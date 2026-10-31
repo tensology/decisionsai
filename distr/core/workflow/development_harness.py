@@ -849,6 +849,7 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                     "summary": str(result_packet.get("summary") or ""),
                     "verification": audit,
                     "output_packet": result_packet,
+                    "execution_mode_decision": run_data.get("execution_mode_decision") or {},
                     "route_receipt": route_receipt,
                 }
         persisted_status = str(execution.get("status") or "").lower()
@@ -2076,6 +2077,10 @@ def dispatch_development_prompt(
     from distr.core.workflow.execution_mode import choose_development_execution_mode
 
     execution_mode = choose_development_execution_mode(clean, assessment=assessment)
+    routing_text = execution_mode.pop("scope_text", clean)
+    if execution_mode.get("policy") == "proposal-scope-v1":
+        assessment.pop("proposal_scope", None)
+        assessment["complexity"] = execution_mode["complexity"]
     if (
         execution_mode["mode"] == "workflow"
         and autonomy_level not in {"plan", "approval"}
@@ -2126,9 +2131,10 @@ def dispatch_development_prompt(
             # Route silently. The ticket-arrival message already explains what the
             # work is; naming the internal policy here is noise, not information.
             route_plan = route_ticket_plan(
-                clean,
+                routing_text,
                 ticket_id=ticket_id,
                 has_repo_target=bool(int(project.id) > 0),
+                **({"requested": execution_mode["workflow_class"]} if execution_mode.get("workflow_class") else {}),
             )
             workflow_id = int(route_plan.get("workflow_id") or 0) or None
             if workflow_id and ticket_id is not None:
@@ -2179,6 +2185,7 @@ def dispatch_development_prompt(
             'turn_attachments': source_attachments,
             "routing_assessment": assessment,
             "execution_mode_decision": execution_mode,
+            "skip_human_checkpoints": bool(assessment.get("skip_human_checkpoints")),
             "skill_ids": list(skill_ids or []),
             "use_playwright": bool(use_playwright),
             "model_route": model_route,
@@ -2295,6 +2302,7 @@ def dispatch_development_prompt(
         summary="",
         streamed_output="",
         activity_status="thinking",
+        execution_mode_decision=execution_mode,
         runtime_id="cli_harness",
         git_status_before=git_status_before,
         git_untracked_before=git_untracked_before,

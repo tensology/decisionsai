@@ -184,6 +184,7 @@ def test_project_ticket_workflow_context_is_captured_and_rendered_in_step_prompt
             run_data = json.loads(run.run_data or "{}")
 
         developer_context = run_data.get("developer_context") or {}
+        assert run_data["submitted_context"] == "Ticket: Fix workflow validation"
         assert developer_context["active_project"]["name"] == "DecisionsAI"
         assert developer_context["active_project"]["folder_location"] == "/repo/DecisionsAI"
         assert developer_context["active_board"]["name"] == "Decisions"
@@ -223,3 +224,28 @@ def test_project_ticket_workflow_context_is_captured_and_rendered_in_step_prompt
     assert "DecisionsAI (/repo/DecisionsAI)" in prompt
     assert "active_board: #" in prompt
     assert "Decisions [database]" in prompt
+
+
+def test_submitted_proposal_survives_packet_context_without_ticket_or_live_process(monkeypatch):
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.dispatcher import StepDispatcher
+
+    factory = _make_factory()
+    ids = _seed_project_ticket_workflow(factory)
+    original = "Owned proposal: run pwd and print PROPOSAL_ACCEPTANCE. Do not edit files."
+    with _session_ctx(factory) as db:
+        run = AutoWorkflowRun(
+            workflow_id=ids["workflow_id"], status="running",
+            run_data=json.dumps({"submitted_context": original,
+                "developer_context": {"user_memory_context": "Unrelated ambient history"},
+                "result_packet": {"status": "waiting", "summary": "A previous attempt needs input"}}),
+        )
+        db.add(run)
+        db.flush()
+        run_id = run.id
+    monkeypatch.setattr("distr.core.workflow.step_executor.get_session", lambda: _session_ctx(factory))
+    prompt = StepDispatcher()._build_agent_prompt({
+        "id": ids["step_id"], "workflow_id": ids["workflow_id"],
+        "name": "Implementation", "instruction": "Complete the scoped task.", "description": "",
+    }, run_id)
+    assert original in prompt

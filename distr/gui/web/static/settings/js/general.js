@@ -66,7 +66,24 @@ async function loadGeneralSettings() {
         document.getElementById('telegram_send_online_notice').checked = settings.telegram_send_online_notice === true;
         document.getElementById('load_on_startup').checked = settings.load_on_startup || false;
         const soundSelect = document.getElementById('notification_sound');
-        if (soundSelect) soundSelect.value = settings.notification_sound || 'bell';
+        if (soundSelect) {
+            let savedSound = settings.notification_sound || 'bell';
+            try {
+                const player = window.DecisionsNotificationSound;
+                const sounds = await player.catalog();
+                if (sounds.length) {
+                    soundSelect.replaceChildren(...sounds.map(sound => new Option(sound.label, sound.slug)));
+                    savedSound = player.resolveSlug(savedSound);
+                }
+            } catch (error) {
+                console.warn('Could not load the notification sound catalogue:', error);
+            }
+            // Retain a saved choice even during a temporary catalogue outage.
+            if (![...soundSelect.options].some(option => option.value === savedSound)) {
+                soundSelect.add(new Option(savedSound, savedSound));
+            }
+            soundSelect.value = savedSound;
+        }
         const proposalSound = document.getElementById('incoming_proposal_sound_enabled');
         if (proposalSound) proposalSound.checked = settings.incoming_proposal_sound_enabled !== false;
         const defaultEditor = document.getElementById('default_project_editor');
