@@ -22,6 +22,7 @@ from distr.gui.oracle.menu import MenuTrayMixin
 from distr.gui.oracle.lifecycle import LifecycleMixin
 from distr.gui.oracle.render_strategy import create_renderer
 from PyQt6 import QtWidgets, QtGui, QtCore
+import sys
 from PyQt6.QtWidgets import QApplication
 import logging
 import os
@@ -3036,8 +3037,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Update tray menu if it exists
         if hasattr(self, 'tray_icon') and self.tray_icon:
             try:
-                # Recreate tray menu to update it (menu state changes)
-                self.create_tray_icon()
+                # macOS: avoid recreating the tray icon during recording;
+                # setContextMenu from a signal handler can trigger AppKit abort.
+                if sys.platform != 'darwin':
+                    self.create_tray_icon()
             except Exception as e:
                 logger.debug(f"Could not update tray menu: {e}")
     
@@ -3057,8 +3060,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Update tray menu if it exists
         if hasattr(self, 'tray_icon') and self.tray_icon:
             try:
-                # Recreate tray menu to update it (menu state changes)
-                self.create_tray_icon()
+                # macOS: avoid recreating the tray icon during recording;
+                # setContextMenu from a signal handler can trigger AppKit abort.
+                if sys.platform != 'darwin':
+                    self.create_tray_icon()
             except Exception as e:
                 logger.debug(f"Could not update tray menu: {e}")
         
