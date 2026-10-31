@@ -580,6 +580,12 @@ if [ -f "$SCRIPT_DIR/scripts/install_pywhispercpp.sh" ]; then
     "$SCRIPT_DIR/scripts/install_pywhispercpp.sh" "$VENV_DIR"
 fi
 
+# Upstream dropped install_pywhispercpp.sh; the wheel's dylib rpaths now point
+# at a deleted build dir. Self-heal the linkage so Whisper STT imports.
+if [ -f "$SCRIPT_DIR/scripts/fix_pywhispercpp_rpath.sh" ]; then
+    "$SCRIPT_DIR/scripts/fix_pywhispercpp_rpath.sh" "$VENV_DIR"
+fi
+
 # Local STT/TTS caches (Vosk dir, Whisper gguf warm) — same idea as Whisper’s lazy download, but up front.
 # Opt out: DECISIONS_AI_SKIP_MODEL_PREFETCH=1 ./bin/decisions.sh
 prefetch_local_models_bootstrap() {
