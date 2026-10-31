@@ -3008,19 +3008,31 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     
     def _update_dictation_menu_state(self):
         """Update the dictation menu items based on current dictation state"""
-        if hasattr(self, 'stop_dictating_action') and self.stop_dictating_action:
-            self.stop_dictating_action.setVisible(self.is_dictating)
-            self.stop_dictating_action.setEnabled(self.is_dictating)
-    
+        def _apply():
+            if hasattr(self, 'stop_dictating_action') and self.stop_dictating_action:
+                self.stop_dictating_action.setVisible(self.is_dictating)
+                self.stop_dictating_action.setEnabled(self.is_dictating)
+        if sys.platform == 'darwin':
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, _apply)
+        else:
+            _apply()
+
     def _update_recording_menu_state(self):
         """Update the recording menu items based on current recording state (recorder host)."""
-        is_recording = self._is_recording_active()
-        if hasattr(self, 'record_action_action') and self.record_action_action:
-            self.record_action_action.setVisible(not is_recording)
-            self.record_action_action.setEnabled(not is_recording)
-        if hasattr(self, 'stop_recording_action') and self.stop_recording_action:
-            self.stop_recording_action.setVisible(is_recording)
-            self.stop_recording_action.setEnabled(is_recording)
+        def _apply():
+            is_recording = self._is_recording_active()
+            if hasattr(self, 'record_action_action') and self.record_action_action:
+                self.record_action_action.setVisible(not is_recording)
+                self.record_action_action.setEnabled(not is_recording)
+            if hasattr(self, 'stop_recording_action') and self.stop_recording_action:
+                self.stop_recording_action.setVisible(is_recording)
+                self.stop_recording_action.setEnabled(is_recording)
+        if sys.platform == 'darwin':
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, _apply)
+        else:
+            _apply()
     
     def _on_recording_started(self, action_id):
         """

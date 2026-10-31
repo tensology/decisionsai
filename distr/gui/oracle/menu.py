@@ -1427,6 +1427,18 @@ class MenuTrayMixin:
         if not hasattr(self, 'tray_icon') or not self.tray_icon:
             return
 
+        # macOS: defer setIcon out of signal handlers to avoid AppKit abort
+        if sys.platform == 'darwin':
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, self._do_update_tray_icon)
+        else:
+            self._do_update_tray_icon()
+
+    def _do_update_tray_icon(self):
+        """Actual tray icon update (must run on main Qt thread)."""
+        if not hasattr(self, 'tray_icon') or not self.tray_icon:
+            return
+
         # Priority: recording > listening state
         if self._is_recording_active():
             icon_path = os.path.join(ICONS_DIR, "tray-recording.png")
