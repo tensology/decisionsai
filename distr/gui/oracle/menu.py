@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -1442,7 +1443,6 @@ class MenuTrayMixin:
         """Handle tray icon activation (click events)."""
         from PyQt6.QtWidgets import QSystemTrayIcon
         from PyQt6.QtCore import QTimer
-        import sys
 
         if reason in (
             QSystemTrayIcon.ActivationReason.Context,
@@ -1495,7 +1495,11 @@ class MenuTrayMixin:
             self.tray_icon.activated.disconnect(self._on_tray_icon_activated)
         except TypeError:
             pass
-        self.tray_icon.activated.connect(self._on_tray_icon_activated)
+        # macOS: Qt6/AppKit crashes with an uncaught NSException when
+        # activated is connected while a context menu is also set.
+        # Rely on Qt's native NSStatusItem menu handling instead.
+        if sys.platform != 'darwin':
+            self.tray_icon.activated.connect(self._on_tray_icon_activated)
         if self.menu:
             self.tray_icon.setContextMenu(self.menu)
         self.tray_icon.show()
