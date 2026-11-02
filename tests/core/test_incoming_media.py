@@ -235,3 +235,48 @@ def test_thread_download_forces_untrusted_active_content_to_download(store, tmp_
     path.unlink()
     with pytest.raises(FileNotFoundError):
         media.required_thread_attachments(cid)
+
+
+def test_list_manifest_and_ensure_soft_fail(store, tmp_path, monkeypatch):
+    sessions, cid = store
+    source = tmp_path / "relay"
+    source.mkdir()
+    good = source / "ok.png"
+    good.write_bytes(PNG)
+    with sessions() as db:
+        db.add(WhatsAppMessage(
+            message_id="ok-1", jid="client@g.us", media_type="image",
+            media_filename="ok.png", media_mime_type="image/png", media_local_path=str(good),
+        ))
+        db.add(WhatsAppMessage(
+            message_id="missing-1", jid="client@g.us", media_type="image",
+            media_filename="gone.png", media_mime_type="image/png", media_local_path="",
+        ))
+    proposal = {
+        "id": "local:whatsapp:manifest",
+        "source": "whatsapp",
+        "source_thread_id": "client@g.us",
+        "message_ids": ["ok-1", "missing-1"],
+    }
+    listed = media.list_proposal_attachment_manifest(proposal)
+    assert {item["source_message_id"] for item in listed} == {"ok-1", "missing-1"}
+    result = media.ensure_proposal_attachments(proposal, 7, strict=False)
+    assert len(result["attachments"]) == 1
+    assert result["attachments"][0]["source_message_id"] == "ok-1"
+    assert result["failures"]
+    assert "gone.png" in result["failures"][0]["name"] or "Could not attach" in result["failures"][0]["error"]
+    media.register_thread_attachments(cid, result["attachments"])
+    assert len(media.thread_attachments(cid)) == 1
+
+
+def test_ensure_tensology_missing_link_soft(store):
+    proposal = {
+        "id": "tensology:999",
+        "origin": "tensology",
+        "source": "gmail",
+        "attachments": [{"name": "x.png", "mime_type": "image/png", "api_path": ""}],
+    }
+    result = media.ensure_proposal_attachments(proposal, 7, strict=False)
+    assert result["attachments"] == []
+    assert result["failures"]
+    assert "download link" in result["failures"][0]["error"].lower() or "missing" in result["failures"][0]["error"].lower()

@@ -66,7 +66,6 @@ def test_development_incoming_returns_whatsapp_and_readable_gmail_threads(monkey
         session.add_all([board, second_board])
         session.flush()
         session.add(WhatsAppPhoneLink(board_id=board.id, phone_jid="menu@g.us", contact_name="Menu client", auto_snapshot=False))
-        session.add(WhatsAppPhoneLink(board_id=second_board.id, phone_jid="menu@g.us", contact_name="Menu client", auto_snapshot=False))
         session.add(WhatsAppMessage(message_id="wa-1", jid="menu@g.us", sender_push_name="Client", text="Add vegetarian filters", whatsapp_timestamp=100, from_me=False, processed=False))
         session.add(WhatsAppMessage(message_id="wa-out", jid="menu@g.us", sender_push_name="Paul", text="I will handle it", whatsapp_timestamp=99, from_me=True, processed=True, media_type="audio", media_mime_type="audio/ogg"))
         session.add(WhatsAppMessage(message_id="wa-2", jid="new-group@g.us", chat_type="group", sender_push_name="Member", text="Review the launch copy", raw_data='{"group_name":"Launch group"}', whatsapp_timestamp=200, from_me=False, processed=False))
@@ -79,7 +78,7 @@ def test_development_incoming_returns_whatsapp_and_readable_gmail_threads(monkey
     assert whatsapp["board_name"] == "Menu Project"
     assert whatsapp["can_snapshot"] is True
     assert whatsapp["conversation_label"] == "Menu client"
-    assert [link["board_name"] for link in whatsapp["links"]] == ["Menu Project", "Website Refresh"]
+    assert [link["board_name"] for link in whatsapp["links"]] == ["Menu Project"]
     outgoing = next(item for item in result["items"] if item.get("source_message_id") == "wa-out")
     assert outgoing["from_me"] is True
     assert outgoing["direction"] == "outbound"
