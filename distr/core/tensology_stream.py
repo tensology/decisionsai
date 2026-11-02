@@ -12,10 +12,10 @@ at most once per OFFLINE_CATCHUP_SECONDS while the stream cannot connect, so tic
 sent while DecisionsAI was offline (or before the relay is deployed) are not lost.
 
 Pause: the ``tensology_push_paused`` setting (or the DECISIONS_TENSOLOGY_PUSH_PAUSED env
-override) stops the ticket push only: no connect, no catch-up fetch, no ticket handling
-and no ticket PATCHes. It is re-read live, so an open connection closes within
-PAUSE_CHECK_SECONDS. Presence, discussions and Mailshot intake (``tensology_enabled``)
-are unaffected.
+override) stops *ticket* push only: no ticket catch-up fetch, no ticket event handling,
+and no ticket PATCHes. The websocket stays connected so Incoming work-request signals
+(``decisions_work_request``) still arrive. Presence, discussions and Mailshot intake
+(``tensology_enabled``) are unaffected.
 """
 from __future__ import annotations
 
@@ -95,15 +95,32 @@ def handle_work_request_signal(event: Any) -> None:
 
     Only the signal and a short summary travel from Tensology; the full proposal stays
     there. This is enough to say *what* is waiting, how urgent it looks, and why.
+
+    Decisions of dismiss / send-to-Decisions made on Tensology or Telegram must also
+    land in the local dismissal ledger so intake cannot recreate the same item.
     """
     if not isinstance(event, dict):
         event = {"request_id": event}
     from distr.core.incoming.events import publish_incoming_change
 
-    publish_incoming_change(request_id=event.get("request_id"), status=event.get("status") or "pending")
+    status = str(event.get("status") or "pending")
     kind = str(event.get("event") or "proposal_created")
-    if kind != "proposal_created" or str(event.get("status") or "pending") != "pending":
+    publish_incoming_change(request_id=event.get("request_id"), status=status)
+    if kind == "proposal_decided" or status in {"dismissed", "sent_to_decisions", "approved"}:
+        try:
+            from distr.core.incoming.proposals import record_remote_proposal_decision
+
+            record_remote_proposal_decision(event)
+        except Exception:
+            logger.debug("Recording remote proposal decision failed", exc_info=True)
         return
+    if kind != "proposal_created" or status != "pending":
+        return
+    try:
+        from distr.core.incoming.proposals import invalidate_proposals_list_cache
+        invalidate_proposals_list_cache()
+    except Exception:
+        logger.debug("Incoming proposals cache invalidate failed", exc_info=True)
     from distr.core.tensology_notify import notify_proposal_created
 
     notify_proposal_created(event)
@@ -165,19 +182,23 @@ def tensology_push_paused(settings: dict[str, Any] | None = None) -> bool:
     return bool(value)
 
 
-async def _close_when_paused(websocket: Any, paused: Callable[[], bool]) -> None:
-    """Close an open stream as soon as the push is paused (checked every PAUSE_CHECK_SECONDS)."""
+async def _watch_ticket_pause(paused: Callable[[], bool], state: dict[str, bool]) -> None:
+    """Refresh the live ticket-pause flag without closing the work-request stream."""
     while True:
         await asyncio.sleep(PAUSE_CHECK_SECONDS)
         try:
-            is_paused = await asyncio.to_thread(paused)
+            is_paused = bool(await asyncio.to_thread(paused))
         except Exception:
             continue
-        if is_paused:
-            logger.info("Tensology ticket stream paused (tensology_push_paused); closing connection")
-            STREAM_STATE["last_error"] = "paused"
-            await websocket.close()
-            return
+        was_paused = state.get("tickets_paused")
+        state["tickets_paused"] = is_paused
+        if is_paused and not was_paused:
+            logger.info("Tensology ticket push paused (tensology_push_paused); ignoring ticket events")
+            STREAM_STATE["last_error"] = "tickets_paused"
+        elif was_paused and not is_paused:
+            logger.info("Tensology ticket push resumed (tensology_push_paused off)")
+            if STREAM_STATE.get("last_error") == "tickets_paused":
+                STREAM_STATE["last_error"] = ""
 
 
 def _stream_config() -> tuple[str, str] | None:
@@ -307,22 +328,12 @@ async def run_tensology_ticket_stream(
             return False
 
     backoff = 0.0
-    pause_logged = False
+    pause_state = {"tickets_paused": False}
     last_catch_up = float("-inf")
     last_logged_error = ""
     attempts = 0
     while max_attempts is None or attempts < max_attempts:
         attempts += 1
-        if await _is_paused():
-            STREAM_STATE.update(connected=False, last_error="paused")
-            if not pause_logged:
-                logger.info("Tensology ticket stream paused (tensology_push_paused); not connecting")
-                pause_logged = True
-            await sleep(NOT_CONFIGURED_RETRY_SECONDS)
-            continue
-        if pause_logged:
-            logger.info("Tensology ticket stream resumed (tensology_push_paused off)")
-            pause_logged = False
         try:
             cfg = await asyncio.to_thread(config)
         except Exception as exc:
@@ -342,17 +353,27 @@ async def run_tensology_ticket_stream(
                 logger.info("Tensology ticket stream connected: %s", url)
                 dispatcher = TicketEventDispatcher(catch_up, handle_events)
                 worker = asyncio.create_task(dispatcher.run())
-                pause_watch = asyncio.create_task(_close_when_paused(websocket, paused))
+                pause_state["tickets_paused"] = await _is_paused()
+                pause_watch = asyncio.create_task(_watch_ticket_pause(paused, pause_state))
                 try:
-                    # Catch up on anything sent while DecisionsAI was offline.
+                    # Catch up on tickets only when ticket push is live.
                     last_catch_up = clock()
-                    dispatcher.request_catch_up()
+                    if pause_state["tickets_paused"]:
+                        STREAM_STATE["last_error"] = "tickets_paused"
+                        logger.info(
+                            "Tensology ticket push paused; stream stays up for work-request events"
+                        )
+                    else:
+                        dispatcher.request_catch_up()
                     async for raw in websocket:
                         event = parse_event(raw)
                         if not event:
                             continue
                         kind = str(event.get("type") or "")
                         if kind == TICKET_EVENT_TYPE:
+                            if pause_state["tickets_paused"] or await _is_paused():
+                                pause_state["tickets_paused"] = True
+                                continue
                             STREAM_STATE["last_event_at"] = time.time()
                             STREAM_STATE["events"] = int(STREAM_STATE.get("events") or 0) + 1
                             logger.info(

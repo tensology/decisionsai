@@ -175,22 +175,40 @@ def test_push_paused_env_override_wins_over_setting(monkeypatch):
     assert stream.tensology_push_paused({"tensology_push_paused": True}) is False
 
 
-def test_paused_never_connects_or_catches_up():
-    seen, catch_ups, sleeps = [], [], []
+def test_paused_connects_but_skips_ticket_catch_up():
+    """Ticket pause keeps the websocket up for work-request events; tickets stay quiet."""
+    seen, catch_ups, work = [], [], []
+    events = [
+        json.dumps({"type": stream.TICKET_EVENT_TYPE, "ticket_id": 9}),
+        json.dumps({"type": stream.WORK_REQUEST_EVENT_TYPE, "request_id": 44, "event": "proposal_created", "status": "pending"}),
+    ]
 
     async def catch_up():
         catch_ups.append(1)
 
+    async def handle_events(ids):
+        catch_ups.append(("events", ids))
+
+    def handle_work(event):
+        work.append(event.get("request_id"))
+
     async def sleep(delay):
-        sleeps.append(delay)
+        pass
 
     asyncio.run(stream.run_tensology_ticket_stream(
-        connect=_connector([FakeSocket([])], seen), catch_up=catch_up,
-        config=lambda: ("wss://t/ws/decisions", "k"), paused=lambda: True, sleep=sleep, max_attempts=2,
+        connect=_connector([FakeSocket(events)], seen),
+        catch_up=catch_up,
+        handle_events=handle_events,
+        handle_work_request=handle_work,
+        config=lambda: ("wss://t/ws/decisions", "k"),
+        paused=lambda: True,
+        sleep=sleep,
+        max_attempts=1,
     ))
-    assert seen == [] and catch_ups == []
-    assert sleeps == [stream.NOT_CONFIGURED_RETRY_SECONDS] * 2
-    assert stream.STREAM_STATE["last_error"] == "paused"
+    assert seen == [("wss://t/ws/decisions", "k")]
+    assert catch_ups == []  # no ticket catch-up / ticket event fetch while paused
+    assert work == [44]
+    assert stream.STREAM_STATE["last_error"] == "tickets_paused"
 
 
 class ClosableSocket(FakeSocket):
@@ -207,35 +225,29 @@ class ClosableSocket(FakeSocket):
         yield  # pragma: no cover
 
 
-def test_pausing_live_closes_open_stream_without_offline_catch_up(monkeypatch):
+def test_ticket_pause_watch_flips_flag_without_closing(monkeypatch):
+    import contextlib
+
     monkeypatch.setattr(stream, "PAUSE_CHECK_SECONDS", 0.01)
-    state = {"paused": False}
-    seen, catch_ups, events = [], [], []
-
-    async def catch_up():
-        catch_ups.append(1)
-        state["paused"] = True  # operator pauses after the stream connected
-
-    async def handle(ids):
-        events.append(ids)
-
-    async def sleep(delay):
-        pass
+    flag = {"tickets_paused": False}
+    paused = {"value": False}
 
     async def scenario():
-        socket = ClosableSocket()
-        await asyncio.wait_for(stream.run_tensology_ticket_stream(
-            connect=_connector([socket], seen), catch_up=catch_up, handle_events=handle,
-            config=lambda: ("wss://t/ws/decisions", "k"), paused=lambda: state["paused"],
-            sleep=sleep, max_attempts=1,
-        ), timeout=5)
-        return socket
+        task = asyncio.create_task(stream._watch_ticket_pause(lambda: paused["value"], flag))
+        await asyncio.sleep(0.03)
+        assert flag["tickets_paused"] is False
+        paused["value"] = True
+        await asyncio.sleep(0.05)
+        assert flag["tickets_paused"] is True
+        assert stream.STREAM_STATE["last_error"] == "tickets_paused"
+        paused["value"] = False
+        await asyncio.sleep(0.05)
+        assert flag["tickets_paused"] is False
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
-    socket = asyncio.run(scenario())
-    assert socket.closed.is_set()
-    assert catch_ups == [1]  # connect catch-up only; no offline catch-up once paused
-    assert events == []
-    assert stream.STREAM_STATE["connected"] is False
+    asyncio.run(scenario())
 
 
 def test_paused_client_skips_ticket_fetch_and_state_patches(monkeypatch):

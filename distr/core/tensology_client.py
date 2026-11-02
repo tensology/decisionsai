@@ -218,6 +218,15 @@ def decide_work_request(proposal_id: int, action: str, *, source: str = "") -> d
     )
 
 
+def create_merged_work_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Create a pending Tensology work proposal for a Decisions Incoming merge."""
+    client = configured_tensology_client(source="incoming-merge")
+    body = dict(payload or {})
+    merged_from = body.get("merged_from") or []
+    idem = "merge-" + "-".join(str(item) for item in merged_from[:8])
+    return client.post("work-requests", body, idempotency_key=idem[:120])
+
+
 _PROPOSAL_DECISION_RE = re.compile(r"^\s*(create\s+(?:a\s+)?ticket|run|queue|dismiss|send)\s+(all|\d+)\s*$", re.IGNORECASE)
 _PROPOSAL_VERB_ACTION = {
     "run": "send_to_decisions",
@@ -260,9 +269,32 @@ def handle_proposal_decision_reply(text: str, *, source: str = "") -> str | None
     for proposal in chosen:
         title = " ".join(str(proposal.get("title") or "").split()) or f"proposal {proposal.get('id')}"
         try:
-            decide_work_request(int(proposal["id"]), action, **({"source": "telegram"} if source == "telegram" else {}))
-            from distr.core.incoming.events import publish_incoming_change
-            publish_incoming_change(request_id=int(proposal["id"]), status="dismissed" if action == "dismiss" else "accepted")
+            from distr.core.incoming.proposals import _from_tensology, dismiss_proposal, record_remote_proposal_decision
+
+            shaped = _from_tensology(proposal) or {
+                "id": f"tensology:{int(proposal['id'])}",
+                "dedupe_key": f"tensology:{int(proposal['id'])}",
+                "message_ids": [],
+                "title": title,
+                "source": str(proposal.get("source") or ""),
+                "source_thread_id": str((proposal.get("source_conversation") or {}).get("thread_id") or ""),
+            }
+            if action == "dismiss":
+                # Shared dismiss: local ledger first, then Tensology, then UI refresh.
+                dismiss_proposal(shaped)
+            else:
+                decide_work_request(int(proposal["id"]), action, **({"source": "telegram"} if source == "telegram" else {}))
+                # Mirror Tensology's decision locally so intake cannot recreate it.
+                record_remote_proposal_decision({
+                    "request_id": int(proposal["id"]),
+                    "status": "sent_to_decisions" if action == "send_to_decisions" else "approved",
+                    "source": shaped.get("source"),
+                    "thread_id": shaped.get("source_thread_id"),
+                    "message_ids": shaped.get("message_ids") or [],
+                    "title": title,
+                })
+                from distr.core.incoming.events import publish_incoming_change
+                publish_incoming_change(request_id=int(proposal["id"]), status="accepted")
             applied.append(title)
         except Exception as exc:
             failed.append(f"{title} ({exc})")

@@ -5,6 +5,150 @@ from __future__ import annotations
 from distr.core.incoming import proposals as proposals_mod
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_incoming_proposals_list_cache():
+    proposals_mod.invalidate_proposals_list_cache()
+    yield
+    proposals_mod.invalidate_proposals_list_cache()
+
+
+def test_dismissed_local_proposal_survives_refresh_and_new_sessions(monkeypatch):
+    import json
+    import subprocess
+    import sys
+    from distr.core.db import engine
+
+    proposal = {'id': 'local:gmail:dismiss-persistence', 'origin': 'local', 'source': 'gmail',
+                'dedupe_key': 'gmail:dismiss-persistence', 'title': 'Fix dismissal',
+                'message_ids': ['dismiss-message-one']}
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [proposal])
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [proposal]
+    assert proposals_mod.dismiss_proposal(proposal) is True
+    engine.dispose()
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
+    restarted = subprocess.run(
+        [sys.executable, '-c',
+         'import json,sys; from distr.core.incoming.proposals import _undismissed_proposals; '
+         'assert _undismissed_proposals([json.load(sys.stdin)]) == []'],
+        input=json.dumps(proposal), text=True, capture_output=True, timeout=15,
+    )
+    assert restarted.returncode == 0, restarted.stderr
+    # Re-triage can change wording or return a smaller message window.
+    proposal['title'] = 'Regenerated title'
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
+    proposal['message_ids'].append('dismiss-message-two')
+    proposals_mod.invalidate_proposals_list_cache()
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [proposal]
+
+
+def test_dismissal_without_message_ids_uses_snapshot_and_is_idempotent():
+    proposal = {'id': 'local:gmail:no-message-ids', 'dedupe_key': 'gmail:no-message-ids',
+                'source': 'gmail', 'title': 'Original work', 'created_at': '2026-11-02T07:00:00Z'}
+    assert proposals_mod.dismiss_proposal(proposal) is True
+    assert proposals_mod.dismiss_proposal(proposal) is True
+    assert proposals_mod._undismissed_proposals([proposal]) == []
+    new_work = {**proposal, 'title': 'Later work', 'created_at': '2026-11-02T09:00:00Z'}
+    assert proposals_mod._undismissed_proposals([new_work]) == [new_work]
+
+
+def test_repeated_source_triage_does_not_revive_or_renotify_dismissed_work(monkeypatch):
+    from unittest.mock import Mock
+
+    class ImmediateThread:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(proposals_mod.threading, 'Thread', ImmediateThread)
+    monkeypatch.setattr(proposals_mod, '_triage_model', lambda settings: ('local', 'fixture'))
+    monkeypatch.setattr(proposals_mod, '_candidate_projects', lambda: [{'id': 7, 'name': 'Fixture'}])
+    monkeypatch.setattr('distr.core.read_response._default_complete', lambda *a:
+                        '{"is_actionable":true,"project_id":7,"title":"Fix repeated source work"}')
+    notify = Mock()
+    monkeypatch.setattr('distr.core.tensology_notify.notify_proposal_created', notify)
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'running', False)
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'at', 0.0)
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [])
+    item = {**_incoming_item('gmail', 'repeat-triage-dismissal', 'Please fix this bug'),
+            'source_message_id': 'triage-original'}
+    proposals = proposals_mod._local_proposals([item], {})
+    assert len(proposals) == 1
+    assert notify.call_count == 1
+    assert proposals_mod.dismiss_proposal(proposals[0]) is True
+    for _ in range(2):
+        monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'at', 0.0)
+        assert proposals_mod._local_proposals([item], {}) == []
+    assert notify.call_count == 1
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'at', 0.0)
+    new_item = {**item, 'source_message_id': 'triage-new', 'created_at': '2026-11-02T10:00:00Z'}
+    assert len(proposals_mod._local_proposals([item, new_item], {})) == 1
+    assert notify.call_count == 2
+
+
+def test_dismissed_tensology_proposal_does_not_return_as_local(monkeypatch):
+    row = _tensology_row(91045, 'dismiss-upstream', 'gmail', 'Dismiss upstream')
+    row['evidence'][0]['id'] = 'upstream-message'
+    proposal = proposals_mod._from_tensology(row)
+    local = {**proposal, 'id': 'local:gmail:dismiss-upstream', 'origin': 'local'}
+    pending = [row]
+    writes = []
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: pending)
+    monkeypatch.setattr('distr.core.tensology_client.decide_work_request', lambda *a: writes.append(a))
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [local])
+    assert proposals_mod.dismiss_proposal(proposal) is True
+    assert writes == [(91045, 'dismiss')]
+    # Even a stale upstream response cannot restore the dismissed record.
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
+    pending.clear()
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
+    local['message_ids'] = ['upstream-message', 'new-request']
+    proposals_mod.invalidate_proposals_list_cache()
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [local]
+
+
+def test_failed_upstream_dismissal_keeps_local_receipt(monkeypatch):
+    """Local dismiss must stick even when Tensology is unreachable."""
+    from unittest.mock import Mock
+
+    row = _tensology_row(91046, 'dismiss-failed', 'gmail', 'Keep failed dismissal')
+    proposal = proposals_mod._from_tensology(row)
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [row])
+    monkeypatch.setattr('distr.core.tensology_client.decide_work_request', Mock(side_effect=ValueError('Offline')))
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [])
+    assert proposals_mod.dismiss_proposal(proposal) is True
+    # Upstream failed, but the local ledger hides it (and covers the conversation messages).
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
+    assert proposal.get('_upstream_dismiss_error')
+
+
+def test_remote_tensology_dismissal_is_honoured_on_intake(monkeypatch):
+    row = _tensology_row(91047, 'remote-dismiss', 'whatsapp', 'Remote dismiss')
+    row['evidence'][0]['id'] = 'wa-msg-1'
+    local = {
+        'id': 'local:whatsapp:remote-dismiss', 'origin': 'local', 'source': 'whatsapp',
+        'dedupe_key': 'whatsapp:remote-dismiss', 'title': 'Remote dismiss',
+        'message_ids': ['wa-msg-1'], 'source_thread_id': 'remote-dismiss',
+    }
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
+    monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [local])
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [local]
+    assert proposals_mod.record_remote_proposal_decision({
+        'request_id': 91047,
+        'status': 'dismissed',
+        'source': 'whatsapp',
+        'thread_id': 'remote-dismiss',
+        'message_ids': ['wa-msg-1'],
+        'title': 'Remote dismiss',
+    }) is True
+    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
+
+
 def test_accepted_local_proposal_stays_out_after_refresh_but_new_work_surfaces(monkeypatch, tmp_path):
     from distr.core.db import Chat, get_session
     from distr.core.db.projects import Project
@@ -48,6 +192,7 @@ def test_accepted_local_proposal_stays_out_after_refresh_but_new_work_surfaces(m
 
     old_key = proposals_mod._proposal_handoff_key(proposal)
     proposal['message_ids'] = ['message-one', 'message-two']
+    proposals_mod.invalidate_proposals_list_cache()
     assert proposals_mod.list_incoming_proposals()['proposals'] == [proposal]
     assert proposals_mod._proposal_handoff_key(proposal) != old_key
     assert created[0]['project_id'] == project_id
@@ -64,9 +209,10 @@ def test_failed_media_handoff_keeps_proposal_pending(monkeypatch):
     monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **k: client)
     monkeypatch.setattr('distr.core.tensology_client._resolve_tensology_project', lambda p: {'id': 7})
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', lambda **k: 123)
-    monkeypatch.setattr('distr.core.incoming.media.proposal_attachments', lambda *a, **k: [])
-    monkeypatch.setattr('distr.core.incoming.media.register_thread_attachments',
-                        Mock(side_effect=ValueError('Media registration failed')))
+    monkeypatch.setattr(
+        'distr.core.incoming.media.ensure_proposal_attachments',
+        Mock(side_effect=ValueError('Media registration failed')),
+    )
     receipt, action = Mock(), Mock()
     monkeypatch.setattr(proposals_mod, '_record_proposal_handoff', receipt)
     monkeypatch.setattr('distr.core.tensology_client.decide_work_request', action)
@@ -239,21 +385,74 @@ def test_merge_rebuilds_two_proposals_into_one(monkeypatch):
     created = {}
     monkeypatch.setattr("distr.core.chat.ChatService.create_new_chat", lambda **kwargs: (created.setdefault("kwargs", kwargs) and 0) or (501, None))
     monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
+    monkeypatch.setattr("distr.core.incoming.media.register_thread_attachments", lambda *a, **k: None)
+    monkeypatch.setattr(proposals_mod, "_merge_proposal_attachments", lambda *a, **k: [])
+    notices = []
+    monkeypatch.setattr("distr.core.tensology_notify.notify_proposal_created", lambda event: notices.append(event))
     dismissed = []
     monkeypatch.setattr("distr.core.tensology_client.decide_work_request", lambda pid, action: dismissed.append((pid, action)))
 
-    first = {"id": "tensology:45", "title": "Check shipping cost", "project_id": 2, "project_name": "Merrypak", "tasks": ["a"]}
-    second = {"id": "tensology:46", "title": "Investigate shipping calc", "project_id": 2, "project_name": "Merrypak", "tasks": ["b"]}
+    first = {
+        "id": "tensology:45", "title": "Check shipping cost", "project_id": 2, "project_name": "Merrypak",
+        "description": "Req A", "tasks": ["a", "shared"], "rationale": "Why A", "message_ids": ["m1"],
+        "evidence": [{"id": "m1", "body": "hello"}],
+    }
+    second = {
+        "id": "tensology:46", "title": "Investigate shipping calc", "project_id": 2, "project_name": "Merrypak",
+        "description": "Req B", "tasks": ["shared", "b"], "rationale": "Why B", "message_ids": ["m2"],
+        "evidence": [{"id": "m2", "body": "there"}],
+    }
 
     def fake_complete(provider, model, messages, settings):
-        return '{"title": "Fix shipping cost calculation", "description": "combined", "tasks": ["a", "b"], "priority": "high"}'
+        # Title polish only — body/tasks come from combined FRAC sections.
+        return '{"title": "Fix shipping cost calculation"}'
 
     result = proposals_mod.merge_proposals(first, second, complete=fake_complete)
     assert result["chat_id"] == 501
-    assert result["merged"]["title"] == "Fix shipping cost calculation"
-    assert result["merged"]["tasks"] == ["a", "b"]
+    merged = result["merged"]
+    assert merged["title"] == "Fix shipping cost calculation"
+    assert merged["tasks"] == ["a", "shared", "b"]
+    assert "Req A" in merged["description"] and "Req B" in merged["description"]
+    assert "Why A" in merged["rationale"] and "Why B" in merged["rationale"]
+    assert merged["message_ids"] == ["m1", "m2"]
     assert created["kwargs"]["project_id"] == 2
     assert dismissed == [(45, "dismiss"), (46, "dismiss")]
+    assert notices and notices[0].get("title") == "Fix shipping cost calculation"
+
+
+def test_merge_dedupes_duplicate_attachments_via_shared_storage_path(monkeypatch):
+    created = {}
+    monkeypatch.setattr("distr.core.chat.ChatService.create_new_chat", lambda **kwargs: (created.setdefault("kwargs", kwargs) and 0) or (777, None))
+    monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
+    registered = []
+    monkeypatch.setattr("distr.core.incoming.media.register_thread_attachments", lambda chat_id, rows: registered.append((chat_id, rows)))
+    monkeypatch.setattr("distr.core.tensology_notify.notify_proposal_created", lambda event: None)
+    monkeypatch.setattr("distr.core.tensology_client.decide_work_request", lambda *a, **k: None)
+
+    shared = {
+        "name": "invoice.pdf", "mime_type": "application/pdf", "size": 12,
+        "sha256": "abc123", "source_message_id": "msg-1", "path": "/tmp/invoice.pdf", "id": "att-1",
+    }
+    duplicate = dict(shared)  # same content hash
+    other = {
+        "name": "photo.jpg", "mime_type": "image/jpeg", "size": 99,
+        "sha256": "def456", "source_message_id": "msg-2", "path": "/tmp/photo.jpg", "id": "att-2",
+    }
+
+    def fake_ensure(proposal, project_id, client=None, chat_id=None, strict=True):
+        if proposal["id"] == "tensology:1":
+            return {"attachments": [shared, other], "failures": []}
+        return {"attachments": [duplicate], "failures": []}  # duplicate content hash
+
+    monkeypatch.setattr("distr.core.incoming.media.ensure_proposal_attachments", fake_ensure)
+
+    first = {"id": "tensology:1", "title": "A", "project_id": 2, "project_name": "Merrypak", "tasks": ["t1"]}
+    second = {"id": "tensology:2", "title": "B", "project_id": 2, "project_name": "Merrypak", "tasks": ["t2"]}
+    result = proposals_mod.merge_proposals(first, second, complete=lambda *a, **k: '{"title": "A + B"}')
+    names = [row["name"] for row in result["merged"]["attachments"]]
+    assert names == ["invoice.pdf", "photo.jpg"]
+    assert registered and registered[0][0] == 777
+    assert len(registered[0][1]) == 2
 
 
 def test_create_and_start_uses_project_flash_route_retries_failure_and_starts_once(monkeypatch, tmp_path):
@@ -302,3 +501,45 @@ def test_create_and_start_uses_project_flash_route_retries_failure_and_starts_on
     assert pinned['route_mode'] == 'manual'
     assert pinned['model'] == 'deepseek-v4.1-flash:cloud'
     assert pinned['model_provider'] == 'ollama'
+
+
+def test_proposals_list_cache_serves_until_invalidated(monkeypatch):
+    """Page refresh must not re-hit Tensology until dismiss/create/WS/Resync."""
+    calls = {'n': 0}
+
+    def fetch():
+        calls['n'] += 1
+        return [{
+            'id': 501,
+            'title': 'Cached proposal',
+            'status': 'pending',
+            'source': 'gmail',
+            'project': {'name': 'CacheProj'},
+            'source_conversation': {'channel': 'gmail', 'thread_id': 'cache-thread'},
+            'source_message_ids': ['m1'],
+        }]
+
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', fetch)
+    monkeypatch.setattr('distr.core.incoming.service.list_development_incoming', lambda **k: {'items': []})
+    monkeypatch.setattr(proposals_mod, '_local_proposals', lambda *a, **k: [])
+    monkeypatch.setattr(proposals_mod, '_project_map', lambda: {})
+    monkeypatch.setattr(proposals_mod, 'apply_project_corrections', lambda rows: rows)
+    monkeypatch.setattr(proposals_mod, '_accepted_proposal_keys', lambda: set())
+    monkeypatch.setattr(proposals_mod, '_undismissed_proposals', lambda rows: rows)
+    monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {'incoming_proposals_auto_accept': False})
+    proposals_mod.invalidate_proposals_list_cache()
+
+    first = proposals_mod.list_incoming_proposals(refresh_local=False)
+    second = proposals_mod.list_incoming_proposals(refresh_local=False)
+    assert calls['n'] == 1
+    assert first['proposals'] and second['proposals']
+    assert first['proposals'][0]['id'] == second['proposals'][0]['id']
+
+    proposals_mod.drop_cached_proposals(request_ids=[501])
+    third = proposals_mod.list_incoming_proposals(refresh_local=False)
+    assert calls['n'] == 1  # surgical drop, no refetch
+    assert third['proposals'] == []
+
+    proposals_mod.invalidate_proposals_list_cache()
+    proposals_mod.list_incoming_proposals(refresh_local=False, force=True)
+    assert calls['n'] == 2
