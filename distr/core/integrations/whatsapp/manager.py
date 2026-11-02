@@ -506,6 +506,13 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         # Request current status
         self._request_status()
 
+        # Catch up messages missed while the desktop socket was down (e.g. after
+        # a Decisions restart). Live WS only covers new traffic after connect.
+        try:
+            self._voice_transcription_executor.submit(self.sync_from_relay, False)
+        except Exception as exc:
+            logger.debug("WhatsApp: catch-up sync schedule failed: %s", exc)
+
     def _on_disconnected(self):
         """Called when WebSocket disconnects."""
         self._connected = False
