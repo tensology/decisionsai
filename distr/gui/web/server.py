@@ -222,9 +222,10 @@ def create_app() -> FastAPI:
                 "/skills/static/", "/projects/static/", "/oauth/static/",
                 "/static/shared/", "/static/development/",
             ]):
-                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                # Revalidate with ETag/Last-Modified (304) instead of no-store so
+                # Cmd+R can reuse unchanged development JS/CSS from disk cache.
+                response.headers["Cache-Control"] = "private, no-cache"
                 response.headers["Pragma"] = "no-cache"
-                response.headers["Expires"] = "0"
             return response
     
     app.add_middleware(NoCacheMiddleware)
@@ -1103,13 +1104,62 @@ def create_app() -> FastAPI:
     
     # Cancel any workflow runs left open from a previous session (crash/restart).
     # Must run before any workflow operations so orphaned runs don't block new pushes.
+
+    @app.on_event("startup")
+    async def _warm_incoming_proposals_cache():
+        """Fill the process-level Incoming proposals cache so the first Cmd+R is warm."""
+        import asyncio
+
+        async def warm():
+            try:
+                from distr.core.incoming.proposals import list_incoming_proposals
+                await asyncio.to_thread(list_incoming_proposals, force=True)
+            except Exception:
+                logger.warning("Incoming proposals cache warm failed", exc_info=True)
+
+        asyncio.create_task(warm())
+
     @app.on_event("startup")
     async def _cancel_orphaned_workflow_runs():
         try:
             from distr.core.workflow.dispatcher import _cleanup_orphaned_runs_on_startup
             _cleanup_orphaned_runs_on_startup()
+            from distr.core.workflow.dispatcher import _auto_resume_interrupted_runs
+            _auto_resume_interrupted_runs()
         except Exception as e:
             logger.warning("Orphaned workflow run cleanup could not run: %s", e)
+
+    @app.on_event("startup")
+    async def _schedule_worker_health_checks():
+        import asyncio
+        from distr.core.workflow.run_health import HEARTBEAT_CHECK_SECONDS, check_worker_heartbeats
+
+        async def monitor():
+            while True:
+                await asyncio.sleep(HEARTBEAT_CHECK_SECONDS)
+                try:
+                    await asyncio.to_thread(check_worker_heartbeats)
+                except Exception:
+                    logger.warning("Worker heartbeat check failed", exc_info=True)
+                try:
+                    from distr.core.settings import load_settings_from_db
+                    if load_settings_from_db().get("incoming_proposals_auto_accept") is True:
+                        from distr.core.incoming.proposals import run_auto_accept_cycle
+                        await asyncio.to_thread(run_auto_accept_cycle)
+                except Exception:
+                    logger.warning("Automatic proposal intake failed; pending proposals retained", exc_info=True)
+        app.state.worker_health_task = asyncio.create_task(monitor())
+
+    @app.on_event("shutdown")
+    async def _stop_worker_health_checks():
+        import asyncio
+        task = getattr(app.state, "worker_health_task", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     @app.on_event("startup")
     async def _schedule_background_maintenance():

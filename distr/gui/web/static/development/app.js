@@ -11,7 +11,7 @@ import { createSidebar } from './sidebar/index.js?v=20261024-sidebar-wfadd';
 
 import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
-import { createIncoming } from './incoming/index.js?v=20261031-proposal-card-cleanup';
+import { createIncoming } from './incoming/index.js?v=20261102-proposal-project';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
@@ -1043,7 +1043,9 @@ function setWorkspaceMode(mode, options) {
         if (kanbanMode) boards.renderKanbanWorkspace();
         if (incomingMode) {
             incoming.renderIncomingWorkspace();
-            incoming.refreshIncomingData({ force: true });
+            // Soft load: hit the process-level proposals cache. Force/refresh=1
+            // only from Resync, WS proposal_created, or explicit invalidate paths.
+            incoming.refreshIncomingData();
         }
         if (terminalMode) {
             terminals.renderTerminalWorkspace();
@@ -1928,6 +1930,12 @@ function primeInitialWorkspace(route) {
     }
     if (route.kind === 'workspace' && route.mode === 'terminals_home') {
         setWorkspaceMode('terminals_home', { focus: false, updateUrl: false });
+        return;
+    }
+    if (route.kind === 'workspace' && route.mode === 'incoming') {
+        // Start proposals soft-fetch in parallel with catalog so Cmd+R is not
+        // gated on sidebar/boards/workflows.
+        setWorkspaceMode('incoming', { focus: false, updateUrl: false });
     }
 }
 
@@ -2318,6 +2326,9 @@ const automations = createAutomations({
 
 const incoming = createIncoming({
     context: {
+        get projects() {
+            return state.projects;
+        },
         get attachments() {
             return state.attachments;
         },
