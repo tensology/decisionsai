@@ -258,11 +258,14 @@ def _release_hold_findings(result: str, step_config: dict[str, Any]) -> list[str
             findings.append(f"Final audit reports a blocker: {blocker[:300]}")
     # Keep this deterministic and conservative. A UI audit that explicitly
     # says its browser proof was blocked/not executed is not release evidence.
+    # Scrub product-feature phrasing like "blocked script" (e.g. ad-blocked
+    # reCAPTCHA) so it cannot false-positive as missing browser proof — run 181.
+    browser_audit_text = re.sub(r"(?i)\bblocked\s+scripts?\b", "unavailable scripts", plain)
     if re.search(
         r"(?is)\b(?:browser|playwright|chromium)\b.{0,160}"
         r"\b(?:blocked|not\s+(?:run|executed)|could\s+not\s+(?:run|launch)|"
         r"unable\s+to\s+(?:run|launch)|stale|predate[sd]?)\b",
-        plain,
+        browser_audit_text,
     ):
         findings.append("Fresh browser evidence was not produced.")
     return list(dict.fromkeys(findings))

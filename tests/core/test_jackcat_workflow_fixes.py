@@ -122,6 +122,19 @@ def test_review_gate_ignores_non_defect_completion_gaps_value():
     assert _release_hold_findings(output, {"step_role": "review"}) == []
 
 
+def test_review_gate_ignores_blocked_script_feature_description():
+    """Product copy about a blocked third-party script is not missing browser proof."""
+    from distr.core.workflow.router import _release_hold_findings
+
+    output = (
+        "No test or browser evidence for the new state. Nothing in frontend/tests "
+        "mentions recaptcha; the \"blocked script → failed banner → reload recovers\" "
+        "path was never exercised at runtime.\n"
+        "Ship verdict: SHIP\nBlockers: none\n"
+    )
+    assert _release_hold_findings(output, {"step_role": "review"}) == []
+
+
 def test_review_gate_passes_clean_review():
     from distr.core.workflow.router import _release_hold_findings
 

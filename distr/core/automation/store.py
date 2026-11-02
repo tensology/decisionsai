@@ -780,6 +780,11 @@ def _sync_development_automation_runs(session, automation_id: int) -> None:
             if str(execution.get("job_id") or "") == str(development_run_id or ""):
                 next_status = str(execution.get("status") or "").lower()
                 summary = str(execution.get("summary") or execution.get("error") or "").strip()
+        # cli_harness finishes successful direct turns as completed_noop;
+        # without this mapping, Automation history stays "running" forever
+        # after a clean DB-load (seen on auto_14 re-run 434, 2026-11-02).
+        if next_status in {"completed_noop", "success", "passed"}:
+            next_status = "completed"
         if next_status not in terminal:
             continue
         row.status = "cancelled" if next_status == "stopped" else next_status
