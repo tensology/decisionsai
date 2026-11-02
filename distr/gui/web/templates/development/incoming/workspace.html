@@ -10,6 +10,13 @@
                         </nav>
                         <div class="incoming-folder-containers">
                             <section class="incoming-folder-panel" id="incoming-panel-proposals" role="tabpanel" aria-labelledby="incoming-folder-proposals">
+                                <header class="incoming-folder-header incoming-proposals-header">
+                                    <label class="settings-toggle" for="incoming-auto-accept">
+                                        <input type="checkbox" id="incoming-auto-accept" class="settings-toggle__input">
+                                        <span class="settings-toggle__switch" aria-hidden="true"></span>
+                                        <span class="settings-toggle__label">Auto-accept proposals (all projects)</span>
+                                    </label>
+                                </header>
                                 <div class="proposal-cards" id="incoming-proposals-list" aria-label="Incoming proposals" aria-live="polite"></div>
                             </section>
                             <section class="incoming-folder-panel hidden" id="incoming-panel-whatsapp" role="tabpanel" aria-labelledby="incoming-folder-whatsapp">

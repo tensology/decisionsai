@@ -47,8 +47,9 @@ def test_chat_page_cannot_override_shared_modal_styles():
     assert base.index("{% block head_styles %}") < base.index("{% block extra_head %}")
     assert 'title: "Delete chat"' in chat_js
     assert 'window.DecisionsAPI.confirm({' in chat_js
-    assert "chat-item-delete-btn" in chat_js
-    assert "deleteBtn.addEventListener('click'" in chat_js
+    # Sidebar delete is keyboard/context-menu via DecisionsListKeyboard.onDelete;
+    # the old per-row .chat-item-delete-btn click handler is gone.
+    assert "onDelete: (id) => { deleteChat(id); }" in chat_js
     assert "onclick=\"event.stopPropagation(); deleteChat" not in chat_js
 
 
@@ -170,6 +171,6 @@ def test_development_model_menu_is_harness_first():
     assert 'backend: clean_backend if mode == "manual" else ""' in threads or '"backend": clean_backend' in threads
     assert 'pinned_backend not in {"pi", "cursor", "codex", "claude_code"}' in harness
     assert "resolve_ticket_cli_route" in assessment
-    # Tickets route to a managed weight-class policy instead of planning a
-    # throwaway draft and falling back to the retired Development pipeline.
-    assert "route_ticket_plan" in harness
+    # Managed class auto-wrap is retired; prompts stay on the direct harness.
+    assert "route_ticket_plan" not in harness
+    assert "execution_mode_decision" in harness
