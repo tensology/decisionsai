@@ -164,25 +164,38 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
     links: list[dict[str, Any]] = []
 
     with get_session() as session:
+        from distr.core.kanban.whatsapp_jid import prefer_whatsapp_jid, whatsapp_jid_match_keys
+
         boards = {int(row.id): row.name for row in session.query(KanbanBoard).all()}
         link_rows = session.query(WhatsAppPhoneLink).order_by(WhatsAppPhoneLink.id.asc()).all()
-        link_by_jid: dict[str, list[WhatsAppPhoneLink]] = {}
-        link_by_phone: dict[str, list[WhatsAppPhoneLink]] = {}
+        link_by_key: dict[str, list[WhatsAppPhoneLink]] = {}
+        preferred_thread_by_link_id: dict[int, str] = {}
         for row in link_rows:
+            keys = whatsapp_jid_match_keys(row.phone_jid, row.phone_number)
+            observed = (
+                session.query(WhatsAppMessage.jid)
+                .filter(
+                    (WhatsAppMessage.jid.in_(keys))
+                    | (WhatsAppMessage.jid_phone.in_(keys))
+                )
+                .order_by(WhatsAppMessage.whatsapp_timestamp.desc(), WhatsAppMessage.id.desc())
+                .limit(1)
+                .scalar()
+            )
+            thread_id = prefer_whatsapp_jid(row.phone_jid, observed) or (row.phone_jid or "")
+            preferred_thread_by_link_id[int(row.id)] = thread_id
             links.append({
                 "id": int(row.id),
                 "source": "whatsapp",
                 "board_id": int(row.board_id),
                 "board_name": boards.get(int(row.board_id), "Unknown board"),
-                "source_thread_id": row.phone_jid or "",
+                "source_thread_id": thread_id,
                 "source_address": row.phone_number or "",
                 "label": row.contact_name or row.phone_number or row.phone_jid or "WhatsApp",
                 "auto_snapshot": bool(row.auto_snapshot),
             })
-            if row.phone_jid:
-                link_by_jid.setdefault(str(row.phone_jid), []).append(row)
-            if row.phone_number:
-                link_by_phone.setdefault(str(row.phone_number), []).append(row)
+            for key in keys:
+                link_by_key.setdefault(key, []).append(row)
 
         whatsapp_rows = (
             session.query(WhatsAppMessage)
@@ -191,8 +204,10 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
             .all()
         )
         seen_message_ids = {int(row.id) for row in whatsapp_rows}
-        linked_addresses = {str(row.phone_jid or row.phone_number or "").strip() for row in link_rows}
-        for address in (value for value in linked_addresses if value):
+        linked_key_set: set[str] = set()
+        for row in link_rows:
+            linked_key_set.update(whatsapp_jid_match_keys(row.phone_jid, row.phone_number))
+        for address in (value for value in linked_key_set if value):
             linked_rows = (
                 session.query(WhatsAppMessage)
                 .filter((WhatsAppMessage.jid == address) | (WhatsAppMessage.jid_phone == address))
@@ -206,7 +221,11 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                     seen_message_ids.add(int(linked_row.id))
         whatsapp_rows.sort(key=lambda row: (int(row.whatsapp_timestamp or 0), int(row.id)), reverse=True)
         for row in whatsapp_rows:
-            row_links = link_by_jid.get(str(row.jid or "")) or link_by_phone.get(str(row.jid_phone or "")) or []
+            row_links = (
+                link_by_key.get(str(row.jid or ""))
+                or link_by_key.get(str(row.jid_phone or ""))
+                or []
+            )
             link = row_links[0] if row_links else None
             serialized_links = [{
                 "id": int(candidate.id),

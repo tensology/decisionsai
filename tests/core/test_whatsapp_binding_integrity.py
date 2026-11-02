@@ -31,7 +31,7 @@ def test_repair_recovers_referenced_board_without_deleting_whatsapp_link(monkeyp
         assert session.query(WhatsAppPhoneLink).filter_by(board_id=2).count() == 1
 
 
-def test_repair_mirrors_project_link_to_primary_board_without_auto_snapshot(monkeypatch, tmp_path):
+def test_repair_moves_project_link_to_primary_board_without_cloning(monkeypatch, tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'bindings.db'}")
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -52,7 +52,8 @@ def test_repair_mirrors_project_link_to_primary_board_without_auto_snapshot(monk
 
     assert report["mirrored_links"][0]["board_id"] == 11
     with Session() as session:
-        mirror = session.query(WhatsAppPhoneLink).filter_by(board_id=11).one()
-        assert mirror.phone_jid == "999@g.us"
-        assert mirror.auto_snapshot is False
-
+        assert session.query(WhatsAppPhoneLink).count() == 1
+        moved = session.query(WhatsAppPhoneLink).filter_by(board_id=11).one()
+        assert moved.phone_jid == "999@g.us"
+        assert moved.auto_snapshot is True
+        assert session.query(WhatsAppPhoneLink).filter_by(board_id=8).count() == 0

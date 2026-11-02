@@ -57,8 +57,11 @@ def audit_and_repair_whatsapp_bindings() -> dict[str, Any]:
             boards[board_id] = board
             report["recovered_boards"].append(board_id)
 
-        # A project feed may resolve several boards, but its primary local board
-        # should still show every project-level WhatsApp relationship in Settings.
+        # One WhatsApp JID maps to exactly one link row. Prefer moving a
+        # project-secondary board link onto the project's primary board when
+        # the primary does not already own that chat — never clone.
+        from distr.core.kanban.whatsapp_jid import whatsapp_jid_match_keys
+
         for project in projects:
             primary_id = int(project.kanban_board_id) if str(project.kanban_board_id or "").isdigit() else 0
             primary = boards.get(primary_id)
@@ -69,22 +72,24 @@ def audit_and_repair_whatsapp_bindings() -> dict[str, Any]:
                 if int(board.default_project_id or 0) == int(project.id)
             }
             source_links = [link for link in links if int(link.board_id) in project_board_ids]
-            existing_jids = {
-                link.phone_jid for link in links if int(link.board_id) == primary_id
-            }
-            for source in source_links:
-                if source.phone_jid in existing_jids:
+            primary_keys = set()
+            for link in links:
+                if int(link.board_id) != primary_id:
                     continue
-                clone = WhatsAppPhoneLink(
-                    board_id=primary_id,
-                    phone_jid=source.phone_jid,
-                    phone_number=source.phone_number,
-                    contact_name=source.contact_name,
-                    # Never duplicate automatic ticket creation across boards.
-                    auto_snapshot=False,
-                )
-                session.add(clone)
-                existing_jids.add(source.phone_jid)
-                report["mirrored_links"].append({"project_id": int(project.id), "board_id": primary_id, "phone_jid": source.phone_jid})
+                primary_keys.update(whatsapp_jid_match_keys(link.phone_jid, link.phone_number))
+            for source in source_links:
+                if int(source.board_id) == primary_id:
+                    continue
+                source_keys = set(whatsapp_jid_match_keys(source.phone_jid, source.phone_number))
+                if source_keys & primary_keys:
+                    continue
+                source.board_id = primary_id
+                primary_keys.update(source_keys)
+                report["mirrored_links"].append({
+                    "project_id": int(project.id),
+                    "board_id": primary_id,
+                    "phone_jid": source.phone_jid,
+                    "moved_link_id": int(source.id),
+                })
         session.commit()
     return report
