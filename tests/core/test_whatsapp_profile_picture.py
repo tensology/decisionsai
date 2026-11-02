@@ -1,10 +1,19 @@
-"""Desktop photo proxy preserves bytes and keeps relay credentials server-side."""
+"""Desktop photo proxy preserves bytes, caches locally, keeps relay credentials server-side."""
 from unittest.mock import patch
 import base64
+import json
+from pathlib import Path
 import httpx
 import pytest
 from fastapi import APIRouter
+from distr.gui.web.routes import kanban_whatsapp as routes
 from distr.gui.web.routes.kanban_whatsapp import register_whatsapp_routes
+
+
+@pytest.fixture(autouse=True)
+def _avatar_cache_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(routes, "DB_DIR", str(tmp_path))
+    yield tmp_path
 
 
 @pytest.mark.asyncio
@@ -14,7 +23,7 @@ from distr.gui.web.routes.kanban_whatsapp import register_whatsapp_routes
     (200, 'text/html', b'html', 502),
     (200, 'image/png', b'x'*1048577, 502), (200, 'image/png', b'', 404),
 ])
-async def test_photo_proxy(status, mime, body, expected):
+async def test_photo_proxy(status, mime, body, expected, tmp_path):
     router = APIRouter()
     register_whatsapp_routes(router, lambda _: {'X-Relay-Internal-Token': 'test-only'}, lambda: {})
     endpoint = next(r.endpoint for r in router.routes if r.path.endswith('/profile-picture'))
@@ -32,6 +41,30 @@ async def test_photo_proxy(status, mime, body, expected):
     if expected == 200:
         assert response.body == body
         assert response.headers['cache-control'] == 'private, max-age=300'
+        bin_path = tmp_path / 'whatsapp_avatars' / '120363000000@g.us.bin'
+        meta_path = tmp_path / 'whatsapp_avatars' / '120363000000@g.us.meta'
+        assert bin_path.read_bytes() == body
+        assert json.loads(meta_path.read_text())['mime'] == 'image/jpeg'
+    if expected == 404 and status == 404:
+        assert (tmp_path / 'whatsapp_avatars' / '120363000000@g.us.missing').is_file()
+
+
+@pytest.mark.asyncio
+async def test_cache_avoids_second_relay_fetch(tmp_path):
+    router = APIRouter()
+    register_whatsapp_routes(router, lambda _: {'X-Relay-Internal-Token': 'test-only'}, lambda: {})
+    endpoint = next(r.endpoint for r in router.routes if r.path.endswith('/profile-picture'))
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, content=b'\xff\xd8\xffcached', headers={'content-type': 'image/jpeg'})
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    with patch('httpx.AsyncClient', return_value=client):
+        first = await endpoint('27820000000@s.whatsapp.net')
+        second = await endpoint('27820000000@s.whatsapp.net')
+    assert first.status_code == 200
+    assert second.body == b'\xff\xd8\xffcached'
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -53,7 +86,6 @@ async def test_device_auth_scopes_photo_to_exact_group():
     register_whatsapp_routes(router, lambda _: {}, lambda: {'device_id': 'test-device', 'private_key': base64.b64encode(key).decode()})
     endpoint = next(r.endpoint for r in router.routes if r.path.endswith('/profile-picture'))
     jid = '120363000000@g.us'
-    import json
     def handle(request):
         if request.url.path.endswith('/challenge'):
             return httpx.Response(200, json={'success': True, 'challenge_id': 'test-challenge', 'challenge_message': 'test-only'})

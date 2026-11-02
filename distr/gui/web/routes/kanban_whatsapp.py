@@ -12,6 +12,7 @@ import subprocess
 import shutil
 import threading
 import time
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -71,13 +72,99 @@ def _remember_missing_wa_media(
         _wa_media_negative_cache[key] = current + max(1.0, float(ttl_seconds))
 
 
+_WA_AVATAR_TTL_SECONDS = 24 * 60 * 60
+_WA_AVATAR_MAX_BYTES = 1024 * 1024
+_WA_AVATAR_JID_RE = re.compile(r"(?:\d+(?::\d+)?@(?:s\.whatsapp\.net|lid)|\d+(?:-\d+)?@g\.us)")
+_WA_AVATAR_MIME = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
+def _wa_avatar_dir() -> Path:
+    directory = Path(DB_DIR) / "whatsapp_avatars"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _wa_avatar_stem(jid: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._@-]+", "_", jid)
+    return _wa_avatar_dir() / safe
+
+
+def _wa_avatar_paths(jid: str) -> tuple[Path, Path, Path]:
+    stem = _wa_avatar_stem(jid)
+    # Do not use Path.with_suffix: JIDs end in .net/.us and would lose the domain.
+    return Path(str(stem) + ".bin"), Path(str(stem) + ".meta"), Path(str(stem) + ".missing")
+
+
+def _wa_avatar_fresh(path: Path, *, now: float | None = None) -> bool:
+    if not path.is_file():
+        return False
+    current = time.time() if now is None else float(now)
+    try:
+        return (current - path.stat().st_mtime) < _WA_AVATAR_TTL_SECONDS
+    except OSError:
+        return False
+
+
+def _wa_avatar_read_cached(jid: str) -> Response | None:
+    bin_path, meta_path, missing_path = _wa_avatar_paths(jid)
+    if _wa_avatar_fresh(missing_path):
+        return Response(status_code=404)
+    if not _wa_avatar_fresh(bin_path) or not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        mime = str(meta.get("mime") or "")
+        body = bin_path.read_bytes()
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if mime not in _WA_AVATAR_MIME or not body or len(body) > _WA_AVATAR_MAX_BYTES:
+        return None
+    return Response(
+        body,
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+def _wa_avatar_store(jid: str, *, mime: str, body: bytes) -> None:
+    bin_path, meta_path, missing_path = _wa_avatar_paths(jid)
+    missing_path.unlink(missing_ok=True)
+    directory = bin_path.parent
+    partial = None
+    meta_partial = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=directory, suffix=".part", delete=False) as output:
+            partial = Path(output.name)
+            output.write(body)
+        with tempfile.NamedTemporaryFile(dir=directory, suffix=".meta.part", delete=False, mode="w", encoding="utf-8") as meta_out:
+            meta_partial = Path(meta_out.name)
+            json.dump({"jid": jid, "mime": mime, "fetched_at": time.time()}, meta_out)
+        partial.replace(bin_path)
+        meta_partial.replace(meta_path)
+    finally:
+        if partial is not None:
+            partial.unlink(missing_ok=True)
+        if meta_partial is not None:
+            meta_partial.unlink(missing_ok=True)
+
+
+def _wa_avatar_store_missing(jid: str) -> None:
+    bin_path, meta_path, missing_path = _wa_avatar_paths(jid)
+    bin_path.unlink(missing_ok=True)
+    meta_path.unlink(missing_ok=True)
+    missing_path.write_text(str(time.time()), encoding="utf-8")
+
+
 def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_identity):
     @router.get("/tickets/whatsapp/profile-picture")
     async def whatsapp_profile_picture(jid: str = ""):
         import httpx
 
-        if not re.fullmatch(r"(?:\d+(?::\d+)?@(?:s\.whatsapp\.net|lid)|\d+(?:-\d+)?@g\.us)", jid):
+        if not _WA_AVATAR_JID_RE.fullmatch(jid or ""):
             return Response(status_code=400)
+        cached = _wa_avatar_read_cached(jid)
+        if cached is not None:
+            return cached
         base_url = _whatsapp_relay_base_url()
         headers, params = await _get_media_auth(base_url, photo_jid=jid)
         if not headers and not params:
@@ -86,18 +173,26 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             async with httpx.AsyncClient(timeout=15.0) as client:
                 async with client.stream("GET", f"{base_url}/profile-picture", headers=headers, params={**params, "jid": jid}) as upstream:
                     if upstream.status_code != 200:
+                        if upstream.status_code == 404:
+                            _wa_avatar_store_missing(jid)
                         return Response(status_code=upstream.status_code if upstream.status_code in (401, 403, 404, 503, 504) else 502)
                     mime = upstream.headers.get("content-type", "").split(";")[0]
-                    if mime not in ("image/jpeg", "image/png", "image/webp"):
+                    if mime not in _WA_AVATAR_MIME:
                         return Response(status_code=502)
                     body = bytearray()
                     async for chunk in upstream.aiter_bytes():
                         body.extend(chunk)
-                        if len(body) > 1024 * 1024:
+                        if len(body) > _WA_AVATAR_MAX_BYTES:
                             return Response(status_code=502)
                     if not body:
+                        _wa_avatar_store_missing(jid)
                         return Response(status_code=404)
-            return Response(bytes(body), media_type=mime, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+            payload = bytes(body)
+            try:
+                _wa_avatar_store(jid, mime=mime, body=payload)
+            except OSError:
+                logger.exception("WhatsApp: failed to cache profile picture for %s", jid)
+            return Response(payload, media_type=mime, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
         except httpx.TimeoutException:
             return Response(status_code=504)
         except httpx.HTTPError:
