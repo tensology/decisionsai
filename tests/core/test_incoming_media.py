@@ -76,7 +76,8 @@ def test_whatsapp_all_files_same_names_durable_and_thread_scoped(store, tmp_path
         media.proposal_attachments({**proposal, 'message_ids': ['wrong-conversation']}, 7)
 
 
-def test_missing_whatsapp_media_fails_before_thread_creation(store, monkeypatch):
+def test_missing_whatsapp_media_is_skipped_and_reported_not_blocking_thread(store, monkeypatch):
+    # Per Paul: a file that cannot be fetched no longer blocks thread creation.
     sessions, _ = store
     from distr.core.db.projects import Project
     monkeypatch.setattr('distr.core.db.get_session', sessions)
@@ -85,12 +86,20 @@ def test_missing_whatsapp_media_fails_before_thread_creation(store, monkeypatch)
         db.add(WhatsAppMessage(message_id='missing', jid='client@g.us', media_type='document', media_filename='brief.pdf'))
     monkeypatch.setattr(media, '_download_whatsapp', Mock(side_effect=OSError('gone')))
     from distr.core.incoming import proposals
-    create = Mock()
+    create = Mock(return_value=901)
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', create)
-    with pytest.raises(ValueError, match='brief.pdf'):
-        proposals.create_proposal_thread({'id': 'local:missing', 'source': 'whatsapp', 'project_id': 7,
-                                         'source_thread_id': 'client@g.us', 'message_ids': ['missing']})
-    create.assert_not_called()
+    registered = Mock(return_value={'failed': []})
+    monkeypatch.setattr(media, 'register_thread_attachments', registered)
+    reports = []
+    monkeypatch.setattr(proposals, '_record_attachment_report', lambda cid, failed, ticket: reports.append((cid, failed)))
+    monkeypatch.setattr(proposals, '_record_proposal_handoff', Mock())
+    monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', Mock())
+    chat_id = proposals.create_proposal_thread({'id': 'local:missing', 'source': 'whatsapp', 'project_id': 7,
+                                                'source_thread_id': 'client@g.us', 'message_ids': ['missing']})
+    assert chat_id == 901
+    create.assert_called_once()
+    registered.assert_called_once_with(901, [])
+    assert reports and reports[0][0] == 901 and [row['name'] for row in reports[0][1]] == ['brief.pdf']
 
 
 def test_remote_multiple_files_on_same_snapshot_identity_and_scoped_urls(store):

@@ -19,9 +19,38 @@ def test_mailshot_message_normalizes_to_intake_shape():
     assert msg["source"] == "mailshot"
     assert msg["thread_id"] == "email-abc"
     assert msg["to"] == "paul@tensology.com"
-    assert msg["attachments"] == [{"filename": "issue.png"}]
+    assert msg["attachments"] == [{"filename": "issue.png", "message_id": "email-abc"}]
     assert intake.is_jira_notification_email(from_addr=msg["from"], subject=msg["subject"])
     assert intake.collect_jira_keys_from_emails([msg]) == ["PLAYER1-69"]
+
+
+def test_mailshot_message_maps_detail_body_and_attachment_ids():
+    msg = intake.mailshot_message_to_intake_dict({
+        "_id": "email-detail",
+        "from": "Ops <ops@tensology.com>",
+        "subject": "Deploy report",
+        "body": "Plain body",
+        "body_html": "<p>Plain body</p>",
+        "attachments": [{
+            "attachment_id": "att-1",
+            "filename": "report.pdf",
+            "content_type": "application/pdf",
+            "size": 12,
+            "storage_path": "/var/secret/path",
+        }],
+    })
+    assert msg["body"] == "Plain body"
+    assert msg["text_body"] == "Plain body"
+    assert msg["html_body"] == "<p>Plain body</p>"
+    assert msg["attachments"] == [{
+        "filename": "report.pdf",
+        "attachment_id": "att-1",
+        "mime_type": "application/pdf",
+        "content_type": "application/pdf",
+        "size": 12,
+        "message_id": "email-detail",
+    }]
+    assert "storage_path" not in msg["attachments"][0]
 
 
 def test_work_intake_prefers_mailshot_over_gmail(monkeypatch):

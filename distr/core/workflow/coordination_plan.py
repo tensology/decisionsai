@@ -668,40 +668,8 @@ def revise_plan_after_step(
         updated["updated_at"] = revision["created_at"]
         updated.setdefault("revisions", []).append(revision)
         return updated, revision
-    fallback = None
-    try:
-        from distr.core.project_cli_backends.model_policy import build_auto_fallback_chain
-
-        fallback = next(
-            (
-                dict(item) for item in build_auto_fallback_chain(previous, settings=settings or {})
-                if _route_identity(item) != _route_identity(previous) and bool(item.get("automatic", True))
-            ),
-            None,
-        )
-    except Exception:
-        fallback = None
-    if not fallback:
-        return updated, None
-    fallback["source"] = "coordination_replan"
-    fallback["rationale"] = reason or "The previous step failed; use the next viable worker for correction."
-    target["primary_route"] = fallback
-    target["revision"] = int(target.get("revision") or 0) + 1
-    assignments[str(next_step_id)] = target
-    revision = {
-        "from_step_id": completed_step_id,
-        "target_step_id": next_step_id,
-        "previous_route": previous,
-        "new_route": fallback,
-        "reason": fallback["rationale"],
-        "replan_evidence_count": evidence_count,
-        "route_changed": True,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    updated["assignments"] = assignments
-    updated["updated_at"] = revision["created_at"]
-    updated.setdefault("revisions", []).append(revision)
-    return updated, revision
+    # Deterministic harness: never replan onto another backend/model.
+    return updated, None
 
 
 def consume_step_replan(

@@ -668,7 +668,7 @@ def _cleanup_orphaned_runs_on_startup() -> None:
     Running work has lost its in-memory worker. A run with a durable current
     step becomes an explicit restart-recovery checkpoint so Telegram or the web
     can resume that same step with its stored context. Malformed runs without a
-    current step become terminal. Existing waiting checkpoints remain durable.
+    current step stay listed with a recovery reason. Existing waiting checkpoints remain durable.
     Provider rows whose owner is terminal or missing must never remain visible
     as queued/running/waiting forever.
     """
@@ -683,23 +683,44 @@ def _cleanup_orphaned_runs_on_startup() -> None:
         recoverable_ids = [int(run.id) for run in recoverable]
         orphan_ids = [int(run.id) for run in terminal_orphans]
         completed_at = utc_now_naive()
+        def hydrate_identity(run, data):
+            from distr.core.workflow.service import _enrich_run_record
+            data = data if isinstance(data, dict) else {}
+            enriched = _enrich_run_record(db, run, data)
+            return {**data, **{key: enriched[key] for key in ("project_name", "ticket_title", "ticket_id") if enriched.get(key)}}
+
         for run in terminal_orphans:
-            run.status = "cancelled"
-            run.completed_at = completed_at
+            # Keep malformed interruptions in the same Active Runs list as
+            # recoverable ones, with an explicit reason instead of hiding them.
+            run.status = "waiting"
+            run.completed_at = None
+            try:
+                data = json.loads(run.run_data or "{}")
+            except (ValueError, TypeError):
+                data = {}
+            data = hydrate_identity(run, data)
+            from distr.core.workflow.run_prompts import restart_prompt, run_label
+            data.update({"waiting_kind": "restart_recovery",
+                         "restart_recovery": {"available": False, "blocked_reason": "No saved current step"},
+                         "waiting_prompt": restart_prompt(run_label(data, ticket_id=run.ticket_id)) + " No current step was saved. Stop this run and review its workflow before starting again."})
+            run.run_data = json.dumps(data)
+            logger.warning("Run %s cannot auto-resume: no saved current step", run.id)
         for run in recoverable:
             try:
                 run_data = json.loads(run.run_data or "{}") or {}
             except Exception:
                 run_data = {}
+            run_data = hydrate_identity(run, run_data)
             run.status = "waiting"
             run.completed_at = None
+            from distr.core.workflow.run_prompts import restart_prompt, run_label
+            previous_recovery = dict(run_data.get("restart_recovery") or {})
             run_data.update({
                 "waiting_kind": "restart_recovery",
-                "waiting_prompt": (
-                    "DecisionsAI restarted while this step was running. "
-                    "Continue to retry the same step with its saved context, or Stop."
-                ),
+                "waiting_prompt": restart_prompt(run_label(run_data, ticket_id=run.ticket_id)),
                 "restart_recovery": {
+                    **previous_recovery,
+                    "interrupted_waiting_kind": run_data.get("waiting_kind") or "",
                     "available": True,
                     "step_id": int(run.current_step_id),
                     "recovered_at": completed_at.isoformat(),
@@ -777,6 +798,89 @@ def _cleanup_orphaned_runs_on_startup() -> None:
             )
 
 
+def _auto_resume_interrupted_runs(*, background: bool = True) -> None:
+    """Run only after startup reconciliation, never across an approval gate."""
+    from distr.core.workflow.run_prompts import auto_resume_decision, restart_prompt, run_label
+
+    eligible = []
+    with get_session() as db:
+        runs = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.status == "waiting").all()
+        for run in runs:
+            try:
+                data = json.loads(run.run_data or "{}")
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("waiting_kind") != "restart_recovery":
+                continue
+            recovery = dict(data.get("restart_recovery") or {})
+            step = db.get(AutoWorkflowStep, run.current_step_id) if run.current_step_id else None
+            allowed, attempts = auto_resume_decision(data, run.current_step_id or 0)
+            reason = ""
+            if step is None or step.workflow_id != run.workflow_id:
+                reason = "No valid saved step"
+            elif not allowed:
+                reason = "Automatic recovery retry limit reached"
+            elif recovery.get("interrupted_waiting_kind") not in {None, "", "restart_recovery"}:
+                reason = "The interrupted step was already at a human checkpoint"
+            elif data.get("pending_route_approval") or data.get("human_intervention_state") == "needs_human_input":
+                reason = "An approval or answer is still required"
+            elif step.action_type not in {"send_to_project_cli", "agent_instruction", "instruction", "agent", "llm"}:
+                reason = "This action may have side effects and cannot safely be replayed automatically"
+            if reason:
+                recovery["blocked_reason"] = reason
+                data["waiting_prompt"] = restart_prompt(run_label(data, ticket_id=run.ticket_id)) + " Recovery blocked: " + reason + "."
+                logger.warning("Run %s cannot auto-resume: %s", run.id, reason)
+            else:
+                counts = dict(recovery.get("auto_resume_counts") or {})
+                counts[str(run.current_step_id)] = attempts + 1
+                recovery.update({"auto_resume_counts": counts, "auto_resume_pending": True})
+                recovery.pop("blocked_reason", None)
+                eligible.append(int(run.id))
+            data["restart_recovery"] = recovery
+            run.run_data = json.dumps(data)
+        db.commit()
+    def resume(run_id):
+        try:
+            result = continue_waiting_step(run_id)
+            if result.get("status_code") == 409:
+                logger.info("Run %s recovery checkpoint was already handled; leaving its current state intact", run_id)
+                return
+            if result.get("error") or (result.get("dispatch") or {}).get("error"):
+                raise RuntimeError(result.get("error") or result["dispatch"]["error"])
+            logger.info("Run %s automatically resumed its saved step after restart", run_id)
+        except Exception as exc:
+            logger.exception("Run %s automatic restart recovery failed", run_id)
+            with get_session() as db:
+                run = db.get(AutoWorkflowRun, run_id)
+                if run is None or run.status not in {"running", "waiting"}:
+                    return
+                data = json.loads(run.run_data or "{}")
+                run.status = "waiting"
+                step = db.get(AutoWorkflowStep, run.current_step_id) if run.current_step_id else None
+                if step:
+                    step.status = "waiting"
+                if run.ticket_id:
+                    from distr.core.db.kanban import KanbanTicket
+                    ticket = db.get(KanbanTicket, run.ticket_id)
+                    if ticket:
+                        ticket.workflow_status = "waiting"
+                data["waiting_kind"] = "restart_recovery"
+                data["waiting_prompt"] = restart_prompt(run_label(data, ticket_id=run.ticket_id)) + f" Recovery failed: {exc}."
+                recovery = dict(data.get("restart_recovery") or {})
+                recovery["blocked_reason"] = str(exc)[:300]
+                data["restart_recovery"] = recovery
+                run.run_data = json.dumps(data)
+                db.commit()
+    for run_id in eligible:
+        if background:
+            threading.Thread(target=resume, args=(run_id,), name=f"restart-recovery-{run_id}", daemon=True).start()
+        else:
+            resume(run_id)
+    increment_workflow_updated()
+
+
 def _enter_controlled_restart_recovery(run_id: int, step_id: int) -> bool:
     """Pause one qualification run at the durable restart boundary.
 
@@ -785,6 +889,7 @@ def _enter_controlled_restart_recovery(run_id: int, step_id: int) -> bool:
     reconcile unrelated live work and is disabled unless the process-level
     qualification switch is enabled.
     """
+    from distr.core.workflow.run_prompts import restart_prompt, run_label
     if os.environ.get("DECISIONS_ENABLE_QUALIFICATION_FAULTS", "").strip().lower() not in {
         "1",
         "true",
@@ -824,10 +929,7 @@ def _enter_controlled_restart_recovery(run_id: int, step_id: int) -> bool:
             "qualification_failure_observed": True,
             "qualification_failure_stage": f"active_step:{int(step_id)}",
             "waiting_kind": "restart_recovery",
-            "waiting_prompt": (
-                "DecisionsAI restarted while this step was running. "
-                "Continue to retry the same step with its saved context, or Stop."
-            ),
+            "waiting_prompt": restart_prompt(run_label(run_data, ticket_id=run.ticket_id)),
             "restart_recovery": {
                 "available": True,
                 "step_id": int(step_id),
@@ -2691,10 +2793,16 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
                 return {"error": "The saved recovery step no longer exists", "status_code": 409}
             run.status = "running"
             step.status = "queued"
+            if run.ticket_id:
+                from distr.core.db.kanban import KanbanTicket
+                ticket = db.get(KanbanTicket, run.ticket_id)
+                if ticket:
+                    ticket.workflow_status = "running"
             run_data.pop("waiting_kind", None)
             run_data.pop("waiting_prompt", None)
             recovery = dict(run_data.get("restart_recovery") or {})
             recovery.update({"available": False, "resumed": True})
+            recovery.pop("auto_resume_pending", None)
             run_data["restart_recovery"] = recovery
             if clean:
                 run_data["feedback"] = clean[:2000]
@@ -2741,6 +2849,7 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
     if waiting_kind == "control_interrupt":
         clean = (optional_input or "").strip()
         lowered = clean.lower()
+        resume_completed_step = False
         if lowered in {"stop", "cancel", "abort"} or lowered.startswith("stop "):
             cancel_run(run_id)
             return {"success": True, "action": "end_run", "status": "cancelled"}
@@ -2758,29 +2867,47 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
                     run_data = json.loads(run.run_data or "{}") or {}
                 except Exception:
                     run_data = {}
+                if run.status != "waiting" or run_data.get("waiting_kind") != "control_interrupt":
+                    return {"error": "This checkpoint is no longer waiting", "status_code": 409}
+                budget = dict(run_data.get("power_budget") or {})
+                if budget:
+                    # Legacy waiting runs may still carry exhausted flags; clear
+                    # them and proceed. Budget no longer gates continuation.
+                    budget["exhausted"] = False
+                    run_data["power_budget"] = budget
+                    run_data.pop("power_budget_pending", None)
+                    completed = run_data.pop("power_budget_step_result", {})
+                    if completed.get("step_id") == run.current_step_id:
+                        run_data["waiting_result"] = completed.get("result") or ""
+                        run_data["waiting_passed"] = bool(completed.get("passed"))
+                        resume_completed_step = True
                 run_data.pop("waiting_kind", None)
+                run_data.pop("waiting_prompt", None)
                 run_data.pop("interrupt_context", None)
+                run_data["human_intervention_state"] = "answer_received"
+                run_data["next_action"] = "worker_continue"
                 run_data["consecutive_step_failures"] = 0
                 run_data.pop("validation_stalled_step_id", None)
                 run_data.pop("validation_stall_count", None)
                 if clean:
                     run_data["feedback"] = clean[:2000]
-                run.status = "running"
+                run.status = "waiting" if resume_completed_step else "running"
                 run.run_data = json.dumps(run_data)
                 step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == run.current_step_id).first()
                 if step:
-                    step.status = "pending"
+                    step.status = "waiting" if resume_completed_step else "pending"
                 db.commit()
                 step_id = int(run.current_step_id or 0)
             else:
                 return {"error": "Run not found", "status_code": 404}
-        if step_id:
+        if step_id and not resume_completed_step:
             return {
                 "success": True,
                 "action": "dispatch_step",
                 **_dispatch_workflow_step(int(run_id), int(step_id)),
             }
-        return {"error": "No step to resume", "status_code": 409}
+        if not step_id:
+            return {"error": "No step to resume", "status_code": 409}
 
     from distr.core.workflow.router import StepRouter
 

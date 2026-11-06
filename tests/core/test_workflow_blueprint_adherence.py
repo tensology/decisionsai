@@ -28,16 +28,15 @@ def test_checklist_has_no_unexplained_fails():
     assert fails[0].get("ceiling")
 
 
-def test_power_budget_exhaustion_stop_and_ask():
+def test_power_budget_meters_never_interrupt():
     run_data = ensure_run_blueprint_defaults({}, complexity="low")
     budget = default_run_power_budget(complexity="low")
     run_data["power_budget"] = {**budget, "turns_used": budget["max_turns"] - 1}
     run_data, interrupt = consume_run_power_budget(run_data, turns=1, tokens=1200, model_provider="openai")
-    assert interrupt is not None
-    assert interrupt["should_interrupt"] is True
-    assert "budget" in interrupt["question"].lower() or "turns" in interrupt["question"].lower()
-    assert run_data["power_budget"]["exhausted"] is True
+    assert interrupt is None
+    assert run_data["power_budget"]["exhausted"] is False
     assert run_data["power_budget"]["estimated_cost_usd"] > 0
+    assert run_data["power_budget"]["turns_used"] == budget["max_turns"]
 
 
 def test_tool_bay_docs_and_failure_recovery():

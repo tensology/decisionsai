@@ -3,6 +3,15 @@ from sqlalchemy.orm import relationship
 from . import Base
 from .time import utc_now_naive
 
+class IncomingProposalProject(Base):
+    """A user's project correction for one proposal work snapshot."""
+    __tablename__ = 'incoming_proposal_projects'
+
+    key = Column(String, primary_key=True)
+    project_id = Column(Integer, ForeignKey('projects.id', ondelete='SET NULL'), nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive)
+
+
 class Project(Base):
     __tablename__ = 'projects'
 

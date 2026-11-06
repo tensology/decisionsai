@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def test_high_complexity_multi_phase_instruction_uses_workflow():
+def test_even_high_complexity_stays_direct_by_default():
     from distr.core.workflow.execution_mode import choose_development_execution_mode
 
     decision = choose_development_execution_mode(
@@ -9,23 +9,22 @@ def test_high_complexity_multi_phase_instruction_uses_workflow():
         assessment={"complexity": "high", "operational_state": "risk"},
     )
 
-    assert decision["mode"] == "workflow"
-    assert "multi_phase_scope" in decision["signals"]
+    assert decision["mode"] == "direct"
+    assert "direct_by_default" in decision["signals"]
 
 
-def test_explicit_direct_override_wins():
+def test_explicit_workflow_language_does_not_auto_wrap():
     from distr.core.workflow.execution_mode import choose_development_execution_mode
 
     decision = choose_development_execution_mode(
-        "Work directly and do not use a workflow, even though this is a production test.",
-        assessment={"complexity": "high", "operational_state": "risk"},
+        "Run an end-to-end workflow across the codebase with independent review.",
+        assessment={"complexity": "high"},
     )
 
     assert decision["mode"] == "direct"
-    assert decision["signals"] == ["explicit_direct_override"]
 
 
-def test_risk_alone_does_not_turn_a_short_request_into_a_workflow():
+def test_short_request_is_direct():
     from distr.core.workflow.execution_mode import choose_development_execution_mode
 
     decision = choose_development_execution_mode(
@@ -36,20 +35,23 @@ def test_risk_alone_does_not_turn_a_short_request_into_a_workflow():
     assert decision["mode"] == "direct"
 
 
-def test_confirmation_direct_choice_is_preserved_by_dispatch():
+def test_proposal_scope_also_stays_direct():
     from distr.core.workflow.execution_mode import choose_development_execution_mode
 
     decision = choose_development_execution_mode(
-        "Plan, implement, audit, and test the production migration end to end.",
+        "ignored wrapper text",
         assessment={
             "complexity": "high",
-            "operational_state": "risk",
-            "execution_mode_override": "direct",
+            "proposal_scope": {
+                "title": "Migrate production",
+                "description": "schema change",
+                "tasks": ["a", "b", "c", "d"],
+            },
         },
     )
 
     assert decision["mode"] == "direct"
-    assert decision["signals"] == ["user_selected_direct"]
+    assert decision["policy"] == "proposal-scope-v1"
 
 
 def test_infrastructure_skills_are_available_to_every_step():

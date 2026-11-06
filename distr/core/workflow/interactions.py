@@ -432,6 +432,7 @@ def resolve_interaction(
                 "response_text": response_text,
                 "source": source,
                 "resolved_at": now,
+                "resolver_id": resolver_id,
             },
             name=f"workflow-interaction-{item['run_id']}-{action}",
             daemon=True,
@@ -450,6 +451,7 @@ def resolve_interaction(
         response_text=response_text,
         source=source,
         resolved_at=now,
+        resolver_id=resolver_id,
     )
 
 
@@ -461,6 +463,7 @@ def _apply_claimed_interaction(
     response_text: str,
     source: str,
     resolved_at: float,
+    resolver_id: str = "",
 ) -> dict[str, Any]:
     """Apply a previously claimed interaction, optionally on a worker thread."""
     try:
@@ -476,6 +479,7 @@ def _apply_claimed_interaction(
                 action=action,
                 response_text=response_text,
                 source=source,
+                resolver_id=resolver_id,
             )
         if result.get("error"):
             raise RuntimeError(str(result["error"]))
@@ -497,10 +501,22 @@ def _apply_claimed_interaction(
     return {"success": True, "run_id": item["run_id"], "action": action, "result": result}
 
 
+def interaction_approver(source: str, resolver_id: str = "") -> str:
+    """Real approver identity for a resolved interaction, or '' if unknown."""
+    who = str(resolver_id or "").strip()
+    if not who:
+        return ""
+    channel = str(source or "interaction").strip() or "interaction"
+    if channel.lower().startswith("telegram"):
+        return f"telegram user {who} via {channel}"
+    return f"{who} via {channel}"
+
+
 def _apply_standard_workflow_interaction(
-    *, item: dict[str, Any], action: str, response_text: str, source: str
+    *, item: dict[str, Any], action: str, response_text: str, source: str, resolver_id: str = ""
 ) -> dict[str, Any]:
     """Apply a normal workflow checkpoint after the durable claim succeeds."""
+    approver = interaction_approver(source, resolver_id)
     synchronous_redispatch = str(source or "").strip().lower() in {
         "cli",
         "qualification",
@@ -513,6 +529,7 @@ def _apply_standard_workflow_interaction(
         result = apply_run_route_approval(
             int(item["run_id"]),
             approved=action == "approve",
+            approved_by=approver,
             **kwargs,
         )
     elif item["kind"] == "provider_preflight" and action.startswith("model_"):
@@ -520,13 +537,14 @@ def _apply_standard_workflow_interaction(
 
         kwargs = {"synchronous_redispatch": True} if synchronous_redispatch else {}
         result = apply_run_provider_model_selection(
-            int(item["run_id"]), int(action.rsplit("_", 1)[1]), **kwargs
+            int(item["run_id"]), int(action.rsplit("_", 1)[1]), approved_by=approver, **kwargs
         )
     elif item["kind"] == "provider_preflight" and action == "approve":
         from distr.core.workflow.service import apply_run_route_approval
 
         kwargs = {"synchronous_redispatch": True} if synchronous_redispatch else {}
-        result = apply_run_route_approval(int(item["run_id"]), approved=True, **kwargs)
+        result = apply_run_route_approval(int(item["run_id"]), approved=True,
+                                          approved_by=approver, **kwargs)
     elif item["kind"] == "pre_execution_approval" and action == "approve":
         from distr.core.workflow.dispatcher import approve_pre_execution_step
 

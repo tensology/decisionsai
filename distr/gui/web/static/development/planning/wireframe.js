@@ -13,7 +13,7 @@ const leaves = 'field input textarea select dropdown option checkbox radio toggl
 const types = new Set([...containers, ...leaves]);
 const common = 'id label width height gap padding bind binding requirement disabled'.split(' ');
 const attributes = {
-    screen: 'device uses route', template: 'uses', slot: 'name', content: 'name',
+    screen: 'device uses route layer', template: 'uses', slot: 'name', content: 'name',
     grid: 'columns', row: '', sidebar: '', header: '', hero: '', footer: '', section: '', input: 'type name value placeholder required min max step',
     field: 'type name value placeholder required min max step', textarea: 'name value placeholder required rows',
     select: 'name value placeholder required options', dropdown: 'name value placeholder required options',
@@ -78,6 +78,7 @@ function validate(node, diagnostics) {
     if (node.attrs.id !== undefined && !/^[A-Za-z][\w-]{0,63}$/.test(node.attrs.id)) diagnostic(diagnostics, node, 'INVALID_ID', 'id must start with a letter and contain at most 64 letters, digits, underscores or hyphens.');
     if (node.attrs.type && !inputTypes.has(node.attrs.type)) diagnostic(diagnostics, node, 'INPUT_TYPE', `Unsupported input type "${node.attrs.type}"; use dedicated checkbox, radio or date components.`);
     if (node.attrs.device && !['desktop', 'tablet', 'mobile'].includes(node.attrs.device)) diagnostic(diagnostics, node, 'DEVICE', 'device must be desktop, tablet or mobile.');
+    if (node.attrs.layer && !['frontend', 'backend', 'ajax', 'guidance'].includes(node.attrs.layer)) diagnostic(diagnostics, node, 'LAYER', 'layer must be frontend, backend, ajax or guidance.');
     for (const key of ['href', 'route']) if (node.attrs[key] !== undefined && !localURL(node.attrs[key])) diagnostic(diagnostics, node, 'UNSAFE_URL', `${key} must be a local anchor or absolute local route.`);
     if (node.attrs.src !== undefined) diagnostic(diagnostics, node, 'UNSUPPORTED_SOURCE', 'Images are offline placeholders; src is not fetched.', 'warning');
     if (node.attrs.asset !== undefined && !/^[1-9]\d{0,15}$/.test(node.attrs.asset)) diagnostic(diagnostics, node, 'INVALID_ASSET', 'asset must be an uploaded project image ID.');

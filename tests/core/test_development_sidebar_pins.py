@@ -42,7 +42,9 @@ def test_shared_board_pins_round_trip_in_isolated_settings_database(monkeypatch)
     with sessions() as db:
         db.add(Settings(development_hot_corner_pinned_project_ids='[9]'))
         db.commit()
-    assert load_pinned_boards() is None
+    monkeypatch.setattr('distr.core.db.get_session', sessions)
+    # Legacy project 9 no longer exists, so migration records an empty shared list.
+    assert load_pinned_boards() == []
     assert save_pinned_boards(['jira:ABC', 'decisions:13', 'jira:ABC']) == ['jira:ABC', 'decisions:13']
     assert load_pinned_boards() == ['jira:ABC', 'decisions:13']
     assert utils.load_settings_from_db()['development_hot_corner_pinned_project_ids'] == [9]
@@ -70,3 +72,63 @@ def test_sidebar_pin_boundary_rejects_invalid_keys_and_returns_shared_state(monk
         response = client.put('/workflows/studio/sidebar/pins', json={'board_keys': ['trello:ABC']})
         assert response.json() == {'board_keys': ['trello:ABC']}
         assert saved == [['trello:ABC']]
+
+
+def _isolated_pin_db(monkeypatch, legacy):
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.projects import Project
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr(utils, 'Session', sessions)
+    monkeypatch.setattr('distr.core.settings.load_settings_from_db', utils.load_settings_from_db)
+    monkeypatch.setattr('distr.core.db.get_session', sessions)
+    with sessions() as db:
+        db.add(Settings(development_hot_corner_pinned_project_ids=legacy))
+        local, external = Project(name='Local'), Project(name='External')
+        unpinned = Project(name='Unpinned')
+        db.add_all([local, external, unpinned])
+        db.flush()
+        board = KanbanBoard(name='Jira', source='jira', external_board_id='ABC', default_project_id=external.id)
+        db.add(board)
+        db.flush()
+        external.kanban_board_id = board.id
+        db.commit()
+        return sessions, int(local.id), int(external.id)
+
+
+def test_legacy_hover_project_pins_migrate_to_board_keys_once(monkeypatch):
+    from distr.core.workflow import development_sidebar as sidebar
+    sessions, local_id, external_id = _isolated_pin_db(monkeypatch, None)
+    utils.save_settings_to_db({'development_hot_corner_pinned_project_ids': [external_id, local_id, 999]})
+    keys = load_pinned_boards()
+    local_key = sidebar.project_board_keys(sessions)[local_id]
+    assert local_key.startswith('decisions:')
+    # Order follows sorted project ids; unknown project 999 is skipped.
+    assert keys == [local_key, 'jira:ABC']
+    # Shared setting is now authoritative; legacy setting is untouched (archived).
+    settings = utils.load_settings_from_db()
+    assert settings['development_hot_corner_pinned_project_ids'] == [external_id, local_id, 999]
+    # Idempotent: later reads never re-merge legacy pins, so unpinning sticks.
+    save_pinned_boards(['jira:ABC'])
+    assert load_pinned_boards() == ['jira:ABC']
+    assert sidebar.migrate_legacy_project_pins(sessions) is None
+    assert sidebar.sidebar_pin_preferences() == {'board_keys': ['jira:ABC']}
+
+
+def test_migration_is_noop_without_legacy_pins(monkeypatch):
+    from distr.core.workflow import development_sidebar as sidebar
+    _isolated_pin_db(monkeypatch, None)
+    assert load_pinned_boards() is None
+    assert sidebar.sidebar_pin_preferences() == {'board_keys': None}
+    assert utils.load_settings_from_db().get('development_pinned_board_keys') is None
+
+
+def test_hover_panel_and_web_share_board_key_format():
+    from types import SimpleNamespace
+    from distr.core.workflow.development_sidebar import board_key_for
+    assert board_key_for(SimpleNamespace(id=5, source='database', external_board_id=None)) == 'decisions:5'
+    assert board_key_for(SimpleNamespace(id=5, source=None, external_board_id=None)) == 'decisions:5'
+    assert board_key_for(SimpleNamespace(id=5, source='trello', external_board_id='T1')) == 'trello:T1'
+    assert board_key_for(SimpleNamespace(id=5, source='jira', external_board_id=None)) is None
+    assert board_key_for(None) is None

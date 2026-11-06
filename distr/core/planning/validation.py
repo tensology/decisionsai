@@ -104,3 +104,96 @@ def validate_plan_references(items, *, asset_ids=()):
                 errors.append(f"{item.get('title', 'Wireframe')}, line {ref['line']}: unresolved {ref['attribute']}={ref['value']}")
     if errors:
         raise PlanReferenceError("Unresolved plan references. No changes were saved: " + "; ".join(errors[:5]))
+
+
+# ---- Interface node metadata sidecar (N6): one trailing line per item --------------------------------
+# wire:    # decisions-flow: {"v":1,"nodes":{"<screen id>":{"shape":..,"image":..,"note":..,"links":{..}}}}
+# mermaid: %% decisions-flow: {"v":1,"nodes":{"<node id>":{"image":..,"note":..,"links":{..}}}}
+# Both are comment lines, so the wire parser / renderer / validate_wireframe and Mermaid ignore them.
+FLOW_SIDECAR_PREFIX = {"wire": "# decisions-flow:", "mermaid": "%% decisions-flow:"}
+FLOW_SHAPES = ("page", "rectangle", "square", "circle", "oval", "diamond")
+FLOW_SIDECAR_MAX_BYTES = 16 * 1024
+FLOW_NODE_LIMIT = 500
+FLOW_NOTE_LIMIT = 500
+FLOW_LINK_LABEL_LIMIT = 120
+_FLOW_ID = re.compile(r"^[A-Za-z][\w-]{0,63}$")
+_SCREEN_ID = re.compile(r"^\s*screen\b.*?\bid=([A-Za-z][\w-]{0,63})\b")
+_MERMAID_TOKEN = re.compile(r"[A-Za-z][\w-]{0,63}")
+
+
+def _flow_node_ids(lines, content_format):
+    ids = set()
+    for line in lines:
+        stripped = line.strip()
+        if content_format == "wire":
+            match = _SCREEN_ID.match(line)
+            if match:
+                ids.add(match.group(1))
+        elif stripped and not stripped.startswith("%%"):
+            ids.update(_MERMAID_TOKEN.findall(stripped.split('"', 1)[0]))
+    return ids
+
+
+def validate_flow_sidecar(content, content_format, *, asset_ids=None):
+    """Validate the optional trailing ``decisions-flow`` line. Raise PlanValidationError (HTTP 422) for bad
+    metadata; return warnings (orphan keys: the server only warns, the editor prunes them)."""
+    prefix = FLOW_SIDECAR_PREFIX.get(content_format)
+    if prefix is None or not isinstance(content, str) or prefix not in content:
+        return []
+    lines = content.split("\n")
+    hits = [index for index, line in enumerate(lines) if line.strip().startswith(prefix)]
+    if not hits:
+        return []
+    if len(hits) > 1:
+        raise PlanValidationError("Only one flow metadata line is allowed.")
+    last = max((index for index, line in enumerate(lines) if line.strip()), default=-1)
+    if hits[0] != last:
+        raise PlanValidationError("The flow metadata line must be the last line of the item.")
+    raw = lines[hits[0]].strip()[len(prefix):].strip()
+    if len(raw.encode("utf-8")) > FLOW_SIDECAR_MAX_BYTES:
+        raise PlanValidationError("Flow metadata is larger than 16 KB.")
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise PlanValidationError("Flow metadata is not valid JSON.") from None
+    if not isinstance(data, dict):
+        raise PlanValidationError("Flow metadata is not valid JSON.")
+    for key in data:
+        if key not in ("v", "nodes"):
+            raise PlanValidationError(f'Unknown flow metadata field "{key}".')
+    if data.get("v") != 1:
+        raise PlanValidationError("Flow metadata needs \"v\": 1.")
+    nodes = data.get("nodes", {})
+    if not isinstance(nodes, dict):
+        raise PlanValidationError('Flow metadata "nodes" must be an object.')
+    if len(nodes) > FLOW_NODE_LIMIT:
+        raise PlanValidationError(f"Flow metadata can describe at most {FLOW_NODE_LIMIT} nodes.")
+    known_assets = None if asset_ids is None else {str(a) for a in asset_ids}
+    for node_id, meta in nodes.items():
+        if not _FLOW_ID.match(str(node_id)):
+            raise PlanValidationError(f'Flow metadata node id "{str(node_id)[:64]}" must start with a letter and use at most 64 letters, digits, _ or -.')
+        if not isinstance(meta, dict):
+            raise PlanValidationError(f'Flow metadata for "{node_id}" must be an object.')
+        for field in meta:
+            if field not in ("shape", "image", "note", "links"):
+                raise PlanValidationError(f'Unknown flow metadata field "{field}".')
+        if "shape" in meta:
+            if content_format == "mermaid":
+                raise PlanValidationError("Node shapes for Mermaid flows are set in the diagram itself, not in flow metadata.")
+            if meta["shape"] not in FLOW_SHAPES:
+                raise PlanValidationError(f'Unknown node shape "{str(meta["shape"])[:40]}". Use page, rectangle, square, circle, oval or diamond.')
+        if "image" in meta:
+            image = meta["image"]
+            if not isinstance(image, (str, int)) or isinstance(image, bool) or (known_assets is not None and str(image) not in known_assets):
+                raise PlanValidationError(f"Image {str(image)[:40]} is not an attachment of this project.")
+        if "note" in meta and (not isinstance(meta["note"], str) or len(meta["note"]) > FLOW_NOTE_LIMIT):
+            raise PlanValidationError(f'Node note for "{node_id}" is longer than {FLOW_NOTE_LIMIT} characters.')
+        if "links" in meta:
+            links = meta["links"]
+            if not isinstance(links, dict) or len(links) > 50 or not all(
+                    _FLOW_ID.match(str(target)) and isinstance(label, str) and len(label) <= FLOW_LINK_LABEL_LIMIT
+                    for target, label in links.items()):
+                raise PlanValidationError(f'Links for "{node_id}" must map node ids to labels of at most {FLOW_LINK_LABEL_LIMIT} characters.')
+    present = _flow_node_ids(lines[:hits[0]], content_format)
+    return [f'Flow metadata for "{node_id}" has no matching node; it will be removed on the next edit.'
+            for node_id in nodes if node_id not in present]

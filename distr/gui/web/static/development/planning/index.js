@@ -1,7 +1,10 @@
-import { createPlanConversation } from './conversation.js?v=20261003-sitemap-groups';
+import { createPlanConversation } from './conversation.js?v=20261103-rows1';
+import { scanHint, watchPlanScan } from './scan-watch.js?v=20261102-plan-scan-bg';
+import { createLoadGuard, isAbort } from './load-guard.js?v=20261102-verify';
 
 export function createPlanning(host, root = document.getElementById('plan-root')) {
-    const state = { boards: [], projects: [], workspaces: [], workspace: null, item: null, navigation: 0, view: 'home' };
+    const state = { boards: [], projects: [], workspaces: [], workspace: null, item: null, navigation: 0, view: 'home', details: new Map() };
+    const loads = createLoadGuard();
     const conversation = createPlanConversation(host, root);
     const escapeHtml = host.escapeHtml;
     const projectFor = (board) => state.projects.find((project) => Number(project.id) === Number(board?.project_id || board?.default_project_id)) || null;
@@ -95,6 +98,7 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         const navigation = ++state.navigation;
         state.view = 'home';
         state.workspace = null;
+        host.setPlanCrumbs?.();
         state.item = null;
         root.innerHTML = '<div class="plan-loading" role="status" aria-label="Loading plans"><span></span><span></span><span></span></div>';
         try {
@@ -121,10 +125,16 @@ export function createPlanning(host, root = document.getElementById('plan-root')
             host.openHome();
             return false;
         }
-        root.innerHTML = '<div class="plan-loading" role="status" aria-label="Loading plan"><span></span><span></span><span></span></div>';
+        // Reopening a board plan shows the cached plan at once and refreshes it in the
+        // background; only the first open waits on the (project-scanning) POST.
+        const load = loads.begin();
+        const cached = state.details.get(board.key);
+        if (cached) conversation.open(cached);
+        else root.innerHTML = '<div class="plan-loading" role="status" aria-label="Loading plan"><span></span><span></span><span></span></div>';
         try {
             const detail = await api('/workflows/studio/plan-workspaces', {
                 method: 'POST',
+                signal: load.signal,
                 body: {
                     board_key: board.key,
                     board_provider: board.provider,
@@ -132,10 +142,29 @@ export function createPlanning(host, root = document.getElementById('plan-root')
                     project_id: board.project_id || board.default_project_id || null
                 }
             });
-            if (navigation !== state.navigation) return false;
-            conversation.open(detail);
+            if (navigation !== state.navigation || !load.isCurrent()) return false;
+            state.details.set(board.key, detail);
+            if (cached) conversation.refreshWorkspace(detail);
+            else conversation.open(detail);
+            conversation.setScanHint(scanHint(detail.scan));
+            if (detail.scan?.state === 'scanning') {
+                watchPlanScan({
+                    api,
+                    workspaceId: detail.id,
+                    isCurrent: () => navigation === state.navigation && load.isCurrent(),
+                    onSettled: (status, workspace) => {
+                        if (workspace) {
+                            state.details.set(board.key, workspace);
+                            conversation.refreshWorkspace(workspace);
+                        }
+                        conversation.setScanHint(scanHint(status));
+                    }
+                });
+            }
             return true;
         } catch (error) {
+            if (isAbort(error) || !load.isCurrent()) return false;
+            if (cached) return true;
             if (navigation === state.navigation) {
                 root.innerHTML = retryHtml(error.message || 'Could not open this plan.', 'board');
                 root.querySelector('[data-plan-retry="board"]')?.addEventListener('click', () => openBoard(board, state.projects));
@@ -151,8 +180,9 @@ export function createPlanning(host, root = document.getElementById('plan-root')
     }
     function leave() {
         ++state.navigation;
+        loads.cancel(); // abort the in-flight plan POST; scan polling stops via isCurrent
         conversation.leave();
     }
-    return { openHome, openBoard, syncCatalog, beforeLeave: async () => true, leave,
+    return { openHome, openBoard, currentView: () => state.view, syncCatalog, beforeLeave: async () => true, leave,
         hasUnsavedChanges: () => conversation.hasDraft() };
 }

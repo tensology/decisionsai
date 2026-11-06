@@ -57,10 +57,9 @@ def build_wait_handoff_text(
     if len(clean_result) > 280:
         summary += "..."
     step_label = step_name or "workflow step"
-    prompt = (
-        f"{step_label} is waiting for your decision. "
-        "Reply with what should happen next, for example: continue, retry, skip, or provide extra instructions."
-    )
+    from distr.core.workflow.run_prompts import wait_prompt
+    prompt = wait_prompt("checkpoint", "the step paused for review", label=ticket_title or step_label,
+                         detail=summary)
     tts = wait_handoff_voice_text(
         step_name=step_label,
         result_text=clean_result,

@@ -6,7 +6,7 @@
 #   ./scripts/deploy_changelog_to_site.sh <ref>   # deploy explicit commit or branch on GitHub
 #
 # Environment overrides:
-#   DECISIONS_SITE_SSH   default root@tensology.com
+#   DECISIONS_SITE_SSH   default root@2.31.165.131
 #   DECISIONS_SITE_ROOT  default /var/www/decisions.tensology.com
 
 set -euo pipefail
@@ -14,7 +14,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-SSH_HOST="${DECISIONS_SITE_SSH:-root@tensology.com}"
+SSH_HOST="${DECISIONS_SITE_SSH:-root@2.31.165.131}"
 SITE_ROOT="${DECISIONS_SITE_ROOT:-/var/www/decisions.tensology.com}"
 REF="${1:-}"
 

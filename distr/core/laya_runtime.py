@@ -32,7 +32,9 @@ def _server(mode: str) -> MCPServerConfig:
         env=frozenset(
             {
                 ("DECISIONS_LAYA_MODE", mode),
-                ("LAYA_DEVICE", "mps"),
+                # MPS retains a large GPU allocation pool for this small router.
+                # CPU keeps the same checkpoints without that persistent pool.
+                ("LAYA_DEVICE", "cpu"),
                 ("LAYA_PRELOAD", "0"),
                 ("LAYA_REVISION", "reviewed"),
             }
@@ -74,7 +76,8 @@ def _package_version() -> str:
 
 def status() -> dict[str, Any]:
     doc = load_mcp_config()
-    registered = LAYA_SERVER in doc.by_name()
+    server = doc.by_name().get(LAYA_SERVER)
+    registered = server is not None
     connected = False
     try:
         from distr.core.mcp.runtime import get_mcp_hub
@@ -92,7 +95,7 @@ def status() -> dict[str, Any]:
         "mode": get_mode(),
         "registered": registered,
         "connected": connected,
-        "device": "mps",
+        "device": dict(server.env).get("LAYA_DEVICE", "auto") if server else "cpu",
     }
 
 

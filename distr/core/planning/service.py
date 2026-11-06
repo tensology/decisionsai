@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from distr.core.planning.files import stage_write, finish_write, managed_target, disk_hash
 import re
 from pathlib import Path
@@ -28,6 +32,7 @@ ITEM_TYPES = {
     "flows": ("Flows and wireframes", "wire", "screen \"Primary flow\" device=desktop\n  stack\n    heading \"Primary screen\"\n    text \"Describe the user journey and the screen states.\"\n"),
     "skills": ("Skills and instructions", "markdown", "# Skills and instructions\n\n## Required skills\n\n- `completion-protocol` for every non-trivial delivery.\n- Identify any additional skills needed to deliver this plan.\n\n## Working instructions\n\n- Keep implementation aligned with the approved requirements and prove complete coverage before completion.\n"),
     "handover": ("Handover", "markdown", "# Handover\n\n## What is ready\n\n## Open items\n\n## Next actions\n\n- Confirm the unresolved decisions before execution.\n"),
+    "document": ("Document", "markdown", "# Document\n\n"),
     "file_structure": ("File structure", "markdown", "# File structure\n\nThis is the bounded file tree observed in the linked project. It is regenerated only when you explicitly ask Plan to inspect the project.\n"),
 }
 
@@ -46,7 +51,16 @@ ITEM_META = {
     "erd": ("The project data relationships", "Rendered ERD"),
     "diagram": ("A system or process relationship", "Rendered diagram"),
     "decision": ("A decision and its consequences", "Decision card"),
+    "document": ("A user-added planning document", "Document"),
 }
+
+# Archived items keep their row, revisions, and (moved) file but leave every live view.
+ARCHIVED_STATUS = "archived"
+USER_DOCUMENT_TYPE = "document"
+
+
+def _live(query):
+    return query.filter(PlanItem.status != ARCHIVED_STATUS)
 
 
 def _hash(content: str) -> str:
@@ -92,7 +106,7 @@ def ticket_preview(workspace_id: int) -> dict[str, Any]:
         workspace = db.get(PlanWorkspace, int(workspace_id))
         if workspace is None:
             raise LookupError("Plan workspace not found.")
-        items = db.query(PlanItem).filter(PlanItem.workspace_id == workspace.id).order_by(PlanItem.sort_order, PlanItem.id).all()
+        items = _live(db.query(PlanItem).filter(PlanItem.workspace_id == workspace.id)).order_by(PlanItem.sort_order, PlanItem.id).all()
         proposals = []
         for position, item in enumerate(items, start=1):
             proposals.append({
@@ -216,8 +230,15 @@ def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, pr
     return get_workspace(payload["id"]) or payload
 
 
-def open_project_plan(*, board_key: str, board_provider: str, board_name: str, project_id: int | None = None) -> dict[str, Any]:
-    """Ensure the board plan workspace, scaffold sections, and fill them from the project."""
+def open_project_plan(
+    *, board_key: str, board_provider: str, board_name: str, project_id: int | None = None, defer_scan: bool = False
+) -> dict[str, Any]:
+    """Ensure the board plan workspace, scaffold sections, and fill them from the project.
+
+    ``defer_scan=True`` (the web open route) returns the scaffolded workspace at once and
+    runs the blocking project scan on a background worker; ``scan`` in the payload and
+    :func:`plan_scan_status` tell the UI when it is done.
+    """
     payload = ensure_workspace(
         board_key=board_key,
         board_provider=board_provider,
@@ -225,10 +246,63 @@ def open_project_plan(*, board_key: str, board_provider: str, board_name: str, p
         project_id=project_id,
     )
     if payload.get("project_id") and payload.get("root_path"):
-        ensure_plan_scaffold(int(payload["id"]))
-        materialize_project_scan(int(payload["id"]), force=False)
-        return get_workspace(int(payload["id"])) or payload
+        workspace_id = int(payload["id"])
+        ensure_plan_scaffold(workspace_id)  # DB-only, cheap; stays synchronous
+        if defer_scan:
+            start_background_scan(workspace_id, int(payload["project_id"]))
+            detail = get_workspace(workspace_id) or payload
+            detail["scan"] = plan_scan_status(workspace_id)
+            return detail
+        materialize_project_scan(workspace_id, force=False)
+        return get_workspace(workspace_id) or payload
     return payload
+
+
+# Background project scans: one in flight per project, status per workspace (process memory).
+logger = logging.getLogger(__name__)
+_SCAN_LOCK = threading.Lock()
+_SCAN_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="plan-scan")
+_SCANS_IN_FLIGHT: set[int] = set()
+_SCAN_STATUS: dict[int, dict[str, Any]] = {}
+
+
+def plan_scan_status(workspace_id: int) -> dict[str, Any]:
+    with _SCAN_LOCK:
+        return dict(_SCAN_STATUS.get(int(workspace_id)) or {"state": "idle", "error": ""})
+
+
+def _run_background_scan(workspace_id: int, project_id: int) -> None:
+    state, error = "done", ""
+    try:
+        # Own sessions: materialize_project_scan opens get_session() itself, never the request's.
+        materialize_project_scan(workspace_id, force=False)
+    except Exception as exc:  # recorded for the UI; the plan stays usable
+        state, error = "error", str(exc) or exc.__class__.__name__
+        logger.warning("Background plan scan failed (workspace %s, project %s): %s", workspace_id, project_id, error)
+    finally:
+        with _SCAN_LOCK:
+            _SCANS_IN_FLIGHT.discard(project_id)
+            _SCAN_STATUS[workspace_id] = {"state": state, "error": error, "finished_at": time.time()}
+
+
+def start_background_scan(workspace_id: int, project_id: int) -> bool:
+    """Queue a scan unless one is already running for this project. Returns True if started."""
+    workspace_id, project_id = int(workspace_id), int(project_id)
+    with _SCAN_LOCK:
+        if project_id in _SCANS_IN_FLIGHT:
+            _SCAN_STATUS.setdefault(workspace_id, {"state": "scanning", "error": ""})
+            return False
+        _SCANS_IN_FLIGHT.add(project_id)
+        _SCAN_STATUS[workspace_id] = {"state": "scanning", "error": ""}
+    try:
+        _SCAN_EXECUTOR.submit(_run_background_scan, workspace_id, project_id)
+    except Exception as exc:
+        with _SCAN_LOCK:
+            _SCANS_IN_FLIGHT.discard(project_id)
+            _SCAN_STATUS[workspace_id] = {"state": "error", "error": str(exc)}
+        logger.warning("Could not start plan scan (workspace %s): %s", workspace_id, exc)
+        return False
+    return True
 
 
 def _default_scaffold_content(item_type: str) -> str:
@@ -238,6 +312,10 @@ def _default_scaffold_content(item_type: str) -> str:
 def _item_is_replaceable(item: dict[str, Any], *, force: bool) -> bool:
     if force:
         return True
+    # Interface items with "#|" page descriptions or a decisions-flow sidecar are hand-made (N6).
+    from distr.core.planning.interface_conventions import has_annotations
+    if has_annotations(str(item.get("content") or ""), str(item.get("content_format") or "")):
+        return False
     if item.get("is_starter"):
         return True
     item_type = str(item.get("item_type") or "")
@@ -295,8 +373,34 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
     skipped: list[str] = []
     by_type = {str(item.get("item_type")): item for item in detail.get("items") or []}
     note = instruction or "Project scan"
+    from distr.core.planning.interface_rebuild import summary_text as rebuild_summary_text
+    interfaces_summary: dict[str, Any] | None = None
     for item_type, content in artifacts.items():
         item = by_type.get(item_type)
+        if item_type == "flows" and str((item or {}).get("content_format") or "wire") == "wire":
+            # N4: Interfaces rebuild is an overlay (soft scan AND force): untouched generated screens are
+            # regenerated, hand-made ones kept, vanished routes flagged "(stale)", new routes appended.
+            from distr.core.planning.interface_rebuild import mark_flows, overlay
+            if item is None:
+                content = mark_flows(content)
+                interfaces_summary = {"regenerated": 0, "added": content.count("# @generated"), "kept": 0, "stale": 0, "first_rebuild": True}
+            else:
+                previous = str(item.get("content") or "")
+                content, interfaces_summary = overlay(previous, content, revision=int(item.get("revision_count") or 1))
+                carry_warnings: list[str] = []
+                from distr.core.planning.interface_conventions import carry_annotations, has_annotations
+                if has_annotations(previous, "wire"):   # safety net + orphan-key warnings (ids, #|, sidecar)
+                    content, carry_warnings = carry_annotations(previous, content, "wire")
+                if content == previous:
+                    skipped.append(item_type)
+                    continue
+                refreshed = update_item(int(item["id"]), content=content, expected_revision=int(item.get("revision_count") or 1),
+                                        source="discovery", instruction=note, workspace_id=int(workspace_id))
+                if refreshed:
+                    if carry_warnings:
+                        refreshed["validation_warnings"] = [*carry_warnings, *refreshed.get("validation_warnings", [])]
+                    updated.append(refreshed)
+                continue
         if item is None:
             created = create_item(
                 workspace_id=int(workspace_id),
@@ -310,6 +414,12 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
         if not _item_is_replaceable(item, force=force):
             skipped.append(item_type)
             continue
+        # Forced regenerate: generated screen lines may change, but "#|" descriptions, screen ids and the
+        # sidecar of the previous version are carried over (vanished sidecar keys kept + flagged).
+        from distr.core.planning.interface_conventions import carry_annotations, has_annotations
+        carry_warnings: list[str] = []
+        if has_annotations(str(item.get("content") or ""), str(item.get("content_format") or "")):
+            content, carry_warnings = carry_annotations(str(item.get("content") or ""), content, str(item.get("content_format")))
         refreshed = update_item(
             int(item["id"]),
             content=content,
@@ -319,6 +429,8 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
             workspace_id=int(workspace_id),
         )
         if refreshed:
+            if carry_warnings:
+                refreshed["validation_warnings"] = [*carry_warnings, *refreshed.get("validation_warnings", [])]
             updated.append(refreshed)
     # Keep file structure honest after every scan.
     tree = by_type.get("file_structure")
@@ -354,11 +466,14 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
         "workspace": workspace,
         "updated": [item.get("item_type") for item in updated],
         "skipped": skipped,
+        "interfaces": interfaces_summary,
+        "validation_warnings": [f"{item.get('item_type')}: {w}" for item in updated for w in item.get("validation_warnings") or []],
         "summary": scanned["summary"],
         "message": (
             f"Scanned {scanned['summary']['route_count']} routes and {scanned['summary']['model_count']} models. "
             f"Updated {len(updated)} plan section(s)."
             + (f" Left curated sections unchanged: {', '.join(skipped)}." if skipped else "")
+            + (" " + rebuild_summary_text(interfaces_summary) if interfaces_summary else "")
         ),
     }
 
@@ -381,14 +496,20 @@ def _workspace_sitemap(db, row) -> dict[str, Any] | None:
         return None
 
 
+def workspace_exists(workspace_id: int) -> bool:
+    """Cheap read-only existence check (no sitemap / file work)."""
+    with get_session() as db:
+        return db.get(PlanWorkspace, int(workspace_id)) is not None
+
+
 def get_workspace(workspace_id: int) -> dict[str, Any] | None:
     with get_session() as db:
         row = db.get(PlanWorkspace, int(workspace_id))
         if row is None:
             return None
-        count = db.query(func.count(PlanItem.id)).filter(PlanItem.workspace_id == row.id).scalar() or 0
+        count = _live(db.query(func.count(PlanItem.id)).filter(PlanItem.workspace_id == row.id)).scalar() or 0
         payload = _workspace_payload(row, count)
-        items = db.query(PlanItem).filter(PlanItem.workspace_id == row.id).order_by(PlanItem.sort_order, PlanItem.id).all()
+        items = _live(db.query(PlanItem).filter(PlanItem.workspace_id == row.id)).order_by(PlanItem.sort_order, PlanItem.id).all()
         payload["items"] = [_item_payload(item, _revision_count(db, item.id)) for item in items]
         for item in payload["items"]:
             original = db.query(PlanItemRevision).filter_by(item_id=item["id"], revision=1).one_or_none()
@@ -534,7 +655,34 @@ def _file_tree_content(project_root: Path, plan_root: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+class PlanRevisionConflict(ValueError):
+    """The caller's expected_revision is stale (HTTP 409); other ValueErrors are validation (422)."""
+
+
 def update_item(item_id: int, *, title: str | None = None, content: str | None = None, status: str | None = None, instruction: str = "", source: str = "user", expected_revision: int | None = None, workspace_id: int | None = None) -> dict[str, Any] | None:
+    flow_warnings: list[str] = []
+    if content is not None:
+        # Same guards as the agent edit path: size cap, and Mermaid must parse (ERDs must be erDiagram).
+        # Validated before the write transaction so the Node check never holds the SQLite write lock.
+        if not isinstance(content, str) or len(content) > 200_000:
+            raise ValueError("Each artifact needs text content of at most 200,000 characters.")
+        with get_session() as db:
+            existing = db.get(PlanItem, int(item_id))
+            kind, fmt, before = (existing.item_type, existing.content_format, existing.content) if existing else (None, None, None)
+        if fmt == "mermaid" and content != before:
+            from distr.core.planning.validation import validate_mermaid
+            validate_mermaid(content, require_erd=kind == "erd")
+        if fmt == "wire" and content != before:
+            # Wire pages are validated server-side too (N6); "#|" descriptions and the trailing
+            # "# decisions-flow:" sidecar are comment lines the shared parser skips.
+            from distr.core.planning.validation import validate_wireframe
+            validate_wireframe(content)
+        if fmt in ("wire", "mermaid") and content != before:
+            from distr.core.planning.validation import project_image_ids, validate_flow_sidecar
+            with get_session() as db:
+                workspace_row = db.get(PlanWorkspace, existing.workspace_id) if existing else None
+                assets = project_image_ids(db, workspace_row.project_id) if workspace_row and workspace_row.project_id else set()
+            flow_warnings = validate_flow_sidecar(content, fmt, asset_ids=assets)
     with get_session() as db:
         # Serialize revision checks and writes, including SQLite's deferred transactions.
         if db.get_bind().dialect.name == "sqlite":
@@ -545,9 +693,11 @@ def update_item(item_id: int, *, title: str | None = None, content: str | None =
             return None
         if workspace_id is not None and item.workspace_id != int(workspace_id):
             raise LookupError("Plan item not found in this workspace.")
+        if item.status == ARCHIVED_STATUS:
+            raise LookupError("Plan item not found.")
         current_revision = _revision_count(db, item.id)
         if expected_revision is not None and current_revision != expected_revision:
-            raise ValueError("This plan item has a newer revision. Your draft has been kept. Review the newer version before saving.")
+            raise PlanRevisionConflict("This plan item has a newer revision. Your draft has been kept. Review the newer version before saving.")
         workspace = db.get(PlanWorkspace, item.workspace_id)
         previous_hash = item.content_hash
         changed = (title is not None and (str(title).strip() or item.title) != item.title) or (content is not None and str(content) != item.content)
@@ -557,7 +707,7 @@ def update_item(item_id: int, *, title: str | None = None, content: str | None =
             item.content = str(content)
         if status is not None:
             clean_status = str(status).strip().lower()
-            if clean_status not in {"draft", "review", "approved"}:
+            if clean_status not in {"draft", "review", "approved"}:  # never "archived": use archive_item
                 raise ValueError("Unknown plan item status.")
             item.status = clean_status
         if changed:
@@ -569,6 +719,8 @@ def update_item(item_id: int, *, title: str | None = None, content: str | None =
         db.refresh(item)
         payload = _item_payload(item, revision)
     payload["file_sync_error"] = _finish_file_projection(payload["id"])
+    if flow_warnings:
+        payload["validation_warnings"] = flow_warnings
     return payload
 
 
@@ -584,7 +736,7 @@ def apply_agent_edits(workspace_id: int, *, edits: list[dict], expected_revision
         raise ValueError("A planning turn can change at most 40 artifacts.")
     allowed = {"wireframe": {"wire", "html"}, "flows": {"wire", "mermaid"},
                "erd": {"mermaid"}, "architecture": {"mermaid"}, "diagram": {"mermaid"},
-               **{kind: {"markdown"} for kind in ("brief", "prd", "frac", "skills", "handover", "decision", "file_structure")}}
+               **{kind: {"markdown"} for kind in ("brief", "prd", "frac", "skills", "handover", "decision", "document", "file_structure")}}
     clean = []
     seen = set()
     for edit in edits:
@@ -612,7 +764,7 @@ def apply_agent_edits(workspace_id: int, *, edits: list[dict], expected_revision
         workspace = db.get(PlanWorkspace, int(workspace_id), with_for_update=True)
         if workspace is None:
             raise LookupError("Plan workspace not found.")
-        rows = db.query(PlanItem).filter_by(workspace_id=workspace.id).all()
+        rows = _live(db.query(PlanItem).filter_by(workspace_id=workspace.id)).all()
         by_id = {item.id: item for item in rows}
         actual = {str(item.id): _revision_count(db, item.id) for item in rows}
         expected = {str(key): value for key, value in expected_revisions.items()}
@@ -637,6 +789,15 @@ def apply_agent_edits(workspace_id: int, *, edits: list[dict], expected_revision
                 validate_wireframe(edit["content"])
             if item and edit.get("expected_revision", actual[str(item.id)]) != actual[str(item.id)]:
                 raise ValueError("The artifact revision is stale.")
+            carry_warnings: list[str] = []
+            if item and fmt in ("wire", "mermaid") and item.item_type in ("wireframe", "flows"):
+                # The model must keep "#|" descriptions and the sidecar line; anything it dropped is
+                # re-attached from the current version (deterministic) and reported, never silently lost.
+                from distr.core.planning.interface_conventions import carry_annotations
+                repaired, carry_warnings = carry_annotations(item.content or "", edit["content"], fmt)
+                if repaired != edit["content"]:
+                    carry_warnings.insert(0, "Kept the page descriptions / node metadata that the edit left out.")
+                    edit["content"] = repaired
             previous_hash = item.content_hash if item else None
             if item is None:
                 if not edit.get("title"):
@@ -657,16 +818,86 @@ def apply_agent_edits(workspace_id: int, *, edits: list[dict], expected_revision
                                    content=item.content, status=item.status or "draft",
                                    source=source, instruction=instruction))
             results.append(_item_payload(item, revision))
-        from distr.core.planning.validation import validate_plan_references, project_image_ids
+            if carry_warnings:
+                results[-1]["validation_warnings"] = carry_warnings
+        from distr.core.planning.validation import validate_plan_references, project_image_ids, validate_flow_sidecar
+        agent_assets = project_image_ids(db, workspace.project_id)
+        for result in results:
+            if result["content_format"] in ("wire", "mermaid"):
+                warnings = validate_flow_sidecar(result["content"], result["content_format"], asset_ids=agent_assets)
+                if warnings:
+                    result["validation_warnings"] = [*result.get("validation_warnings", []), *warnings]
         validate_plan_references([
             {"title": item.title, "item_type": item.item_type,
              "content_format": item.content_format, "content": item.content or ""}
-            for item in db.query(PlanItem).filter_by(workspace_id=workspace.id).all()
+            for item in _live(db.query(PlanItem).filter_by(workspace_id=workspace.id)).all()
         ], asset_ids=project_image_ids(db, workspace.project_id))
         db.commit()
     for result in results:
         result["file_sync_error"] = _finish_file_projection(result["id"])
     return results
+
+
+class PlanItemTypeForbidden(PermissionError):
+    """Only user-added documents can be removed (HTTP 403)."""
+
+
+def archive_item(workspace_id: int, item_id: int, *, expected_revision: int, allow_ai_created: bool = False) -> dict[str, Any]:
+    """Remove a user document from the plan without losing history.
+
+    The row and every PlanItemRevision stay; a final revision records the archive.
+    The managed file is moved (never deleted) into ``<plan root>/.archive/``. A
+    pending file projection blocks the archive so file sync can never be orphaned.
+    """
+    if type(expected_revision) is not int or expected_revision < 1:
+        raise ValueError("expected_revision is required.")
+    with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            from sqlalchemy import text
+            db.execute(text("BEGIN IMMEDIATE"))
+        item = db.get(PlanItem, int(item_id), with_for_update=True)
+        if item is None or item.workspace_id != int(workspace_id) or item.status == ARCHIVED_STATUS:
+            raise LookupError("Plan item not found in this workspace.")
+        if item.item_type != USER_DOCUMENT_TYPE:
+            # Chat-tool Undo of an AI create (N1): the item may be archived when its first revision is the AI's.
+            first = db.query(PlanItemRevision).filter_by(item_id=item.id, revision=1).one_or_none()
+            if not (allow_ai_created and first is not None and first.source in ("ai", "agent")):
+                raise PlanItemTypeForbidden("Only user-added documents can be deleted.")
+        current_revision = _revision_count(db, item.id)
+        if current_revision != expected_revision:
+            raise PlanRevisionConflict("This document has a newer revision. Review the newer version before deleting it.")
+        from distr.core.db.workflow import PlanFileWrite
+        if db.get(PlanFileWrite, item.id):
+            raise PlanRevisionConflict("A committed revision of this document is waiting for file synchronization. Reopen the workspace to retry.")
+        workspace = db.get(PlanWorkspace, item.workspace_id)
+        archive_path = ""
+        source = None
+        if workspace is not None and workspace.root_path and item.file_path:
+            from distr.core.planning.files import managed_target
+            source = managed_target(workspace, item)
+        revision = current_revision + 1
+        item.status = ARCHIVED_STATUS
+        db.add(PlanItemRevision(item_id=item.id, revision=revision, title=item.title, content=item.content,
+                                status=ARCHIVED_STATUS, source="restore" if allow_ai_created else "user",
+                                instruction="Archived (undo of an AI-created item)" if allow_ai_created else "Archived (deleted from Documents)"))
+        moved = None
+        if source is not None and source.exists():
+            archive_dir = source.parent / ".archive"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+            target = archive_dir / f"{source.stem}.{stamp}{source.suffix}"
+            source.rename(target)  # mv, never delete
+            moved = (target, source)
+            archive_path = str(target)
+            item.file_path = str(target)
+        try:
+            db.commit()
+        except Exception:
+            if moved:
+                moved[0].rename(moved[1])
+            raise
+        return {"id": int(item.id), "workspace_id": int(item.workspace_id), "archived": True,
+                "revision": revision, "archive_path": archive_path}
 
 
 def list_revisions(item_id: int) -> list[dict[str, Any]]:

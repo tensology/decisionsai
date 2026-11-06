@@ -20,7 +20,7 @@ from distr.gui.development_hot_corner import (
     format_duration,
     is_top_left_corner,
     load_development_groups,
-    load_pinned_projects,
+    load_pinned_board_keys,
     project_folder_icon,
     recent_development_threads,
     weekly_entry_seconds,
@@ -31,6 +31,9 @@ from distr.gui.development_hot_corner import (
 def isolated_sidebar_preferences(monkeypatch, tmp_path):
     preferences = QtCore.QSettings(str(tmp_path / "preferences.ini"), QtCore.QSettings.Format.IniFormat)
     monkeypatch.setattr(QtCore, "QSettings", lambda *_args: preferences)
+    # Never read or migrate pins in the real settings database from these tests.
+    monkeypatch.setattr("distr.core.workflow.development_sidebar.load_pinned_boards", lambda: [])
+    monkeypatch.setattr("distr.core.workflow.development_sidebar.save_pinned_boards", lambda keys: list(keys))
 
 
 def _app() -> QtWidgets.QApplication:
@@ -57,7 +60,11 @@ def test_empty_folder_has_no_open_state_and_cannot_expand(monkeypatch):
     def image(icon, state):
         return icon.pixmap(24, 24, QtGui.QIcon.Mode.Normal, state).toImage()
     assert image(empty, QtGui.QIcon.State.On) == image(empty, QtGui.QIcon.State.Off)
-    assert image(filled, QtGui.QIcon.State.On) != image(filled, QtGui.QIcon.State.Off)
+    # No open/closed swap: expanded state does not change the icon.
+    assert image(filled, QtGui.QIcon.State.On) == image(filled, QtGui.QIcon.State.Off)
+    # Filled interior when the board has threads; transparent (outline only) when empty.
+    assert image(filled, QtGui.QIcon.State.Off).pixelColor(12, 15).alpha() == 255
+    assert image(empty, QtGui.QIcon.State.Off).pixelColor(12, 15).alpha() == 0
     assert image(empty, QtGui.QIcon.State.Off) != image(filled, QtGui.QIcon.State.Off)
     monkeypatch.setattr('distr.gui.development_hot_corner.load_development_groups',
                         lambda _: [{'project_id': 9, 'board_key': 'decisions:18',
@@ -301,25 +308,31 @@ def test_pinned_project_ids_round_trip_through_settings(monkeypatch) -> None:
     assert core_utils.load_settings_from_db()["development_hot_corner_pinned_project_ids"] == [2, 7]
 
 
-def test_load_pinned_projects_normalizes_saved_ids(monkeypatch) -> None:
+def test_hover_panel_pins_read_the_shared_board_key_list(monkeypatch) -> None:
     monkeypatch.setattr(
-        "distr.core.settings.load_settings_from_db",
-        lambda: {"development_hot_corner_pinned_project_ids": [7, 2, 7]},
+        "distr.core.workflow.development_sidebar.load_pinned_boards",
+        lambda: ["decisions:7", "jira:X"],
     )
 
-    assert load_pinned_projects() == [2, 7]
+    assert load_pinned_board_keys() == ["decisions:7", "jira:X"]
 
 
-def test_panel_loads_pins_directly_instead_of_relying_on_startup_settings(monkeypatch) -> None:
+def test_panel_maps_shared_board_keys_to_projects_on_refresh(monkeypatch) -> None:
     app = _app()
     monkeypatch.setattr(
-        "distr.gui.development_hot_corner.load_pinned_projects",
-        lambda: [2, 7],
+        "distr.core.workflow.development_sidebar.load_pinned_boards",
+        lambda: ["decisions:7"],
     )
+    groups = [
+        dict(project_id=2, board_key="decisions:7", name="A", weekly_seconds=0, threads=[]),
+        dict(project_id=3, board_key="decisions:8", name="B", weekly_seconds=0, threads=[]),
+    ]
+    monkeypatch.setattr("distr.gui.development_hot_corner.load_development_groups", lambda _: groups)
 
     panel = DevelopmentHotCornerPanel(enabled=False)
+    panel._refresh_threads()
 
-    assert panel._pinned_project_ids == {2, 7}
+    assert panel._pinned_project_ids == {2}
     panel.close()
     panel.deleteLater()
     app.processEvents()
@@ -748,7 +761,6 @@ def test_quick_action_icons_open_development_areas() -> None:
 
     assert list(panel.quick_actions) == [
         "New thread",
-        "Planning",
         "Incoming",
         "Scheduled",
         "Workflows",
@@ -757,7 +769,6 @@ def test_quick_action_icons_open_development_areas() -> None:
     ]
     assert opened == [
         "/development/new/",
-        "/development/plan/",
         "/development/incoming/",
         "/development/automations/",
         "/development/workflows/",
@@ -766,7 +777,9 @@ def test_quick_action_icons_open_development_areas() -> None:
     ]
     title = panel.findChild(QtWidgets.QLabel, "developmentDrawerTitle")
     new_thread = panel.quick_actions["New thread"]
-    planning = panel.quick_actions["Planning"]
+    # Plan moved to the web Kanban header; the first footer action is now Incoming.
+    assert "Planning" not in panel.quick_actions
+    planning = panel.quick_actions["Incoming"]
     assert abs(new_thread.mapTo(panel, new_thread.rect().center()).y()
                - title.mapTo(panel, title.rect().center()).y()) <= 1
     assert planning.mapTo(panel, QtCore.QPoint()).x() < panel.footer.mapTo(panel, QtCore.QPoint()).x()

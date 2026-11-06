@@ -6850,26 +6850,27 @@ source: kanban_ticket_{t.id}
 
     @router.post("/tickets/boards/{board_id}/whatsapp-links")
     async def add_whatsapp_link(board_id: int, payload: dict):
-        """Link a WhatsApp phone number to this board."""
-        from distr.core.db import WhatsAppPhoneLink
+        """Link a WhatsApp phone/group JID to this board (one JID -> one link)."""
+        from distr.core.kanban.whatsapp_jid import upsert_whatsapp_phone_link
         phone_jid = payload.get("phone_jid", "")
         if not phone_jid:
             raise HTTPException(400, "phone_jid is required")
         with get_session() as s:
-            # Prevent duplicate links
-            existing = s.query(WhatsAppPhoneLink).filter_by(board_id=board_id, phone_jid=phone_jid).first()
-            if existing:
-                return JSONResponse({"success": True, "id": existing.id, "message": "Already linked"})
-            link = WhatsAppPhoneLink(
+            link, created = upsert_whatsapp_phone_link(
+                s,
                 board_id=board_id,
                 phone_jid=phone_jid,
-                phone_number=payload.get("phone_number", phone_jid.split("@")[0].split(":")[0]),
+                phone_number=payload.get("phone_number"),
                 contact_name=payload.get("contact_name", ""),
                 auto_snapshot=payload.get("auto_snapshot", False),
+                move_board=True,
             )
-            s.add(link)
-            s.flush()
-            return JSONResponse({"success": True, "id": link.id})
+            return JSONResponse({
+                "success": True,
+                "id": link.id,
+                "created": created,
+                "message": "Linked" if created else "Updated existing link",
+            })
 
     @router.delete("/tickets/boards/{board_id}/whatsapp-links/{link_id}")
     async def delete_whatsapp_link(board_id: int, link_id: int):

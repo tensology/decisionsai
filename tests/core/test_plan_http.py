@@ -122,6 +122,41 @@ def test_http_build_creates_scoped_hierarchy_and_reuses_tickets(plan_http, monke
         assert db.query(ProjectExecutionSession).count() == 0
 
 
+def test_http_rebuild_interfaces_uses_the_selected_model_and_skips_the_folder_scan(plan_http, monkeypatch):
+    client, base = plan_http
+    workspace_id = int(base.rsplit("/", 1)[-1])
+    created = service.create_item(
+        workspace_id=workspace_id, item_type="flows", title="Interfaces", content_format="wire",
+        content='screen "Customers" id=customers route=/customers\n  heading "Customers"\n',
+    )
+    calls = []
+
+    def stream(provider, model, messages, settings, **scope):
+        calls.append((provider, model, messages))
+        yield json.dumps({"reply": "Rebuilt the interfaces from the plan model.", "edits": [{
+            "id": created["id"], "item_type": "flows", "title": "Interfaces", "content_format": "wire",
+            "expected_revision": 1,
+            "content": 'screen "Customers" id=customers route=/customers\n  heading "Customers updated"\n',
+        }]})
+
+    def boom(*args, **kwargs):
+        raise AssertionError("folder scan")
+
+    monkeypatch.setattr(conversation.runtime, "create_stream", stream)
+    monkeypatch.setattr(service, "materialize_project_scan", boom)
+    monkeypatch.setattr("distr.core.planning.project_scan.scan_project", boom)
+    response = client.post(base + "/rebuild-interfaces", json={"provider": "openrouter", "model_name": "selected-model"})
+    assert response.status_code == 200, response.text
+    assert response.json()["action"] == "rebuilt"
+    assert calls[0][:2] == ("openrouter", "selected-model")
+    sent = json.dumps(calls[0][2])
+    assert "Customers" in sent and "folder_location" not in sent and "scan_project" not in sent
+    saved = next(item for item in client.get(base).json()["items"] if item["item_type"] == "flows")
+    assert 'heading "Customers updated"' in saved["content"]
+    rejected = client.post(base + "/rebuild-interfaces", json={"provider": "openrouter", "model_name": "auto"})
+    assert rejected.status_code == 409
+
+
 def test_http_scan_rebuilds_plan_from_linked_project(plan_http, plan_workspace_db):
     folder = plan_workspace_db["folder"]
     src = folder / "frontend" / "src"

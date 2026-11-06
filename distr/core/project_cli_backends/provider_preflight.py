@@ -12,7 +12,6 @@ from urllib.request import Request, urlopen
 
 
 _OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
-_OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?sort=intelligence-high-to-low"
 _OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 _COMPLEXITY_BUFFER_USD = {
@@ -332,117 +331,53 @@ def probe_openrouter_model_readiness(
 def _openrouter_preflight(
     *, model: str, api_key: str, complexity: str, timeout_seconds: float
 ) -> ProviderPreflight:
+    """Auth/key probe only. Credit balance is not checked and never gates a run."""
     provider = "openrouter"
-    required = _COMPLEXITY_BUFFER_USD.get(str(complexity or "medium").lower(), 0.10)
     if not api_key.strip():
         return ProviderPreflight(
             provider, model, "blocked", False,
             "OpenRouter is selected but no API key is configured.",
-            required_buffer_usd=required,
         )
     headers = {"Authorization": f"Bearer {api_key.strip()}", "Accept": "application/json"}
-    account_remaining: float | None = None
-    credits_request = Request(_OPENROUTER_CREDITS_URL, headers=headers)
-    try:
-        with urlopen(credits_request, timeout=timeout_seconds) as response:
-            credits_payload = json.loads(response.read().decode("utf-8"))
-        credits_data = credits_payload.get("data") if isinstance(credits_payload, dict) else {}
-        credits_data = credits_data if isinstance(credits_data, dict) else {}
-        account_remaining = round(
-            float(credits_data.get("total_credits")) - float(credits_data.get("total_usage")),
-            6,
-        )
-    except HTTPError as exc:
-        if exc.code in {401, 402}:
-            reason = (
-                "OpenRouter rejected the configured API key."
-                if exc.code == 401
-                else "OpenRouter reports insufficient credit on the account."
-            )
-            return ProviderPreflight(
-                provider, model, "blocked", False, reason,
-                required_buffer_usd=required, http_status=exc.code,
-            )
-        # The credits endpoint can require a management-capable key. Fall back
-        # to the current-key limit endpoint when access is forbidden.
-        if exc.code != 403:
-            account_remaining = None
-    except Exception:
-        account_remaining = None
-
-    request = Request(
-        _OPENROUTER_KEY_URL,
-        headers=headers,
-    )
+    request = Request(_OPENROUTER_KEY_URL, headers=headers)
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        if exc.code in {401, 402, 403}:
+        if exc.code in {401, 403}:
             reason = {
                 401: "OpenRouter rejected the configured API key.",
-                402: "OpenRouter reports insufficient credit for this API key.",
                 403: "OpenRouter reports that this API key cannot inspect or use the requested route.",
             }[exc.code]
             return ProviderPreflight(
-                provider, model, "blocked", False, reason,
-                required_buffer_usd=required, http_status=exc.code,
+                provider, model, "blocked", False, reason, http_status=exc.code,
+            )
+        # 402/credit responses must not gate; treat as ready-enough to try the harness.
+        if exc.code == 402:
+            return ProviderPreflight(
+                provider, model, "ready", True,
+                "OpenRouter key probe returned HTTP 402; credit is not gated — continuing on the configured harness.",
+                http_status=exc.code,
             )
         return ProviderPreflight(
             provider, model, "unverified", None,
-            f"OpenRouter financial preflight could not be verified (HTTP {exc.code}).",
-            required_buffer_usd=required, http_status=exc.code,
+            f"OpenRouter key probe could not be verified (HTTP {exc.code}).",
+            http_status=exc.code,
         )
     except Exception as exc:
         return ProviderPreflight(
             provider, model, "unverified", None,
-            f"OpenRouter financial preflight is temporarily unavailable: {type(exc).__name__}.",
-            required_buffer_usd=required,
+            f"OpenRouter key probe is temporarily unavailable: {type(exc).__name__}.",
         )
 
     data = payload.get("data") if isinstance(payload, dict) else {}
     data = data if isinstance(data, dict) else {}
-    remaining_raw = data.get("limit_remaining")
-    if remaining_raw is None:
-        if account_remaining is None:
-            return ProviderPreflight(
-                provider, model, "unverified", None,
-                "OpenRouter key is valid, but account credit could not be verified.",
-                required_buffer_usd=required,
-            )
-        remaining_raw = account_remaining
-    try:
-        remaining = float(remaining_raw)
-        if account_remaining is not None:
-            remaining = min(remaining, account_remaining)
-    except (TypeError, ValueError):
-        return ProviderPreflight(
-            provider, model, "unverified", None,
-            "OpenRouter returned an unreadable credit balance.",
-            required_buffer_usd=required,
-        )
-
-    free_route = model.strip().lower() == "openrouter/free" or model.strip().lower().endswith(":free")
-    minimum = 0.0 if free_route else required
-    # ``:free`` models are served regardless of balance (verified 2026-10-22:
-    # HTTP 200 from a :free model at a -$0.27 balance). A negative balance only
-    # matters for paid routes, so it must not block a free one.
-    if not free_route and remaining < minimum:
-        return ProviderPreflight(
-            provider, model, "blocked", False,
-            (
-                f"OpenRouter has ${remaining:.2f} available; this {complexity or 'medium'} "
-                f"route requires at least a ${minimum:.2f} safety buffer."
-            ),
-            available_credit_usd=remaining,
-            required_buffer_usd=minimum,
-        )
+    # Key validated. Do not read or enforce credit balances.
     return ProviderPreflight(
         provider, model, "ready", True,
-        f"OpenRouter financial preflight passed with ${remaining:.2f} available.",
-        available_credit_usd=remaining,
-        required_buffer_usd=minimum,
+        "OpenRouter API key validated (credit check removed; configured harness runs as-is).",
     )
+
 
 
 _OPENROUTER_CATALOGUE_CACHE: dict[str, Any] = {"at": 0.0, "ids": None}

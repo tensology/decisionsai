@@ -24,6 +24,11 @@ if not ((3, 12, 8) <= tuple(sys.version_info[:3]) < (3, 13, 0)):
     )
 
 os.environ.setdefault("DECISIONS_DB_DIR", tempfile.mkdtemp(prefix="decisions-test-db-"))
+# Agent restart/death log must never hit ~/.decisions/logs from tests.
+os.environ.setdefault(
+    "DECISIONS_AGENT_RESTART_LOG",
+    os.path.join(tempfile.mkdtemp(prefix="decisions-test-logs-"), "agent_death.log"),
+)
 os.environ.setdefault("DECISIONS_TEST_MODE", "1")
 
 # ---------------------------------------------------------------------------

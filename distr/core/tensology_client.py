@@ -185,7 +185,7 @@ def configured_tensology_client(source: str = "decisionsai") -> TensologyClient:
     )
 
 
-def fetch_pending_work_requests() -> list[dict[str, Any]]:
+def fetch_pending_work_requests(*, include_decided: bool = False) -> list[dict[str, Any]]:
     """Pending Tensology work proposals awaiting a decision (queue / send / dismiss).
 
     Best-effort: never raises for a missing key or a Tensology outage, so it is safe
@@ -195,11 +195,18 @@ def fetch_pending_work_requests() -> list[dict[str, Any]]:
         client = configured_tensology_client()
     except TensologyApiError:
         return []
-    try:
-        data = client.get("work-requests", query={"status": "pending"})
-    except TensologyApiError:
-        return []
-    return [item for item in (data if isinstance(data, list) else []) if isinstance(item, dict)]
+    rows: dict[str, dict[str, Any]] = {}
+    # The all-status endpoint is bounded. Fetch pending independently so a
+    # collection with an old start date cannot be crowded out by newer history.
+    for status in (["pending", "all"] if include_decided else ["pending"]):
+        try:
+            data = client.get("work-requests", query={"status": status})
+        except TensologyApiError:
+            continue
+        for item in data if isinstance(data, list) else []:
+            if isinstance(item, dict) and item.get('id') is not None:
+                rows[str(item['id'])] = item
+    return list(rows.values())
 
 
 def decide_work_request(proposal_id: int, action: str, *, source: str = "") -> dict[str, Any]:

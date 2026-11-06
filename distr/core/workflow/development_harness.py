@@ -770,7 +770,7 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, **changes: Any
         next_status = str(execution.get("status") or "").strip().lower()
         if ticket is not None and next_status in {
             "initializing", "queued", "running", "waiting", "paused",
-            "completed", "completed_noop", "failed", "cancelled",
+            "completed", "completed_noop", "failed", "blocked", "cancelled",
         }:
             ticket.workflow_status = "completed" if next_status == "completed_noop" else next_status
         db.commit()
@@ -1200,6 +1200,7 @@ def _runtime_identity_text(metadata: dict[str, Any]) -> str:
 
 def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, autonomy_level: str) -> str:
     from distr.core.chat_agents import agent_instructions
+    from distr.core.incoming.source_context import thread_source_instructions
 
     history = ChatService.get_chat_history(int(chat_id))
     if history and history[-1].get("role") == "user" and str(history[-1].get("content") or "").strip() == prompt.strip():
@@ -1259,6 +1260,7 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
             "A direct modification request is authorization to implement it. Do not finish by offering to make the requested change or asking which obvious project target to use when repository and runtime evidence identify it. When cosmetic details are omitted, make the smallest conventional implementation and report what you chose.",
             _runtime_identity_text(metadata),
             agent_instructions(chat_id),
+            thread_source_instructions(chat_id),
             skill_instruction,
             "\n".join(item for item in scope if item),
             "Conversation context since the latest context checkpoint:\n" + "\n\n".join(transcript) if transcript else "",
@@ -1693,11 +1695,12 @@ async def _run_execution(
         if current.get("job_id") != job_id or current.get("status") == "cancelled":
             return
         success = bool(result.success)
-        waiting = bool(result.waits_for_human and success)
+        blocked = str(getattr(result, "status", "")) == "blocked"
+        waiting = bool(result.waits_for_human and (success or blocked))
         output = str(result.output or "").strip()
         error = str(result.error or "").strip()
         response = output or error or ("Work completed." if success else "The development agent did not return a result.")
-        status = "waiting" if waiting else "completed" if success else "failed"
+        status = "blocked" if blocked else "waiting" if waiting else "completed" if success else "failed"
         changes = _turn_change_manifest(
             str(project.folder_location or ""),
             dict(current.get("git_status_before") or {}),
@@ -2076,178 +2079,15 @@ def dispatch_development_prompt(
         return control_result
     from distr.core.workflow.execution_mode import choose_development_execution_mode
 
+    # Workflows only run when the caller already chose a named workflow_id
+    # (threads/studio → dispatch_work_item). Auto-wrap into managed class
+    # workflows is retired: every prompt/ticket continues as a direct turn.
     execution_mode = choose_development_execution_mode(clean, assessment=assessment)
-    routing_text = execution_mode.pop("scope_text", clean)
     if execution_mode.get("policy") == "proposal-scope-v1":
         assessment.pop("proposal_scope", None)
         assessment["complexity"] = execution_mode["complexity"]
-    if (
-        execution_mode["mode"] == "workflow"
-        and autonomy_level not in {"plan", "approval"}
-    ):
-        from distr.core.workflow.work_dispatch import dispatch_work_item
+    assessment["execution_mode_decision"] = execution_mode
 
-        existing_workflow_id = int(metadata.get("workflow_id") or 0) or None
-        workflow_id = existing_workflow_id
-        if existing_workflow_id is not None:
-            from distr.core.workflow.phases import is_retired_workflow
-
-            # The ticket link outlives the workflow. A link to the retired
-            # Development pipeline must route fresh, not resume a dead flow.
-            if is_retired_workflow(existing_workflow_id):
-                existing_workflow_id = None
-                workflow_id = None
-        # A deliberate "make it heavier/lighter" relinks the ticket before dispatch.
-        if ticket_id is not None:
-            from distr.core.workflow.phases import apply_route_override
-
-            route_override = apply_route_override(int(ticket_id), clean, chat_id=int(chat_id))
-            if route_override.get("changed"):
-                workflow_id = int(route_override["workflow_id"])
-                existing_workflow_id = workflow_id
-        relaunch_inherit: dict[str, Any] = {}
-        if existing_workflow_id is not None:
-            from distr.core.workflow.relaunch_guard import relaunch_decision
-
-            relaunch = relaunch_decision(int(chat_id), int(existing_workflow_id), clean)
-            if not relaunch.get("allow", True):
-                ChatService.append_assistant_notice(int(chat_id), str(relaunch.get("notice") or ""))
-                return {
-                    "direct": False,
-                    "execution_mode": "workflow",
-                    "started": False,
-                    "requires_resume": True,
-                    "previous_run_id": relaunch.get("previous_run_id"),
-                    "message": str(relaunch.get("notice") or ""),
-                }
-            relaunch_inherit = dict(relaunch.get("inherit") or {})
-        if workflow_id is None:
-            # Route the ticket to its weight-class policy. The old path planned a
-            # throwaway "instruction" draft (which was never runnable) and then
-            # fell back to the retired Development pipeline, which is exactly how
-            # the workflow list filled with dead drafts and one token furnace.
-            from distr.core.workflow.phases import route_ticket_plan
-
-            # Route silently. The ticket-arrival message already explains what the
-            # work is; naming the internal policy here is noise, not information.
-            route_plan = route_ticket_plan(
-                routing_text,
-                ticket_id=ticket_id,
-                has_repo_target=bool(int(project.id) > 0),
-                **({"requested": execution_mode["workflow_class"]} if execution_mode.get("workflow_class") else {}),
-            )
-            workflow_id = int(route_plan.get("workflow_id") or 0) or None
-            if workflow_id and ticket_id is not None:
-                from distr.core.workflow.phases import relink_ticket_to_workflow
-
-                relink_ticket_to_workflow(int(ticket_id), int(workflow_id))
-            if workflow_id:
-                try:
-                    from distr.core.workflow.development_threads import mark_development_thread
-
-                    mark_development_thread(
-                        int(chat_id),
-                        workflow_id=int(workflow_id),
-                        ticket_id=ticket_id,
-                        board_key=metadata.get("board_key"),
-                        board_provider=metadata.get("board_provider"),
-                        board_ticket_key=metadata.get("board_ticket_key"),
-                        board_ticket_title=metadata.get("board_ticket_title"),
-                        board_ticket_lane=metadata.get("board_ticket_lane"),
-                    )
-                except Exception as exc:
-                    # Thread marking is bookkeeping. Losing it must not throw away
-                    # a usable routed workflow and strand the ticket.
-                    ChatService.append_assistant_notice(
-                        int(chat_id),
-                        f"Could not mark this thread against the routed workflow ({exc}).",
-                    )
-        if not workflow_id:
-            notice = "No workflow is available to run this ticket. Create one from the Workflows page."
-            ChatService.append_assistant_notice(int(chat_id), notice)
-            return {
-                "direct": False,
-                "execution_mode": "workflow",
-                "started": False,
-                "message": notice,
-            }
-        model_route = metadata.get("model_route") if isinstance(metadata.get("model_route"), dict) else {}
-        pinned_backend = str(model_route.get("backend") or "").strip().lower()
-        local_sel = resolve_local_harness_selection(pinned_backend)
-        if (
-            str(model_route.get("route_mode") or "").strip().lower() == "manual"
-            and pinned_backend not in CLI_BACKENDS
-            and local_sel is None
-        ):
-            pinned_backend = "pi"
-        routed_backend, routed_model, routed_options, routed_complexity = _route(project, metadata, assessment)
-        run_metadata = {
-            'turn_attachments': source_attachments,
-            "routing_assessment": assessment,
-            "execution_mode_decision": execution_mode,
-            "skip_human_checkpoints": bool(assessment.get("skip_human_checkpoints")),
-            "skill_ids": list(skill_ids or []),
-            "use_playwright": bool(use_playwright),
-            "model_route": model_route,
-            "route_receipt": _route_receipt(
-                metadata,
-                assessment,
-                backend=routed_backend,
-                model=routed_model,
-                adapter_options=routed_options,
-                complexity=routed_complexity,
-            ),
-        }
-        if pinned_backend in CLI_BACKENDS or local_sel is not None:
-            from distr.core.project_cli_backends.timing import resolve_pi_model_provider
-
-            run_metadata["execution_route"] = {
-                "backend": (local_sel["backend"] if local_sel else pinned_backend),
-                "model": (
-                    str(local_sel["model"])
-                    if local_sel
-                    else str(model_route.get("model_name") or "auto")
-                ),
-                "model_provider": (
-                    str(local_sel["provider"])
-                    if local_sel
-                    else (
-                        resolve_pi_model_provider(
-                            str(model_route.get("model_name") or ""),
-                            str(model_route.get("provider") or ""),
-                        )
-                        if pinned_backend == "pi"
-                        else str(model_route.get("provider") or "")
-                    )
-                ),
-                "source": "thread_model_route",
-                "route_mode": str(model_route.get("route_mode") or "manual").strip().lower() or "manual",
-                "local_harness_preset": local_sel["local_harness_preset"] if local_sel else "",
-            }
-        for inherited_key in ("model_route", "execution_route"):
-            # An explicit resume keeps the stopped run's pinned route instead
-            # of letting Auto pick a (possibly free) model for the relaunch.
-            if inherited_key in relaunch_inherit and not run_metadata.get(inherited_key):
-                run_metadata[inherited_key] = relaunch_inherit[inherited_key]
-        record_turn_route(int(chat_id), run_metadata["route_receipt"])
-        result = dispatch_work_item(
-            workflow_id=int(workflow_id),
-            chat_id=int(chat_id),
-            context=clean,
-            project_id=int(project.id) if int(project.id) > 0 else None,
-            board_id=board_id,
-            ticket_id=ticket_id,
-            source_type="development_thread_orchestrator",
-            run_metadata=run_metadata,
-            dispatch_async=dispatch_async,
-        )
-        return {
-            **result,
-            "direct": False,
-            "execution_mode": "workflow",
-            "orchestrator_agent": "workflow_orchestrator",
-            "workflow_generated": existing_workflow_id is None,
-        }
     persistent_attachments = _linked_ticket_attachments(ticket_id)
     persistent_attachments.extend(source_attachments)
     turn_attachments = _safe_turn_attachments(

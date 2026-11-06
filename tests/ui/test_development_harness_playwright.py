@@ -12,7 +12,6 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from playwright.sync_api import Page, expect
 
-
 pytestmark = pytest.mark.e2e_playwright
 URL = TEST_BASE_URL + "/development/threads/17/"
 
@@ -76,6 +75,7 @@ def _install_api(
     routing_execution_mode: str = "direct",
     seven_step_workflow: bool = False,
     provider_preflight_interaction: bool = False,
+    budget_exhausted_interaction: bool = False,
     activity_events: list[dict] | None = None,
 ) -> None:
     projects = [
@@ -684,6 +684,11 @@ def _install_api(
                 "workflow_id": 44,
                 "chat_id": 17,
                 "status": run_status or ("running" if live_activity else "waiting"),
+                "waiting_kind": "control_interrupt" if budget_exhausted_interaction else "",
+                "waiting_prompt": "Heavy session is waiting for your decision.",
+                "blueprint": ({"interrupt_line": {
+                    "question": "DecisionsAI #42 Repair part lookup: the worker has a question for you. Which approach should we take? Continue sends your answer to the worker and carries on. Safe default if you do nothing: the worker stays paused awaiting your answer. Your answer is needed."
+                }} if budget_exhausted_interaction else {}),
                 "current_step_id": 3 if seven_step_workflow else 1,
                 "step_routes": ({
                     "1": {"backend": "pi", "model": "nemotron-3.5-super"},
@@ -802,8 +807,8 @@ def _install_api(
                 "interactions": ([{
                     "token": "abc123",
                     "run_id": 99,
-                    "kind": "provider_preflight" if provider_preflight_interaction else "approval",
-                    "allowed_actions": ["model_0", "stop"] if provider_preflight_interaction else ["approve", "stop", "feedback"],
+                    "kind": "provider_preflight" if provider_preflight_interaction else "control_interrupt" if budget_exhausted_interaction else "approval",
+                    "allowed_actions": ["continue", "stop", "feedback"] if budget_exhausted_interaction else ["model_0", "stop"] if provider_preflight_interaction else ["approve", "stop", "feedback"],
                     "telegram_linked": True,
                 }] if pending_interaction else []),
             }
@@ -1268,7 +1273,9 @@ def test_development_navigation_uses_clean_urls_and_restores_history(page: Page)
     expect(page.locator("#task-prompt")).to_be_enabled()
 
     expect(page.locator("#sidebar-automations-toggle, #sidebar-automation-add")).to_have_count(0)
-    page.locator("#sidebar-plan-toggle").click()
+    # The sidebar has no Plan row any more; the plan route stays reachable by URL.
+    expect(page.locator("#sidebar-plan-toggle")).to_have_count(0)
+    page.goto(TEST_BASE_URL + "/development/plan/")
     expect(page).to_have_url(TEST_BASE_URL + "/development/plan/")
     expect(page.locator("#plan-workspace")).to_be_visible()
     expect(page.locator("#plan-workspace h1")).to_have_text("Plans")
@@ -1786,7 +1793,7 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
 
     page.locator('[data-board-toggle="decisions:70"]').click()
     expect(page.locator('[data-chat-id="17"]').first).to_be_hidden()
-    page.locator("#sidebar-plan-toggle").click()
+    page.locator("#sidebar-reports-toggle").click()
     expect(page.locator('[data-chat-id="17"]').first).to_be_hidden()
     expect(page.locator('[data-board-toggle="decisions:70"]')).to_have_attribute("aria-expanded", "false")
     page.locator('[data-board-toggle="decisions:70"]').click()
@@ -1800,11 +1807,11 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator('[data-board-group="decisions:80"] .project-row')).to_have_class(re.compile(r"\bactive\b"))
     expect(page.locator('[data-board-select="decisions:80"]')).to_have_attribute("aria-current", "true")
 
-    kanban_button = page.locator('[data-board-kanban="decisions:70"]')
+    # Selecting the board opens Kanban, so rows no longer carry a separate Kanban button.
+    expect(page.locator('[data-board-kanban]')).to_have_count(0)
     new_thread_button = page.locator('[data-board-new-chat="decisions:70"]')
-    expect(kanban_button).to_be_visible()
     expect(new_thread_button).to_be_visible()
-    assert kanban_button.bounding_box()["width"] == new_thread_button.bounding_box()["width"] == 28
+    assert new_thread_button.bounding_box()["width"] == 28
     page.screenshot(path="/private/tmp/development-board-actions.png", full_page=True)
 
     page.locator('[data-board-new-chat="jira:jira-1"]').click()
@@ -2085,6 +2092,11 @@ def test_waiting_workflow_defaults_to_loop_and_exposes_approval(page: Page):
     checkpoint.get_by_role("button", name="Approve and continue", exact=True).click()
 
     assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
+
+
+@pytest.mark.skip(reason="Budget gate removed; Raise-budget checkpoint UI is gone")
+def test_budget_checkpoint_shows_reason_and_explicit_continue_action(page: Page):
+    pass
 
 
 def test_pending_checkpoint_requires_explicit_revision_and_blocks_normal_send(page: Page):
@@ -2859,8 +2871,7 @@ def test_compact_actions_workflows_provider_groups_and_board_linking(page: Page)
     expect(page.locator("#board-task-tree .board-provider-label")).to_have_count(3)
     expect(page.locator("#board-task-tree")).to_contain_text("Jira")
     expect(page.locator("#board-task-tree")).to_contain_text("Trello")
-    expect(page.locator('[data-board-group="decisions:70"] .board-link-bead')).to_have_class(re.compile(r"linked"))
-    expect(page.locator('[data-board-group="trello:trello-1"] .board-link-bead')).not_to_have_class(re.compile(r"linked"))
+    expect(page.locator("#board-task-tree .board-link-bead")).to_have_count(0)
 
     page.locator("#composer-plan-button").click()
     expect(page.locator("#composer-action-menu")).to_be_visible()
@@ -2967,20 +2978,42 @@ def test_workflow_stop_reconciles_without_a_permanent_spinner(page: Page):
 
 
 def test_workflows_three_dot_menu_routes_direct_waiting_execution(page: Page):
+    # Decided: thread runs (direct development and regular threads) live on Threads, never on Workflows
+    # (development/workflows/index.js activeExecutionRowsHtml filter). The run's controls are on its thread.
     requests: list[tuple[str, str]] = []
-    _install_api(page, requests, unified_direct_run=True, direct_execution=True)
+    _install_api(page, requests, unified_direct_run=True, direct_execution=True, live_activity=True)
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(TEST_BASE_URL + "/development/workflows/")
+    expect(page.locator("#workflows-view, .workflow-library, main").first).to_be_visible()
+    page.wait_for_timeout(300)
+    expect(page.locator('[data-active-execution="development:17:direct-91"]')).to_have_count(0)
 
-    row = page.locator('[data-active-execution="development:17:direct-91"]')
-    expect(row).to_be_visible()
-    row.get_by_label("What you can do with this run").click()
-    expect(row.get_by_role("link", name="Open", exact=True)).to_have_attribute("href", "/development/threads/17/")
-    expect(row.get_by_role("link", name="Related ticket")).to_be_visible()
-    expect(row.get_by_role("link", name="Continue / Respond")).to_be_visible()
-    row.get_by_role("button", name="Cancel").click()
-
+    page.goto(TEST_BASE_URL + "/development/threads/17/")
+    stop = page.locator("#stop-run-button")
+    expect(stop).to_be_visible()
+    stop.click()
+    expect(page.locator("#decisions-confirm-modal")).to_be_visible()
+    page.get_by_role("button", name="Stop agent", exact=True).click()
+    page.wait_for_timeout(100)
     assert ("POST", "/api/workflows/studio/tasks/17/execution/stop") in requests
+
+
+def test_workflows_page_never_lists_thread_runs(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    runs = [
+        {"id": "development:17:direct-91", "execution_kind": "development", "chat_id": 17, "status": "waiting", "ticket_title": "Direct thread run", "open_url": "/development/threads/17/"},
+        {"id": "thread:18", "execution_kind": "thread", "workflow_id": None, "chat_id": 18, "status": "running", "ticket_title": "Regular thread run", "open_url": "/development/threads/18/"},
+        {"id": 99, "execution_kind": "workflow", "workflow_id": 44, "workflow_name": "Development", "chat_id": 19, "status": "running", "ticket_title": "Real workflow run"},
+    ]
+    page.route("**/api/workflows/active-runs*", lambda route: route.fulfill(json=runs))
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(TEST_BASE_URL + "/development/workflows/")
+    expect(page.locator('[data-active-execution="99"]')).to_be_visible()
+    expect(page.locator('[data-active-execution="development:17:direct-91"]')).to_have_count(0)
+    expect(page.locator('[data-active-execution="thread:18"]')).to_have_count(0)
+    expect(page.get_by_text("Direct thread run")).to_have_count(0)
+    expect(page.get_by_text("Regular thread run")).to_have_count(0)
 
 
 def test_workflows_three_dot_menu_routes_workflow_cancel(page: Page):
@@ -3511,10 +3544,13 @@ def test_ticket_material_creates_a_reviewable_thread_draft_without_submitting(pa
     expect(page.locator("#kanban-ticket-attachments")).to_contain_text("composer.png")
     expect(page.locator("#kanban-ticket-attachments")).to_contain_text("requirements.pdf")
     expect(page.locator("#kanban-ticket-attachments img")).to_have_count(1)
-    expect(page.locator("#kanban-ticket-comment-count")).to_have_text("1 comment")
+    details_height = dialog.evaluate("node => node.getBoundingClientRect().height")
 
-    dialog.get_by_role("tab", name=re.compile("Links & files")).click()
-    expect(dialog.get_by_role("tab", name=re.compile("Links & files"))).to_have_attribute("aria-selected", "true")
+    dialog.get_by_role("tab", name=re.compile("^Files")).click()
+    expect(dialog.get_by_role("tab", name=re.compile("^Files"))).to_have_attribute("aria-selected", "true")
+    # Switching tabs never resizes the modal.
+    assert dialog.evaluate("node => node.getBoundingClientRect().height") == details_height
+    expect(page.locator("#kanban-ticket-dropzone")).to_be_visible()
     expect(page.locator("#kanban-ticket-details-panel")).to_be_hidden()
     expect(page.locator("#kanban-ticket-attachments-panel")).to_be_visible()
     page.locator("#kanban-ticket-attachments").evaluate(
@@ -3554,7 +3590,7 @@ def test_incoming_channels_automation_rules_and_step_models_are_operable(page: P
     expect(page.locator("#incoming-search-input")).to_have_count(0)
     page.screenshot(path="/private/tmp/development-harness-incoming.png", full_page=True)
     expect(page.locator("#incoming-list")).to_contain_text("Menu Project client")
-    expect(page.locator("#incoming-list")).to_contain_text("Linked work")
+    expect(page.locator("#incoming-list")).to_contain_text("Linked conversations")
     expect(page.locator("#incoming-list")).to_contain_text("Other conversations")
     expect(page.locator("#incoming-folder-whatsapp")).to_have_attribute("aria-selected", "true")
     expect(page.locator("#incoming-folder-gmail")).to_have_count(1)
@@ -3855,11 +3891,9 @@ def test_auto_routing_is_visible_and_manual_image_incompatibility_blocks_send(pa
     page.locator("#model-button").click()
     page.locator('[data-model-pane="harness"]').click()
     expect(page.locator("#model-submenu-list .model-choice")).to_have_count(5)
-    page.get_by_role("menuitemradio", name=re.compile(r"^Claude Code\b")).click()
+    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
     expect(page.locator("#model-submenu-title")).to_have_text("Model")
-    page.get_by_role("menuitemradio", name=re.compile("Claude Sonnet 4")).click()
-    expect(page.locator("#model-effort-row")).to_be_hidden()
-    expect(page.locator("#model-speed-row")).to_be_hidden()
+    page.get_by_role("menuitemradio", name=re.compile("Kilo Auto Free")).click()
     page.locator("#context-file-input").set_input_files({"name": "reference.png", "mimeType": "image/png", "buffer": b"image"})
     page.locator("#task-prompt").fill("Use this reference")
     before = requests.count(("POST", "/api/workflows/studio/tasks/17/messages"))
@@ -4317,9 +4351,9 @@ def test_image_drop_turns_red_for_a_model_without_vision(page: Page):
     page.locator("#model-button").click()
     page.locator('[data-model-pane="harness"]').click()
     expect(page.locator("#model-submenu-list .model-choice")).to_have_count(5)
-    page.get_by_role("menuitemradio", name=re.compile(r"^Claude Code\b")).click()
+    page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
     expect(page.locator("#model-submenu-title")).to_have_text("Model")
-    page.get_by_role("menuitemradio", name=re.compile("Claude Sonnet 4")).click()
+    page.get_by_role("menuitemradio", name=re.compile("Kilo Auto Free")).click()
     page.locator("#model-dialog").evaluate("node => node.close()")
     page.wait_for_timeout(100)
 

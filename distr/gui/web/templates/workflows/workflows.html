@@ -209,6 +209,15 @@
 .chevron { transition: transform 0.15s; display: inline-block; }
 .chevron.open { transform: rotate(90deg); }
 .wf-live-run { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); }
+#wf-tab-runs, #wf-runs-pane-active, #wf-active-runs-list { min-width: 0; max-width: 100%; }
+#wf-active-runs-list > div { overflow-wrap: anywhere; }
+#wf-detail-tab-scroll { min-width: 0; }
+#wf-tab-runs { width: 100%; contain: inline-size; }
+@media (max-width: 767px) {
+    #wf-runs-pane-active > .flex, #wf-runs-pane-active > .flex > .flex,
+    #wf-active-runs-list > div > .flex { flex-wrap: wrap; }
+    #wf-tab-runs > .flex { overflow-x: auto; }
+}
 @keyframes wf-spin { to { transform: rotate(360deg); } }
 .kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100000; align-items: center; justify-content: center; }
 .kb-modal-overlay:not(.hidden) { display: flex; }

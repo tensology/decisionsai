@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -65,6 +66,29 @@ class ExecutionResult:
         return asdict(self)
 
 
+def reported_task_status(output: str) -> str:
+    """Read explicit terminal reports, with compatibility for the old blocked heading."""
+    statuses = []
+    aliases = {"completed": "completed", "failed": "failed", "blocked": "blocked",
+               "needs_input": "blocked", "needs input": "blocked"}
+    for line in str(output or "").splitlines():
+        clean = re.sub(r"[*_`]", "", line).strip().lstrip("#- ")
+        match = re.fullmatch(r"(?i)status\s*:\s*(completed|failed|blocked|needs input|needsinput)\s*", clean)
+        if match:
+            statuses.append(aliases.get(match.group(1).lower(), "blocked"))
+        try:
+            row = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(row, dict) and str(row.get("status", "")).lower() in aliases:
+            statuses.append(aliases[str(row["status"]).lower()])
+    if statuses:
+        return statuses[-1]
+    if re.search(r"(?im)^\s*(?:\*\*|#{1,6}\s*)?Blocked\s+(?:on\b|by\b)", output or ""):
+        return "blocked"
+    return ""
+
+
 def normalize_execution_result(raw: Any, *, backend_id: str = "", attempt_id: int | None = None) -> ExecutionResult:
     """Normalize legacy adapter results without teaching workflows each format."""
     def value(name: str, default: Any = None) -> Any:
@@ -77,6 +101,16 @@ def normalize_execution_result(raw: Any, *, backend_id: str = "", attempt_id: in
     error = str(value("error", "") or "")
     output = str(value("output", "") or "")
     status = str(value("status", "") or "").strip().lower()
+    reported = reported_task_status(output)
+    if reported in {"blocked", "failed"}:
+        status = reported
+        success = False
+        waits = reported == "blocked"
+        error = error or ("Task requires input before it can complete." if waits else "Worker reported task failure.")
+    elif status in {"blocked", "needs_input"}:
+        status, success, waits = "blocked", False, True
+    elif error:
+        status, success = "failed", False
     if not status:
         status = "waiting" if waits and success else ("completed" if success else "failed")
     resolved_backend = str(value("backend_id", "") or backend_id)

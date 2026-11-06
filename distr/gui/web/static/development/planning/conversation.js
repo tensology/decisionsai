@@ -1,31 +1,49 @@
 import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js';
-import { createThreadsTranscript } from '../threads/transcript/index.js';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
 import { layoutConnectedSitemap, pageAccessGroup, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261028-responsive';
 import { pageCaptureFor } from './page-captures.js?v=20261003-sitemap-groups';
 import { planningProviderLabel } from './routes.js';
+import { createInlineEditor, addUnsavedCheck, isRevisionConflict } from './inline-edit/editor.js?v=20261103-ifaces3';
+import { markdownToEditableHtml } from './inline-edit/markdown.js';
+import { DOCUMENT_ORDER, orderDocuments, documentLabel, openDocument, moveTab, normaliseMode, isUserDocument } from './documents.js?v=20261103-ifaces3';
+import { userDocumentsEnabled, USER_DOCUMENT_TYPE } from './documents-config.js?v=20261103-ifaces3';
+import { mountErdItem, isErdMermaid, erdIsDirty } from './erd/mount.js?v=20261103-rows1';
+import { fillToWindow, createCallout, advancedButton, pinDock, openDrawer } from './canvas-chrome.js?v=20261103-ifaces3';
+import { readSidecar, nodeIds, writeSidecar, slugId } from './flow-meta.js?v=20261103-ifaces3';
+import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261103-ifaceradial1';
+import { createIfaceCanvas } from './iface-canvas.js?v=20261103-ifaceradial1';
+import { decorateNode, nodeButton, openNodePopover, openNodePicker, closeNodePopover, warningsNotice } from './flow-nodes.js?v=20261103-ifaces3';
+import { rememberedRoute, rememberRoute, routeStore } from './route-memory.js?v=20261102-verify';
+import { chatHeaderHtml, chatStore, rememberChat, rememberedChat, pickActiveChat, validateImageFiles, rejectionMessage, isImageAsset, imageLabel } from './chat-header.js?v=20261103-chat2';
+import { toolCardsHtml, draftsPayload, memoryPanelHtml } from './chat-tools.js?v=20261103-chat2';
+
+// Planning providers are the same for every board: fetch once per page, not per plan open.
+let planningProviders = null;
 
 const BASE = '/workflows/studio/plan-workspaces';
 const TABS = {
-    wireframes: { label: 'Pages', help: 'Page outlines, sitemap, and how screens fit together', types: ['wireframe', 'flows'] },
+    wireframes: { label: 'Interfaces', help: 'Page outlines, sitemap, and how screens fit together', types: ['wireframe', 'flows'] },
     erd: { label: 'Data', help: 'Entities and relationships (ERD / architecture)', types: ['erd', 'architecture', 'diagram'] },
-    requirements: { label: 'Requirements', help: 'FRAC, brief, and acceptance criteria', types: ['brief', 'prd', 'frac', 'skills', 'file_structure', 'handover', 'decision', 'project_overview', 'discovery_proposal'] }
+    // Internal id stays 'requirements' (session.tab, data-plan-tab, data-hub-tab, saved selections); the UI says Documents.
+    requirements: { label: 'Documents', help: 'FRAC, brief, PRD, handover and other project documents', types: DOCUMENT_ORDER }
 };
 
 
 export function createPlanConversation(host, root) {
     const sessions = new Map();
     const esc = (value) => host.escapeHtml(String(value ?? ''));
-    const { assistantMarkdown } = createThreadsTranscript({ actions: { escapeHtml: esc } });
     const api = (path, options) => host.api(path, options);
     let active = null;
     let mermaidReady;
     let diagramId = 0;
     const path = (session, suffix = '') => `${BASE}/${encodeURIComponent(session.id)}${suffix}`;
+    // The conversation of the session's active chat (N3 multi-chat); no chat id = the server's newest live chat.
+    const conversationPath = (session) => path(session, '/conversation') + (session.chatId ? `?chat_id=${encodeURIComponent(session.chatId)}` : '');
     const current = (session) => active === session && Boolean(root.querySelector('.plan-detail'));
-    const items = (session) => (session.workspace.items || []).filter((item) => TABS[session.tab].types.includes(item.item_type));
-    const selected = (session) => items(session).find((item) => String(item.id) === String(session.selection[session.tab])) || items(session)[0] || null;
+    const items = (session) => (session.tab === 'requirements' ? orderDocuments(session.workspace.items) : (session.workspace.items || []).filter((item) => TABS[session.tab].types.includes(item.item_type)));
+    const selected = (session) => (session.tab === 'requirements' ? openDocument(items(session), session.selection.requirements)
+        : items(session).find((item) => String(item.id) === String(session.selection[session.tab])) || items(session)[0] || null);
     const blocked = (session) => !session.loaded || Boolean(session.pending) || ['running', 'pending', 'processing'].includes(session.conversation.status);
     const modelAvailable = (session) => (session.models || []).some(model => (typeof model === 'string' ? model : model.id || model.name) === session.model);
     const allStarters = (session) => {
@@ -38,7 +56,7 @@ export function createPlanConversation(host, root) {
         if (!current(session) || session.pending || !['running', 'pending', 'processing'].includes(session.conversation.status)) return;
         session.polling = createPlanPolling({
             active: () => current(session) && !session.pending,
-            read: () => api(path(session, '/conversation')),
+            read: () => api(conversationPath(session)),
             apply: async (conversation, valid) => {
                 const running = ['running', 'pending', 'processing'].includes(conversation.status);
                 if (!running) {
@@ -96,24 +114,240 @@ export function createPlanConversation(host, root) {
         if (current(session)) root.querySelector('#plan-model').innerHTML = modelOptions(session);
     }
 
+    // The plan tabs live in the host's contextual header, with Build tickets beside the
+    // Kanban / Plan / Last thread switch. Only the ⋯ menu sits on the interfaces canvas.
+    let bar = null;
+    const planBar = () => bar || root;
+    function mountBar() {
+        const slot = host.planControlsSlot?.();
+        const header = root.querySelector('.plan-detail-header');
+        bar = null;
+        if (!slot || !header) return;
+        header.classList.add('plan-context-controls');
+        slot.replaceChildren(header);
+        bar = header;
+    }
+
+    // Interfaces actions live on the canvas (not the header). Held here so a preview re-render cannot drop them.
+    let ifaceActions = null;
+
+    // ⋯ menu (same .board-context-menu popover as the thread header menu). Fixed under its button.
+    function closePlanMenu() {
+        const menu = ifaceActions?.querySelector('#plan-header-menu');
+        if (!menu || menu.classList.contains('hidden')) return;
+        menu.classList.add('hidden');
+        ifaceActions.querySelector('#plan-more-button')?.setAttribute('aria-expanded', 'false');
+    }
+    function togglePlanMenu() {
+        const menu = ifaceActions?.querySelector('#plan-header-menu');
+        const button = ifaceActions?.querySelector('#plan-more-button');
+        if (!menu || !button) return;
+        const opening = menu.classList.contains('hidden');
+        if (opening) {
+            const rect = button.getBoundingClientRect();
+            menu.style.position = 'fixed';
+            menu.style.left = 'auto';
+            menu.style.top = `${Math.round(rect.bottom + 6)}px`;
+            menu.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
+        }
+        menu.classList.toggle('hidden', !opening);
+        button.setAttribute('aria-expanded', String(opening));
+        if (opening) menu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+    }
+    if (typeof document !== 'undefined') {
+        document.addEventListener('click', (event) => {
+            if (!event.target.closest?.('#plan-header-menu') && !event.target.closest?.('#plan-more-button')) closePlanMenu();
+            if (!event.target.closest?.('#plan-chat-menu') && !event.target.closest?.('#plan-chat-switch')) {
+                root.querySelector('#plan-chat-menu')?.classList.add('hidden');
+                root.querySelector('#plan-chat-switch')?.setAttribute('aria-expanded', 'false');
+            }
+        });
+        document.addEventListener('keydown', (event) => {
+            const menu = ifaceActions?.querySelector('#plan-header-menu');
+            if (!menu || menu.classList.contains('hidden')) return;
+            if (event.key === 'Escape') { closePlanMenu(); ifaceActions?.querySelector('#plan-more-button')?.focus(); return; }
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            const items = [...menu.querySelectorAll('[role="menuitem"]:not(:disabled)')];
+            if (!items.length) return;
+            event.preventDefault();
+            const at = items.indexOf(document.activeElement);
+            items[(at + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+        });
+    }
+
+    // Interfaces: existing page / sitemap content on the gridded, window-filling canvas surface with the
+    // summary call-out. The wire renderers below replace the preview's contents (innerHTML), so the call-out
+    // is re-attached whenever it is wiped; the observer and fill-height go away with previewCleanup.
+    function interfacesSurface(preview, stats, hint) {
+        preview.classList.add('plan-canvas-surface');
+        const callout = createCallout({ key: 'interfaces', label: 'Interfaces summary', stats, hint });
+        preview.prepend(callout);   // first child: the sticky, floated call-out pins to the surface's top right
+        const keep = new MutationObserver(() => { if (preview.firstElementChild !== callout) preview.prepend(callout); });
+        keep.observe(preview, { childList: true });
+        const unfill = fillToWindow(preview);
+        return () => { keep.disconnect(); unfill?.(); };
+    }
+
+    // ---- Documents tab: tab bar (role=tablist), Editor / Markdown, Print PDF ------------------
+    const DOC_MODE_KEY = 'decisions.plan.docMode';
+    const docMode = () => { try { return normaliseMode(sessionStorage.getItem(DOC_MODE_KEY)); } catch { return 'inline'; } };
+    const setDocMode = (mode) => { try { sessionStorage.setItem(DOC_MODE_KEY, normaliseMode(mode)); } catch { /* per view only */ } };
+    function documentsBarHtml(session, docs, open) {
+        const userDocs = userDocumentsEnabled();
+        const mode = docMode();
+        const tabs = docs.length ? docs.map((doc) => {
+            const on = String(doc.id) === String(open?.id);
+            const unsaved = Boolean(session.inlineDrafts?.[doc.id]);
+            return `<button type="button" role="tab" class="plan-doc-tab" id="plan-doc-tab-${esc(doc.id)}" data-doc="${esc(doc.id)}" aria-selected="${on}" aria-controls="plan-preview" tabindex="${on ? 0 : -1}"${isUserDocument(doc) ? ' data-user-doc="true"' : ''}${unsaved ? ' data-unsaved="true"' : ''} title="${esc(doc.title || '')}">${esc(documentLabel(doc, docs))}<span class="plan-doc-dot" aria-hidden="true"></span>${unsaved ? '<span class="visually-hidden"> (unsaved)</span>' : ''}</button>`;
+        }).join('') : '<button type="button" role="tab" class="plan-doc-tab" aria-selected="true" tabindex="0" aria-controls="plan-preview" disabled>FRAC</button>';
+        const userActions = userDocs ? `<button type="button" class="plan-doc-add" id="plan-doc-add" aria-label="Add document" title="Add document">+</button>${open && isUserDocument(open) ? `<button type="button" class="plan-doc-rename" id="plan-doc-rename" aria-label="Rename ${esc(open.title || 'document')}" title="Rename">Rename</button><button type="button" class="plan-doc-delete" id="plan-doc-delete" aria-label="Delete ${esc(open.title || 'document')}" title="Delete">Delete</button>` : ''}` : '';
+        return `<div class="plan-docs-bar">
+            <div class="plan-doc-tabs" role="tablist" aria-label="Documents">${tabs}</div>${userActions}
+            <span class="plan-docs-actions">
+                <span class="plan-doc-modes" role="group" aria-label="Editor mode">
+                    <button type="button" data-doc-mode="inline" aria-pressed="${mode === 'inline'}">Editor</button>
+                    <button type="button" data-doc-mode="raw" aria-pressed="${mode === 'raw'}">Markdown</button>
+                </span>
+                <button type="button" class="header-button plan-doc-print" id="plan-doc-print" aria-label="Print PDF"${open ? '' : ' disabled'}>Print PDF</button>
+            </span>
+        </div>`;
+    }
+    function markDocTabs(session) {
+        root.querySelectorAll('.plan-doc-tab[data-doc]').forEach((tab) => {
+            const unsaved = Boolean(session.inlineDrafts?.[tab.dataset.doc]);
+            if (unsaved) tab.dataset.unsaved = 'true'; else delete tab.dataset.unsaved;
+        });
+    }
+    function wireDocumentsBar(session, panel, docs, open) {
+        const tabs = [...panel.querySelectorAll('.plan-doc-tab[data-doc]')];
+        const select = (id) => { session.viewedAsset = null; session.selection.requirements = id; renderArtifacts(session); panel.querySelector(`.plan-doc-tab[data-doc="${CSS.escape(String(id))}"]`)?.focus(); };
+        tabs.forEach((tab, i) => {
+            tab.onclick = () => { if (tab.getAttribute('aria-selected') !== 'true') select(tab.dataset.doc); };
+            tab.onkeydown = (event) => {
+                const next = moveTab(tabs.length, i, event.key);
+                if (next < 0) return;
+                event.preventDefault();
+                select(tabs[next].dataset.doc);        // automatic activation: drafts are kept per document
+            };
+        });
+        panel.querySelector('.plan-doc-tab[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+        // Typing in the open editor updates the unsaved dot on its tab.
+        panel.oninput = () => markDocTabs(session);
+        panel.querySelectorAll('[data-doc-mode]').forEach((button) => {
+            button.onclick = () => {
+                if (button.getAttribute('aria-pressed') === 'true') return;
+                setDocMode(button.dataset.docMode);
+                renderArtifacts(session);
+                root.querySelector(`[data-doc-mode="${button.dataset.docMode}"]`)?.focus();
+            };
+        });
+        const print = panel.querySelector('#plan-doc-print');
+        if (print && open) print.onclick = () => printDocument(session, open, documentLabel(open, docs));
+        const add = panel.querySelector('#plan-doc-add');
+        if (add) add.onclick = async () => {
+            add.disabled = true;
+            try {
+                const created = await api(path(session, '/items'), { method: 'POST', body: { item_type: USER_DOCUMENT_TYPE, title: 'Untitled document', content: '# Untitled document\n\n', content_format: 'markdown' } });
+                session.workspace.items = [...(session.workspace.items || []), created];
+                session.selection.requirements = created.id;
+                renderArtifacts(session);
+                renameDocument(session, created);
+            } catch (error) { host.toast?.(`Could not add the document: ${error?.message || 'unknown error'}`, 'error'); add.disabled = false; }
+        };
+        const rename = panel.querySelector('#plan-doc-rename');
+        if (rename && open) rename.onclick = () => renameDocument(session, open);
+        const remove = panel.querySelector('#plan-doc-delete');
+        if (remove && open) remove.onclick = () => deleteDocument(session, open);
+    }
+    // Delete = archive on the server (DELETE .../plan-items/{id}?expected_revision=N): only user documents,
+    // history and the moved file are kept. Built-in documents never show the button and the route refuses them.
+    async function deleteDocument(session, doc) {
+        if (!userDocumentsEnabled() || !isUserDocument(doc)) return;
+        const name = doc.title || 'this document';
+        const unsaved = session.inlineDrafts?.[doc.id] ? ' Your unsaved changes to it will be lost.' : '';
+        const ok = Boolean(await window.DecisionsAPI?.confirm?.({ title: 'Delete document', message: `Delete "${name}"? It is removed from Documents; its history is kept.${unsaved}`, confirmLabel: 'Delete', danger: true }));
+        if (!ok) return;
+        try {
+            await api(`${path(session, `/plan-items/${encodeURIComponent(doc.id)}`)}?expected_revision=${encodeURIComponent(revisionOf(doc) ?? '')}`, { method: 'DELETE' });
+        } catch (error) {
+            const message = error?.status === 409
+                ? 'This document has a newer revision. Review the newer version before deleting it.'
+                : `Could not delete the document: ${error?.message || 'unknown error'}`;
+            host.toast?.(message, 'error');
+            return;
+        }
+        session.workspace.items = (session.workspace.items || []).filter((item) => String(item.id) !== String(doc.id));
+        if (session.inlineDrafts) delete session.inlineDrafts[doc.id];
+        if (String(session.selection.requirements) === String(doc.id)) {
+            const frac = (session.workspace.items || []).find((item) => item.item_type === 'frac');
+            session.selection.requirements = frac ? frac.id : null;
+        }
+        renderArtifacts(session);
+        root.querySelector('.plan-doc-tab[aria-selected="true"]')?.focus();
+    }
+    // Rename = the existing PATCH with title + expected_revision (a title change is a new revision, so it
+    // waits until the document has no unsaved draft).
+    function renameDocument(session, doc) {
+        if (!userDocumentsEnabled() || !isUserDocument(doc)) return;
+        if (session.inlineDrafts?.[doc.id]) { host.toast?.('Save or undo your changes to this document before renaming it.', 'error'); return; }
+        const tab = root.querySelector(`.plan-doc-tab[data-doc="${CSS.escape(String(doc.id))}"]`);
+        if (!tab) return;
+        const input = document.createElement('input');
+        input.className = 'plan-doc-rename-input';
+        input.value = doc.title || '';
+        input.setAttribute('aria-label', 'Document name');
+        tab.replaceWith(input);
+        input.focus(); input.select();
+        let done = false;
+        const finish = async (commit) => {
+            if (done) return; done = true;
+            const title = input.value.trim();
+            if (commit && title && title !== doc.title) {
+                try {
+                    const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(doc.id)}`, { method: 'PATCH', body: { title, expected_revision: revisionOf(doc) } });
+                    Object.assign(doc, updated);
+                } catch (error) { host.toast?.(`Could not rename: ${error?.message || 'unknown error'}`, 'error'); }
+            }
+            renderArtifacts(session);
+            root.querySelector(`.plan-doc-tab[data-doc="${CSS.escape(String(doc.id))}"]`)?.focus();
+        };
+        input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); finish(true); } else if (event.key === 'Escape') { event.preventDefault(); finish(false); } });
+        input.addEventListener('blur', () => finish(true));
+    }
+    // Print PDF: a print-only container with the open document (its unsaved draft if any) rendered from
+    // markdown; @media print hides all app chrome (styles.css "Documents print"). No PDF export route exists.
+    function printDocument(session, doc, label) {
+        document.getElementById('plan-print-root')?.remove();
+        const content = session.inlineDrafts?.[doc.id]?.draft ?? doc.content ?? '';
+        const node = document.createElement('article');
+        node.id = 'plan-print-root';
+        node.className = 'plan-print-root message-markdown';
+        node.setAttribute('aria-hidden', 'true');
+        node.innerHTML = `<header class="plan-print-head"><span>${esc(session.workspace.board_name || '')}</span><span>${esc(label)}</span></header>${markdownToEditableHtml(content).html}`;
+        node.querySelectorAll('[contenteditable]').forEach((n) => n.removeAttribute('contenteditable'));
+        document.body.append(node);
+        document.body.classList.add('plan-printing');
+        const cleanup = () => { node.remove(); document.body.classList.remove('plan-printing'); window.removeEventListener('afterprint', cleanup); };
+        window.addEventListener('afterprint', cleanup);
+        window.print();
+    }
+
     function shell(session) {
+        bar?.remove();
         root.innerHTML = `<div class="plan-detail">
             <header class="plan-detail-header">
-                <button type="button" id="plan-back" aria-label="Back to plans"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
                 <strong class="plan-project" title="${esc(session.workspace.board_name)}">${esc(session.workspace.board_name)}</strong>
                 <nav class="plan-tabs" aria-label="Plan sections">${Object.entries(TABS).map(([tab, info]) => `<button type="button" data-plan-tab="${tab}" title="${esc(info.help || info.label)}" aria-pressed="${session.tab === tab}">${info.label}</button>`).join('')}</nav>
-                <button type="button" id="plan-canvas-toggle" aria-pressed="false">Hide artifacts</button>
-                <span class="plan-header-actions">
-                <button type="button" id="plan-rebuild-sitemap">Rebuild sitemap</button>
-                <button type="button" id="plan-build">Build tasks</button>
-                </span>
             </header>
             <div class="plan-detail-body">
                 <section class="plan-artifacts" id="plan-artifacts" aria-label="Artifacts"></section>
                 <section class="plan-conversation" aria-label="Plan conversation">
+                    <header class="plan-chat-header" id="plan-chat-header" aria-label="Chat"></header>
+                    <div class="composer-drop-overlay plan-drop-overlay" id="plan-drop-overlay" hidden><strong>Drop images to attach</strong><span>PNG, JPEG or WebP, up to 10 MB each</span></div>
                     <div class="plan-messages" id="plan-messages" role="log" aria-label="Messages" aria-live="polite"></div>
                     <div class="plan-composer-wrap">
                         <div id="plan-operation-status" role="status" aria-live="polite"></div>
+                        <div class="plan-context-hint" id="plan-context-hint" hidden></div>
                         <form class="studio-composer plan-language" id="plan-language">
                             <div id="plan-draft-assets" class="composer-context"></div>
                             <textarea id="plan-language-input" rows="2" placeholder="Talk through the flow: screens first, then FRAC / data, then what to build…" aria-label="Message"></textarea>
@@ -141,16 +375,23 @@ export function createPlanConversation(host, root) {
             }
         });
         root.querySelector('#plan-language').addEventListener('submit', (event) => { event.preventDefault(); send(session); });
-        root.querySelector('#plan-back').onclick = () => host.openHome();
-        root.querySelector('#plan-canvas-toggle').onclick = () => {
-            session.canvasClosed = !session.canvasClosed;
-            renderArtifacts(session);
-        };
-        root.querySelector('#plan-rebuild-sitemap').onclick = () => rebuildSitemap(session);
-        root.querySelector('#plan-build').onclick = () => build(session);
+        mountBar();
+        ifaceActions = document.createElement('div');
+        ifaceActions.className = 'plan-iface-actions';
+        ifaceActions.id = 'plan-header-actions';
+        ifaceActions.setAttribute('role', 'group');
+        ifaceActions.setAttribute('aria-label', 'Interface actions');
+        ifaceActions.innerHTML = `<button type="button" class="header-button" id="plan-rebuild-sitemap">Rebuild</button>`;
+        ifaceActions.querySelector('#plan-rebuild-sitemap').onclick = () => { closePlanMenu(); rebuildSitemap(session); };
+        const buildActions = document.createElement('span');
+        buildActions.className = 'plan-header-actions';
+        buildActions.innerHTML = `<button type="button" class="header-button primary" id="plan-build">Build tickets</button>`;
+        (bar || root.querySelector('.plan-detail-header'))?.append(buildActions);
+        planBar().querySelector('#plan-build').onclick = () => { closePlanMenu(); build(session); };
         root.querySelector('#plan-provider').onchange = async (event) => {
             session.provider = event.target.value;
             session.model = '';
+            rememberRoute(routeStore(), session.id, { provider: session.provider, model: '' });
             session.pending = 'Loading models...';
             session.error = '';
             root.querySelector('#plan-model').innerHTML = '<option value="">Select model</option>';
@@ -161,35 +402,50 @@ export function createPlanConversation(host, root) {
         };
         root.querySelector('#plan-model').onchange = (event) => {
             session.model = event.target.value;
+            rememberRoute(routeStore(), session.id, { provider: session.provider, model: session.model });
             controls(session);
         };
+        wireImageDrop(session, root.querySelector('.plan-conversation'), input);
         root.querySelector('#plan-attach').onclick = () => root.querySelector('#plan-attachment').click();
         root.querySelector('#plan-attachment').onchange = (event) => {
             const files = [...event.target.files];
             event.target.value = '';
             upload(session, files);
         };
-        root.querySelectorAll('[data-plan-tab]').forEach((button) => {
+        planBar().querySelectorAll('[data-plan-tab]').forEach((button) => {
             button.onclick = () => {
                 session.tab = button.dataset.planTab;
-                session.canvasClosed = false;
                 session.viewedAsset = null;
-                root.querySelectorAll('[data-plan-tab]').forEach((tab) => tab.setAttribute('aria-pressed', String(tab === button)));
+                planBar().querySelectorAll('[data-plan-tab]').forEach((tab) => tab.setAttribute('aria-pressed', String(tab === button)));
                 renderArtifacts(session);
             };
         });
         refresh(session);
     }
 
+    function syncRebuildButton(session) {
+        const rebuild = ifaceActions?.querySelector('#plan-rebuild-sitemap');
+        if (!rebuild) return;
+        rebuild.textContent = session.rebuildingInterfaces ? 'Rebuilding' : 'Rebuild';
+        rebuild.disabled = blocked(session) || session.rebuildingInterfaces || !modelAvailable(session);
+    }
+
     function controls(session) {
         if (!current(session)) return;
         const busy = blocked(session);
         root.querySelector('#plan-send').disabled = busy || !modelAvailable(session) || !session.draft.trim();
-        root.querySelector('#plan-rebuild-sitemap').disabled = busy;
-        root.querySelector('#plan-build').disabled = busy || !modelAvailable(session);
+        const buildButton = planBar().querySelector('#plan-build');
+        syncRebuildButton(session);
+        if (buildButton) buildButton.disabled = busy || !modelAvailable(session);
+        const resetZoom = root.querySelector('[data-iface="reset-zoom"]');
+        if (resetZoom) resetZoom.disabled = busy;
         root.querySelector('#plan-model').disabled = busy;
         root.querySelector('#plan-provider').disabled = busy;
         root.querySelector('#plan-attach').disabled = busy;
+        root.querySelectorAll('#plan-chat-header button').forEach((button) => {
+            if (button.dataset.chatSwitch !== undefined || button.id === 'plan-chat-switch') button.disabled = busy;
+            else button.disabled = busy || button.dataset.staticDisabled === 'true';
+        });
         const status = root.querySelector('#plan-operation-status');
         status.replaceChildren();
         if (session.error) {
@@ -206,6 +462,14 @@ export function createPlanConversation(host, root) {
             text.textContent = String(note);
             status.append(text);
         }
+        if (session.undoClear && !session.pending) {
+            const undo = document.createElement('button');
+            undo.type = 'button';
+            undo.id = 'plan-chat-undo-clear';
+            undo.textContent = 'Undo clear';
+            undo.onclick = () => undoClear(session);
+            status.append(undo);
+        }
         if (!session.pending && (session.error || !session.loaded)) {
             const retry = document.createElement('button');
             retry.type = 'button';
@@ -219,32 +483,41 @@ export function createPlanConversation(host, root) {
         if (!current(session)) return;
         const log = root.querySelector('#plan-messages');
         const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 64;
+        let compactedShown = false;
+        renderChatHeader(session);
         log.innerHTML = (session.conversation.messages || []).map((message) => {
             const isAssistant = message.role === 'assistant';
             const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
             const author = isAssistant
                 ? `<strong class="plan-message-author"><span class="plan-message-avatar" data-assistant-identity>${assistantIdentity}</span><span data-assistant-name>${esc(window.DecisionsAssistantIdentity?.name() || 'Assistant')}</span></strong>`
                 : `<strong>${esc(message.role === 'user' ? 'You' : message.role)}</strong>`;
-            return `<article class="plan-message${message.role === 'user' ? ' plan-message-user' : ''}">${author}<div class="plan-message-content">${esc(message.content)}</div>${(message.artifacts || []).map((id) => {
+            const images = (message.attachment_ids || []).map((id) => sessionAssets(session).find((asset) => String(asset.id) === String(id))).filter(isImageAsset);
+            const thumbs = images.length ? `<div class="plan-message-images">${images.map((asset) => {
+                const url = safeUrl(asset.url);
+                return url ? `<figure class="plan-message-image"><img src="${esc(url)}" alt="${esc(asset.name)}" loading="lazy"><figcaption>${esc(imageLabel(asset))}</figcaption></figure>` : '';
+            }).join('')}</div>` : '';
+            const divider = message.compacted && !compactedShown ? (compactedShown = true, '<p class="plan-compacted-note">Earlier turns are summarised for the assistant (compacted). They stay visible here.</p>') : '';
+            return `${divider}<article class="plan-message${message.role === 'user' ? ' plan-message-user' : ''}${message.compacted ? ' plan-message-compacted' : ''}">${author}<div class="plan-message-content">${esc(message.content)}</div>${thumbs}${(message.artifacts || []).map((id) => {
             const item = (session.workspace.items || []).find((item) => String(item.id) === String(id));
             return item ? `<button type="button" data-message-artifact="${esc(item.id)}">${esc(item.title)}</button>` : '';
-        }).join('')}${isAssistant ? buildResultsHtml(message.build_result, esc) : ''}</article>`;
+        }).join('')}${isAssistant ? toolCardsHtml(message, session.workspace.items, esc, session.dismissedCards || new Set()) : ''}${isAssistant && message.memory_used ? `<p class="plan-memory-hint">Used ${esc(message.memory_used)} note${message.memory_used === 1 ? '' : 's'} from earlier chats</p>` : ''}${isAssistant ? buildResultsHtml(message.build_result, esc) : ''}</article>`;
         }).join('') || (session.loaded
             ? `<div class="plan-conversation-empty">${allStarters(session)
-                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Read the sitemap in Public, Account, and Signed in</li><li>Tighten requirements, then ask for build tasks</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
+                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Read the sitemap in Public, Account, and Signed in</li><li>Tighten requirements, then ask for build tickets</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
                 : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Start with the pages, then define requirements and data before building tasks.</p>`}</div>`
             : '');
+        wireToolCards(session, log);
         log.querySelectorAll('[data-message-artifact]').forEach((button) => {
             button.onclick = () => {
                 const item = session.workspace.items.find((item) => String(item.id) === button.dataset.messageArtifact);
                 const tab = Object.keys(TABS).find((tab) => TABS[tab].types.includes(item.item_type));
                 if (!tab) return;
                 session.selection[tab] = item.id;
-                root.querySelector(`[data-plan-tab="${tab}"]`).click();
+                planBar().querySelector(`[data-plan-tab="${tab}"]`).click();
             };
         });
         const drafts = root.querySelector('#plan-draft-assets');
-        drafts.innerHTML = session.attachments.map((asset) => `<span class="context-chip"><span>${esc(asset.name)}</span><button type="button" data-remove-asset="${esc(asset.id)}" aria-label="Remove ${esc(asset.name)}">Remove</button></span>`).join('');
+        drafts.innerHTML = session.attachments.map((asset) => `<span class="context-chip">${isImageAsset(asset) && safeUrl(asset.url) ? `<img class="context-chip-preview" src="${esc(safeUrl(asset.url))}" alt="">` : ''}<span title="${esc(asset.name)}">${esc(isImageAsset(asset) ? `${imageLabel(asset)} · ${asset.name}` : asset.name)}</span><button type="button" data-remove-asset="${esc(asset.id)}" aria-label="Remove ${esc(asset.name)}">Remove</button></span>`).join('');
         drafts.querySelectorAll('[data-remove-asset]').forEach((button) => {
             button.disabled = Boolean(session.pending);
             button.onclick = () => { if (session.pending) return; session.attachments = session.attachments.filter((asset) => String(asset.id) !== button.dataset.removeAsset); refresh(session); };
@@ -348,7 +621,7 @@ export function createPlanConversation(host, root) {
         target.append(mark);
     }
 
-    function appendSitemapCard(parent, node, shot, access, quiet) {
+    function appendSitemapCard(parent, node, shot, access, quiet, decorate = null) {
         const el = document.createElement('div');
         el.className = quiet ? 'plan-sitemap-node plan-sitemap-node-quiet' : 'plan-sitemap-node';
         el.dataset.kind = node.kind || 'page';
@@ -364,10 +637,11 @@ export function createPlanConversation(host, root) {
         const meta = document.createElement('small');
         meta.textContent = node.route;
         el.append(name, meta);
+        decorate?.(el, node);
         parent.append(el);
     }
 
-    function renderAccessGroups(preview, layout, captures) {
+    function renderAccessGroups(preview, layout, captures, decorate = null) {
         const wrap = document.createElement('div');
         wrap.className = 'plan-sitemap-wrap plan-sitemap-groups';
         const buckets = new Map(SITEMAP_ACCESS_GROUPS.map(group => [group.id, []]));
@@ -392,7 +666,7 @@ export function createPlanConversation(host, root) {
             const ordered = rows.slice().sort((a, b) => a.node.label.localeCompare(b.node.label) || a.node.route.localeCompare(b.node.route));
             for (const row of ordered) {
                 const hidden = Boolean(row.shot?.notFound) && !keepLarge.has(row.node.route);
-                appendSitemapCard(hidden ? quiet : cards, row.node, row.shot, row.access, hidden);
+                appendSitemapCard(hidden ? quiet : cards, row.node, row.shot, row.access, hidden, hidden ? null : decorate);
             }
             if (cards.childNodes.length) section.append(cards);
             if (quiet.childNodes.length) {
@@ -416,8 +690,10 @@ export function createPlanConversation(host, root) {
         };
         const layout = layoutConnectedSitemap(model, screens);
         const captures = pageCaptureFor(session.workspace);
+        const byScreen = new Map(screens.map(screen => [String(screen.id), screen]));
+        const decorate = (el, node) => decorateScreenNode(session, item, el, byScreen.get(node.screenId));
         if (captures) {
-            renderAccessGroups(preview, layout, captures);
+            renderAccessGroups(preview, layout, captures, decorate);
             return;
         }
         const wrap = document.createElement('div');
@@ -501,6 +777,7 @@ export function createPlanConversation(host, root) {
             const meta = document.createElement('small');
             meta.textContent = node.route;
             el.append(name, meta);
+            decorate(el, node);
             canvas.append(el);
         }
         wrap.append(canvas);
@@ -525,27 +802,97 @@ export function createPlanConversation(host, root) {
         if (saved) requestAnimationFrame(() => { preview.scrollLeft = saved.left; preview.scrollTop = saved.top; });
     }
 
+    // ---- Interfaces node metadata (N6): shapes, images, notes, links in the item's trailing sidecar line -----
+    const sessionAssets = (session) => [...new Map([...(session.conversation.attachments || []), ...session.attachments].map((asset) => [String(asset.id), asset])).values()];
+    function wireTargets(session) {
+        const out = [];
+        for (const it of (session.workspace.items || []).filter((row) => TABS.wireframes.types.includes(row.item_type) && row.content_format === 'wire')) {
+            let screens = [];
+            try { screens = parseWireframe(it.content).screens || []; } catch { screens = []; }
+            for (const screen of screens) if (screen.attrs?.id && !out.some((t) => t.id === screen.attrs.id)) out.push({ id: screen.attrs.id, label: screen.label || screen.attrs.id, itemId: it.id, screenId: screen.id });
+        }
+        return out;
+    }
+    function nodeCtx(session, item) {
+        return {
+            format: item.content_format,
+            item: () => item,
+            toast: (message, type) => host.toast?.(message, type),
+            asset: (id) => sessionAssets(session).find((asset) => String(asset.id) === String(id) && /^image\//i.test(asset.mime_type || '') && safeUrl(asset.url)) || null,
+            assetUrl: (id) => safeUrl(sessionAssets(session).find((asset) => String(asset.id) === String(id))?.url) || '',
+            viewAsset: (id) => { closeNodePopover(); session.viewedAsset = String(id); renderArtifacts(session); },
+            targets: () => wireTargets(session),
+            follow: (id) => {
+                const target = wireTargets(session).find((t) => t.id === id);
+                if (!target) return;
+                closeNodePopover();
+                session.viewedAsset = null;
+                session.sitemap = false;
+                session.selection.wireframes = target.itemId;
+                session.pages ||= {}; session.pages[target.itemId] = target.screenId;
+                session.pageLayers ||= {}; session.pageLayers[target.itemId] = 'preview';
+                renderArtifacts(session);
+            },
+            upload: async (file) => {
+                const body = new FormData();
+                body.append('file', file);
+                const asset = await api(path(session, '/attachments'), { method: 'POST', body });
+                session.conversation.attachments = [...(session.conversation.attachments || []), asset];
+                return asset;
+            },
+            save: async (content) => {
+                const before = item.content || '';
+                const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: { content, expected_revision: revisionOf(item) } });
+                Object.assign(item, updated);
+                recordIfaceEdit(session, item, before);
+                if (!updated?.validation_warnings) delete item.validation_warnings;
+                session.flowWarnings ||= {};
+                session.flowWarnings[item.id] = updated?.validation_warnings || [];
+                renderArtifacts(session);
+                return updated;
+            },
+            reloadLatest: (mine) => reloadLatest(session, item, mine),
+        };
+    }
+    const screenNode = (screen) => ({ key: screen.attrs?.id || null, screenLine: screen.attrs?.id ? null : screen.line, label: screen.label || screen.attrs?.id || 'Page' });
+    function decorateScreenNode(session, item, el, screen) {
+        if (!screen) return;
+        const ctx = nodeCtx(session, item);
+        const meta = screen.attrs?.id ? readSidecar(item.content, 'wire').nodes[screen.attrs.id] : null;
+        decorateNode(el, meta, ctx);
+        el.append(nodeButton(screen.label || 'Page', (opener) => openNodePopover(opener, screenNode(screen), ctx), 'plan-node-open-card'));
+    }
+    function nodeNotices(session, item, panel, preview) {
+        const warnings = [...(session.flowWarnings?.[item.id] || [])];
+        const bad = ['wire', 'mermaid'].includes(item.content_format) ? readSidecar(item.content, item.content_format).error : '';
+        if (bad) warnings.unshift(`Node metadata was ignored: ${bad}`);
+        if (warnings.length) panel.insertBefore(warningsNotice(warnings, () => { if (session.flowWarnings) session.flowWarnings[item.id] = []; }), preview);
+    }
+
     function renderArtifacts(session) {
         if (!current(session)) return;
+        ifaceActions?.remove();
+        session.previewCleanup?.();
+        session.previewCleanup = null;
         const panel = root.querySelector('#plan-artifacts');
-        const toggle = root.querySelector('#plan-canvas-toggle');
-        root.querySelector('.plan-detail-body').classList.toggle('plan-chat-only', Boolean(session.canvasClosed));
-        panel.hidden = Boolean(session.canvasClosed);
-        toggle.textContent = session.canvasClosed ? 'Show artifacts' : 'Hide artifacts';
-        toggle.setAttribute('aria-pressed', String(Boolean(session.canvasClosed)));
-        root.querySelectorAll('[data-plan-tab]').forEach(button => button.setAttribute('aria-pressed', String(!session.canvasClosed && session.tab === button.dataset.planTab)));
-        if (session.canvasClosed) return;
+        // Artifacts are always shown (the old show/hide toggle was removed in Round 16).
+        panel.hidden = false;
+        planBar().querySelectorAll('[data-plan-tab]').forEach(button => button.setAttribute('aria-pressed', String(session.tab === button.dataset.planTab)));
         const item = selected(session);
         if (item) session.selection[session.tab] = item.id;
         const choices = items(session);
         const assets = [...new Map([...(session.conversation.attachments || []), ...session.attachments].map((asset) => [String(asset.id), asset])).values()];
         const previewAssets = assets.filter(asset => asset.url === `/api/workflows/studio/plan-workspaces/${session.id}/attachments/${asset.id}`)
             .map(asset => ({...asset, url: new URL(asset.url, window.location.origin).href}));
-        panel.innerHTML = `${choices.length > 1 ? `<label class="plan-artifact-picker"><select id="plan-artifact-select" aria-label="Select artifact">${choices.map((choice) => `<option value="${esc(choice.id)}"${String(choice.id) === String(item?.id) ? ' selected' : ''}>${esc(choice.title)}${choice.is_starter ? ' · needs content' : ''}</option>`).join('')}</select></label>` : ''}
+        const docsTab = session.tab === 'requirements';
+        const hint = root.querySelector('#plan-context-hint');
+        if (hint) { hint.hidden = !(docsTab && item); hint.textContent = docsTab && item ? `Context: ${documentLabel(item, choices)}` : ''; }
+        panel.innerHTML = `${docsTab ? documentsBarHtml(session, choices, item) : choices.length > 1 ? `<label class="plan-artifact-picker"><select id="plan-artifact-select" aria-label="Select artifact">${choices.map((choice) => `<option value="${esc(choice.id)}"${String(choice.id) === String(item?.id) ? ' selected' : ''}>${esc(choice.title)}${choice.is_starter ? ' · needs content' : ''}</option>`).join('')}</select></label>` : ''}
             ${item?.is_starter && !session.viewedAsset ? `<div class="plan-artifact-revision">Starter section · ask Plan to fill this from the project</div>` : ''}
             ${item?.file_sync_error ? `<div class="plan-file-status" role="alert">${esc(item.file_sync_error)}<button type="button" id="plan-review-file">Review file changes</button></div>` : ''}
             <div class="plan-preview" id="plan-preview"></div>
             ${assets.length ? `<div class="plan-assets" aria-label="Assets">${assetsHtml(assets)}</div>` : ''}`;
+        if (docsTab) wireDocumentsBar(session, panel, choices, item);
         panel.querySelector('#plan-artifact-select')?.addEventListener('change', (event) => { session.viewedAsset = null; session.selection[session.tab] = event.target.value; renderArtifacts(session); });
         panel.querySelectorAll('[data-view-asset]').forEach(button => {
             button.onclick = () => { session.viewedAsset = button.dataset.viewAsset; renderArtifacts(session); };
@@ -553,16 +900,60 @@ export function createPlanConversation(host, root) {
         const review = panel.querySelector('#plan-review-file');
         if (review) { review.disabled = Boolean(session.pending); review.onclick = () => reviewFile(session, item); }
         const preview = panel.querySelector('#plan-preview');
+        if (session.tab === 'wireframes' && session.rebuildingInterfaces) {
+            preview.innerHTML = rebuildStatusHtml(session.rebuildPercent || 0);
+            parkIfaceActions(session, preview);
+            return;
+        }
         const sourceAsset = assets.find(asset => String(asset.id) === String(session.viewedAsset));
-        if (sourceAsset) { renderSourceAsset(session, sourceAsset, preview); return; }
+        if (sourceAsset) { renderSourceAsset(session, sourceAsset, preview); parkIfaceActions(session, preview); return; }
         if (!item) {
             const tips = {
                 wireframes: 'HTML templates, views, and URL maps fill the sitemap. Ask Plan to draft a page outline for anything still missing.',
                 erd: 'Ask Plan for an ERD once the main entities are clear.',
                 requirements: 'Capture FRAC / acceptance criteria after the screens make sense.',
             };
+            session.previewCleanup?.();
+            session.previewCleanup = null;
             preview.innerHTML = `<div class="plan-canvas-empty"><p><strong>No ${esc(TABS[session.tab].label.toLowerCase())} yet</strong></p><p class="plan-empty-hint">${esc(tips[session.tab] || 'Ask Plan to fill this section.')}</p></div>`;
+            if (session.tab === 'wireframes') session.previewCleanup = interfacesSurface(preview, '0 pages, 0 documents', 'Ask Plan to draft a page outline, or rescan the project to fill the sitemap.');
+            parkIfaceActions(session, preview);
             return;
+        }
+        session.previewCleanup?.();
+        session.previewCleanup = null;
+        if (session.tab === 'wireframes') nodeNotices(session, item, panel, preview);
+        if (session.tab === 'wireframes' && item.content_format === 'wire' && mountIfaceCanvas(session, item, panel, preview, choices)) { parkIfaceActions(session, preview); return; }
+        let ifaceTools = null;
+        if (session.tab === 'wireframes' && item.content_format !== 'mermaid') {
+            // Interfaces: same chrome as the Data canvas, a bottom-left dock inside the surface holding the
+            // Advanced drawer (editable page source, Apply = revision-checked save) and the node opener.
+            ifaceTools = document.createElement('div');
+            ifaceTools.className = 'erd-dock erd-dock-left plan-interfaces-tools';
+            ifaceTools.setAttribute('role', 'toolbar');
+            ifaceTools.setAttribute('aria-label', 'Page');
+            if (item.content_format === 'wire') {
+                const h = ifaceHistory(session, item);
+                const mk = (cls, label, title, svg, fn, disabled = false) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.setAttribute('aria-label', label); b.title = title; b.innerHTML = svg; b.disabled = disabled; b.onclick = fn; return b; };
+                const ico = (d) => `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+                const divider = document.createElement('span'); divider.className = 'erd-dock-divider'; divider.setAttribute('aria-hidden', 'true');
+                ifaceTools.append(
+                    mk('erd-dock-button erd-dock-wide', 'Add page', 'Add page', `${ico('M8 3v10M3 8h10')}<span class="erd-dock-label">Add page</span>`, (e) => addPageDrawer(session, item, { opener: e.currentTarget })),
+                    divider,
+                    mk('erd-dock-button', 'Undo', 'Undo', ico('M6 4 3 7l3 3M3.5 7H10a3 3 0 0 1 0 6H8'), () => ifaceStep(session, item, 'undo'), !h.undo.length),
+                    mk('erd-dock-button', 'Redo', 'Redo', ico('M10 4l3 3-3 3M12.5 7H6a3 3 0 0 0 0 6h2'), () => ifaceStep(session, item, 'redo'), !h.redo.length));
+            }
+            ifaceTools.append(advancedButton({ title: 'Advanced · page source', text: () => item.content || '', onApply: (text) => applyPageSource(session, item, text) }));
+            panel.append(ifaceTools);
+        }
+        if (session.tab === 'wireframes') {
+            let pages = 0;
+            try { pages = item.content_format === 'wire' ? (parseWireframe(item.content).screens || []).length : 0; } catch { pages = 0; }
+            const stats = pages ? `${pages} ${pages === 1 ? 'page' : 'pages'}, ${choices.length} ${choices.length === 1 ? 'document' : 'documents'}` : `${choices.length} ${choices.length === 1 ? 'document' : 'documents'}`;
+            const opened = Boolean(session.openPage?.[item.id]);
+            const surfaceCleanup = interfacesSurface(preview, stats, opened ? 'Switch perspective with Preview / Planning / Development, or go back with All pages.' : 'Switch perspective with Preview / Planning / Development above the page.');
+            const dockCleanup = ifaceTools ? pinDock(ifaceTools, preview) : null;
+            session.previewCleanup = () => { surfaceCleanup?.(); dockCleanup?.(); };
         }
         if (item.content_format === 'wire') {
             try {
@@ -573,7 +964,8 @@ export function createPlanConversation(host, root) {
                 session.pageLayers ||= {};
                 session.previewModes[item.id] ||= 'html';
                 session.pageLayers[item.id] ||= 'preview';
-                const page = screens.length === 1 ? screens[0] : null;
+                const openId = session.openPage?.[item.id];
+                const page = screens.length === 1 ? screens[0] : (screens.find((s) => String(s.id) === String(openId)) || null);
                 session.pages[item.id] = page?.id;
                 const layer = session.pageLayers[item.id];
                 if (page) {
@@ -584,8 +976,24 @@ export function createPlanConversation(host, root) {
                         <button type="button" data-layer="planning" aria-pressed="${layer === 'planning'}">Planning</button>
                         <button type="button" data-layer="development" aria-pressed="${layer === 'development'}">Development</button>
                        </div>`;
-                    toolbar.innerHTML = `${layer === 'preview' ? `<button type="button" aria-pressed="${session.previewModes[item.id] === 'html'}">${session.previewModes[item.id] === 'html' ? 'Interactive' : 'Stencil'}</button>` : ''}${layerButtons}`;
+                    toolbar.innerHTML = `${screens.length > 1 ? '<button type="button" class="iface-back" data-iface-back aria-label="Back to all pages">← All pages</button>' : ''}${layer === 'preview' ? `<button type="button" aria-pressed="${session.previewModes[item.id] === 'html'}">${session.previewModes[item.id] === 'html' ? 'Interactive' : 'Stencil'}</button>` : ''}${layerButtons}`;
                     panel.insertBefore(toolbar, preview);
+                    const ctx = nodeCtx(session, item);
+                    (ifaceTools || toolbar).append(nodeButton(page.label || 'Page', (opener) => openNodePopover(opener, screenNode(page), ctx), ifaceTools ? 'erd-dock-button erd-dock-wide' : ''));
+                    const pageMeta = page.attrs.id ? readSidecar(item.content, 'wire').nodes[page.attrs.id] : null;
+                    if (pageMeta && Object.keys(pageMeta).length) {
+                        const strip = document.createElement('div');
+                        strip.className = 'plan-node-strip';
+                        strip.setAttribute('aria-label', 'Node');
+                        const name = document.createElement('span');
+                        name.className = 'plan-node-strip-name';
+                        name.textContent = page.label || page.attrs.id;
+                        strip.append(name);
+                        decorateNode(strip, pageMeta, ctx);
+                        if (pageMeta.note) { const note = document.createElement('p'); note.className = 'plan-node-strip-note'; note.textContent = pageMeta.note; strip.append(note); }
+                        panel.insertBefore(strip, preview);
+                    }
+                    toolbar.querySelector('[data-iface-back]')?.addEventListener('click', () => { delete session.openPage[item.id]; renderArtifacts(session); });
                     toolbar.querySelectorAll('[data-layer]').forEach(button => {
                         button.onclick = () => { session.pageLayers[item.id] = button.dataset.layer; renderArtifacts(session); };
                     });
@@ -639,14 +1047,15 @@ export function createPlanConversation(host, root) {
                             <li>Data binds: ${ann.binds.length ? esc([...new Set(ann.binds)].join(', ')) : 'none on this page yet'}</li>
                           </ul>
                           <div class="plan-hub-actions">
-                            <button type="button" data-hub-tab="requirements">Open Requirements</button>
+                            <button type="button" data-hub-tab="requirements">Open Documents</button>
                             <button type="button" data-hub-tab="erd">Open Data</button>
                           </div>
                         </section>
                     </div>`;
                     preview.querySelectorAll('[data-hub-tab]').forEach(btn => {
-                        btn.onclick = () => root.querySelector(`[data-plan-tab="${btn.dataset.hubTab}"]`)?.click();
+                        btn.onclick = () => planBar().querySelector(`[data-plan-tab="${btn.dataset.hubTab}"]`)?.click();
                     });
+                    mountPageDescription(session, item, preview);
                     return;
                 }
 
@@ -666,10 +1075,10 @@ export function createPlanConversation(host, root) {
                           <button type="button" data-hub-tab="erd">Jump to Data (ERD)</button></section>
                         <section><h4>Business logic / acceptance</h4>
                           <ul>${reqs.length ? reqs.map(r => `<li><code>${esc(r)}</code></li>`).join('') : '<li>No requirement= tags yet. Link FR-### once FRAC exists.</li>'}</ul>
-                          <button type="button" data-hub-tab="requirements">Jump to Requirements</button></section>
+                          <button type="button" data-hub-tab="requirements">Jump to Documents</button></section>
                     </div>`;
                     preview.querySelectorAll('[data-hub-tab]').forEach(btn => {
-                        btn.onclick = () => root.querySelector(`[data-plan-tab="${btn.dataset.hubTab}"]`)?.click();
+                        btn.onclick = () => planBar().querySelector(`[data-plan-tab="${btn.dataset.hubTab}"]`)?.click();
                     });
                     return;
                 }
@@ -684,6 +1093,7 @@ export function createPlanConversation(host, root) {
                     frame.srcdoc = result.html;
                     preview.querySelector('.plan-wireframe-preview').replaceWith(frame);
                 }
+                if (page) mountPageDescription(session, item, preview);
             } catch (error) {
                 preview.innerHTML = `<div class="plan-canvas-empty"><p><strong>Could not show this page outline</strong></p><p class="plan-empty-hint">${esc(error.message || 'Try Sitemap or ask Plan to regenerate the wireframes.')}</p></div>`;
             }
@@ -694,71 +1104,381 @@ export function createPlanConversation(host, root) {
             frame.referrerPolicy = 'no-referrer';
             frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; form-action 'none'; base-uri 'none'">${item.content || ''}`;
             preview.append(frame);
+        } else if (item.content_format === 'mermaid' && isErdMermaid(item.content)) {
+            // Data tab ERD: visual canvas is the only editing surface (DSL stays background, read-only Advanced).
+            preview.classList.add('plan-erd');
+            mountErdItem({ preview, item, session, api, toast: (m, t) => host.toast?.(m, t), isBlocked: () => blocked(session), reloadLatest: (mine) => reloadLatest(session, item, mine), onSchemaApplied: (updated) => schemaApplied(session, updated) });
         } else if (item.content_format === 'mermaid') {
-            preview.classList.add('plan-mermaid');
-            renderDiagram(preview, item.content);
-        } else {
-            if (item.item_type === 'brief') {
-                const bar = document.createElement('div');
-                bar.className = 'plan-brief-bar';
-                const edit = document.createElement('button');
-                edit.type = 'button';
-                edit.textContent = 'Edit brief';
-                edit.disabled = blocked(session);
-                edit.onclick = () => editBrief(session, item);
-                bar.append(edit);
-                preview.append(bar);
+            // The Mermaid DSL is a background representation (agents, rebuild, tickets): show the rendered
+            // diagram read-only, plus a collapsed, read-only "Advanced" source view (never remembered open).
+            const surface = document.createElement('div');
+            surface.className = 'plan-canvas-surface plan-diagram-surface';
+            const diagram = document.createElement('div');
+            diagram.className = 'plan-mermaid';
+            const dock = document.createElement('div');
+            dock.className = 'erd-dock erd-dock-left';
+            dock.setAttribute('role', 'toolbar');
+            dock.setAttribute('aria-label', 'Diagram');
+            dock.append(session.tab === 'wireframes'
+                ? advancedButton({ title: 'Advanced · page source', text: () => item.content || '', onApply: (text) => applyPageSource(session, item, text) })
+                : advancedButton({ text: () => item.content || '' }));
+            if (session.tab === 'wireframes') {
+                // Mermaid flows: native shapes; the sidecar adds image / note / link per node id.
+                const ctx = nodeCtx(session, item);
+                const nodes = () => { const meta = readSidecar(item.content, 'mermaid').nodes; return nodeIds(item.content, 'mermaid').map((id) => ({ key: id, label: id, meta: meta[id] })); };
+                const opener = nodeButton('Mermaid flow', (button) => openNodePicker(button, nodes(), (node, from) => openNodePopover(from, { key: node.key, label: node.label }, ctx)), 'erd-dock-button erd-dock-wide');
+                opener.setAttribute('aria-label', 'Node details');
+                dock.append(opener);
+                const described = nodes().filter((node) => node.meta && Object.keys(node.meta).length);
+                if (described.length) {
+                    const strip = document.createElement('div');
+                    strip.className = 'plan-node-strip plan-node-strip-flow';
+                    for (const node of described) {
+                        const chip = document.createElement('span');
+                        chip.className = 'plan-node-strip-item';
+                        const name = document.createElement('span');
+                        name.className = 'plan-node-strip-name';
+                        name.textContent = node.label;
+                        chip.append(name);
+                        decorateNode(chip, node.meta, ctx);
+                        strip.append(chip);
+                    }
+                    panel.insertBefore(strip, preview);
+                }
             }
-            const documentEl = window.document.createElement('div');
-            documentEl.className = 'plan-document message-markdown';
-            documentEl.innerHTML = assistantMarkdown(item.content || '');
-            preview.append(documentEl);
+            surface.append(diagram, dock);
+            preview.append(surface);
+            renderDiagram(diagram, item.content);
+            session.previewCleanup = fillToWindow(surface);
+        } else {
+            // Markdown documents are edited in place: rich inline editor + floating toolbar, or (Documents
+            // "Edit markdown") a raw textarea. Both share the per-document draft, so switching mode keeps edits.
+            const raw = session.tab === 'requirements' && docMode() === 'raw';
+            preview.append(inlineEditorFor(session, item, raw ? 'markdown-raw' : 'markdown', item.title || 'Document', () => markDocTabs(session)).el);
         }
+        parkIfaceActions(session, preview);
+    }
+
+    // Top-right of the interfaces container, same right inset as the zoom dock. Hidden on other plan sections.
+    function parkIfaceActions(session, preview) {
+        if (!ifaceActions) return;
+        if (session.tab !== 'wireframes' || !preview?.isConnected) { ifaceActions.remove(); return; }
+        const anchor = preview.querySelector('.erd-body') || preview;
+        anchor.append(ifaceActions);
+        syncRebuildButton(session);
     }
 
 
-    function editBrief(session, item) {
-        const preview = root.querySelector('#plan-preview');
-        if (!preview || blocked(session)) return;
-        preview.innerHTML = '';
-        const area = document.createElement('textarea');
-        area.className = 'plan-brief-input';
-        area.setAttribute('aria-label', 'Outcome brief');
-        area.value = item.content || '';
-        const actions = document.createElement('div');
-        actions.className = 'plan-brief-actions';
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.textContent = 'Save brief';
-        const cancel = document.createElement('button');
-        cancel.type = 'button';
-        cancel.textContent = 'Cancel';
-        const status = document.createElement('p');
-        status.className = 'plan-empty-hint';
-        status.setAttribute('role', 'status');
-        cancel.onclick = () => renderArtifacts(session);
-        save.onclick = async () => {
-            save.disabled = true;
-            cancel.disabled = true;
-            status.textContent = '';
-            try {
+
+    // Inline editing: drafts survive re-renders/tab switches per item; saves use the existing
+    // PATCH /workflows/studio/plan-items/{id} (new revision + file sync), same content format.
+    // A draft remembers the revision it was based on ({ draft, baseRevision }) and always saves against
+    // that revision, so a draft restored after refreshWorkspace can never overwrite a newer server version:
+    // if the item moved on, the editor opens in conflict mode (draft kept, Save locked, Reload latest offered).
+    const revisionOf = (item) => (item?.revision_count == null ? null : Number(item.revision_count));
+    function inlineEditorFor(session, item, format, label, onSaved = () => {}) {   // markdown text only (Requirements / Interfaces)
+        session.inlineDrafts ||= {};
+        const stored = session.inlineDrafts[item.id] ?? null;
+        const baseRevision = stored ? stored.baseRevision : revisionOf(item);
+        return createInlineEditor({
+            value: item.content || '', format, label,
+            initialDraft: stored?.draft ?? null,
+            conflict: Boolean(stored) && stored.baseRevision !== revisionOf(item),
+            onReloadLatest: (mine) => reloadLatest(session, item, mine),
+            onDraft: (draft) => {
+                if (draft === null) delete session.inlineDrafts[item.id];
+                else session.inlineDrafts[item.id] = { draft, baseRevision: session.inlineDrafts[item.id]?.baseRevision ?? baseRevision };
+            },
+            toast: (message, type) => host.toast?.(message, type),
+            save: async (content) => {
+                const base = session.inlineDrafts[item.id]?.baseRevision ?? baseRevision;
                 const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, {
-                    method: 'PATCH',
-                    body: { content: area.value, expected_revision: Number(item.revision_count || 0) },
+                    method: 'PATCH', body: { content, expected_revision: base },
                 });
-                const rows = session.workspace.items || [];
-                const index = rows.findIndex(row => String(row.id) === String(item.id));
-                if (index >= 0) rows[index] = { ...rows[index], ...updated };
+                Object.assign(item, updated);
+                delete session.inlineDrafts[item.id];
+                return updated;
+            },
+            onSaved,
+        });
+    }
+
+    // ---- Interfaces: per-page description + editable Advanced source -------------------------------------
+    // A page description is markdown kept inside the page outline as "#|" comment lines directly under the
+    // `screen` line (comments are ignored by the wire parser, renderer and server validator), so it travels
+    // with the page and saves through the same PATCH + expected_revision path as every other edit.
+    const DESC_PREFIX = /^(\s*)#\| ?(.*)$/;
+    function pageDescription(content) {
+        const lines = String(content || '').split('\n');
+        const at = lines.findIndex((line) => /^\s*screen\b/.test(line));
+        if (at < 0) return '';
+        const out = [];
+        for (let i = at + 1; i < lines.length; i += 1) { const m = DESC_PREFIX.exec(lines[i]); if (!m) break; out.push(m[2]); }
+        return out.join('\n');
+    }
+    function withPageDescription(content, markdown) {
+        const lines = String(content || '').split('\n');
+        const at = lines.findIndex((line) => /^\s*screen\b/.test(line));
+        if (at < 0) throw new Error('This page outline has no screen to describe.');
+        let end = at + 1;
+        while (end < lines.length && DESC_PREFIX.test(lines[end])) end += 1;
+        const indent = `${/^\s*/.exec(lines[at])[0]}  `;
+        const body = String(markdown || '').replace(/\s+$/, '');
+        const desc = body ? body.split('\n').map((line) => (line ? `${indent}#| ${line}` : `${indent}#|`)) : [];
+        return [...lines.slice(0, at + 1), ...desc, ...lines.slice(end)].join('\n');
+    }
+    const descKey = (item) => `${item.id}#description`;
+    function mountPageDescription(session, item, preview) {
+        session.inlineDrafts ||= {};
+        session.descModes ||= {};
+        const key = descKey(item);
+        const mode = session.descModes[item.id] === 'raw' ? 'raw' : 'inline';
+        const stored = session.inlineDrafts[key] ?? null;
+        const baseRevision = stored ? stored.baseRevision : revisionOf(item);
+        const section = document.createElement('section');
+        section.className = 'plan-page-description';
+        section.setAttribute('aria-label', 'Page description');
+        section.innerHTML = `<div class="plan-page-description-head"><h4>Page description</h4>
+            <span class="plan-doc-modes" role="group" aria-label="Description editor mode">
+                <button type="button" data-desc-mode="raw" aria-pressed="${mode === 'raw'}">Edit markdown</button>
+                <button type="button" data-desc-mode="inline" aria-pressed="${mode === 'inline'}">Inline editor</button></span></div>`;
+        const editor = createInlineEditor({
+            value: pageDescription(item.content), format: mode === 'raw' ? 'markdown-raw' : 'markdown', label: `${item.title || 'Page'} description`,
+            initialDraft: stored?.draft ?? null,
+            conflict: Boolean(stored) && stored.baseRevision !== revisionOf(item),
+            onReloadLatest: (mine) => reloadLatest(session, item, mine),
+            onDraft: (draft) => {
+                if (draft === null) delete session.inlineDrafts[key];
+                else session.inlineDrafts[key] = { draft, baseRevision: session.inlineDrafts[key]?.baseRevision ?? baseRevision };
+            },
+            toast: (message, type) => host.toast?.(message, type),
+            save: async (markdown) => {
+                const base = session.inlineDrafts[key]?.baseRevision ?? baseRevision;
+                const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, {
+                    method: 'PATCH', body: { content: withPageDescription(item.content, markdown), expected_revision: base },
+                });
+                Object.assign(item, updated);
+                delete session.inlineDrafts[key];
+                return updated;
+            },
+        });
+        section.append(editor.el);
+        section.querySelectorAll('[data-desc-mode]').forEach((button) => {
+            button.onclick = () => {
+                if (button.getAttribute('aria-pressed') === 'true') return;
+                session.descModes[item.id] = button.dataset.descMode;
+                editor.destroy();
                 renderArtifacts(session);
-            } catch (error) {
-                status.textContent = error.message || 'Could not save the brief.';
-                save.disabled = false;
-                cancel.disabled = false;
+                root.querySelector(`[data-desc-mode="${button.dataset.descMode}"]`)?.focus();
+            };
+        });
+        preview.append(section);
+        return editor;
+    }
+    async function applyPageSource(session, item, text) {
+        if (item.content_format === 'wire') {
+            let errors = [];
+            try { errors = (parseWireframe(text).diagnostics || []).filter((d) => d.severity === 'error'); }
+            catch (error) { errors = [{ line: 0, message: error?.message || 'Could not read the page outline.' }]; }
+            if (errors.length) throw new Error(`Invalid page outline: ${errors.slice(0, 3).map((d) => (d.line ? `line ${d.line}: ${d.message}` : d.message)).join('; ')}`);
+        }
+        let updated;
+        const before = item.content || '';
+        try {
+            updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: { content: text, expected_revision: revisionOf(item) } });
+        } catch (error) {
+            if (error?.status === 409 || isRevisionConflict(error)) throw new Error('This page has a newer revision. Your text is kept here; copy it, then reload the page to see the latest version.');
+            throw error;
+        }
+        Object.assign(item, updated);
+        recordIfaceEdit(session, item, before);
+        renderArtifacts(session);
+        host.toast?.(updated?.file_sync_error ? 'Applied. The file sync is pending and will retry.' : 'Applied');
+    }
+
+    // ---- Interfaces canvas: undo / redo of this tab's saved edits, Add page, page details ----------------
+    // Every step is a normal revision-checked PATCH (new revision, server validation); history lives for the
+    // browser session only and is dropped when the item changed elsewhere.
+    function ifaceHistory(session, item) {
+        session.ifaceHistory ||= {};
+        return (session.ifaceHistory[item.id] ||= { undo: [], redo: [] });
+    }
+    function recordIfaceEdit(session, item, before, { keepRedo = false } = {}) {
+        if (session.tab !== 'wireframes' || before === (item.content || '')) return;
+        const h = ifaceHistory(session, item);
+        h.undo.push({ before, after: item.content || '' });
+        if (h.undo.length > 50) h.undo.shift();
+        if (!keepRedo) h.redo = [];
+    }
+    async function ifaceStep(session, item, direction) {
+        const h = ifaceHistory(session, item);
+        const stack = direction === 'undo' ? h.undo : h.redo;
+        const step = stack[stack.length - 1];
+        if (!step || blocked(session)) return;
+        const expected = direction === 'undo' ? step.after : step.before;
+        if ((item.content || '') !== expected) {
+            h.undo = []; h.redo = [];
+            host.toast?.('This page outline changed elsewhere, so undo history was cleared.', 'info');
+            renderArtifacts(session);
+            return;
+        }
+        try {
+            const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: { content: direction === 'undo' ? step.before : step.after, expected_revision: revisionOf(item) } });
+            Object.assign(item, updated);
+            stack.pop();
+            (direction === 'undo' ? h.redo : h.undo).push(step);
+            host.toast?.(direction === 'undo' ? 'Undone (saved as a new revision)' : 'Redone (saved as a new revision)');
+        } catch (error) {
+            host.toast?.(error?.status === 409 || isRevisionConflict(error) ? 'This page outline has a newer revision; reload to see it.' : `Could not ${direction}: ${error?.message || 'unknown error'}`, 'error');
+        }
+        renderArtifacts(session);
+    }
+    function addPageDrawer(session, item, { label = '', route = '', opener = document.activeElement } = {}) {
+        const { drawer, close } = openDrawer({ title: label ? 'Create page outline' : 'Add page', opener, className: 'iface-add-drawer', html: `
+            <form class="iface-add-form">
+                <label>Page name<input name="label" required maxlength="80" value="${esc(label)}" autocomplete="off"></label>
+                <label>Route<input name="route" maxlength="200" placeholder="/example" value="${esc(route)}" autocomplete="off"></label>
+                <p class="plan-empty-hint">Adds a page outline to this Interfaces item (a new revision; the server validates it).</p>
+                <footer class="plan-drawer-foot"><p class="plan-drawer-error" role="alert" hidden></p>
+                    <button type="button" class="header-button plan-drawer-cancel">Cancel</button>
+                    <button type="submit" class="header-button primary">${label ? 'Create outline' : 'Add page'}</button></footer>
+            </form>` });
+        const form = drawer.querySelector('form');
+        const error = drawer.querySelector('.plan-drawer-error');
+        drawer.querySelector('.plan-drawer-cancel').onclick = close;
+        setTimeout(() => form.elements.label.focus(), 30);
+        form.onsubmit = async (event) => {
+            event.preventDefault();
+            const name = form.elements.label.value.trim();
+            if (!name) return;
+            const submit = form.querySelector('[type=submit]');
+            submit.disabled = true;
+            try {
+                let taken = [];
+                try { taken = (parseWireframe(item.content || '').screens || []).map((s) => s.attrs?.id).filter(Boolean); } catch { taken = []; }
+                const id = slugId(name, taken);
+                const sidecar = readSidecar(item.content || '', 'wire');
+                const body = (sidecar.error ? (item.content || '') : sidecar.body).replace(/\s+$/, '');
+                const added = `${body ? `${body}\n` : ''}${newScreenSource({ label: name, route: form.elements.route.value, id })}`;
+                const content = !sidecar.error && Object.keys(sidecar.nodes).length ? writeSidecar(added, 'wire', sidecar.nodes) : added;
+                await applyPageSource(session, item, content);
+                session.ifaceSel ||= {};
+                session.ifaceSel[item.id] = null;
+                close();
+            } catch (e) {
+                error.textContent = e?.message || 'Could not add the page.';
+                error.hidden = false;
+                submit.disabled = false;
             }
         };
-        actions.append(save, cancel);
-        preview.append(area, actions, status);
-        area.focus();
+    }
+    function ifacePanelHtml(node) {
+        const lane = LANES.find((l) => l.id === node.lane)?.label || 'Public';
+        const row = (k, v) => (v ? `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>` : '');
+        return `<h4>${esc(node.label)}</h4>
+            ${node.shot?.image ? `<img class="iface-panel-shot" alt="Screenshot of ${esc(node.label)}" src="${esc(node.shot.image)}">` : ''}
+            <dl class="iface-facts">${row('Route', node.route || 'not set')}${row('Section', lane)}
+                ${row('Shape', `${SHAPE_KIND[node.shape] || node.shape}${node.shapeSource === 'default' ? ' (default for this page type)' : ''}`)}
+                ${row('Page outline', node.screenId ? (node.screenKey ? `yes · id ${node.screenKey}` : 'yes') : 'not yet')}
+                ${row('Template', node.template)}${row('View', node.view)}${row('Status', node.status)}${row('Method', node.method)}${row('Screenshot', node.lane === 'ajax' || node.lane === 'guidance' ? '' : (node.shot?.image ? '' : node.shot?.reason || (node.shot ? '' : 'none saved')))}</dl>
+            ${node.note ? `<p class="iface-note">${esc(node.note)}</p>` : ''}
+            <div class="erd-panel-actions iface-panel-actions">
+                ${node.screenId ? '<button type="button" class="header-button primary" data-iface-open>Open page</button><button type="button" class="header-button" data-iface-node>Name, id, shape…</button>'
+                    : '<button type="button" class="header-button primary" data-iface-create>Create page outline</button>'}
+                <button type="button" class="header-button" data-iface-source>Source</button>
+            </div>`;
+    }
+    function openIfacePage(session, item, node) {
+        if (!node?.screenId) return false;
+        session.openPage ||= {};
+        session.openPage[item.id] = node.screenId;
+        session.pageLayers ||= {};
+        session.pageLayers[item.id] = 'preview';
+        renderArtifacts(session);
+        return true;
+    }
+    // Multi-page Interfaces item (generated sitemap or several outlines): the Data-style canvas. Returns true
+    // when it rendered; false = a single page (or an opened page) renders below as before.
+    function mountIfaceCanvas(session, item, panel, preview, choices) {
+        let parsed;
+        try { parsed = parseWireframe(item.content || ''); } catch { return false; }
+        const screens = parsed.screens || [];
+        const openId = session.openPage?.[item.id];
+        if (screens.length === 1 || (openId && screens.some((s) => String(s.id) === String(openId)))) return false;
+        const model = buildIfaceModel({ sitemap: session.workspace?.sitemap, screens, captures: pageCaptureFor(session.workspace), meta: readSidecar(item.content, 'wire').nodes, source: item.content || '' });
+        if (!model.nodes.length) return false;
+        const h = ifaceHistory(session, item);
+        session.ifaceView ||= {}; session.ifaceSel ||= {};
+        const width = Math.max(320, (preview.clientWidth || 900) - 24);
+        const height = Math.max(320, Math.round(window.innerHeight - Math.max(0, preview.getBoundingClientRect().top) - 40));
+        const byScreen = new Map(screens.map((s) => [String(s.id), s]));
+        const ctx = nodeCtx(session, item);
+        const canvas = createIfaceCanvas({
+            model, aspect: Math.min(2.4, Math.max(0.5, width / height)),
+            view: session.ifaceView[item.id] || null, selectedKey: session.ifaceSel[item.id] || null,
+            canUndo: h.undo.length > 0, canRedo: h.redo.length > 0,
+            onAddPage: (opener) => addPageDrawer(session, item, { opener }),
+            onUndo: () => ifaceStep(session, item, 'undo'), onRedo: () => ifaceStep(session, item, 'redo'),
+            onViewChange: (view) => { session.ifaceView[item.id] = view; },
+            onSelect: (node) => { session.ifaceSel[item.id] = node?.key || null; },
+            onOpen: (node) => { if (!openIfacePage(session, item, node)) canvas.select(node?.key, { focus: true }); },
+            panelHtml: ifacePanelHtml,
+            onPanel: (box, node) => {
+                box.querySelector('[data-iface-open]')?.addEventListener('click', () => openIfacePage(session, item, node));
+                box.querySelector('[data-iface-create]')?.addEventListener('click', (e) => addPageDrawer(session, item, { label: node.label, route: node.route, opener: e.currentTarget }));
+                box.querySelector('[data-iface-source]')?.addEventListener('click', () => panelSource.click());
+                const nodeBtn = box.querySelector('[data-iface-node]');
+                if (nodeBtn) {
+                    nodeBtn.setAttribute('aria-haspopup', 'dialog');
+                    nodeBtn.addEventListener('click', () => { const screen = byScreen.get(node.screenId); if (screen) openNodePopover(nodeBtn, screenNode(screen), ctx); });
+                }
+            },
+        });
+        const dock = canvas.dock;
+        const panelSource = advancedButton({ title: 'Advanced · page source', text: () => item.content || '', onApply: (text) => applyPageSource(session, item, text) });
+        dock.append(panelSource);
+        const docs = choices.length;
+        const callout = createCallout({ key: 'interfaces', label: 'Interfaces summary',
+            stats: `${model.nodes.length} ${model.nodes.length === 1 ? 'page' : 'pages'} · ${model.outlined} with outlines · ${docs} ${docs === 1 ? 'document' : 'documents'}`,
+            hint: 'Click a page for its details. Double-click or Enter opens a page outline with Preview / Planning / Development. Drag to pan. Hold Command and scroll to zoom.' });
+        canvas.el.querySelector('.erd-body').append(callout);
+        preview.classList.add('plan-erd', 'plan-iface');
+        const hostEl = document.createElement('div');
+        hostEl.className = 'erd-host';
+        hostEl.append(canvas.el);
+        preview.append(hostEl);
+        requestAnimationFrame(() => canvas.mounted());
+        session.resetZoom = () => canvas.resetZoom();
+        session.ifaceShots = (session.ifaceShots || 0) + 1;
+        const shotGeneration = session.ifaceShots;
+        session.previewCleanup = () => { session.ifaceShots += 1; session.resetZoom = null; canvas.destroy(); };
+        loadIfaceShots(session, model, canvas, shotGeneration);
+        const docErrors = (parsed.diagnostics || []).filter((d) => d.severity === 'error');
+        if (docErrors.length) preview.insertAdjacentHTML('beforeend', `<div class="plan-wireframe-diagnostics" role="status"><strong>${docErrors.length} problem(s) in the page outline</strong></div>`);
+        return true;
+    }
+
+    // "Reload latest (your version is copied)": keep the user's version (clipboard + session copy),
+    // drop the stale draft/editor, fetch the workspace and re-render with the newest revision.
+    // Databases drawer applied a schema (N5 phase 4): reload, show the ERD it wrote (new per-link ERD or this one).
+    async function schemaApplied(session, updated) {
+        try { await reload(session); } catch (error) { host.toast?.(`Could not load the updated ERD: ${error?.message || 'unknown error'}`, 'error'); return; }
+        if (updated?.id != null) { session.selection ||= {}; session.selection[session.tab] = String(updated.id); }
+        renderArtifacts(session);
+    }
+
+    async function reloadLatest(session, item, mine) {
+        session.conflictCopies ||= {};
+        session.conflictCopies[item.id] = mine;
+        let copied = false;
+        try { await navigator.clipboard?.writeText(mine); copied = Boolean(navigator.clipboard); } catch { copied = false; }
+        delete session.inlineDrafts?.[item.id];
+        if (session.inlineDrafts) delete session.inlineDrafts[descKey(item)];
+        const entry = session.erdEditors?.[item.id];
+        if (entry) { entry.editor.destroy(); delete session.erdEditors[item.id]; }
+        try { await reload(session); } catch (error) { host.toast?.(`Could not load the latest version: ${error?.message || 'unknown error'}`, 'error'); return; }
+        renderArtifacts(session);
+        host.toast?.(copied ? 'Loaded the latest version. Your version is on the clipboard.' : 'Loaded the latest version. Your version is kept for this session (clipboard unavailable).');
     }
 
     async function renderSourceAsset(session, asset, preview) {
@@ -821,19 +1541,33 @@ export function createPlanConversation(host, root) {
         session.error = '';
         controls(session);
         try {
-            const conversation = await api(path(session, '/conversation'));
+            // Conversation and provider list load in parallel (was a sequential waterfall).
+            planningProviders ||= api('/llms/available-providers?type=planning').then((data) => data.providers || []).catch((error) => { planningProviders = null; throw error; });
+            if (!session.chatId) session.chatId = rememberedChat(chatStore(), session.id);
+            let [conversation] = await Promise.all([api(conversationPath(session)).catch((error) => {
+                if (error?.status !== 404 || !session.chatId) throw error;
+                session.chatId = null;                       // remembered chat no longer exists
+                return api(conversationPath(session));
+            }), planningProviders]);
+            const active = pickActiveChat(conversation.chats, session.chatId, conversation.chat_id);
+            if (active && active !== conversation.chat_id) { session.chatId = active; conversation = await api(conversationPath(session)); }
             session.conversation = conversation;
-            session.provider = session.provider || conversation.provider || '';
-            session.model = session.model || conversation.model_name || '';
+            session.chatId = conversation.chat_id || null;
+            rememberChat(chatStore(), session.id, session.chatId);
+            const remembered = rememberedRoute(routeStore(), session.id);
+            // Server default route (settings) only fills a chat that has no route of its own.
+            const fallback = conversation.default_route || {};
+            session.provider = session.provider || conversation.provider || remembered?.provider || fallback.provider || '';
+            session.model = session.model || conversation.model_name || (remembered?.provider === session.provider ? remembered.model : '') || (fallback.provider === session.provider ? fallback.model_name : '') || '';
             session.loaded = true;
             if (current(session)) {
                 root.querySelector('#plan-provider').innerHTML = providerOptions(session);
                 root.querySelector('#plan-model').innerHTML = modelOptions(session);
             }
-            if (refreshWorkspace) await reload(session);
-            session.providers = (await api('/llms/available-providers?type=planning')).providers || [];
+            session.providers = await planningProviders;
             if (current(session)) root.querySelector('#plan-provider').innerHTML = providerOptions(session);
-            await loadModels(session);
+            // Models only need the saved provider, so they load alongside the workspace reload.
+            await Promise.all([refreshWorkspace ? reload(session) : null, loadModels(session)]);
         } catch (error) { session.error = error.message || 'Could not load conversation. Refresh to retry.'; }
         finally { session.pending = ''; session.pollError = ''; refresh(session); monitor(session); }
     }
@@ -841,9 +1575,10 @@ export function createPlanConversation(host, root) {
     async function send(session) {
         if (blocked(session) || !session.draft.trim() || !modelAvailable(session)) return;
         const version = session.draftVersion;
-        const attachments = [...new Set([...session.attachments.map((asset) => asset.id), ...(!session.canvasClosed && session.viewedAsset ? [Number(session.viewedAsset)] : [])])];
-        const selectedItem = session.canvasClosed || session.viewedAsset ? null : selected(session);
-        const body = { message: session.draft.trim(), provider: session.provider, model_name: session.model, tab: session.tab, item_id: selectedItem?.id ?? null, page_id: selectedItem?.content_format === 'wire' ? session.pages?.[selectedItem.id] ?? null : null, attachments };
+        const attachments = [...new Set([...session.attachments.map((asset) => asset.id), ...(session.viewedAsset ? [Number(session.viewedAsset)] : [])])];
+        const selectedItem = session.viewedAsset ? null : selected(session);
+        const body = { message: session.draft.trim(), provider: session.provider, model_name: session.model, tab: session.tab, item_id: selectedItem?.id ?? null, page_id: selectedItem?.content_format === 'wire' ? session.pages?.[selectedItem.id] ?? null : null, attachments, chat_id: session.chatId || null, drafts: draftsPayload(session.inlineDrafts) };
+        session.undoClear = null;
         session.pending = 'Waiting for assistant...';
         session.error = '';
         session.outcome = '';
@@ -851,6 +1586,7 @@ export function createPlanConversation(host, root) {
         followSubmittedTurn(session);
         try {
             session.conversation = await api(path(session, '/messages'), { method: 'POST', body });
+            if (session.conversation.chat_id) { session.chatId = session.conversation.chat_id; rememberChat(chatStore(), session.id, session.chatId); }
             if (session.conversation.status === 'error') {
                 session.error = 'The assistant could not complete this request. Your draft is preserved.';
                 return;
@@ -866,7 +1602,7 @@ export function createPlanConversation(host, root) {
         } catch (error) {
             session.error = error.message || 'Message failed. Your draft is preserved.';
             // The server may have persisted an assistant error even when the HTTP request failed.
-            try { session.conversation = await api(path(session, '/conversation')); } catch { /* Keep last persisted messages and the draft. */ }
+            try { session.conversation = await api(conversationPath(session)); } catch { /* Keep last persisted messages and the draft. */ }
         } finally { session.pending = ''; refresh(session); monitor(session); }
     }
 
@@ -886,23 +1622,404 @@ export function createPlanConversation(host, root) {
         finally { session.pending = ''; refresh(session); }
     }
 
-    async function rebuildSitemap(session) {
-        if (blocked(session)) return;
-        session.pending = 'Rebuilding sitemap and page scan...';
+    // ---- Item 11: drag/drop and paste images into the chat (same upload route as "+") ------------------
+    function wireImageDrop(session, zone, input) {
+        const overlay = zone.querySelector('#plan-drop-overlay');
+        let depth = 0;
+        const hasFiles = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
+        const hide = () => { depth = 0; overlay.hidden = true; overlay.classList.remove('is-invalid'); };
+        zone.addEventListener('dragenter', (event) => {
+            if (!hasFiles(event)) return;
+            event.preventDefault();
+            depth += 1;
+            const items = [...(event.dataTransfer.items || [])];
+            const invalid = blocked(session) || items.some((item) => item.kind === 'file' && item.type && !/^image\/(png|jpeg|webp)$/i.test(item.type));
+            overlay.classList.toggle('is-invalid', invalid);
+            overlay.querySelector('span').textContent = blocked(session) ? 'Wait for the assistant to finish' : invalid ? 'Only PNG, JPEG or WebP images' : 'PNG, JPEG or WebP, up to 10 MB each';
+            overlay.hidden = false;
+        });
+        zone.addEventListener('dragover', (event) => { if (hasFiles(event)) event.preventDefault(); });
+        zone.addEventListener('dragleave', (event) => { if (!hasFiles(event)) return; depth -= 1; if (depth <= 0) hide(); });
+        zone.addEventListener('drop', (event) => {
+            if (!hasFiles(event)) return;
+            event.preventDefault();
+            hide();
+            attachImages(session, [...event.dataTransfer.files]);
+        });
+        input.addEventListener('paste', (event) => {
+            const files = [...(event.clipboardData?.files || [])];
+            if (!files.length) return;                     // plain text paste stays native
+            event.preventDefault();
+            attachImages(session, files);
+        });
+    }
+    function attachImages(session, files) {
+        if (blocked(session)) { session.error = 'Wait for the assistant to finish before attaching images.'; controls(session); return; }
+        const { accepted, rejected } = validateImageFiles(files, session.attachments.length);
+        session.error = rejectionMessage(rejected);
+        if (!accepted.length) { controls(session); return; }
+        upload(session, accepted).then(() => { if (rejected.length && !session.error) session.error = rejectionMessage(rejected); controls(session); });
+    }
+
+    // ---- Items 9/10: chat switcher, new / rename / archive / restore, clear (undoable) and compact ------------
+    function renderChatHeader(session) {
+        const header = root.querySelector('#plan-chat-header');
+        if (!header) return;
+        // A server without multi-chat (Python not restarted yet) returns no `chats`: keep the single-chat UI.
+        header.hidden = !Array.isArray(session.conversation.chats);
+        if (header.hidden) { header.replaceChildren(); return; }
+        header.innerHTML = chatHeaderHtml(session, esc);
+        header.querySelectorAll('button:disabled').forEach((button) => { button.dataset.staticDisabled = 'true'; });
+        const menu = header.querySelector('#plan-chat-menu');
+        const toggle = header.querySelector('#plan-chat-switch');
+        const close = () => { menu.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); };
+        toggle.onclick = (event) => {
+            event.stopPropagation();
+            const opening = menu.classList.contains('hidden');
+            menu.classList.toggle('hidden', !opening);
+            toggle.setAttribute('aria-expanded', String(opening));
+            if (opening) {
+                const rect = toggle.getBoundingClientRect();
+                menu.style.left = `${Math.max(8, Math.min(Math.round(rect.left), window.innerWidth - menu.offsetWidth - 8))}px`;
+                menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+                menu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+            }
+        };
+        menu.addEventListener('keydown', (event) => { if (event.key === 'Escape') { close(); toggle.focus(); } });
+        menu.querySelectorAll('[data-chat-switch]').forEach((button) => { button.onclick = () => { close(); switchChat(session, Number(button.dataset.chatSwitch)); }; });
+        menu.querySelectorAll('[data-chat-restore]').forEach((button) => { button.onclick = () => { close(); chatAction(session, Number(button.dataset.chatRestore), 'restore', 'Chat restored.', true); }; });
+        header.querySelector('#plan-chat-rename').onclick = () => { close(); renameChat(session); };
+        header.querySelector('#plan-chat-archive').onclick = () => { close(); archiveChat(session); };
+        header.querySelector('#plan-chat-memory').onclick = () => { close(); openMemory(session); };
+        header.querySelector('#plan-chat-new').onclick = () => newChat(session);
+        header.querySelector('#plan-chat-compact').onclick = () => chatAction(session, session.chatId, 'compact', 'Compacted: earlier turns are now a summary for the assistant.');
+        header.querySelector('#plan-chat-clear').onclick = () => clearChat(session);
+    }
+    const currentChat = (session) => (session.conversation.chats || []).find((chat) => chat.id === session.chatId) || session.conversation.chat;
+    async function chatRequest(session, label, run) {
+        if (blocked(session)) return null;
+        session.pending = label;
         session.error = '';
         session.outcome = '';
         controls(session);
+        try { return await run(); }
+        catch (error) {
+            session.error = error?.status === 409 ? (error.message || 'This chat changed elsewhere. Reload and try again.') : (error.message || 'The chat action failed.');
+            return null;
+        } finally { session.pending = ''; }
+    }
+    async function switchChat(session, chatId) {
+        if (!chatId || chatId === session.chatId) return;
+        const result = await chatRequest(session, 'Opening chat...', async () => {
+            const conversation = await api(`${path(session, '/conversation')}?chat_id=${encodeURIComponent(chatId)}`);
+            session.conversation = conversation;
+            session.chatId = conversation.chat_id;
+            session.undoClear = null;
+            rememberChat(chatStore(), session.id, session.chatId);
+            return conversation;
+        });
+        refresh(session);
+        if (result) { monitor(session); root.querySelector('#plan-language-input')?.focus(); }
+    }
+    async function openChat(session, chatId) {
+        session.conversation = await api(chatId ? `${path(session, '/conversation')}?chat_id=${encodeURIComponent(chatId)}` : path(session, '/conversation'));
+        session.chatId = session.conversation.chat_id || null;
+        rememberChat(chatStore(), session.id, session.chatId);
+    }
+    async function newChat(session) {
+        await chatRequest(session, 'Starting a new chat...', async () => {
+            const created = await api(path(session, '/chats'), { method: 'POST', body: {} });
+            session.undoClear = null;
+            await openChat(session, created.chat_id);
+            session.outcome = 'New chat started.';
+        });
+        refresh(session);
+    }
+    async function chatAction(session, chatId, action, done, open = false) {
+        const chat = (session.conversation.chats || []).find((row) => row.id === chatId);
+        if (!chatId) return;
+        await chatRequest(session, 'Updating chat...', async () => {
+            await api(path(session, `/chats/${encodeURIComponent(chatId)}/${action}`), { method: 'POST', body: { expected_revision: chat?.revision ?? null } });
+            await openChat(session, open ? chatId : session.chatId);
+            session.outcome = done;
+        });
+        refresh(session);
+    }
+    async function clearChat(session) {
+        const chat = currentChat(session);
+        if (!chat) return;
+        await chatRequest(session, 'Clearing chat...', async () => {
+            const result = await api(path(session, `/chats/${encodeURIComponent(chat.id)}/clear`), { method: 'POST', body: { expected_revision: chat.revision ?? null } });
+            await openChat(session, result.chat_id);
+            session.undoClear = { archived: result.archived_chat_id, fresh: result.chat_id };
+            session.outcome = `"${chat.title}" was archived; this is a fresh chat.`;
+        });
+        refresh(session);
+    }
+    async function undoClear(session) {
+        const undo = session.undoClear;
+        if (!undo) return;
+        await chatRequest(session, 'Restoring chat...', async () => {
+            await api(path(session, `/chats/${encodeURIComponent(undo.archived)}/restore`), { method: 'POST', body: {} });
+            const fresh = (session.conversation.chats || []).find((row) => row.id === undo.fresh);
+            // The fresh chat is archived again only while it is still empty (never loses a message).
+            if (fresh && !fresh.messages) await api(path(session, `/chats/${encodeURIComponent(undo.fresh)}/archive`), { method: 'POST', body: { expected_revision: fresh.revision } });
+            session.undoClear = null;
+            await openChat(session, undo.archived);
+            session.outcome = 'Chat restored.';
+        });
+        refresh(session);
+    }
+    async function archiveChat(session) {
+        const chat = currentChat(session);
+        if (!chat) return;
+        const confirm = window.DecisionsAPI?.confirm;
+        const ok = confirm ? Boolean(await confirm({ title: 'Archive chat', message: `Archive "${chat.title}"? It moves to Archived in the chat list and can be restored.`, confirmLabel: 'Archive' })) : true;
+        if (!ok) return;
+        await chatRequest(session, 'Archiving chat...', async () => {
+            await api(path(session, `/chats/${encodeURIComponent(chat.id)}/archive`), { method: 'POST', body: { expected_revision: chat.revision ?? null } });
+            await openChat(session, null);
+            session.undoClear = null;
+            session.outcome = `"${chat.title}" archived.`;
+        });
+        refresh(session);
+    }
+    function renameChat(session) {
+        const chat = currentChat(session);
+        const button = root.querySelector('#plan-chat-switch');
+        if (!chat || !button || blocked(session)) return;
+        const input = document.createElement('input');
+        input.className = 'plan-chat-rename-input';
+        input.value = chat.title || '';
+        input.maxLength = 120;
+        input.setAttribute('aria-label', 'Chat name');
+        button.replaceWith(input);
+        input.focus(); input.select();
+        let finished = false;
+        const finish = async (commit) => {
+            if (finished) return; finished = true;
+            const title = input.value.trim();
+            if (commit && title && title !== chat.title) {
+                await chatRequest(session, 'Renaming chat...', async () => {
+                    await api(path(session, `/chats/${encodeURIComponent(chat.id)}`), { method: 'PATCH', body: { title, expected_revision: chat.revision ?? null } });
+                    await openChat(session, chat.id);
+                });
+            }
+            refresh(session);
+            root.querySelector('#plan-chat-switch')?.focus();
+        };
+        input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); finish(true); } else if (event.key === 'Escape') { event.preventDefault(); finish(false); } });
+        input.addEventListener('blur', () => finish(true));
+    }
+
+    // ---- Item 7: tool-call cards (Open / Undo, or Apply AI version / Keep mine for unsaved items) -------------
+    const cardOf = (session, el) => (session.conversation.messages || []).find((m) => m.role === 'assistant' && String(m.id) === el.dataset.turn)?.tool_calls?.[Number(el.dataset.card)];
+    function wireToolCards(session, log) {
+        log.querySelectorAll('[data-tool-open]').forEach((button) => {
+            button.onclick = () => {
+                const item = session.workspace.items.find((row) => String(row.id) === button.dataset.toolOpen);
+                const tab = item && Object.keys(TABS).find((key) => TABS[key].types.includes(item.item_type));
+                if (!tab) return;
+                session.selection[tab] = item.id;
+                planBar().querySelector(`[data-plan-tab="${tab}"]`).click();
+            };
+        });
+        log.querySelectorAll('[data-tool-undo]').forEach((button) => { button.onclick = () => undoTool(session, cardOf(session, button)); });
+        log.querySelectorAll('[data-tool-apply]').forEach((button) => { button.onclick = () => applyAiVersion(session, cardOf(session, button), button); });
+        log.querySelectorAll('[data-tool-keep]').forEach((button) => {
+            button.onclick = () => { (session.dismissedCards ||= new Set()).add(`${button.dataset.turn}:${button.dataset.card}`); refresh(session); };
+        });
+    }
+    async function undoTool(session, card) {
+        if (!card || blocked(session)) return;
+        await chatRequest(session, 'Undoing...', async () => {
+            await api(path(session, `/plan-items/${encodeURIComponent(card.id)}/restore`), { method: 'POST', body: { revision: card.from_revision, expected_revision: card.to_revision } });
+            await reload(session);
+            session.outcome = card.from_revision ? `Undone: "${card.title}" is back to revision ${card.from_revision} (saved as a new revision).` : `Undone: "${card.title}" was archived.`;
+        });
+        refresh(session);
+    }
+    async function applyAiVersion(session, card, button) {
+        if (!card || blocked(session)) return;
+        const confirm = window.DecisionsAPI?.confirm;
+        const ok = confirm ? Boolean(await confirm({ title: 'Apply AI version', message: `Replace your unsaved changes in "${card.title}" with the AI version? Your draft is discarded; the current saved version stays in history.`, confirmLabel: 'Apply AI version', danger: true })) : true;
+        if (!ok) return;
+        const item = session.workspace.items.find((row) => String(row.id) === String(card.id));
+        await chatRequest(session, 'Applying AI version...', async () => {
+            await api(`/workflows/studio/plan-items/${encodeURIComponent(card.id)}`, { method: 'PATCH', body: { content: card.proposed_content, expected_revision: item?.revision_count } });
+            for (const key of Object.keys(session.inlineDrafts || {})) if (Number.parseInt(key, 10) === Number(card.id)) delete session.inlineDrafts[key];
+            (session.dismissedCards ||= new Set()).add(`${button.dataset.turn}:${button.dataset.card}`);
+            await reload(session);
+            session.outcome = `Applied the AI version of "${card.title}".`;
+        });
+        refresh(session);
+    }
+
+    // ---- Item 8: memory panel (view, switch on/off, forget chat / project) ------------------------------
+    async function openMemory(session) {
+        const chat = currentChat(session);
+        if (!chat) return;
+        const base = path(session, `/chats/${encodeURIComponent(chat.id)}/memory`);
+        let view;
+        try { view = await api(base); } catch (error) { session.error = error.message || 'Could not load chat memory.'; controls(session); return; }
+        const dialog = document.createElement('dialog');
+        dialog.className = 'plan-memory-dialog';
+        const paint = () => {
+            dialog.innerHTML = memoryPanelHtml(view, esc);
+            dialog.querySelector('[data-memory-close]').onclick = () => dialog.close();
+            dialog.querySelector('#plan-memory-enabled').onchange = async (event) => {
+                try { view = await api(base, { method: 'PUT', body: { enabled: event.target.checked } }); }
+                catch (error) { host.toast?.(error.message || 'Could not change memory.', 'error'); }
+                paint();
+            };
+            dialog.querySelectorAll('[data-memory-forget]').forEach((button) => {
+                button.onclick = async () => {
+                    const scope = button.dataset.memoryForget;
+                    const confirm = window.DecisionsAPI?.confirm;
+                    const ok = confirm ? Boolean(await confirm({ title: 'Forget memory', message: scope === 'project' ? 'Forget the saved memory of every plan chat in this project? Messages stay visible.' : 'Forget this chat\'s saved memory? Messages stay visible.', confirmLabel: 'Forget', danger: true })) : true;
+                    if (!ok) return;
+                    try { view = await api(`${base}?scope=${scope}`, { method: 'DELETE' }); host.toast?.(`Forgot ${view.removed} saved note${view.removed === 1 ? '' : 's'}.`); }
+                    catch (error) { host.toast?.(error.message || 'Could not forget memory.', 'error'); }
+                    paint();
+                };
+            });
+        };
+        paint();
+        root.append(dialog);
+        dialog.addEventListener('close', async () => {
+            dialog.remove();
+            try { await openChat(session, session.chatId); } catch { /* keep the current view */ }
+            refresh(session);
+        }, { once: true });
+        dialog.showModal();
+    }
+
+    // "<item_type>: message" (service.materialize_project_scan) -> { [item id]: [message, …] }, merged.
+    function scanWarnings(items, warnings, previous = {}) {
+        const out = { ...(previous || {}) };
+        for (const raw of Array.isArray(warnings) ? warnings : []) {
+            const m = /^([a-z_]+):\s*(.*)$/s.exec(String(raw));
+            const item = m && items.find((i) => i.item_type === m[1]);
+            if (!item || !m[2]) continue;
+            out[item.id] = [...new Set([...(out[item.id] || []), m[2]])];
+        }
+        return out;
+    }
+
+    function rebuildStatusHtml(percent) {
+        const n = Math.max(0, Math.min(100, Math.round(percent)));
+        return `<div class="plan-rebuild-status" role="status">
+            <p>Rebuilding interface</p>
+            <div class="plan-rebuild-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${n}" aria-valuetext="${n}%">
+                <span class="plan-rebuild-bar" style="width:${n}%"></span>
+                <span class="plan-rebuild-pct" aria-hidden="true">${n}%</span>
+            </div>
+        </div>`;
+    }
+    function paintRebuildPercent(percent) {
+        const n = Math.max(0, Math.min(100, Math.round(percent)));
+        const track = root.querySelector('#plan-preview .plan-rebuild-track');
+        if (!track) return;
+        track.setAttribute('aria-valuenow', String(n));
+        track.setAttribute('aria-valuetext', `${n}%`);
+        const bar = track.querySelector('.plan-rebuild-bar');
+        const label = track.querySelector('.plan-rebuild-pct');
+        if (bar) bar.style.width = `${n}%`;
+        if (label) label.textContent = `${n}%`;
+    }
+    // The rebuild route is one POST with no progress events. The bar eases toward 90 while that
+    // request is in flight and reaches 100 only when the response arrives.
+    function startRebuildProgress(session) {
+        clearInterval(session.rebuildTimer);
+        session.rebuildPercent = 4;
+        session.rebuildTimer = setInterval(() => {
+            if (!session.rebuildingInterfaces) { clearInterval(session.rebuildTimer); session.rebuildTimer = 0; return; }
+            const current = session.rebuildPercent || 0;
+            if (current >= 90) return;
+            session.rebuildPercent = Math.min(90, current + Math.max(0.8, (90 - current) * 0.08));
+            paintRebuildPercent(session.rebuildPercent);
+        }, 450);
+    }
+    function concretePageRoute(route) {
+        const value = String(route || '');
+        if (!/^\/[A-Za-z0-9._~/-]*$/.test(value) || value.includes('..')) return '';
+        return value;
+    }
+    function mountShotEye(canvas, text) {
+        if (canvas.el.querySelector('.iface-shot-eye')) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'iface-shot-eye';
+        button.title = text;
+        button.setAttribute('aria-label', text);
+        button.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span></span>';
+        button.querySelector('span').textContent = text;
+        canvas.el.querySelector('.erd-body')?.append(button);
+    }
+    async function loadIfaceShots(session, model, canvas, generation) {
+        let status;
+        try { status = await api(path(session, '/interface-shots')); }
+        catch { return; }
+        if (session.ifaceShots !== generation || !canvas.el.isConnected) return;
+        const saved = new Set(status.saved || []);
+        const imageUrl = (screenKey) => `/api${path(session, `/interface-shots/${encodeURIComponent(screenKey)}`)}`;
+        const pages = model.nodes.filter((node) => (node.lane === 'frontend' || node.lane === 'backend') && node.screenKey && concretePageRoute(node.route) && !node.shot?.image);
+        for (const node of pages) {
+            const hit = ['.png', '.jpg', '.jpeg', '.webp'].some((ext) => saved.has(`${node.screenKey}${ext}`));
+            if (hit) canvas.setShot(node.key, { image: imageUrl(node.screenKey) });
+        }
+        const reason = status.reason || 'Images cannot be fetched because the terminals are down. If they were up, this could show the frontend and the backend.';
+        if (!status.terminals_up || (!status.frontend_url && !status.backend_url)) {
+            mountShotEye(canvas, reason);
+            return;
+        }
+        for (const node of pages) {
+            if (session.ifaceShots !== generation || !canvas.el.isConnected) return;
+            if (node.shot?.image) continue;
+            const base = node.lane === 'backend' ? status.backend_url : status.frontend_url;
+            if (!base) {
+                canvas.setShot(node.key, { reason: node.lane === 'backend' ? 'No backend address is published in the running terminals.' : 'No frontend address is published in the running terminals.' });
+                continue;
+            }
+            try {
+                const result = await api(path(session, '/interface-shots'), { method: 'POST', body: { screen_id: node.screenKey, route: node.route, lane: node.lane } });
+                if (session.ifaceShots !== generation || !canvas.el.isConnected) return;
+                if (result.image) canvas.setShot(node.key, { image: result.image });
+                else if (result.reason) canvas.setShot(node.key, { reason: result.reason });
+            } catch { /* leave the card placeholder */ }
+        }
+    }
+
+    async function rebuildSitemap(session) {
+        if (blocked(session) || session.rebuildingInterfaces || !modelAvailable(session)) return;
+        closePlanMenu();
+        session.rebuildingInterfaces = true;
+        session.rebuildPercent = 4;
+        session.error = '';
+        session.outcome = '';
+        controls(session);
+        if (current(session)) renderArtifacts(session);
+        startRebuildProgress(session);
         try {
-            const result = await api(path(session, '/scan'), { method: 'POST', body: {} });
+            const result = await api(path(session, '/rebuild-interfaces'), {
+                method: 'POST',
+                body: { provider: session.provider, model_name: session.model, chat_id: session.chatId || null },
+            });
+            session.rebuildPercent = 100;
+            paintRebuildPercent(100);
             if (result.workspace) session.workspace = result.workspace;
             else await reload(session);
             session.pages = {};
             session.sitemap = true;
-            session.outcome = result.message || 'Rebuilt the sitemap and page scan.';
+            session.outcome = result.message || 'Rebuilt the interfaces and sitemap.';
+            // Scan warnings ("flows: …") go to the existing per-item warnings notice of that section.
+            session.flowWarnings = scanWarnings(session.workspace?.items || [], result.validation_warnings, session.flowWarnings);
         } catch (error) {
             session.error = error.message || 'Could not rebuild the sitemap.';
         } finally {
-            session.pending = '';
+            clearInterval(session.rebuildTimer);
+            session.rebuildTimer = 0;
+            session.rebuildingInterfaces = false;
             refresh(session);
         }
     }
@@ -915,12 +2032,12 @@ export function createPlanConversation(host, root) {
         controls(session);
         followSubmittedTurn(session);
         try {
-            const result = await api(path(session, '/build'), { method: 'POST', body: { provider: session.provider, model_name: session.model } });
-            if (result.status === 'error') throw new Error(result.error || 'Could not build tasks.');
+            const result = await api(path(session, '/build'), { method: 'POST', body: { provider: session.provider, model_name: session.model, chat_id: session.chatId || null } });
+            if (result.status === 'error') throw new Error(result.error || 'Could not build tickets.');
             session.outcome = result.status === 'needs_input' ? '' : `Tasks: ${result.created} created, ${result.updated || 0} updated, ${result.reused} reused.`;
-        } catch (error) { session.error = error.message || 'Could not build tasks.'; }
+        } catch (error) { session.error = error.message || 'Could not build tickets.'; }
         finally {
-            try { session.conversation = await api(path(session, '/conversation')); }
+            try { session.conversation = await api(conversationPath(session)); session.chatId = session.conversation.chat_id || session.chatId; }
             catch (error) { session.error = session.error || `Could not refresh build conversation: ${error.message}`; }
             session.pending = '';
             refresh(session);
@@ -972,19 +2089,46 @@ export function createPlanConversation(host, root) {
         let session = sessions.get(id);
         if (!session) {
             session = { id, workspace, conversation: { messages: [], attachments: [] }, models: null, loaded: false, draft: '', draftVersion: 0, attachments: [], provider: '', model: '', tab: 'wireframes', selection: {}, pending: '', error: '', outcome: '' };
-            session.canvasClosed = !(workspace.items || []).some(item =>
-                ['wireframe', 'flows'].includes(item.item_type) && String(item.content || '').trim());
             sessions.set(id, session);
         } else if (!session.pending) session.workspace = workspace;
         active?.polling?.stop();
         active = session;
         shell(session);
+        // Breadcrumb is "<project> / plan"; the active section is shown by the tabs, not repeated here.
+        host.setPlanCrumbs?.();
         load(session);
+    }
+    // Background refresh of an already-open plan: update artifacts without rebuilding the shell.
+    // Scan hint lives in the plan toolbar (contextual header area).
+    function setScanHint(hint) {
+        const bar = planBar().querySelector('.plan-detail-header') || planBar();
+        let node = bar.querySelector?.('.plan-scan-hint');
+        if (!hint) { node?.remove(); return; }
+        if (!node) {
+            node = document.createElement('span');
+            node.className = 'plan-scan-hint';
+            node.setAttribute('role', 'status');
+            bar.append(node);
+        }
+        node.dataset.kind = hint.kind;
+        node.textContent = hint.text;
+    }
+    function refreshWorkspace(workspace) {
+        const session = sessions.get(String(workspace.id));
+        if (!session || session.pending) return;
+        session.workspace = workspace;
+        if (current(session)) renderArtifacts(session);
     }
     function leave() {
         root.querySelector('.plan-file-dialog')?.close();
+        bar?.remove();
+        bar = null;
         active?.polling?.stop();
         active = null;
     }
-    return { open, leave, hasDraft: () => [...sessions.values()].some((session) => Boolean(session.draft || session.attachments.length || session.pending)) };
+    // Unsaved = chat draft/attachments/pending turn, a stored inline draft, or a dirty ERD canvas.
+    const hasDraft = () => [...sessions.values()].some((session) => Boolean(session.draft || session.attachments.length || session.pending
+        || Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
+    addUnsavedCheck(() => [...sessions.values()].some((session) => Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
+    return { open, refreshWorkspace, setScanHint, leave, hasDraft };
 }

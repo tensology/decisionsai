@@ -439,35 +439,57 @@ class GoogleWorkspaceConnector:
         
         # Parse email data
         headers = {h['name']: h['value'] for h in result.get('payload', {}).get('headers', [])}
-        body = ""
+        text_body = ""
+        html_body = ""
         attachments: List[Dict[str, Any]] = []
         
         payload = result.get('payload', {})
+        def _decode_part_data(part: Dict[str, Any]) -> str:
+            data = part.get('body', {}).get('data', '')
+            if not data:
+                return ""
+            try:
+                return base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
+            except Exception:
+                return ""
+
+        def _part_headers(part: Dict[str, Any]) -> Dict[str, str]:
+            return {
+                str(h.get('name') or '').lower(): str(h.get('value') or '')
+                for h in (part.get('headers') or [])
+                if isinstance(h, dict)
+            }
+
         if 'parts' in payload:
             for part in _walk_gmail_parts(payload):
-                if part.get('mimeType') == 'text/plain':
-                    data = part.get('body', {}).get('data', '')
-                    if data:
-                        body = base64.urlsafe_b64decode(data).decode('utf-8')
-                elif part.get('mimeType') == 'text/html' and not body:
-                    data = part.get('body', {}).get('data', '')
-                    if data:
-                        body = base64.urlsafe_b64decode(data).decode('utf-8')
+                mime = str(part.get('mimeType') or '')
+                if mime == 'text/plain' and not text_body:
+                    text_body = _decode_part_data(part)
+                elif mime == 'text/html' and not html_body:
+                    html_body = _decode_part_data(part)
                 filename = part.get('filename') or ''
                 attachment_id = part.get('body', {}).get('attachmentId')
-                if filename and attachment_id:
+                part_headers = _part_headers(part)
+                content_id = str(part_headers.get('content-id') or '').strip().strip('<>')
+                if attachment_id and (filename or content_id):
                     attachments.append({
                         'message_id': message_id,
                         'attachment_id': attachment_id,
-                        'filename': filename,
-                        'mime_type': part.get('mimeType', ''),
+                        'filename': filename or (f'inline-{content_id}' if content_id else 'attachment'),
+                        'mime_type': mime,
                         'size': part.get('body', {}).get('size', 0),
+                        'content_id': content_id,
+                        'inline': bool(content_id and not filename),
                     })
         else:
-            data = payload.get('body', {}).get('data', '')
-            if data:
-                body = base64.urlsafe_b64decode(data).decode('utf-8')
+            mime = str(payload.get('mimeType') or '')
+            decoded = _decode_part_data(payload)
+            if mime == 'text/html':
+                html_body = decoded
+            else:
+                text_body = decoded
         
+        body = text_body or html_body
         return {
             'id': message_id,
             'threadId': result.get('threadId'),
@@ -477,6 +499,8 @@ class GoogleWorkspaceConnector:
             'date': headers.get('Date', ''),
             'snippet': result.get('snippet', ''),
             'body': body,
+            'text_body': text_body,
+            'html_body': html_body,
             'labels': result.get('labelIds', []),
             'attachments': attachments,
         }
@@ -512,6 +536,78 @@ class GoogleWorkspaceConnector:
         path = dest_dir / safe_name
         path.write_bytes(raw)
         return str(path)
+
+    def fetch_email_attachment_bytes(
+        self,
+        message_id: str,
+        attachment_id: str = "",
+        *,
+        content_id: str = "",
+    ) -> Optional[tuple[bytes, str, str]]:
+        """Return ``(bytes, mime_type, filename)`` for a Gmail attachment.
+
+        Prefer ``attachment_id``. When only ``content_id`` is known, resolve it via
+        ``get_email`` metadata. Used by the Incoming mail preview route.
+        """
+        if not self._ensure_valid_token():
+            return None
+        message_id = str(message_id or "").strip()
+        attachment_id = str(attachment_id or "").strip()
+        content_id = str(content_id or "").strip().strip("<>")
+        if not message_id:
+            return None
+        mime_type = "application/octet-stream"
+        filename = "attachment"
+        if not attachment_id and content_id:
+            detail = self.get_email(message_id) or {}
+            for item in detail.get("attachments") or []:
+                if not isinstance(item, dict):
+                    continue
+                cid = str(item.get("content_id") or "").strip().strip("<>")
+                if cid.lower() == content_id.lower():
+                    attachment_id = str(item.get("attachment_id") or "").strip()
+                    mime_type = str(item.get("mime_type") or mime_type)
+                    filename = str(item.get("filename") or filename)
+                    break
+            if not attachment_id:
+                return None
+        elif attachment_id:
+            detail = self.get_email(message_id) or {}
+            for item in detail.get("attachments") or []:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("attachment_id") or "").strip() == attachment_id:
+                    mime_type = str(item.get("mime_type") or mime_type)
+                    filename = str(item.get("filename") or filename)
+                    break
+        if not attachment_id:
+            return None
+        url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}"
+        result = self._make_request("GET", url)
+        if not result or not result.get("data"):
+            return None
+        data = str(result.get("data") or "")
+        padding = "=" * (-len(data) % 4)
+        try:
+            raw = base64.urlsafe_b64decode((data + padding).encode("ascii"))
+        except Exception as exc:
+            logger.error("Failed to decode Gmail attachment %s: %s", attachment_id, exc, exc_info=True)
+            return None
+        mime = mime_type.split(";", 1)[0].strip() or "application/octet-stream"
+        # Sniff common image bytes when Gmail omits a useful mimeType on the part.
+        if mime in {"", "application/octet-stream"} and raw:
+            if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+                mime = "image/png"
+            elif raw.startswith(b"\xff\xd8\xff"):
+                mime = "image/jpeg"
+            elif raw.startswith((b"GIF87a", b"GIF89a")):
+                mime = "image/gif"
+            elif raw.startswith(b"RIFF") and b"WEBP" in raw[:16]:
+                mime = "image/webp"
+            elif raw.startswith(b"%PDF"):
+                mime = "application/pdf"
+        return raw, mime, _safe_attachment_filename(filename)
+
     
     def send_email(self, to: str, subject: str, body: str, body_type: str = 'plain', cc: Optional[str] = None, bcc: Optional[str] = None) -> bool:
         """Send email via Gmail"""

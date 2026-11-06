@@ -191,8 +191,9 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
             .all()
         )
 
-        assert recovered_run.status == "cancelled"
-        assert recovered_run.completed_at is not None
+        assert recovered_run.status == "waiting"
+        assert "No saved current step" in __import__("json").loads(recovered_run.run_data)["restart_recovery"]["blocked_reason"]
+        assert recovered_run.completed_at is None
         assert waiting_run.status == "waiting"
         assert recovered_execution.status == "cancelled"
         assert recovered_execution.completed_at is not None
@@ -207,7 +208,7 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
         assert missing_run.completed_at is not None
         assert durable_waiting.status == "waiting"
         assert durable_waiting.completed_at is None
-        assert recovered_ticket.workflow_status == "cancelled"
+        assert recovered_ticket.workflow_status == "waiting"
         assert stale_terminal_ticket.workflow_status == "completed"
 
 

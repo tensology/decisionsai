@@ -155,6 +155,9 @@ class AnimationPlayer(QObject):
         # second between a shortcut press and its visual response.
         self._webm_cache = OrderedDict()
         self._webm_cache_limit = 8
+        # A count alone can retain hundreds of MiB at large/Retina sizes.
+        # Keep the active animation even if it alone exceeds this budget.
+        self._webm_cache_bytes_limit = 64 * 1024 * 1024
 
     def _webm_cache_key(
         self,
@@ -179,17 +182,30 @@ class AnimationPlayer(QObject):
         )
 
     def _trim_webm_cache(self) -> None:
-        while len(self._webm_cache) > self._webm_cache_limit:
-            _, player = self._webm_cache.popitem(last=False)
+        total = sum(int(player.memory_bytes) for player in self._webm_cache.values())
+        for key, player in list(self._webm_cache.items()):
+            if (len(self._webm_cache) <= self._webm_cache_limit
+                    and total <= self._webm_cache_bytes_limit):
+                break
             if player is self._webm_player:
                 continue
-            player.stop()
+            del self._webm_cache[key]
+            total -= int(player.memory_bytes)
+            player.release_frames()
             player.deleteLater()
 
     def load(self, file_path: str, playback: str = "loop",
              chroma_key: tuple | None = None, chroma_threshold: int = 35) -> None:
         """Detect format from extension and create the appropriate player."""
         self.stop()
+        # Preempt unfinished preloads/previous states so the pressed shortcut
+        # is next in the serial decoder queue, rather than waiting for a clip.
+        requested_key = self._webm_cache_key(file_path, playback, chroma_key, chroma_threshold)
+        for key, cached in list(self._webm_cache.items()):
+            if key != requested_key and cached._decode_task is not None:
+                del self._webm_cache[key]
+                cached.release_frames()
+                cached.deleteLater()
 
         if file_path.lower().endswith(".gif"):
             player = GifPlayer(self)
@@ -208,16 +224,17 @@ class AnimationPlayer(QObject):
             if player is None:
                 player = WebMPlayer(self)
                 player.frame_ready.connect(self.frame_ready)
+                player.loaded.connect(self._trim_webm_cache)
                 player.set_device_pixel_ratio(self._device_pixel_ratio)
                 # Size before load so the first frame build never creates a
                 # second full-resolution QPixmap set only to shrink it again.
                 if self._width and self._height:
                     player.set_size(self._width, self._height)
-                player.load(file_path, playback=playback,
-                            chroma_key=chroma_key, chroma_threshold=chroma_threshold)
+                player.load_async(file_path, playback=playback,
+                                  chroma_key=chroma_key, chroma_threshold=chroma_threshold)
             self._webm_cache[cache_key] = player
-            self._trim_webm_cache()
             self._webm_player = player
+            self._trim_webm_cache()
             self._player = None
         elif file_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
             # Static image — emit a single frame
@@ -244,14 +261,16 @@ class AnimationPlayer(QObject):
 
         player = WebMPlayer(self)
         player.frame_ready.connect(self.frame_ready)
+        player.loaded.connect(self._trim_webm_cache)
         player.set_device_pixel_ratio(self._device_pixel_ratio)
         if self._width and self._height:
             player.set_size(self._width, self._height)
-        player.load(
+        player.load_async(
             file_path,
             playback=playback,
             chroma_key=chroma_key,
             chroma_threshold=chroma_threshold,
+            priority=0,
         )
         self._webm_cache[cache_key] = player
         self._trim_webm_cache()
@@ -282,6 +301,7 @@ class AnimationPlayer(QObject):
             self._player.set_size(width, height)
         if self._webm_player is not None:
             self._webm_player.set_size(width, height)
+        self._trim_webm_cache()
 
     def set_device_pixel_ratio(self, dpr: float) -> None:
         """Set device pixel ratio used by WebM playback frames."""
@@ -291,3 +311,4 @@ class AnimationPlayer(QObject):
         self._device_pixel_ratio = safe_dpr
         if self._webm_player is not None:
             self._webm_player.set_device_pixel_ratio(self._device_pixel_ratio)
+        self._trim_webm_cache()

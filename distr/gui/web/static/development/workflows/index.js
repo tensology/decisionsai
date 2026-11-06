@@ -175,18 +175,24 @@ export function createWorkflows({ context, actions, el }) {
     }
 
     function activeExecutionRowsHtml() {
-        const runs = (context.runs || []).filter((run) =>
-            ['initializing', 'queued', 'running', 'waiting', 'paused'].includes(String(run.status || '').toLowerCase())
-        );
+        // Workflows page: only orchestrated workflow runs. Direct/development
+        // threads (including automation-driven Load latest DB prompts) belong
+        // on Threads, not under a workflow "Running now" heading.
+        const runs = (context.runs || []).filter((run) => {
+            const status = String(run.status || '').toLowerCase();
+            if (!['initializing', 'queued', 'running', 'waiting', 'paused'].includes(status)) return false;
+            if (String(run.execution_kind || '').toLowerCase() === 'development') return false;
+            return Boolean(Number(run.workflow_id || 0));
+        });
         if (!runs.length) return '';
         const rows = runs
             .map((run) => {
                 const status = String(run.status || 'running').toLowerCase();
-                const kind = run.execution_kind === 'development' ? 'Direct Development' : run.workflow_name || 'Workflow';
+                const kind = run.workflow_name || 'Workflow';
                 const cancelUrl =
                     run.cancellation_target?.url || (run.workflow_id && run.id ? `/api/workflows/${Number(run.workflow_id)}/cancel-run/${Number(run.id)}` : '');
                 return `<article class="workflow-active-execution" data-active-execution="${actions.escapeHtml(run.id)}">
-                <div><i class="workflow-state ${status === 'waiting' || status === 'paused' ? 'waiting' : 'running'}"></i><span><strong>${actions.escapeHtml(run.ticket_title || kind)}</strong><small>${actions.escapeHtml(kind)} · ${actions.escapeHtml(actions.statusLabel(status))}${run.project_name ? ` · ${actions.escapeHtml(run.project_name)}` : ''}</small></span></div>
+                <div><i class="workflow-state ${run.stalled || status === 'waiting' || status === 'paused' ? 'waiting' : 'running'}"></i><span><strong>${actions.escapeHtml(run.ticket_title || kind)}</strong><small>${actions.escapeHtml(run.status_summary || `${kind} · ${actions.statusLabel(status)}`)}</small>${run.waiting_prompt && (run.stalled || run.waiting_kind === 'restart_recovery') ? `<small>${actions.escapeHtml(run.waiting_prompt)}</small>` : ''}</span></div>
                 <details class="workflow-run-menu"><summary aria-label="What you can do with this run">•••</summary><div>
                     ${run.open_url ? `<a href="${actions.escapeHtml(run.open_url)}">Open</a>` : ''}
                     ${run.related_ticket_url ? `<a href="${actions.escapeHtml(run.related_ticket_url)}">Related ticket</a>` : ''}

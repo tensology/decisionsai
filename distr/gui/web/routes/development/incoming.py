@@ -150,15 +150,92 @@ def register_routes(router, templates):
             path, record = await asyncio.to_thread(_run)
             data = path.read_bytes()
             mime = str(record.get("mime_type") or "application/octet-stream")
+            # Browsers accept audio/ogg; drop long parameter lists that break <audio>.
+            media_type = mime.split(";", 1)[0].strip() or "application/octet-stream"
+            if media_type == "audio/ogg" and "codecs=" in mime.lower():
+                media_type = "audio/ogg"
+            filename = Path(str(record.get("name") or path.name)).name.replace('"', "")
             headers = {
                 "Cache-Control": "private, max-age=600",
-                "Content-Disposition": f'inline; filename="{Path(str(record.get("name") or path.name)).name}"',
+                "Content-Disposition": f'inline; filename="{filename}"',
             }
-            return Response(content=data, media_type=mime, headers=headers)
+            return Response(content=data, media_type=media_type, headers=headers)
         except FileNotFoundError as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=404)
         except Exception as e:
             logger.warning("Managed proposal file serve failed: %s", e)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=502)
+
+
+
+    @router.get("/workflows/studio/incoming/mail/attachment")
+    async def workflow_studio_incoming_mail_attachment(
+        message_id: str = "",
+        attachment_id: str = "",
+        content_id: str = "",
+        provider: str = "",
+        filename: str = "",
+    ):
+        """Serve a Gmail or Mailshot Incoming attachment/inline image for the mail reader.
+
+        Session-auth only — no internal_token. Used for cid: rewrite and the
+        fixed attachment bar previews. Mailshot uses the local tunnel; Gmail
+        uses the connected Google Workspace account.
+        """
+        message_id = str(message_id or "").strip()
+        attachment_id = str(attachment_id or "").strip()
+        content_id = str(content_id or "").strip().strip("<>")
+        provider_key = str(provider or "").strip().lower()
+        filename_hint = str(filename or "").strip()
+        if not provider_key and message_id.startswith("email-"):
+            provider_key = "mailshot"
+        if not message_id or (not attachment_id and not content_id):
+            return JSONResponse({"success": False, "error": "message_id and attachment_id or content_id are required."}, status_code=422)
+        try:
+            if provider_key in {"mailshot", "tensology"}:
+                if not attachment_id:
+                    return JSONResponse({"success": False, "error": "attachment_id is required for Mailshot previews."}, status_code=422)
+                from distr.core.incoming.mailshot_media import fetch_mailshot_attachment_bytes
+
+                def _run_mailshot():
+                    return fetch_mailshot_attachment_bytes(
+                        message_id,
+                        attachment_id,
+                        filename_hint=filename_hint,
+                    )
+
+                data, mime, resolved_name = await asyncio.to_thread(_run_mailshot)
+            else:
+                from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+
+                def _run_gmail():
+                    connector = GoogleWorkspaceConnector()
+                    if not connector.is_connected():
+                        raise FileNotFoundError("Connect Gmail in Settings to preview attachments.")
+                    result = connector.fetch_email_attachment_bytes(
+                        message_id,
+                        attachment_id,
+                        content_id=content_id,
+                    )
+                    if not result:
+                        raise FileNotFoundError("Attachment could not be loaded.")
+                    return result
+
+                data, mime, resolved_name = await asyncio.to_thread(_run_gmail)
+            media_type = (mime or "application/octet-stream").split(";", 1)[0].strip() or "application/octet-stream"
+            safe_name = Path(resolved_name or filename_hint or "attachment").name.replace('"', "")
+            return Response(
+                content=data,
+                media_type=media_type,
+                headers={
+                    "Cache-Control": "private, max-age=600",
+                    "Content-Disposition": f'inline; filename="{safe_name}"',
+                },
+            )
+        except FileNotFoundError as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=404)
+        except Exception as e:
+            logger.warning("Incoming mail attachment serve failed: %s", e)
             return JSONResponse({"success": False, "error": str(e)}, status_code=502)
 
 
@@ -226,8 +303,12 @@ def register_routes(router, templates):
         try:
             from distr.core.incoming.proposals import create_proposal_thread
 
+            from distr.core.incoming.proposals import proposal_thread_attachment_report
+
             chat_id = await asyncio.to_thread(create_proposal_thread, proposal, start_work=True)
-            return JSONResponse({"success": True, "chat_id": chat_id})
+            # Files that could not be fetched never block the thread; report them.
+            report = await asyncio.to_thread(proposal_thread_attachment_report, chat_id)
+            return JSONResponse({"success": True, "chat_id": chat_id, **report})
         except Exception as e:
             logger.error("Proposal thread creation failed: %s", e, exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -246,11 +327,67 @@ def register_routes(router, templates):
         try:
             from distr.core.incoming.proposals import dismiss_proposal
 
+            from distr.core.incoming.proposals import dismissal_receipt_keys
+
             dismissed = await asyncio.to_thread(dismiss_proposal, proposal)
-            return JSONResponse({"success": True, "dismissed": dismissed})
+            receipt_keys = dismissal_receipt_keys(proposal)
+            return JSONResponse({
+                "success": True, "dismissed": dismissed,
+                "key": receipt_keys[0], "receipt_keys": receipt_keys,
+                "upstream_dismissed": any(k.startswith("tensology:") for k in receipt_keys),
+            })
         except Exception as e:
             logger.error("Proposal dismiss failed: %s", e, exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.post("/workflows/studio/incoming/proposals/restore")
+    async def workflow_studio_proposal_restore(request: Request):
+        """Undo a dismissal: delete the local receipt(s). Never calls Tensology."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        key = str((body or {}).get("key") or "").strip() if isinstance(body, dict) else ""
+        if not key:
+            return JSONResponse({"success": False, "error": "A dismissal key is required."}, status_code=422)
+        try:
+            from distr.core.incoming.proposals import undismiss_proposal
+
+            result = await asyncio.to_thread(undismiss_proposal, key)
+            return JSONResponse({"success": True, **result})
+        except Exception as e:
+            logger.error("Proposal restore failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.delete("/workflows/studio/incoming/proposals/dismissed")
+    async def workflow_studio_hide_dismissed_proposal(request: Request):
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        key = str(body.get('key') or '').strip() if isinstance(body, dict) else ''
+        if not key:
+            return JSONResponse({'success':False, 'error':'A dismissal key is required.'}, status_code=422)
+        try:
+            from distr.core.incoming.proposals import hide_dismissed_proposal
+            result = await asyncio.to_thread(hide_dismissed_proposal, key)
+            return JSONResponse({'success':True, **result})
+        except Exception:
+            logger.exception('Dismissal history hide failed')
+            return JSONResponse({'success':False, 'error':'Could not remove the entry from history.'}, status_code=500)
+
+    @router.get("/workflows/studio/incoming/proposals/dismissed")
+    async def workflow_studio_proposals_dismissed(limit: int = 20):
+        """Recently dismissed proposals (titles only when still cached in memory)."""
+        try:
+            from distr.core.incoming.proposals import list_dismissed_proposals
+
+            rows = await asyncio.to_thread(list_dismissed_proposals, limit)
+            return JSONResponse({"success": True, "dismissed": rows,
+                                 "restore_immediate": True, "history_delete": True})
+        except Exception as e:
+            logger.error("Dismissed proposals load failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "dismissed": [], "error": str(e)}, status_code=500)
 
 
     @router.post("/workflows/intake/inbox/{event_id}/action")

@@ -209,6 +209,17 @@ def build_tasks(workspace_id: int, *, tasks: list[dict], expected_revisions: dic
                 if revision != expected:
                     raise PlanBuildConflict(f"Stale plan revision: {item_id}")
 
+            # Interface context (generated): deterministic page descriptions + node notes for tasks whose
+            # sources include Interface items; appended BEFORE contracts/digests so edit detection still works.
+            from distr.core.planning.interface_conventions import INTERFACE_TYPES, interface_context, with_interface_context
+            by_item = {item.id: item for item in current_items}
+            for task in graph.values():
+                sources = [by_item[i] for i in task["source_item_ids"] if i in by_item and by_item[i].item_type in INTERFACE_TYPES]
+                if not sources:
+                    continue
+                block = interface_context([{"item_type": s.item_type, "content_format": s.content_format,
+                                            "content": s.content or "", "title": s.title} for s in sources])
+                task["description"] = with_interface_context(task["description"], block)
             identities = {key: f"plan:{workspace_id}:task:{key}" for key in graph}
             existing = db.query(KanbanTicket).filter(
                 KanbanTicket.source_provider == "plan",

@@ -110,6 +110,81 @@ def _scheduled_timing_metadata(due_at: datetime | None) -> dict[str, Any]:
     return _timing(due_at)
 
 
+
+def _action_config_dict(row) -> dict[str, Any]:
+    raw = getattr(row, "action_config", None)
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _local_calendar_date(moment: datetime, timezone_name: str | None):
+    from distr.core.workflow.scheduler import _utc_naive_to_local_wall
+
+    return _utc_naive_to_local_wall(moment, timezone_name).date()
+
+
+def _should_skip_missed_or_daily_cap(session, row, sched: dict[str, Any], now: datetime) -> bool:
+    """Return True when this due occurrence must be advanced without dispatch.
+
+    Honours action_config:
+    - late_policy=skip_missed: due local date before today is not catch-up-run
+    - max_scheduled_runs_per_local_day: skip if that many completed scheduled
+      runs already exist for today's local date
+    """
+    from distr.core.db.automation import AutomationRun
+
+    action = _action_config_dict(row)
+    late_policy = str(action.get("late_policy") or "").strip().lower()
+    tz = sched.get("timezone") or None
+    due_at = row.next_run_at
+    if due_at is None:
+        return False
+    today = _local_calendar_date(now, tz)
+    due_day = _local_calendar_date(due_at, tz)
+    if late_policy == "skip_missed" and due_day < today:
+        return True
+    try:
+        cap = int(action.get("max_scheduled_runs_per_local_day") or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    if cap <= 0:
+        return False
+    # Count completed non-manual scheduled runs whose start falls on local today.
+    from distr.core.workflow.scheduler import _utc_naive_to_local_wall
+
+    completed = (
+        session.query(AutomationRun)
+        .filter(
+            AutomationRun.automation_id == row.id,
+            AutomationRun.status == "completed",
+        )
+        .all()
+    )
+    count_today = 0
+    for run in completed:
+        started = run.started_at
+        if not started:
+            continue
+        try:
+            data = json.loads(run.run_data or "{}")
+        except Exception:
+            data = {}
+        if data.get("manual") is True:
+            continue
+        if _utc_naive_to_local_wall(started, tz).date() == today:
+            count_today += 1
+            if count_today >= cap:
+                return True
+    return False
+
+
 def run_scheduled_automation(
     automation: dict[str, Any],
     *,
@@ -149,6 +224,35 @@ def run_scheduled_automation(
             if occurrence_key(row.next_run_at, sched.get("timezone") or None) in set(sched.get("ignored_occurrences") or []):
                 row.next_run_at = skip_ignored(row.next_run_at, sched)
                 row.modified_date = now
+                session.commit()
+                return False
+            # Once-per-local-day / skip_missed (action_config): do not stack catch-up
+            # runs after downtime. Used by Merrypak/Snuza daily DB loads.
+            if _should_skip_missed_or_daily_cap(session, row, sched, now):
+                from distr.core.automation.scheduler_advance import advance_next_run_for_automation
+
+                due_skipped = row.next_run_at
+                advance_next_run_for_automation(row)
+                row.modified_date = now
+                session.add(
+                    AutomationRun(
+                        automation_id=row.id,
+                        status="skipped",
+                        started_at=now,
+                        completed_at=now,
+                        run_data=json.dumps(
+                            {
+                                **_scheduled_timing_metadata(due_skipped),
+                                "phase": "scheduled_automation",
+                                "due_at": due_skipped.isoformat() if due_skipped else None,
+                                "summary": "Skipped missed/extra occurrence (late_policy=skip_missed or daily cap).",
+                                "retry_policy": "none",
+                                "late_policy": "skip_missed",
+                            },
+                            default=str,
+                        ),
+                    )
+                )
                 session.commit()
                 return False
         due_at = row.next_run_at

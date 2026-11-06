@@ -3702,41 +3702,18 @@ async def run_project_task(
             logger.warning("Project CLI provider preflight failed unexpectedly", exc_info=True)
     if provider_financial is not None:
         preflight_payload["provider_financial"] = provider_financial.to_dict()
-    if provider_financial is not None and provider_financial.ready is False:
-        msg = (
-            f"{provider_financial.message} No model work was started. "
-            "Would you like to choose another route or proceed anyway?"
-        )
-        append_execution_event(
-            execution_session_id,
-            "provider_preflight",
-            status="waiting",
-            message=msg,
-            payload=preflight_payload,
-        )
-        complete_execution_session(
-            execution_session_id,
-            success=False,
-            output_packet=_normalized_output_packet(
-                {
-                    "backend_id": backend_id,
-                    "engine": backend_id,
-                    "success": False,
-                    "error": msg,
-                },
-                preflight=preflight_payload["preflight"],
-                provider_preflight=provider_financial.to_dict(),
-            ),
-            error=msg,
-        )
-        return BackendTaskResult(
-            False,
-            backend_id,
-            backend_id,
-            error=msg,
-            execution_session_id=execution_session_id,
-            waits_for_human=True,
-        )
+        # Credit/readiness is informational only; never block dispatch or swap harness.
+        if provider_financial.ready is False:
+            append_execution_event(
+                execution_session_id,
+                "provider_preflight",
+                status="completed",
+                message=(
+                    f"{provider_financial.message} Continuing on the configured harness "
+                    "(budget/readiness no longer gates dispatch)."
+                ),
+                payload=preflight_payload,
+            )
 
     append_execution_event(
         execution_session_id,
@@ -3924,6 +3901,14 @@ async def run_project_task(
     result.output = str(redact_handoff_payload(result.output or ""))
     result.error = str(redact_handoff_payload(result.error or ""))
 
+    # A successful CLI exit is not proof that its task completed. Apply explicit
+    # worker blockers before persisting either the session or Development state.
+    task_outcome = _normalized_output_packet(result)
+    if task_outcome["status"] in {"blocked", "failed"}:
+        result.success = False
+        result.waits_for_human = bool(task_outcome["waits_for_human"])
+        result.error = task_outcome["error"]
+
     result.execution_session_id = execution_session_id
     git_status_after = _git_status_short(task.folder)
     workspace_state_delta = (
@@ -4060,6 +4045,7 @@ async def run_project_task(
     complete_execution_session(
         execution_session_id,
         success=result.success,
+        status=_normalized_output_packet(result)["status"],
         output_packet=_normalized_output_packet(
             result,
             ticket_id=ticket_id,

@@ -37,10 +37,7 @@ from distr.core.project_cli_backends.registry import (
 )
 from distr.core.workflow.step_executor import (
     StepExecutorMixin,
-    _exclude_failed_route_candidates,
     _exclude_proven_unhealthy_retry_candidates,
-    _known_fallback_blocker,
-    _paid_fallback_requires_approval,
     _project_python_runtime_hint,
     _route_required_capabilities,
     _workflow_run_cancelled,
@@ -118,76 +115,6 @@ def test_cancelled_run_is_detected_before_provider_fallback(monkeypatch):
     )
 
     assert _workflow_run_cancelled(112) is True
-
-
-def test_free_local_route_requires_approval_before_paid_codex_fallback():
-    assert _paid_fallback_requires_approval(
-        {"backend": "pi", "model_provider": "ollama", "model": "ornith:35b"},
-        {"backend": "codex", "model": "auto"},
-        {},
-    ) is True
-    assert _paid_fallback_requires_approval(
-        {"backend": "pi", "model_provider": "openrouter", "model": "free/model:free"},
-        {"backend": "pi", "model_provider": "openrouter", "model": "other/model:free"},
-        {},
-    ) is False
-
-
-def test_claude_fallback_always_requires_explicit_approval_after_paid_route():
-    assert _paid_fallback_requires_approval(
-        {"backend": "codex", "model": "auto"},
-        {"backend": "claude_code", "model": "auto"},
-        {},
-    ) is True
-
-
-def test_known_cli_credit_failure_blocks_repeat_dispatch(monkeypatch):
-    certification = SimpleNamespace(
-        evidence={"error": "Credit balance is too low"},
-    )
-    store = SimpleNamespace(get=lambda *_args: certification)
-    monkeypatch.setattr(
-        "distr.core.qualification.ProviderCertificationStore",
-        lambda: store,
-    )
-
-    assert _known_fallback_blocker(
-        {"backend": "claude_code", "model": "auto"},
-        required_capabilities=["code"],
-    ) == "Credit balance is too low"
-
-
-def test_failed_readiness_model_is_not_recommended_again():
-    candidates = [
-        {"model": "google/gemma-4-31b-it:free", "name": "Gemma"},
-        {"model": "cohere/north-mini-code:free", "name": "North"},
-    ]
-
-    assert _exclude_failed_route_candidates(
-        candidates,
-        failed_model="GOOGLE/GEMMA-4-31B-IT:FREE",
-    ) == [{"model": "cohere/north-mini-code:free", "name": "North"}]
-
-
-def test_all_previously_failed_models_are_excluded_from_retry_catalog():
-    candidates = [
-        {"model": "google/gemma-4-31b-it:free"},
-        {"model": "google/gemma-4-26b-a4b-it:free"},
-        {"model": "cohere/north-mini-code:free"},
-    ]
-
-    assert _exclude_failed_route_candidates(
-        candidates,
-        failed_models=[
-            "google/gemma-4-31b-it:free",
-            "google/gemma-4-26b-a4b-it:free",
-        ],
-    ) == [{"model": "cohere/north-mini-code:free"}]
-    assert _paid_fallback_requires_approval(
-        {"backend": "pi", "model_provider": "ollama", "model": "ornith:35b"},
-        {"backend": "codex", "model": "auto"},
-        {"auto_approve_paid_failover": True},
-    ) is False
 
 
 def test_project_execution_limited_model_is_not_offered_as_retry(monkeypatch):
@@ -617,7 +544,7 @@ def test_auto_step_policy_routes_medium_implementation_to_configured_ornith(monk
     assert resolved["model_provider"] == "ollama"
     assert resolved["auto_detected"] is True
     assert resolved["step_role"] == "implementation"
-    assert resolved["fallback_chain"][0]["backend"] == "codex"
+    assert resolved.get("fallback_chain") == []
 
 
 def test_auto_step_policy_can_plan_with_codex_then_implement_with_ornith(monkeypatch):
@@ -712,7 +639,7 @@ def test_auto_step_policy_honors_free_local_preference_before_paid_high_risk_esc
     assert implementation["model"] == "ornith:35b"
     assert implementation["model_provider"] == "ollama"
     assert implementation["task_profile"]["intent"] == "implementation"
-    assert implementation["fallback_chain"][0]["backend"] == "codex"
+    assert implementation.get("fallback_chain") == []
 
 
 def test_auto_step_policy_uses_independent_hy3_review_after_codex():
@@ -765,14 +692,25 @@ def test_auto_step_policy_preserves_evidence_backed_failover_on_loop_retry():
     assert resolved["fallback_from"] == "pi"
 
 
-def test_auto_fallback_ladder_keeps_claude_last():
+def test_runtime_provider_fallback_helper_removed_and_ready_route_keeps_harness():
+    assert not hasattr(StepExecutorMixin, "_runtime_provider_fallback_route")
+    route = {
+        "backend": "codex",
+        "model": "auto",
+        "fallback_backend": "claude_code",
+        "fallback_chain": [{"backend": "pi", "automatic": True}],
+    }
+    kept = StepExecutorMixin._ready_route_or_fallback(route)
+    assert kept["backend"] == "codex"
+    assert kept.get("model") == "auto"
+
+
+def test_auto_fallback_ladder_is_removed_for_deterministic_harness():
     chain = build_auto_fallback_chain(
         {"backend": "pi", "model": "ornith:35b", "model_provider": "ollama"},
         settings={"openrouter_enabled": True, "openrouter_key": "configured"},
     )
-    assert [item["backend"] for item in chain] == ["pi", "codex", "cursor", "claude_code"]
-    assert chain[0]["model"] == "tencent/hy3-preview"
-    assert chain[-1]["backend"] == "claude_code"
+    assert chain == []
 
 
 def test_high_complexity_auto_uses_stronger_installed_local_not_configured_9b(monkeypatch):
@@ -2538,62 +2476,6 @@ def test_live_harness_accepts_pi_dynamic_model_for_auto_policy(monkeypatch):
     assert session["selected_model"] == "openrouter/free"
 
 
-def test_runtime_provider_failover_defaults_between_pi_and_codex():
-    assert StepExecutorMixin._runtime_provider_fallback_route(
-        {"backend": "pi", "model": "openrouter/free"},
-        {},
-    ) == {"backend": "codex", "model": "auto"}
-    assert StepExecutorMixin._runtime_provider_fallback_route(
-        {"backend": "codex", "model": "auto"},
-        {},
-    ) == {"backend": "claude_code", "model": "auto"}
-
-
-def test_runtime_provider_failover_uses_auto_chain_and_skips_interactive_cursor():
-    route = {
-        "backend": "codex",
-        "model": "auto",
-        "fallback_chain": [
-            {"backend": "cursor", "model": "auto", "automatic": False},
-            {
-                "backend": "pi",
-                "model": "tencent/hy3-preview",
-                "model_provider": "openrouter",
-                "automatic": True,
-            },
-            {"backend": "claude_code", "model": "auto", "automatic": True},
-        ],
-    }
-    assert StepExecutorMixin._runtime_provider_fallback_route(route, {}) == {
-        "backend": "pi",
-        "model": "tencent/hy3-preview",
-        "model_provider": "openrouter",
-    }
-
-
-def test_runtime_provider_failover_inserts_codex_before_claude_for_partial_pi_chain():
-    route = {
-        "backend": "pi",
-        "model": "vendor/text-only",
-        "fallback_chain": [
-            {"backend": "cursor", "model": "auto", "automatic": False},
-            {"backend": "claude_code", "model": "auto", "automatic": True},
-        ],
-    }
-
-    assert StepExecutorMixin._runtime_provider_fallback_route(route, {}) == {
-        "backend": "codex",
-        "model": "auto",
-    }
-
-
-@pytest.mark.parametrize("message", ["Credit balance is too low", "Insufficient credits"])
-def test_provider_billing_messages_fail_closed(message):
-    from distr.core.workflow.step_executor import _agent_result_passed
-
-    assert _agent_result_passed(message) is False
-
-
 def test_qualification_fault_requires_process_switch_and_is_consumed_once(monkeypatch):
     from distr.core.workflow.step_executor import _consume_qualification_fault
 
@@ -2673,25 +2555,6 @@ def test_planning_handoff_is_judged_by_its_named_contract_not_ticket_completion(
         "context_packet: partial",
         ["context_packet", "unknowns"],
     )
-
-
-def test_runtime_provider_failover_can_be_disabled_or_scoped():
-    assert StepExecutorMixin._runtime_provider_fallback_route(
-        {"backend": "pi"},
-        {"allow_provider_failover": False},
-    ) == {}
-    assert StepExecutorMixin._runtime_provider_fallback_route(
-        {"backend": "pi"},
-        {
-            "fallback_backend": "claude_code",
-            "fallback_model": "sonnet",
-            "fallback_model_provider": "anthropic",
-        },
-    ) == {
-        "backend": "claude_code",
-        "model": "sonnet",
-        "model_provider": "anthropic",
-    }
 
 
 def test_step_override_preserves_specific_provider_and_model():

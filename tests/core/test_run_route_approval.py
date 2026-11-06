@@ -67,6 +67,7 @@ def test_apply_run_route_approval_approve_updates_execution_route(
             run_data=json.dumps(
                 {
                     "waiting_kind": "provider_preflight",
+                    "provider_preflight": {"ready": False, "message": "Ollama model ornith:35b is not loaded"},
                     "waiting_prompt": "Use Codex?",
                     "waiting_result": "Use Codex?",
                     "waiting_passed": True,
@@ -119,6 +120,7 @@ def test_apply_run_route_approval_approve_updates_execution_route(
         run_id,
         approved=True,
         synchronous_redispatch=synchronous_redispatch,
+        approved_by="telegram user 42 via telegram_callback",
     )
     assert result["success"] is True
     assert result["approved"] is True
@@ -145,7 +147,7 @@ def test_apply_run_route_approval_approve_updates_execution_route(
         assert data["step_routes"]["99"]["model"] == "independent-review-model"
         assert data["step_role_routes"]["planning"]["backend"] == "codex"
         assert data["step_role_routes"]["review"]["model"] == "independent-review-model"
-        assert data["approved_provider_replacements"][-1] == {
+        assert {k: data["approved_provider_replacements"][-1][k] for k in ("from_backend", "from_model", "to_backend", "to_model")} == {
             "from_backend": "pi",
             "from_model": "ornith:35b",
             "to_backend": "codex",
@@ -212,6 +214,8 @@ def test_coordination_revision_preserves_approved_provider_replacement():
         "from_model": "retired/free-model",
         "to_backend": "codex",
         "to_model": "auto",
+        "approved_by": "telegram user 42 via telegram_callback",
+        "unready_reason": "model retired",
     }])
 
     assert updated["planning"]["backend"] == "codex"
@@ -237,6 +241,7 @@ def test_free_model_selection_preserves_visible_codex_escalation(tmp_path, monke
             current_step_id=step.id,
             run_data=json.dumps({
                 "waiting_kind": "provider_preflight",
+                "provider_preflight": {"ready": False, "message": "Ollama model ornith:35b is not loaded"},
                 "execution_route": {
                     "backend": "pi",
                     "model": "ornith:35b",
@@ -277,7 +282,7 @@ def test_free_model_selection_preserves_visible_codex_escalation(tmp_path, monke
         MagicMock(return_value={"success": True}),
     )
 
-    result = apply_run_provider_model_selection(run_id, 0)
+    result = apply_run_provider_model_selection(run_id, 0, approved_by="web UI user paul")
 
     assert result["success"] is True
     assert result["execution_route"]["paid_fallback_route"]["backend"] == "codex"

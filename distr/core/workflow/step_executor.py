@@ -68,30 +68,6 @@ def _project_python_runtime_hint(project_folder: str, ticket_context: str) -> st
     )
 
 
-def _exclude_failed_route_candidates(
-    candidates: Any,
-    *,
-    failed_model: str = "",
-    failed_models: Any = None,
-) -> list[dict[str, Any]]:
-    """Never recommend the same model that just failed readiness."""
-    failed = {
-        str(item or "").strip().lower()
-        for item in (failed_models if isinstance(failed_models, (list, tuple, set)) else [])
-        if str(item or "").strip()
-    }
-    if str(failed_model or "").strip():
-        failed.add(str(failed_model or "").strip().lower())
-    output: list[dict[str, Any]] = []
-    for item in candidates if isinstance(candidates, list) else []:
-        candidate = dict(item or {})
-        model = str(candidate.get("model") or "").strip().lower()
-        if not model or model in failed:
-            continue
-        output.append(candidate)
-    return output
-
-
 def _exclude_proven_unhealthy_retry_candidates(candidates: Any) -> list[dict[str, Any]]:
     """Do not recommend a model whose real project execution already failed."""
     routes = [dict(item or {}) for item in candidates if isinstance(item, dict)] if isinstance(candidates, list) else []
@@ -325,126 +301,6 @@ def _computer_use_cancelled(
         return False
 
 
-def _paid_fallback_requires_approval(
-    route: dict[str, Any], fallback: dict[str, Any], config: dict[str, Any]
-) -> bool:
-    """Require consent before Auto crosses into paid or final-expense work."""
-    if not fallback or bool(config.get("auto_approve_paid_failover")):
-        return False
-    fallback_backend = str(fallback.get("backend") or "").strip().lower()
-    # Claude is the deliberately last and most expensive recovery tier.  It
-    # must never become a silent retry merely because the route immediately
-    # before it was another paid worker such as Codex.
-    if fallback_backend == "claude_code":
-        return True
-    current_provider = str(route.get("model_provider") or "").strip().lower()
-    current_model = str(route.get("model") or "").strip().lower()
-    current_is_free = current_provider in {"ollama", "local"} or current_model.endswith(":free")
-    if not current_is_free:
-        return False
-    fallback_provider = str(fallback.get("model_provider") or "").strip().lower()
-    fallback_model = str(fallback.get("model") or "auto").strip().lower()
-    fallback_is_free = fallback_provider in {"ollama", "local"} or fallback_model.endswith(":free")
-    fallback_is_paid = fallback_backend in {"codex", "claude_code", "cursor"} or (
-        fallback_provider == "openrouter" and not fallback_is_free
-    )
-    return fallback_is_paid and not fallback_is_free
-
-
-def _known_fallback_blocker(
-    fallback: dict[str, Any], *, required_capabilities: list[str] | None = None
-) -> str:
-    """Return a durable reason a fallback must not be dispatched again."""
-    backend = str(fallback.get("backend") or "").strip().lower()
-    model = str(fallback.get("model") or "auto").strip() or "auto"
-    if not backend:
-        return ""
-    try:
-        from distr.core.qualification import ProviderCertificationStore
-
-        store = ProviderCertificationStore()
-        capabilities = list(dict.fromkeys([
-            *(required_capabilities or []),
-            "project_execution", "code", "files", "text",
-        ]))
-        for capability in capabilities:
-            certification = store.get(backend, model, str(capability))
-            evidence = certification.evidence or {}
-            message = str(evidence.get("error") or evidence.get("message") or "").strip()
-            normalized = message.lower()
-            if any(marker in normalized for marker in (
-                "credit balance is too low",
-                "insufficient credit",
-                "insufficient quota",
-                "billing failed",
-                "authentication failed",
-                "not authenticated",
-            )):
-                return message
-    except Exception:
-        logger.debug("Could not consult fallback certification history", exc_info=True)
-    return ""
-
-
-def _hosted_free_recommendation(candidate: dict[str, Any], *, complexity: str) -> str:
-    """Explain hosted Auto selection in operator language, not router jargon."""
-    name = str(candidate.get("name") or candidate.get("model") or "the next model").strip()
-    parameter_billions = candidate.get("parameter_billions")
-    try:
-        size = float(parameter_billions) if parameter_billions is not None else 0.0
-    except (TypeError, ValueError):
-        size = 0.0
-    details: list[str] = []
-    if size:
-        details.append(f"{size:g}B")
-    if candidate.get("supports_tools"):
-        details.append("tool-capable")
-    context = int(candidate.get("context_length") or 0)
-    if context:
-        details.append(f"{context // 1024}K context")
-    descriptor = f" ({', '.join(details)})" if details else ""
-    is_large_step = str(complexity or "medium").lower() in {"high", "complex", "critical"}
-    if is_large_step and size and size < 40:
-        return (
-            "The stronger compatible hosted free models are unavailable, so the best "
-            f"remaining free option is {name}{descriptor}."
-        )
-    provider = str(candidate.get("model_provider") or candidate.get("provider") or "hosted provider").strip()
-    provider_label = "OpenRouter" if provider.lower() == "openrouter" else provider
-    return (
-        f"This work runs on {provider_label}, so your Mac's memory is not the size limit. "
-        f"The strongest healthy compatible free option is {name}{descriptor}."
-    )
-
-
-def _provider_rate_limited(*, message: str = "", http_status: Any = None) -> bool:
-    """Recognize provider-wide throttling so Auto does not roulette models.
-
-    A 429 is usually capacity or account throttling for the provider route, not
-    evidence that the next identifier in the same free catalogue will work.
-    Prefer a different healthy provider/local route before asking the operator
-    to approve another doomed readiness probe.
-    """
-    lowered = str(message or "").strip().lower()
-    # OpenRouter explicitly distinguishes an upstream model's shared free-tier
-    # capacity from account/provider throttling. In that case another ranked
-    # free model is a meaningful retry; treating every 429 as provider-wide
-    # incorrectly skipped the remaining candidates and jumped to paid Codex.
-    upstream_model_limit = any(
-        marker in lowered
-        for marker in (
-            "rate-limited upstream",
-            "upstream rate limit",
-            "temporarily rate-limited upstream",
-        )
-    )
-    if upstream_model_limit:
-        return False
-    if str(http_status or "").strip() == "429":
-        return True
-    return "429" in lowered or "rate limit" in lowered or "too many requests" in lowered
-
-
 def _ticket_requires_read_only_execution(ticket_context: str) -> bool:
     """Preserve an explicit ticket-wide no-mutation contract across all steps."""
     text = " ".join(str(ticket_context or "").lower().split())
@@ -491,9 +347,6 @@ class StepExecutorMixin:
     def _execute(self, step_data: Dict[str, Any], run_id: Optional[int]) -> Dict[str, Any]:
         """Route to the correct step-type handler."""
         step_data = self._apply_pending_correction_context(step_data, run_id)
-        blocked = self._power_budget_gate(run_id, step_data)
-        if blocked is not None:
-            return blocked
         action_type = step_data["action_type"]
         config = self._build_config(step_data)
         handlers = {
@@ -539,74 +392,6 @@ class StepExecutorMixin:
             self._consume_power_budget_after_step(run_id, step_data, result)
         return result
 
-    def _power_budget_gate(
-        self,
-        run_id: Optional[int],
-        step_data: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
-        """Stop-and-ask before a step when the run power budget is already exhausted."""
-        if run_id is None:
-            return None
-        try:
-            from distr.core.workflow.blueprint_adherence import (
-                default_run_power_budget,
-                ensure_run_blueprint_defaults,
-            )
-
-            with get_session() as db:
-                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-                if not run:
-                    return None
-                try:
-                    run_data = json.loads(run.run_data or "{}") or {}
-                except Exception:
-                    run_data = {}
-                complexity = str(
-                    ((run_data.get("execution_route") or {}) if isinstance(run_data.get("execution_route"), dict) else {}).get("complexity")
-                    or run_data.get("complexity")
-                    or "medium"
-                )
-                run_data = ensure_run_blueprint_defaults(run_data, complexity=complexity)
-                budget = dict(run_data.get("power_budget") or default_run_power_budget(complexity=complexity))
-                exhausted = bool(budget.get("exhausted")) or (
-                    int(budget.get("turns_used") or 0) >= int(budget.get("max_turns") or 0)
-                    or int(budget.get("tokens_used") or 0) >= int(budget.get("max_tokens") or 0)
-                )
-                if not exhausted:
-                    run.run_data = json.dumps(run_data, default=str)
-                    db.commit()
-                    return None
-                budget["exhausted"] = True
-                interrupt = {
-                    "should_interrupt": True,
-                    "reason": "The run power budget was exhausted.",
-                    "question": (
-                        f"This run used {budget.get('turns_used')}/{budget.get('max_turns')} turns and "
-                        f"{budget.get('tokens_used')}/{budget.get('max_tokens')} tokens "
-                        f"(~${float(budget.get('estimated_cost_usd') or 0):.4f}). "
-                        "Raise the budget, change approach, or stop?"
-                    ),
-                    "recommendation": "Raise the budget only if acceptance criteria still justify the spend.",
-                    "options": ["Raise budget", "Change approach", "Stop"],
-                }
-                run_data["power_budget"] = budget
-                run_data["power_budget_pending"] = True
-                run_data["waiting_kind"] = "control_interrupt"
-                run_data["waiting_prompt"] = interrupt["question"]
-                run_data["interrupt_context"] = interrupt
-                run_data["human_intervention_state"] = "needs_human_input"
-                run_data["next_action"] = "needs_human_input"
-                run.run_data = json.dumps(run_data, default=str)
-                db.commit()
-                return {
-                    "output": interrupt["question"],
-                    "passed": False,
-                    "power_budget_exhausted": True,
-                    "step_id": step_data.get("id"),
-                }
-        except Exception:
-            logger.debug("_power_budget_gate failed", exc_info=True)
-            return None
 
     def _consume_power_budget_after_step(
         self,
@@ -626,8 +411,21 @@ class StepExecutorMixin:
             tokens_out = (result or {}).get("tokens_out")
             if not explicit_tokens and (tokens_in is not None or tokens_out is not None):
                 explicit_tokens = int(tokens_in or 0) + int(tokens_out or 0)
+            # Codex and similar CLIs report input_tokens that already include the
+            # cached conversation re-sent every turn. Charge the budget only for
+            # new input (input minus cache reads) plus output so a long context
+            # is not counted again on each turn.
+            usage_info = (result or {}).get("usage")
+            if isinstance(usage_info, dict) and tokens_in is not None:
+                try:
+                    cache_read = int(usage_info.get("cacheRead") or 0)
+                    fresh_in = max(0, int(tokens_in or 0) - max(0, cache_read))
+                    explicit_tokens = fresh_in + int(tokens_out or 0)
+                except (TypeError, ValueError):
+                    pass
             # Estimate from output only when the provider reported nothing at all.
-            tokens = explicit_tokens or max(500, (len(output) // 4) + 800)
+            reported_usage = "tokens_used" in (result or {}) or tokens_in is not None or tokens_out is not None
+            tokens = max(0, explicit_tokens) if reported_usage else max(500, (len(output) // 4) + 800)
             model_provider = str(
                 (result or {}).get("model_provider")
                 or (result or {}).get("provider")
@@ -644,19 +442,15 @@ class StepExecutorMixin:
                 if not model_provider:
                     route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
                     model_provider = str(route.get("model_provider") or route.get("provider") or "")
-                run_data, interrupt = consume_run_power_budget(
+                run_data, _interrupt = consume_run_power_budget(
                     run_data,
                     turns=1,
                     tokens=tokens,
                     model_provider=model_provider,
                 )
                 budget = dict(run_data.get("power_budget") or {})
-                if interrupt:
-                    run_data["power_budget_pending"] = True
-                    run_data["waiting_kind"] = "control_interrupt"
-                    run_data["waiting_prompt"] = interrupt["question"]
-                    run_data["interrupt_context"] = interrupt
-                    run_data["human_intervention_state"] = "needs_human_input"
+                # Budget meters stay informational; never pause the run.
+                run_data.pop("power_budget_pending", None)
                 run.run_data = json.dumps(run_data, default=str)
                 ledger_ticket_id = int(run.ticket_id) if getattr(run, "ticket_id", None) is not None else None
                 db.commit()
@@ -707,7 +501,7 @@ class StepExecutorMixin:
                 emit_orchestration_event(
                     source="workflow",
                     event_type="power_budget_updated",
-                    status="ok" if not interrupt else "waiting",
+                    status="ok",
                     workflow_id=step_data.get("workflow_id"),
                     run_id=int(run_id),
                     step_id=int(step_data.get("id") or 0) or None,
@@ -718,8 +512,7 @@ class StepExecutorMixin:
                     ),
                     payload={
                         "power_budget": budget,
-                        "interrupt": interrupt,
-                        "version_pin": (run_data.get("version_pin") if isinstance(run_data.get("version_pin"), dict) else {}),
+                                                "version_pin": (run_data.get("version_pin") if isinstance(run_data.get("version_pin"), dict) else {}),
                     },
                 )
             except Exception:
@@ -1640,166 +1433,47 @@ class StepExecutorMixin:
                         db.commit()
                     if (
                         provider_preflight is not None
-                        and provider_preflight.ready is True
-                        and str(route.get("model_provider") or "").strip().lower() == "openrouter"
-                        and str(route.get("model") or "").strip().lower().endswith(":free")
-                        and not bool(route.get("paid_first"))
-                    ):
-                        # A readiness probe is only a point-in-time check. Keep
-                        # the current ranked free catalogue on the route so an
-                        # execution-time quota/rate-limit failure can offer the
-                        # next free model instead of jumping straight to Codex.
-                        try:
-                            from distr.core.project_cli_backends.provider_preflight import (
-                                rank_openrouter_free_models,
-                            )
-                            from distr.core.project_cli_backends.policy_manager import (
-                                _apply_recent_model_health,
-                            )
-
-                            free_retry_candidates = _exclude_failed_route_candidates(
-                                _exclude_proven_unhealthy_retry_candidates(_apply_recent_model_health(
-                                    rank_openrouter_free_models(
-                                        api_key=str((routing_settings or {}).get("openrouter_key") or ""),
-                                        complexity=str(route.get("complexity") or "medium"),
-                                        required_capabilities=_route_required_capabilities(
-                                            config_local, route, run_data_local
-                                        ),
-                                        limit=8,
-                                    )
-                                )),
-                                failed_models=run_data_local.get("provider_failed_models") or [],
-                            )
-                            if free_retry_candidates:
-                                route["free_model_retry_candidates"] = free_retry_candidates
-                                route["paid_fallback_route"] = self._runtime_provider_fallback_route(
-                                    route,
-                                    config_local,
-                                )
-                        except Exception:
-                            logger.warning(
-                                "Could not prepare execution-time free-model alternatives",
-                                exc_info=True,
-                            )
-                    if (
-                        provider_preflight is not None
                         and provider_preflight.ready is False
                         and not bool(route.get("provider_preflight_override"))
                     ):
-                        free_candidates = []
-                        previously_failed = list(run_data_local.get("provider_failed_models") or [])
-                        failed_model = str(route.get("model") or "")
-                        if failed_model and failed_model.lower() not in {
-                            str(item or "").lower() for item in previously_failed
-                        }:
-                            previously_failed.append(failed_model)
-                        # An account-wide block (bad key, no credit, balance
-                        # gate) fails every OpenRouter model the same way, so
-                        # offering another free model only loops the approval.
-                        # Use the configured fallback (e.g. Pi/Kilo) instead.
-                        account_wide_block = (
-                            provider_preflight.http_status in (401, 402)
-                            or getattr(provider_preflight, "available_credit_usd", None) is not None
+                        # Never pause or swap harness on a failed readiness/credit
+                        # check. Keep the configured route and surface the notice.
+                        notice = str(provider_preflight.message or "Provider readiness failed.").strip()
+                        route["provider_preflight_override"] = True
+                        route["rationale"] = (
+                            f"{notice} Continuing on the configured harness without fallback."
                         )
-                        if (
-                            str(route.get("model_provider") or "").strip().lower() == "openrouter"
-                            and not account_wide_block
-                            and not _provider_rate_limited(
-                                message=str(provider_preflight.message or ""),
-                                http_status=provider_preflight.http_status,
-                            )
-                        ):
-                            try:
-                                from distr.core.project_cli_backends.provider_preflight import rank_openrouter_free_models
-                                from distr.core.project_cli_backends.policy_manager import _apply_recent_model_health
-
-                                free_candidates = _exclude_failed_route_candidates(
-                                    _exclude_proven_unhealthy_retry_candidates(_apply_recent_model_health(
-                                        rank_openrouter_free_models(
-                                            api_key=str((routing_settings or {}).get("openrouter_key") or ""),
-                                            complexity=str(route.get("complexity") or "medium"),
-                                            required_capabilities=_route_required_capabilities(
-                                                config_local, route, run_data_local
-                                            ),
-                                            limit=6,
-                                        )
-                                    )),
-                                    failed_models=previously_failed,
-                                )
-                            except Exception:
-                                logger.warning("Could not fetch ranked OpenRouter free candidates", exc_info=True)
-                        fallback = self._runtime_provider_fallback_route(route, config_local)
-                        if fallback and bool(route.get("paid_first")):
-                            # Pinned/Tensology routes: the configured paid
-                            # fallback comes before any free model.
-                            free_candidates = []
-                        proposed = dict((free_candidates[0] if free_candidates else None) or fallback or route)
-                        proposed["provider_preflight_override"] = not bool(fallback)
-                        if free_candidates:
-                            proposed["provider_preflight_override"] = False
-                            proposed["source"] = "provider_preflight_free_recommendation"
-                        proposed["rationale"] = (
-                            f"{provider_preflight.message} "
-                            + (
-                                "Try the recommended current free model after a readiness probe."
-                                if free_candidates
-                                else ("Use this alternative route instead." if fallback else
-                                "Proceed with the selected route only if you explicitly accept this risk.")
-                            )
-                        ).strip()
-                        current_label = " / ".join(
-                            part for part in (
-                                str(route.get("backend") or "pi"),
-                                str(route.get("model_provider") or ""),
-                                str(route.get("model") or "auto"),
-                            ) if part
-                        )
-                        proposed_label = " / ".join(
-                            part for part in (
-                                str(proposed.get("backend") or "pi"),
-                                str(proposed.get("model_provider") or ""),
-                                str(proposed.get("model") or "auto"),
-                            ) if part
-                        )
-                        failure_reason = str(provider_preflight.message or "Provider readiness failed.").strip()
-                        if free_candidates:
-                            recommendation = _hosted_free_recommendation(
-                                proposed,
-                                complexity=str(route.get("complexity") or "medium"),
-                            )
-                            question = (
-                                f"{current_label} failed its readiness check: {failure_reason} "
-                                f"{recommendation} "
-                                "Choose one of the model options below to readiness-check and try it, or Stop."
-                            )
-                        elif fallback:
-                            question = (
-                                f"{current_label} failed its readiness check: {failure_reason} "
-                                f"I recommend {proposed_label}. Approve to use it, or Stop."
-                            )
-                        else:
-                            question = (
-                                f"{current_label} failed its readiness check: {failure_reason} "
-                                "No verified alternative is available. Stop and change the pinned model before retrying."
-                            )
                         if run_row:
                             latest = json.loads(run_row.run_data or "{}") or {}
-                            latest["pending_route_approval"] = proposed
-                            latest["provider_preflight_pending"] = True
                             latest["provider_preflight"] = provider_preflight.to_dict()
-                            latest["provider_free_candidates"] = free_candidates
-                            latest["provider_failed_models"] = previously_failed
-                            latest["provider_fallback_route"] = dict(fallback or {})
-                            latest["provider_preflight_prompt"] = question
-                            latest["waiting_prompt"] = question
+                            latest["provider_preflight_notice"] = notice
+                            latest.pop("provider_preflight_pending", None)
+                            latest.pop("pending_route_approval", None)
+                            latest.pop("provider_fallback_route", None)
+                            latest["execution_route"] = dict(route)
                             run_row.run_data = json.dumps(latest)
                             db.commit()
-                        return {
-                            "output": question,
-                            "passed": True,
-                            "skip_wait": False,
-                            "provider_preflight_pending": True,
-                        }
+                        try:
+                            from distr.core.kanban.ticket_workflow_engagement import (
+                                notify_ticket_workflow_progress,
+                            )
+                            notify_ticket_workflow_progress(
+                                run_id=int(run_id) if run_id is not None else None,
+                                step_id=int(step_data.get("id") or 0) or None,
+                                body=(
+                                    f"Budget/readiness check: {notice} "
+                                    "Continuing on the configured harness (no fallback)."
+                                ),
+                                voice_body=None,
+                                state_fingerprint=f"provider-preflight-notice:{run_id}:{step_data.get('id')}",
+                                priority="normal",
+                                requires_response=False,
+                                audible=False,
+                                allow_voice=False,
+                            )
+                        except Exception:
+                            logger.debug("Could not post provider preflight notice", exc_info=True)
+
                     try:
                         from distr.core.orchestration_events import emit_orchestration_event
 
@@ -2231,333 +1905,9 @@ class StepExecutorMixin:
                             run_row.run_data = json.dumps(run_data_local)
                             db.commit()
                     if handle.result is not None and not bool(handle.result.success):
-                        # Cancellation can arrive while a provider is unwinding.
-                        # Never interpret that failed/terminated worker as a
-                        # reason to launch a fresh fallback after the user has
-                        # already stopped the run.
-                        if _workflow_run_cancelled(run_id):
-                            return handle.result
-                        # A pinned local route must terminate as a local failure.
-                        # Do not turn a report/finalization problem into a hosted
-                        # recommendation after the worker has already completed
-                        # its project work.
-                        if config_local.get("allow_provider_failover", True) is False:
-                            return handle.result
-                        free_retry_candidates = route.get("free_model_retry_candidates")
-                        free_retry_candidates = (
-                            list(free_retry_candidates)
-                            if isinstance(free_retry_candidates, list)
-                            and not bool(route.get("paid_first"))
-                            else []
-                        )
-                        # A local-first Auto route can fail after readiness too.
-                        # Discover hosted-free alternatives at that point so a
-                        # transient local inference failure does not jump
-                        # directly to paid Codex. Hosted selection is ranked by
-                        # capability/capacity because it is not constrained by
-                        # this machine's RAM.
-                        # A locked local workflow must remain local after a
-                        # worker failure. Do not discover hosted alternatives
-                        # here when failover is explicitly disabled: doing so
-                        # produces a misleading OpenRouter recommendation and
-                        # leaks a cloud route into the audit trail.
-                        if (
-                            not free_retry_candidates
-                            and config_local.get("allow_provider_failover", True) is not False
-                            and not bool(route.get("paid_first"))
-                        ):
-                            try:
-                                from distr.core.project_cli_backends.policy_manager import (
-                                    _apply_recent_model_health,
-                                )
-                                from distr.core.project_cli_backends.provider_preflight import (
-                                    rank_openrouter_free_models,
-                                )
-
-                                free_retry_candidates = _exclude_failed_route_candidates(
-                                    _exclude_proven_unhealthy_retry_candidates(_apply_recent_model_health(
-                                        rank_openrouter_free_models(
-                                            api_key=str((routing_settings or {}).get("openrouter_key") or ""),
-                                            complexity=str(route.get("complexity") or "medium"),
-                                            required_capabilities=_route_required_capabilities(
-                                                config_local, route, run_data_local
-                                            ),
-                                            limit=8,
-                                        )
-                                    )),
-                                    failed_model=str(route.get("model") or ""),
-                                    failed_models=run_data_local.get("provider_failed_models") or [],
-                                )
-                                if free_retry_candidates:
-                                    route["free_model_retry_candidates"] = free_retry_candidates
-                                    route["paid_fallback_route"] = self._runtime_provider_fallback_route(
-                                        route,
-                                        config_local,
-                                    )
-                            except Exception:
-                                logger.warning(
-                                    "Could not discover hosted-free alternatives after worker failure",
-                                    exc_info=True,
-                                )
-                        if free_retry_candidates and run_row:
-                            current_model = str(route.get("model") or "")
-                            failed_text = str(
-                                getattr(handle.result, "error", "")
-                                or getattr(handle.result, "output", "")
-                                or "the model did not complete the work contract"
-                            ).strip()
-                            latest = json.loads(run_row.run_data or "{}") or {}
-                            failed_models = {
-                                str(item or "").strip().lower()
-                                for item in (latest.get("provider_failed_models") or [])
-                                if str(item or "").strip()
-                            }
-                            failed_models.add(current_model.strip().lower())
-                            remaining = []
-                            for index, item in enumerate(free_retry_candidates):
-                                candidate = dict(item or {})
-                                candidate_model = str(candidate.get("model") or "").strip()
-                                if candidate_model.lower() == current_model.strip().lower():
-                                    candidate["readiness_failed"] = True
-                                    candidate["execution_failed"] = True
-                                    candidate["execution_failure"] = failed_text[:1000]
-                                    free_retry_candidates[index] = candidate
-                                elif (
-                                    candidate_model.lower() not in failed_models
-                                    and not candidate.get("readiness_failed")
-                                    and not candidate.get("execution_failed")
-                                ):
-                                    remaining.append((index, candidate))
-                            paid_fallback = dict(route.get("paid_fallback_route") or {})
-                            if _provider_rate_limited(message=failed_text):
-                                remaining = []
-                            if remaining:
-                                next_index, recommended = remaining[0]
-                                proposed_retry = dict(recommended)
-                                recommendation = _hosted_free_recommendation(
-                                    recommended,
-                                    complexity=str(route.get("complexity") or "medium"),
-                                )
-                                question = (
-                                    f"{current_model} passed readiness but failed the actual work: {failed_text[:500]} "
-                                    f"{recommendation} It is option {next_index + 1}. "
-                                    "Would you like me to readiness-check and try it?"
-                                )
-                            elif paid_fallback:
-                                proposed_retry = paid_fallback
-                                question = (
-                                    f"{current_model} failed the actual work: {failed_text[:500]} "
-                                    "No ranked free candidates remain. "
-                                    f"I recommend {paid_fallback.get('backend') or 'the fallback'} / "
-                                    f"{paid_fallback.get('model') or 'auto'}. Would you like to proceed?"
-                                )
-                            else:
-                                proposed_retry = {}
-                                question = (
-                                    f"{current_model} failed the actual work: {failed_text[:500]} "
-                                    "No ready candidate remains. Stop the run or change the route."
-                                )
-                            latest["provider_failed_models"] = sorted(failed_models)
-                            latest["provider_free_candidates"] = free_retry_candidates
-                            latest["provider_preflight_prompt"] = question
-                            latest["waiting_prompt"] = question
-                            latest["provider_preflight_pending"] = True
-                            if proposed_retry:
-                                latest["pending_route_approval"] = proposed_retry
-                            run_row.run_data = json.dumps(latest)
-                            db.commit()
-                            return {
-                                "output": question,
-                                "passed": True,
-                                "skip_wait": False,
-                                "provider_preflight_pending": True,
-                            }
-                        fallback = self._runtime_provider_fallback_route(route, config)
-                        fallback_backend = str(fallback.get("backend") or "")
-                        fallback_blocker = _known_fallback_blocker(
-                            fallback,
-                            required_capabilities=[
-                                str(item or "").strip()
-                                for item in (route.get("required_capabilities") or [])
-                                if str(item or "").strip()
-                            ],
-                        )
-                        if fallback_backend and fallback_blocker and run_row:
-                            fallback_label = " / ".join(
-                                part for part in (
-                                    fallback_backend,
-                                    str(fallback.get("model_provider") or ""),
-                                    str(fallback.get("model") or "auto"),
-                                ) if part
-                            )
-                            question = (
-                                f"I did not start {fallback_label} because its latest account check failed: "
-                                f"{fallback_blocker[:500]} Change the route or stop this run."
-                            )
-                            latest = json.loads(run_row.run_data or "{}") or {}
-                            latest["provider_preflight_prompt"] = question
-                            latest["waiting_prompt"] = question
-                            latest["provider_preflight_pending"] = True
-                            latest.pop("pending_route_approval", None)
-                            run_row.run_data = json.dumps(latest)
-                            db.commit()
-                            return {
-                                "output": question,
-                                "passed": True,
-                                "skip_wait": False,
-                                "provider_preflight_pending": True,
-                            }
-                        if (
-                            fallback_backend
-                            and run_row
-                            and _paid_fallback_requires_approval(route, fallback, config)
-                        ):
-                            failed_label = " / ".join(
-                                part for part in (
-                                    str(route.get("backend") or "pi"),
-                                    str(route.get("model_provider") or ""),
-                                    str(route.get("model") or "auto"),
-                                ) if part
-                            )
-                            fallback_label = " / ".join(
-                                part for part in (
-                                    fallback_backend,
-                                    str(fallback.get("model_provider") or ""),
-                                    str(fallback.get("model") or "auto"),
-                                ) if part
-                            )
-                            failure_reason = str(
-                                getattr(handle.result, "error", "")
-                                or getattr(handle.result, "output", "")
-                                or "the free/local worker did not satisfy the step contract"
-                            ).strip()
-                            question = (
-                                f"The free/local route {failed_label} could not finish this step: "
-                                f"{failure_reason[:500]} I recommend {fallback_label} as the paid fallback. "
-                                "Would you like me to proceed?"
-                            )
-                            approved_fallback = dict(fallback)
-                            if bool(config.get("read_only")) and fallback_backend == "codex":
-                                configured_ceiling = int(config.get("timeout_seconds") or 180)
-                                approved_fallback["timeout_seconds"] = min(180, max(30, configured_ceiling))
-                                approved_fallback["codex_reasoning_effort"] = "low"
-                            latest = json.loads(run_row.run_data or "{}") or {}
-                            latest["pending_route_approval"] = approved_fallback
-                            latest["provider_fallback_route"] = approved_fallback
-                            latest["provider_preflight_prompt"] = question
-                            latest["waiting_prompt"] = question
-                            latest["provider_preflight_pending"] = True
-                            run_row.run_data = json.dumps(latest)
-                            db.commit()
-                            return {
-                                "output": question,
-                                "passed": True,
-                                "skip_wait": False,
-                                "provider_preflight_pending": True,
-                            }
-                        if fallback_backend:
-                            from distr.core.project_cli_backends import get_backend
-                            from distr.core.project_cli_backends.ide_handoff import is_ide_backend
-
-                            fallback_adapter = get_backend(fallback_backend)
-                            if (
-                                fallback_backend != backend_id
-                                and not is_ide_backend(fallback_backend)
-                                and fallback_adapter.setup_status().ready
-                                and fallback_adapter.supports(required_capabilities)
-                            ):
-                                try:
-                                    from distr.core.orchestration_events import emit_orchestration_event
-
-                                    emit_orchestration_event(
-                                        source="orchestrator",
-                                        event_type="provider_failover",
-                                        status="running",
-                                        workflow_id=workflow_id,
-                                        run_id=run_id,
-                                        step_id=step_data.get("id"),
-                                        ticket_id=int(ticket_id) if ticket_id is not None else None,
-                                        board_id=getattr(board, "id", None) if board else None,
-                                        project_id=int(project_id),
-                                        summary=(
-                                            f"{backend_id} failed; retrying this step with "
-                                            f"{fallback_backend}."
-                                        ),
-                                        payload={
-                                            "failed_backend": backend_id,
-                                            "fallback_backend": fallback_backend,
-                                            "fallback_model": fallback.get("model") or "auto",
-                                            "reason": str(handle.result.error or "")[:1000],
-                                        },
-                                    )
-                                except Exception:
-                                    logger.debug("Could not emit provider failover event", exc_info=True)
-                                try:
-                                    from distr.core.kanban.ticket_workflow_engagement import (
-                                        build_provider_failover_message,
-                                        notify_ticket_workflow_progress,
-                                    )
-
-                                    notify_ticket_workflow_progress(
-                                        run_id=int(run_id),
-                                        step_id=int(step_data.get("id")) if step_data.get("id") else None,
-                                        body=build_provider_failover_message(
-                                            ticket_title=str(
-                                                (json.loads(run_row.run_data or "{}") or {}).get("ticket_title")
-                                                if run_row else ""
-                                            ),
-                                            step_name=str(step_data.get("name") or ""),
-                                            failed_backend=backend_id,
-                                            fallback_backend=fallback_backend,
-                                        ),
-                                        state_fingerprint=(
-                                            f"provider_failover:{step_data.get('id')}:"
-                                            f"{backend_id}:{fallback_backend}"
-                                        ),
-                                        priority="normal",
-                                    )
-                                except Exception:
-                                    logger.debug(
-                                        "Could not send provider failover engagement",
-                                        exc_info=True,
-                                    )
-                                route.update(fallback)
-                                if not fallback.get("model_provider"):
-                                    route.pop("model_provider", None)
-                                try:
-                                    from distr.core.project_cli_backends.model_policy import build_auto_fallback_chain
-                                    from distr.core.settings import load_settings_from_db
-
-                                    route["fallback_chain"] = build_auto_fallback_chain(
-                                        route,
-                                        settings=load_settings_from_db(),
-                                    )
-                                except Exception:
-                                    pass
-                                route["source"] = "runtime_provider_failover"
-                                route["policy_source"] = "runtime_provider_failover"
-                                route["policy_reason"] = (
-                                    f"The {backend_id} execution failed its completion contract."
-                                )
-                                route["fallback_from"] = backend_id
-                                if run_row:
-                                    run_data_local = json.loads(run_row.run_data or "{}") or {}
-                                    run_data_local["execution_route"] = route
-                                    step_routes = run_data_local.get("step_routes")
-                                    step_routes = step_routes if isinstance(step_routes, dict) else {}
-                                    step_routes[str(step_data.get("id"))] = dict(route)
-                                    run_data_local["step_routes"] = step_routes
-                                    run_row.run_data = json.dumps(run_data_local)
-                                    db.commit()
-                                if _workflow_run_cancelled(run_id):
-                                    return handle.result
-                                handle = await dispatch_harness_async(
-                                    _harness_context(
-                                        fallback_backend,
-                                        str(fallback.get("model") or "auto"),
-                                        str(fallback.get("model_provider") or ""),
-                                    )
-                                )
+                        # Configured harness only: never propose, approve, or
+                        # silently switch to another backend/model on failure.
+                        return handle.result
                     if run_id and handle.execution_session_id:
                         if run_row:
                             run_data_local = json.loads(run_row.run_data or "{}") or {}
@@ -2620,7 +1970,7 @@ class StepExecutorMixin:
                 def _thread_runner():
                     return asyncio.run(_run_task())
                 timeout_seconds = int(config.get("timeout_seconds", 900) or 900)
-                max_attempts = 1 if config.get("allow_provider_failover", True) is False else 2
+                max_attempts = 1  # configured harness only; no failover retry
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     return pool.submit(_thread_runner).result(
                         timeout=(timeout_seconds * max_attempts) + 30
@@ -3123,141 +2473,8 @@ class StepExecutorMixin:
         project: Any = None,
         board: Any = None,
     ) -> dict[str, Any]:
-        """Return ``route`` if its backend is ready, else its fallback/complexity route."""
-        route = dict(route or {})
-        backend = str(route.get("backend") or "").strip()
-        if not backend:
-            return route
-        from distr.core.project_cli_backends import get_backend, normalize_backend_id
-
-        try:
-            if get_backend(backend).setup_status().ready:
-                return route
-        except Exception:
-            # Readiness could not be verified; never discard a resolved route.
-            return route
-        fallback_backend = str(route.get("fallback_backend") or "").strip()
-        if fallback_backend:
-            try:
-                fallback_ready = bool(get_backend(fallback_backend).setup_status().ready)
-            except Exception:
-                fallback_ready = False
-            if fallback_ready:
-                out = dict(route)
-                out["backend"] = normalize_backend_id(fallback_backend)
-                out["model"] = str(route.get("fallback_model") or "auto").strip() or "auto"
-                if route.get("fallback_model_provider"):
-                    out["model_provider"] = str(route["fallback_model_provider"]).strip().lower()
-                else:
-                    out.pop("model_provider", None)
-                for key in ("fallback_backend", "fallback_model", "fallback_model_provider"):
-                    out.pop(key, None)
-                out["source"] = "step_readiness_fallback"
-                out["rationale"] = f"{backend} is not available; using the configured fallback {out['backend']}."
-                return out
-        try:
-            from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
-
-            resolved = resolve_ticket_cli_route(
-                project,
-                str(route.get("complexity") or "medium"),
-                board=board,
-            )
-        except Exception:
-            return route
-        out = dict(route)
-        for key in ("model_provider", "fallback_backend", "fallback_model", "fallback_model_provider"):
-            out.pop(key, None)
-        out.update(resolved)
-        out["source"] = "step_readiness_fallback"
-        out["rationale"] = (
-            f"{backend} is not available; using the {resolved.get('complexity') or 'medium'} "
-            f"complexity route {resolved.get('backend')}."
-        )
-        return out
-
-    @staticmethod
-    def _runtime_provider_fallback_route(
-        route: dict[str, Any],
-        config: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Return one explicit provider failover route for a failed CLI step."""
-        if config.get("allow_provider_failover", True) is False:
-            return {}
-        current_backend = str(route.get("backend") or "pi").strip()
-        explicit_fallback = bool(config.get("fallback_backend") or route.get("fallback_backend"))
-        fallback_backend = str(config.get("fallback_backend") or route.get("fallback_backend") or "").strip()
-        fallback_model = str(config.get("fallback_model") or route.get("fallback_model") or "auto").strip() or "auto"
-        fallback_provider = str(
-            config.get("fallback_model_provider")
-            or route.get("fallback_model_provider")
-            or ""
-        ).strip()
-        if not explicit_fallback:
-            chain = route.get("fallback_chain")
-            chain = chain if isinstance(chain, list) else []
-            eligible = [
-                item for item in chain
-                if isinstance(item, dict)
-                and item.get("automatic", True) is not False
-                and str(item.get("backend") or "").strip()
-                and str(item.get("backend") or "").strip() != current_backend
-            ]
-            # Paid escalation order is explicit product policy: after local or
-            # provider workers are exhausted, use Codex before the final,
-            # more-expensive Claude tier. A stale/partial stored chain must not
-            # accidentally jump straight from Pi/OpenRouter to Claude.
-            candidate = next(
-                (item for item in eligible if str(item.get("backend") or "").strip() == "codex"),
-                None,
-            ) if current_backend == "pi" else None
-            if candidate is None and current_backend == "pi" and eligible:
-                candidate = next(
-                    (item for item in eligible if str(item.get("backend") or "").strip() != "claude_code"),
-                    None,
-                )
-            if candidate is None and current_backend == "pi" and eligible:
-                candidate = {"backend": "codex", "model": "auto"}
-            if candidate is None:
-                candidate = eligible[0] if eligible else None
-            if candidate:
-                fallback_backend = str(candidate.get("backend") or "").strip()
-                fallback_model = str(candidate.get("model") or "auto").strip() or "auto"
-                fallback_provider = str(candidate.get("model_provider") or "").strip()
-            elif current_backend == "pi":
-                fallback_backend = "codex"
-            elif current_backend == "codex":
-                try:
-                    from distr.core.project_cli_backends.model_policy import _openrouter_hy3_route
-                    from distr.core.settings import load_settings_from_db
-
-                    hy3 = _openrouter_hy3_route(load_settings_from_db())
-                except Exception:
-                    hy3 = None
-                if hy3:
-                    fallback_backend = "pi"
-                    fallback_model = str(hy3.get("model") or "tencent/hy3-preview")
-                    fallback_provider = "openrouter"
-                else:
-                    fallback_backend = "claude_code"
-            elif current_backend != "claude_code":
-                fallback_backend = "claude_code"
-        if not fallback_backend:
-            return {}
-        if fallback_backend == current_backend:
-            # Same CLI is a valid failover when it targets a different
-            # model/provider (e.g. Pi via OpenRouter -> Pi via Kilo Code).
-            same_model = fallback_model.lower() == str(route.get("model") or "auto").strip().lower()
-            same_provider = fallback_provider.lower() == str(route.get("model_provider") or "").strip().lower()
-            if not explicit_fallback or (same_model and same_provider):
-                return {}
-        fallback: dict[str, Any] = {
-            "backend": fallback_backend,
-            "model": fallback_model,
-        }
-        if fallback_provider:
-            fallback["model_provider"] = fallback_provider
-        return fallback
+        """Deterministic: always keep the configured harness; never switch at runtime."""
+        return dict(route or {})
 
     # ── Helpers ──────────────────────────────────────────────────────
 

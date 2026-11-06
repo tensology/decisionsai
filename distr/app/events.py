@@ -207,6 +207,13 @@ class EventHandlerMixin:
                 self.oracle_window.restart_app()
             else:
                 logger.warning("[EVENT QUEUE] No oracle_window available for restart")
+        elif event == 'agent_ready':
+            self._agent_lifecycle_state = 'ready'
+            self._agent_ready_since_restart = True
+            self._agent_ready_at = time.monotonic()
+            self._last_agent_health_ack = self._agent_ready_at
+            self._agent_health_probe_sent_at = None
+            logger.info("[HEALTH CHECK] Agent reported ready (pid=%s)", (data or {}).get('pid') if isinstance(data, dict) else None)
         elif event == 'agent_health_ack':
             self._last_agent_health_ack = time.monotonic()
             self._agent_health_probe_sent_at = None

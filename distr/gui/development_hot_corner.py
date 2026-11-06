@@ -16,12 +16,47 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from distr.core.db import Chat, get_session
 from distr.core.db.projects import Project
 from distr.core.kanban.lifecycle import ensure_project_boards
+from distr.core.workflow.development_sidebar import board_key_for
 from distr.core.db.time import utc_now_naive
 from distr.core.db.workflow import AutoWorkflowRun, DevelopmentTimeEntry, DevelopmentWorkItem
 
 
 logger = logging.getLogger(__name__)
+# Archived legacy setting; migrated into development_pinned_board_keys.
 PINNED_PROJECTS_SETTING = "development_hot_corner_pinned_project_ids"
+
+
+class _ExpiredProposalRibbon(QtWidgets.QWidget):
+    """Native equivalent of the Incoming card's diagonal top-right ribbon."""
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setClipRect(self.rect())
+        painter.translate(self.width() - 28, 24)
+        painter.rotate(45)
+        painter.fillRect(QtCore.QRect(-66, -12, 132, 24), QtGui.QColor('#626770'))
+        painter.setPen(QtGui.QColor('#ffffff'))
+        font = painter.font()
+        font.setPixelSize(12)
+        painter.setFont(font)
+        painter.drawText(QtCore.QRect(-66, -12, 132, 24), QtCore.Qt.AlignmentFlag.AlignCenter, 'Expired')
+
+
+class _ExpiredProposalCard(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self._ribbon = _ExpiredProposalRibbon(self)
+        self._ribbon.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._ribbon.setGeometry(max(0, self.width() - 94), 0, 94, 94)
+        self._ribbon.raise_()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._ribbon.raise_()
 
 
 def load_desktop_proposals():
@@ -41,47 +76,30 @@ def start_desktop_proposal(proposal):
     return int(result['chat_id'])
 
 
-def load_pinned_projects() -> list[int]:
-    from distr.core.settings import load_settings_from_db
+def load_pinned_board_keys() -> list[str]:
+    """The one pin list shared with the web sidebar (board keys)."""
+    from distr.core.workflow.development_sidebar import load_pinned_boards
 
-    value = load_settings_from_db().get(PINNED_PROJECTS_SETTING, [])
-    if not isinstance(value, list):
-        return []
-    return sorted({int(project_id) for project_id in value})
-
-
-def save_pinned_projects(project_ids: list[int]) -> None:
-    from distr.core.utils import save_settings_to_db
-
-    save_settings_to_db(
-        {PINNED_PROJECTS_SETTING: sorted({int(project_id) for project_id in project_ids})}
-    )
+    return load_pinned_boards() or []
 
 
 def project_folder_icon(has_threads: bool) -> QtGui.QIcon:
+    """Filled folder when the board has threads underneath, outline when it has none."""
+    pixmap = QtGui.QPixmap(24, 24)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    color = QtGui.QColor("#dce0e5" if has_threads else "#626770")
+    painter.setPen(QtGui.QPen(color, 1.5))
+    painter.setBrush(color if has_threads else QtCore.Qt.BrushStyle.NoBrush)
+    painter.drawPolygon(QtGui.QPolygonF([
+        QtCore.QPointF(x, y) for x, y in
+        [(3, 6), (10, 6), (12, 9), (21, 9), (21, 20), (3, 20)]
+    ]))
+    painter.end()
     icon = QtGui.QIcon()
-    for opened in (False, True):
-        pixmap = QtGui.QPixmap(24, 24)
-        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-        painter = QtGui.QPainter(pixmap)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        color = QtGui.QColor("#dce0e5" if has_threads else "#626770")
-        painter.setPen(QtGui.QPen(color, 1.5))
-        painter.setBrush(QtGui.QColor("#292e35" if has_threads else "#17191d"))
-        painter.drawPolygon(QtGui.QPolygonF([
-            QtCore.QPointF(x, y) for x, y in
-            [(3, 6), (10, 6), (12, 9), (21, 9), (21, 20), (3, 20)]
-        ]))
-        if opened and has_threads:
-            painter.setBrush(color)
-            painter.drawPolygon(QtGui.QPolygonF([
-                QtCore.QPointF(x, y) for x, y in [(2, 13), (23, 13), (19, 21), (4, 21)]
-            ]))
-        else:
-            painter.drawLine(3, 11, 21, 11)
-        painter.end()
-        icon.addPixmap(pixmap, QtGui.QIcon.Mode.Normal,
-                       QtGui.QIcon.State.On if opened else QtGui.QIcon.State.Off)
+    icon.addPixmap(pixmap, QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.Off)
+    icon.addPixmap(pixmap, QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.On)
     return icon
 
 
@@ -154,21 +172,11 @@ def load_development_groups(
 
         groups = []
         for project in projects:
-            board = boards_by_project.get(int(project.id))
-            provider = (
-                "decisions"
-                if board is not None and board.source in {None, "database", "decisions", "local"}
-                else str(getattr(board, "source", "") or "")
-            )
-            board_identity = (
-                int(board.id)
-                if provider == "decisions" and board is not None
-                else getattr(board, "external_board_id", None)
-            )
+            board_key = board_key_for(boards_by_project.get(int(project.id)))
             groups.append(
                 {
                     "project_id": int(project.id),
-                    "board_key": f"{provider}:{board_identity}" if provider and board_identity else None,
+                    "board_key": board_key,
                     "name": project.name or "Untitled",
                     "weekly_seconds": 0,
                     "threads": [],
@@ -479,7 +487,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         thread_factory: Callable[..., int] | None = None,
         time_updater: Callable[[int, str], Any] | None = None,
         pinned_project_ids: list[int] | None = None,
-        pin_saver: Callable[[list[int]], None] = save_pinned_projects,
+        pin_saver: Callable[[list[int]], None] | None = None,
     ) -> None:
         flags = (
             QtCore.Qt.WindowType.Tool
@@ -498,10 +506,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._open_path = open_path or (lambda _path: None)
         self._thread_factory = thread_factory
         self._time_updater = time_updater
-        resolved_pins = load_pinned_projects() if pinned_project_ids is None else pinned_project_ids
-        self._pinned_project_ids = {int(project_id) for project_id in resolved_pins}
+        # Pins come from the shared board-key list; explicit ids/saver are test hooks.
+        self._pinned_project_ids = {int(project_id) for project_id in (pinned_project_ids or [])}
         self._pin_saver = pin_saver
-        self._uses_shared_pins = pinned_project_ids is None and pin_saver is save_pinned_projects
+        self._uses_shared_pins = pinned_project_ids is None and pin_saver is None
         self._corner_screen: QtGui.QScreen | None = None
         self._corner_started_at: float | None = None
         self._open_screen: QtGui.QScreen | None = None
@@ -536,6 +544,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._proposal_task_timer = QtCore.QTimer(self)
         self._proposal_task_timer.setInterval(50)
         self._proposal_task_timer.timeout.connect(self._poll_proposal_tasks)
+        self._proposal_expiry_timer = QtCore.QTimer(self)
+        self._proposal_expiry_timer.setSingleShot(True)
+        self._proposal_expiry_timer.timeout.connect(self._render_proposals)
 
         self._slide = QtCore.QPropertyAnimation(self, b"geometry", self)
         self._slide.setDuration(240)
@@ -707,7 +718,6 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
 
         footer_actions = []
         for label, symbol, path in (
-            ("Planning", "≡", "/development/plan/"),
             ("Incoming", "↓", "/development/incoming/"),
             ("Scheduled", "◷", "/development/automations/"),
             ("Workflows", "⎇", "/development/workflows/"),
@@ -987,6 +997,14 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._render_proposals()
 
     def _render_proposals(self):
+        from distr.core.incoming.expiry import proposal_expiry, source_instant
+        self._proposals = [proposal_expiry(row) for row in self._proposals]
+        self._proposal_expiry_timer.stop()
+        deadlines = [source_instant(row.get('expires_at')) for row in self._proposals if not row.get('is_expired')]
+        now = datetime.now().astimezone()
+        waits = [(at - now).total_seconds() for at in deadlines if at and at > now]
+        if waits:
+            self._proposal_expiry_timer.start(min(2_147_483_647, max(1, int(min(waits) * 1000) + 1)))
         section = self._section_rows.get('proposals')
         if section is None:
             section = QtWidgets.QTreeWidgetItem(['Proposals'])
@@ -1039,7 +1057,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {'kind': 'proposal', 'proposal': proposal})
             section.addChild(item)
             item.setFirstColumnSpanned(True)
-            row = QtWidgets.QWidget()
+            row = _ExpiredProposalCard() if proposal.get('is_expired') else QtWidgets.QWidget()
             box = QtWidgets.QVBoxLayout(row)
             box.setContentsMargins(8, 8, 8, 8)
             box.setSpacing(4)
@@ -1331,9 +1349,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         if not self._uses_shared_pins:
             return False
         from distr.core.workflow.development_sidebar import load_pinned_boards
-        keys = load_pinned_boards()
-        if keys is None:
-            return False
+        keys = load_pinned_boards() or []
         next_ids = {group['project_id'] for group in groups if group.get('board_key') in keys}
         changed = next_ids != self._pinned_project_ids
         self._pinned_project_ids = next_ids
@@ -1510,19 +1526,16 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         if self._uses_shared_pins:
             from distr.core.workflow.development_sidebar import load_pinned_boards, save_pinned_boards
             groups = [group for _item, group in self._project_rows]
-            keys = load_pinned_boards()
-            if keys is None:
-                keys = [group['board_key'] for group in groups
-                        if group['project_id'] in self._pinned_project_ids and group.get('board_key')]
             key = next((group.get('board_key') for group in groups if group['project_id'] == project_id), None)
             if key:
-                keys = [existing for existing in keys if existing != key]
+                keys = [existing for existing in (load_pinned_boards() or []) if existing != key]
                 if project_id in self._pinned_project_ids:
                     keys.append(key)
                 save_pinned_boards(keys)
             else:
-                self._pin_saver(sorted(self._pinned_project_ids))
-        else:
+                # Without a board there is nothing to pin in the shared list.
+                self._pinned_project_ids.discard(project_id)
+        elif self._pin_saver is not None:
             self._pin_saver(sorted(self._pinned_project_ids))
         self._refresh_threads()
 

@@ -220,7 +220,7 @@ def test_thread_owned_time_can_play_pause_reset_and_auto_pause(development_db):
         db.commit()
     auto_paused = control.thread_time_state(development_db["chat_id"])
     assert auto_paused["paused"] is True
-    assert 330 <= auto_paused["seconds"] <= 345
+    assert 150 <= auto_paused["seconds"] <= 165
     assert any(entry["source"] == "auto_pause" for entry in auto_paused.get("entries") or [])
     assert any(int(entry.get("seconds") or 0) >= 0 for entry in auto_paused.get("entries") or [])
     assert all("started_at" in entry and "ended_at" in entry for entry in auto_paused.get("entries") or [])
@@ -374,8 +374,8 @@ def test_idle_thread_without_response_stops_accumulating_time(development_db, mo
         db.commit()
     result = control.thread_time_state(development_db["chat_id"])
     assert result["running"] is False
-    assert result["seconds"] == 180
-    assert control.thread_time_state(development_db["chat_id"])["seconds"] == 180
+    assert result["seconds"] == 2
+    assert control.thread_time_state(development_db["chat_id"])["seconds"] == 2
 
 
 def _set_execution_status(session, chat_id: int, status: str) -> None:

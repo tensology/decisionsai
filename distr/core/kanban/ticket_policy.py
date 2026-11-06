@@ -181,40 +181,27 @@ def _global_complexity_route(level: str, settings: dict[str, Any] | None = None)
 
 
 def _apply_configured_fallback(route: dict[str, str], level: str) -> dict[str, str]:
-    """Use the user-configured CLI fallback when the primary backend is unavailable."""
-    from distr.core.project_cli_backends import get_backend, normalize_backend_id
+    """Deprecated no-op: never silently switch harnesses.
 
-    fallback_provider = ""
-    raw_fallback = str(route.get("fallback_backend") or "").strip()
-    fallback_backend = normalize_backend_id(raw_fallback) if raw_fallback else ""
-    if not fallback_backend:
-        fallback = DEFAULT_COMPLEXITY_ROUTES[level]
-        fallback_backend = normalize_backend_id(fallback.get("backend") or "pi")
-        fallback_model = str(fallback.get("model") or "auto").strip()
-    else:
-        fallback_model = str(route.get("fallback_model") or "auto").strip()
-        fallback_provider = str(route.get("fallback_model_provider") or "").strip().lower()
-    try:
-        if get_backend(fallback_backend).setup_status().ready:
-            out = {
-                "complexity": level,
-                "backend": fallback_backend,
-                "model": fallback_model,
-            }
-            if fallback_provider:
-                out["model_provider"] = fallback_provider
-            out["fallback_from_backend"] = str(route.get("backend") or "")
-            if fallback_backend == "codex":
-                out["codex_reasoning_effort"] = route.get("codex_reasoning_effort", "")
-                out["codex_service_tier"] = route.get("codex_service_tier", "")
-            return out
-    except Exception:
-        pass
-    return {
+    Kept as an identity helper so older call sites stay importable. The
+    configured primary backend/model always wins; readiness does not rewrite it.
+    """
+    out = {
         "complexity": level,
-        "backend": "pi",
-        "model": "",
+        "backend": str(route.get("backend") or ""),
+        "model": str(route.get("model") or ""),
     }
+    if route.get("model_provider"):
+        out["model_provider"] = str(route.get("model_provider") or "")
+    if route.get("fallback_backend"):
+        out["fallback_backend"] = str(route.get("fallback_backend") or "")
+        out["fallback_model"] = str(route.get("fallback_model") or "auto")
+        if route.get("fallback_model_provider"):
+            out["fallback_model_provider"] = str(route.get("fallback_model_provider") or "")
+    if out["backend"] == "codex":
+        out["codex_reasoning_effort"] = route.get("codex_reasoning_effort", "")
+        out["codex_service_tier"] = route.get("codex_service_tier", "")
+    return out
 
 
 def resolve_ticket_cli_route(
@@ -229,8 +216,6 @@ def resolve_ticket_cli_route(
     Ticket complexity is global routing policy by default. Boards may override
     per-complexity backend/model via ``orchestrator_policy.complexity_routing``.
     """
-    from distr.core.project_cli_backends import get_backend
-
     level = normalize_ticket_complexity(complexity)
     route = _global_complexity_route(level, settings)
 
@@ -284,11 +269,7 @@ def resolve_ticket_cli_route(
 
     backend = route["backend"]
     model = route["model"]
-    try:
-        if not get_backend(backend).setup_status().ready:
-            return _apply_configured_fallback({**route, "complexity": level}, level)
-    except Exception:
-        return _apply_configured_fallback({**route, "complexity": level}, level)
+    # Deterministic single configured harness: never rewrite on readiness miss.
     out: dict[str, str] = {"complexity": level, "backend": backend, "model": model}
     if route.get("tier_auto"):
         out["tier_auto"] = "1"

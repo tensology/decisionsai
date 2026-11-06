@@ -174,7 +174,9 @@ def test_active_runs_label_overdue_worker_heartbeat_without_timing_out_waiting_u
 
     run = next(item for item in get_active_runs(workflow_id=workflow_id) if item["id"] == run_id)
     assert run["heartbeat_age_seconds"] >= 120
-    assert run["activity_state"] == "stale"
+    assert run["activity_state"] == "stalled"
+    assert run["stalled"] is True
+    assert "Stalled" in run["status_summary"]
 
     with get_session() as session:
         stored = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).one()

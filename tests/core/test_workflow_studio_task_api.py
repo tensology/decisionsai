@@ -136,7 +136,7 @@ def test_studio_auto_routing_assessment_escalates_failures_and_vision_work():
     assert set(payload["signals"]) >= {"blocked", "failure", "risk", "vision"}
     assert payload["route"]["model"] == "auto"
     assert payload["sentiment"] == "blocked"
-    assert payload["execution_mode"] == "workflow"
+    assert payload["execution_mode"] == "direct"
 
 
 def test_studio_auto_routing_assessment_keeps_small_copy_edit_low():

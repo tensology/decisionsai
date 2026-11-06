@@ -35,11 +35,15 @@ def register_routes(router, templates):
             shell = _attach_process_usage(
                 get_startup_sessions_for_project(project_id, purpose="cli_shell")
             )
+            pi_cli = _attach_process_usage(
+                get_startup_sessions_for_project(project_id, purpose="pi_cli")
+            )
             projects[str(project_id)] = {
-                "running": bool(startup or shell),
+                "running": bool(startup or shell or pi_cli),
                 "startup_count": len(startup),
                 "shell_count": len(shell),
-                "sessions": startup + shell,
+                "pi_cli_count": len(pi_cli),
+                "sessions": startup + shell + pi_cli,
             }
         return JSONResponse({"projects": projects})
 
@@ -72,6 +76,12 @@ def register_routes(router, templates):
         await websocket.accept()
         websocket_board_id = _coerce_optional_int(websocket.query_params.get("board_id"))
         websocket_workflow_id = _coerce_optional_int(websocket.query_params.get("workflow_id"))
+        # Development thread CLI mode and other harness viewers pass attach=live so they
+        # follow live_sessions (one-shot Pi/Codex/Cursor workers), not a separate Pi RPC chat.
+        attach_live = str(websocket.query_params.get("attach") or "").strip().lower() in {
+            "live", "harness", "1", "true", "yes"
+        }
+        backend_override = str(websocket.query_params.get("backend_id") or "").strip().lower()
 
         # Get project folder
         try:
@@ -85,7 +95,7 @@ def register_routes(router, templates):
                     return
                 cwd = project.folder_location or os.path.expanduser("~")
                 project_name = project.name or ""
-                backend_id = _backend_id_for_project(project)
+                backend_id = backend_override or _backend_id_for_project(project)
                 backend_model = (project.coding_backend_model or "").strip()
         except Exception as e:
             logger.error(f"Terminal: failed to load project: {e}")
@@ -98,10 +108,14 @@ def register_routes(router, templates):
             cwd = os.path.expanduser("~")
 
         from distr.core.project_cli_backends import get_backend, run_project_task
-        backend = get_backend(backend_id)
+        try:
+            backend = get_backend(backend_id)
+        except Exception:
+            backend_id = _backend_id_for_project(project)
+            backend = get_backend(backend_id)
         loop = asyncio.get_running_loop()
 
-        if not backend.supports_rpc:
+        if attach_live or not backend.supports_rpc:
             status = backend.setup_status()
             event_queue: asyncio.Queue = asyncio.Queue()
             register_live_session_listener(project_id, backend.id, event_queue, board_id=websocket_board_id)
@@ -112,6 +126,7 @@ def register_routes(router, templates):
                 "board_id": websocket_board_id,
                 "workflow_id": websocket_workflow_id,
                 "supports_rpc": False,
+                "attach": "live" if attach_live else "backend",
                 "alive": live_session_is_alive(project_id, backend.id, board_id=websocket_board_id),
                 "buffer": snapshot_live_session(project_id, backend.id, board_id=websocket_board_id),
             })
@@ -528,6 +543,7 @@ def register_routes(router, templates):
         except Exception as e:
             logger.warning("Failed to materialize queued startup sessions for project %s: %s", project_id, e)
         sessions = _attach_process_usage(get_startup_sessions_for_project(project_id, purpose="startup"))
+        pi_cli = _attach_process_usage(get_startup_sessions_for_project(project_id, purpose="pi_cli"))
         try:
             from distr.core.db import get_session as db_session
             from distr.core.db.projects import Project
@@ -535,14 +551,15 @@ def register_routes(router, templates):
             with db_session() as session:
                 project = session.query(Project).filter(Project.id == project_id).first()
                 folder = (project.folder_location or "").strip() if project else ""
+            managed_pids = {int(row.get("pid") or 0) for row in sessions + pi_cli}
             discovered = _discover_project_server_processes(
                 folder,
-                excluded_pids=_managed_process_tree_pids({int(row.get("pid") or 0) for row in sessions}),
+                excluded_pids=_managed_process_tree_pids(managed_pids),
             )
         except Exception as e:
             logger.debug("Project process discovery failed for %s: %s", project_id, e)
             discovered = []
-        return JSONResponse({"sessions": sessions + discovered})
+        return JSONResponse({"sessions": sessions + pi_cli + discovered})
 
     @router.post("/projects/{project_id}/startup-terminals/start")
     async def start_project_startup_terminals_api(project_id: int, request: Request):
@@ -606,6 +623,352 @@ def register_routes(router, templates):
         from distr.core.terminal import get_startup_sessions_for_project
         sessions = _attach_process_usage(get_startup_sessions_for_project(project_id, purpose="cli_shell"))
         return JSONResponse({"sessions": sessions})
+
+
+    def _pi_cli_command_for_backend(backend_id: str, command_override: str = "") -> str:
+        cmd = (command_override or "").strip()
+        if cmd:
+            return cmd
+        backend_id = str(backend_id or "pi").strip().lower() or "pi"
+        if backend_id in ("pi", "pi-coding-agent", ""):
+            return "pi"
+        if backend_id in ("codex", "openai-codex"):
+            return "codex"
+        if backend_id in ("cursor", "cursor-agent"):
+            return "agent"
+        if backend_id.isidentifier() or "/" not in backend_id:
+            return backend_id
+        return "pi"
+
+    def _pi_cli_project_folder(project_id: int):
+        from distr.core.db import get_session as db_session
+        from distr.core.db.projects import Project
+
+        with db_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                return None, None, "Project not found"
+            folder = (project.folder_location or "").strip()
+            if not folder or not os.path.isdir(folder):
+                return None, None, "Project has no valid folder location"
+            backend_id = str(getattr(project, "coding_backend", None) or "pi").strip().lower() or "pi"
+            return os.path.realpath(folder), backend_id, None
+
+    @router.get("/projects/{project_id}/pi-cli-terminal/status")
+    async def pi_cli_terminal_status(project_id: int):
+        """List alive purpose=pi_cli PTYs plus durable tab metadata for this project."""
+        from distr.core.terminal import get_startup_sessions_for_project, cleanup_dead_startup_sessions
+        from distr.core.project_cli_backends.pi_cli_tabs import load_project_tabs
+
+        cleanup_dead_startup_sessions()
+        sessions = get_startup_sessions_for_project(project_id, purpose="pi_cli")
+        tabs = load_project_tabs(project_id)
+        return JSONResponse({
+            "project_id": project_id,
+            "running": bool(sessions),
+            "sessions": sessions,
+            "tabs": tabs.get("tabs") or [],
+            "active_tab_id": tabs.get("active_tab_id"),
+        })
+
+    @router.get("/projects/{project_id}/pi-cli-terminal/tabs")
+    async def get_pi_cli_tabs(project_id: int):
+        from distr.core.project_cli_backends.pi_cli_tabs import load_project_tabs
+        from distr.core.terminal import get_startup_sessions_for_project, cleanup_dead_startup_sessions
+
+        cleanup_dead_startup_sessions()
+        alive = {
+            str(row.get("process_id")): row
+            for row in get_startup_sessions_for_project(project_id, purpose="pi_cli")
+        }
+        stored = load_project_tabs(project_id)
+        tabs = []
+        for tab in stored.get("tabs") or []:
+            process_id = str(tab.get("process_id") or "")
+            live = alive.get(process_id)
+            item = dict(tab)
+            item["alive"] = bool(live)
+            if live:
+                item["pid"] = live.get("pid")
+                item["command"] = live.get("command") or item.get("command") or "pi"
+            tabs.append(item)
+        return JSONResponse({
+            "project_id": project_id,
+            "tabs": tabs,
+            "active_tab_id": stored.get("active_tab_id"),
+            "sessions": list(alive.values()),
+        })
+
+    @router.put("/projects/{project_id}/pi-cli-terminal/tabs")
+    async def put_pi_cli_tabs(project_id: int, request: Request):
+        """Persist the tab set (visible + dismissed-but-alive). Does not spawn/kill PTYs."""
+        from distr.core.project_cli_backends.pi_cli_tabs import save_project_tabs
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        result = save_project_tabs(
+            project_id,
+            tabs=body.get("tabs") or [],
+            active_tab_id=body.get("active_tab_id"),
+        )
+        return JSONResponse({"success": True, **result})
+
+    @router.post("/projects/{project_id}/pi-cli-terminal/start")
+    async def start_pi_cli_terminal(project_id: int, request: Request):
+        """Spawn or attach a real coding-CLI PTY in the project folder.
+
+        Body:
+          - new / force_new: always spawn another session (multi-tab)
+          - process_id: reuse that specific alive session when command matches
+          - command: override CLI binary
+          - tab_id / label: optional durable tab metadata updates
+          - recover: if true and no alive process, spawn from command (post-restart)
+        """
+        from distr.core.terminal import (
+            create_startup_shell_session,
+            get_startup_session,
+            get_startup_sessions_for_project,
+            cleanup_dead_startup_sessions,
+        )
+        from distr.core.project_cli_backends.pi_cli_tabs import load_project_tabs, save_project_tabs
+
+        force_new = False
+        recover = False
+        command_override = ""
+        process_id = ""
+        tab_id = ""
+        label = ""
+        try:
+            if request.headers.get("content-type", "").startswith("application/json"):
+                body = await request.json()
+                if isinstance(body, dict):
+                    force_new = bool(body.get("new") or body.get("force_new"))
+                    recover = bool(body.get("recover"))
+                    command_override = str(body.get("command") or "").strip()
+                    process_id = str(body.get("process_id") or "").strip()
+                    tab_id = str(body.get("tab_id") or "").strip()
+                    label = str(body.get("label") or "").strip()
+        except Exception:
+            body = {}
+
+        canonical, backend_id, err = _pi_cli_project_folder(project_id)
+        if err:
+            code = 404 if err == "Project not found" else 400
+            return JSONResponse({"success": False, "error": err}, status_code=code)
+
+        cleanup_dead_startup_sessions()
+        cmd = _pi_cli_command_for_backend(backend_id, command_override)
+
+        # Reuse a specific alive session when requested (toggle-on / tab switch).
+        owned_process_dead = False
+        if process_id and not force_new:
+            sess = get_startup_session(process_id)
+            if sess and sess.is_alive and int(sess.project_id) == int(project_id) and getattr(sess, "purpose", "") == "pi_cli":
+                existing_cmd = (sess.shell_command or "").strip() or "pi"
+                if existing_cmd == cmd or not command_override:
+                    return JSONResponse({
+                        "success": True,
+                        "process_id": process_id,
+                        "pid": sess.pid,
+                        "reused": True,
+                        "command": existing_cmd,
+                        "backend_id": backend_id,
+                        "attach": "pty",
+                        "tab_id": tab_id or None,
+                    })
+            # This tab already owns a process_id that is gone — do not steal another tab's PTY.
+            owned_process_dead = True
+
+        # First open (no process_id): reuse an unmatched alive session with the same command.
+        if not force_new and not recover and not owned_process_dead and not process_id:
+            for row in get_startup_sessions_for_project(project_id, purpose="pi_cli"):
+                if str(row.get("command") or "").strip() == cmd:
+                    return JSONResponse({
+                        "success": True,
+                        "process_id": row.get("process_id"),
+                        "pid": row.get("pid"),
+                        "reused": True,
+                        "command": row.get("command") or cmd,
+                        "backend_id": backend_id,
+                        "attach": "pty",
+                        "tab_id": tab_id or None,
+                    })
+
+        try:
+            terminal_id, sess = await create_startup_shell_session(
+                project_id, canonical, cmd, purpose="pi_cli"
+            )
+        except Exception as e:
+            logger.error(f"pi-cli-terminal spawn failed: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+        # Persist / update durable tab metadata when the client supplies a tab_id.
+        if tab_id:
+            stored = load_project_tabs(project_id)
+            tabs = list(stored.get("tabs") or [])
+            found = False
+            for tab in tabs:
+                if tab.get("tab_id") == tab_id:
+                    tab["process_id"] = terminal_id
+                    tab["command"] = cmd
+                    tab["label"] = label or tab.get("label") or cmd
+                    tab["cwd"] = canonical
+                    tab["visible"] = True if tab.get("visible", True) else False
+                    found = True
+                    break
+            if not found:
+                import time as _time
+                tabs.append({
+                    "tab_id": tab_id,
+                    "process_id": terminal_id,
+                    "command": cmd,
+                    "label": label or cmd,
+                    "cwd": canonical,
+                    "visible": True,
+                    "created_at": _time.time(),
+                })
+            save_project_tabs(project_id, tabs=tabs, active_tab_id=tab_id)
+
+        return JSONResponse({
+            "success": True,
+            "process_id": terminal_id,
+            "pid": sess.pid,
+            "reused": False,
+            "command": cmd,
+            "backend_id": backend_id,
+            "attach": "pty",
+            "tab_id": tab_id or None,
+            "cwd": canonical,
+        })
+
+    @router.post("/projects/{project_id}/pi-cli-terminal/stop")
+    async def stop_pi_cli_terminal(project_id: int, request: Request):
+        """Stop one pi_cli PTY by process_id. Without process_id, stops none (safe default).
+
+        Closing a UI tab must NOT call this — X only dismisses the tab. Explicit kill
+        (future) or project teardown may pass process_id.
+        """
+        from distr.core.terminal import get_startup_session, kill_startup_session, cleanup_dead_startup_sessions
+
+        process_id = ""
+        stop_all = False
+        try:
+            if request.headers.get("content-type", "").startswith("application/json"):
+                body = await request.json()
+                if isinstance(body, dict):
+                    process_id = str(body.get("process_id") or "").strip()
+                    stop_all = bool(body.get("all"))
+        except Exception:
+            body = {}
+
+        cleanup_dead_startup_sessions()
+        stopped = 0
+        if process_id:
+            sess = get_startup_session(process_id)
+            if sess and int(sess.project_id) == int(project_id) and await kill_startup_session(process_id):
+                stopped = 1
+        elif stop_all:
+            from distr.core.terminal import get_startup_sessions_for_project
+            for row in get_startup_sessions_for_project(project_id, purpose="pi_cli"):
+                pid = str(row.get("process_id") or "")
+                if pid and await kill_startup_session(pid):
+                    stopped += 1
+        return JSONResponse({"success": True, "stopped": stopped, "project_id": project_id, "process_id": process_id or None})
+
+    @router.post("/projects/{project_id}/pi-cli-terminal/recover")
+    async def recover_pi_cli_terminals(project_id: int):
+        """After Decisions restart: respawn PTYs for the durable saved tab set only.
+
+        PTYs do not survive process exit (in-memory registry + atexit kill). Recovery
+        recreates one PTY per saved tab using its command in the project folder.
+        """
+        from distr.core.terminal import (
+            create_startup_shell_session,
+            get_startup_session,
+            get_startup_sessions_for_project,
+            cleanup_dead_startup_sessions,
+        )
+        from distr.core.project_cli_backends.pi_cli_tabs import load_project_tabs, save_project_tabs
+        import time as _time
+
+        canonical, backend_id, err = _pi_cli_project_folder(project_id)
+        if err:
+            code = 404 if err == "Project not found" else 400
+            return JSONResponse({"success": False, "error": err}, status_code=code)
+
+        cleanup_dead_startup_sessions()
+        stored = load_project_tabs(project_id)
+        tabs = list(stored.get("tabs") or [])
+        if not tabs:
+            return JSONResponse({
+                "success": True,
+                "project_id": project_id,
+                "tabs": [],
+                "active_tab_id": None,
+                "respawned": 0,
+                "reused": 0,
+            })
+
+        # PTYs already owned by a saved tab (one per thread) must never be handed to
+        # another tab — otherwise thread B could reattach to thread A's Pi.
+        claimed = set()
+        for tab in tabs:
+            pid_key = str(tab.get("process_id") or "").strip()
+            owned = get_startup_session(pid_key) if pid_key else None
+            if owned and owned.is_alive and int(owned.project_id) == int(project_id):
+                claimed.add(pid_key)
+        alive_by_cmd: dict[str, list[dict]] = {}
+        for row in get_startup_sessions_for_project(project_id, purpose="pi_cli"):
+            if str(row.get("process_id") or "") in claimed:
+                continue
+            alive_by_cmd.setdefault(str(row.get("command") or "pi"), []).append(row)
+
+        respawned = 0
+        reused = 0
+        for tab in tabs:
+            cmd = str(tab.get("command") or "pi").strip() or "pi"
+            process_id = str(tab.get("process_id") or "").strip()
+            sess = get_startup_session(process_id) if process_id else None
+            if sess and sess.is_alive and int(sess.project_id) == int(project_id):
+                reused += 1
+                continue
+            # Prefer an unmatched alive session with the same command before spawning.
+            pool = alive_by_cmd.get(cmd) or []
+            if pool:
+                row = pool.pop(0)
+                tab["process_id"] = row.get("process_id")
+                reused += 1
+                continue
+            try:
+                terminal_id, _sess = await create_startup_shell_session(
+                    project_id, canonical, cmd, purpose="pi_cli"
+                )
+                tab["process_id"] = terminal_id
+                tab["cwd"] = canonical
+                tab["created_at"] = float(tab.get("created_at") or 0) or _time.time()
+                respawned += 1
+            except Exception as e:
+                logger.error(f"pi-cli recover spawn failed for {cmd}: {e}", exc_info=True)
+                tab["process_id"] = None
+
+        saved = save_project_tabs(
+            project_id,
+            tabs=tabs,
+            active_tab_id=stored.get("active_tab_id"),
+        )
+        return JSONResponse({
+            "success": True,
+            "project_id": project_id,
+            "tabs": saved.get("tabs") or [],
+            "active_tab_id": saved.get("active_tab_id"),
+            "respawned": respawned,
+            "reused": reused,
+            "backend_id": backend_id,
+        })
 
     @router.post("/projects/{project_id}/shell-terminal/start")
     async def start_project_shell_terminal(project_id: int, request: Request):
@@ -727,7 +1090,12 @@ def register_routes(router, templates):
             try:
                 replay = sess._raw_buffer.decode("utf-8", errors="replace")
                 await websocket.send_text(
-                    json.dumps({"type": "output", "data": replay, "terminal_id": terminal_id})
+                    json.dumps({
+                        "type": "output",
+                        "data": replay,
+                        "terminal_id": terminal_id,
+                        "replay": True,
+                    })
                 )
             except Exception as e:
                 logger.debug(f"startup terminal replay failed: {e}")

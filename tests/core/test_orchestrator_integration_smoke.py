@@ -85,7 +85,7 @@ def test_orchestrator_integration_smoke_skills_route_steer(tmp_path, monkeypatch
     monkeypatch.setattr("distr.core.kanban.project_execution.append_execution_event", MagicMock())
     monkeypatch.setattr("distr.core.workflow.standards_memory.capture_feedback_as_standard", MagicMock())
 
-    approval = apply_run_route_approval(run_id, approved=True)
+    approval = apply_run_route_approval(run_id, approved=True, approved_by="web UI user paul")
     assert approval["success"] is True
     assert approval["execution_route"]["backend"] == "pi"
 

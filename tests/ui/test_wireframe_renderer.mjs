@@ -9,6 +9,13 @@ const errors = result => result.diagnostics.filter(d => d.severity === 'error');
 const boxes = svg => [...svg.matchAll(/<g id="([^"]+)" data-type="([^"]+)" data-line="(\d+)" data-x="([\d.]+)" data-y="([\d.]+)" data-width="([\d.]+)" data-height="([\d.]+)"/g)].map(m => ({ id: m[1], type: m[2], line: +m[3], x: +m[4], y: +m[5], w: +m[6], h: +m[7] }));
 const separated = (a, b) => a.x + a.w <= b.x + .001 || b.x + b.w <= a.x + .001 || a.y + a.h <= b.y + .001 || b.y + b.h <= a.y + .001;
 
+test('a screen layer is frontend, backend, ajax, or guidance', () => {
+    const ok = parseWireframe('screen "Shop" id=shop route=/shop layer=frontend\n  link "Load" route=/api/orders');
+    assert.deepEqual(errors(ok), []);
+    assert.equal(ok.screens[0].attrs.layer, 'frontend');
+    assert.ok(errors(parseWireframe('screen "Shop" layer=database')).some(d => d.code === 'LAYER'));
+});
+
 test('project images render from host manifests, never URLs in DSL source', () => {
     const dsl = 'screen Brand\n  image "Logo" asset=7 width=160 height=64';
     const url = 'http://127.0.0.1:8778/api/workflows/studio/plan-workspaces/1/attachments/7';

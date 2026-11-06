@@ -42,6 +42,8 @@ def test_get_email_includes_attachment_metadata(monkeypatch):
 
     assert email["id"] == "msg-1"
     assert email["body"] == "Body text"
+    assert email["text_body"] == "Body text"
+    assert email["html_body"] == ""
     assert email["attachments"] == [
         {
             "message_id": "msg-1",
@@ -49,6 +51,8 @@ def test_get_email_includes_attachment_metadata(monkeypatch):
             "filename": "changes.pdf",
             "mime_type": "application/pdf",
             "size": 123,
+            "content_id": "",
+            "inline": False,
         }
     ]
 
@@ -144,3 +148,81 @@ def test_download_email_attachments_tool_saves_all_files(tmp_path, monkeypatch):
 
     assert "Saved attachment to" in result
     assert str(tmp_path / "changes.pdf") in result
+
+
+def test_get_email_captures_html_and_inline_cid(monkeypatch):
+    from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+    import base64
+
+    connector = GoogleWorkspaceConnector.__new__(GoogleWorkspaceConnector)
+    connector.access_token = "token"
+    monkeypatch.setattr(connector, "_ensure_valid_token", lambda: True)
+
+    def fake_request(method, url, params=None, **kwargs):
+        return {
+            "threadId": "thread-1",
+            "snippet": "Hello",
+            "labelIds": ["INBOX"],
+            "payload": {
+                "headers": [{"name": "Subject", "value": "Hi"}],
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "body": {"data": base64.urlsafe_b64encode(b"Plain hello").decode("ascii")},
+                    },
+                    {
+                        "mimeType": "text/html",
+                        "body": {"data": base64.urlsafe_b64encode(b"<p>Hi <img src=\"cid:img1\"></p>").decode("ascii")},
+                    },
+                    {
+                        "mimeType": "image/png",
+                        "filename": "",
+                        "headers": [{"name": "Content-ID", "value": "<img1>"}],
+                        "body": {"attachmentId": "att-inline", "size": 10},
+                    },
+                ],
+            },
+        }
+
+    monkeypatch.setattr(connector, "_make_request", fake_request)
+    email = connector.get_email("msg-html")
+    assert email["text_body"] == "Plain hello"
+    assert "cid:img1" in email["html_body"]
+    assert email["body"] == "Plain hello"
+    assert email["attachments"][0]["content_id"] == "img1"
+    assert email["attachments"][0]["inline"] is True
+
+
+def test_fetch_email_attachment_bytes_decodes(monkeypatch):
+    from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+
+    connector = GoogleWorkspaceConnector.__new__(GoogleWorkspaceConnector)
+    connector.access_token = "token"
+    monkeypatch.setattr(connector, "_ensure_valid_token", lambda: True)
+    encoded = base64.urlsafe_b64encode(b"png-bytes").decode("ascii").rstrip("=")
+
+    def fake_request(method, url, params=None, **kwargs):
+        if "attachments/att-inline" in url:
+            return {"data": encoded}
+        return {
+            "threadId": "t",
+            "snippet": "",
+            "labelIds": [],
+            "payload": {
+                "headers": [],
+                "parts": [
+                    {
+                        "mimeType": "image/png",
+                        "filename": "logo.png",
+                        "headers": [{"name": "Content-ID", "value": "<img1>"}],
+                        "body": {"attachmentId": "att-inline", "size": 9},
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(connector, "_make_request", fake_request)
+    data, mime, name = connector.fetch_email_attachment_bytes("msg-1", "", content_id="img1")
+    assert data == b"png-bytes"
+    assert mime == "image/png"
+    assert name.endswith("logo.png") or "logo" in name

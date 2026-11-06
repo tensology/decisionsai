@@ -673,10 +673,18 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const role = message.role || 'assistant';
         if (role === 'user') {
             const presentation = userMessagePresentation(message);
-            const media = (message.attachments || []).filter(item => /^\/api\/workflows\/studio\/tasks\/\d+\/attachments\/[a-f0-9]+$/.test(item.url || '')).map(item => {
-                const url = actions.escapeHtml(item.url);
+            const media = (message.attachments || []).map(item => {
+                const err = item.download_error || item.error || '';
                 const name = actions.escapeHtml(item.name || 'Attachment');
-                return `<a class="thread-source-file" href="${url}" target="_blank" rel="noopener">${String(item.mime_type || '').startsWith('image/') ? `<img src="${url}" alt="${name}" loading="lazy">` : ''}<span>${name}</span></a>`;
+                if (err) {
+                    return `<div class="thread-source-file thread-source-file-failed" role="status" title="${actions.escapeHtml(err)}"><span>${name}</span><small>${actions.escapeHtml(err)}</small></div>`;
+                }
+                if (!/^\/api\/workflows\/studio\/tasks\/\d+\/attachments\/[a-f0-9]+$/.test(item.url || '')) return '';
+                const url = actions.escapeHtml(item.url);
+                const mime = String(item.mime_type || '');
+                const payload = actions.escapeHtml(JSON.stringify({ url: item.url, name: item.name || 'Attachment', mime_type: mime }));
+                const thumb = mime.startsWith('image/') ? `<img src="${url}" alt="${name}" loading="lazy">` : '';
+                return `<button type="button" class="thread-source-file" data-thread-file-preview="${payload}">${thumb}<span>${name}</span></button>`;
             }).join('');
             return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}${media ? `<div class="thread-source-files" aria-label="Source attachments">${media}</div>` : ''}</div></article>`;
         }
@@ -888,13 +896,16 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const interactionActions = Array.isArray(interaction?.allowed_actions) ? interaction.allowed_actions : [];
         const actionable = interactionActions.filter((action) => action !== 'feedback');
         const approval = run?.pending_route_approval || {};
-        const waitingPrompt = interaction?.kind === 'provider_preflight' && (approval.name || approval.model)
+        const budgetApproval = false; // budget gate removed
+        const waitingPrompt = budgetApproval
+            ? run?.blueprint?.interrupt_line?.question || run?.waiting_prompt || 'The run budget is exhausted. Raise the budget to continue, or stop.'
+            : interaction?.kind === 'provider_preflight' && (approval.name || approval.model)
             ? `Use ${approval.name || approval.model} for this step and continue the workflow.`
             : run?.worker_question || run?.waiting_prompt || 'Review the pending checkpoint before the workflow continues.';
         const checkpoint = ['waiting', 'paused'].includes(runStatus)
             ? `<section class="thread-workflow-checkpoint" aria-label="Workflow approval required">
                 <div><strong>Approval required</strong><p>${actions.escapeHtml(waitingPrompt)}</p></div>
-                ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(index === 0 && action !== 'stop' ? 'Approve and continue' : actions.actionLabel(action))}</button>`).join('')}</div>` : ''}
+                ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(index === 0 && action !== 'stop' ? (budgetApproval ? 'Raise budget and continue' : 'Approve and continue') : actions.actionLabel(action))}</button>`).join('')}</div>` : ''}
             </section>`
             : '';
         const currentStep = statusSteps[activeIndex];
@@ -1221,3 +1232,14 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         syncDurableTurnActivity
     };
 }
+
+    document.addEventListener('click', (event) => {
+        const node = event.target.closest?.('[data-thread-file-preview]');
+        if (!node) return;
+        try {
+            const meta = JSON.parse(node.getAttribute('data-thread-file-preview') || '{}');
+            if (window.DecisionsIncoming?.openFilePreview) window.DecisionsIncoming.openFilePreview(meta);
+            else if (meta.url) window.open(meta.url, '_blank', 'noopener');
+        } catch (_) {}
+    });
+

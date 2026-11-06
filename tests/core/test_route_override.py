@@ -1,4 +1,4 @@
-"""Overriding a ticket's weight class relinks it, and risk still wins."""
+"""Managed class weight overrides are retired; helpers still work."""
 
 from __future__ import annotations
 
@@ -44,57 +44,15 @@ def _ticket(factory, title: str, description: str = "") -> int:
         return int(ticket.id)
 
 
-def _workflow_ids():
-    return {"light": 11, "standard": 10, "heavy": 12, "critical": 13}
-
-
-def test_override_relinks_the_ticket(db_factory, monkeypatch):
+def test_override_is_retired(db_factory):
     from distr.core.workflow import phases
 
     ticket_id = _ticket(db_factory, "Add a button")
-    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: _workflow_ids()[key])
-
     result = phases.apply_route_override(ticket_id, "make it heavier", speak=False)
-
-    assert result["changed"] is True
-    assert result["class"] == "heavy"
-    assert result["workflow_id"] == 12
+    assert result["changed"] is False
+    assert result["reason"] == "managed_class_retired"
     with db_factory() as db:
-        assert db.get(KanbanTicket, ticket_id).linked_workflow_id == 12
-
-
-def test_override_cannot_talk_a_migration_down(db_factory, monkeypatch):
-    from distr.core.workflow import phases
-
-    ticket_id = _ticket(db_factory, "Add a schema migration for the invoices table")
-    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: _workflow_ids()[key])
-
-    result = phases.apply_route_override(ticket_id, "make it lighter", speak=False)
-
-    # Risk floors the override: a migration cannot become the cheap policy.
-    assert result["class"] == "heavy"
-    assert result["workflow_id"] == 12
-
-
-def test_ordinary_text_is_not_an_override(db_factory, monkeypatch):
-    from distr.core.workflow import phases
-
-    ticket_id = _ticket(db_factory, "Add a button")
-    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 10)
-
-    assert phases.apply_route_override(ticket_id, "fix the button", speak=False)["changed"] is False
-
-
-def test_explicit_class_word_override(db_factory, monkeypatch):
-    from distr.core.workflow import phases
-
-    ticket_id = _ticket(db_factory, "Tidy the readme")
-    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: _workflow_ids()[key])
-
-    result = phases.apply_route_override(ticket_id, "make it critical", speak=False)
-
-    assert result["class"] == "critical"
-    assert result["workflow_id"] == 13
+        assert db.get(KanbanTicket, ticket_id).linked_workflow_id is None
 
 
 def test_is_retired_workflow_flags_archived_and_missing(db_factory):
@@ -102,7 +60,7 @@ def test_is_retired_workflow_flags_archived_and_missing(db_factory):
     from distr.core.workflow import phases
 
     with db_factory() as db:
-        active = AutoWorkflow(name="Ticket: standard (one session)", status="active")
+        active = AutoWorkflow(name="Hand-rolled", status="active")
         archived = AutoWorkflow(name="Development", status="archived")
         db.add_all([active, archived])
         db.commit()

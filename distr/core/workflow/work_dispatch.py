@@ -204,6 +204,8 @@ def dispatch_work_item(
             if scope["project_id"] is not None:
                 ticket.linked_project_id = int(scope["project_id"])
             db.commit()
+        from distr.core.incoming.media import sync_thread_files_safely
+        sync_thread_files_safely(int(chat_id), int(ticket_id))
 
     metadata = dict(run_metadata or {})
     routing_assessment = (

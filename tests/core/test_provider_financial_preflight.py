@@ -11,8 +11,6 @@ from distr.core.project_cli_backends.provider_preflight import (
     rank_openrouter_free_models,
 )
 from distr.core.workflow.step_executor import (
-    _hosted_free_recommendation,
-    _provider_rate_limited,
     _ticket_requires_read_only_execution,
 )
 
@@ -44,41 +42,42 @@ def _openrouter_responses(*, account_remaining, key_remaining):
     return respond
 
 
-def test_openrouter_preflight_blocks_before_dispatch_when_credit_is_too_low(monkeypatch):
+def test_openrouter_preflight_validates_key_without_credit_gate(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.provider_preflight.urlopen",
-        _openrouter_responses(account_remaining=0.03, key_remaining=None),
+        _openrouter_responses(account_remaining=0.03, key_remaining=1.0),
     )
 
     report = preflight_provider_route(
         _route(), settings={"openrouter_key": "secret"}, complexity="medium"
     )
 
-    assert report.ready is False
-    assert report.status == "blocked"
-    assert report.available_credit_usd == 0.03
-    assert report.required_buffer_usd == 0.10
+    assert report.ready is True
+    assert report.status == "ready"
+    assert report.available_credit_usd is None
     assert "secret" not in report.message
+    assert "credit check removed" in report.message.lower() or "validated" in report.message.lower()
 
 
-def test_openrouter_preflight_scales_safety_buffer_with_work_size(monkeypatch):
+def test_openrouter_preflight_ignores_complexity_buffers(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.provider_preflight.urlopen",
-        _openrouter_responses(account_remaining=0.20, key_remaining=None),
+        _openrouter_responses(account_remaining=0.20, key_remaining=1.0),
     )
 
     small = preflight_provider_route(_route(), settings={"openrouter_key": "k"}, complexity="low")
     collection = preflight_provider_route(_route(), settings={"openrouter_key": "k"}, complexity="high")
 
     assert small.ready is True
-    assert collection.ready is False
-    assert collection.required_buffer_usd == 0.50
+    assert collection.ready is True
+    assert small.available_credit_usd is None
+    assert collection.available_credit_usd is None
 
 
-def test_free_openrouter_route_only_blocks_negative_balance(monkeypatch):
+def test_free_openrouter_route_is_ready_without_credit_lookup(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.provider_preflight.urlopen",
-        _openrouter_responses(account_remaining=0, key_remaining=None),
+        _openrouter_responses(account_remaining=0, key_remaining=1.0),
     )
 
     report = preflight_provider_route(
@@ -86,14 +85,12 @@ def test_free_openrouter_route_only_blocks_negative_balance(monkeypatch):
     )
 
     assert report.ready is True
-    assert report.required_buffer_usd == 0
 
 
-def test_free_openrouter_route_is_not_blocked_by_negative_balance(monkeypatch):
-    # OpenRouter serves :free models at a negative balance (observed 2026-10-22).
+def test_free_openrouter_route_ignores_balance_entirely(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.provider_preflight.urlopen",
-        _openrouter_responses(account_remaining=-0.27, key_remaining=None),
+        _openrouter_responses(account_remaining=-0.27, key_remaining=1.0),
     )
 
     report = preflight_provider_route(
@@ -101,10 +98,10 @@ def test_free_openrouter_route_is_not_blocked_by_negative_balance(monkeypatch):
     )
 
     assert report.ready is True
-    assert report.available_credit_usd == -0.27
+    assert report.available_credit_usd is None
 
 
-def test_openrouter_402_is_a_blocking_preflight(monkeypatch):
+def test_openrouter_402_does_not_gate_dispatch(monkeypatch):
     def denied(*_args, **_kwargs):
         raise HTTPError("https://openrouter.ai/api/v1/key", 402, "Payment Required", {}, io.BytesIO())
 
@@ -112,24 +109,23 @@ def test_openrouter_402_is_a_blocking_preflight(monkeypatch):
 
     report = preflight_provider_route(_route(), settings={"openrouter_key": "k"})
 
-    assert report.ready is False
+    assert report.ready is True
     assert report.http_status == 402
-    assert "insufficient credit" in report.message.lower()
+    assert "not gated" in report.message.lower() or "402" in report.message
 
 
-def test_openrouter_account_balance_blocks_even_when_key_is_unlimited(monkeypatch):
+def test_openrouter_account_balance_is_not_consulted(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.provider_preflight.urlopen",
-        _openrouter_responses(account_remaining=-0.43, key_remaining=None),
+        _openrouter_responses(account_remaining=-0.43, key_remaining=1.0),
     )
 
     report = preflight_provider_route(
         _route(), settings={"openrouter_key": "k"}, complexity="high"
     )
 
-    assert report.ready is False
-    assert report.available_credit_usd == -0.43
-    assert "$-0.43" in report.message
+    assert report.ready is True
+    assert report.available_credit_usd is None
 
 
 def test_unreachable_credit_probe_is_unverified_not_false_insufficient_credit(monkeypatch):
@@ -150,16 +146,19 @@ def test_provider_preflight_interaction_uses_proceed_and_stop_actions():
     assert allowed_actions_for_kind("provider_preflight") == ["approve", "stop"]
 
 
-def test_provider_preflight_prompt_never_offers_an_unavailable_action():
+def test_provider_preflight_no_longer_offers_fallback_approval_prompts():
     source = Path("distr/core/workflow/step_executor.py").read_text(encoding="utf-8")
 
-    assert "Approve to use it, choose another model, or Stop." not in source
-    assert "Choose one of the model options below" in source
+    assert "Choose one of the model options below" not in source
+    assert "Approve to use it, or Stop." not in source
+    assert "Continuing on the configured harness" in source
 
 
-def test_direct_project_prompt_is_not_dispatched_when_provider_has_no_credit(monkeypatch, tmp_path):
+def test_direct_project_prompt_still_dispatches_when_provider_credit_check_fails(monkeypatch, tmp_path):
     from distr.core.project_cli_backends import registry
     from distr.core.project_cli_backends.provider_preflight import ProviderPreflight
+
+    sent = {"called": False}
 
     class Backend:
         id = "pi"
@@ -174,7 +173,16 @@ def test_direct_project_prompt_is_not_dispatched_when_provider_has_no_credit(mon
             )
 
         async def send_task(self, *_args, **_kwargs):
-            raise AssertionError("financial preflight must prevent dispatch")
+            sent["called"] = True
+            return SimpleNamespace(
+                success=True,
+                backend_id="pi",
+                engine="pi",
+                output="ok",
+                error="",
+                execution_session_id=99,
+                waits_for_human=False,
+            )
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_id: Backend())
     monkeypatch.setattr(registry, "_git_status_short", lambda _folder: [])
@@ -207,10 +215,9 @@ def test_direct_project_prompt_is_not_dispatched_when_provider_has_no_credit(mon
         )
     )
 
-    assert result.success is False
-    assert result.waits_for_human is True
-    assert "No model work was started" in result.error
-    assert "Would you like" in result.error
+    assert sent["called"] is True
+    assert result.success is True
+    assert not getattr(result, "waits_for_human", False)
 
 
 def test_free_catalogue_ranks_tool_capable_coding_models_and_filters_unfit_models(monkeypatch):
@@ -347,42 +354,6 @@ def test_hosted_auto_prefers_stronger_capable_free_model_when_benchmarks_are_spa
     assert candidates[0]["deployment_scope"] == "hosted"
     assert candidates[0]["capacity_policy"] == "prefer_strongest_capable"
     assert "120B hosted capacity" in candidates[0]["reason"]
-
-
-def test_hosted_recommendation_explains_capacity_and_honestly_labels_small_fallback():
-    large = _hosted_free_recommendation(
-        {
-            "name": "Command 120B",
-            "parameter_billions": 120,
-            "supports_tools": True,
-            "context_length": 131072,
-        },
-        complexity="high",
-    )
-    last_resort = _hosted_free_recommendation(
-        {
-            "name": "Gemma 4 26B",
-            "parameter_billions": 26,
-            "supports_tools": True,
-            "context_length": 131072,
-        },
-        complexity="high",
-    )
-
-    assert "Mac's memory is not the size limit" in large
-    assert "strongest healthy compatible" in large
-    assert "120B" in large
-    assert "stronger compatible hosted free models are unavailable" in last_resort
-    assert "best remaining" in last_resort
-
-
-def test_provider_rate_limit_is_treated_as_provider_wide_not_model_specific():
-    assert _provider_rate_limited(http_status=429) is True
-    assert _provider_rate_limited(message="429 Rate limit exceeded") is True
-    assert _provider_rate_limited(
-        message="429 Provider returned error: model is temporarily rate-limited upstream"
-    ) is False
-    assert _provider_rate_limited(message="model not found") is False
 
 
 def test_explicit_ticket_wide_read_only_contract_survives_implementation_steps():

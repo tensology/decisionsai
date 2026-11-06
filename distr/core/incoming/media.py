@@ -104,6 +104,7 @@ def list_proposal_attachment_manifest(proposal: dict[str, Any]) -> list[dict[str
                 'mime_type': mime or (mimetypes.guess_type(name)[0] or 'application/octet-stream'),
                 'kind': str(row.media_type or ''),
                 'size': int(row.media_file_length or 0) if row.media_file_length else 0,
+                'duration': int(row.media_duration) if row.media_duration not in (None, '') else None,
                 'source_message_id': str(row.message_id),
                 'api_path': '',
                 'download_status': 'local' if row.media_local_path else 'not_cached',
@@ -229,6 +230,7 @@ def ensure_proposal_attachments(
             return {'attachments': attachments, 'failures': failures}
         media = [{'id': row.id, 'message_id': row.message_id, 'name': row.media_filename or '',
                   'mime': row.media_mime_type or '', 'kind': row.media_type or '',
+                  'duration': int(row.media_duration) if row.media_duration not in (None, '') else None,
                   'stored': row.media_local_path or ''} for row in rows if row.media_type or row.media_local_path]
     from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
     for item in media:
@@ -238,7 +240,7 @@ def ensure_proposal_attachments(
         destination = _destination(root, identity, name)
         try:
             if (not strict) and destination.is_file() and 0 < destination.stat().st_size <= MAX_MEDIA_BYTES:
-                attachments.append(_record(destination, name, item['mime'], identity, source_message_id=item['message_id']))
+                attachments.append(_record(destination, name, item['mime'], identity, source_message_id=item['message_id'], kind=item.get('kind') or '', duration=item.get('duration')))
                 continue
             original = Path(resolve_whatsapp_media_disk_path(item['stored'])) if item['stored'] else None
             if original and original.is_file():
@@ -247,10 +249,10 @@ def ensure_proposal_attachments(
                 shutil.copyfile(original, destination)
             else:
                 _download_whatsapp(item['id'], item['message_id'], destination)
-            attachments.append(_record(destination, name, item['mime'], identity, source_message_id=item['message_id']))
+            attachments.append(_record(destination, name, item['mime'], identity, source_message_id=item['message_id'], kind=item.get('kind') or '', duration=item.get('duration')))
         except Exception as exc:
             _fail(name, f'Could not attach {name}. The proposal was not pushed. Sync WhatsApp media and retry. ({exc})',
-                  source_message_id=item['message_id'], mime_type=item['mime'])
+                  source_message_id=item['message_id'], mime_type=item['mime'], kind=item.get('kind') or '')
     if chat_id is not None and attachments:
         register_thread_attachments(int(chat_id), attachments)
     return {'attachments': attachments, 'failures': failures}
@@ -368,6 +370,8 @@ def register_thread_attachments(chat_id: int, attachments: list[dict[str, Any]])
         params['incoming_attachments'] = list(merged.values())
         chat.params = json.dumps(params)
         db.commit()
+    # Thread files also belong in the linked ticket's Files tab (best effort).
+    return sync_thread_files_to_tickets(int(chat_id))
 
 
 def public_thread_attachments(chat_id: int) -> list[dict[str, Any]]:
@@ -404,3 +408,91 @@ def resolve_thread_attachment(chat_id: int, attachment_id: str) -> tuple[Path, d
     if path.stat().st_size != record.get('size') or _digest(path) != record.get('sha256'):
         raise FileNotFoundError('Thread attachment changed. Resync source media and retry.')
     return path, record
+
+
+# ---- Thread -> ticket Files tab ---------------------------------------------
+# A Development thread's incoming files (documents, images, audio notes) are
+# copied into kanban_uploads/{ticket_id} as KanbanTicketFile rows for every
+# ticket linked to the thread (KanbanTicket.source_chat_id). Copies, never moves:
+# the thread keeps its own files. Idempotent via a description marker. Never raises.
+TICKET_FILE_MARKER = 'incoming-attachment:'
+
+
+def _kanban_uploads_dir() -> Path:
+    from distr.core.paths import DB_DIR
+    return Path(DB_DIR) / 'kanban_uploads'
+
+
+def _unique_destination(folder: Path, name: str) -> Path:
+    safe = Path(str(name or 'file')).name.strip() or 'file'
+    if safe in {'.', '..'}:
+        safe = 'file'
+    candidate = folder / safe
+    stem, suffix, index = candidate.stem, candidate.suffix, 1
+    while candidate.exists():
+        candidate = folder / f"{stem}-{index}{suffix}"
+        index += 1
+    return candidate
+
+
+def sync_thread_files_to_tickets(chat_id: int, ticket_id: int | None = None) -> dict[str, Any]:
+    """Copy a thread's incoming files onto its linked ticket(s). Returns a report."""
+    import logging
+    log = logging.getLogger(__name__)
+    report: dict[str, Any] = {'attached': [], 'failed': [], 'ticket_ids': []}
+    try:
+        from distr.core.db.kanban import KanbanTicket, KanbanTicketFile
+
+        items = thread_attachments(int(chat_id))
+        if not items:
+            return report
+        with get_session() as db:
+            query = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == int(chat_id))
+            ticket_ids = [int(row.id) for row in query.all()]
+            if ticket_id is not None and int(ticket_id) not in ticket_ids and db.get(KanbanTicket, int(ticket_id)) is not None:
+                ticket_ids.append(int(ticket_id))
+            report['ticket_ids'] = ticket_ids
+            for tid in ticket_ids:
+                existing = {str(row.description or '') for row in db.query(KanbanTicketFile).filter(KanbanTicketFile.ticket_id == tid).all()}
+                folder = _kanban_uploads_dir() / str(tid)
+                for item in items:
+                    name = str(item.get('name') or 'file')
+                    marker = f"{TICKET_FILE_MARKER}{item.get('id') or item.get('sha256') or name}"
+                    if marker in existing:
+                        continue
+                    error = item.get('download_error') or item.get('error')
+                    source = Path(str(item.get('path') or ''))
+                    try:
+                        if error:
+                            raise ValueError(str(error))
+                        if not source.is_file():
+                            raise FileNotFoundError('The thread file is missing on disk.')
+                        folder.mkdir(parents=True, exist_ok=True)
+                        destination = _unique_destination(folder, name)
+                        if destination.resolve().parent != folder.resolve():
+                            raise ValueError('Unsafe file name.')
+                        shutil.copy2(source, destination)
+                        db.add(KanbanTicketFile(ticket_id=tid, filename=destination.name,
+                                                file_path=str(destination), description=marker))
+                        existing.add(marker)
+                        report['attached'].append({'ticket_id': tid, 'name': destination.name})
+                    except Exception as exc:  # one bad file never blocks the rest
+                        log.warning('Could not attach thread %s file %r to ticket %s: %s', chat_id, name, tid, exc)
+                        report['failed'].append({'ticket_id': tid, 'name': name, 'error': str(exc)})
+            db.commit()
+    except Exception as exc:
+        log.warning('Thread %s file sync to ticket failed: %s', chat_id, exc, exc_info=True)
+        report['failed'].append({'name': '*', 'error': str(exc)})
+    return report
+
+
+def sync_thread_files_safely(chat_id: int | None, ticket_id: int | None = None) -> None:
+    if chat_id is None:
+        return
+    try:
+        sync_thread_files_to_tickets(int(chat_id), ticket_id)
+        from distr.core.incoming.source_context import sync_ticket_source_context
+
+        sync_ticket_source_context(int(chat_id), ticket_id)
+    except Exception:
+        pass

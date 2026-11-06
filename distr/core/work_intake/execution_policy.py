@@ -185,6 +185,21 @@ def apply_approved_provider_replacements_to_route(
         from_model = str(replacement.get("from_model") or "auto").strip()
         if candidate_backend != from_backend or candidate_model != from_model:
             continue
+        from distr.core.workflow.run_prompts import real_approver
+
+        approver = real_approver(replacement.get("approved_by"))
+        reason = str(replacement.get("unready_reason") or "").strip()
+        if not approver or not reason:
+            # Legacy or unattributed swaps are never applied silently: the
+            # configured route stays, and its own preflight asks again.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Ignoring recorded provider replacement %s/%s -> %s/%s: missing %s",
+                from_backend, from_model, replacement.get("to_backend"), replacement.get("to_model"),
+                "approver" if not approver else "unready reason",
+            )
+            continue
         candidate.update(
             {
                 "backend": normalize_backend_id(
@@ -193,8 +208,13 @@ def apply_approved_provider_replacements_to_route(
                 "model": str(replacement.get("to_model") or "auto").strip(),
                 "source": "approved_provider_replacement",
                 "requires_approval": False,
+                "reason": replacement.get("rationale") or f"{from_backend}/{from_model} was not ready ({reason}); approved by {approver}.",
+                "rationale": replacement.get("rationale") or f"{from_backend}/{from_model} was not ready ({reason}); approved by {approver}.",
+                "unready_reason": reason,
+                "approved_by": approver,
             }
         )
-        candidate.pop("model_provider", None)
+        for stale_key in ("model_provider", "provider", "base_url", "endpoint", "local", "free"):
+            candidate.pop(stale_key, None)
         break
     return candidate

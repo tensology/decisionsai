@@ -188,7 +188,7 @@ def complete_execution_session(
         return
     ensure_project_execution_tables()
     clean_status = str(status or "").strip().lower()
-    if clean_status not in {"completed", "failed", "cancelled", "canceled"}:
+    if clean_status not in {"completed", "failed", "blocked", "cancelled", "canceled"}:
         clean_status = "completed" if success else "failed"
     if clean_status == "canceled":
         clean_status = "cancelled"
@@ -204,11 +204,13 @@ def complete_execution_session(
         row.error = safe_error
         row.completed_at = now
         row.updated_at = now
-        event_type = "session_cancelled" if clean_status == "cancelled" else "session_completed"
+        event_type = "session_cancelled" if clean_status == "cancelled" else "session_blocked" if clean_status == "blocked" else "session_completed"
         if clean_status == "cancelled":
             message = safe_error or "Project execution session cancelled."
         elif clean_status == "completed":
             message = "Project execution session completed."
+        elif clean_status == "blocked":
+            message = "Project execution session blocked; input is required."
         else:
             message = "Project execution session failed."
         session.add(ProjectExecutionEvent(

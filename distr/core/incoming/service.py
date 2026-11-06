@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import html
 from html.parser import HTMLParser
 from typing import Any
 
@@ -21,6 +22,17 @@ def _iso_from_epoch(value: Any) -> str:
         return datetime.fromtimestamp(int(value), tz=timezone.utc).isoformat()
     except (TypeError, ValueError, OSError):
         return ""
+
+
+def _whatsapp_source_sequence(row: WhatsAppMessage) -> int | None:
+    """Relay ids retain arrival order when a newest-first batch is imported."""
+    try:
+        raw = json.loads(row.raw_data or "{}")
+        value = raw.get("id") if isinstance(raw, dict) else None
+        sequence = int(value) if value is not None and not isinstance(value, bool) else 0
+        return sequence if sequence > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _whatsapp_conversation_label(row: WhatsAppMessage, links: list[WhatsAppPhoneLink]) -> str:
@@ -45,31 +57,81 @@ def _whatsapp_conversation_label(row: WhatsAppMessage, links: list[WhatsAppPhone
 class _EmailTextParser(HTMLParser):
     """Small, dependency-free HTML email to readable text converter."""
 
+    _SKIP = frozenset({"script", "style", "head", "title", "noscript", "template"})
+    _BREAK = frozenset({"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"})
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
+        self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"br", "p", "div", "li", "tr"}:
+        name = tag.lower()
+        if name in self._SKIP:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        if name in self._BREAK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.lower()
+        if name in self._SKIP and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if self._skip_depth:
+            return
+        if name in {"p", "div", "li", "tr"}:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
         self.parts.append(data)
 
 
 def _email_text(value: Any) -> str:
+    """Strip tags/entities from email HTML into readable plain text."""
     raw = str(value or "").strip()
     if not raw:
         return ""
     if "<" not in raw or ">" not in raw:
-        return raw
+        return html.unescape(raw)
     parser = _EmailTextParser()
     try:
         parser.feed(raw)
         lines = [" ".join(line.split()) for line in "".join(parser.parts).splitlines()]
         return "\n".join(line for line in lines if line).strip()
     except Exception:
-        return raw
+        return html.unescape(raw)
+
+
+def _email_list_snippet(*parts: Any) -> str:
+    """One-line plain preview for Incoming mail list rows (Gmail + Mailshot)."""
+    for part in parts:
+        plain = _email_text(part)
+        if plain:
+            return " ".join(plain.split())
+    return ""
+
+
+def _mail_plain_and_html(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Shared Gmail/Mailshot field shaping: (text, html_body, snippet)."""
+    raw_body = str(row.get("body") or "")
+    html_body = str(row.get("html_body") or "").strip()
+    if not html_body and "<" in raw_body and ">" in raw_body and (
+        "</" in raw_body or "<br" in raw_body.lower() or "<div" in raw_body.lower()
+    ):
+        html_body = raw_body
+    explicit_text = str(row.get("text_body") or "").strip()
+    text = (
+        _email_text(explicit_text or raw_body)
+        or _email_text(html_body)
+        or _email_text(row.get("snippet") or "")
+    )
+    snippet = _email_list_snippet(row.get("snippet"), explicit_text or raw_body, html_body, text)
+    return text, html_body, snippet
 
 
 def _email_created_at(value: Any) -> str:
@@ -84,6 +146,57 @@ def _email_created_at(value: Any) -> str:
     except (TypeError, ValueError, OverflowError):
         return raw
 
+
+
+def _mail_attachment_preview_url(
+    attachment: dict[str, Any],
+    *,
+    message_id: str = "",
+    provider: str = "",
+) -> str:
+    """Build a same-origin preview URL for an Incoming mail attachment (session auth)."""
+    if not isinstance(attachment, dict):
+        return ""
+    mid = str(attachment.get("message_id") or message_id or "").strip()
+    aid = str(attachment.get("attachment_id") or "").strip()
+    cid = str(attachment.get("content_id") or "").strip().strip("<>")
+    if not mid or (not aid and not cid):
+        return ""
+    from urllib.parse import urlencode
+    params = {"message_id": mid}
+    if aid:
+        params["attachment_id"] = aid
+    if cid:
+        params["content_id"] = cid
+    provider_key = str(provider or attachment.get("provider") or "").strip().lower()
+    if provider_key:
+        params["provider"] = provider_key
+    elif mid.startswith("email-"):
+        params["provider"] = "mailshot"
+    return f"/api/workflows/studio/incoming/mail/attachment?{urlencode(params)}"
+
+
+def _with_mail_preview_urls(
+    attachments: Any,
+    *,
+    message_id: str = "",
+    provider: str = "",
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        mid = str(row.get("message_id") or message_id or "").strip()
+        if mid and not row.get("message_id"):
+            row["message_id"] = mid
+        if provider and not row.get("provider"):
+            row["provider"] = provider
+        preview = _mail_attachment_preview_url(row, message_id=mid, provider=provider)
+        if preview:
+            row["preview_url"] = preview
+        out.append(row)
+    return out
 
 def _load_gmail_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Read a bounded slice of the connected Gmail inbox."""
@@ -147,6 +260,7 @@ def _load_mailshot_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dic
             limit=max(1, min(int(max_results), 30)),
             max_pages=1,
             jira_only=False,
+            hydrate=True,
         )
         return [row for row in rows if isinstance(row, dict)], {"connected": True, "error": ""}
     except Exception:
@@ -241,6 +355,7 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                 "source": "whatsapp",
                 "source_label": "WhatsApp",
                 "database_id": int(row.id),
+                "source_sequence": _whatsapp_source_sequence(row),
                 "source_message_id": row.message_id or str(row.id),
                 "source_thread_id": row.jid or row.jid_phone or "",
                 "conversation_label": _whatsapp_conversation_label(row, row_links),
@@ -248,6 +363,7 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                 "sender": row.sender_push_name or row.sender_phone or row.jid_phone or "WhatsApp",
                 "text": text,
                 "created_at": _iso_from_epoch(row.whatsapp_timestamp) or (row.created_date.isoformat() if row.created_date else ""),
+                "source_sent_at": _iso_from_epoch(row.whatsapp_timestamp),
                 "processed": bool(row.processed),
                 "snapshotted": bool(row.snapshot_group),
                 "media_type": row.media_type or "",
@@ -271,7 +387,7 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
         thread_id = str(row.get("threadId") or row.get("thread_id") or message_id).strip()
         subject = str(row.get("subject") or "").strip() or "(No subject)"
         sender = str(row.get("from") or "").strip() or "Unknown sender"
-        body = _email_text(row.get("body")) or str(row.get("snippet") or "").strip()
+        text_body, html_body, snippet = _mail_plain_and_html(row)
         labels = [str(label) for label in (row.get("labels") or [])]
         if message_id:
             gmail_message_ids.add(message_id)
@@ -287,13 +403,14 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
             "sender": sender,
             "recipient": str(row.get("to") or "").strip(),
             "subject": subject,
-            "text": body,
-            "snippet": str(row.get("snippet") or "").strip(),
+            "text": text_body,
+            "html_body": html_body,
+            "snippet": snippet,
             "created_at": _email_created_at(row.get("date")),
             "processed": "UNREAD" not in labels,
             "unread": "UNREAD" in labels,
             "labels": labels,
-            "attachments": row.get("attachments") or [],
+            "attachments": _with_mail_preview_urls(row.get("attachments") or [], message_id=message_id),
             "board_id": None,
             "board_name": "",
             "can_snapshot": False,
@@ -305,6 +422,7 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
         thread_id = str(row.get("thread_id") or message_id).strip()
         subject = str(row.get("subject") or "").strip() or "(No subject)"
         labels = [str(label) for label in (row.get("labels") or [])]
+        text_body, html_body, snippet = _mail_plain_and_html(row)
         items.append({
             "key": f"mailshot:{message_id or thread_id}",
             "source": "mailshot",
@@ -317,13 +435,18 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
             "sender": str(row.get("from") or "").strip() or "Unknown sender",
             "recipient": str(row.get("to") or "").strip(),
             "subject": subject,
-            "text": _email_text(row.get("body")) or str(row.get("snippet") or "").strip(),
-            "snippet": str(row.get("snippet") or "").strip(),
+            "text": text_body,
+            "html_body": html_body,
+            "snippet": snippet,
             "created_at": _email_created_at(row.get("date")),
             "processed": bool(row.get("read")),
             "unread": not bool(row.get("read")),
             "labels": labels,
-            "attachments": row.get("attachments") or [],
+            "attachments": _with_mail_preview_urls(
+                row.get("attachments") or [],
+                message_id=message_id,
+                provider="mailshot",
+            ),
             "board_id": None,
             "board_name": "",
             "can_snapshot": False,

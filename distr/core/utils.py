@@ -11,6 +11,7 @@ import logging
 import json
 import os
 import platform
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,11 @@ SECRET_SETTINGS_FIELDS = {
     "nvidia_key",
     "pixazo_key",
     "tensology_key",
+    # 7b: previously stored as plaintext; migrated to enc:v1 by load_settings_from_db's re-save.
+    "icloud_app_password",
+    "fishaudio_key",
+    "replicate_api_token",
+    "masko_key",
 }
 CONNECTED_ACCOUNT_SECRET_FIELDS = {
     "api_token",
@@ -171,6 +177,32 @@ def _decrypt_connected_accounts(accounts: Any) -> Any:
         decrypted_accounts.append(cloned)
     return decrypted_accounts
 
+def _secret_is_unreadable(raw: Any) -> bool:
+    """True for an enc:v1 value no known key can open (does not touch the MAC failure counter)."""
+    raw = (raw or "").strip() if isinstance(raw, str) else ""
+    if not raw.startswith(ENCRYPTION_PREFIX):
+        return False
+    try:
+        payload = base64.urlsafe_b64decode(raw[len(ENCRYPTION_PREFIX):].encode("ascii"))
+    except Exception:
+        return True
+    if len(payload) < 16 + 32:
+        return False  # _decrypt_secret hands such values back unchanged
+    nonce, mac, ciphertext = payload[:16], payload[-32:], payload[16:-32]
+    return not any(
+        hmac.compare_digest(mac, hmac.new(key, nonce + ciphertext, hashlib.sha256).digest())
+        for key in _iter_decrypt_key_bytes()
+    )
+
+
+_MASK_PLACEHOLDER_RE = re.compile(r"(\*{4,}|•{4,})")
+
+
+def _looks_masked(value: Any) -> bool:
+    """A redacted UI placeholder (mask_secret output, '••••' hints) — never a real secret to store."""
+    return isinstance(value, str) and bool(_MASK_PLACEHOLDER_RE.search(value))
+
+
 def save_settings_to_db(settings_dict: Dict[str, Any]) -> None:
     """Save settings to database"""
     normalized_settings = dict(settings_dict)
@@ -203,9 +235,17 @@ def save_settings_to_db(settings_dict: Dict[str, Any]) -> None:
         for key, value in normalized_settings.items():
             if hasattr(settings, key):
                 old_value = getattr(settings, key)
+                if key in SECRET_SETTINGS_FIELDS:
+                    # Never replace a stored secret with a mask placeholder, and never blank a value we simply
+                    # could not decrypt (MAC mismatch makes load return "", and every load->save would wipe it).
+                    if _looks_masked(settings_dict.get(key)) or (not value and _secret_is_unreadable(old_value)):
+                        continue
                 setattr(settings, key, value)
                 if old_value != value:
-                    logger.debug(f"Setting {key} = {value} (was {old_value})")
+                    if key in SECRET_SETTINGS_FIELDS or key == 'connected_accounts':
+                        logger.debug(f"Setting {key} updated (secret value not logged)")
+                    else:
+                        logger.debug(f"Setting {key} = {value} (was {old_value})")
             else:
                 logger.warning(f"Settings model does not have attribute: {key}")
         

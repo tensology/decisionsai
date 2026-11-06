@@ -2947,8 +2947,8 @@
             pop.style.maxWidth = "300px";
 
             var statusCls = data.status === "waiting" ? "text-amber-300" : "text-sky-300";
-            var stepLine = data.current_step_name
-                ? '<div class="text-gray-400 mt-1">Step: <span class="text-gray-200">' + esc(data.current_step_name) + "</span></div>"
+            var stepLine = data.status_summary || data.current_step_name
+                ? '<div class="text-gray-400 mt-1"><span class="text-gray-200">' + esc(data.status_summary || data.current_step_name) + "</span></div>"
                 : "";
             var phaseLine = data.phase
                 ? '<div class="text-gray-400">Phase: <span class="text-gray-200">' + esc(data.phase) + "</span></div>"

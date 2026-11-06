@@ -60,3 +60,69 @@
 .workflow-step-panel .workflow-step-output { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: #c9d2e6; }
 .workflow-step-panel .workflow-step-output b { display: block; color: #7f8baa; font-size: 7px; text-transform: uppercase; }
 .workflow-step-numbers-host { margin-top: 12px; }
+
+
+/* Shared ticket / proposal modal: one constant height for every tab; tab bodies scroll. */
+:root { --ticket-modal-height: min(640px, calc(100vh - 2rem)); }   /* <650 keeps the ticket modal compact (harness test) */
+/* Shared UI tokens: ticket modal, proposal modal and plan tabs use the same font, tab size and spacing.
+   Font is always the app font (body: Quicksand via base.html); controls inherit it (shell.css). */
+:root {
+    --studio-tab-height: 36px;
+    --studio-tab-padding: 0 10px;
+    --studio-tab-gap: 4px;
+    --studio-tab-font-size: 12px;
+    --studio-tab-font-weight: 600;
+    --studio-tab-count-size: 10px;
+    --ticket-modal-width: min(760px, calc(100vw - 24px));
+    --ticket-modal-radius: 8px;
+    --ticket-modal-header-pad: 14px 16px 12px;
+    --ticket-modal-title-size: 0.95rem;
+    --ticket-modal-pane-pad: 16px;
+    --ticket-modal-text-size: 13px;
+    --ticket-modal-label-size: 11px;
+}
+
+/* Files tab drop zone (tickets and proposals). */
+.ticket-file-drop { display: flex; min-height: 64px; align-items: center; justify-content: center; gap: 10px; padding: 12px; border: 1px dashed var(--studio-line); border-radius: 8px; color: var(--studio-muted); font-size: 11px; transition: border-color .14s ease, background .14s ease; }
+.ticket-file-drop.is-dragover { border-color: var(--studio-accent); background: rgba(255,255,255,.05); color: var(--studio-text); }
+.ticket-file-drop.disabled { opacity: .7; }
+.ticket-file-drop.hidden { display: none; }
+
+/* Readable JSON notes. */
+.ticket-note-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 16px 0; color: var(--studio-dim); font-size: 10px; }
+.ticket-note-toolbar.hidden, .ticket-note-fields.hidden { display: none; }
+.ticket-note-fields { display: grid; gap: 6px; margin: 8px 16px 0; }
+.ticket-note-group { padding-left: calc(var(--note-depth, 0) * 14px); color: var(--studio-text); font-size: 11px; font-weight: 600; margin-top: 4px; }
+.ticket-note-field { display: grid; gap: 3px; margin: 0; padding-left: calc(var(--note-depth, 0) * 14px); }
+.ticket-note-field > span { color: var(--studio-dim); font-size: 10px; }
+.ticket-note-field > em { color: var(--studio-dim); font-size: 10px; }
+.ticket-note-field input, .ticket-note-field textarea { width: 100%; font-size: 12px; }
+/* Board view switcher: icons at the far right of the thread and Kanban header bars. */
+/* No auto margin: .task-state (margin-left: auto) already right-aligns the cluster; a second auto split the space. */
+/* Segmented control tokens: shared by the view switcher and the plan header's Pages/Data/Requirements. */
+:root {
+    --segment-gap: 2px;
+    --segment-pad: 2px;
+    --segment-border: 1px solid var(--studio-line-soft);
+    --segment-radius: 7px;
+    --segment-item-height: 26px;
+    --segment-item-radius: 5px;
+    --segment-active-bg: var(--studio-raised);
+    --segment-active-color: var(--studio-accent);
+    --segment-hover-bg: var(--studio-raised);
+    --segment-divider: var(--studio-line-soft);
+}
+.board-view-switch { display: inline-flex; flex: 0 0 auto; gap: var(--segment-gap); margin-left: 0; padding: var(--segment-pad); border: var(--segment-border); border-radius: var(--segment-radius); }
+.board-view-switch.hidden { display: none; }
+.board-view-switch .icon-button { width: var(--segment-item-height); height: var(--segment-item-height); border-radius: var(--segment-item-radius); }
+.board-view-switch .icon-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.board-view-switch [aria-pressed="true"] { background: var(--segment-active-bg); color: var(--segment-active-color); }
+.board-view-switch [aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+/* Contextual view controls next to the breadcrumb (plan toolbar mounts here). */
+.header-context { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 8px; overflow-x: auto; }
+.header-context.hidden { display: none; }
+.header-context .plan-context-controls { border: 0; min-height: 0; padding: 0; flex: 1 1 auto; }
+/* Shared header layout (thread, plan, Kanban): breadcrumb takes the free space so the
+   status / Stop / ⋯ / terminal / view-switch cluster is always right-aligned with one gap. */
+.task-header > .task-breadcrumb { flex: 1 1 auto; }
+#development-task-header.plan-mode > .task-breadcrumb { flex: 0 1 auto; }

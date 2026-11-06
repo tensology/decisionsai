@@ -569,7 +569,7 @@ class DeveloperContextAssembler:
                 workspace = session.query(PlanWorkspace).filter(PlanWorkspace.project_id == active_project.id).order_by(PlanWorkspace.modified_at.desc()).first()
             if workspace is None:
                 return None
-            items = session.query(PlanItem).filter(PlanItem.workspace_id == workspace.id).order_by(PlanItem.sort_order, PlanItem.id).all()
+            items = session.query(PlanItem).filter(PlanItem.workspace_id == workspace.id, PlanItem.status != "archived").order_by(PlanItem.sort_order, PlanItem.id).all()
             return DeveloperPlanContext(
                 id=int(workspace.id), board_key=workspace.board_key or board_key,
                 board_name=workspace.board_name or active_board.name,

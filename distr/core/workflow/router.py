@@ -362,13 +362,24 @@ def _effective_wait_prompt(
 ) -> str:
     """Keep actionable provider/route questions instead of generic wait copy."""
     kind = str(run_data.get("waiting_kind") or "").strip().lower()
+    from distr.core.workflow.run_prompts import human_question_prompt, provider_failure_prompt, restart_prompt, run_label
+    label = run_label(run_data)
     if kind == "provider_preflight":
-        return str(
+        return provider_failure_prompt(str(
             run_data.get("provider_preflight_prompt") or result or default_prompt
-        ).strip()
+        ).strip(), label=label)
     if kind == "route_approval":
-        return str(run_data.get("route_approval_prompt") or result or default_prompt).strip()
-    return str(default_prompt or result or "Workflow is waiting for input.").strip()
+        return provider_failure_prompt(str(run_data.get("route_approval_prompt") or result or default_prompt).strip(), label=label)
+    if kind == "control_interrupt":
+        interrupt = run_data.get("interrupt_context") or {}
+        text = str(interrupt.get("question") or run_data.get("waiting_prompt") or result or default_prompt).strip()
+        return human_question_prompt(text, label=label)
+    if kind == "restart_recovery":
+        return str(run_data.get("waiting_prompt") or restart_prompt(label))
+    if kind in {"needs_human_input", "worker_needs_input"}:
+        return human_question_prompt(str(run_data.get("worker_question") or result or default_prompt), label=label)
+    from distr.core.workflow.run_prompts import wait_prompt
+    return wait_prompt("checkpoint", "the step paused for review", label=label, detail=str(result or "")[:280])
 
 
 class StepRouter:
@@ -439,38 +450,7 @@ class StepRouter:
                     run.run_data = json.dumps(run_data)
                     db.flush()
                     return self._enter_wait_state(db, step, run_id, result, passed)
-                if run_data.pop("power_budget_pending", False):
-                    interrupt = (
-                        run_data.get("interrupt_context")
-                        if isinstance(run_data.get("interrupt_context"), dict)
-                        else {}
-                    )
-                    question = str(
-                        interrupt.get("question")
-                        or run_data.get("waiting_prompt")
-                        or "The run power budget was exhausted. Raise the budget, change approach, or stop?"
-                    )
-                    recommendation = str(
-                        interrupt.get("recommendation")
-                        or "Raise the budget only if acceptance criteria still justify the spend."
-                    )
-                    run_data["waiting_kind"] = "control_interrupt"
-                    run_data["waiting_prompt"] = (
-                        f"{question} I recommend: {recommendation} "
-                        "Reply with a choice, steer the run, or stop it."
-                    )
-                    run_data["interrupt_context"] = {
-                        "should_interrupt": True,
-                        "reason": str(interrupt.get("reason") or "The run power budget was exhausted."),
-                        "question": question,
-                        "recommendation": recommendation,
-                        "options": list(interrupt.get("options") or ["Raise budget", "Change approach", "Stop"]),
-                        "can_continue_default": False,
-                    }
-                    run_data["human_intervention_state"] = "needs_human_input"
-                    run.run_data = json.dumps(run_data)
-                    db.flush()
-                    return self._enter_wait_state(db, step, run_id, run_data["waiting_prompt"], passed)
+                # power_budget_pending gating removed; meters are informational only.
                 if run_data.pop("route_approval_pending", False):
                     from distr.core.workflow.control_policy import decide_interruption
 
@@ -1948,6 +1928,11 @@ class StepRouter:
             run_data = json.loads(run.run_data or "{}")
             run_data["waiting_result"] = result
             run_data["waiting_passed"] = passed
+            from distr.core.workflow.service import _enrich_run_record
+            identity = _enrich_run_record(db, run, run_data)
+            for key in ("project_name", "ticket_title", "ticket_id"):
+                if identity.get(key):
+                    run_data[key] = identity[key]
             if not run_data.get("waiting_kind"):
                 run_data["waiting_kind"] = ""
             run_data["waiting_prompt"] = _effective_wait_prompt(
@@ -1955,6 +1940,9 @@ class StepRouter:
                 default_prompt=handoff["prompt"],
                 result=result,
             )
+            handoff["history_entry"] = handoff["history_entry"].replace(handoff["prompt"], run_data["waiting_prompt"])
+            handoff["prompt"] = run_data["waiting_prompt"]
+            handoff["report"] += "\nOperator prompt: " + run_data["waiting_prompt"]
             waiting_kind = str(run_data.get("waiting_kind") or "").strip().lower()
             if waiting_kind in {
                 "control_interrupt",

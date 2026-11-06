@@ -52,6 +52,9 @@ def test_development_kanban_exposes_current_board_and_ticket_controls():
     assert "kanban-list-time" in js
     assert "development-kanban-card-title" in js
     assert "kanban-run-status" in js
+    # Run-status dot sits first in the badges row in both layouts, never in the title.
+    assert '<span class="development-kanban-card-badges">${statusHtml}' in js
+    assert '<span class="development-kanban-card-title"><strong' in js
     assert "label.toLowerCase()" in js
     assert '${escapeHtml(status)}</button>' not in js
     assert "layout === 'list' ? '' : kanbanTicketMetaHtml(ticket)" in js

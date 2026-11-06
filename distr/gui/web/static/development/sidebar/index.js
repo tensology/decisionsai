@@ -1,4 +1,9 @@
 // Owns sidebar rendering, interactions, and private view state.
+// Filled folder = board has threads underneath; outline = none.
+export function boardFolderIconHtml(hasThreads) {
+    return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" class="${hasThreads ? 'folder-filled' : 'folder-outline'}"><path d="M1.5 3.5h4l1.5 1.5h7.5v8h-13z" fill="${hasThreads ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+}
+
 export function createSidebar({ context, actions, el }) {
     const state = {
         pinnedBoardKeys: [],
@@ -8,7 +13,9 @@ export function createSidebar({ context, actions, el }) {
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
         showAllRecents: new URLSearchParams(window.location.search).get('recent') === '1',
         contextBoardKey: '',
-        contextThreadId: null
+        contextThreadId: null,
+        pendingTerminalBoards: new Set(),
+        primedTerminalProjects: new Set()
     };
     try {
         const pinned = JSON.parse(window.localStorage.getItem('decisions-development-pinned-boards') || '[]');
@@ -25,13 +32,10 @@ export function createSidebar({ context, actions, el }) {
     async function applyPinnedBoards(payload) {
         if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'board_keys')) return;
         if (payload.board_keys === null) {
-            // Preserve both existing pin sets when introducing the shared setting.
-            const legacyIds = new Set((payload.legacy_project_ids || []).map(Number));
-            const keys = Array.from(new Set([
-                ...state.pinnedBoardKeys,
-                ...context.boards.filter(board => legacyIds.has(Number(board.project_id))).map(board => board.key)
-            ]));
-            payload = await actions.api('/workflows/studio/sidebar/pins', {
+            // Server already migrated hover-panel project pins; seed only this browser's old local pins.
+            const keys = Array.from(new Set(state.pinnedBoardKeys));
+            if (!keys.length) payload = { board_keys: [] };
+            else payload = await actions.api('/workflows/studio/sidebar/pins', {
                 method: 'PUT', body: { board_keys: keys }
             });
         }
@@ -41,6 +45,18 @@ export function createSidebar({ context, actions, el }) {
             window.localStorage.setItem('decisions-development-pinned-boards', JSON.stringify(state.pinnedBoardKeys));
         } catch (_) { /* The server remains authoritative without browser storage. */ }
     }
+    function isThreadActive(chat) {
+        const currentId = Number(context.currentChat?.id || 0);
+        const chatId = Number(chat?.id || 0);
+        if (!currentId || !chatId || currentId !== chatId) return false;
+        if (context.workspaceMode === 'chat') return true;
+        // Keep the thread selected while viewing that project's terminals.
+        if (context.workspaceMode === 'terminals') {
+            const projectId = Number(context.currentChat?.project_id || 0);
+            return Boolean(projectId);
+        }
+        return false;
+    }
     function renderSidebar() {
         const pinnedBoards = context.boards.filter((board) => state.pinnedBoardKeys.includes(board.key));
         const pinnedThreads = context.chats.filter((chat) => chat.pinned);
@@ -48,7 +64,7 @@ export function createSidebar({ context, actions, el }) {
         const visible = state.boardsExpanded ? unpinned : unpinned.slice(0, 6);
         const pinnedRows = pinnedThreads
             .map((chat) => {
-                const active = context.workspaceMode === 'chat' && Number(context.currentChat?.id) === Number(chat.id);
+                const active = isThreadActive(chat);
                 return threadRowHtml(chat, active, true);
             })
             .join('');
@@ -81,7 +97,6 @@ export function createSidebar({ context, actions, el }) {
         el('new-thread-button').classList.toggle('active', newThreadActive);
         el('new-thread-button').setAttribute('aria-current', newThreadActive ? 'page' : 'false');
         [
-            ['sidebar-plan-toggle', context.workspaceMode === 'plan'],
             ['sidebar-terminals-toggle', ['terminals_home', 'terminals'].includes(context.workspaceMode)],
             ['sidebar-reports-toggle', context.workspaceMode === 'reports']
         ].forEach(([id, active]) => {
@@ -124,7 +139,7 @@ export function createSidebar({ context, actions, el }) {
         el('recents-toggle').querySelector('.chevron').textContent = state.recentsExpanded ? '▼' : '▶';
         el('recent-task-group').innerHTML = visibleRecent
             .map((chat) => {
-                const active = context.workspaceMode === 'chat' && Number(context.currentChat?.id) === Number(chat.id);
+                const active = isThreadActive(chat);
                 return threadRowHtml(chat, active);
             })
             .join('');
@@ -146,12 +161,19 @@ export function createSidebar({ context, actions, el }) {
                 actions.startBoardDevelopment(button.dataset.boardNewChat);
             });
         });
-        document.querySelectorAll('[data-board-kanban]').forEach((button) => {
+        document.querySelectorAll('[data-board-terminal]').forEach((button) => {
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
-                actions.openBoardFromSidebar(button.dataset.boardKanban);
+                toggleBoardTerminal(button);
             });
         });
+        document.querySelectorAll('[data-board-edit-commands]').forEach((button) => {
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                openBoardLinkDialog(button.dataset.boardEditCommands);
+            });
+        });
+        primeBoardTerminalSessions();
         document.querySelectorAll('[data-chat-id]').forEach((button) => {
             button.addEventListener('click', () => actions.loadChat(Number(button.dataset.chatId)));
             button.addEventListener('contextmenu', (event) => {
@@ -430,6 +452,65 @@ export function createSidebar({ context, actions, el }) {
         }
     }
 
+    // Same rule as the thread header: a project with startup terminal commands
+    // (hasStartupTerminalCommands, or the board's own copy of the project's
+    // startup_instructions) or live sessions has a terminal; live sessions = running.
+    function hasCommandLines(text) {
+        return String(text || '').split('\n').some((line) => line.trim() && !line.trim().startsWith('#'));
+    }
+    function boardTerminalState(board) {
+        const projectId = Number(board?.project_id || 0);
+        if (!projectId) return { linked: false, running: false };
+        const sessions = actions.getTerminalSessions?.(projectId) || [];
+        const running = sessions.length > 0;
+        const linked = running || Boolean(actions.hasStartupTerminalCommands?.(projectId)) || hasCommandLines(board.startup_instructions);
+        return { linked, running };
+    }
+    // Board edit dialog (openBoardLinkDialog) saves startup_instructions only for
+    // Decisions boards; it creates and links a project when the board has none.
+    function boardCanEditTerminalCommands(board) {
+        return board?.provider === 'decisions';
+    }
+    function boardTerminalActionHtml(board) {
+        const { linked, running } = boardTerminalState(board);
+        if (!linked) {
+            if (!boardCanEditTerminalCommands(board)) return '';
+            const name = actions.escapeHtml(board.name || 'board');
+            return `<button class="board-row-action board-edit-commands" type="button" data-board-edit-commands="${actions.escapeHtml(board.key)}" aria-label="Add terminal commands for ${name}" title="Add terminal commands"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M9.5 4.2 11.8 6.5 6 12.3H3.7V10z"/><path d="M8.4 5.3l2.3 2.3"/></svg></button>`;
+        }
+        const label = running ? 'Stop terminal' : 'Start terminal';
+        const name = actions.escapeHtml(board.name || 'board');
+        return `<button class="board-row-action board-terminal terminal-project-action ${running ? 'stop' : 'start'}" type="button" data-board-terminal="${actions.escapeHtml(board.key)}" data-running="${String(running)}" aria-label="${label} for ${name}" title="${label}">${actions.terminalProjectActionIcon(running ? 'stop' : 'start', state.pendingTerminalBoards.has(board.key))}</button>`;
+    }
+    async function toggleBoardTerminal(button) {
+        const boardKey = String(button.dataset.boardTerminal || '');
+        const board = actions.boardByKey(boardKey);
+        const projectId = Number(board?.project_id || 0);
+        if (!projectId || state.pendingTerminalBoards.has(boardKey)) return;
+        const running = button.dataset.running === 'true';
+        state.pendingTerminalBoards.add(boardKey);
+        try {
+            const changed = await actions.setTerminalProjectRunning(projectId, !running, button);
+            await actions.loadProjectTerminalSessions(projectId);
+            // Global "On startup, go to terminals." (default on): starting a terminal takes
+            // you straight into that project's terminals; off = start in place.
+            if (!running && changed && actions.playOpensTerminals?.() !== false) await actions.openBoardTerminals?.(boardKey);
+        } catch (error) {
+            console.warn(`Board terminal ${running ? 'stop' : 'start'} failed:`, error?.message || error);
+        } finally {
+            state.pendingTerminalBoards.delete(boardKey);
+            renderSidebar();
+        }
+    }
+    async function primeBoardTerminalSessions() {
+        // Load each linked project's sessions once so the icon reflects the real state.
+        const ids = new Set(context.boards.map(board => Number(board.project_id || 0))
+            .filter(id => id && !state.primedTerminalProjects.has(id) && actions.hasStartupTerminalCommands?.(id)));
+        if (!ids.size || !actions.loadProjectTerminalSessions) return;
+        ids.forEach(id => state.primedTerminalProjects.add(id));
+        await Promise.all([...ids].map(id => actions.loadProjectTerminalSessions(id).catch(() => [])));
+        renderSidebar();
+    }
     function boardGroupHtml(board) {
         const chats = context.chats.filter((chat) => {
             if (chat.pinned) return false;
@@ -444,18 +525,15 @@ export function createSidebar({ context, actions, el }) {
             );
         const rows = orderedChats
             .map((chat) => {
-                const active = context.workspaceMode === 'chat' && Number(context.currentChat?.id) === Number(chat.id);
+                const active = isThreadActive(chat);
                 return threadRowHtml(chat, active, Boolean(chat.pinned));
             })
             .join('');
         const selected = !['terminals', 'terminals_home'].includes(context.workspaceMode) && context.selectedBoardKey === board.key;
-        const kanbanAction = actions.boardSupportsKanban(board)
-            ? `<button class="board-row-action board-kanban" type="button" data-board-kanban="${actions.escapeHtml(board.key)}" aria-label="Open ${actions.escapeHtml(board.name || 'board')} Kanban" title="Open Kanban"><span aria-hidden="true">▦</span></button>`
-            : '';
         const projectRow = `<div class="project-row${selected ? ' active' : ''}">
-            <span class="board-link-bead${board.project_id ? ' linked' : ''}" title="${board.project_id ? 'Linked to a project' : 'Not linked to a project'}" aria-label="${board.project_id ? 'Linked to a project' : 'Not linked to a project'}"></span>
+            ${hasTasks ? `<button class="project-toggle project-folder${collapsed ? '' : ' expanded'}" type="button" data-board-toggle="${actions.escapeHtml(board.key)}" aria-expanded="${String(!collapsed)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${actions.escapeHtml(board.name || 'board')} threads"><span class="folder-icon">${boardFolderIconHtml(true)}</span></button>` : `<span class="project-toggle project-folder empty" aria-hidden="true"><span class="folder-icon">${boardFolderIconHtml(false)}</span></span>`}
             <button class="project-select" type="button" data-board-select="${actions.escapeHtml(board.key)}"${selected ? ' aria-current="true"' : ''}><span>${actions.escapeHtml(board.name || 'Ticket board')}</span></button>
-            <div class="board-row-tail${hasTasks ? ' has-threads' : ''}">${hasTasks ? `<button class="project-toggle" type="button" data-board-toggle="${actions.escapeHtml(board.key)}" aria-expanded="${String(!collapsed)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${actions.escapeHtml(board.name || 'board')} threads"><span class="chevron">${collapsed ? '▶' : '▼'}</span></button>` : ''}${kanbanAction}<button class="board-row-action board-new-chat" type="button" data-board-new-chat="${actions.escapeHtml(board.key)}" aria-label="New thread in ${actions.escapeHtml(board.name || 'board')}" title="New thread in board"><span aria-hidden="true">+</span></button></div>
+            <div class="board-row-tail${hasTasks ? ' has-threads' : ''}">${boardTerminalActionHtml(board)}<button class="board-row-action board-new-chat" type="button" data-board-new-chat="${actions.escapeHtml(board.key)}" aria-label="New thread in ${actions.escapeHtml(board.name || 'board')}" title="New thread in board"><span aria-hidden="true">+</span></button></div>
         </div>`;
         return `<section class="project-group" data-board-group="${actions.escapeHtml(board.key)}">
             ${projectRow}
@@ -480,7 +558,7 @@ export function createSidebar({ context, actions, el }) {
                 /* local preference only */
             }
             list.classList.toggle('hidden', closing);
-            button.querySelector('.chevron').textContent = closing ? '▶' : '▼';
+            button.classList.toggle('expanded', !closing);
             button.setAttribute('aria-expanded', String(!closing));
             button.setAttribute('aria-label', `${closing ? 'Expand' : 'Collapse'} ${boardName} threads`);
         });
@@ -505,9 +583,52 @@ export function createSidebar({ context, actions, el }) {
         closeBoardContextMenu();
     }
 
+    // Desktop sidebar collapse: one toggle in the New Thread row; when collapsed only that
+    // toggle remains (thin rail). Persisted globally in localStorage; default expanded.
+    const SIDEBAR_COLLAPSED_KEY = 'decisions.development.sidebarCollapsed';
+    const SIDEBAR_ICON_COLLAPSE = '<svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/><path d="M10.5 6 8.5 8l2 2"/></svg>';
+    const SIDEBAR_ICON_EXPAND = '<svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/><path d="M8.5 6l2 2-2 2"/></svg>';
+
+    function readSidebarCollapsed() {
+        try {
+            return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function applySidebarCollapsed(collapsed) {
+        const on = Boolean(collapsed);
+        el('studio-shell')?.classList.toggle('sidebar-collapsed', on);
+        el('studio-sidebar')?.classList.toggle('collapsed', on);
+        const button = el('sidebar-collapse-toggle');
+        if (!button) return;
+        const label = on ? 'Expand sidebar' : 'Collapse sidebar';
+        button.innerHTML = on ? SIDEBAR_ICON_EXPAND : SIDEBAR_ICON_COLLAPSE;
+        button.setAttribute('aria-label', label);
+        button.setAttribute('aria-expanded', on ? 'false' : 'true');
+        button.title = label;
+    }
+
+    function setSidebarCollapsed(collapsed) {
+        try {
+            window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+        } catch (_) {
+            /* ignore */
+        }
+        applySidebarCollapsed(collapsed);
+        // Let layout-sensitive panes (xterm) refit to the new width.
+        window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+
+    applySidebarCollapsed(readSidebarCollapsed());
+
     function bindEvents() {
+        el('sidebar-collapse-toggle')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            setSidebarCollapsed(!el('studio-shell')?.classList.contains('sidebar-collapsed'));
+        });
         el('new-thread-button').addEventListener('click', actions.startNewDevelopmentFromSidebar);
-        el('sidebar-plan-toggle').addEventListener('click', () => actions.setWorkspaceMode('plan'));
         el('sidebar-incoming-toggle').addEventListener('click', () => actions.setWorkspaceMode('incoming'));
         el('sidebar-rules-toggle').addEventListener('click', () => actions.setWorkspaceMode('automations'));
         el('sidebar-rule-add').addEventListener('click', () => {
@@ -688,6 +809,7 @@ export function createSidebar({ context, actions, el }) {
         },
         applyPinnedBoards,
         bindEvents,
+        boardTerminalActionHtml,
         closeBoardContextMenu,
         closeThreadContextMenu,
         openBoardContextMenu,

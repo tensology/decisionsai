@@ -45,6 +45,9 @@ DEFAULT_SETTINGS = {
     'show_splash_video': True,
     'notification_sound': 'bell',
     'incoming_proposal_sound_enabled': True,
+    'incoming_proposals_auto_accept': False,
+    # Own projects only; Tensology/client proposals are never auto-accepted.
+    'incoming_proposals_auto_accept_projects': ['JackCat', 'Merrypak', 'RelightSA', 'Snuza', 'Player1Sport', 'Spoortrack', 'PlanMyCharter', 'DecisionsAI'],
     'show_about': False,
     'welcome_greet_me': True,
     'telegram_send_online_notice': False,

@@ -170,22 +170,26 @@ def resolve_whatsapp_link(jid: str, *, jid_phone: str = "") -> WhatsAppLinkInfo:
     if not tid:
         return info
     try:
+        from sqlalchemy import or_
+
         from distr.core.db import WhatsAppPhoneLink, get_session
         from distr.core.db.kanban import KanbanBoard
         from distr.core.db.projects import Project
+        from distr.core.kanban.whatsapp_jid import whatsapp_jid_match_keys
 
         with get_session() as session:
+            keys = whatsapp_jid_match_keys(jid, jid_phone, tid)
             link = (
                 session.query(WhatsAppPhoneLink)
                 .filter(
-                    (WhatsAppPhoneLink.phone_jid == tid)
-                    | (WhatsAppPhoneLink.phone_number == tid)
-                    | (WhatsAppPhoneLink.phone_jid == jid)
-                    | (WhatsAppPhoneLink.phone_number == jid_phone)
+                    or_(
+                        WhatsAppPhoneLink.phone_jid.in_(keys),
+                        WhatsAppPhoneLink.phone_number.in_(keys),
+                    )
                 )
                 .order_by(WhatsAppPhoneLink.auto_snapshot.desc(), WhatsAppPhoneLink.id.asc())
                 .first()
-            )
+            ) if keys else None
             if link is None:
                 return info
             board = session.query(KanbanBoard).filter(KanbanBoard.id == int(link.board_id)).first()

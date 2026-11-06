@@ -6392,7 +6392,7 @@
         if (mode === "feed") {
             return '<div class="wf-loop-decision-context">' +
                 '<div class="wf-loop-ticket-kicker"><span>' + esc(isActive ? "Current execution" : "Run context") + '</span></div>' +
-                '<div class="wf-loop-ticket-title">' + esc(loopRunStepBit(run) || title) + '</div>' +
+                '<div class="wf-loop-ticket-title">' + esc(run.status_summary || loopRunStepBit(run) || title) + '</div>' +
                 '<div class="wf-loop-ticket-meta">' + [workflowRunStatusLabel(run.status), routeLabel, heartbeatText].filter(Boolean).map(function (bit) {
                     return '<span>' + esc(bit) + '</span>';
                 }).join("") + '</div>' +
@@ -6725,7 +6725,7 @@
                 var ticketText = meta.ticketText;
                 var projectText = meta.projectText;
                 var sourceText = meta.sourceText;
-                var stepText = r.current_step_name || (r.current_step_id ? ("Step #" + r.current_step_id) : "Starting");
+                var stepText = r.status_summary || r.current_step_name || (r.current_step_id ? ("Step #" + r.current_step_id) : "Starting");
                 var recentStepNames = workflowCleanStringList(r.recent_step_names).filter(function (name) {
                     return name && name !== stepText;
                 }).slice(0, 4);
@@ -6785,7 +6785,7 @@
                         ' chars · ' + esc(parseInt(contextCounts.artifact_refs, 10) || 0) + ' artifact refs · ' +
                         esc(parseInt(contextCounts.memory_facts, 10) || 0) + ' relevant memory facts</span></div>'
                     : '';
-                if (activityState === "stale") {
+                if (activityState === "stalled" || activityState === "stale") {
                     activityHtml += '<div class="md:col-span-2 text-red-300">Worker heartbeat overdue by ' + esc(formatElapsed(heartbeatAge)) + '. You can stop the run or wait for provider recovery.</div>';
                 } else if (activityState === "delayed") {
                     activityHtml += '<div class="md:col-span-2 text-amber-300">Worker heartbeat delayed (' + esc(formatElapsed(heartbeatAge)) + ' ago); reconnect/recovery is still in progress.</div>';
@@ -6820,7 +6820,8 @@
                         '<div><span class="text-gray-500">Project:</span> <span class="text-gray-200">' + esc(projectText) + '</span></div>' +
                         '<div><span class="text-gray-500">Source:</span> <span class="text-gray-200">' + esc(sourceText) + '</span></div>' +
                         '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(workflowText) + '</span></div>' +
-                        '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
+                        '<div class="md:col-span-2"><span class="text-gray-500">Status:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
+                        (r.waiting_prompt && (r.stalled || r.waiting_kind === "restart_recovery") ? '<div class="md:col-span-2 text-amber-300">' + esc(r.waiting_prompt) + '</div>' : '') +
                         activityHtml +
                         contextHtml +
                         recentStepsHtml +
@@ -7426,7 +7427,7 @@
             }).join("");
             approvalHtml = '<div class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 p-3">' +
                 '<p class="text-xs text-amber-200 font-medium">Choose the retry model</p>' +
-                '<p class="mt-1 text-[11px] text-gray-300">The selected model is readiness-checked before this step retries. No work is sent if readiness fails.</p>' +
+                '<p class="mt-1 text-[11px] text-gray-300">Route info only — the configured harness always runs; readiness no longer blocks or switches workers.</p>' +
                 (run.waiting_prompt ? '<p class="mt-2 text-[11px] text-gray-400">' + esc(run.waiting_prompt) + '</p>' : '') +
                 '<div class="mt-2 flex flex-wrap gap-2">' + candidateButtons + '</div>' +
             '</div>';

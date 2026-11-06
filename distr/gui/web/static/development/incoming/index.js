@@ -1,5 +1,58 @@
+import { fileDropZoneHtml, proposalThreadToast } from '../shared/ticket-modal.js?v=20261102-proposal-files';
+
+export function compareIncomingMessagesNewestFirst(left, right) {
+    const time = (item) => Date.parse(item.created_at || '') || 0;
+    const difference = time(right) - time(left);
+    if (difference) return difference;
+    // A batch arrives newest first, so local database ids may run backwards.
+    // Use the relay's original sequence when both messages retain it.
+    const leftSequence = Number(left.source_sequence);
+    const rightSequence = Number(right.source_sequence);
+    if (left.source === 'whatsapp' && right.source === 'whatsapp'
+        && leftSequence > 0 && rightSequence > 0) return rightSequence - leftSequence;
+    return Number(right.database_id || 0) - Number(left.database_id || 0);
+}
+
+export function incomingConversationLabel(conversation) {
+    const messages = conversation.messages || [];
+    const latest = messages[0] || {};
+    const linked = messages.find((item) => item.link_id || item.board_id || item.links?.length);
+    const synthetic = conversation.syntheticLinks || [];
+    const group = (linked?.chat_type || latest.chat_type) === 'group' || String(conversation.threadId || '').endsWith('@g.us');
+    // An outbound private message names us, not the person we are talking to.
+    const contact = conversation.source === 'whatsapp' && !group && !linked && !synthetic.length
+        ? messages.find((item) => !item.from_me)
+        : null;
+    return linked?.conversation_label || synthetic[0]?.label
+        || contact?.conversation_label || contact?.sender
+        || latest.conversation_label || latest.thread_label || latest.sender || conversation.threadId;
+}
+
+export function proposalSourceStartTime(proposal) {
+    const supplied = Date.parse(proposal.source_started_at || '');
+    if (Number.isFinite(supplied)) return supplied;
+    const values = proposal.message_ids?.length ? proposal.message_ids : proposal.source_message_ids;
+    const ids = values?.length ? new Set(values.map(String)) : null;
+    const dates = (proposal.evidence || []).filter(row => ids === null || ids.has(String(row.id)))
+        .map(row => Date.parse(row.sent_at || '')).filter(Number.isFinite);
+    return dates.length ? Math.min(...dates) : null;
+}
+
+export function compareIncomingProposalsNewestFirst(left, right) {
+    const first = proposalSourceStartTime(left);
+    const second = proposalSourceStartTime(right);
+    if (first === null && second !== null) return 1;
+    if (first !== null && second === null) return -1;
+    if (first !== null && second !== null && first !== second) return second - first;
+    const leftId = String(left.id || left.dedupe_key || '');
+    const rightId = String(right.id || right.dedupe_key || '');
+    return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+
 // Owns incoming rendering, interactions, and private view state.
 export function createIncoming({ context, actions, el }) {
+    let dismissExpiredBusy = false;
+    const proposalMutations = new Set();
     const state = {
         incoming: [],
         incomingLinks: [],
@@ -66,17 +119,11 @@ export function createIncoming({ context, actions, el }) {
         }
         return Array.from(grouped.values())
             .map((conversation) => {
-                conversation.messages.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+                conversation.messages.sort(compareIncomingMessagesNewestFirst);
                 const latest = conversation.messages[0] || {};
                 const link = conversation.messages.find((item) => item.link_id || item.board_id || item.links?.length) || latest;
                 conversation.latest = latest;
-                conversation.label =
-                    link.conversation_label ||
-                    latest.conversation_label ||
-                    conversation.syntheticLinks?.[0]?.label ||
-                    latest.thread_label ||
-                    latest.sender ||
-                    conversation.threadId;
+                conversation.label = incomingConversationLabel(conversation);
                 conversation.chatType = link.chat_type || latest.chat_type || 'thread';
                 const allLinks = (conversation.syntheticLinks || []).concat(
                     conversation.messages.flatMap((item) =>
@@ -223,15 +270,133 @@ export function createIncoming({ context, actions, el }) {
             .join('');
     }
 
+    function parseCssPx(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return NaN;
+        const match = raw.match(/^(\d+(?:\.\d+)?)\s*px$/i) || raw.match(/^(\d+(?:\.\d+)?)$/);
+        return match ? Number(match[1]) : NaN;
+    }
+
+    function isDeclaredTrackingPixel(img) {
+        const dims = [];
+        for (const attr of ['width', 'height']) {
+            const n = parseCssPx(img.getAttribute(attr));
+            if (Number.isFinite(n)) dims.push(n);
+        }
+        const style = String(img.getAttribute('style') || '');
+        for (const prop of ['width', 'height']) {
+            const match = style.match(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, 'i'));
+            const n = match ? parseCssPx(match[1]) : NaN;
+            if (Number.isFinite(n)) dims.push(n);
+        }
+        return dims.some((n) => n <= 3);
+    }
+
+    function sanitizeEmailHtml(html) {
+        const template = document.createElement('template');
+        template.innerHTML = String(html || '');
+        const blocked = new Set(['script', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form']);
+        const dropNodes = [];
+        template.content.querySelectorAll('*').forEach((node) => {
+            const tag = node.tagName.toLowerCase();
+            if (blocked.has(tag)) {
+                node.remove();
+                return;
+            }
+            if (tag === 'img' && isDeclaredTrackingPixel(node)) {
+                dropNodes.push(node);
+                return;
+            }
+            [...node.attributes].forEach((attr) => {
+                const name = attr.name.toLowerCase();
+                const value = String(attr.value || '');
+                if (name.startsWith('on') || name === 'srcdoc') {
+                    node.removeAttribute(attr.name);
+                    return;
+                }
+                if ((name === 'href' || name === 'xlink:href') && /^\s*javascript:/i.test(value)) {
+                    node.removeAttribute(attr.name);
+                    return;
+                }
+                if (name === 'src' || name === 'poster' || name === 'background') {
+                    const remote = /^\s*https?:/i.test(value) || /^\s*\/\//.test(value);
+                    if (!remote) return;
+                    // Allow real remote <img src="https://...">; strip other remote media attrs.
+                    // Tracking pixels are removed by declared size (above) or natural size on load.
+                    if (tag === 'img' && name === 'src') return;
+                    node.removeAttribute(attr.name);
+                }
+            });
+            if (tag === 'a') {
+                node.setAttribute('target', '_blank');
+                node.setAttribute('rel', 'noopener noreferrer');
+            }
+        });
+        dropNodes.forEach((node) => node.remove());
+        return template.innerHTML;
+    }
+
+    function mailBodyHtml(item) {
+        const htmlBody = String(item.html_body || '').trim();
+        const plain = String(item.text || item.snippet || '').trim() || 'No message text';
+        if (htmlBody) {
+            const cidMap = {};
+            (item.attachments || []).forEach((attachment) => {
+                const cid = String(attachment.content_id || attachment.cid || '').replace(/^<|>$/g, '');
+                const url = attachment.preview_url || attachment.url || '';
+                if (cid && url) cidMap[cid.toLowerCase()] = url;
+            });
+            let rewritten = htmlBody.replace(/cid:([^"'\s>]+)/gi, (_, raw) => {
+                const key = String(raw || '').replace(/^<|>$/g, '').toLowerCase();
+                return cidMap[key] || 'about:blank';
+            });
+            rewritten = sanitizeEmailHtml(rewritten);
+            // Same app font as the rest of the UI (Quicksand); the iframe does not inherit it.
+            const doc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><link rel="stylesheet" href="/static/vendor/quicksand.css"><style>
+                html,body{margin:0;padding:0;background:#fff;color:#111827;}
+                body{font:14px/1.55 Quicksand,sans-serif;word-break:break-word;}
+                img{max-width:100%;height:auto;}
+                a{color:#1d4ed8;}
+                pre,code{white-space:pre-wrap;word-break:break-word;}
+            </style></head><body>${rewritten}</body></html>`;
+            return `<iframe class="incoming-mail-html-frame" title="Email body" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" srcdoc="${actions.escapeHtml(doc)}"></iframe>`;
+        }
+        return `<div class="incoming-gmail-body incoming-gmail-body-plain">${actions.escapeHtml(plain)}</div>`;
+    }
+
+    function mailAttachmentsHtml(item) {
+        const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+        if (!attachments.length) return '';
+        const cards = attachments.map((attachment) => {
+            const name = attachment.filename || attachment.name || 'Attachment';
+            const mime = String(attachment.mime_type || attachment.type || '');
+            const size = formatAttachmentBytes(attachment.size);
+            const url = attachment.preview_url || attachment.url || '';
+            const label = proposalAttachmentLabel({ name, mime_type: mime, kind: attachment.kind || '' });
+            const meta = [size, mime.split(';', 1)[0]].filter(Boolean).join(' · ');
+            const payload = actions.escapeHtml(JSON.stringify({
+                url,
+                name: label,
+                filename: name,
+                mime_type: mime,
+                caption: '',
+            }));
+            const isImage = mime.toLowerCase().startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(name);
+            if (url && isImage) {
+                return `<button type="button" class="incoming-mail-attachment incoming-mail-attachment-image" data-file-preview="${payload}" title="${actions.escapeHtml(name)}"><img src="${actions.escapeHtml(url)}" alt="${actions.escapeHtml(label)}" loading="lazy"><span>${actions.escapeHtml(label)}</span></button>`;
+            }
+            return `<button type="button" class="incoming-mail-attachment" data-file-preview="${payload}" ${url ? '' : 'disabled'} title="${actions.escapeHtml(name)}"><span class="incoming-mail-attachment-icon" aria-hidden="true">▣</span><span class="incoming-mail-attachment-meta"><strong>${actions.escapeHtml(label)}</strong><small>${actions.escapeHtml(meta || name)}</small></span></button>`;
+        }).join('');
+        return `<div class="incoming-mail-attachments" aria-label="Attachments">${cards}</div>`;
+    }
+
     function mailMessageCardHtml(item) {
-        const attachments =
-            Array.isArray(item.attachments) && item.attachments.length
-                ? `<small class="incoming-gmail-attachments">${item.attachments.length} attachment${item.attachments.length === 1 ? '' : 's'}: ${actions.escapeHtml(item.attachments.map((attachment) => attachment.filename || 'Attachment').join(', '))}</small>`
-                : '';
         const from = item.sender || 'Unknown sender';
-        const to = item.recipient ? `To ${item.recipient}` : '';
         const when = actions.formatDateTime(item.created_at);
-        return `<section class="incoming-gmail-message" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-mail-key="${actions.escapeHtml(item.key || '')}" data-mail-id="${actions.escapeHtml(item.source_message_id || '')}" data-mail-sender="${actions.escapeHtml(from)}" data-mail-subject="${actions.escapeHtml(item.subject || '')}"><header class="incoming-mail-headers"><div class="incoming-mail-header-row"><span class="incoming-mail-header-label">From</span><strong>${actions.escapeHtml(from)}</strong></div>${to ? `<div class="incoming-mail-header-row"><span class="incoming-mail-header-label">To</span><span>${actions.escapeHtml(item.recipient)}</span></div>` : ''}<div class="incoming-mail-header-row"><span class="incoming-mail-header-label">Date</span><time>${actions.escapeHtml(when)}</time></div></header><div class="incoming-gmail-body">${actions.escapeHtml(item.text || item.snippet || 'No message text')}</div>${attachments}</section>`;
+        const to = item.recipient
+            ? `<div class="incoming-mail-header-row"><span class="incoming-mail-header-label">To</span><span>${actions.escapeHtml(item.recipient)}</span></div>`
+            : '';
+        return `<section class="incoming-gmail-message" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-mail-key="${actions.escapeHtml(item.key || '')}" data-mail-id="${actions.escapeHtml(item.source_message_id || '')}" data-mail-sender="${actions.escapeHtml(from)}" data-mail-subject="${actions.escapeHtml(item.subject || '')}"><header class="incoming-mail-headers"><div class="incoming-mail-header-row"><span class="incoming-mail-header-label">From</span><strong>${actions.escapeHtml(from)}</strong></div>${to}<div class="incoming-mail-header-row"><span class="incoming-mail-header-label">Date</span><time>${actions.escapeHtml(when)}</time></div></header>${mailBodyHtml(item)}${mailAttachmentsHtml(item)}</section>`;
     }
 
     function mailReplySubject(conversation) {
@@ -274,22 +439,134 @@ export function createIncoming({ context, actions, el }) {
         return `<header class="incoming-whatsapp-reader-header">${incomingAvatarHtml(conversation, true)}<div><h3>${actions.escapeHtml(conversation.label)}</h3><p>${conversation.chatType === 'group' ? 'WhatsApp group' : 'WhatsApp contact'} · ${conversation.messages.length} recent messages</p></div><button type="button" data-incoming-manage aria-label="Manage ${actions.escapeHtml(conversation.label)}">•••</button></header><div class="incoming-whatsapp-messages">${messages}</div><footer>${linkedNote ? `<small>${actions.escapeHtml(linkedNote)}</small>` : '<span></span>'}<span></span></footer>`;
     }
 
+    function whatsappMessagesAtBottom(messages) {
+        if (!messages) return false;
+        return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 24;
+    }
+
+    function refreshWhatsAppConversationRow(conversationKey) {
+        const list = el('incoming-list');
+        if (!list || !conversationKey) return;
+        const conversation = incomingConversations('whatsapp').find((row) => row.key === conversationKey);
+        if (!conversation) return;
+        const existing = list.querySelector(`[data-incoming-conversation="${CSS.escape(conversationKey)}"]`);
+        if (!existing) return;
+        const wrap = document.createElement('div');
+        wrap.innerHTML = incomingConversationRowHtml(conversation);
+        const next = wrap.firstElementChild;
+        if (!next) return;
+        existing.replaceWith(next);
+        next.addEventListener('click', () => {
+            state.selectedIncomingConversationKey = next.dataset.incomingConversation || '';
+            state.incomingMobileDetail = true;
+            renderIncomingWorkspace();
+        });
+        next.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            openIncomingLinkDialog(next.dataset.incomingConversation || '');
+        });
+        bindIncomingActions(next);
+    }
+
+    function maybeClearWhatsAppUnreadFromVisibility() {
+        const key = state.selectedIncomingConversationKey;
+        if (!key) return;
+        const messages = el('incoming-whatsapp-reader')?.querySelector('.incoming-whatsapp-messages');
+        if (!whatsappMessagesAtBottom(messages)) return;
+        const conversation = incomingConversations('whatsapp').find((row) => row.key === key);
+        if (!conversationShowsNewDot(conversation)) return;
+        markConversationSeen(key, conversation);
+        refreshWhatsAppConversationRow(key);
+    }
+
     function scrollIncomingWhatsAppToLatest() {
         const messages = el('incoming-whatsapp-reader')?.querySelector('.incoming-whatsapp-messages');
         if (!messages) return;
         const scroll = () => {
             messages.scrollTop = messages.scrollHeight;
+            maybeClearWhatsAppUnreadFromVisibility();
         };
+        if (!messages.dataset.incomingSeenScrollBound) {
+            messages.dataset.incomingSeenScrollBound = '1';
+            messages.addEventListener('scroll', () => maybeClearWhatsAppUnreadFromVisibility(), { passive: true });
+        }
         window.requestAnimationFrame(scroll);
         messages.querySelectorAll('img, video').forEach((media) => {
             media.addEventListener(media.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', scroll, { once: true });
         });
+        // Short threads that already fit still count as "latest visible".
+        window.requestAnimationFrame(() => maybeClearWhatsAppUnreadFromVisibility());
     }
 
     function mailThreadButtonHtml(conversation, selectedKey, dataAttribute) {
         const latest = conversation.latest || {};
         const preview = latest.snippet || latest.text || 'No message text';
         return `<button type="button" class="incoming-gmail-thread${conversation.pendingCount ? ' unread' : ''}${selectedKey === conversation.key ? ' selected' : ''}" ${dataAttribute}="${actions.escapeHtml(conversation.key)}"><span><strong>${actions.escapeHtml(conversation.label || '(No subject)')}</strong><time>${actions.escapeHtml(actions.formatDateTime(latest.created_at))}</time></span><small>${actions.escapeHtml(latest.sender || 'Unknown sender')}</small><p>${actions.escapeHtml(preview)}</p></button>`;
+    }
+
+
+    function collectConversationMailAttachments(conversation) {
+        const seen = new Set();
+        const out = [];
+        for (const message of (conversation?.messages || [])) {
+            for (const attachment of (message.attachments || [])) {
+                if (!attachment || typeof attachment !== 'object') continue;
+                const key = [
+                    attachment.attachment_id || '',
+                    attachment.content_id || '',
+                    attachment.filename || attachment.name || '',
+                    message.source_message_id || message.id || '',
+                ].join('|');
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push({
+                    ...attachment,
+                    message_id: attachment.message_id || message.source_message_id || '',
+                    preview_url: attachment.preview_url || '',
+                });
+            }
+        }
+        return out;
+    }
+
+    function mailAttachmentPreviewUrl(attachment) {
+        if (attachment?.preview_url) return String(attachment.preview_url);
+        const mid = String(attachment?.message_id || '').trim();
+        const aid = String(attachment?.attachment_id || '').trim();
+        const cid = String(attachment?.content_id || '').replace(/^<|>$/g, '').trim();
+        if (!mid || (!aid && !cid)) return '';
+        const params = new URLSearchParams({ message_id: mid });
+        if (aid) params.set('attachment_id', aid);
+        if (cid) params.set('content_id', cid);
+        const provider = String(attachment?.provider || '').trim().toLowerCase();
+        if (provider) params.set('provider', provider);
+        else if (mid.startsWith('email-')) params.set('provider', 'mailshot');
+        return `/api/workflows/studio/incoming/mail/attachment?${params.toString()}`;
+    }
+
+    function mailAttachmentBarHtml(conversation) {
+        const attachments = collectConversationMailAttachments(conversation);
+        if (!attachments.length) return '';
+        const items = attachments.map((attachment) => {
+            const name = String(attachment.filename || attachment.name || 'Attachment');
+            const mime = String(attachment.mime_type || attachment.type || '');
+            const url = mailAttachmentPreviewUrl(attachment);
+            const label = proposalAttachmentLabel({ name, mime_type: mime, kind: attachment.kind || '' });
+            const isImage = mime.toLowerCase().startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(name);
+            const payload = actions.escapeHtml(JSON.stringify({
+                url,
+                name: label,
+                filename: name,
+                mime_type: mime,
+                caption: '',
+            }));
+            const thumb = (url && isImage)
+                ? `<img class="incoming-mail-attach-thumb" src="${actions.escapeHtml(url)}" alt="" loading="lazy">`
+                : `<span class="incoming-mail-attach-icon" aria-hidden="true">${isImage ? '▣' : (mime.includes('pdf') ? 'PDF' : '◉')}</span>`;
+            const disabled = url ? '' : ' disabled';
+            return `<button type="button" class="incoming-mail-attach-chip"${disabled} data-file-preview="${payload}" title="${actions.escapeHtml(name)}">${thumb}<span class="incoming-mail-attach-name">${actions.escapeHtml(name)}</span></button>`;
+        }).join('');
+        return `<div class="incoming-mail-attachment-bar" aria-label="Attachments"><div class="incoming-mail-attachment-bar-track">${items}</div></div>`;
     }
 
     function gmailReaderHtml(conversation) {
@@ -306,7 +583,8 @@ export function createIncoming({ context, actions, el }) {
         const replySubject = actions.escapeHtml(mailReplySubject(conversation));
         const replyMessageId = actions.escapeHtml(latest.source_message_id || '');
         const messages = conversation.messages.slice().reverse().map(mailMessageCardHtml).join('');
-        return `<header class="incoming-gmail-reader-header"><div><h3>${actions.escapeHtml(conversation.label || '(No subject)')}</h3><p>${conversation.messages.length} message${conversation.messages.length === 1 ? '' : 's'}</p></div></header><div class="incoming-gmail-messages">${messages}</div><div class="incoming-quick-reply hidden" data-incoming-quick-reply><div class="incoming-quick-reply-fields"><label>To<input type="email" data-quick-reply-to value="${replyTo}" autocomplete="email"></label><label>Subject<input type="text" data-quick-reply-subject value="${replySubject}"></label><label>Message<textarea data-quick-reply-body rows="6" placeholder="Write your reply"></textarea></label><input type="hidden" data-quick-reply-message-id value="${replyMessageId}"></div><div class="incoming-quick-reply-actions"><button type="button" class="proposal-btn ghost" data-quick-reply-cancel>Cancel</button><button type="button" class="proposal-btn primary" data-quick-reply-send>Send</button></div></div><footer class="incoming-mail-footer"><button type="button" class="proposal-btn ghost" data-incoming-quick-reply-open>Quick Reply</button><div class="incoming-mail-footer-right">${rightActions}</div></footer>`;
+        const attachmentBar = mailAttachmentBarHtml(conversation);
+        return `<div class="incoming-gmail-messages">${messages}</div>${attachmentBar}<div class="incoming-quick-reply hidden" data-incoming-quick-reply><div class="incoming-quick-reply-fields"><label>To<input type="email" data-quick-reply-to value="${replyTo}" autocomplete="email"></label><label>Subject<input type="text" data-quick-reply-subject value="${replySubject}"></label><label>Message<textarea data-quick-reply-body rows="6" placeholder="Write your reply"></textarea></label><input type="hidden" data-quick-reply-message-id value="${replyMessageId}"></div><div class="incoming-quick-reply-actions"><button type="button" class="proposal-btn ghost" data-quick-reply-cancel>Cancel</button><button type="button" class="proposal-btn primary" data-quick-reply-send>Send</button></div></div><footer class="incoming-mail-footer"><button type="button" class="proposal-btn ghost" data-incoming-quick-reply-open>Quick Reply</button><div class="incoming-mail-footer-right">${rightActions}</div></footer>`;
     }
 
     function bindIncomingActions(root) {
@@ -317,6 +595,7 @@ export function createIncoming({ context, actions, el }) {
             if (photo.complete) show();
         });
         if (!root) return;
+        bindProposalFilePreview(root);
         root.querySelectorAll('[data-incoming-snapshot]').forEach((button) =>
             button.addEventListener('click', () => snapshotIncomingWhatsApp(Number(button.dataset.boardId), Number(button.dataset.incomingSnapshot), button))
         );
@@ -366,6 +645,42 @@ export function createIncoming({ context, actions, el }) {
         root.querySelectorAll('[data-quick-reply-send]').forEach((button) =>
             button.addEventListener('click', () => sendIncomingQuickReply(button))
         );
+        bindProposalFilePreview(root);
+        root.querySelectorAll('iframe.incoming-mail-html-frame').forEach((frame) => {
+            const fit = () => {
+                try {
+                    const doc = frame.contentDocument;
+                    const height = Math.max(doc?.body?.scrollHeight || 0, doc?.documentElement?.scrollHeight || 0, 120);
+                    frame.style.height = `${Math.min(Math.max(height + 8, 120), 1200)}px`;
+                } catch (_) {
+                    frame.style.height = '320px';
+                }
+            };
+            const scrubTrackingPixels = () => {
+                try {
+                    const doc = frame.contentDocument;
+                    if (!doc) return;
+                    [...doc.querySelectorAll('img')].forEach((img) => {
+                        const dropIfTiny = () => {
+                            const w = Number(img.naturalWidth || 0);
+                            const h = Number(img.naturalHeight || 0);
+                            if ((w > 0 && w <= 3) || (h > 0 && h <= 3)) {
+                                img.remove();
+                                fit();
+                            }
+                        };
+                        if (img.complete) dropIfTiny();
+                        else img.addEventListener('load', dropIfTiny, { once: true });
+                    });
+                } catch (_) { /* ignore cross-document races */ }
+            };
+            const onReady = () => {
+                scrubTrackingPixels();
+                fit();
+            };
+            frame.addEventListener('load', onReady);
+            setTimeout(onReady, 50);
+        });
     }
 
     async function sendIncomingQuickReply(button) {
@@ -429,7 +744,25 @@ export function createIncoming({ context, actions, el }) {
     // Card mirrors Tensology's proposal card: project name top-left, title, source pill
     // top-right (hover shows the exact message), description, then the actions. Clicking
     // the card opens the evidence view with the retained messages and attachments.
+    function proposalIsExpired(proposal) {
+        const status = String(proposal.stored_status || proposal.status || 'pending').toLowerCase();
+        if (!['pending', 'candidate', 'expired'].includes(status)) return false;
+        const deadline = Date.parse(proposal.expires_at || '');
+        return proposal.is_expired === true || (Number.isFinite(deadline) && Date.now() >= deadline);
+    }
+
+    let proposalExpiryTimer = null;
+    function scheduleProposalExpiry() {
+        clearTimeout(proposalExpiryTimer);
+        const deadlines = (state.incomingProposals || []).filter((row) => !proposalIsExpired(row))
+            .map((row) => Date.parse(row.expires_at || '')).filter((value) => Number.isFinite(value) && value > Date.now());
+        if (deadlines.length) proposalExpiryTimer = setTimeout(() => {
+            renderIncomingWorkspace();
+        }, Math.min(2_147_483_647, Math.max(1, Math.min(...deadlines) - Date.now() + 1)));
+    }
+
     function incomingProposalRowHtml(proposal) {
+        const expired = proposalIsExpired(proposal);
         const source = String(proposal.source_label || proposal.source || '').trim();
         const project = String(proposal.project_name || (proposal.project_id ? `Project ${proposal.project_id}` : '')).trim();
         const origin = proposal.origin === 'tensology' ? 'Synced from Tensology' : 'Detected here';
@@ -441,14 +774,15 @@ export function createIncoming({ context, actions, el }) {
             : `<span class="proposal-btn muted" title="Link this conversation to a project first">No project</span>`;
         const dismiss = `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
         const projectKey = actions.escapeHtml(String(proposal.project_id || ''));
-        return `<article class="proposal-card" data-incoming-proposal-open="${proposalId}" data-proposal-project="${projectKey}" draggable="true" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
+        return `<article class="proposal-card${expired ? ' proposal-expired' : ''}" data-incoming-proposal-open="${proposalId}" data-proposal-project="${projectKey}" draggable="true" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
+            ${expired ? '<span class="proposal-expired-ribbon">Expired</span>' : ''}
             <div class="proposal-head">
                 <p class="proposal-project${project ? '' : ' none'}">${actions.escapeHtml(project || 'Not linked to a project')}</p>
                 <h3 class="proposal-title">${actions.escapeHtml(proposal.title || 'Proposal')}</h3>
                 <span class="proposal-source" title="${actions.escapeHtml(tooltip)}" data-incoming-proposal-open="${proposalId}">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span>
             </div>
             ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
-            <div class="proposal-actions">${push}${dismiss}<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span></div>
+            <div class="proposal-actions">${push}${dismiss}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button><span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span></span></div>
         </article>`;
     }
 
@@ -458,7 +792,21 @@ export function createIncoming({ context, actions, el }) {
         return (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId)) || null;
     }
 
+    async function copyProposal(proposalId) {
+        const proposal = proposalById(proposalId);
+        if (!proposal) return;
+        const text = [proposal.title || 'Proposal', proposal.description || proposal.rationale || '']
+            .map((part) => String(part).trim()).filter(Boolean).join('\n\n');
+        try {
+            await navigator.clipboard.writeText(text);
+            actions.toast('Proposal title and description copied.');
+        } catch (_) {
+            actions.toast('Could not copy the proposal. Check clipboard permissions and try again.', 'error');
+        }
+    }
+
     async function mergeProposalCards(targetId, sourceId) {
+        if (dismissExpiredBusy || proposalMutations.size) return;
         const first = proposalById(sourceId);
         const second = proposalById(targetId);
         if (!first || !second || String(first.id) === String(second.id)) return;
@@ -466,6 +814,7 @@ export function createIncoming({ context, actions, el }) {
             actions.toast('Only proposals on the same project can be merged.', 'error');
             return;
         }
+        proposalMutations.add(String(sourceId));
         try {
             const result = await actions.api('/workflows/studio/incoming/proposals/merge', {
                 method: 'POST',
@@ -481,18 +830,116 @@ export function createIncoming({ context, actions, el }) {
             }
         } catch (error) {
             actions.toast(error.message || 'Could not merge the proposals.', 'error');
+        } finally {
+            proposalMutations.delete(String(sourceId));
+            renderIncomingWorkspace();
         }
     }
 
+    function proposalSourceChunk(proposal) {
+        const evidence = Array.isArray(proposal.evidence) ? proposal.evidence.filter((ev) => ev && (ev.id || ev.body || ev.sent_at)) : [];
+        const messageIds = Array.isArray(proposal.message_ids) ? proposal.message_ids.map(String).filter(Boolean) : [];
+        if (evidence.length) {
+            const ordered = evidence.slice().sort((a, b) => String(a.sent_at || '').localeCompare(String(b.sent_at || '')));
+            return {
+                messages: ordered,
+                count: ordered.length,
+                start: ordered[0],
+                end: ordered[ordered.length - 1],
+                messageIds: ordered.map((ev) => String(ev.id || '')).filter(Boolean),
+            };
+        }
+        const source = String(proposal.source || '').toLowerCase();
+        const threadId = String(
+            proposal.source_thread_id
+            || proposal.source_conversation?.thread_id
+            || (String(proposal.id || '').includes(':') ? String(proposal.id).split(':').slice(2).join(':') : '')
+            || ''
+        ).trim();
+        const wanted = new Set(messageIds);
+        const incoming = state.incoming || [];
+
+        // Prefer exact source_message_id hits across Incoming (do not require source match).
+        let pool = [];
+        if (wanted.size) {
+            pool = incoming.filter((item) => wanted.has(String(item.source_message_id || '')));
+        }
+        // Fallback: same source + thread when ids are missing or none of the ids are cached yet.
+        if (!pool.length && threadId) {
+            pool = incoming.filter((item) => {
+                const itemSource = String(item.source || '').toLowerCase();
+                if (source && itemSource && itemSource !== source) return false;
+                return String(item.source_thread_id || '') === threadId;
+            });
+            if (wanted.size) {
+                const filtered = pool.filter((item) => wanted.has(String(item.source_message_id || '')));
+                if (filtered.length) pool = filtered;
+            }
+        }
+
+        const matched = pool.map((item) => ({
+            id: String(item.source_message_id || ''),
+            body: item.text || item.snippet || '',
+            sent_at: item.created_at || '',
+            sender_name: item.sender || item.conversation_label || '',
+            sender_address: item.sender || '',
+            direction: item.direction || '',
+        }));
+        // Keep recorded id order when possible, else chronological.
+        if (wanted.size) {
+            const rank = new Map(messageIds.map((id, i) => [id, i]));
+            matched.sort((a, b) => {
+                const ra = rank.has(a.id) ? rank.get(a.id) : 1e9;
+                const rb = rank.has(b.id) ? rank.get(b.id) : 1e9;
+                if (ra !== rb) return ra - rb;
+                return String(a.sent_at || '').localeCompare(String(b.sent_at || ''));
+            });
+        } else {
+            matched.sort((a, b) => String(a.sent_at || '').localeCompare(String(b.sent_at || '')));
+        }
+
+        if (!matched.length && messageIds.length) {
+            return {
+                messages: [],
+                count: messageIds.length,
+                start: null,
+                end: null,
+                messageIds,
+                idsOnly: true,
+            };
+        }
+        return {
+            messages: matched,
+            count: matched.length || messageIds.length,
+            start: matched[0] || null,
+            end: matched[matched.length - 1] || null,
+            messageIds: matched.map((ev) => ev.id).filter(Boolean).length
+                ? matched.map((ev) => ev.id).filter(Boolean)
+                : messageIds,
+            idsOnly: false,
+        };
+    }
+
     function proposalEvidenceHtml(proposal) {
-        const evidence = proposal.evidence || [];
-        if (!evidence.length) {
+        const chunk = proposalSourceChunk(proposal);
+        if (!chunk.count) {
             return '<p class="proposal-empty">No retained source messages for this proposal.</p>';
         }
-        return evidence.map((ev) => `<article class="proposal-message">
+        const startLabel = chunk.start
+            ? `${actions.formatDateTime(chunk.start.sent_at)}${chunk.start.sender_name ? `, ${chunk.start.sender_name}` : ''}`
+            : 'start';
+        const endLabel = chunk.end
+            ? `${actions.formatDateTime(chunk.end.sent_at)}${chunk.end.sender_name ? `, ${chunk.end.sender_name}` : ''}`
+            : 'end';
+        const summary = chunk.idsOnly
+            ? `<p class="proposal-source-summary">${chunk.count} source message id${chunk.count === 1 ? '' : 's'} recorded. Open the conversation to view them.</p>`
+            : `<p class="proposal-source-summary">From <strong>${actions.escapeHtml(startLabel)}</strong> to <strong>${actions.escapeHtml(endLabel)}</strong>, ${chunk.count} message${chunk.count === 1 ? '' : 's'}</p>`;
+        const jump = `<p class="proposal-source-jump"><button type="button" class="proposal-btn ghost" data-proposal-jump-source="${actions.escapeHtml(proposal.id || '')}">View in conversation</button></p>`;
+        const messages = (chunk.messages || []).map((ev) => `<article class="proposal-message" data-source-message-id="${actions.escapeHtml(ev.id || '')}">
             <header><strong>${actions.escapeHtml(ev.sender_name || ev.sender_address || 'Unknown')}</strong><time>${actions.escapeHtml(actions.formatDateTime(ev.sent_at))}</time></header>
             ${ev.body ? `<p>${actions.escapeHtml(ev.body)}</p>` : '<p class="muted">(no text)</p>'}
         </article>`).join('');
+        return `${summary}${jump}${messages || '<p class="proposal-empty">Message bodies are not cached in this proposal yet.</p>'}`;
     }
 
     function proposalAttachmentUrl(proposal, item) {
@@ -511,31 +958,239 @@ export function createIncoming({ context, actions, el }) {
         return '';
     }
 
+    function formatAttachmentBytes(value) {
+        const size = Number(value) || 0;
+        if (size <= 0) return '';
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+        return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function formatAttachmentDuration(seconds) {
+        const total = Math.round(Number(seconds) || 0);
+        if (!total || total < 0) return '';
+        const mins = Math.floor(total / 60);
+        const secs = total % 60;
+        return mins > 0 ? `${mins}:${String(secs).padStart(2, '0')}` : `${secs}s`;
+    }
+
+    function attachmentMimeBase(value) {
+        return String(value || '').split(';', 1)[0].trim().toLowerCase();
+    }
+
+    function isAudioAttachment(item) {
+        const mime = attachmentMimeBase(item?.mime_type);
+        const kind = String(item?.kind || '').toLowerCase();
+        const name = String(item?.name || '');
+        return mime.startsWith('audio/') || ['audio', 'voice', 'ptt'].includes(kind) || /\.(ogg|opus|mp3|m4a|wav|aac)$/i.test(name);
+    }
+
+    function isImageAttachment(item) {
+        const mime = attachmentMimeBase(item?.mime_type);
+        const kind = String(item?.kind || '').toLowerCase();
+        return mime.startsWith('image/') || ['image', 'photo', 'sticker'].includes(kind);
+    }
+
+    function proposalAttachmentLabel(item) {
+        const kind = String(item?.kind || '').toLowerCase();
+        const mime = attachmentMimeBase(item?.mime_type);
+        const name = String(item?.name || '').trim();
+        if (['voice', 'ptt'].includes(kind) || (mime.startsWith('audio/') && /voice|ptt|whatsapp_voice/i.test(name))) return 'Voice note';
+        if (mime.startsWith('audio/') || kind === 'audio') return 'Audio';
+        if (isImageAttachment(item)) return 'Image';
+        if (mime === 'application/pdf' || /\.pdf$/i.test(name)) return 'PDF';
+        if (name) {
+            const base = name.replace(/^whatsapp[_-]/i, '').replace(/[_-]+/g, ' ').replace(/\.[a-z0-9]+$/i, '');
+            if (base && base.length <= 48) return base.replace(/\b\w/g, (ch) => ch.toUpperCase());
+        }
+        return name || 'Attachment';
+    }
+
+    function proposalAttachmentMetaLine(item) {
+        const parts = [];
+        const duration = formatAttachmentDuration(item?.duration ?? item?.media_duration);
+        const size = formatAttachmentBytes(item?.size);
+        if (duration) parts.push(duration);
+        if (size) parts.push(size);
+        const mime = attachmentMimeBase(item?.mime_type);
+        if (mime && !mime.startsWith('audio/')) parts.push(mime);
+        else if (mime.startsWith('audio/') && !duration) parts.push(mime.split('/')[1] || 'audio');
+        return parts.join(' · ');
+    }
+
+    function normalizeProposalTask(item, index) {
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+            const title = String(item.title || item.name || item.task || item.summary || '').trim();
+            const description = String(item.description || item.details || item.detail || item.body || '').trim();
+            const acceptance = item.acceptance_criteria || item.acceptance || item.done_when || item.criteria || '';
+            const acceptanceText = Array.isArray(acceptance)
+                ? acceptance.map((row) => String(row || '').trim()).filter(Boolean).join('\n')
+                : String(acceptance || '').trim();
+            const status = String(item.status || item.state || '').trim() || 'To do';
+            const estimate = item.estimate || item.estimated_minutes || item.minutes || '';
+            return {
+                number: index + 1,
+                title: title || `Task ${index + 1}`,
+                description,
+                acceptance: acceptanceText,
+                status,
+                estimate: estimate === '' || estimate == null ? '' : String(estimate),
+                rich: Boolean(title || description || acceptanceText || item.status),
+            };
+        }
+        const title = String(item || '').trim();
+        return {
+            number: index + 1,
+            title: title || `Task ${index + 1}`,
+            description: '',
+            acceptance: '',
+            status: 'To do',
+            estimate: '',
+            rich: false,
+        };
+    }
+
+    function stripTranscriptionPrefix(text) {
+        return String(text || '').replace(/^\[(?:Transcription|Transcript)\]\s*/i, '').trim();
+    }
+
+    function proposalAttachmentTranscript(proposal, attachment) {
+        const direct = stripTranscriptionPrefix(attachment?.transcript || attachment?.caption || '');
+        if (direct) return direct;
+        const mid = String(attachment?.source_message_id || attachment?.message_id || '').trim();
+        const name = String(attachment?.name || '').trim();
+        const rows = state.incoming || [];
+        const hit = rows.find((item) => {
+            if (mid && String(item.source_message_id || '') === mid) return true;
+            if (name && String(item.media_filename || '') === name) return true;
+            return false;
+        });
+        if (!hit) return '';
+        return stripTranscriptionPrefix(hit.text || hit.snippet || '');
+    }
+
+    function proposalTaskDoneKey(proposalId) {
+        return `incoming.proposal.tasks.done:${String(proposalId || '')}`;
+    }
+
+    function loadProposalTaskDone(proposalId) {
+        try {
+            const raw = localStorage.getItem(proposalTaskDoneKey(proposalId));
+            const parsed = raw ? JSON.parse(raw) : [];
+            return new Set(Array.isArray(parsed) ? parsed.map(Number).filter((n) => Number.isFinite(n)) : []);
+        } catch (_) {
+            return new Set();
+        }
+    }
+
+    function saveProposalTaskDone(proposalId, doneSet) {
+        try {
+            localStorage.setItem(proposalTaskDoneKey(proposalId), JSON.stringify([...doneSet].sort((a, b) => a - b)));
+        } catch (_) { /* ignore quota */ }
+    }
+
+    function proposalTasksHtml(tasks, proposalId) {
+        const items = Array.isArray(tasks) ? tasks : [];
+        if (!items.length) return '<p class="proposal-empty">No tasks listed.</p>';
+        const done = loadProposalTaskDone(proposalId);
+        const cards = items.map((raw, index) => {
+            const task = normalizeProposalTask(raw, index);
+            const isDone = done.has(index);
+            const details = [];
+            if (task.description) {
+                details.push(`<p class="proposal-task-description">${actions.escapeHtml(task.description)}</p>`);
+            }
+            if (task.acceptance) {
+                details.push(`<p class="proposal-task-acceptance"><span>Acceptance</span> ${actions.escapeHtml(task.acceptance)}</p>`);
+            }
+            if (task.estimate) {
+                details.push(`<p class="proposal-task-estimate">${actions.escapeHtml(task.estimate)}${/^\d+$/.test(task.estimate) ? ' min' : ''}</p>`);
+            }
+            const body = details.length
+                ? `<div class="proposal-task-body">${details.join('')}</div>`
+                : '';
+            return `<li class="proposal-task-card${isDone ? ' is-done' : ''}" data-proposal-task-index="${index}">
+                <div class="proposal-task-head">
+                    <button type="button" class="proposal-task-check" role="checkbox" aria-checked="${isDone ? 'true' : 'false'}" aria-label="${isDone ? 'Mark task not done' : 'Mark task done'}" data-proposal-task-toggle="${index}">
+                        <span class="proposal-task-number" aria-hidden="true">${isDone ? '✓' : task.number}</span>
+                    </button>
+                    <div class="proposal-task-copy">
+                        <strong class="proposal-task-title">${actions.escapeHtml(task.title)}</strong>
+                    </div>
+                </div>
+                ${body}
+            </li>`;
+        }).join('');
+        return `<ol class="proposal-task-list" data-proposal-tasks-for="${actions.escapeHtml(String(proposalId || ''))}">${cards}</ol>`;
+    }
+
+    // Proposals have no local file storage yet, so the shared drop zone is shown read-only.
+    const PROPOSAL_DROP_ZONE = fileDropZoneHtml('proposal-file-drop', { disabled: true, message: 'Files from the source conversation. They are attached to the thread and its ticket when you accept.' });
+
     function proposalFilesHtml(proposal) {
+        return PROPOSAL_DROP_ZONE + proposalFileListHtml(proposal);
+    }
+
+    function proposalFileListHtml(proposal) {
         const items = proposal.attachments || [];
         if (!items.length) return '<p class="proposal-empty">No attachments on this proposal.</p>';
-        const media = items.map((a, index) => {
+        const images = [];
+        const files = [];
+        items.forEach((a) => {
             const err = a.download_error || a.error || '';
             if (err) {
-                return `<div class="proposal-file proposal-file-failed" role="status" title="${actions.escapeHtml(err)}"><strong>${actions.escapeHtml(a.name || 'Attachment')}</strong><span>${actions.escapeHtml(err)}</span></div>`;
+                files.push(`<div class="proposal-file-card proposal-file-failed" role="status" title="${actions.escapeHtml(err)}"><div class="proposal-file-card-head"><span class="proposal-file-icon" aria-hidden="true">!</span><div class="proposal-file-meta"><strong>${actions.escapeHtml(proposalAttachmentLabel(a))}</strong><span>${actions.escapeHtml(err)}</span></div></div></div>`);
+                return;
             }
             const url = proposalAttachmentUrl(proposal, a);
-            if (!url) {
-                return `<div class="proposal-file proposal-file-failed" role="status"><strong>${actions.escapeHtml(a.name || 'Attachment')}</strong><span>No download link yet. Open Files again after sync.</span></div>`;
-            }
-            const isImage = String(a.mime_type || '').startsWith('image/');
+            const label = proposalAttachmentLabel(a);
+            const meta = proposalAttachmentMetaLine(a);
             const caption = a.caption || a.transcript || '';
             const payload = actions.escapeHtml(JSON.stringify({
                 url,
-                name: a.name || 'Attachment',
+                name: label,
+                filename: a.name || label,
                 mime_type: a.mime_type || '',
                 caption,
             }));
-            return isImage
-                ? `<button type="button" class="proposal-media" data-file-preview="${payload}" title="${actions.escapeHtml(caption || a.name || '')}"><img src="${url}" alt="${actions.escapeHtml(a.name || 'Attachment')}" loading="lazy" /></button>`
-                : `<button type="button" class="proposal-file" data-file-preview="${payload}">${actions.escapeHtml(a.name || 'Attachment')}${a.kind ? ` · ${actions.escapeHtml(a.kind)}` : ''}</button>`;
-        }).join('');
-        return `<div class="proposal-media-grid">${media || '<p class="proposal-empty">No attachments on this proposal.</p>'}</div>`;
+            if (!url) {
+                files.push(`<div class="proposal-file-card proposal-file-failed" role="status"><div class="proposal-file-card-head"><span class="proposal-file-icon" aria-hidden="true">?</span><div class="proposal-file-meta"><strong title="${actions.escapeHtml(a.name || label)}">${actions.escapeHtml(label)}</strong><span>No download link yet. Open Files again after sync.</span></div></div></div>`);
+                return;
+            }
+            if (isImageAttachment(a)) {
+                images.push(`<button type="button" class="proposal-media" data-file-preview="${payload}" title="${actions.escapeHtml(caption || label)}"><img src="${url}" alt="${actions.escapeHtml(label)}" loading="lazy" /></button>`);
+                return;
+            }
+            if (isAudioAttachment(a)) {
+                const fileName = String(a.name || label || 'audio').trim() || 'audio';
+                const sizeOnly = formatAttachmentBytes(a.size);
+                const transcript = proposalAttachmentTranscript(proposal, a);
+                const transcriptBlock = transcript
+                    ? `<details class="proposal-file-transcript"><summary>Transcription</summary><p>${actions.escapeHtml(transcript)}</p></details>`
+                    : '';
+                files.push(`<div class="proposal-file-card proposal-file-audio">
+                    <div class="proposal-file-audio-meta">
+                        <strong class="proposal-file-name" title="${actions.escapeHtml(fileName)}">${actions.escapeHtml(fileName)}</strong>
+                        ${sizeOnly ? `<span class="proposal-file-size">${actions.escapeHtml(sizeOnly)}</span>` : ''}
+                    </div>
+                    <audio class="proposal-file-audio-player" controls preload="metadata" src="${actions.escapeHtml(url)}"></audio>
+                    ${transcriptBlock}
+                </div>`);
+                return;
+            }
+            files.push(`<button type="button" class="proposal-file-card" data-file-preview="${payload}">
+                <div class="proposal-file-card-head">
+                    <span class="proposal-file-icon" aria-hidden="true">▣</span>
+                    <div class="proposal-file-meta">
+                        <strong title="${actions.escapeHtml(a.name || label)}">${actions.escapeHtml(label)}</strong>
+                        <span>${actions.escapeHtml(meta || 'File')}</span>
+                    </div>
+                </div>
+            </button>`);
+        });
+        const imageBlock = images.length ? `<div class="proposal-media-grid">${images.join('')}</div>` : '';
+        const fileBlock = files.length ? `<div class="proposal-file-list">${files.join('')}</div>` : '';
+        return `${imageBlock}${fileBlock}` || '<p class="proposal-empty">No attachments on this proposal.</p>';
     }
 
     function closeFilePreview() {
@@ -556,14 +1211,17 @@ export function createIncoming({ context, actions, el }) {
         const mime = String(meta.mime_type || '');
         const name = meta.name || 'Attachment';
         let body;
-        if (mime.startsWith('image/')) {
+        const filename = meta.filename || name;
+        if (mime.startsWith('image/') || isImageAttachment({ mime_type: mime, name: filename })) {
             body = `<img class="file-preview-image" src="${actions.escapeHtml(meta.url)}" alt="${actions.escapeHtml(name)}" />`;
-        } else if (mime === 'application/pdf' || String(name).toLowerCase().endsWith('.pdf')) {
+        } else if (mime.startsWith('audio/') || isAudioAttachment({ mime_type: mime, name: filename, kind: meta.kind })) {
+            body = `<audio class="file-preview-audio" controls autoplay preload="metadata" src="${actions.escapeHtml(meta.url)}"></audio>`;
+        } else if (mime === 'application/pdf' || String(filename).toLowerCase().endsWith('.pdf')) {
             body = `<iframe class="file-preview-frame" title="${actions.escapeHtml(name)}" src="${actions.escapeHtml(meta.url)}"></iframe>`;
-        } else if (mime.startsWith('text/') || mime === 'application/json' || /\.(txt|md|csv|json|log)$/i.test(name)) {
+        } else if (mime.startsWith('text/') || mime === 'application/json' || /\.(txt|md|csv|json|log)$/i.test(filename)) {
             body = `<pre class="file-preview-text" data-file-preview-text>Loading…</pre>`;
         } else {
-            body = `<div class="file-preview-other"><p>Preview is not available for this file type.</p><a class="proposal-btn primary" href="${actions.escapeHtml(meta.url)}" download="${actions.escapeHtml(name)}">Download ${actions.escapeHtml(name)}</a></div>`;
+            body = `<div class="file-preview-other"><p>Preview is not available for this file type.</p><a class="proposal-btn primary" href="${actions.escapeHtml(meta.url)}" download="${actions.escapeHtml(filename)}">Download ${actions.escapeHtml(name)}</a></div>`;
         }
         const overlay = document.createElement('div');
         overlay.className = 'proposal-modal-overlay file-preview-overlay';
@@ -602,6 +1260,43 @@ export function createIncoming({ context, actions, el }) {
                 textNode.textContent = error?.message || 'Could not load file.';
             });
         }
+    }
+
+
+    function bindProposalTaskToggles(root, proposalId) {
+        if (!root) return;
+        const list = root.querySelector('[data-proposal-tasks-for]');
+        if (!list) return;
+        const done = loadProposalTaskDone(proposalId);
+        const apply = (card, index, isDone) => {
+            card.classList.toggle('is-done', isDone);
+            const button = card.querySelector('[data-proposal-task-toggle]');
+            const number = button?.querySelector('.proposal-task-number');
+            if (button) {
+                button.setAttribute('aria-checked', isDone ? 'true' : 'false');
+                button.setAttribute('aria-label', isDone ? 'Mark task not done' : 'Mark task done');
+            }
+            if (number) number.textContent = isDone ? '✓' : String(index + 1);
+        };
+        list.querySelectorAll('[data-proposal-task-toggle]').forEach((button) => {
+            const activate = () => {
+                const index = Number(button.getAttribute('data-proposal-task-toggle'));
+                if (!Number.isFinite(index)) return;
+                const card = button.closest('.proposal-task-card');
+                if (!card) return;
+                if (done.has(index)) done.delete(index);
+                else done.add(index);
+                saveProposalTaskDone(proposalId, done);
+                apply(card, index, done.has(index));
+            };
+            button.addEventListener('click', activate);
+            button.addEventListener('keydown', (event) => {
+                if (event.key === ' ' || event.key === 'Enter') {
+                    event.preventDefault();
+                    activate();
+                }
+            });
+        });
     }
 
     function bindProposalFilePreview(root) {
@@ -648,6 +1343,74 @@ export function createIncoming({ context, actions, el }) {
         if (event.key === 'Escape') closeProposalDetail();
     }
 
+
+
+    async function ensureIncomingRowsLoaded() {
+        if ((state.incoming || []).length) return state.incoming;
+        try {
+            await refreshIncomingData({ force: false });
+        } catch (_) { /* soft */ }
+        return state.incoming || [];
+    }
+
+    function refreshProposalSourcePane(overlay, proposal) {
+        if (!overlay || !proposal) return null;
+        const sourcePane = overlay.querySelector('[data-proposal-pane="source"]');
+        const sourceTab = overlay.querySelector('[data-proposal-tab="source"]');
+        if (!sourcePane) return null;
+        const chunk = proposalSourceChunk(proposal);
+        sourcePane.innerHTML = proposalEvidenceHtml(proposal);
+        sourcePane.querySelectorAll('[data-proposal-jump-source]').forEach((button) => {
+            button.addEventListener('click', () => jumpProposalSource(button.getAttribute('data-proposal-jump-source') || ''));
+        });
+        if (sourceTab) {
+            const count = chunk.count || 0;
+            sourceTab.innerHTML = `Source${count ? `<span class="proposal-tab-count">${count}</span>` : ''}`;
+        }
+        return chunk;
+    }
+
+    function jumpProposalSource(proposalId) {
+        const proposal = proposalById(proposalId) || (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
+        if (!proposal) return;
+        const chunk = proposalSourceChunk(proposal);
+        const source = String(proposal.source || '').toLowerCase();
+        const threadId = String(proposal.source_thread_id || proposal.source_conversation?.thread_id || '');
+        closeProposalDetail();
+        state.incomingFilter = source || state.incomingFilter;
+        if (source === 'whatsapp') {
+            const key = threadId ? `whatsapp:${threadId}` : '';
+            const conversations = incomingConversations('whatsapp');
+            const match = conversations.find((row) => row.key === key) || conversations.find((row) => (chunk.messageIds || []).some((id) => row.messages?.some((m) => String(m.source_message_id) === String(id))));
+            if (match) state.selectedIncomingConversationKey = match.key;
+        } else if (source === 'gmail') {
+            state.selectedGmailThreadKey = conversationsKeyForMail('gmail', threadId, chunk.messageIds);
+        } else if (source === 'mailshot') {
+            state.selectedMailshotThreadKey = conversationsKeyForMail('mailshot', threadId, chunk.messageIds);
+        }
+        renderIncomingWorkspace();
+        const root = el('incoming-workspace');
+        root?.classList.add('incoming-detail-open');
+        // Highlight first/last markers when present; otherwise scroll reader.
+        requestAnimationFrame(() => {
+            const firstId = (chunk.messageIds || [])[0];
+            const lastId = (chunk.messageIds || [])[(chunk.messageIds || []).length - 1];
+            const reader = el(source === 'whatsapp' ? 'incoming-whatsapp-reader' : source === 'mailshot' ? 'incoming-mailshot-reader' : 'incoming-gmail-reader');
+            const startNode = firstId ? reader?.querySelector(`[data-incoming-msg*="${CSS.escape(firstId)}"], [data-source-message-id="${CSS.escape(firstId)}"]`) : null;
+            const endNode = lastId ? reader?.querySelector(`[data-wa-proposal-end="${CSS.escape(String(proposal.id))}"], [data-incoming-msg*="${CSS.escape(lastId)}"]`) : null;
+            (startNode || endNode || reader)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+    }
+
+    function conversationsKeyForMail(source, threadId, messageIds) {
+        const conversations = incomingConversations(source);
+        const byThread = conversations.find((row) => row.threadId === threadId || row.key === `${source}:${threadId}`);
+        if (byThread) return byThread.key;
+        const wanted = new Set((messageIds || []).map(String));
+        const byMsg = conversations.find((row) => row.messages?.some((m) => wanted.has(String(m.source_message_id || ''))));
+        return byMsg?.key || conversations[0]?.key || '';
+    }
+
     // Tabbed detail, mirroring Tensology's ticket view (Details / Tasks / Files ...).
     function openProposalDetail(proposalId) {
         const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
@@ -678,8 +1441,9 @@ export function createIncoming({ context, actions, el }) {
             <dl class="proposal-modal-meta">${meta.map(([k, v]) => `<div><dt>${actions.escapeHtml(k)}</dt><dd>${actions.escapeHtml(v)}</dd></div>`).join('')}</dl>
             ${proposal.description ? `<p class="proposal-modal-desc">${actions.escapeHtml(proposal.description)}</p>` : ''}
             ${proposal.rationale ? `<p class="proposal-modal-rationale"><span>Why</span> ${actions.escapeHtml(proposal.rationale)}</p>` : ''}`;
-        const tasksPane = tasks.length ? `<ul class="proposal-tasks">${tasks.map((t) => `<li>${actions.escapeHtml(t)}</li>`).join('')}</ul>` : '<p class="proposal-empty">No tasks listed.</p>';
-        const tabs = [['details', 'Details', 0], ['tasks', 'Tasks', tasks.length], ['files', 'Files', files.length], ['source', 'Source', evidence.length]];
+        const tasksPane = proposalTasksHtml(tasks, proposal.id);
+        const sourceChunk = proposalSourceChunk(proposal);
+        const tabs = [['details', 'Details', 0], ['tasks', 'Tasks', tasks.length], ['files', 'Files', files.length], ['source', 'Source', sourceChunk.count]];
         const tabBar = tabs.map(([id, label, count], i) => `<button type="button" role="tab" class="proposal-tab${i === 0 ? ' active' : ''}" aria-selected="${i === 0}" data-proposal-tab="${id}">${label}${count ? `<span class="proposal-tab-count">${count}</span>` : ''}</button>`).join('');
         const pane = (id, html, active) => `<div class="proposal-pane${active ? '' : ' hidden'}" role="tabpanel" data-proposal-pane="${id}">${html}</div>`;
         const overlay = document.createElement('div');
@@ -704,6 +1468,10 @@ export function createIncoming({ context, actions, el }) {
         </div>`;
         document.body.appendChild(overlay);
         bindProposalFilePreview(overlay);
+        bindProposalTaskToggles(overlay, proposal.id);
+        overlay.querySelectorAll('[data-proposal-jump-source]').forEach((button) => {
+            button.addEventListener('click', () => jumpProposalSource(button.getAttribute('data-proposal-jump-source') || ''));
+        });
         const filesPane = overlay.querySelector('[data-proposal-pane="files"]');
         const filesTab = overlay.querySelector('[data-proposal-tab="files"]');
         if (filesPane && !(proposal.attachments || []).some((item) => item.url || item.id || item.download_error || item.error)) {
@@ -717,6 +1485,10 @@ export function createIncoming({ context, actions, el }) {
                 const count = attachments.length;
                 filesTab.innerHTML = `Files${count ? `<span class="proposal-tab-count">${count}</span>` : ''}`;
             }
+        });
+        ensureIncomingRowsLoaded().then(() => {
+            if (!overlay.isConnected) return;
+            refreshProposalSourcePane(overlay, proposalById(proposalId) || proposal);
         });
         const projectSelect = overlay.querySelector('#proposal-project-select');
         const projectStatus = overlay.querySelector('#proposal-project-status');
@@ -768,6 +1540,13 @@ export function createIncoming({ context, actions, el }) {
         overlay.querySelectorAll('[data-proposal-tab]').forEach((button) => button.addEventListener('click', () => {
             overlay.querySelectorAll('[data-proposal-tab]').forEach((b) => { b.classList.toggle('active', b === button); b.setAttribute('aria-selected', String(b === button)); });
             overlay.querySelectorAll('[data-proposal-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.proposalPane !== button.dataset.proposalTab));
+            if (button.dataset.proposalTab === 'source') {
+                const current = proposalById(proposalId) || proposal;
+                ensureIncomingRowsLoaded().then(() => {
+                    if (!overlay.isConnected) return;
+                    refreshProposalSourcePane(overlay, current);
+                });
+            }
         }));
         overlay.querySelectorAll('[data-proposal-thread]').forEach((b) => b.addEventListener('click', () => {
             closeProposalDetail();
@@ -776,25 +1555,217 @@ export function createIncoming({ context, actions, el }) {
         document.addEventListener('keydown', onProposalDetailKey);
     }
 
-    async function dismissProposal(proposalId, button) {
+    async function dismissProposal(proposalId, button, { bulk = false } = {}) {
+        if ((!bulk && dismissExpiredBusy) || proposalMutations.has(String(proposalId))) return false;
         const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
-        if (!proposal) return;
+        if (!proposal) return false;
+        proposalMutations.add(String(proposalId));
         button.disabled = true;
+        const index = (state.incomingProposals || []).indexOf(proposal);
         try {
-            await actions.api('/workflows/studio/incoming/proposals/dismiss', { method: 'POST', body: { proposal } });
+            const result = await actions.api('/workflows/studio/incoming/proposals/dismiss', { method: 'POST', body: { proposal } });
+            if (result?.success === false || result?.dismissed === false) throw new Error(result?.error || 'Could not dismiss the proposal.');
+            ++incomingLoadSeq;
+            state.incomingLoad = null;
+            setResyncBusy(false);
             state.incomingProposals = (state.incomingProposals || []).filter((row) => String(row.id) !== String(proposalId));
             renderIncomingWorkspace();
+            const key = result?.key || (result?.receipt_keys || [])[0];
+            if (key) {
+                undoDismissed.set(key, { proposal, index });
+                if (!bulk) showUndoSnackbar({ key, proposal, index, upstream: Boolean(result?.upstream_dismissed) });
+            }
+            if (!el('incoming-dismissed-panel')?.classList.contains('hidden')) loadDismissedList();
+            return true;
         } catch (error) {
-            actions.toast(error.message || 'Could not dismiss the proposal.', 'error');
+            if (!bulk) actions.toast(error.message || 'Could not dismiss the proposal.', 'error');
             button.disabled = false;
+            return false;
+        } finally {
+            proposalMutations.delete(String(proposalId));
+            if (!bulk) renderIncomingWorkspace();
         }
     }
 
+    async function dismissExpiredProposals() {
+        if (dismissExpiredBusy || proposalMutations.size) return;
+        const targets = (state.incomingProposals || []).filter(proposalIsExpired).map(row => String(row.id));
+        if (!targets.length) return;
+        dismissExpiredBusy = true;
+        ++incomingLoadSeq;
+        state.incomingLoad = null;
+        setResyncBusy(false);
+        renderIncomingWorkspace();
+        let dismissed = 0;
+        try {
+            for (const id of targets) {
+                if (await dismissProposal(id, el('incoming-dismiss-expired'), { bulk: true })) dismissed++;
+            }
+            const failed = targets.length - dismissed;
+            actions.toast(`Dismissed ${dismissed} expired proposal${dismissed === 1 ? '' : 's'}.${failed ? ` ${failed} could not be dismissed.` : ''}`, failed ? 'error' : 'success');
+        } finally {
+            dismissExpiredBusy = false;
+            renderIncomingWorkspace();
+            if (!el('incoming-dismissed-panel')?.classList.contains('hidden')) loadDismissedList();
+        }
+    }
+
+    // Undo for dismissals: one snackbar at a time; older dismissals stay reachable
+    // through "Recently dismissed". Rows kept here so Undo restores position.
+    const UNDO_MS = 10_000;
+    const undoDismissed = new Map();
+    const locallyRestored = new Set();
+    let undoTimer = null;
+    let undoCurrent = null;
+    function undoSnackbarNode() {
+        let node = document.getElementById('incoming-undo-snackbar');
+        if (node) return node;
+        node = document.createElement('div');
+        node.id = 'incoming-undo-snackbar';
+        node.className = 'incoming-undo-snackbar hidden';
+        node.setAttribute('role', 'status');
+        node.setAttribute('aria-live', 'polite');
+        node.innerHTML = '<span class="incoming-undo-message" data-incoming-undo-message></span>'
+            + '<button type="button" class="proposal-btn primary" data-incoming-undo>Undo</button>'
+            + '<button type="button" class="incoming-undo-close" data-incoming-undo-close aria-label="Close">&times;</button>';
+        node.querySelector('[data-incoming-undo]').addEventListener('click', () => {
+            if (undoCurrent) restoreDismissed(undoCurrent.key);
+        });
+        node.querySelector('[data-incoming-undo-close]').addEventListener('click', hideUndoSnackbar);
+        // Do not yank the snackbar from under keyboard / pointer users.
+        node.addEventListener('focusin', () => clearTimeout(undoTimer));
+        node.addEventListener('mouseenter', () => clearTimeout(undoTimer));
+        node.addEventListener('focusout', armUndoTimer);
+        node.addEventListener('mouseleave', armUndoTimer);
+        node.addEventListener('keydown', (event) => { if (event.key === 'Escape') hideUndoSnackbar(); });
+        document.body.appendChild(node);
+        return node;
+    }
+    function armUndoTimer() {
+        clearTimeout(undoTimer);
+        undoTimer = setTimeout(hideUndoSnackbar, UNDO_MS);
+    }
+    function showUndoSnackbar(entry) {
+        const node = undoSnackbarNode();
+        undoCurrent = entry;
+        const title = entry.proposal?.title || 'Proposal';
+        node.querySelector('[data-incoming-undo-message]').textContent = `Dismissed “${title}”`;
+        node.querySelector('[data-incoming-undo]').disabled = false;
+        node.classList.remove('hidden');
+        armUndoTimer();
+    }
+    function hideUndoSnackbar() {
+        clearTimeout(undoTimer);
+        undoCurrent = null;
+        document.getElementById('incoming-undo-snackbar')?.classList.add('hidden');
+    }
+    async function restoreDismissed(key, button) {
+        if (dismissExpiredBusy) return;
+        const restoreHadFocus = button === document.activeElement;
+        if (button) button.disabled = true;
+        const undoButton = document.querySelector('#incoming-undo-snackbar [data-incoming-undo]');
+        if (undoCurrent?.key === key && undoButton) undoButton.disabled = true;
+        try {
+            const result = await actions.api('/workflows/studio/incoming/proposals/restore', { method: 'POST', body: { key } });
+            locallyRestored.add(key);
+            setTimeout(() => locallyRestored.delete(key), 5_000);
+            const kept = undoDismissed.get(key);
+            undoDismissed.delete(key);
+            if (undoCurrent?.key === key) hideUndoSnackbar();
+            const restoredProposal = result?.proposal || kept?.proposal;
+            if (restoredProposal) {
+                const rows = (state.incomingProposals || []).filter((row) => String(row.id) !== String(restoredProposal.id));
+                const at = kept?.index >= 0 ? Math.min(kept.index, rows.length) : 0;
+                rows.splice(at, 0, restoredProposal);
+                state.incomingProposals = rows;
+                renderIncomingWorkspace();
+            } else {
+                // Not in this page's memory: reconcile from the (invalidated) server list.
+                state.incomingLoadedAt = 0;
+                refreshIncomingData();
+            }
+            if (result?.pending_retriage) {
+                actions.toast('The running server could not return the restored proposal. The restore update needs to be loaded.', 'error');
+            } else if (result?.upstream_dismissed) {
+                actions.toast('Restored here. It may still be dismissed on Tensology.');
+            } else if (result?.restored === false) {
+                actions.toast('That proposal was already restored.');
+            } else {
+                actions.toast('Proposal restored.');
+            }
+            if (!el('incoming-dismissed-panel')?.classList.contains('hidden')) await loadDismissedList();
+            if (restoreHadFocus) el('incoming-dismissed-toggle')?.focus();
+        } catch (error) {
+            actions.toast(error.message || 'Could not restore the proposal.', 'error');
+            if (button) button.disabled = false;
+            if (undoButton) undoButton.disabled = false;
+        }
+    }
+    function dismissedRowHtml(row, canDelete = false) {
+        const when = row.created_at ? new Date(row.created_at) : null;
+        const label = row.title || `${row.source || 'Proposal'} · ${row.conversation_key || row.key}`;
+        return `<li class="incoming-dismissed-row">
+            <div class="incoming-dismissed-text"${row.summary ? ` title="${actions.escapeHtml(row.summary)}"` : ''}><strong>${actions.escapeHtml(label)}</strong>
+            <small>${when && !isNaN(when) ? actions.escapeHtml(when.toLocaleString()) : ''}${row.title_recovered ? '' : ' · Title not stored (dismissed before titles were saved)'}${row.upstream_dismissed ? ' · Tensology' : ''}</small></div>
+            <div class="incoming-dismissed-actions"><button type="button" class="proposal-btn ghost" data-incoming-restore="${actions.escapeHtml(row.key)}" aria-label="Restore ${actions.escapeHtml(label)}">Restore</button>
+            ${canDelete ? `<button type="button" class="proposal-btn ghost" data-incoming-hide-dismissed="${actions.escapeHtml(row.key)}" aria-label="Delete ${actions.escapeHtml(label)} from history" title="Remove from history and keep this proposal dismissed">Delete</button>` : ''}</div>
+        </li>`;
+    }
+    async function hideDismissed(key, button) {
+        const hadFocus = button === document.activeElement;
+        button.disabled = true;
+        const row = button.closest('.incoming-dismissed-row');
+        const next = row?.nextElementSibling?.querySelector('button') || row?.previousElementSibling?.querySelector('button');
+        try {
+            await actions.api('/workflows/studio/incoming/proposals/dismissed', { method: 'DELETE', body: { key } });
+            row?.remove();
+            if (hadFocus) (next || el('incoming-dismissed-toggle'))?.focus();
+            if (!el('incoming-dismissed-panel')?.querySelector('.incoming-dismissed-row')) {
+                await loadDismissedList();
+            }
+            actions.toast('Removed from history. The proposal remains dismissed.');
+        } catch (error) {
+            button.disabled = false;
+            button.focus();
+            actions.toast(error.message || 'Could not remove the entry from history.', 'error');
+        }
+    }
+    async function loadDismissedList() {
+        const panel = el('incoming-dismissed-panel');
+        if (!panel) return;
+        panel.innerHTML = '<p class="incoming-dismissed-status" role="status">Loading…</p>';
+        try {
+            const result = await actions.api('/workflows/studio/incoming/proposals/dismissed?limit=20');
+            const rows = result?.dismissed || [];
+            panel.innerHTML = rows.length
+                ? `<ul class="incoming-dismissed-list" aria-label="Recently dismissed proposals">${rows.map((row) => dismissedRowHtml(row, result.history_delete === true)).join('')}</ul>`
+                : '<p class="incoming-dismissed-status" role="status">Nothing dismissed recently.</p>';
+            panel.querySelectorAll('[data-incoming-restore]').forEach((b) =>
+                b.addEventListener('click', () => restoreDismissed(b.dataset.incomingRestore, b))
+            );
+            panel.querySelectorAll('[data-incoming-hide-dismissed]').forEach((b) =>
+                b.addEventListener('click', () => hideDismissed(b.dataset.incomingHideDismissed, b))
+            );
+        } catch (error) {
+            panel.innerHTML = `<p class="incoming-dismissed-status" role="status">${actions.escapeHtml(error.message || 'Could not load dismissed proposals.')}</p>`;
+        }
+    }
+    function toggleDismissedPanel(force) {
+        const panel = el('incoming-dismissed-panel');
+        const toggle = el('incoming-dismissed-toggle');
+        if (!panel || !toggle) return;
+        const open = typeof force === 'boolean' ? force : panel.classList.contains('hidden');
+        panel.classList.toggle('hidden', !open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) loadDismissedList();
+    }
+
     async function pushProposalToThread(proposalId, button) {
-        if (button?.disabled) return;
+        if (button?.disabled || dismissExpiredBusy || proposalMutations.size) return;
         const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
         if (!proposal) return;
         const original = button.textContent;
+        proposalMutations.add(String(proposalId));
         button.disabled = true;
         button.textContent = 'Creating…';
         try {
@@ -804,7 +1775,10 @@ export function createIncoming({ context, actions, el }) {
             });
             if (!result?.chat_id) throw new Error(result?.error || 'The proposal thread could not be created.');
             if (result && result.chat_id) {
-                actions.toast('Thread created.', 'success');
+                ++incomingLoadSeq;
+                state.incomingLoad = null;
+                setResyncBusy(false);
+                actions.toast(proposalThreadToast(result), (result.failed_attachments || []).length ? 'error' : 'success');
                 // The proposal is actioned (and cleared on Tensology) — drop it from the list.
                 state.incomingProposals = (state.incomingProposals || []).filter((row) => String(row.id) !== String(proposalId));
                 renderIncomingWorkspace();
@@ -814,12 +1788,15 @@ export function createIncoming({ context, actions, el }) {
         } catch (error) {
             actions.toast(error.message || 'Could not create the thread.', 'error');
         } finally {
+            proposalMutations.delete(String(proposalId));
             button.disabled = false;
             button.textContent = original;
+            renderIncomingWorkspace();
         }
     }
 
     function renderIncomingWorkspace() {
+        scheduleProposalExpiry();
         const list = el('incoming-list');
         if (!list) return;
         el('incoming-workspace').classList.toggle('incoming-detail-open', state.incomingMobileDetail);
@@ -842,6 +1819,12 @@ export function createIncoming({ context, actions, el }) {
         if (proposalsPanel) proposalsPanel.classList.toggle('hidden', state.incomingFilter !== 'proposals');
         const proposalsCount = el('incoming-proposals-count');
         if (proposalsCount) proposalsCount.textContent = String((state.incomingProposals || []).length);
+        const dismissExpiredButton = el('incoming-dismiss-expired');
+        if (dismissExpiredButton) {
+            dismissExpiredButton.disabled = dismissExpiredBusy || proposalMutations.size > 0 || !(state.incomingProposals || []).some(proposalIsExpired);
+            dismissExpiredButton.textContent = dismissExpiredBusy ? 'Dismissing...' : 'Dismiss expired';
+            dismissExpiredButton.setAttribute('aria-busy', String(dismissExpiredBusy));
+        }
         const proposalsList = el('incoming-proposals-list');
         if (proposalsList) {
             const hasProposals = (state.incomingProposals || []).length > 0;
@@ -853,7 +1836,7 @@ export function createIncoming({ context, actions, el }) {
                 : state.incomingProposalsError
                   ? `<div class="proposal-list-status" role="status">${actions.escapeHtml(state.incomingProposalsError)}</div>`
                   : hasProposals
-                    ? (state.incomingProposals || []).map(incomingProposalRowHtml).join('')
+                    ? [...(state.incomingProposals || [])].sort(compareIncomingProposalsNewestFirst).map(incomingProposalRowHtml).join('')
                     : '<div class="proposal-list-status" role="status">No proposals right now.</div>';
             proposalsList.querySelectorAll('[data-incoming-proposal-thread]').forEach((button) =>
                 button.addEventListener('click', () => pushProposalToThread(button.dataset.incomingProposalThread, button))
@@ -861,14 +1844,19 @@ export function createIncoming({ context, actions, el }) {
             proposalsList.querySelectorAll('[data-incoming-proposal-dismiss]').forEach((button) =>
                 button.addEventListener('click', () => dismissProposal(button.dataset.incomingProposalDismiss, button))
             );
+            if (dismissExpiredBusy) proposalsList.querySelectorAll('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss]').forEach(button => { button.disabled = true; });
+            proposalsList.querySelectorAll('[data-incoming-proposal-copy]').forEach((button) =>
+                button.addEventListener('click', () => copyProposal(button.dataset.incomingProposalCopy))
+            );
             proposalsList.querySelectorAll('[data-incoming-proposal-open]').forEach((node) =>
                 node.addEventListener('click', (event) => {
-                    if (event.target.closest('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss]')) return;
+                    if (event.target.closest('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss],[data-incoming-proposal-copy]')) return;
                     openProposalDetail(node.dataset.incomingProposalOpen);
                 })
             );
             proposalsList.querySelectorAll('.proposal-card[data-incoming-proposal-open]').forEach((node) =>
                 node.addEventListener('keydown', (event) => {
+                    if (event.target !== node) return;
                     if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
                         openProposalDetail(node.dataset.incomingProposalOpen);
@@ -1423,6 +2411,13 @@ export function createIncoming({ context, actions, el }) {
             const status = String(message.status || '').toLowerCase();
             // Dismiss / thread creation already updated server cache surgically —
             // drop the card locally and skip a full Tensology refetch.
+            if (status === 'restored') {
+                // Our own Undo already re-inserted the row; others reconcile softly.
+                if (locallyRestored.size) return;
+                state.incomingLoadedAt = 0;
+                if (context.workspaceMode === 'incoming') refreshIncomingData();
+                return;
+            }
             if (['dismissed', 'created', 'started', 'sent_to_decisions', 'approved'].includes(status)) {
                 removeProposalByRequest(message.request_id);
                 if (message.type === 'development_changed') {
@@ -1491,6 +2486,7 @@ export function createIncoming({ context, actions, el }) {
         button.setAttribute('aria-busy', busy ? 'true' : 'false');
     }
     function refreshIncomingData(options) {
+        if (dismissExpiredBusy) return Promise.resolve();
         if (state.incomingLoad && !options?.force) return state.incomingLoad;
         if (!options?.force && state.incomingLoadedAt && Date.now() - state.incomingLoadedAt < 15_000) return Promise.resolve();
         connectIncomingPush();
@@ -1581,6 +2577,11 @@ export function createIncoming({ context, actions, el }) {
             el(`incoming-panel-${state.incomingFilter}`)?.querySelector('.selected')?.focus();
         }));
         el('incoming-resync')?.addEventListener('click', () => refreshIncomingData({ force: true }));
+        el('incoming-dismissed-toggle')?.addEventListener('click', () => toggleDismissedPanel());
+        el('incoming-dismiss-expired')?.addEventListener('click', dismissExpiredProposals);
+        el('incoming-dismissed-panel')?.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') { toggleDismissedPanel(false); el('incoming-dismissed-toggle')?.focus(); }
+        });
         el('incoming-auto-accept')?.addEventListener('change', async (event) => {
             const control = event.target;
             const enabled = control.checked;

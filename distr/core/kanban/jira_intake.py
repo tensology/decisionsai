@@ -740,10 +740,78 @@ def collect_jira_keys_from_emails(messages: Iterable[dict[str, Any]]) -> list[st
     return extract_jira_issue_keys(" ".join(keys))
 
 
+def _normalize_mailshot_attachments(raw_attachments: Any, *, message_id: str = "") -> list[dict[str, Any]]:
+    """Keep Mailshot attachment metadata FE/Gmail-shaped; drop server storage paths."""
+    out: list[dict[str, Any]] = []
+    for item in raw_attachments or []:
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or item.get("name") or "attachment").strip() or "attachment"
+        attachment_id = str(
+            item.get("attachment_id") or item.get("id") or item.get("_id") or ""
+        ).strip()
+        mime = str(
+            item.get("mime_type") or item.get("content_type") or item.get("type") or ""
+        ).strip()
+        row: dict[str, Any] = {"filename": filename}
+        if attachment_id:
+            row["attachment_id"] = attachment_id
+        if mime:
+            row["mime_type"] = mime
+            row["content_type"] = mime
+        if item.get("size") is not None:
+            row["size"] = item.get("size")
+        mid = str(item.get("message_id") or message_id or "").strip()
+        if mid:
+            row["message_id"] = mid
+        out.append(row)
+    return out
+
+
+def _mailshot_detail_payload(detail: Any) -> dict[str, Any]:
+    if not isinstance(detail, dict):
+        return {}
+    email = detail.get("email")
+    return email if isinstance(email, dict) else detail
+
+
+def hydrate_mailshot_message(client: Any, raw: dict[str, Any]) -> dict[str, Any]:
+    """Merge GET mail/messages/{id} body/html/attachment ids onto a compact list row.
+
+    Tensology's list endpoint omits body/body_html and attachment_id (compact summary).
+    Incoming needs the detail payload to render the reader and preview attachments.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    merged = dict(raw)
+    message_id = str(merged.get("_id") or merged.get("id") or "").strip()
+    has_body = bool(str(merged.get("body") or "").strip() or str(merged.get("body_html") or "").strip())
+    attachments = merged.get("attachments") if isinstance(merged.get("attachments"), list) else []
+    needs_attachment_ids = bool(attachments) and not any(
+        isinstance(item, dict) and str(item.get("attachment_id") or item.get("id") or "").strip()
+        for item in attachments
+    )
+    if message_id and (not has_body or needs_attachment_ids):
+        try:
+            detail = _mailshot_detail_payload(client.get(f"mail/messages/{message_id}"))
+        except Exception:
+            logger.info("Mailshot detail hydrate failed for %s", message_id, exc_info=True)
+            detail = {}
+        if detail:
+            for key in ("body", "body_html", "preview", "attachments", "cc", "bcc", "date", "subject", "from", "to", "read", "labels", "messageId"):
+                if key in detail and detail.get(key) is not None:
+                    merged[key] = detail[key]
+            if not merged.get("_id") and detail.get("_id"):
+                merged["_id"] = detail.get("_id")
+    return merged
+
+
 def mailshot_message_to_intake_dict(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize a Tensology Mailshot email row into the Gmail-shaped intake dict."""
-    snippet = str(raw.get("preview") or raw.get("snippet") or raw.get("body") or "").strip()
     message_id = str(raw.get("_id") or raw.get("id") or raw.get("messageId") or "").strip()
+    body_text = str(raw.get("body") or raw.get("text") or raw.get("text_body") or "").strip()
+    body_html = str(raw.get("body_html") or raw.get("html_body") or raw.get("html") or "").strip()
+    snippet = str(raw.get("preview") or raw.get("snippet") or body_text or "").strip()
     return {
         "id": message_id,
         "thread_id": str(raw.get("thread_id") or raw.get("threadId") or message_id).strip(),
@@ -751,11 +819,13 @@ def mailshot_message_to_intake_dict(raw: dict[str, Any]) -> dict[str, Any]:
         "to": str(raw.get("to") or "").strip(),
         "subject": str(raw.get("subject") or "").strip(),
         "snippet": snippet[:500],
-        "body": str(raw.get("body") or snippet or ""),
+        "body": body_text or snippet or "",
+        "text_body": body_text or snippet or "",
+        "html_body": body_html,
         "date": str(raw.get("date") or "").strip(),
         "labels": list(raw.get("labels") or []),
         "read": bool(raw.get("read")),
-        "attachments": list(raw.get("attachments") or []),
+        "attachments": _normalize_mailshot_attachments(raw.get("attachments") or [], message_id=message_id),
         "source": "mailshot",
     }
 
@@ -765,11 +835,15 @@ def fetch_mailshot_intake_messages(
     limit: int = 50,
     max_pages: int = 5,
     jira_only: bool = True,
+    hydrate: bool = False,
 ) -> list[dict[str, Any]]:
     """Read Tensology Mailshot inbox rows shaped for Jira intake classifiers.
 
     Mailshot is the preferred wake source when Jira notifications land on
     Tensology mail rather than Gmail.
+
+    When ``hydrate`` is true (Incoming reader), each compact list row is filled
+    from GET mail/messages/{id} so body/html_body and attachment ids are present.
     """
     try:
         from distr.core.tensology_client import TensologyApiError, configured_tensology_client
@@ -791,7 +865,8 @@ def fetch_mailshot_intake_messages(
             for raw in emails:
                 if not isinstance(raw, dict):
                     continue
-                msg = mailshot_message_to_intake_dict(raw)
+                row = hydrate_mailshot_message(client, raw) if hydrate else raw
+                msg = mailshot_message_to_intake_dict(row)
                 if jira_only and not is_jira_notification_email(
                     from_addr=msg.get("from") or "",
                     subject=msg.get("subject") or "",

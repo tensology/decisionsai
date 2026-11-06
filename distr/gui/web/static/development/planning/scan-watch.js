@@ -1,0 +1,27 @@
+// Background project scan: poll the lightweight status endpoint until the scan settles,
+// then hand the refreshed workspace to the caller (planning/index.js -> refreshWorkspace).
+
+export const SCANNING_HINT = 'Scanning project…';
+
+export function scanHint(scan) {
+    if (scan?.state === 'scanning') return { text: SCANNING_HINT, kind: 'scanning' };
+    if (scan?.state === 'error') return { text: `Project scan failed: ${scan.error || 'unknown error'}`, kind: 'error' };
+    return null;
+}
+
+export async function watchPlanScan({ api, workspaceId, isCurrent, onSettled, interval = 1500, maxPolls = 240, sleep }) {
+    const wait = sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const base = `/workflows/studio/plan-workspaces/${encodeURIComponent(workspaceId)}`;
+    for (let poll = 0; poll < maxPolls; poll += 1) {
+        await wait(interval);
+        if (!isCurrent()) return 'abandoned';
+        let status;
+        try { status = await api(`${base}/scan-status`); } catch { continue; }
+        if (status?.state === 'scanning') continue;
+        const workspace = status?.state === 'done' ? await api(base).catch(() => null) : null;
+        if (!isCurrent()) return 'abandoned';
+        onSettled(status || { state: 'idle' }, workspace);
+        return status?.state || 'idle';
+    }
+    return 'timeout';
+}

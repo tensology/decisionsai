@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import threading
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import List, Dict, Any, Optional
 
 from sqlalchemy import or_
@@ -197,6 +199,9 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
     budget = run_data.get("budget") if isinstance(run_data.get("budget"), dict) else {}
     drift_metrics = run_data.get("drift_metrics") if isinstance(run_data.get("drift_metrics"), dict) else {}
     latest_handoff = run_data.get("latest_backend_handoff") if isinstance(run_data.get("latest_backend_handoff"), dict) else {}
+    from distr.core.workflow.run_health import run_health
+    health = run_health(db, run, {**run_data, "project_name": run_data.get("project_name") or (project.name if project else ""),
+                                "ticket_title": run_data.get("ticket_title") or (ticket.title if ticket else "")})
     return {
         "board_id": board_id,
         "board_name": run_data.get("board_name") or (board.name if board else None),
@@ -213,6 +218,9 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "execution_route": run_data.get("execution_route") or {},
         "route_receipt": run_data.get("route_receipt") or {},
         "pending_route_approval": run_data.get("pending_route_approval") or {},
+        # Who approved the current provider swap (empty when none was swapped).
+        "route_approved_by": ((run_data.get("execution_route") or {}).get("approved_by") or ""),
+        "provider_swaps": list(run_data.get("approved_provider_replacements") or []),
         "provider_free_candidates": (run_data.get("provider_free_candidates") or [])[:3],
         "provider_preflight": run_data.get("provider_preflight") or {},
         "provider_model_readiness": run_data.get("provider_model_readiness") or {},
@@ -240,6 +248,7 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "worker_question": run_data.get("worker_question") or "",
         "waiting_prompt": run_data.get("waiting_prompt") or "",
         "next_action": run_data.get("next_action") or decide_workflow_next_action(run_data=run_data).get("action"),
+        **health,
     }
 
 
@@ -1262,10 +1271,17 @@ def apply_run_provider_model_selection(
     candidate_index: int,
     *,
     synchronous_redispatch: bool = False,
+    approved_by: str = "",
 ) -> Dict[str, Any]:
     """Readiness-check a chosen free model, then resume or offer the next one."""
     from distr.core.project_cli_backends.provider_preflight import probe_openrouter_model_readiness
     from distr.core.settings import load_settings_from_db
+    from distr.core.workflow.run_prompts import real_approver
+
+    if not real_approver(approved_by):
+        logger.error("Run %s model selection REFUSED: unknown approver (approved_by=%r)", run_id, approved_by)
+        return {"error": "Provider swap refused: unknown approver: a provider swap needs the real approver's identity.",
+                "status_code": 403, "refused": True}
 
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
@@ -1347,6 +1363,7 @@ def apply_run_provider_model_selection(
             run_id,
             approved=True,
             synchronous_redispatch=synchronous_redispatch,
+            approved_by=approved_by,
         )
 
     with get_session() as db:
@@ -1446,6 +1463,7 @@ def apply_run_route_approval(
     approved: bool,
     *,
     synchronous_redispatch: bool = False,
+    approved_by: str = "",
 ) -> Dict[str, Any]:
     """Approve or reject a pending orchestrator route override for an active run."""
     from distr.core.project_cli_backends import normalize_backend_id
@@ -1473,6 +1491,40 @@ def apply_run_route_approval(
             current_route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
             failed_backend = normalize_backend_id(str(current_route.get("backend") or "").strip() or "pi")
             failed_model = str(current_route.get("model") or "auto").strip()
+            swap_record = None
+            from distr.core.workflow.run_prompts import provider_unready_reason, real_approver
+
+            is_swap = backend_id != failed_backend or model != failed_model
+            if is_swap or waiting_kind == "provider_preflight":
+                # A provider swap is always deliberate: it needs a real approver
+                # and a logged reason. Refuse loudly instead of falling back.
+                approver = real_approver(approved_by)
+                why = (provider_unready_reason(run_data.get("provider_preflight"))
+                       if waiting_kind == "provider_preflight" else rationale)
+                refusal = ""
+                if not approver:
+                    refusal = "unknown approver: a provider swap needs the real approver's identity"
+                elif is_swap and not why:
+                    refusal = "no reason recorded for why the current provider was judged unready"
+                if refusal:
+                    logger.error("Run %s provider swap %s/%s -> %s/%s REFUSED: %s (approved_by=%r)",
+                                 run_id, failed_backend, failed_model, backend_id, model, refusal, approved_by)
+                    return {"error": f"Provider swap refused: {refusal}.", "status_code": 403 if not approver else 409,
+                            "refused": True}
+                approved_by = approver
+            if waiting_kind == "provider_preflight":
+                from distr.core.workflow.run_prompts import provider_swap_record
+
+                swap_record = provider_swap_record(
+                    failed_backend=failed_backend, failed_model=failed_model,
+                    to_backend=backend_id, to_model=model,
+                    preflight=run_data.get("provider_preflight"), approved_by=approved_by,
+                )
+                rationale = swap_record["rationale"]
+                pending = {**pending, **{key: swap_record[key] for key in
+                           ("rationale", "unready_reason", "approved_by", "approved_at")},
+                           "reason": rationale}
+                logger.info("Run %s provider replacement: %s", run_id, rationale)
             previous_backend = normalize_backend_id(str(current_route.get("backend") or "").strip() or "pi")
             if previous_backend != backend_id:
                 # Provider-specific values belong to the route they came from.
@@ -1497,8 +1549,17 @@ def apply_run_route_approval(
                 "model": model,
                 "source": "orchestrator_override",
                 "rationale": rationale,
+                "reason": rationale,
                 "requires_approval": False,
+                **({"approved_by": approved_by} if approved_by else {}),
             }
+            receipt = dict(run_data.get("route_receipt") or {})
+            if receipt:
+                receipt.update({"decision_engine": "approved_provider_replacement" if swap_record else "orchestrator_override",
+                                "decision_reason": rationale,
+                                "selected": {"backend": backend_id, "model": model,
+                                             "provider": pending.get("model_provider") or pending.get("provider") or ""}})
+                run_data["route_receipt"] = receipt
             if waiting_kind == "provider_preflight" and failed_model:
                 # A readiness failure applies to the provider/model, not just
                 # one step. Rewrite every still-planned occurrence so approval
@@ -1535,12 +1596,7 @@ def apply_run_route_approval(
                     run_data.get("step_role_routes")
                 )
                 replacements = list(run_data.get("approved_provider_replacements") or [])
-                replacements.append({
-                    "from_backend": failed_backend,
-                    "from_model": failed_model,
-                    "to_backend": backend_id,
-                    "to_model": model,
-                })
+                replacements.append(swap_record)
                 run_data["approved_provider_replacements"] = replacements
                 # A sequential ticket group is one approved delivery plan. A
                 # visible provider substitution accepted on its first ticket
@@ -1552,7 +1608,9 @@ def apply_run_route_approval(
                     common_metadata["approved_provider_replacements"] = replacements
                     run_data["ticket_group_common_metadata"] = common_metadata
             event_type = "route_approval_granted"
-            summary = f"Route override approved: {backend_id} / {model or 'auto'}"
+            summary = f"Route override approved by {approved_by or 'unknown approver'}: {backend_id} / {model or 'auto'}"
+            if swap_record or is_swap:
+                summary = f"Provider swap approved by {approved_by}: {rationale}"
         else:
             event_type = "route_approval_rejected"
             summary = "Route override rejected; policy route will be used."
@@ -1600,10 +1658,26 @@ def apply_run_route_approval(
             ticket_id=ticket_id,
             board_id=board_id,
             summary=summary,
-            payload={"pending_route": pending, "approved": approved},
+            payload={"pending_route": pending, "approved": approved,
+                     "approved_by": approved_by if approved else None},
         )
     except Exception:
         logger.debug("Could not emit route approval event", exc_info=True)
+    if approved:
+        try:
+            # Make every swap visible in the run timeline, not only the bus.
+            from distr.core.orchestration_events import emit_orchestration_event
+
+            emit_orchestration_event(
+                source="approval", event_type="route_approval_granted", status="approved",
+                workflow_id=workflow_id, run_id=run_id, step_id=step_id, ticket_id=ticket_id,
+                board_id=board_id, summary=summary,
+                payload={"approved_by": approved_by, "reason": pending.get("reason") or pending.get("rationale") or "",
+                         "unready_reason": pending.get("unready_reason") or "",
+                         "to_backend": pending.get("backend"), "to_model": pending.get("model")},
+            )
+        except Exception:
+            logger.warning("Could not record route approval in the run timeline", exc_info=True)
 
     increment_workflow_updated()
 
@@ -1987,6 +2061,8 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 activity_state = "delayed"
             else:
                 activity_state = "stale"
+            if enriched.get("stalled"):
+                activity_state = "stalled"
             results.append({
                 "id": r.id,
                 "execution_kind": "workflow",
@@ -2055,6 +2131,18 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
             project_id = work_item.project_id or chat.project_id or (ticket.linked_project_id if ticket else None)
             project = db.get(Project, int(project_id)) if project_id else None
             started_at = execution.get("started_at") or (chat.modified_date.isoformat() if chat.modified_date else None)
+            from distr.core.workflow.run_health import run_health
+            try:
+                started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                if started.tzinfo:
+                    started = started.astimezone(timezone.utc).replace(tzinfo=None)
+            except (TypeError, ValueError):
+                started = chat.modified_date
+            session_row = db.get(ProjectExecutionSession, execution["execution_session_id"]) if execution.get("execution_session_id") else None
+            health = run_health(db, SimpleNamespace(id=None, current_step_id=None, started_at=started,
+                                status=status, ticket_id=work_item.local_ticket_id),
+                                {**execution, "project_name": project.name if project else "",
+                                 "ticket_title": work_item.ticket_title or chat.title}, execution=session_row)
             results.append({
                 "id": f"development:{int(chat.id)}:{execution.get('job_id') or execution.get('execution_session_id') or 'active'}",
                 "execution_kind": "development",
@@ -2089,9 +2177,15 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                     "kind": "development",
                     "url": f"/api/workflows/studio/tasks/{int(chat.id)}/execution/stop",
                 },
+                **health,
+                **({"activity_state": "stalled"} if health["stalled"] else {}),
             })
         results.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
-        return results[:limit]
+        visible = results[:max(0, limit)]
+        visible_ids = {item["id"] for item in visible}
+        # Interrupted work must not disappear behind the normal active-list cap.
+        return visible + [item for item in results if item["id"] not in visible_ids
+                          and item.get("waiting_kind") == "restart_recovery"]
 
 
 def _run_blueprint_snapshot(run_data: dict) -> dict:

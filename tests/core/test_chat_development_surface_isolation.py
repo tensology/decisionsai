@@ -143,6 +143,50 @@ def test_chat_detail_requires_the_matching_surface_contract():
     assert isinstance(development.json()["development"], dict)
 
 
+def test_plan_root_stays_out_of_chat_history_and_in_the_plan_list():
+    """A new_root plan chat is not Chat or Development history, and Plan still lists it."""
+    import json
+    from types import SimpleNamespace
+
+    from distr.core.db import Chat, get_session
+    from distr.core.planning.chats import is_plan_chat, list_chats, new_root
+    from distr.gui.oracle.menu import get_recent_chats_for_menu
+
+    assert is_plan_chat(SimpleNamespace(autonomy_level="plan", params="{}"))
+    assert is_plan_chat(SimpleNamespace(autonomy_level="full", params=json.dumps({"plan_workspace_id": 4})))
+    assert is_plan_chat(SimpleNamespace(autonomy_level="full", params=json.dumps({"source_type": "plan_workspace"})))
+    assert not is_plan_chat(SimpleNamespace(autonomy_level="full", params=json.dumps({"source_type": "prompt"})))
+
+    workspace_id = 910000003
+    plan_id = regular_id = None
+    try:
+        with get_session() as db:
+            plan = new_root(db, SimpleNamespace(id=workspace_id, project_id=None), title="Plan only history leak")
+            regular = Chat(title="Regular history control", autonomy_level="full", is_hidden=False, is_archived=False)
+            db.add(regular)
+            db.flush()
+            plan_id, regular_id = int(plan.id), int(regular.id)
+            db.commit()
+
+        client = _client()
+        chat_ids = {row["id"] for row in client.get("/api/chats?surface=chat").json()["chats"]}
+        development_ids = {row["id"] for row in client.get("/api/chats?surface=development").json()["chats"]}
+        assert plan_id not in chat_ids
+        assert plan_id not in development_ids
+        assert regular_id in chat_ids
+        assert any(row["id"] == plan_id for row in list_chats(workspace_id))
+        menu_ids = {chat_id for chat_id, _title in get_recent_chats_for_menu(limit=20)}
+        assert plan_id not in menu_ids
+        assert regular_id in menu_ids
+    finally:
+        if plan_id is not None or regular_id is not None:
+            with get_session() as db:
+                db.query(Chat).filter(Chat.id.in_([i for i in (plan_id, regular_id) if i is not None])).delete(
+                    synchronize_session=False
+                )
+                db.commit()
+
+
 def test_development_chat_list_exposes_shared_timer_state():
     from distr.core.workflow.development_control import resume_thread_time
 

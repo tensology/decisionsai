@@ -36,7 +36,7 @@
 .workflow-active-execution > div { display: flex; align-items: center; min-width: 0; gap: 9px; }
 .workflow-active-execution span { display: grid; min-width: 0; gap: 2px; }
 .workflow-active-execution strong { overflow: hidden; color: var(--studio-text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.workflow-active-execution small { overflow: hidden; color: var(--studio-dim); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-active-execution small { color: var(--studio-muted); font-size: 12px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 .workflow-run-menu { position: relative; flex: 0 0 auto; }
 .workflow-run-menu summary { list-style: none; cursor: pointer; border-radius: 6px; padding: 4px 7px; color: var(--studio-muted); font-size: 12px; }
 .workflow-run-menu summary::-webkit-details-marker { display: none; }

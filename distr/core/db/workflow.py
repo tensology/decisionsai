@@ -6,7 +6,7 @@ sequence of steps. Each step IS a single action with validation and routing.
 
 Named "Auto" to avoid conflict with the existing Workflow model (template/job card system).
 """
-from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from . import Base
 from .time import utc_now_naive
@@ -392,6 +392,36 @@ Index('ix_autoworkflowrun_status', AutoWorkflowRun.status)
 Index('ix_studio_artifacts_chat_order', StudioArtifact.chat_id, StudioArtifact.sort_order)
 Index('ix_studio_artifacts_workflow', StudioArtifact.workflow_id)
 Index('ix_studio_artifacts_run', StudioArtifact.run_id)
+class PlanDbLink(Base):
+    """A read-only link from a project / plan workspace to a local (loopback) Postgres or MySQL database.
+
+    Never stores a password: ``secret_ref`` is only a reference (e.g. a macOS Keychain item) or NULL
+    (prompt per session). Several links per project are allowed.
+    """
+
+    __tablename__ = "plan_db_links"
+    __table_args__ = (CheckConstraint("engine IN ('postgres','mysql')", name="ck_plan_db_links_engine"),)
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    workspace_id = Column(Integer, ForeignKey("plan_workspaces.id"), nullable=True)
+    engine = Column(String, nullable=False)
+    host = Column(String, nullable=False)          # 127.0.0.1 | ::1 | localhost | unix:/path
+    port = Column(Integer, nullable=True)
+    database = Column(String, nullable=False)
+    schemas = Column(Text, nullable=False, default="[]")   # JSON list
+    username = Column(String, nullable=False)
+    secret_ref = Column(String, nullable=True)
+    label = Column(String, nullable=False)
+    colour = Column(String, nullable=True)
+    read_only = Column(Boolean, nullable=False, default=True)
+    status = Column(String, nullable=False, default="new")
+    last_error = Column(String, nullable=True)     # redacted message only
+    last_introspected_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    modified_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+
 Index('ix_development_commands_chat_position', DevelopmentCommand.chat_id, DevelopmentCommand.position)
 Index('ix_development_commands_status', DevelopmentCommand.status)
 Index('ix_development_commands_run', DevelopmentCommand.run_id)
@@ -401,3 +431,4 @@ Index('ix_development_work_items_project', DevelopmentWorkItem.project_id)
 Index('ix_plan_workspaces_project', PlanWorkspace.project_id)
 Index('ix_plan_items_workspace_order', PlanItem.workspace_id, PlanItem.sort_order)
 Index('ix_plan_item_revisions_item', PlanItemRevision.item_id, PlanItemRevision.revision)
+Index('ix_plan_db_links_project', PlanDbLink.project_id)

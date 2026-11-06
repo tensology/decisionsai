@@ -300,11 +300,33 @@ class PlanMessageRequest(BaseModel):
     item_id: Optional[int] = None
     page_id: Optional[str] = Field(default=None, max_length=256)
     attachments: list[int] = Field(default_factory=list, max_length=8)
+    chat_id: Optional[int] = None  # multi-chat (N3); None = the workspace's newest live chat
+    drafts: list[dict] = Field(default_factory=list, max_length=64)  # [{id, base_revision}] unsaved editors (N1)
 
 
 class PlanBuildRequest(BaseModel):
     provider: str = Field(min_length=1, max_length=80)
     model_name: str = Field(min_length=1, max_length=200)
+    chat_id: Optional[int] = None
+
+
+class PlanInterfaceShotRequest(BaseModel):
+    screen_id: str = Field(min_length=1, max_length=64)
+    route: str = Field(default="", max_length=300)
+    lane: str = Field(default="", max_length=20)
+
+
+class PlanChatCreateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
+class PlanChatUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    expected_revision: Optional[int] = None
+
+
+class PlanChatActionRequest(BaseModel):
+    expected_revision: Optional[int] = None
 
 
 class ProjectOpsPlanRequest(BaseModel):
@@ -395,3 +417,13 @@ class PlanFileReconcileRequest(BaseModel):
     expected_revision: int
     file_hash: str | None = None
     action: str
+
+
+class PlanRestoreRequest(BaseModel):
+    revision: int = Field(ge=0)
+    expected_revision: int = Field(ge=1)
+
+
+class PlanMemoryRequest(BaseModel):
+    enabled: Optional[bool] = None
+    scope: str = Field(default="chat", max_length=16)

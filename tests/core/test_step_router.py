@@ -61,14 +61,16 @@ def test_soft_inspection_budget_allows_a_bounded_finish_but_keeps_a_hard_ceiling
 def test_provider_wait_keeps_specific_model_decision_instead_of_generic_prompt():
     specific = "The local model exceeded its budget. Use Codex as the paid fallback?"
 
-    assert _effective_wait_prompt(
+    prompt = _effective_wait_prompt(
         {
             "waiting_kind": "provider_preflight",
             "provider_preflight_prompt": specific,
         },
         default_prompt="Reply with what should happen next.",
         result="",
-    ) == specific
+    )
+    assert specific in prompt
+    assert 'Continue retries the same configured harness' in prompt and 'Safe default if you do nothing' in prompt
 
 
 def test_expected_output_contract_requires_named_compact_handoff_fields():

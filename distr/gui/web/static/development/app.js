@@ -5,23 +5,28 @@ import { createThreadSession } from './threads/session.js?v=20261030-chat-run-sc
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261003-sitemap-groups';
+import { createPlanning } from './planning/index.js?v=20261103-rows1';
+import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
+import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261102-verify';
+import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml } from './planning/view-switch.js?v=20261103-section';
 
-import { createSidebar } from './sidebar/index.js?v=20261024-sidebar-wfadd';
+import { createSidebar } from './sidebar/index.js?v=20261106-sidebar-collapse1';
 
 import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
-import { createIncoming } from './incoming/index.js?v=20261102-proposal-project';
+import { createIncoming } from './incoming/index.js?v=20261106-source-chronology';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
-import { createBoards } from './boards/index.js?v=20260916-ticket-dblclick';
+import { createBoards } from './boards/index.js?v=20261102-verify';
 
-import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261023-terminal-parity1';
+import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261106-cli-clean1';
 
 import { createThreadsTranscript } from './threads/transcript/index.js?v=20261031-completed-run-history';
 
-import { createThreadsComposer } from './threads/composer/index.js?v=20261023-steering1';
+import { createThreadsComposer } from './threads/composer/index.js?v=20261106-composer-polish1';
+
+import { createThreadCliMode } from './threads/cli-mode.js?v=20261106-cli-clean1';
 
 import { createThreadsInspector } from './threads/inspector/index.js?v=20261023-queueactions1';
 
@@ -87,10 +92,13 @@ const state = {
     workspaceMode: 'chat',
     routingAssessment: null,
     elapsedTimer: null,
+    autoPauseTimer: null,
     projectTickets: {},
     projectTicketLoads: {},
     ready: false,
     routeLoading: false,
+    planOpenToken: 0,
+    planBoardView: false,
     changeReview: null,
     changeReviewLoading: false,
     selectedChangePath: '',
@@ -346,7 +354,7 @@ function threadIsProcessing(chat) {
     const isCurrent = Number(state.currentChat?.id) === Number(chat?.id);
     if (isCurrent && state.busy) return true;
     const run = (isCurrent && state.currentRun) || directExecutionForChat(chat);
-    const settled = Boolean(run && ['completed', 'failed', 'cancelled'].includes(String(run.status || '').toLowerCase()));
+    const settled = Boolean(run && ['completed', 'failed', 'blocked', 'cancelled'].includes(String(run.status || '').toLowerCase()));
     if (settled) {
         const workflow = workflowForChat(chat?.id);
         return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id, chat?.id)));
@@ -376,6 +384,7 @@ function statusLabel(status) {
         waiting: 'Waiting for input',
         paused: 'Paused',
         failed: 'Needs attention',
+        blocked: 'Needs input',
         completed: 'Complete',
         cancelled: 'Stopped',
         ready: 'Ready'
@@ -446,7 +455,39 @@ function elapsedLabel(run) {
         : `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
 }
 
+const chatBoardKey = (chat) => (boardByKey(chat?.development_board_key) || boardForProject(chat?.project_id))?.key || '';
+
+// Kanban / Plan / last-thread switcher inside both .task-breadcrumb bars (thread header and Kanban header).
+function syncBoardViewSwitch() {
+    const boardKey = state.selectedBoardKey;
+    const mode = state.workspaceMode;
+    const current = mode === 'kanban' ? 'kanban' : mode === 'plan' ? 'plan' : mode === 'chat' && state.currentChat ? 'thread' : '';
+    // Board plan vs plans list comes from the route intent (setWorkspaceMode boardPlan), not from
+    // planning.currentView(), which only flips to 'board' after setWorkspaceMode has already synced.
+    const planHome = mode === 'plan' && !state.planBoardView;
+    const show = Boolean(boardByKey(boardKey) && current && !planHome);
+    const html = show ? boardViewSwitchHtml(boardViewOptions(current, boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey))) : '';
+    document.querySelectorAll('[data-board-view-switch]').forEach((node) => {
+        node.classList.toggle('hidden', !show);
+        if (node.innerHTML !== html) node.innerHTML = html;
+    });
+}
+
+async function switchBoardView(view) {
+    const boardKey = state.selectedBoardKey;
+    if (!boardByKey(boardKey)) return;
+    if (view === 'kanban' && state.workspaceMode !== 'kanban') await openBoardKanban(boardKey);
+    // Not awaited: a slow plan load must never hold the switcher.
+    else if (view === 'plan' && state.workspaceMode !== 'plan') openBoardPlan(boardKey).catch(() => {});
+    else if (view === 'thread') {
+        const chatId = boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey);
+        if (chatId && !(state.workspaceMode === 'chat' && Number(state.currentChat?.id) === chatId)) await loadChat(chatId);
+    }
+    syncBoardViewSwitch();
+}
+
 function syncHeader() {
+    threadCliMode.syncFromShell();
     const chat = state.currentChat;
     const board = boardByKey(state.selectedBoardKey) || boardForProject(chat?.project_id);
     const runStatus = String(state.currentRun?.status || 'ready').toLowerCase();
@@ -457,6 +498,7 @@ function syncHeader() {
     el('task-state').classList.toggle('hidden', !chat);
     syncThreadTerminalButton();
     syncProjectSelect();
+    syncBoardViewSwitch();
 }
 
 // Thread terminal button: reflects the real PTY state of the thread's project
@@ -509,6 +551,7 @@ function syncThreadTerminalButton() {
         renderThreadTerminalButton();
         return;
     }
+    closeThreadTerminalMenu();
     threadTerminal.chatId = chatId;
     threadTerminal.running = false;
     threadTerminal.seq++;
@@ -535,6 +578,10 @@ async function toggleThreadTerminal() {
         if (!changed && chatId === threadTerminal.chatId) threadTerminal.running = previous;
         threadTerminal.pending = false;
         await refreshThreadTerminalStatus();
+        // Global "On startup, go to terminals." (default on): play opens that project's terminals.
+        if (!previous && changed && playOpensTerminals() && chatId === threadTerminal.chatId) {
+            await goToThreadProjectTerminal();
+        }
     } catch (error) {
         if (chatId === threadTerminal.chatId) threadTerminal.running = previous; // revert
         console.warn(`Thread terminal ${previous ? 'stop' : 'start'} failed:`, error?.message || error);
@@ -885,6 +932,110 @@ function syncPermissionSelect() {
     el('composer-permission-select').value = permission || state.draft.permission_mode || 'standard';
 }
 
+// Global Development pref "On startup, go to terminals." — saved in Decisions settings
+// (dev-tools settings: dev_play_opens_terminals), mirrored to localStorage. Default ON:
+// only an explicitly saved false turns it off.
+const PLAY_OPENS_TERMINALS_KEY = 'decisions.development.playOpensTerminals';
+const playTerminalsPref = { value: true };
+
+function readLocalPlayOpensTerminals() {
+    try {
+        const raw = window.localStorage.getItem(PLAY_OPENS_TERMINALS_KEY);
+        if (raw === '1') return true;
+        if (raw === '0') return false;
+    } catch (_) {
+        /* ignore */
+    }
+    return null;
+}
+
+function writeLocalPlayOpensTerminals(value) {
+    try {
+        window.localStorage.setItem(PLAY_OPENS_TERMINALS_KEY, value ? '1' : '0');
+    } catch (_) {
+        /* ignore */
+    }
+}
+
+function playOpensTerminals() {
+    return playTerminalsPref.value !== false;
+}
+
+function renderPlayOpensTerminalsItem() {
+    el('thread-menu-startup-terminals')?.setAttribute('aria-checked', playOpensTerminals() ? 'true' : 'false');
+}
+
+async function savePlayOpensTerminals(value) {
+    try {
+        await api('/dev-tools/settings', { method: 'POST', body: { dev_play_opens_terminals: Boolean(value) } });
+    } catch (error) {
+        console.warn('Saving "On startup, go to terminals." failed:', error?.message || error);
+    }
+}
+
+async function loadPlayOpensTerminals() {
+    const local = readLocalPlayOpensTerminals();
+    playTerminalsPref.value = local === null ? true : local;
+    renderPlayOpensTerminalsItem();
+    try {
+        const data = await api('/dev-tools/settings');
+        if (data && typeof data.dev_play_opens_terminals === 'boolean') {
+            if (data.dev_play_opens_terminals_set) {
+                playTerminalsPref.value = data.dev_play_opens_terminals;
+                writeLocalPlayOpensTerminals(playTerminalsPref.value);
+            } else {
+                // Never saved globally: save the effective value (default on) so it is a real config key.
+                playTerminalsPref.value = local === null ? true : local;
+                writeLocalPlayOpensTerminals(playTerminalsPref.value);
+                savePlayOpensTerminals(playTerminalsPref.value);
+            }
+        } else if (local === null) {
+            writeLocalPlayOpensTerminals(true);
+        }
+    } catch (_) {
+        /* keep local/default */
+    }
+    renderPlayOpensTerminalsItem();
+}
+
+function togglePlayOpensTerminals() {
+    playTerminalsPref.value = !playOpensTerminals();
+    writeLocalPlayOpensTerminals(playTerminalsPref.value);
+    renderPlayOpensTerminalsItem();
+    savePlayOpensTerminals(playTerminalsPref.value);
+}
+
+function closeThreadTerminalMenu({ restoreFocus = false } = {}) {
+    const menu = el('thread-terminal-menu');
+    const wasOpen = menu && !menu.classList.contains('hidden');
+    menu?.classList.add('hidden');
+    el('thread-terminal-button')?.setAttribute('aria-expanded', 'false');
+    if (wasOpen && restoreFocus) el('thread-terminal-button')?.focus();
+}
+
+function openThreadTerminalMenu(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!Number(state.currentChat?.project_id || 0)) return;
+    closeThreadHeaderMenu();
+    el('thread-terminal-menu').classList.remove('hidden');
+    el('thread-terminal-button').setAttribute('aria-expanded', 'true');
+    el('thread-menu-terminal').focus();
+}
+
+async function goToThreadProjectTerminal() {
+    const projectId = Number(state.currentChat?.project_id || 0);
+    closeThreadTerminalMenu();
+    if (!projectId) return;
+    const board = boardForProject(projectId);
+    try {
+        if (board) await openBoardTerminals(board.key);
+        else await terminals.openProjectTerminals(projectId);
+    } catch (error) {
+        toast(error.message || 'Could not open project terminals.', 'error');
+    }
+}
+
 function closeThreadHeaderMenu() {
     el('thread-header-menu').classList.add('hidden');
     el('thread-more-button').setAttribute('aria-expanded', 'false');
@@ -892,6 +1043,7 @@ function closeThreadHeaderMenu() {
 
 function toggleThreadHeaderMenu() {
     if (!state.currentChat) return;
+    closeThreadTerminalMenu();
     const menu = el('thread-header-menu');
     const opening = menu.classList.contains('hidden');
     menu.classList.toggle('hidden', !opening);
@@ -926,8 +1078,10 @@ function openTimeDialog() {
     el('time-dialog').showModal();
 }
 
-async function updateThreadTime(action) {
+async function updateThreadTime(action, options = {}) {
     if (!state.currentChat) return;
+    if (action === 'play') clearAutoPauseThreadTime();
+    if (action === 'pause' || action === 'reset') clearAutoPauseThreadTime();
     try {
         if (action === 'reset')
             state.threadTime = timerSnapshot(
@@ -937,14 +1091,43 @@ async function updateThreadTime(action) {
                 })
             );
         else state.threadTime = timerSnapshot(await api(`/workflows/studio/tasks/${state.currentChat.id}/time/${action}`, { method: 'POST', body: {} }));
-        el('time-editor-value').textContent = threadTimeLabel(state.threadTime, true);
-        el('time-play-button').disabled = !state.threadTime.paused;
-        el('time-pause-button').disabled = state.threadTime.paused;
+        if (el('time-editor-value')) el('time-editor-value').textContent = threadTimeLabel(state.threadTime, true);
+        if (el('time-play-button')) el('time-play-button').disabled = !state.threadTime.paused;
+        if (el('time-pause-button')) el('time-pause-button').disabled = state.threadTime.paused;
         updateElapsedTime();
-        toast(action === 'reset' ? 'Thread timer stopped and reset.' : action === 'play' ? 'Time logging resumed.' : 'Thread timer stopped.');
+        if (!options.quiet) {
+            toast(action === 'reset' ? 'Thread timer stopped and reset.' : action === 'play' ? 'Time logging resumed.' : 'Thread timer stopped.');
+        }
     } catch (error) {
-        toast(error.message || 'Could not update thread time.', 'error');
+        if (!options.quiet) toast(error.message || 'Could not update thread time.', 'error');
     }
+}
+
+
+const THREAD_TIMER_AUTO_PAUSE_MS = 2000;
+
+function clearAutoPauseThreadTime() {
+    if (state.autoPauseTimer) {
+        window.clearTimeout(state.autoPauseTimer);
+        state.autoPauseTimer = null;
+    }
+}
+
+function scheduleAutoPauseThreadTime(reason = 'response') {
+    // Time-lapse pause: keep the elapsed label visible, but stop ticking shortly
+    // after the harness reply lands. Never clears or hides #run-elapsed.
+    clearAutoPauseThreadTime();
+    const chatId = Number(state.currentChat?.id || 0);
+    if (!chatId) return;
+    if (!state.threadTime || state.threadTime.paused) return;
+    if (isActiveAgentRun(state.currentRun)) return;
+    state.autoPauseTimer = window.setTimeout(() => {
+        state.autoPauseTimer = null;
+        if (Number(state.currentChat?.id) !== chatId) return;
+        if (!state.threadTime || state.threadTime.paused) return;
+        if (isActiveAgentRun(state.currentRun)) return;
+        updateThreadTime('pause', { quiet: true, reason });
+    }, THREAD_TIMER_AUTO_PAUSE_MS);
 }
 
 async function updateSidebarThreadTime(chatId, action = null) {
@@ -1000,6 +1183,7 @@ function setWorkspaceMode(mode, options) {
     const incomingMode = mode === 'incoming';
     const terminalMode = mode === 'terminals';
     const planMode = mode === 'plan';
+    state.planBoardView = planMode && Boolean(options?.boardPlan);
     const terminalsHomeMode = mode === 'terminals_home';
     const reportsMode = mode === 'reports';
     const placeholderMode = planMode || terminalsHomeMode || reportsMode;
@@ -1024,9 +1208,19 @@ function setWorkspaceMode(mode, options) {
                         : reportsMode
                           ? 'reports'
                           : 'chat';
-    el('development-task-header').classList.toggle('hidden', alternateMode);
-    el('conversation').classList.toggle('hidden', alternateMode);
-    el('development-composer-layer').classList.toggle('hidden', alternateMode);
+    // Plan is embedded under the thread header: keep the header, swap its breadcrumb.
+    el('development-task-header').classList.toggle('hidden', alternateMode && !planMode);
+    el('development-task-header').classList.toggle('plan-mode', planMode);
+    el('development-header-context').classList.toggle('hidden', !planMode);
+    if (!planMode) {
+        clearPlanCrumbs(document);
+        syncHeader();
+    }
+    // CLI mode on + project thread: keep the CLI pane up; never re-reveal the
+    // transcript/composer (that was the chat flash when switching projects from CLI).
+    const cliOwnsChat = !alternateMode && threadCliMode.ownsChatView();
+    el('conversation').classList.toggle('hidden', alternateMode || cliOwnsChat);
+    el('development-composer-layer').classList.toggle('hidden', alternateMode || cliOwnsChat);
     el('scheduled-workspace').classList.toggle('hidden', !automationMode);
     el('workflow-workspace').classList.toggle('hidden', !workflowMode);
     el('kanban-workspace').classList.toggle('hidden', !kanbanMode);
@@ -1059,6 +1253,7 @@ function setWorkspaceMode(mode, options) {
         if (planMode && !options?.boardPlan) planning.openHome(state.boards, state.projects);
     }
     sidebar.renderSidebar();
+    syncBoardViewSwitch();
     if (window.innerWidth <= 680) closeDrawers();
     const focusTarget = automationMode
         ? el('scheduled-prompt-input')
@@ -1099,11 +1294,54 @@ async function waitForRouteReady() {
     while (state.routeLoading) await new Promise((resolve) => window.setTimeout(resolve, 20));
 }
 
+// Planning, Kanban, or Last thread. A specific thread counts as Last thread. Anything else (terminals,
+// reports, the empty composer) is not one of those sections.
+function currentMainSection() {
+    if (state.workspaceMode === 'kanban') return 'kanban';
+    if (state.workspaceMode === 'plan' && state.planBoardView) return 'plan';
+    if (state.workspaceMode === 'chat' && state.currentChat) return 'thread';
+    return '';
+}
+
 async function openBoardFromSidebar(boardKey) {
     await waitForRouteReady();
-    const selection = ++state.chatLoadToken;
     const board = boardByKey(boardKey);
-    if (boardSupportsKanban(board)) {
+    if (!board) return;
+    // Already on the terminals view: stay there, showing the clicked project's terminals.
+    // Otherwise a project click never jumps to terminals (setting only affects startup + play).
+    if (['terminals', 'terminals_home'].includes(state.workspaceMode) && boardHasTerminalProject(board)) {
+        await openBoardTerminals(board.key);
+        return;
+    }
+    // CLI mode on: open that project's last thread straight into its CLI (no chat flash,
+    // no jump to the terminals workspace).
+    if (threadCliMode.isOn()) {
+        const cliChatId = boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey);
+        if (cliChatId) {
+            await loadChat(cliChatId);
+            return;
+        }
+    }
+    // In Planning, Kanban, or Last thread: keep that section on the project just clicked.
+    // A specific thread is Last thread for the clicked project, not the thread left behind.
+    // Otherwise use the section last viewed on that project.
+    let section = currentMainSection() || boardLastSection(window.localStorage, boardKey);
+    if (section === 'plan' && (!board.project_id || !projectById(board.project_id))) section = '';
+    if (section === 'kanban' && !boardSupportsKanban(board)) section = '';
+    if (section === 'thread') {
+        const chatId = boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey);
+        if (chatId) {
+            await loadChat(chatId);
+            return;
+        }
+        section = '';
+    }
+    if (section === 'plan') {
+        await openBoardPlan(boardKey);
+        return;
+    }
+    const selection = ++state.chatLoadToken;
+    if ((section === 'kanban' || !section) && boardSupportsKanban(board)) {
         const detail = state.boardDetails[boardKey] || (await loadBoardTickets(boardKey));
         if (selection !== state.chatLoadToken) return;
         if (detail) {
@@ -1130,6 +1368,7 @@ async function openBoardKanban(boardKey, options) {
     const board = boardByKey(boardKey);
     if (!board) return;
     state.selectedBoardKey = board.key;
+    rememberBoardSection(window.localStorage, board.key, 'kanban');
     setWorkspaceMode('kanban', { focus: false, updateUrl: false });
     boards.renderKanbanWorkspace();
     await loadBoardTickets(board.key);
@@ -1147,10 +1386,15 @@ async function openBoardPlan(boardKey, options) {
         return;
     }
     state.selectedBoardKey = board.key;
+    rememberBoardSection(window.localStorage, board.key, 'plan');
+    const planToken = ++state.planOpenToken;
     setWorkspaceMode('plan', { focus: false, updateUrl: false, boardPlan: true });
     sidebar.closeBoardContextMenu();
-    await planning.openBoard(board, state.projects);
+    // Push the plan URL now so navigating away mid-load is never overwritten by a late push.
     if (options?.updateUrl !== false) setDevelopmentLocation(developmentBoardPath(board.key, 'plan'), options);
+    await planning.openBoard(board, state.projects);
+    // A newer plan open or leaving the plan makes this load stale; planning ignores its result.
+    return planToken === state.planOpenToken && state.workspaceMode === 'plan';
 }
 
 async function openBoardTerminals(boardKey, options) {
@@ -1294,7 +1538,14 @@ async function performShellRefresh(options) {
                 state.chats = state.chats.map((chat) => (Number(chat.id) === chatId ? state.currentChat : chat));
                 threads_transcript.renderConversation(state.currentChat);
             }
-            if (runFinished) sidebar.renderSidebar();
+            if (runFinished) {
+                sidebar.renderSidebar();
+                scheduleAutoPauseThreadTime('run-finished');
+            } else if (!isActiveAgentRun(state.currentRun)) {
+                scheduleAutoPauseThreadTime('idle-snapshot');
+            } else {
+                clearAutoPauseThreadTime();
+            }
             syncHeader();
             if (preserveConversation && !runFinished) threads_transcript.syncDurableTurnActivity();
             threads_inspector.renderInspector();
@@ -1508,10 +1759,17 @@ async function loadChat(chatId, options) {
         state.changeReviewLoading = false;
         state.selectedChangePath = '';
         updateElapsedTime();
+        if (!isActiveAgentRun(state.currentRun)) {
+            scheduleAutoPauseThreadTime('load-chat');
+        } else {
+            clearAutoPauseThreadTime();
+        }
         state.draft.project_id = chat.project_id || null;
         state.draft.workflow_id = Number(state.currentWorkflow?.id || chat.development_workflow_id || 0) || null;
         state.selectedProjectId = chat.project_id || null;
         state.selectedBoardKey = (boardByKey(chat.development_board_key) || boardForProject(chat.project_id))?.key || state.selectedBoardKey || '';
+        rememberBoardThread(window.localStorage, chatBoardKey(chat), chat.id);
+        rememberBoardSection(window.localStorage, chatBoardKey(chat), 'thread');
         state.draft.title = chat.title || '';
         // 2026-10-22 selector: a background reload must not overwrite a route the user is choosing right now.
         if (!(options?.quiet && threads_composer.isRouteMenuOpen())) {
@@ -1840,6 +2098,36 @@ const threadLive = createThreadLiveUpdates({
         if (!state.busy) refreshShell({ preserveConversation: false });
     }
 });
+
+const threadCliMode = createThreadCliMode({
+    el,
+    token,
+    toast,
+    api,
+    getContext: () => {
+        const chat = state.currentChat;
+        const board = boardByKey(chat?.development_board_key) || boardForProject(chat?.project_id);
+        const projectId = chat?.project_id || board?.project_id || null;
+        const project = state.projects.find((item) => Number(item.id) === Number(projectId)) || null;
+        const backend =
+            state.draft?.backend ||
+            chat?.backend ||
+            (typeof chat?.development === 'object' ? chat.development?.backend : '') ||
+            project?.coding_backend ||
+            'pi';
+        const folder = String(project?.folder_location || project?.name || chat?.title || 'project');
+        return {
+            chatId: chat?.id || null,
+            projectId,
+            boardId: board?.local_id || board?.id || null,
+            backendId: String(backend || 'pi').toLowerCase(),
+            projectName: project?.name || chat?.title || 'project',
+            folderLabel: folder.split(/[/\\]/).filter(Boolean).pop() || project?.name || 'project',
+            workspaceMode: state.workspaceMode
+        };
+    }
+});
+
 const disconnectLiveUpdates = threadLive.disconnect;
 const connectLiveUpdates = threadLive.connect;
 window.addEventListener('pagehide', () => {
@@ -1893,9 +2181,30 @@ function developmentChatById(chatId) {
     return [...state.chats, ...state.archivedChats].find((chat) => Number(chat.id) === targetId && chat.development === true) || null;
 }
 
+function boardHasTerminalProject(board) {
+    return Boolean(board?.project_id && projectById(board.project_id));
+}
+
+// Global "On startup, go to terminals." (default on): Development home / project home
+// lands on that project's terminals. Explicit thread/plan/kanban/terminals URLs are untouched.
+async function openStartupTerminals(projectId, options) {
+    const id = Number(projectId || 0);
+    if (!id || !projectById(id)) return false;
+    const board = boardForProject(id);
+    const urlOptions = { replace: !options?.fromHistory };
+    if (boardHasTerminalProject(board)) await openBoardTerminals(board.key, urlOptions);
+    else await terminals.openProjectTerminals(id, urlOptions);
+    return true;
+}
+
 async function restoreDevelopmentHome(options) {
     const requested = developmentChatById(options?.lastChatId);
     const initial = requested || state.chats[0] || null;
+    if (playOpensTerminals() && !threadCliMode.isOn()) {
+        const lastBoard = boardByKey(state.selectedBoardKey);
+        const projectId = Number(initial?.project_id || 0) || Number(lastBoard?.project_id || 0);
+        if (await openStartupTerminals(projectId, options)) return;
+    }
     if (initial) {
         await loadChat(initial.id, {
             quiet: true,
@@ -1988,7 +2297,13 @@ async function restoreDevelopmentLocation(options) {
                 return;
             }
             selectBoard(board.key, { updateUrl: false });
-            if (route.view === 'plan') await openBoardPlan(board.key, { updateUrl: false });
+            if (route.view === 'plan') {
+                // A plan opened by deep link gets its board Kanban as the history entry
+                // behind it, so the browser Back button lands on the Kanban too.
+                if (!options?.fromHistory) seedPlanHistory(window.history, window.location, developmentBoardPath(board.key, 'kanban'));
+                // Do not hold routeLoading for the plan fetch: sidebar/switcher stay usable.
+                openBoardPlan(board.key, { updateUrl: false }).catch(() => {});
+            }
             else if (route.view === 'kanban') {
                 await openBoardKanban(board.key, { updateUrl: false });
                 if (route.ticketId) {
@@ -2041,6 +2356,10 @@ async function init() {
         window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
     }
     state.ready = true;
+    if (state.pendingHistoryRestore) {
+        state.pendingHistoryRestore = false;
+        restoreDevelopmentLocation({ fromHistory: true });
+    }
     syncComposerAvailability();
     api('/workflows/studio/routing-assessment', {
         method: 'POST',
@@ -2068,6 +2387,10 @@ async function init() {
 }
 
 function bindEvents() {
+    // Capture outside clicks even when another header control stops propagation.
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest('#thread-terminal-menu')) closeThreadTerminalMenu();
+    }, true);
     document.addEventListener('click', (event) => {
         if (!event.target.closest('#board-context-menu')) sidebar.closeBoardContextMenu();
         if (!event.target.closest('#ticket-context-menu') && !event.target.closest('[data-kanban-menu]')) boards.closeTicketContextMenu();
@@ -2141,7 +2464,31 @@ function bindEvents() {
     el('stop-run-button').addEventListener('click', threads_composer.stopRun);
     el('thread-terminal-button')?.addEventListener('click', (event) => {
         event.stopPropagation();
+        closeThreadTerminalMenu();
         toggleThreadTerminal();
+    });
+    el('thread-terminal-button')?.addEventListener('contextmenu', openThreadTerminalMenu);
+    el('thread-terminal-button')?.addEventListener('keydown', (event) => {
+        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openThreadTerminalMenu(event);
+    });
+    el('thread-menu-terminal')?.addEventListener('click', goToThreadProjectTerminal);
+    el('thread-menu-startup-terminals')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        togglePlayOpensTerminals();
+    });
+    el('thread-terminal-menu')?.addEventListener('keydown', (event) => {
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+            event.preventDefault();
+            const items = [el('thread-menu-terminal'), el('thread-menu-startup-terminals')].filter(Boolean);
+            const index = items.indexOf(document.activeElement);
+            const next =
+                event.key === 'Home' ? 0
+                : event.key === 'End' ? items.length - 1
+                : event.key === 'ArrowUp' ? (index <= 0 ? items.length - 1 : index - 1)
+                : (index + 1) % items.length;
+            items[next]?.focus();
+        }
+        if (event.key === 'Tab') closeThreadTerminalMenu();
     });
     el('thread-more-button').addEventListener('click', (event) => {
         event.stopPropagation();
@@ -2169,6 +2516,7 @@ function bindEvents() {
     );
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') {
+            closeThreadTerminalMenu({ restoreFocus: true });
             closePickerMenus();
             automations.closeAutomationImportMenu();
             automations.closeScheduledRowMenu();
@@ -2187,8 +2535,15 @@ function bindEvents() {
         if (!event.target.closest('#thread-header-menu') && !event.target.closest('#thread-more-button')) closeThreadHeaderMenu();
         if (el('model-dialog').open && !event.target.closest('#model-dialog') && !event.target.closest('#model-button')) el('model-dialog').close('cancel');
     });
+    document.addEventListener('click', (event) => {
+        const button = event.target.closest?.('[data-board-view-switch] [data-board-view]');
+        if (button && button.getAttribute('aria-disabled') !== 'true') switchBoardView(button.dataset.boardView);
+    });
     window.addEventListener('popstate', () => {
+        // A Back/Forward or in-app push before startup finished is replayed once startup is ready, so the
+        // URL the user navigated to wins over the route startup began restoring.
         if (state.ready) restoreDevelopmentLocation({ fromHistory: true });
+        else state.pendingHistoryRestore = true;
     });
 }
 
@@ -2234,6 +2589,9 @@ const sidebar = createSidebar({
         forceRefreshKanbanBoard: (...args) => boards.forceRefreshKanbanBoard(...args),
         getKanbanViewMode: (...args) => boards.getKanbanViewMode(...args),
         getTerminalSessions: (...args) => terminals.getTerminalSessions(...args),
+        hasStartupTerminalCommands: (...args) => hasStartupTerminalCommands(...args),
+        setTerminalProjectRunning: (...args) => terminals.setTerminalProjectRunning(...args),
+        terminalProjectActionIcon: (...args) => terminalProjectActionIcon(...args),
         incomingConversations: (...args) => incoming.incomingConversations(...args),
         loadChat: (...args) => loadChat(...args),
         loadProjectTerminalSessions: (...args) => terminals.loadProjectTerminalSessions(...args),
@@ -2241,6 +2599,7 @@ const sidebar = createSidebar({
         openBoardKanban: (...args) => openBoardKanban(...args),
         openBoardPlan: (...args) => openBoardPlan(...args),
         openBoardTerminals: (...args) => openBoardTerminals(...args),
+        playOpensTerminals: () => playOpensTerminals(),
         openKanbanTicketDialog: (...args) => boards.openKanbanTicketDialog(...args),
         openRecentThreads: () => {
             showEmptyTask();
@@ -2824,6 +3183,14 @@ const planning = createPlanning({
     escapeHtml,
     openBoardPlan,
     openHome: () => setWorkspaceMode('plan'),
+    planControlsSlot: () => el('development-header-context'),
+    setPlanCrumbs: (...rest) => {
+        if (state.workspaceMode !== 'plan') return;
+        const board = boardByKey(state.selectedBoardKey);
+        const project = board && projectById(board.project_id);
+        const name = planning.currentView() === 'board' ? project?.name || board?.name : '';
+        renderPlanCrumbs(document, planCrumbs(name, ...rest));
+    },
     pathForBoard: (boardKey) => developmentBoardPath(boardKey, 'plan'),
     toast
 });
@@ -2835,6 +3202,8 @@ incoming.bindEvents();
 workflows.bindEvents();
 boards.bindEvents();
 terminals.bindEvents();
+threadCliMode.bind();
+loadPlayOpensTerminals();
 
 init();
 

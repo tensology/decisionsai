@@ -69,14 +69,11 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.set_viewport_size(size)
     page.goto(plan_server)
-    expect(page.get_by_role("button", name="Hide artifacts", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Hide artifacts", exact=True).click()
-    expect(page.get_by_role("region", name="Artifacts", exact=True)).to_be_hidden()
-    expect(page.get_by_role("button", name="Show artifacts", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Show artifacts", exact=True).click()
+    expect(page.get_by_role("button", name="Hide artifacts", exact=True)).to_have_count(0)
     expect(page.get_by_role("region", name="Artifacts", exact=True)).to_be_visible()
     expect(page.get_by_label("Model", exact=True)).to_have_value("fixture-model")
-    expect(page.get_by_role("button", name="Build tasks", exact=True)).to_be_enabled()
+    expect(page.get_by_role("button", name="Build tickets", exact=True)).to_be_enabled()
+    expect(page.get_by_role("button", name="Rebuild", exact=True)).to_be_visible()
     expect(page.locator('select[aria-label="Browse pages"]')).to_have_count(0)
     expect(page.locator('select[aria-label="Wireframe page"]')).to_have_count(0)
     expect(page.locator(".plan-sitemap-wrap")).to_be_visible()
@@ -90,17 +87,18 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
     page.locator(".plan-message-author").first.scroll_into_view_if_needed()
     page.screenshot(path=str(tmp_path / f"plan-oracle-{size['width']}x{size['height']}.png"), full_page=True)
     page.get_by_role("button", name="Data", exact=True).click()
-    expect(page.locator(".plan-mermaid svg")).to_be_visible()
-    expect(page.locator(".plan-mermaid")).to_contain_text("phone")
-    page.get_by_role("button", name="Requirements", exact=True).click()
+    # erDiagrams open in the visual ERD canvas (ERD editor phase 1), not as a static Mermaid SVG.
+    expect(page.locator(".erd-editor .erd-table").first).to_be_visible()
+    expect(page.locator(".erd-editor .erd-nodes")).to_contain_text("phone")
+    page.get_by_role("button", name="Documents", exact=True).click()
     expect(page.get_by_text("FR-002: Store an optional phone number.", exact=True)).to_be_visible()
     page.get_by_label("Message", exact=True).fill("Keep this draft")
-    page.get_by_role("button", name="Pages", exact=True).click()
+    page.get_by_role("button", name="Interfaces", exact=True).click()
     expect(page.get_by_role("region", name="Artifacts", exact=True)).to_be_visible()
     expect(page.get_by_label("Message", exact=True)).to_have_value("Keep this draft")
     page.get_by_label("Message", exact=True).fill("")
     with page.expect_response("**/plan-workspaces/1/build") as first:
-        page.get_by_role("button", name="Build tasks", exact=True).click()
+        page.get_by_role("button", name="Build tickets", exact=True).click()
     assert first.value.json()["created"] == 3
     task_list = page.get_by_role("list", name="Generated tasks", exact=True)
     expect(task_list).to_contain_text("Persist customer details")
@@ -108,7 +106,7 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
     page.reload()
     expect(task_list).to_contain_text("After #2")
     with page.expect_response("**/plan-workspaces/1/build") as repeated:
-        page.get_by_role("button", name="Build tasks", exact=True).click()
+        page.get_by_role("button", name="Build tickets", exact=True).click()
     assert repeated.value.json()["created"] == 0
     assert repeated.value.json()["reused"] == 3
     assert [task["id"] for task in repeated.value.json()["tasks"]] == [task["id"] for task in first.value.json()["tasks"]]

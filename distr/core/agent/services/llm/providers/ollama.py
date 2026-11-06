@@ -53,6 +53,25 @@ for _name in ("pipecat", "pipecat.transports", "pipecat.pipeline", "pipecat.util
 from distr.core.signals import signal_manager
 
 
+def _ollama_runtime_options(default_num_ctx: int = 8192) -> dict:
+    """num_ctx / keep_alive for agent chat calls.
+
+    Explicit overrides come ONLY from the env vars DECISIONS_OLLAMA_NUM_CTX and
+    DECISIONS_OLLAMA_KEEP_ALIVE (there is no settings column for these). Without them:
+    num_ctx = ``default_num_ctx`` and keep_alive = -1, or "10m" below 16 GB RAM.
+    Falls back to today's values (num_ctx default, keep_alive -1) on any error."""
+    try:
+        import os as _os
+        from distr.core.system_resources import ollama_runtime_options
+        explicit = {
+            "ollama_num_ctx": _os.environ.get("DECISIONS_OLLAMA_NUM_CTX"),
+            "ollama_keep_alive": _os.environ.get("DECISIONS_OLLAMA_KEEP_ALIVE"),
+        }
+        return ollama_runtime_options(explicit, default_num_ctx=default_num_ctx)
+    except Exception:
+        return {"num_ctx": default_num_ctx, "keep_alive": -1}
+
+
 class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
     """Ollama-based LLM service using Pipecat."""
 
@@ -440,15 +459,18 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     "LLM: [small-path] calling ollama model=%s msgs=%d sys_prompt_len=%d",
                     current_model, len(self._messages), sys_len,
                 )
-                num_ctx = 8192
+                _rt = _ollama_runtime_options(8192)
+                num_ctx = _rt["num_ctx"]
                 # Normalize tool_calls arguments (Ollama v0.6.1+ Pydantic v2 requires dicts)
                 self._normalize_messages_arguments_inplace()
                 small_chat_kwargs = {
                     "model": current_model,
                     "messages": self._messages,
                     "stream": True,
-                    "options": {"keep_alive": -1, "num_ctx": num_ctx, "temperature": 0.7},
+                    "options": {"keep_alive": _rt["keep_alive"], "num_ctx": num_ctx, "temperature": 0.7},
                 }
+                if _rt["keep_alive"] != -1:
+                    small_chat_kwargs["keep_alive"] = _rt["keep_alive"]
                 # Explicitly no "tools" key
                 if current_chat_id:
                     try:
@@ -624,7 +646,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             # Adaptive context window: smaller models don't need 8192 and
             # prompt eval is proportional to num_ctx.  When tools are passed
             # via the API the model needs room for tool schemas (~2k tokens).
-            num_ctx = 8192
+            _rt = _ollama_runtime_options(8192)
+            num_ctx = _rt["num_ctx"]
             # Normalize self._messages before sending: ensure all tool_calls[].function.arguments
             # are dicts (not strings).  Ollama v0.6.1+ Pydantic v2 validation rejects strings.
             self._normalize_messages_arguments_inplace()
@@ -632,8 +655,11 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 "model": current_model,
                 "messages": self._messages,
                 "stream": True,
-                "options": {"keep_alive": -1, "num_ctx": num_ctx, "temperature": 0.7},
+                "options": {"keep_alive": _rt["keep_alive"], "num_ctx": num_ctx, "temperature": 0.7},
             }
+            if _rt["keep_alive"] != -1:
+                # Finite keep_alive must be top-level for Ollama to honour it (low-RAM machines).
+                chat_kwargs["keep_alive"] = _rt["keep_alive"]
             if ollama_tools:
                 chat_kwargs["tools"] = ollama_tools
             if current_chat_id:

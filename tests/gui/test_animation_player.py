@@ -157,7 +157,7 @@ class TestAnimationPlayerFormatDetection:
         player.load("cached.webm", chroma_key=(0, 255, 0))
 
         MockWebMPlayer.assert_called_once_with(player)
-        mock_instance.load.assert_called_once()
+        mock_instance.load_async.assert_called_once()
         mock_instance.set_size.assert_called_once_with(200, 200)
         assert player._webm_player is mock_instance
 
@@ -176,7 +176,7 @@ class TestAnimationPlayerFormatDetection:
         player.load("shortcut.webm", chroma_key=(0, 255, 0))
 
         MockWebMPlayer.assert_called_once_with(player)
-        mock_instance.load.assert_called_once()
+        mock_instance.load_async.assert_called_once()
         assert player._webm_player is mock_instance
 
     @patch("distr.gui.oracle.animation_player.GifPlayer")
@@ -244,6 +244,80 @@ class TestWebMPlayerResourceLimits:
         assert player._source_images == []
 
 
+class TestAnimationCacheBudget:
+    @staticmethod
+    def _fake_player(size):
+        player = MagicMock()
+        player.memory_bytes = size
+        return player
+
+    def test_byte_budget_evicts_old_frames_immediately(self):
+        from distr.gui.oracle.animation_player import AnimationPlayer
+
+        player = AnimationPlayer()
+        player._webm_cache_bytes_limit = 64
+        old, recent = self._fake_player(40), self._fake_player(40)
+        player._webm_cache.update(old=old, recent=recent)
+        player._trim_webm_cache()
+        assert list(player._webm_cache) == ["recent"]
+        old.release_frames.assert_called_once()
+        old.deleteLater.assert_called_once()
+
+    def test_oversize_active_animation_is_kept_and_preloads_are_evicted(self):
+        from distr.gui.oracle.animation_player import AnimationPlayer
+
+        player = AnimationPlayer()
+        player._webm_cache_bytes_limit = 64
+        active, preload = self._fake_player(80), self._fake_player(20)
+        player._webm_player = active
+        player._webm_cache.update(active=active, preload=preload)
+        player._trim_webm_cache()
+        assert list(player._webm_cache) == ["active"]
+        active.release_frames.assert_not_called()
+        preload.release_frames.assert_called_once()
+
+    def test_count_limit_keeps_active_entry_and_evicts_oldest_inactive(self):
+        from distr.gui.oracle.animation_player import AnimationPlayer
+
+        player = AnimationPlayer()
+        player._webm_cache_limit = 2
+        active, old, recent = [self._fake_player(1) for _ in range(3)]
+        player._webm_player = active
+        player._webm_cache.update(active=active, old=old, recent=recent)
+        player._trim_webm_cache()
+        assert list(player._webm_cache) == ["active", "recent"]
+        old.release_frames.assert_called_once()
+        active.release_frames.assert_not_called()
+
+    @patch("distr.gui.oracle.webm_player.WebMPlayer")
+    def test_visible_oversize_load_is_not_deleted_by_trim(self, factory):
+        from distr.gui.oracle.animation_player import AnimationPlayer
+
+        active = self._fake_player(100)
+        factory.return_value = active
+        player = AnimationPlayer()
+        player._webm_cache_bytes_limit = 64
+        player.load("large.webm")
+        assert player._webm_player is active
+        assert list(player._webm_cache.values()) == [active]
+        active.release_frames.assert_not_called()
+
+    def test_frame_accounting_uses_physical_dimensions_and_depth(self):
+        from distr.gui.oracle.webm_player import WebMPlayer
+
+        player = WebMPlayer()
+        frame = MagicMock()
+        frame.width.return_value = 160
+        frame.height.return_value = 160
+        frame.depth.return_value = 32
+        player._frames = [frame, frame]
+        assert player.memory_bytes == 160 * 160 * 4 * 2
+        player.release_frames()
+        assert player._frames == []
+        assert player._source_images == []
+        assert player.memory_bytes == 0
+
+
 def test_chroma_key_despills_only_subject_edges():
     import numpy as np
     from PyQt6.QtGui import QImage
@@ -273,3 +347,34 @@ def test_chroma_key_despills_only_subject_edges():
     assert result[0, 0, 3] == 0
     assert result[12, 8, 1] == max(result[12, 8, 0], result[12, 8, 2])
     assert tuple(result[20, 20, :3]) == (40, 180, 40)
+
+
+def test_decoder_prepares_each_frame_before_reading_the_next(monkeypatch):
+    import numpy as np
+    import sys
+    from types import SimpleNamespace
+    from distr.gui.oracle.webm_player import _extract_frames_imageio
+
+    prepared = []
+
+    def frames(*args, **kwargs):
+        yield np.zeros((20, 20, 3), dtype=np.uint8)
+        assert len(prepared) == 1
+        yield np.zeros((20, 20, 3), dtype=np.uint8)
+
+    def prepare(image):
+        prepared.append(image.size())
+        return image.scaled(4, 4)
+
+    # imageio is optional; production can use the cv2 fallback instead.
+    iio = SimpleNamespace(
+        improps=lambda *a, **k: SimpleNamespace(fps=24),
+        imiter=frames,
+        imread=lambda *a, **k: pytest.fail("whole-video allocation"),
+    )
+    monkeypatch.setitem(sys.modules, "imageio", SimpleNamespace(v3=iio))
+    monkeypatch.setitem(sys.modules, "imageio.v3", iio)
+    images, fps = _extract_frames_imageio("test.webm", prepare_frame=prepare)
+    assert fps == 24
+    assert len(images) == 2
+    assert [(img.width(), img.height()) for img in images] == [(4, 4), (4, 4)]

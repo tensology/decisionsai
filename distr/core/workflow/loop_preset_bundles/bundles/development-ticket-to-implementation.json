@@ -46,7 +46,7 @@
     "ui_local_first": true,
     "hosted_ui_escalation_after_failures": 2,
     "independent_validation": true,
-    "allow_provider_failover": true,
+    "allow_provider_failover": false,
     "memory_enabled": true,
     "load_workflow_memory": true,
     "load_project_memory": true,

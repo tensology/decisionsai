@@ -26,6 +26,7 @@ from distr.core.hotkeys import (
 from sqlalchemy import desc, nulls_last
 
 from distr.core.db import Action, Chat, Snippet, get_session
+from distr.core.planning.chats import is_plan_chat
 from distr.core.db.kanban import KanbanBoard
 from distr.core.db.projects import Project
 from distr.core.automation.store import list_automations, update_automation
@@ -89,7 +90,7 @@ def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
                 params = json.loads(chat.params or "{}")
             except (TypeError, ValueError):
                 params = {}
-            if isinstance(params.get("development"), dict):
+            if is_plan_chat(chat) or isinstance(params.get("development"), dict):
                 continue
             rows.append((chat.id, format_menu_title(chat.title or "New Chat")))
             if len(rows) >= int(limit):

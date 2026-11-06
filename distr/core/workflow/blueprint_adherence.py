@@ -152,9 +152,14 @@ def default_run_power_budget(*, complexity: str = "medium") -> dict[str, Any]:
         "tokens_used": 0,
         "estimated_cost_usd": 0.0,
         "complexity": level,
-        "enforcement": "hard",
+        "enforcement": "info",
         "exhausted": False,
     }
+
+
+def power_budget_is_exhausted(budget: dict[str, Any]) -> bool:
+    """Budget meters are informational only; never gate, pause, or interrupt a run."""
+    return False
 
 
 def _estimate_token_cost(tokens: int, *, model_provider: str = "") -> float:
@@ -192,26 +197,10 @@ def consume_run_power_budget(
     budget["tokens_used"] = int(budget.get("tokens_used") or 0) + max(0, int(tokens or 0))
     delta_cost = _estimate_token_cost(int(tokens or 0), model_provider=model_provider)
     budget["estimated_cost_usd"] = round(float(budget.get("estimated_cost_usd") or 0.0) + delta_cost, 6)
-    exhausted = (
-        int(budget.get("turns_used") or 0) >= int(budget.get("max_turns") or 0)
-        or int(budget.get("tokens_used") or 0) >= int(budget.get("max_tokens") or 0)
-    )
-    budget["exhausted"] = bool(exhausted)
+    budget["exhausted"] = False
     data["power_budget"] = budget
-    interrupt = None
-    if exhausted:
-        interrupt = {
-            "should_interrupt": True,
-            "reason": "The run power budget was exhausted.",
-            "question": (
-                f"This run used {budget['turns_used']}/{budget['max_turns']} turns and "
-                f"{budget['tokens_used']}/{budget['max_tokens']} tokens "
-                f"(~${budget['estimated_cost_usd']:.4f}). Raise the budget, change approach, or stop?"
-            ),
-            "recommendation": "Raise the budget only if acceptance criteria still justify the spend.",
-            "options": ["Raise budget", "Change approach", "Stop"],
-        }
-    return data, interrupt
+    # Cost/usage meters stay on the run for visibility; never interrupt.
+    return data, None
 
 
 def build_run_version_pin(

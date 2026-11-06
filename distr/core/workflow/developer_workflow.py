@@ -32,7 +32,7 @@ DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "ui_local_first": True,
     "hosted_ui_escalation_after_failures": 2,
     "independent_validation": True,
-    "allow_provider_failover": True,
+    "allow_provider_failover": False,
     "memory_enabled": True,
     "load_workflow_memory": True,
     "load_project_memory": True,

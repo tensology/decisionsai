@@ -755,7 +755,10 @@ def register_routes(router, templates):
         try:
             from distr.core.workflow.service import apply_run_provider_model_selection
 
-            result = apply_run_provider_model_selection(run_id, candidate_index)
+            from distr.core.workflow.run_prompts import web_approver
+
+            approver = web_approver(body.get("approved_by"), getattr(request.client, "host", "") if request.client else "")
+            result = apply_run_provider_model_selection(run_id, candidate_index, approved_by=approver)
             if result.get("error"):
                 return JSONResponse(
                     {"detail": result["error"]},

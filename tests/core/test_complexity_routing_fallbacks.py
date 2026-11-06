@@ -58,7 +58,8 @@ def test_empty_fallback_is_not_turned_into_default_pi(monkeypatch):
     assert "fallback_backend" not in route
 
 
-def test_unready_primary_uses_configured_fallback_with_provider(monkeypatch):
+def test_unready_primary_keeps_configured_harness(monkeypatch):
+    # Primary may be unready; policy must still return the configured harness.
     monkeypatch.setattr("distr.core.project_cli_backends.get_backend", _backends({"pi"}))
     settings = {
         "project_cli_high_backend": "codex",
@@ -68,9 +69,9 @@ def test_unready_primary_uses_configured_fallback_with_provider(monkeypatch):
         "project_cli_high_fallback_model_provider": "openrouter",
     }
     route = resolve_ticket_cli_route(None, "high", settings=settings)
-    assert route["backend"] == "pi"
-    assert route["model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
-    assert route["model_provider"] == "openrouter"
+    assert route["backend"] == "codex"
+    assert route["model"] == "auto"
+    assert route.get("fallback_backend") == "pi"
 
 
 def test_board_override_can_set_fallback(monkeypatch):
@@ -155,40 +156,27 @@ def test_step_time_readiness_keeps_ready_route(monkeypatch):
     assert StepExecutorMixin._ready_route_or_fallback(route) == route
 
 
-def test_step_time_readiness_uses_route_fallback(monkeypatch):
+def test_step_time_readiness_never_switches_harness(monkeypatch):
     monkeypatch.setattr("distr.core.project_cli_backends.get_backend", _backends({"pi"}))
     route = {
         "backend": "codex", "model": "auto", "complexity": "high",
         "fallback_backend": "pi", "fallback_model": "b:free", "fallback_model_provider": "kilocode",
     }
     out = StepExecutorMixin._ready_route_or_fallback(route)
-    assert (out["backend"], out["model"], out["model_provider"]) == ("pi", "b:free", "kilocode")
-    assert out["source"] == "step_readiness_fallback"
-    assert "fallback_backend" not in out
+    assert out["backend"] == "codex"
+    assert out["model"] == "auto"
+    assert out.get("fallback_backend") == "pi"
 
 
-def test_step_time_readiness_falls_back_to_complexity_route(monkeypatch):
+def test_step_time_readiness_keeps_unready_configured_route(monkeypatch):
     monkeypatch.setattr("distr.core.project_cli_backends.get_backend", _backends({"pi"}))
-    monkeypatch.setattr(
-        "distr.core.kanban.ticket_policy.resolve_ticket_cli_route",
-        lambda project, complexity, board=None, **_: {
-            "complexity": complexity, "backend": "pi", "model": "c:free", "model_provider": "openrouter",
-        },
-    )
-    out = StepExecutorMixin._ready_route_or_fallback({"backend": "cursor", "model": "grok-4.7-high", "complexity": "high"})
-    assert (out["backend"], out["model"], out["model_provider"]) == ("pi", "c:free", "openrouter")
+    route = {"backend": "cursor", "model": "grok-4.7-high", "complexity": "high"}
+    out = StepExecutorMixin._ready_route_or_fallback(route)
+    assert out == route
 
 
-def test_runtime_failover_allows_same_backend_with_different_provider():
-    route = {
-        "backend": "pi", "model": "m:free", "model_provider": "openrouter",
-        "fallback_backend": "pi", "fallback_model": "m:free", "fallback_model_provider": "kilocode",
-    }
-    assert StepExecutorMixin._runtime_provider_fallback_route(route, {}) == {
-        "backend": "pi", "model": "m:free", "model_provider": "kilocode",
-    }
-    identical = dict(route, fallback_model_provider="openrouter")
-    assert StepExecutorMixin._runtime_provider_fallback_route(identical, {}) == {}
+def test_runtime_provider_fallback_route_deleted():
+    assert not hasattr(StepExecutorMixin, "_runtime_provider_fallback_route")
 
 
 # ── workflow_execution save ──────────────────────────────────────────────────

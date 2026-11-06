@@ -35,6 +35,10 @@ def _view(s: dict) -> dict:
         "icloud_app_password_set": bool(str(s.get("icloud_app_password") or "").strip()),
         "icloud_calendar_name": s.get("icloud_calendar_name") or "",
         "browser_profile": "~/.decisions/chrome-profile",
+        # Global Development pref: play / terminal start opens the project's terminals view.
+        # Default ON when never saved; only an explicit saved False turns it off.
+        "dev_play_opens_terminals": s.get("dev_play_opens_terminals") is not False,
+        "dev_play_opens_terminals_set": "dev_play_opens_terminals" in s,
     }
 
 
@@ -51,7 +55,7 @@ async def post_settings(request: Request):
     body = await request.json()
     from distr.core.settings import load_settings_from_db, save_settings_to_db
     s = load_settings_from_db() or {}
-    for key in ("dev_files_enabled", "dev_browser_enabled"):
+    for key in ("dev_files_enabled", "dev_browser_enabled", "dev_play_opens_terminals"):
         if key in body:
             s[key] = bool(body[key])
     if "dev_calendar_provider" in body and str(body["dev_calendar_provider"]) in _PROVIDERS:

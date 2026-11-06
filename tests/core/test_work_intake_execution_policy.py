@@ -19,14 +19,22 @@ def test_approved_provider_replacement_is_applied_before_next_group_preflight():
         "from_model": "z-ai/glm-4.5-air:free",
         "to_backend": "codex",
         "to_model": "auto",
+        "unready_reason": "OpenRouter credit below buffer",
+        "approved_by": "telegram user 42 via telegram_callback",
     }])
 
+    why = ("pi/z-ai/glm-4.5-air:free was not ready (OpenRouter credit below buffer); "
+           "approved by telegram user 42 via telegram_callback.")
     assert updated == {
         "backend": "codex",
         "model": "auto",
         "complexity": "medium",
         "source": "approved_provider_replacement",
         "requires_approval": False,
+        "reason": why,
+        "rationale": why,
+        "unready_reason": "OpenRouter credit below buffer",
+        "approved_by": "telegram user 42 via telegram_callback",
     }
     assert route["model"] == "z-ai/glm-4.5-air:free"
 

@@ -75,9 +75,14 @@ def test_development_sidebar_exposes_minimal_placeholder_destinations():
     studio = development_template()
     javascript = development_assets(".js")
 
-    for name in ("plan", "terminals", "reports"):
+    for name in ("terminals", "reports"):
         assert f'id="sidebar-{name}-toggle"' in studio
         assert f"/development/{name}/" in javascript
+    # Plan left the sidebar and the Kanban header; reached via the board view switcher. Route stays.
+    assert 'id="sidebar-plan-toggle"' not in studio
+    assert 'id="development-kanban-plan"' not in studio
+    assert 'data-board-view-switch' in studio
+    assert "/development/plan/" in javascript
     assert 'id="plan-workspace"' in studio
     assert 'id="terminals-home-workspace"' in studio
     assert 'id="reports-workspace"' in studio
@@ -790,6 +795,8 @@ def test_removed_cv_parser_nav_and_workflow_home_copy():
     assert "one-off workflow" not in javascript
     assert "currently active" not in javascript
     assert "<h2>Running now</h2>" in javascript
+    assert "execution_kind" in javascript
+    assert "Boolean(Number(run.workflow_id || 0))" in javascript
     assert "${runs.length} running" in javascript
     category = javascript[javascript.index("function workflowLibraryCategory("):]
     category = category[: category.index("function sortedWorkflowLibraryRows(")]

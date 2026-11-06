@@ -15,6 +15,7 @@
                             </span>
                     </div>
                     <div class="composer-toolbar">
+                        <div class="composer-toolbar-start">
                         <button type="button" class="tool-button add-button" id="attach-button" aria-label="Add to prompt" data-tooltip="Attach files"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"></path></svg></span></button>
                         <button type="button" class="tool-button plan-button" id="composer-plan-button" aria-label="Plan or skill" data-tooltip="Plan or skill" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M10.75 2.75l2.5 2.5-7.5 7.5H3.25v-2.5z"></path><path d="M9.25 4.25l2.5 2.5"></path></svg></span></button>
                         <div class="composer-action-menu hidden" id="composer-action-menu" role="menu" aria-label="Plan or skill">
@@ -22,11 +23,14 @@
                             <button type="button" role="menuitem" data-composer-action="skills"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M6.25 2.5h3.5v2.25H12v3.5H9.75v2.25h-3.5V8.25H4v-3.5h2.25z"></path><path d="M6.25 4.75h3.5v3.5h-3.5z"></path></svg></span><span><strong>Attach skill</strong><small>Browse skills; they are matched automatically on send</small></span></button>
                         </div>
                         <label class="permission-control" for="composer-permission-select" title="Development permissions" data-tooltip="Permissions"><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 2.5 12.25 4v3.25c0 2.65-1.65 4.75-4.25 6.25-2.6-1.5-4.25-3.6-4.25-6.25V4z"></path><path d="M6.25 8 7.5 9.25 10 6.75"></path></svg></span><select id="composer-permission-select" aria-label="Development permissions"><option value="trusted">Full access</option><option value="standard">Read/write</option><option value="careful">Read only</option></select></label>
-                        <div class="composer-attachment-strip hidden" id="composer-attachment-strip" aria-label="Attached to this prompt"></div>
+                        </div>
+                        <div class="composer-attachment-strip is-empty" id="composer-attachment-strip" aria-label="Attached to this prompt"></div>
+                        <div class="composer-toolbar-end">
                         <button type="button" class="mode-button hidden" id="mode-button" aria-haspopup="dialog"><span id="mode-label">Plan</span></button>
                         <span class="model-auto-chip" id="model-auto-chip" hidden></span>
                         <button type="button" class="model-button" id="model-button" aria-haspopup="dialog" data-tooltip="Choose harness, model, effort, and execution mode"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 4h10M5.5 8h5M7 12h2"></path><circle cx="6" cy="4" r="1"></circle><circle cx="9" cy="8" r="1"></circle><circle cx="8" cy="12" r="1"></circle></svg><span id="model-label">Auto · Medium</span><svg class="model-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5L11.5 6"></path></svg></button>
                         <button type="submit" class="send-button" id="send-button" aria-label="Send prompt" data-tooltip="Send" disabled><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7"></path></svg></button>
+                        </div>
                     </div>
                     <div class="composer-drop-overlay hidden" id="composer-drop-overlay" aria-live="polite"><strong>Drop files into this prompt</strong><span>Images and files become visible prompt context</span></div>
                 </form>

@@ -1038,7 +1038,8 @@ def render_artifacts(context: dict[str, Any]) -> dict[str, str]:
             context["routes"],
             project_name=context["project_name"],
             models=context["models"],
-            cues=context.get("cues") or {},
+            # N4 widen: Django template form cues fill routes the page scan found nothing for.
+            cues={**(context.get("template_cues") or {}), **(context.get("cues") or {})},
         ),
     }
 
@@ -1186,6 +1187,7 @@ def build_plan(
         "cues": {},
         "depth": 0,
     }
+    context["widen"] = widen_routes_with_sitemap(root, context["routes"], context)
     passes: list[dict[str, Any]] = []
     artifacts = render_artifacts(context)
     for pass_index in range(max_passes):
@@ -1250,6 +1252,7 @@ def build_plan(
             "route_groups": sorted({row["group"] for row in context["routes"]}),
             "model_apps": sorted({row["app"] for row in context["models"]}),
             "cue_count": len(context.get("cues") or {}),
+            "widen": context.get("widen") or {},
             "passes": len(passes),
             "adequate": not final_gaps,
         },
@@ -1950,3 +1953,63 @@ def ensure_sitemap_cache(project_root: Path | str, cache_path: Path | None = Non
 def scan_project(project_root: Path | str, *, project_name: str = "", max_passes: int = 4) -> dict[str, Any]:
     """Public entry used by Plan materialize — always runs the iterative builder."""
     return build_plan(project_root, project_name=project_name, max_passes=max_passes)
+
+
+# ---------------------------------------------------------------------------
+# N4 "widen": Rebuild Interfaces also uses the HTML sitemap (Django url maps + views + templates).
+# Deterministic, bounded, read-only. Only field names / labels / types / button and heading text are taken
+# from templates (via _extract_screen_cues, which never reads value= attributes); .env and dotfiles are never
+# sitemap sources (iter_sitemap_sources); huge or binary templates are skipped.
+_MAX_WIDEN_ROUTES = 40
+_MAX_TEMPLATE_FIELDS = 6
+_MAX_TEMPLATE_BYTES = 200_000
+
+
+def _template_cue(text: str) -> dict[str, Any] | None:
+    if not text or len(text) > _MAX_TEMPLATE_BYTES or "\x00" in text:
+        return None
+    cue = _extract_screen_cues(text)
+    if not _cue_has_content(cue):
+        return None
+    cue["fields"] = cue["fields"][:_MAX_TEMPLATE_FIELDS]
+    cue["types"] = {k: v for k, v in (cue.get("types") or {}).items() if k in cue["fields"]}
+    cue["buttons"] = cue["buttons"][:3]
+    cue["headings"] = cue["headings"][:6]
+    cue["links"] = cue["links"][:4]
+    return cue
+
+
+def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context: dict[str, Any]) -> dict[str, int]:
+    """Union sitemap pages into `routes` (dedupe on the normalised URL) and collect template form cues into
+    context["template_cues"] keyed by the route URL used in the wire output. Mutates routes/context."""
+    stats = {"sitemap_pages": 0, "routes_added": 0, "template_cues": 0}
+    context.setdefault("template_cues", {})
+    try:
+        files = iter_sitemap_sources(root) if root.is_dir() else []
+        sitemap = build_html_sitemap(root)
+        templates = _template_index(files, root)
+    except Exception:  # noqa: BLE001 - widening is best effort; the plain route scan still works
+        return stats
+    by_norm = {_normalize_route(row["url"]): row for row in routes}
+    for node in sitemap.get("nodes") or []:
+        if node.get("kind") != "page" or not node.get("route"):
+            continue
+        stats["sitemap_pages"] += 1
+        norm = _normalize_route(node["route"])
+        row = by_norm.get(norm)
+        if row is None and norm != "/" and stats["routes_added"] < _MAX_WIDEN_ROUTES and len(routes) < 80:
+            name = str(node.get("url_name") or norm.strip("/").replace("/", "_").replace(":", "") or "home")
+            row = {"url": norm, "name": name, "view": str(node.get("view") or ""), "title": str(node.get("label") or _title(name)),
+                   "group": _group_for_route(norm, name), "source": "sitemap"}
+            routes.append(row)
+            by_norm[norm] = row
+            stats["routes_added"] += 1
+        if row is None:
+            continue
+        key = _resolve_template_key(str(node.get("template") or ""), templates) if node.get("template") else None
+        cue = _template_cue(templates[key]["text"]) if key else None
+        if cue and row["url"] not in context["template_cues"]:
+            cue["path"] = templates[key]["path"]
+            context["template_cues"][row["url"]] = cue
+            stats["template_cues"] += 1
+    return stats

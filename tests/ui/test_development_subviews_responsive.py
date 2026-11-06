@@ -63,7 +63,9 @@ def test_planning_page_data_and_diagram_subviews(page: Page, width):
     assert page.locator('.plan-sitemap-node').evaluate_all('nodes => Math.min(...nodes.map(node => node.offsetLeft)) === 0')
     capture(page, 'plan-sitemap', width)
     page.locator('[data-plan-tab="erd"]').click()
-    expect(page.locator('.plan-mermaid svg')).to_be_visible()
+    # erDiagram items are edited on the visual ERD canvas (Data tab); other Mermaid stays a rendered picture
+    expect(page.locator('.erd-viewport')).to_be_visible()
+    expect(page.locator('.erd-table')).to_have_count(2)
     capture(page, 'plan-erd', width)
     page.locator('#plan-artifact-select').select_option('304')
     expect(page.locator('.plan-mermaid svg')).to_be_visible()

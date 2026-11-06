@@ -16,7 +16,12 @@
                                         <span class="settings-toggle__switch" aria-hidden="true"></span>
                                         <span class="settings-toggle__label">Auto-accept proposals (all projects)</span>
                                     </label>
+                                    <div class="incoming-proposal-tools">
+                                        <button type="button" class="proposal-btn ghost incoming-dismissed-toggle" id="incoming-dismissed-toggle" aria-expanded="false" aria-controls="incoming-dismissed-panel">Recently dismissed</button>
+                                        <button type="button" class="proposal-btn ghost" id="incoming-dismiss-expired" disabled>Dismiss expired</button>
+                                    </div>
                                 </header>
+                                <div class="incoming-dismissed-panel hidden" id="incoming-dismissed-panel" aria-label="Recently dismissed proposals"></div>
                                 <div class="proposal-cards" id="incoming-proposals-list" aria-label="Incoming proposals" aria-live="polite"></div>
                             </section>
                             <section class="incoming-folder-panel hidden" id="incoming-panel-whatsapp" role="tabpanel" aria-labelledby="incoming-folder-whatsapp">

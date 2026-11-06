@@ -6,10 +6,22 @@ from distr.core.incoming import proposals as proposals_mod
 
 
 import pytest
+from datetime import datetime, timezone
+
+
+def _assert_cards(rows, expected):
+    assert len(rows) == len(expected)
+    for row, source in zip(rows, expected):
+        for key, value in source.items():
+            assert row.get(key) == value, f"Card field {key}: {row.get(key)!r} != {value!r}"
 
 
 @pytest.fixture(autouse=True)
 def _clear_incoming_proposals_list_cache():
+    from distr.core.db import IncomingProposalRestoration, get_session
+    with get_session() as db:
+        db.query(IncomingProposalRestoration).delete()
+        db.commit()
     proposals_mod.invalidate_proposals_list_cache()
     yield
     proposals_mod.invalidate_proposals_list_cache()
@@ -24,9 +36,9 @@ def test_dismissed_local_proposal_survives_refresh_and_new_sessions(monkeypatch)
     proposal = {'id': 'local:gmail:dismiss-persistence', 'origin': 'local', 'source': 'gmail',
                 'dedupe_key': 'gmail:dismiss-persistence', 'title': 'Fix dismissal',
                 'message_ids': ['dismiss-message-one']}
-    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: [])
     monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [proposal])
-    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [proposal]
+    _assert_cards(proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'], [proposal])
     assert proposals_mod.dismiss_proposal(proposal) is True
     engine.dispose()
     assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
@@ -42,7 +54,7 @@ def test_dismissed_local_proposal_survives_refresh_and_new_sessions(monkeypatch)
     assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
     proposal['message_ids'].append('dismiss-message-two')
     proposals_mod.invalidate_proposals_list_cache()
-    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [proposal]
+    _assert_cards(proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'], [proposal])
 
 
 def test_dismissal_without_message_ids_uses_snapshot_and_is_idempotent():
@@ -98,7 +110,7 @@ def test_dismissed_tensology_proposal_does_not_return_as_local(monkeypatch):
     local = {**proposal, 'id': 'local:gmail:dismiss-upstream', 'origin': 'local'}
     pending = [row]
     writes = []
-    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: pending)
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: pending)
     monkeypatch.setattr('distr.core.tensology_client.decide_work_request', lambda *a: writes.append(a))
     monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [local])
     assert proposals_mod.dismiss_proposal(proposal) is True
@@ -109,7 +121,7 @@ def test_dismissed_tensology_proposal_does_not_return_as_local(monkeypatch):
     assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == []
     local['message_ids'] = ['upstream-message', 'new-request']
     proposals_mod.invalidate_proposals_list_cache()
-    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [local]
+    _assert_cards(proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'], [local])
 
 
 def test_failed_upstream_dismissal_keeps_local_receipt(monkeypatch):
@@ -118,7 +130,7 @@ def test_failed_upstream_dismissal_keeps_local_receipt(monkeypatch):
 
     row = _tensology_row(91046, 'dismiss-failed', 'gmail', 'Keep failed dismissal')
     proposal = proposals_mod._from_tensology(row)
-    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [row])
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: [row])
     monkeypatch.setattr('distr.core.tensology_client.decide_work_request', Mock(side_effect=ValueError('Offline')))
     monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [])
     assert proposals_mod.dismiss_proposal(proposal) is True
@@ -135,9 +147,9 @@ def test_remote_tensology_dismissal_is_honoured_on_intake(monkeypatch):
         'dedupe_key': 'whatsapp:remote-dismiss', 'title': 'Remote dismiss',
         'message_ids': ['wa-msg-1'], 'source_thread_id': 'remote-dismiss',
     }
-    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: [])
     monkeypatch.setitem(proposals_mod._TRIAGE_CACHE, 'proposals', [local])
-    assert proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'] == [local]
+    _assert_cards(proposals_mod.list_incoming_proposals(refresh_local=False)['proposals'], [local])
     assert proposals_mod.record_remote_proposal_decision({
         'request_id': 91047,
         'status': 'dismissed',
@@ -180,11 +192,11 @@ def test_accepted_local_proposal_stays_out_after_refresh_but_new_work_surfaces(m
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', create)
     monkeypatch.setattr('distr.core.incoming.media.proposal_attachments', lambda *a, **k: [])
     monkeypatch.setattr('distr.core.incoming.media.register_thread_attachments', lambda *a: None)
-    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: [])
     monkeypatch.setattr('distr.core.incoming.service.list_development_incoming', lambda **k: {'items': []})
     monkeypatch.setattr(proposals_mod, '_local_proposals', lambda *a: [proposal])
 
-    assert proposals_mod.list_incoming_proposals()['proposals'] == [proposal]
+    _assert_cards(proposals_mod.list_incoming_proposals()['proposals'], [proposal])
     chat_id = proposals_mod.create_proposal_thread(proposal)
     with get_session() as db:
         assert db.get(Chat, chat_id).project_id == project_id
@@ -193,7 +205,7 @@ def test_accepted_local_proposal_stays_out_after_refresh_but_new_work_surfaces(m
     old_key = proposals_mod._proposal_handoff_key(proposal)
     proposal['message_ids'] = ['message-one', 'message-two']
     proposals_mod.invalidate_proposals_list_cache()
-    assert proposals_mod.list_incoming_proposals()['proposals'] == [proposal]
+    _assert_cards(proposals_mod.list_incoming_proposals()['proposals'], [proposal])
     assert proposals_mod._proposal_handoff_key(proposal) != old_key
     assert created[0]['project_id'] == project_id
 
@@ -241,7 +253,7 @@ def _tensology_row(pid, thread_id, source, title):
         "title": title,
         "project": {"id": 1, "name": "Merrypak"},
         "source_conversation": {"thread_id": thread_id},
-        "evidence": [{"sent_at": "2026-10-29T07:00:00+00:00"}],
+        "evidence": [{"sent_at": datetime.now(timezone.utc).isoformat()}],
     }
 
 
@@ -253,7 +265,7 @@ def _incoming_item(source, thread_id, text, label="Client"):
         "conversation_label": label,
         "sender": label,
         "text": text,
-        "created_at": "2026-10-29T08:00:00+00:00",
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -261,7 +273,7 @@ def test_tensology_proposals_kept_and_local_deduped(monkeypatch):
     shared = "120363339060471282@g.us"
     monkeypatch.setattr(
         "distr.core.tensology_client.fetch_pending_work_requests",
-        lambda: [
+        lambda **kwargs: [
             _tensology_row(45, shared, "whatsapp", "Check the first shipping cost"),
             _tensology_row(46, shared, "whatsapp", "Investigate incorrect shipping cost"),
             _tensology_row(47, "email-abc", "mailshot", "Reconnect GitLab"),
@@ -507,7 +519,7 @@ def test_proposals_list_cache_serves_until_invalidated(monkeypatch):
     """Page refresh must not re-hit Tensology until dismiss/create/WS/Resync."""
     calls = {'n': 0}
 
-    def fetch():
+    def fetch(**kwargs):
         calls['n'] += 1
         return [{
             'id': 501,

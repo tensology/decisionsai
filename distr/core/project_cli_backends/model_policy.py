@@ -272,48 +272,8 @@ def build_auto_fallback_chain(
     *,
     settings: dict | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the ordered, evidence-triggered escalation ladder for Auto mode."""
-    current_backend = str(route.get("backend") or "pi").strip().lower()
-    current_model = str(route.get("model") or "auto").strip().lower()
-    current_provider = str(route.get("model_provider") or "").strip().lower()
-    if current_backend == "claude_code":
-        return []
-
-    candidates: list[dict[str, Any]] = []
-    hy3 = _openrouter_hy3_route(settings)
-    if hy3 and not (
-        current_backend == "pi"
-        and current_provider == "openrouter"
-        and current_model == "tencent/hy3-preview"
-    ):
-        candidates.append({
-            **hy3,
-            "automatic": True,
-            "reason": "Try the lower-cost OpenRouter cloud tier before paid coding agents.",
-        })
-    if current_backend == "pi" and not (
-        current_provider == "openrouter" and current_model == "tencent/hy3-preview"
-    ):
-        candidates.append({
-            "backend": "codex",
-            "model": "auto",
-            "automatic": True,
-            "reason": "Escalate from free workers after their completion contracts fail.",
-        })
-    if current_backend in {"pi", "codex"}:
-        candidates.append({
-            "backend": "cursor",
-            "model": "auto",
-            "automatic": False,
-            "reason": "Cursor is available as an interactive IDE handoff, not a silent background retry.",
-        })
-    candidates.append({
-        "backend": "claude_code",
-        "model": "auto",
-        "automatic": True,
-        "reason": "Claude is the final expensive escalation after cheaper routes fail.",
-    })
-    return candidates
+    """Removed: harness selection is deterministic; no runtime fallback chain."""
+    return []
 
 
 def apply_auto_step_role_policy(

@@ -24,32 +24,30 @@ def test_same_scope_ignores_surface_wrappers_and_unrelated_assessments(surface):
     )
     assert decision == choose_proposal_execution_mode(SIMPLE)
     assert decision["mode"] == "direct"
-    assert decision["signals"] == []
+    assert "direct_by_default" in decision["signals"]
     assert decision["policy"] == "proposal-scope-v1"
 
 
-@pytest.mark.parametrize("scope,expected", [
-    ({"title": "Migrate production authentication schema"}, "critical"),
-    ({"title": "Refactor integration across the project"}, "heavy"),
-    ({"title": "Inspect command output with independent review"}, "heavy"),
-    ({"title": "Coordinate the change", "tasks": ["first", "second", "third", "fourth"]}, "heavy"),
+@pytest.mark.parametrize("scope", [
+    {"title": "Migrate production authentication schema"},
+    {"title": "Refactor integration across the project"},
+    {"title": "Inspect command output with independent review"},
+    {"title": "Coordinate the change", "tasks": ["first", "second", "third", "fourth"]},
 ])
-def test_fixed_complex_and_risky_rules_repeat_exactly(scope, expected):
+def test_risky_and_complex_scopes_stay_direct(scope):
     decisions = [choose_proposal_execution_mode(scope) for _ in range(30)]
     assert all(decision == decisions[0] for decision in decisions)
-    assert decisions[0]["mode"] == "workflow"
-    assert decisions[0]["workflow_class"] == expected
-    assert decisions[0]["signals"] and decisions[0]["reason"]
+    assert decisions[0]["mode"] == "direct"
+    assert decisions[0]["workflow_class"] is None
 
 
-def test_positive_risk_survives_a_following_negative_constraint():
+def test_auth_risk_stays_direct_without_auto_wrap():
     decision = choose_proposal_execution_mode({"description": "Fix authentication without deploying the application."})
-    assert decision["mode"] == "workflow"
-    assert "risk:auth" in decision["signals"]
+    assert decision["mode"] == "direct"
 
 
-def test_no_describing_a_failure_does_not_hide_production_risk():
-    assert choose_proposal_execution_mode({"title": "No jobs load in production"})["mode"] == "workflow"
+def test_production_wording_stays_direct():
+    assert choose_proposal_execution_mode({"title": "No jobs load in production"})["mode"] == "direct"
 
 
 def test_transport_metadata_is_not_part_of_the_canonical_scope():

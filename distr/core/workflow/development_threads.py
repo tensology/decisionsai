@@ -738,6 +738,10 @@ def mark_development_thread(
             board_ticket_lane=board_ticket_lane,
         )
         db.commit()
+    # A ticket linked to this thread shows the thread's files in its Files tab.
+    if ticket_id is not None:
+        from distr.core.incoming.media import sync_thread_files_safely
+        sync_thread_files_safely(int(chat_id), int(ticket_id))
 
 
 def rebind_development_thread(
@@ -829,6 +833,9 @@ def rebind_development_thread(
             params["development"] = development
             root.params = json.dumps(params)
         db.commit()
+        if ticket_id is not None:
+            from distr.core.incoming.media import sync_thread_files_safely
+            sync_thread_files_safely(int(root.id), int(ticket_id))
         return {
             "chat_id": int(root.id),
             "title": root.title or "New Chat",

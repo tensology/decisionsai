@@ -129,6 +129,7 @@ class TurnResult:
     execution_session_id: int | None = None
     artifacts: tuple[str, ...] = ()
     evidence: dict[str, Any] = field(default_factory=dict)
+    status: str = ""
 
 
 class CancellationToken:

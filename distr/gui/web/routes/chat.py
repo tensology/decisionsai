@@ -157,6 +157,7 @@ from distr.core.chat_title_auto import (
     maybe_refresh_chat_title as _maybe_refresh_chat_title,
     _title_auto_meta,
 )
+from distr.core.planning.chats import is_plan_chat
 from distr.core.workflow.development_threads import is_development_thread
 from distr.gui.web.security import (
     is_allowed_local_origin,
@@ -1155,6 +1156,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 settings = load_settings_from_db()
                 result = []
                 for chat in chats:
+                    if is_plan_chat(chat):
+                        continue
                     owned_by_development = is_development_thread(session, chat)
                     if owned_by_development != (normalized_surface == "development"):
                         continue

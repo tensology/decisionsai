@@ -200,31 +200,19 @@ def test_composed_instruction_without_reply_has_no_marker():
     assert REPLY_PHASE_MARKER not in text
 
 
-def test_route_ticket_workflow_id_returns_the_managed_workflow(monkeypatch):
+def test_route_ticket_workflow_id_never_auto_attaches():
     from distr.core.workflow import phases
 
-    monkeypatch.setattr(phases, "find_class_workflow_id", lambda key: 55)
-    assert phases.route_ticket_workflow_id("add a button") == 55
+    assert phases.route_ticket_workflow_id("add a button") == 0
+    assert phases.route_ticket_workflow_id("schema migration") == 0
 
 
-def test_route_ticket_workflow_id_creates_then_falls_back_to_standard(monkeypatch):
+def test_route_ticket_plan_classifies_without_workflow_id():
     from distr.core.workflow import phases
 
-    calls = {"ensured": 0}
-
-    def _ensure():
-        calls["ensured"] += 1
-        return {"standard": 77}
-
-    monkeypatch.setattr(phases, "ensure_class_workflows", _ensure)
-    monkeypatch.setattr(
-        phases,
-        "find_class_workflow_id",
-        lambda key: 77 if key == "standard" else None,
-    )
-
-    assert phases.route_ticket_workflow_id("schema migration") == 77
-    assert calls["ensured"] == 1
+    plan = phases.route_ticket_plan("schema migration")
+    assert plan.get("class")
+    assert plan.get("workflow_id") is None
 
 
 def test_announce_route_choice_posts_and_speaks_the_decision(monkeypatch):
@@ -245,9 +233,9 @@ def test_announce_route_choice_posts_and_speaks_the_decision(monkeypatch):
     plan = phases.announce_route_choice(7, "Add a migration for invoices", ticket_id=42)
 
     assert plan["class"] == "critical"
-    assert plan["workflow_id"] == 33
+    # Managed class auto-attach is retired; announce classifies only.
+    assert plan["workflow_id"] is None
     assert posted and posted[0][0] == 7
-    assert "Ticket #42" in posted[0][1]
     assert "Critical" in posted[0][1]
     assert spoken == [posted[0][1]]
 

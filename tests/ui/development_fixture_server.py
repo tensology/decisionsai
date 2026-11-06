@@ -12,13 +12,18 @@ import uvicorn
 ROOT = Path(__file__).resolve().parents[2]
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=ROOT / "distr/gui/web/static"), name="static")
+app.mount("/workflows/static", StaticFiles(directory=ROOT / "distr/gui/web/static/workflows"), name="workflow_static")
+app.mount("/tickets/static", StaticFiles(directory=ROOT / "distr/gui/web/static/kanban"), name="ticket_static")
 app.mount("/assets", StaticFiles(directory=ROOT / "assets"), name="assets")
 templates = Jinja2Templates(directory=ROOT / "distr/gui/web/templates")
 
 @app.get("/workflows/")
+@app.get("/legacy-workflows/")
+@app.get("/legacy-kanban/")
 @app.get("/development/{path:path}")
 async def development(request: Request, path: str = ""):
-    return templates.TemplateResponse(request, "workflows/studio.html", {"active_page": "/development", "app_version": "fixture", "internal_api_token": "fixture-token"})
+    template = {"/legacy-workflows/": "workflows/workflows.html", "/legacy-kanban/": "kanban/kanban.html"}.get(request.url.path, "workflows/studio.html")
+    return templates.TemplateResponse(request, template, {"active_page": "/development", "app_version": "fixture", "internal_api_token": "fixture-token"})
 
 @app.get("/api/events/stream")
 async def events():

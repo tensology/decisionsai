@@ -125,6 +125,9 @@ cd "$PROJECT_ROOT"
     --hidden-import AppKit \
     --hidden-import distr \
     --hidden-import sqlalchemy \
+    --hidden-import psycopg \
+    --collect-all psycopg_binary \
+    --hidden-import pymysql \
     --hidden-import litellm \
     --hidden-import ollama \
     --hidden-import pipecat \

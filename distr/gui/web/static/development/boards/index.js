@@ -1,4 +1,5 @@
 // Owns boards rendering, interactions, and private view state.
+import { bindFileDropZone, collectNoteEdits, flattenNote, noteChanged, noteFieldsHtml, parseNoteJson, serializeNote } from '../shared/ticket-modal.js?v=20261102-proposal-files';
 export function createBoards({ context, actions, el }) {
     const state = {
         kanbanViewMode:
@@ -7,7 +8,11 @@ export function createBoards({ context, actions, el }) {
                 : 'board',
         collapsedKanbanLanes: new Set(),
         expandedKanbanLanes: new Set(),
-        contextTicketKey: ''
+        contextTicketKey: '',
+        // Loaded context note and its parsed JSON, so unedited notes are never re-sent.
+        noteOriginal: '',
+        noteJson: null,
+        noteMode: 'text'
     };
     function kanbanLanes() {
         return context.boardDetails[context.selectedBoardKey]?.lanes || [];
@@ -134,8 +139,8 @@ export function createBoards({ context, actions, el }) {
                 : '';
         const statusHtml = kanbanTicketStatusHtml(ticket);
         return `<article class="development-kanban-card${layout === 'list' ? ' list-row' : ''}" draggable="true" tabindex="0" role="button" data-kanban-ticket="${actions.escapeHtml(key)}" data-ticket-id="${actions.escapeHtml(id)}" aria-label="Open ${actions.escapeHtml(title)}">
-            <div class="development-kanban-card-head"><span class="development-kanban-card-badges">${layout === 'list' ? statusHtml : ''}${showSource ? `<span class="kanban-source">${actions.escapeHtml(actions.providerName(source))}</span>` : ''}${complexity ? `<span class="kanban-complexity">${actions.escapeHtml(String(complexity).replaceAll('_', ' '))}</span>` : ''}${priority ? `<span class="kanban-priority ${actions.escapeHtml(String(priority).toLowerCase())}">${actions.escapeHtml(priority)}</span>` : ''}${listTime}</span><button type="button" class="development-kanban-ticket-menu" data-kanban-menu aria-label="Ticket actions" title="Ticket actions">•••</button></div>
-            <div class="development-kanban-card-copy"><span class="development-kanban-card-title">${layout === 'list' ? '' : statusHtml}<strong title="${actions.escapeHtml(title)}">${actions.escapeHtml(title)}</strong></span>${layout === 'list' ? listDescription : description ? `<p>${actions.escapeHtml(description)}</p>` : ''}${layout === 'list' ? '' : kanbanTicketMetaHtml(ticket)}</div>
+            <div class="development-kanban-card-head"><span class="development-kanban-card-badges">${statusHtml}${showSource ? `<span class="kanban-source">${actions.escapeHtml(actions.providerName(source))}</span>` : ''}${complexity ? `<span class="kanban-complexity">${actions.escapeHtml(String(complexity).replaceAll('_', ' '))}</span>` : ''}${priority ? `<span class="kanban-priority ${actions.escapeHtml(String(priority).toLowerCase())}">${actions.escapeHtml(priority)}</span>` : ''}${listTime}</span><button type="button" class="development-kanban-ticket-menu" data-kanban-menu aria-label="Ticket actions" title="Ticket actions">•••</button></div>
+            <div class="development-kanban-card-copy"><span class="development-kanban-card-title"><strong title="${actions.escapeHtml(title)}">${actions.escapeHtml(title)}</strong></span>${layout === 'list' ? listDescription : description ? `<p>${actions.escapeHtml(description)}</p>` : ''}${layout === 'list' ? '' : kanbanTicketMetaHtml(ticket)}</div>
             <footer>${ticket.source_chat_id ? '<span class="kanban-thread-link">Thread linked</span>' : '<span></span>'}<span>${Array.isArray(ticket.files) && ticket.files.length ? `${ticket.files.length} file${ticket.files.length === 1 ? '' : 's'}` : ''}</span></footer>
         </article>`;
     }
@@ -496,7 +501,7 @@ export function createBoards({ context, actions, el }) {
             }
             const popover = document.createElement('div');
             popover.className = 'development-run-popover';
-            popover.innerHTML = `<header><strong>${actions.escapeHtml(data.workflow_name || data.ticket_title || ticket.ticket_title)}</strong><span>${actions.escapeHtml(data.status || 'running')}</span></header>${data.current_step_name ? `<p>Step: ${actions.escapeHtml(data.current_step_name)}</p>` : ''}${data.phase ? `<p>Phase: ${actions.escapeHtml(data.phase)}</p>` : ''}<footer><a href="${actions.escapeHtml(data.open_url || '/development/')}">Open run</a>${data.status === 'waiting' ? `<a href="${actions.escapeHtml(data.open_url || '/development/')}">Respond</a>` : ''}<button type="button" class="danger">Cancel run</button></footer>`;
+            popover.innerHTML = `<header><strong>${actions.escapeHtml(data.workflow_name || data.ticket_title || ticket.ticket_title)}</strong><span>${actions.escapeHtml(data.status || 'running')}</span></header>${data.status_summary || data.current_step_name ? `<p>${actions.escapeHtml(data.status_summary || data.current_step_name)}</p>` : ''}${data.phase ? `<p>Phase: ${actions.escapeHtml(data.phase)}</p>` : ''}<footer><a href="${actions.escapeHtml(data.open_url || '/development/')}">Open run</a>${data.status === 'waiting' ? `<a href="${actions.escapeHtml(data.open_url || '/development/')}">Respond</a>` : ''}<button type="button" class="danger">Cancel run</button></footer>`;
             document.body.appendChild(popover);
             const rect = anchor.getBoundingClientRect();
             popover.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popover.offsetWidth - 8))}px`;
@@ -547,21 +552,10 @@ export function createBoards({ context, actions, el }) {
 
     function renderKanbanTicketRelations(ticket, editable) {
         const raw = ticket?.raw || {};
-        const links = Array.isArray(raw.links) ? raw.links : [];
         const files = Array.isArray(raw.files) ? raw.files : [];
         const todos = Array.isArray(raw.todos) ? raw.todos : [];
-        const comments = Array.isArray(raw.comments) ? raw.comments : [];
-        el('kanban-ticket-attachment-count').textContent = links.length + files.length ? String(links.length + files.length) : '';
+        el('kanban-ticket-attachment-count').textContent = files.length ? String(files.length) : '';
         el('kanban-ticket-todo-count').textContent = todos.length ? String(todos.length) : '';
-        el('kanban-ticket-comment-count').textContent = comments.length ? `${comments.length} comment${comments.length === 1 ? '' : 's'}` : '';
-        el('kanban-ticket-links').innerHTML = links.length
-            ? links
-                  .map(
-                      (item) =>
-                          `<div class="kanban-ticket-relation-row"><a href="${actions.escapeHtml(item.url || '#')}" target="_blank" rel="noopener"><strong>${actions.escapeHtml(item.title || item.url || 'Link')}</strong><small>${actions.escapeHtml(item.url || '')}</small></a>${editable ? `<button type="button" data-ticket-link-delete="${Number(item.id)}" aria-label="Delete link">×</button>` : ''}</div>`
-                  )
-                  .join('')
-            : '<p class="kanban-ticket-no-attachments">No links added</p>';
         el('kanban-ticket-attachments').innerHTML = files.length
             ? files
                   .map((item) => {
@@ -582,17 +576,13 @@ export function createBoards({ context, actions, el }) {
                   .join('')
             : '<p class="kanban-ticket-no-attachments">No to-do items</p>';
         [
-            'kanban-ticket-link-title',
-            'kanban-ticket-link-url',
-            'kanban-ticket-add-link',
             'kanban-ticket-upload',
             'kanban-ticket-todo-input',
             'kanban-ticket-add-todo'
         ].forEach((id) => {
             el(id).disabled = !editable;
         });
-        el('kanban-ticket-link-form').classList.toggle('hidden', !editable);
-        el('kanban-ticket-upload').classList.toggle('hidden', !editable);
+        el('kanban-ticket-dropzone').classList.toggle('hidden', !editable);
         el('kanban-ticket-todo-input').parentElement.classList.toggle('hidden', !editable);
     }
 
@@ -645,8 +635,7 @@ export function createBoards({ context, actions, el }) {
         el('kanban-ticket-tabs').classList.toggle('hidden', creating);
         el('kanban-ticket-notes-tab').classList.toggle('hidden', externalExisting);
         el('kanban-ticket-todos-tab').classList.toggle('hidden', externalExisting);
-        el('kanban-ticket-context-notes').value = raw.context_notes || '';
-        el('kanban-ticket-context-notes').readOnly = externalExisting;
+        loadKanbanTicketNote(raw.context_notes || '', externalExisting);
         if (Array.isArray(raw.attachments) && raw.attachments.length && (!Array.isArray(raw.files) || !raw.files.length)) raw.files = materialRows;
         renderKanbanTicketRelations(ticket, Boolean(ticket && board.provider === 'decisions'));
         const sourceLink = el('kanban-ticket-source-link');
@@ -675,7 +664,9 @@ export function createBoards({ context, actions, el }) {
         };
         if (board.provider === 'decisions') {
             body.complexity = el('kanban-ticket-complexity').value;
-            body.context_notes = el('kanban-ticket-context-notes').value.trim();
+            const note = currentKanbanTicketNote();
+            // Only send the note when the user changed it, so stored JSON is never rewritten silently.
+            if (creating || noteChanged(state.noteOriginal, note)) body.context_notes = note.trim();
         }
         try {
             if (board.provider === 'decisions') {
@@ -719,26 +710,51 @@ export function createBoards({ context, actions, el }) {
         if (ticket) renderKanbanTicketRelations(ticket, actions.boardByKey(context.selectedBoardKey)?.provider === 'decisions');
     }
 
-    async function addKanbanTicketLink() {
-        const ticket = currentKanbanDialogTicket();
-        const title = el('kanban-ticket-link-title').value.trim();
-        const url = el('kanban-ticket-link-url').value.trim();
-        if (!ticket?.ticket_id || !title || !url) {
-            actions.toast('Enter a link title and URL.', 'error');
-            return;
+    function renderKanbanTicketNoteMode() {
+        const structured = state.noteMode === 'fields' && state.noteJson;
+        el('kanban-ticket-notes-toolbar').classList.toggle('hidden', !state.noteJson);
+        el('kanban-ticket-notes-fields').classList.toggle('hidden', !structured);
+        el('kanban-ticket-context-notes-field').classList.toggle('hidden', Boolean(structured));
+        el('kanban-ticket-notes-mode').textContent = structured ? 'Edit as text' : 'Readable view';
+    }
+
+    function loadKanbanTicketNote(text, readOnly) {
+        const parsed = parseNoteJson(text);
+        state.noteOriginal = String(text || '');
+        state.noteJson = parsed.kind === 'json' ? parsed.value : null;
+        state.noteMode = state.noteJson ? 'fields' : 'text';
+        el('kanban-ticket-context-notes').value = state.noteOriginal;
+        el('kanban-ticket-context-notes').readOnly = readOnly;
+        el('kanban-ticket-notes-fields').innerHTML = state.noteJson
+            ? noteFieldsHtml(flattenNote(state.noteJson), actions.escapeHtml, { readOnly })
+            : '';
+        renderKanbanTicketNoteMode();
+    }
+
+    function currentKanbanTicketNote() {
+        if (state.noteMode === 'fields' && state.noteJson) {
+            return serializeNote(state.noteOriginal, state.noteJson, collectNoteEdits(el('kanban-ticket-notes-fields')));
         }
-        try {
-            await actions.api(`/tickets/tickets/${ticket.ticket_id}/links`, {
-                method: 'POST',
-                body: { title, url }
-            });
-            el('kanban-ticket-link-title').value = '';
-            el('kanban-ticket-link-url').value = '';
-            await refreshKanbanTicketRelations(ticket.key);
-            actions.toast('Link added.');
-        } catch (error) {
-            actions.toast(error.message || 'Could not add the link.', 'error');
+        return el('kanban-ticket-context-notes').value;
+    }
+
+    function toggleKanbanTicketNoteMode() {
+        if (!state.noteJson) return;
+        if (state.noteMode === 'fields') {
+            el('kanban-ticket-context-notes').value = currentKanbanTicketNote();
+            state.noteMode = 'text';
+        } else {
+            const parsed = parseNoteJson(el('kanban-ticket-context-notes').value);
+            if (parsed.kind !== 'json') {
+                actions.toast('The text is not valid JSON, so it stays in text view.', 'error');
+                return;
+            }
+            // Re-base the readable view on the edited text; original stays for change detection.
+            state.noteJson = parsed.value;
+            el('kanban-ticket-notes-fields').innerHTML = noteFieldsHtml(flattenNote(parsed.value), actions.escapeHtml, { readOnly: el('kanban-ticket-context-notes').readOnly });
+            state.noteMode = 'fields';
         }
+        renderKanbanTicketNoteMode();
     }
 
     async function uploadKanbanTicketFiles(files) {
@@ -780,13 +796,10 @@ export function createBoards({ context, actions, el }) {
     async function handleKanbanTicketRelationClick(event) {
         const ticket = currentKanbanDialogTicket();
         if (!ticket?.ticket_id) return;
-        const linkDelete = event.target.closest('[data-ticket-link-delete]');
         const fileDelete = event.target.closest('[data-ticket-file-delete]');
         const todoDelete = event.target.closest('[data-ticket-todo-delete]');
         try {
-            if (linkDelete)
-                await actions.api(`/tickets/tickets/${ticket.ticket_id}/links/${Number(linkDelete.dataset.ticketLinkDelete)}`, { method: 'DELETE' });
-            else if (fileDelete)
+            if (fileDelete)
                 await actions.api(`/tickets/tickets/${ticket.ticket_id}/files/${Number(fileDelete.dataset.ticketFileDelete)}`, { method: 'DELETE' });
             else if (todoDelete)
                 await actions.api(`/tickets/tickets/${ticket.ticket_id}/todos/${Number(todoDelete.dataset.ticketTodoDelete)}`, { method: 'DELETE' });
@@ -969,11 +982,10 @@ export function createBoards({ context, actions, el }) {
         el('kanban-ticket-create-thread').addEventListener('click', createThreadFromKanbanTicket);
         el('kanban-ticket-run-agent').addEventListener('click', () => runKanbanTicketAction(currentKanbanDialogTicket(), 'agent'));
         el('kanban-ticket-delete').addEventListener('click', deleteKanbanTicket);
-        el('kanban-ticket-add-link').addEventListener('click', addKanbanTicketLink);
-        el('kanban-ticket-upload').addEventListener('click', () => el('kanban-ticket-file-input').click());
+        el('kanban-ticket-notes-mode').addEventListener('click', toggleKanbanTicketNoteMode);
+        bindFileDropZone(el('kanban-ticket-dropzone'), uploadKanbanTicketFiles, el('kanban-ticket-file-input'));
         el('kanban-ticket-file-input').addEventListener('change', (event) => uploadKanbanTicketFiles(Array.from(event.target.files || [])));
         el('kanban-ticket-add-todo').addEventListener('click', addKanbanTicketTodo);
-        el('kanban-ticket-links').addEventListener('click', handleKanbanTicketRelationClick);
         el('kanban-ticket-attachments').addEventListener('click', handleKanbanTicketRelationClick);
         el('kanban-ticket-todos').addEventListener('click', handleKanbanTicketRelationClick);
         el('kanban-ticket-todos').addEventListener('change', handleKanbanTicketTodoChange);
@@ -981,6 +993,7 @@ export function createBoards({ context, actions, el }) {
     return {
         bindEvents,
         closeTicketContextMenu,
+        kanbanCardHtml,
         forceRefreshKanbanBoard,
         getKanbanViewMode,
         openKanbanTicketDialog,

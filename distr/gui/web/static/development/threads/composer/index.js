@@ -1598,17 +1598,26 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     function modelSupportsImages() {
+        // Capability lists are a positive signal only: many catalog rows omit vision
+        // even when the model accepts images (DeepSeek V4.1 Flash, Claude Sonnet 4, etc.).
         if (context.draft.route_mode === 'auto') return true;
         const catalogModel = selectedCatalogModel();
-        const capabilityList = Array.isArray(catalogModel?.capabilities) ? catalogModel.capabilities.map((value) => String(value).toLowerCase()) : [];
-        if (capabilityList.length) return capabilityList.some((value) => ['vision', 'image', 'images', 'image_input'].includes(value));
-        const declared = declaredCapability(catalogModel, ['supports_vision', 'vision', 'image_input', 'images']);
+        const visionKeys = ['vision', 'image', 'images', 'image_input', 'multimodal'];
+        const capabilityList = Array.isArray(catalogModel?.capabilities)
+            ? catalogModel.capabilities.map((value) => String(value).toLowerCase())
+            : [];
+        if (capabilityList.some((value) => visionKeys.includes(value))) return true;
+        const declared = declaredCapability(catalogModel, ['supports_vision', 'vision', 'image_input', 'images', 'multimodal']);
         if (declared === true) return true;
-        if (Array.isArray(declared)) return declared.length > 0;
+        if (Array.isArray(declared) && declared.length > 0) return true;
         const model = String(context.draft.model_name || '').toLowerCase();
         const provider = String(context.draft.provider || '').toLowerCase();
         if (provider === 'openai' && /gpt|o1|o3|o4/.test(model)) return true;
-        if (provider === 'anthropic' && /claude-(3|4)/.test(model)) return true;
+        if (provider === 'anthropic' && /claude/.test(model)) return true;
+        // Claude Code / OpenRouter ids: claude-sonnet-4, claude-opus-4, …
+        if (/claude-(sonnet|opus|haiku)/.test(model) || /claude-[34]/.test(model)) return true;
+        // DeepSeek V3/V4 multimodal (incl. deepseek/deepseek-v4.1-flash on Pi/OpenRouter)
+        if (/deepseek/.test(model) && /(v3|v4|vl|vision|chat|flash)/.test(model)) return true;
         return /(gemini|gemma-3|llama-4|qwen.*vl|vision|pixtral)/.test(model);
     }
 
@@ -2101,7 +2110,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
                     return `<span class="composer-attachment-icon${kindClass}" data-tooltip="${actions.escapeHtml(tip)}" aria-label="${actions.escapeHtml(tip)}" role="img">${body}<button type="button" data-remove-attachment="${index}" aria-label="Remove ${actions.escapeHtml(tip)}" data-tooltip="Remove ${actions.escapeHtml(item.label)}">×</button></span>`;
                 })
                 .join('');
-            strip.classList.toggle('hidden', !visible.length);
+            strip.classList.toggle('is-empty', !visible.length);
+            strip.classList.remove('hidden');
             strip.querySelectorAll('[data-remove-attachment]').forEach((button) =>
                 button.addEventListener('click', () => {
                     const removed = context.attachments.splice(Number(button.dataset.removeAttachment), 1)[0];

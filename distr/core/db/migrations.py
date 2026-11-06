@@ -1086,7 +1086,10 @@ def run_migrations():
                 logger.info("Added llm_model column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add llm_model column: {e}")
-    
+
+    ensure_plan_db_links_table(engine)
+    ensure_incoming_dismissal_snapshot_columns(engine)
+
     logger.info("Database migrations completed")
 
 
@@ -2151,6 +2154,17 @@ def run_migrations():
     except Exception as e:
         logger.warning(f"Could not create whatsapp_phone_links table: {e}")
 
+    # One WhatsApp chat identity -> one board link (blocks duplicate phone_jid rows).
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_phone_links_phone_jid "
+                "ON whatsapp_phone_links (phone_jid)"
+            ))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Could not ensure unique phone_jid on whatsapp_phone_links: {e}")
+
     # ── WhatsApp compose drafts (unsent reply text per chat) ─────────────────
     try:
         with engine.connect() as conn:
@@ -2791,3 +2805,36 @@ def _drop_settings_columns(engine, columns) -> None:
             logger.info("Dropped retired settings columns: %s", ", ".join(to_drop))
     except Exception as e:
         logger.warning("Could not drop retired settings columns %s: %s", columns, e)
+
+
+def ensure_plan_db_links_table(engine) -> None:
+    """Additive, idempotent: CREATE TABLE / INDEX IF NOT EXISTS for plan_db_links (no password column)."""
+    from sqlalchemy.schema import CreateIndex, CreateTable
+    from distr.core.db.workflow import PlanDbLink
+    try:
+        with engine.connect() as conn:
+            conn.execute(CreateTable(PlanDbLink.__table__, if_not_exists=True))
+            for index in PlanDbLink.__table__.indexes:
+                conn.execute(CreateIndex(index, if_not_exists=True))
+            conn.commit()
+    except Exception as e:
+        logger.warning("Could not ensure plan_db_links table: %s", e)
+
+
+def ensure_incoming_dismissal_snapshot_columns(engine) -> None:
+    """Additive receipt text/snapshots and a durable local history-visibility flag."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("PRAGMA table_info(incoming_proposal_dismissals)")).fetchall()
+            if not rows:
+                return  # table not created yet; create_all builds it with the columns
+            have = {row[1] for row in rows}
+            for column in ("title", "summary", "snapshot"):
+                if column not in have:
+                    conn.execute(text(f"ALTER TABLE incoming_proposal_dismissals ADD COLUMN {column} TEXT"))
+                    logger.info("Added %s column to incoming_proposal_dismissals", column)
+            if 'history_hidden' not in have:
+                conn.execute(text('ALTER TABLE incoming_proposal_dismissals ADD COLUMN history_hidden INTEGER NOT NULL DEFAULT 0'))
+            conn.commit()
+    except Exception as e:
+        logger.warning("Could not ensure incoming_proposal_dismissals snapshot columns: %s", e)

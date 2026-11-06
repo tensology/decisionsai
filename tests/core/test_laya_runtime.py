@@ -1,6 +1,23 @@
 from distr.core import laya_runtime
 
 
+def test_laya_defaults_to_cpu_without_preloading():
+    env = dict(laya_runtime._server("auto").env)
+    assert env["LAYA_DEVICE"] == "cpu"
+    assert env["LAYA_PRELOAD"] == "0"
+    assert env["LAYA_REVISION"] == "reviewed"
+
+
+def test_status_reports_configured_device(monkeypatch):
+    from dataclasses import replace
+    from distr.core.mcp.config import MCPConfigDocument
+
+    config = replace(laya_runtime._server("auto"), env=frozenset({("LAYA_DEVICE", "cpu")}))
+    monkeypatch.setattr(laya_runtime, "load_mcp_config", lambda: MCPConfigDocument((config,)))
+    monkeypatch.setattr(laya_runtime, "_package_version", lambda: "0.3.23")
+    assert laya_runtime.status()["device"] == "cpu"
+
+
 def test_decode_tool_result_unwraps_laya_result_json():
     result = laya_runtime._decode_tool_result(
         {

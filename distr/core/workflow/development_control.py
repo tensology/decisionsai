@@ -391,8 +391,12 @@ def _sync_ticket_time(db, item: DevelopmentWorkItem, seconds: int) -> None:
     ticket.time_spent = format_time_tracking_seconds(clean) if clean else ""
 
 
-def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 180) -> dict[str, Any]:
-    """Return thread-owned time and apply the inactivity auto-pause rule."""
+def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 2) -> dict[str, Any]:
+    """Return thread-owned time and auto-pause shortly after the reply lands.
+
+    Grace is short on purpose (time-lapse): once the harness is idle, keep the
+    elapsed value visible but stop incrementing after a couple of seconds.
+    """
     from distr.core.workflow.development_harness import development_execution_active
 
     agent_active = development_execution_active(int(chat_id))

@@ -172,3 +172,11 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-10-30 | Did: Left Incoming No proposals right now near the top in a single grid column | Wanted: Center it horizontally and vertically within the proposals panel, with a spinner during loading | Why: Paul explicitly requested proper centering and visible loading feedback from the screenshot
 
 2026-10-31 | Did: Displayed 1 message, 2 messages and attachment counts on Incoming proposal cards | Wanted: Keep these low-value counts in the details view, not on the cards | Why: Paul explicitly said the counts do not add value in the proposal list
+2026-11-03 | Did: Plan Documents used an orange left bar on the document body, a print control left of the mode switch, pill document tabs, and a save bar sharing the document scrollbar | Wanted: No left bar on the document body, Editor then Markdown then a real Print PDF button on the right, underline tabs that meet the page, a green tick at the top right inside the document, and a full-width save footer under the scrollbar | Why: Paul asked for those exact document chrome fixes
+2026-11-04 | Did: Placed the Incoming proposal copy icon to the right of the drag handle | Wanted: Copy on the left and drag on the right, keeping both vertically aligned to the left buttons | Why: Paul explicitly corrected the icon order
+
+2026-11-04 | Did: PlanMyCharter dashboard used oversized buttons, loose spacing, a truncated single-vessel dropdown and a detached Boardroom link | Wanted: Compact desktop actions and spacing, full single-vessel text without a dropdown, and Boardroom aligned with the footer collapse icon | Why: Paul requested consistent operational density and mobile assessment
+
+2026-11-04 | Did: Put auth inputs inside a fieldset with a legend in normal flow, making the outline taller than the input | Wanted: The notched outline and input must share the same compact height, including the autofill background | Why: Paul explicitly rejected the extra empty strip above Email and Password
+
+2026-11-05 | Did: Expiry disabled proposal actions and the corner ribbon reserved header space | Wanted: Expired is only a source-date indicator, Send and Queue remain available, and the ribbon overlays the source badge and description without shifting their layout | Why: Paul explicitly corrected both behaviour and layering

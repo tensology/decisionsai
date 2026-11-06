@@ -1,0 +1,95 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<title>Incoming email pane fixture</title>
+<link rel="stylesheet" href="file:///Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/distr/gui/web/static/development/incoming/styles.css">
+<style>
+  body { margin: 0; background: #0b1220; color: #e5e7eb; font: 14px/1.4 system-ui, sans-serif; }
+  #incoming-workspace { max-width: 960px; margin: 24px auto; min-height: 720px; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; overflow: hidden; background: #111827; }
+  .incoming-gmail-reader { display: flex; flex-direction: column; min-height: 640px; background: #0f172a; }
+</style>
+</head><body>
+<div id="incoming-workspace"><div class="incoming-gmail-reader" id="fixture-reader"></div></div>
+<script>
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function formatAttachmentBytes(value) {
+  const size = Number(value) || 0;
+  if (size <= 0) return '';
+  if (size < 1024) return `${size} B`;
+  return `${(size / 1024).toFixed(0)} KB`;
+}
+function sanitizeEmailHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = String(html || '');
+  const blocked = new Set(['script','iframe','object','embed','link','meta','base','form']);
+  template.content.querySelectorAll('*').forEach((node) => {
+    const tag = node.tagName.toLowerCase();
+    if (blocked.has(tag)) { node.remove(); return; }
+    [...node.attributes].forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '');
+      if (name.startsWith('on') || name === 'srcdoc') node.removeAttribute(attr.name);
+      if ((name === 'href') && /^\s*javascript:/i.test(value)) node.removeAttribute(attr.name);
+      if ((name === 'src' || name === 'poster') && (/^\s*https?:/i.test(value) || /^\s*\/\//.test(value))) {
+        node.removeAttribute(attr.name);
+        if (tag === 'img') node.setAttribute('alt', 'Image removed');
+      }
+    });
+  });
+  return template.innerHTML;
+}
+function mailBodyHtml(item) {
+  const htmlBody = String(item.html_body || '').trim();
+  const plain = String(item.text || item.snippet || '').trim() || 'No message text';
+  if (htmlBody) {
+    const rewritten = sanitizeEmailHtml(htmlBody);
+    const doc = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:12px;background:#fff;color:#111827;font:14px/1.55 sans-serif}img{max-width:100%}</style></head><body>${rewritten}</body></html>`;
+    return `<iframe class="incoming-mail-html-frame" title="Email body" sandbox="allow-same-origin" srcdoc="${escapeHtml(doc)}" style="height:220px"></iframe>`;
+  }
+  return `<div class="incoming-gmail-body incoming-gmail-body-plain">${escapeHtml(plain)}</div>`;
+}
+function mailAttachmentsHtml(item) {
+  const attachments = item.attachments || [];
+  if (!attachments.length) return '';
+  return `<div class="incoming-mail-attachments">${attachments.map((a) => {
+    const name = a.filename || a.name || 'Attachment';
+    const mime = a.mime_type || '';
+    const isImage = mime.startsWith('image/');
+    if (isImage && a.url) return `<button type="button" class="incoming-mail-attachment incoming-mail-attachment-image"><img src="${escapeHtml(a.url)}" alt=""><span>${escapeHtml(name)}</span></button>`;
+    return `<button type="button" class="incoming-mail-attachment"><span class="incoming-mail-attachment-icon">▣</span><span class="incoming-mail-attachment-meta"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(formatAttachmentBytes(a.size) || mime)}</small></span></button>`;
+  }).join('')}</div>`;
+}
+const evil = '<' + 'script>document.title="hacked"</' + 'script>';
+const item = {
+  sender: 'Julie <julie@eurolux.example>',
+  recipient: 'paul@tensology.com',
+  html_body: '<p>Hi Paul,</p><p>Please <b>update the portal password</b> and clear the stuck quotes.</p><p><img src="https://tracker.example/pixel.png" width="1" height="1"><img src="cid:logo"></p>' + evil,
+  text: 'Hi Paul,\nPlease update the portal password and clear the stuck quotes.',
+  attachments: [
+    { filename: 'quote.pdf', mime_type: 'application/pdf', size: 20480 },
+    { filename: 'logo.png', mime_type: 'image/png', size: 4096, url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', content_id: 'logo' }
+  ]
+};
+const rightActions = `<div class="incoming-link-controls"><select aria-label="Choose ticket board"><option>RelightSA</option></select><button type="button" class="proposal-btn primary">Create ticket</button></div>`;
+document.getElementById('fixture-reader').innerHTML = `
+  <div class="incoming-gmail-messages">
+    <section class="incoming-gmail-message">
+      <header class="incoming-mail-headers">
+        <div class="incoming-mail-header-row"><span class="incoming-mail-header-label">From</span><strong>${escapeHtml(item.sender)}</strong></div>
+        <div class="incoming-mail-header-row"><span class="incoming-mail-header-label">To</span><span>${escapeHtml(item.recipient)}</span></div>
+        <div class="incoming-mail-header-row"><span class="incoming-mail-header-label">Date</span><time>2 Nov 2026, 12:00</time></div>
+      </header>
+      ${mailBodyHtml(item)}
+      ${mailAttachmentsHtml(item)}
+    </section>
+  </div>
+  <footer class="incoming-mail-footer">
+    <button type="button" class="proposal-btn ghost">Quick Reply</button>
+    <div class="incoming-mail-footer-right">${rightActions}</div>
+  </footer>`;
+
+</script>
+</body></html>

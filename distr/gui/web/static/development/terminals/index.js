@@ -196,12 +196,51 @@ export function createTerminals({ context, actions, el, token }) {
         };
     }
 
+    function isPiCliSession(session) {
+        return String(session?.purpose || '').toLowerCase() === 'pi_cli';
+    }
+
+    // The thread Pi CLI is standalone: purpose=pi_cli PTYs (and any process discovered under
+    // them) never render in the terminals area and are never targeted by Stop all.
+    const piCliPidsByProject = new Map();
+
+    function rememberPiCliPids(projectId, sessions) {
+        const pids = (sessions || []).filter(isPiCliSession).map((session) => Number(session.pid || 0)).filter(Boolean);
+        if (!pids.length) return;
+        const set = piCliPidsByProject.get(String(projectId)) || new Set();
+        pids.forEach((pid) => set.add(pid));
+        piCliPidsByProject.set(String(projectId), set);
+    }
+
+    function withoutPiCli(projectId, sessions) {
+        const list = Array.isArray(sessions) ? sessions : [];
+        rememberPiCliPids(projectId, list);
+        const piPids = piCliPidsByProject.get(String(projectId)) || new Set();
+        return list.filter((session) => {
+            if (isPiCliSession(session)) return false;
+            const processId = String(session.process_id || session.terminal_id || '');
+            if (processId.startsWith('discovered:') && (piPids.has(Number(session.pid || 0)) || piPids.has(Number(session.ppid || 0)))) return false;
+            return true;
+        });
+    }
+
     async function loadProjectTerminalSessions(projectId) {
-        const [startup, shell] = await Promise.all([
+        const [startup, shell, piCli] = await Promise.all([
             actions.api(`/projects/${Number(projectId)}/startup-sessions`),
-            actions.api(`/projects/${Number(projectId)}/shell-terminal`).catch(() => ({ sessions: [] }))
+            actions.api(`/projects/${Number(projectId)}/shell-terminal`).catch(() => ({ sessions: [] })),
+            actions.api(`/projects/${Number(projectId)}/pi-cli-terminal/status`).catch(() => ({ sessions: [] }))
         ]);
-        const sessions = [...(startup.sessions || []), ...(shell.sessions || [])];
+        // pi_cli status is fetched only to learn its pids (so its child processes are not shown
+        // as "discovered" or killed by Stop all) — pi_cli rows themselves are never listed.
+        rememberPiCliPids(projectId, (piCli.sessions || []).map((session) => ({ ...session, purpose: 'pi_cli' })));
+        const seen = new Set();
+        const sessions = [];
+        for (const session of withoutPiCli(projectId, [...(startup.sessions || []), ...(shell.sessions || [])])) {
+            const key = String(session.process_id || session.terminal_id || '');
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            sessions.push(session);
+        }
         state.terminalSessions[String(projectId)] = sessions;
         return sessions;
     }
@@ -225,10 +264,11 @@ export function createTerminals({ context, actions, el, token }) {
             let refreshOpenProject = false;
             projectIds.forEach((projectId) => {
                 const previous = state.terminalSessions[String(projectId)] || [];
-                const managed = statuses[String(projectId)]?.sessions || [];
-                const changed = terminalManagedSessionKey(previous) !== terminalManagedSessionKey(managed);
+                // terminal-status may include purpose=pi_cli rows: drop them (CLI is not a terminal).
+                const next = withoutPiCli(projectId, statuses[String(projectId)]?.sessions || []);
+                const changed = terminalManagedSessionKey(previous) !== terminalManagedSessionKey(next);
                 if (!changed) return;
-                state.terminalSessions[String(projectId)] = managed;
+                state.terminalSessions[String(projectId)] = next;
                 if (context.workspaceMode === 'terminals_home') paintTerminalProjectCard(projectId);
                 if (context.workspaceMode === 'terminals' && Number(state.terminalProjectId) === projectId) refreshOpenProject = true;
             });
@@ -264,7 +304,8 @@ export function createTerminals({ context, actions, el, token }) {
 
     function terminalProjectCard(project) {
         const sessions = state.terminalSessions[String(project.id)] || [];
-        const count = sessions.length;
+        const managedSessions = sessions.filter((session) => !isPiCliSession(session));
+        const count = managedSessions.length;
         const commandsLoaded = Object.prototype.hasOwnProperty.call(project, 'startup_instructions');
         const commandsFailed = Boolean(project._terminalConfigError);
         const sessionCommands = sessions.map((session) => String(session.command || '').trim()).filter(Boolean);
@@ -342,7 +383,7 @@ export function createTerminals({ context, actions, el, token }) {
                     body: { commands, startup_instructions: commands.join('\n') }
                 });
                 if (result?.success === false) throw new Error(result.message || 'Could not start the project terminals.');
-                const returnedSessions = result.sessions || [];
+                const returnedSessions = withoutPiCli(projectId, result.sessions || []);
                 state.terminalSessions[String(projectId)] = returnedSessions.length
                     ? returnedSessions
                     : commands.map((command, index) => ({
@@ -356,11 +397,9 @@ export function createTerminals({ context, actions, el, token }) {
                 const auxiliarySessions = displayedSessions.filter((session) => {
                     const processId = String(session.process_id || session.terminal_id || '');
                     const purpose = String(session.purpose || '').toLowerCase();
-                    return (
-                        processId &&
-                        !processId.startsWith('starting:') &&
-                        (purpose === 'cli_shell' || processId.startsWith('discovered:') || (purpose && purpose !== 'startup'))
-                    );
+                    // Never treat purpose=pi_cli as a startup/shell process for Stop all.
+                    if (!processId || processId.startsWith('starting:') || purpose === 'pi_cli') return false;
+                    return purpose === 'cli_shell' || processId.startsWith('discovered:');
                 });
                 const auxiliaryResults = await Promise.allSettled(
                     auxiliarySessions.map((session) =>
@@ -739,7 +778,7 @@ export function createTerminals({ context, actions, el, token }) {
             const project = actions.projectById(projectId);
             if (project) project.startup_instructions = instructions;
             actions.toast(result.message || 'Project terminals started.');
-            const returnedSessions = result.sessions || [];
+            const returnedSessions = withoutPiCli(projectId, result.sessions || []);
             const sessions = returnedSessions.length
                 ? returnedSessions
                 : commands.map((command, index) => ({
@@ -772,7 +811,8 @@ export function createTerminals({ context, actions, el, token }) {
         stopButton.setAttribute('aria-label', 'Stopping all terminals');
         stopButton.title = 'Stopping all terminals';
         try {
-            const current = state.terminalSessions[String(projectId)] || [];
+            // Never target the thread Pi CLI (pi_cli PTYs or processes under them).
+            const current = withoutPiCli(projectId, state.terminalSessions[String(projectId)] || []);
             const managedPids = new Set(
                 current
                     .filter((session) => !String(session.process_id || '').startsWith('discovered:'))

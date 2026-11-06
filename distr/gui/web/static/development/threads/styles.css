@@ -51,6 +51,7 @@
 .task-state.running span { background: var(--studio-green); box-shadow: 0 0 0 4px rgba(104, 211, 145, .08); }
 
 .task-state.waiting span { background: var(--studio-amber); }
+.task-state.blocked span { background: var(--studio-amber); }
 
 .task-state.failed span { background: var(--studio-red); }
 
@@ -744,11 +745,11 @@
 
 .inspector-header .icon-button { margin-left: auto; }
 
-.inspector-tabs { display: flex; height: 39px; padding: 0 9px; overflow-x: auto; border-bottom: 1px solid var(--studio-line); }
+.inspector-tabs { display: flex; height: var(--studio-tab-height); gap: var(--studio-tab-gap); padding: 0 9px; overflow-x: auto; border-bottom: 1px solid var(--studio-line); }
 
-.inspector-tabs button { min-width: max-content; flex: 1; padding: 0 7px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--studio-muted); font-size: 10px; }
+.inspector-tabs button { min-width: max-content; flex: 1; min-height: var(--studio-tab-height); padding: var(--studio-tab-padding); border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--studio-muted); font: inherit; font-size: var(--studio-tab-font-size); font-weight: var(--studio-tab-font-weight); }
 
-.inspector-tabs button.active { border-color: var(--studio-accent); color: var(--studio-text); }
+.inspector-tabs button.active { border-bottom-color: var(--studio-accent); color: var(--studio-text); }
 
 .inspector-scroll { min-height: 0; overflow: auto; padding: 13px; scrollbar-width: thin; }
 
@@ -906,6 +907,7 @@
     .task-header { padding: 0 10px; }
     .task-breadcrumb span, .task-breadcrumb i { display: none; }
     .task-state b { display: none; }
+    .task-state.blocked b { display: inline; }
     .conversation-inner { width: calc(100% - 24px); padding-top: 19px; padding-bottom: 158px; }
     .studio-empty { min-height: calc(100dvh - 230px); }
     .studio-empty > p { font-size: 11px; }
@@ -1065,8 +1067,13 @@
 .skill-card:hover, .skill-card:focus-visible { border-color: rgba(249,115,22,.5); background: var(--studio-raised-2); outline: none; }
 .skill-card.selected { border-color: rgba(249,115,22,.55); background: rgba(249,115,22,.1); }
 .composer-action-menu { left: max(42px, calc((100% - min(820px, 100%)) / 2 + 42px)); }
-/* Attachment/skill icon strip beside the access dropdown */
-.composer-attachment-strip { display: flex; min-width: 0; flex: 0 1 auto; max-width: 46%; align-items: center; gap: 5px; padding: 6px 4px 4px; margin: -6px 0 -4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.2) transparent; }
+/* Attachment/skill icon strip: stable middle flex zone so add-file does not shove controls. */
+.composer-toolbar-start,
+.composer-toolbar-end { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.composer-toolbar-start { flex: 0 0 auto; }
+.composer-toolbar-end { flex: 0 1 auto; }
+.composer-attachment-strip { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 5px; height: 26px; padding: 0 4px; margin: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.2) transparent; }
+.composer-attachment-strip.is-empty { flex: 1 1 auto; }
 .composer-attachment-strip::-webkit-scrollbar { height: 4px; }
 .composer-attachment-strip::-webkit-scrollbar-thumb { border-radius: 4px; background: rgba(255,255,255,.2); }
 .composer-attachment-icon { position: relative; display: inline-grid; flex: 0 0 auto; width: 26px; height: 26px; place-items: center; border: 1px solid var(--studio-line-soft); border-radius: 6px; background: var(--studio-raised); color: var(--studio-muted); }
@@ -1230,3 +1237,886 @@
 /* The Files inspector can narrow a desktop composer to phone width. */
 .composer-toolbar .model-button { flex-shrink: 1; overflow: hidden; }
 .composer-toolbar .tool-button, .composer-toolbar .permission-control, .composer-toolbar .send-button { flex-shrink: 0; }
+
+button.thread-source-file { border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+
+.thread-source-file-failed { display:flex; flex-direction:column; gap:2px; padding:6px 8px; border:1px solid #b45309; border-radius:8px; color:#fbbf24; background:rgba(180,83,9,.12); max-width:280px; }
+.thread-source-file-failed small { color:#fcd34d; white-space:pre-wrap; word-break:break-word; font-size:11px; }
+
+
+/* 2026-11-06 cli-mode1: live harness session viewer (not a chat restyle). */
+.thread-cli-mode-toggle {
+    display: inline-flex;
+    align-items: stretch;
+    gap: 2px;
+    box-sizing: border-box;
+    height: 28px;
+    min-height: 28px;
+    padding: 2px;
+    border: 1px solid var(--studio-line, #354078);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--studio-muted, #9ca3af);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: .04em;
+    cursor: pointer;
+}
+.thread-cli-mode-toggle:hover { color: var(--studio-text, #ececf1); border-color: var(--studio-line); }
+.thread-cli-mode-toggle[aria-pressed="true"] {
+    border-color: rgba(249,115,22,.55);
+    background: rgba(249,115,22,.12);
+    color: #fdba74;
+}
+.thread-cli-mode-toggle > span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    padding: 0 5px;
+    border-radius: 3px;
+    color: var(--studio-muted, #9ca3af);
+}
+.thread-cli-mode-toggle[aria-pressed="false"] .thread-mode-chat {
+    background: var(--studio-raised, #283040);
+    color: var(--studio-text, #ececf1);
+    box-shadow: inset 0 0 0 1px var(--studio-line, #354078);
+}
+.thread-cli-mode-toggle[aria-pressed="true"] .thread-mode-cli {
+    background: rgba(249,115,22,.24);
+    color: #fdba74;
+    box-shadow: inset 0 0 0 1px rgba(249,115,22,.55);
+}
+.thread-cli-mode-toggle:focus-visible { outline: 2px solid #fb923c; outline-offset: 2px; }
+.thread-cli-mode-toggle:disabled { opacity: .45; cursor: not-allowed; }
+.thread-terminal-menu { position: absolute; top: calc(100% - 4px); right: 12px; left: auto; z-index: 20; }
+.thread-terminal-menu button:focus-visible { outline: 2px solid #fb923c; outline-offset: -2px; }
+.thread-cli-pane.is-drop-target { position: relative; outline: 2px dashed #f97316; outline-offset: -6px; }
+.thread-cli-pane.is-drop-target::after { content: 'Drop image to attach to the CLI'; position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); padding: 6px 12px; border-radius: 6px; background: rgba(249,115,22,.92); color: #fff; font-size: 12px; font-weight: 600; pointer-events: none; z-index: 5; }
+.thread-terminal-menu .context-menu-divider { height: 1px; margin: 4px 7px; background: var(--studio-line-soft); }
+.thread-terminal-menu .thread-menu-check { display: flex; align-items: center; gap: 8px; }
+.thread-terminal-menu .thread-menu-check-box { flex: 0 0 auto; width: 12px; height: 12px; border: 1px solid var(--studio-muted, #8b93a1); border-radius: 3px; position: relative; }
+.thread-terminal-menu .thread-menu-check[aria-checked="true"] .thread-menu-check-box { background: #f97316; border-color: #f97316; }
+.thread-terminal-menu .thread-menu-check[aria-checked="true"] .thread-menu-check-box::after { content: ''; position: absolute; left: 3px; top: 0; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.thread-cli-pane {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    margin: 0;
+    border-top: 1px solid var(--studio-line-soft, rgba(255,255,255,.06));
+    background: #070a0f;
+}
+.thread-cli-pane.hidden { display: none; }
+.thread-cli-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 4px 12px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    color: #9ca3af;
+    font-size: 11px;
+}
+.thread-cli-bar strong { color: #e5e7eb; font-size: 11px; font-weight: 650; }
+#thread-cli-status[data-state="running"] { color: #86efac; }
+#thread-cli-status[data-state="error"] { color: #fca5a5; }
+#thread-cli-status[data-state="connecting"] { color: #fdba74; }
+.thread-cli-transcript {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 14px 24px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #d7dde8;
+}
+.thread-cli-line { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
+.thread-cli-line-user { color: #fdba74; }
+.thread-cli-line-assistant { color: #d1d5db; }
+.thread-cli-line-system { color: #6b7280; font-style: italic; }
+.thread-cli-line-error { color: #fca5a5; }
+
+
+/* 2026-11-06 cli-prompt1: interactive project CLI prompt (hides chat composer while ON). */
+#development-composer-layer.hidden { display: none !important; }
+.thread-cli-pane {
+    display: flex;
+    flex-direction: column;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+    border-top: 1px solid rgba(255,255,255,.06);
+    background: #070a0f;
+}
+.thread-cli-pane.hidden { display: none; }
+.thread-cli-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 4px 12px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    color: #9ca3af;
+    font-size: 11px;
+}
+.thread-cli-bar strong { color: #e5e7eb; font-size: 11px; font-weight: 650; }
+#thread-cli-status[data-state="running"] { color: #86efac; }
+#thread-cli-status[data-state="error"] { color: #fca5a5; }
+#thread-cli-status[data-state="connecting"] { color: #fdba74; }
+.thread-cli-transcript {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 14px 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #d7dde8;
+}
+.thread-cli-line { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
+.thread-cli-line-user { color: #fdba74; }
+.thread-cli-line-assistant { color: #d1d5db; }
+.thread-cli-line-system { color: #6b7280; font-style: italic; }
+.thread-cli-line-error { color: #fca5a5; }
+.thread-cli-prompt {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid rgba(255,255,255,.08);
+    background: #05070c;
+}
+.thread-cli-prompt-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 8px 14px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #d7dde8;
+}
+.thread-cli-prompt-label {
+    flex: 0 0 auto;
+    color: #86efac;
+    user-select: none;
+}
+#thread-cli-prompt-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: #e5e7eb;
+    font: inherit;
+    caret-color: #f97316;
+}
+#thread-cli-prompt-input::placeholder { color: #4b5563; }
+#thread-cli-prompt-input:disabled { opacity: .55; cursor: not-allowed; }
+
+/* 2026-11-06 visual-consistency1 — composer agent bar + transcript type system */
+
+/* Composer: one compact even control row (28px), keep start|strip|end structure. */
+.studio-composer {
+    width: min(760px, 100%);
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 14px;
+    background: #151d49;
+    box-shadow: 0 8px 24px rgba(0,0,0,.22);
+}
+.studio-composer textarea,
+.studio-composer #task-prompt {
+    min-height: 44px;
+    max-height: 160px;
+    padding: 12px 14px 8px;
+    border: 0;
+    background: transparent;
+    color: var(--studio-text);
+    font-size: 13px;
+    line-height: 1.45;
+}
+.studio-composer textarea::placeholder { color: #6b7280; font-size: 13px; }
+.composer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 4px 8px 8px;
+}
+.composer-toolbar-start,
+.composer-toolbar-end {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.composer-toolbar-end { margin-left: 0; flex: 0 1 auto; min-width: 0; }
+.composer-attachment-strip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 28px;
+    padding: 0 4px;
+    margin: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+.composer-attachment-strip.is-empty { min-height: 28px; }
+.composer-attachment-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+}
+.composer-toolbar .tool-button,
+.composer-toolbar .plan-button,
+.composer-toolbar .time-toggle-button {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+}
+.composer-toolbar .tool-button svg,
+.composer-toolbar .plan-button svg,
+.composer-toolbar .time-toggle-button svg,
+.composer-toolbar .send-button svg,
+.composer-toolbar .permission-control svg,
+.composer-toolbar .model-button svg {
+    width: 15px;
+    height: 15px;
+}
+.composer-toolbar .permission-control {
+    height: 28px;
+    min-height: 28px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 6px;
+    gap: 2px;
+}
+.composer-toolbar .permission-control select {
+    height: 28px;
+    max-width: 96px;
+    padding: 0 14px 0 0;
+    font-size: 11px;
+}
+.composer-toolbar .model-button {
+    width: auto;
+    max-width: min(240px, 42vw);
+    min-height: 28px;
+    height: 28px;
+    margin-left: 0;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--studio-muted);
+    font-size: 11px;
+}
+.composer-toolbar .model-auto-chip {
+    height: 28px;
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-size: 10px;
+}
+.composer-toolbar .send-button {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    border-radius: 6px;
+    background: var(--studio-text);
+    color: #151923;
+}
+.composer-toolbar .send-button:disabled { opacity: .4; }
+.composer-scope-strip {
+    min-height: 28px;
+    padding: 4px 10px 0;
+    gap: 6px;
+}
+.composer-prompt-wrap .composer-time-controls {
+    padding: 0;
+    gap: 4px;
+}
+.composer-prompt-wrap .run-elapsed {
+    font-size: 10px;
+    color: var(--studio-dim);
+}
+
+/* Transcript / activity: Codex-like one surface — body 13, meta 11, mono 11. */
+.message-list {
+    gap: 14px;
+}
+.studio-message.assistant,
+.studio-message.active-turn {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 10px;
+}
+.message-avatar {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
+}
+.message-body {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--studio-text);
+}
+.message-body > p,
+.message-markdown > p {
+    margin: 0 0 8px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.message-markdown h2,
+.message-markdown h3,
+.message-markdown h4,
+.message-markdown h5 {
+    margin: 12px 0 6px;
+    color: var(--studio-text);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.35;
+}
+.message-markdown code {
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: rgba(255,255,255,.06);
+    color: #d6dce5;
+    font-size: 11px;
+}
+.message-markdown code.file-ref {
+    background: rgba(255,255,255,.06);
+    color: #c5d0e0;
+}
+.message-markdown pre {
+    margin: 8px 0;
+    padding: 10px 0;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px;
+    background: rgba(0,0,0,.22);
+    font-size: 11px;
+    line-height: 1.45;
+}
+.message-markdown .code-line { color: #d6dce5; }
+.message-markdown a { color: #9db7d8; }
+.message-markdown a:hover { color: #c5d4e8; }
+.message-footer {
+    min-height: 24px;
+    margin-top: 8px;
+    gap: 10px;
+}
+.message-timing,
+.message-date,
+.thread-status-event time {
+    color: var(--studio-dim);
+    font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.message-date {
+    font-size: 10px;
+    letter-spacing: .08em;
+}
+.thread-status-event {
+    min-height: 24px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--studio-muted);
+}
+.thread-status-event strong { color: var(--studio-text); font-weight: 600; }
+
+.activity-row {
+    gap: 8px;
+    padding: 4px 0;
+}
+.activity-title {
+    color: var(--studio-text);
+    font-size: 12px;
+    font-weight: 600;
+}
+.activity-detail,
+.activity-meta {
+    color: var(--studio-muted);
+    font-size: 11px;
+}
+.activity-path {
+    color: var(--studio-muted);
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.activity-empty { font-size: 12px; color: var(--studio-muted); }
+
+.turn-activity-disclosure { margin: 0 0 10px; }
+.turn-activity-disclosure > summary {
+    min-height: 28px;
+    gap: 6px;
+    padding: 2px 0;
+    color: var(--studio-muted);
+    font-size: 12px;
+}
+.turn-activity-disclosure > summary:hover { color: var(--studio-text); }
+.turn-activity-disclosure .turn-event-copy strong {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--studio-text);
+}
+.turn-activity-disclosure .turn-event-preview,
+.turn-activity-disclosure .turn-event-status,
+.turn-activity-disclosure .turn-event-file {
+    font-size: 11px;
+    color: var(--studio-muted);
+}
+.turn-activity-disclosure .turn-activity-content pre {
+    max-height: 240px;
+    font-size: 11px;
+    color: #c5cdd8;
+}
+
+.turn-event-copy strong {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--studio-text);
+}
+.turn-event-preview,
+.turn-event-status {
+    font-size: 11px;
+    color: var(--studio-muted);
+}
+.turn-event-preview.code,
+.turn-event-file {
+    font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--studio-muted);
+}
+.turn-activity-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border-color: rgba(255,255,255,.1);
+    background: rgba(255,255,255,.04);
+    color: var(--studio-muted);
+}
+/* Restrain rainbow: keep subtle status, drop loud per-kind palettes toward one muted system. */
+.event-agent .turn-activity-icon,
+.event-tests .turn-activity-icon,
+.event-commands .turn-activity-icon,
+.event-edits .turn-activity-icon,
+.event-browser .turn-activity-icon,
+.event-inspection .turn-activity-icon,
+.event-skills .turn-activity-icon,
+.event-guidance .turn-activity-icon {
+    border-color: rgba(255,255,255,.12);
+    background: rgba(255,255,255,.045);
+    color: var(--studio-muted);
+}
+.turn-event-row.running .turn-event-status { color: var(--studio-muted); }
+.turn-event-row.failed .turn-event-copy strong,
+.turn-event-row.failed .turn-event-status,
+.activity-row.failed .activity-title {
+    color: var(--studio-red);
+}
+.turn-event-row.failed .turn-activity-icon {
+    border-color: rgba(255,110,110,.28);
+    background: rgba(255,110,110,.08);
+    color: var(--studio-red);
+}
+.activity-row.route .activity-icon,
+.activity-row.route .activity-title {
+    color: var(--studio-muted);
+}
+.turn-changes-toggle strong { font-size: 12px; }
+.turn-changes-toggle small { font-size: 11px; }
+.message-skill-icons { margin-top: 6px; gap: 4px; color: var(--studio-muted); }
+
+
+/* 2026-11-06 chat-message-pass1
+   Unify chat message body + markdown tables + View activity to one 12px body scale.
+   Timestamps/meta keep muted color at the SAME 12px. Restore readable content width;
+   composer matches content and is slightly wider. Does not restyle CLI pane. */
+#conversation.conversation {
+    grid-row: 2;
+    min-width: 0;
+    width: 100%;
+}
+#conversation .conversation-inner {
+    width: min(780px, calc(100% - 42px));
+    max-width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+}
+#development-composer-layer .studio-composer,
+.studio-main > .composer-layer .studio-composer {
+    width: min(820px, calc(100% - 42px));
+    max-width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* One body size across message text, tables, and View activity */
+#conversation .message-body,
+#conversation .message-body > p,
+#conversation .message-markdown,
+#conversation .message-markdown p,
+#conversation .message-markdown li,
+#conversation .message-markdown h2,
+#conversation .message-markdown h3,
+#conversation .message-markdown h4,
+#conversation .message-markdown h5,
+#conversation .message-markdown table,
+#conversation .message-markdown th,
+#conversation .message-markdown td,
+#conversation .message-timing,
+#conversation .message-date,
+#conversation .thread-status-event,
+#conversation .thread-status-event time,
+#conversation .thread-status-event strong,
+#conversation .turn-activity-disclosure > summary,
+#conversation .turn-activity-disclosure .turn-event-copy strong,
+#conversation .turn-activity-disclosure .turn-event-preview,
+#conversation .turn-activity-disclosure .turn-event-status,
+#conversation .turn-activity-disclosure .turn-event-file,
+#conversation .turn-activity-disclosure .turn-activity-content pre,
+#conversation .activity-empty,
+#conversation .activity-title,
+#conversation .activity-detail,
+#conversation .activity-meta,
+#conversation .activity-path,
+#conversation .turn-event-copy strong,
+#conversation .turn-event-preview,
+#conversation .turn-event-status,
+#conversation .turn-event-file,
+#conversation .turn-activity-content pre,
+#conversation .turn-changes-toggle strong,
+#conversation .turn-changes-toggle small {
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Timestamps/meta: same size as body, muted only — not a second type product */
+#conversation .message-timing,
+#conversation .message-date,
+#conversation .thread-status-event time,
+#conversation .activity-meta {
+    color: var(--studio-dim);
+    font-family: inherit;
+    font-weight: 500;
+    letter-spacing: normal;
+    text-transform: none;
+}
+#conversation .message-date {
+    font-weight: 650;
+}
+#conversation .activity-detail,
+#conversation .turn-event-preview,
+#conversation .turn-event-status,
+#conversation .turn-event-file,
+#conversation .activity-path {
+    color: var(--studio-muted);
+}
+#conversation .message-markdown table {
+    font-size: 12px;
+    line-height: 1.5;
+}
+#conversation .message-markdown code,
+#conversation .message-markdown pre,
+#conversation .message-markdown .code-line {
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* 2026-11-06 chat-line-height1
+   Font size is 12px across these surfaces, but leftover line-heights still differed:
+   message body 1.48/1.5; markdown headings 1.25/1.35; tables 1.4; list items 1.48;
+   timestamps 1 and 1.35 (from font shorthands); View activity 1.35/1.4/1.45/1.48.
+   One line-height: 18px (12px x 1.5). Does not restyle the CLI pane. */
+#conversation .message-body,
+#conversation .message-body *,
+#conversation .message-markdown,
+#conversation .message-markdown *,
+#conversation .message-footer,
+#conversation .message-footer *,
+#conversation .message-timing,
+#conversation .message-date,
+#conversation .thread-status-event,
+#conversation .thread-status-event *,
+#conversation .turn-activity-disclosure,
+#conversation .turn-activity-disclosure *:not(.turn-activity-chevron):not(.change-disclosure),
+#conversation .activity-row,
+#conversation .activity-row *,
+#conversation .activity-title,
+#conversation .activity-detail,
+#conversation .activity-meta,
+#conversation .activity-path,
+#conversation .activity-empty,
+#conversation .turn-event-row,
+#conversation .turn-event-row *:not(.turn-activity-chevron),
+#conversation .turn-event-copy,
+#conversation .turn-event-copy strong,
+#conversation .turn-event-preview,
+#conversation .turn-event-status,
+#conversation .turn-event-file,
+#conversation .turn-change-list,
+#conversation .turn-change-list * {
+    line-height: 18px;
+}
+
+
+/* 2026-11-06 cli-pty1 / cli-onethread2: real Pi PTY xterm host flush under chrome. */
+.thread-cli-xterm {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    background: #070a0f;
+}
+.thread-cli-xterm .xterm {
+    height: 100%;
+    padding: 0;
+    margin: 0;
+}
+.thread-cli-xterm .xterm-viewport,
+.thread-cli-xterm .xterm-screen {
+    height: 100%;
+}
+.thread-cli-xterm .xterm-helper-textarea {
+    /* keep accessible; xterm positions it */
+}
+/* Hide legacy mock prompt/transcript if a cached template still has them */
+.thread-cli-transcript,
+.thread-cli-prompt {
+    display: none !important;
+}
+
+/* 2026-11-06 chat-table-style1
+   Markdown tables looked bare: cell/wrap borders used undefined --studio-border
+   (invalid, so no grid painted), last-column/last-row borders were stripped,
+   and the header wash was nearly invisible. Visible grid, header, and row
+   separation. Does not change line-height (chat-line-height1 owns that). */
+#conversation .message-markdown .md-table-wrap {
+    max-width: 100%;
+    margin: 10px 0 12px;
+    overflow-x: auto;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.025);
+}
+#conversation .message-markdown table {
+    width: 100%;
+    border-collapse: collapse;
+    background: transparent;
+}
+#conversation .message-markdown th,
+#conversation .message-markdown td {
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    text-align: left;
+    vertical-align: top;
+}
+#conversation .message-markdown thead th,
+#conversation .message-markdown th {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--studio-text);
+    font-weight: 650;
+    border-bottom-color: rgba(255, 255, 255, 0.2);
+}
+#conversation .message-markdown tbody tr:nth-child(even) td {
+    background: rgba(255, 255, 255, 0.035);
+}
+#conversation .message-markdown th:last-child,
+#conversation .message-markdown td:last-child {
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+}
+#conversation .message-markdown tbody tr:last-child td {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* 2026-11-06 activity-icon-top1
+   Activity row icons (View activity, run command, and every other type)
+   were vertically centered against the whole row via align-items: center
+   on .turn-event-main / .turn-event-row > summary. Pin them to the top. */
+#conversation .turn-event-main,
+#conversation .turn-event-row > summary,
+#conversation .turn-activity-block > summary,
+#conversation .activity-row {
+    align-items: start;
+}
+#conversation .turn-activity-icon,
+#conversation .activity-icon {
+    align-self: start;
+}
+
+
+/* 2026-11-06 cli-tabs1: CLI tab bar + background sessions (chat fonts/width untouched). */
+.thread-cli-tabs {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 4px;
+    min-height: 32px;
+    padding: 4px 10px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    overflow-x: auto;
+    background: #080b12;
+}
+.thread-cli-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    max-width: 180px;
+    min-height: 24px;
+    padding: 0 2px 0 8px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 6px;
+    background: rgba(255,255,255,.03);
+    color: #9ca3af;
+}
+.thread-cli-tab.is-active {
+    border-color: rgba(249,115,22,.45);
+    background: rgba(249,115,22,.1);
+    color: #e5e7eb;
+}
+.thread-cli-tab-select {
+    min-width: 0;
+    max-width: 140px;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: 600 11px/1.2 ui-sans-serif, system-ui, sans-serif;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.thread-cli-tab-close {
+    display: inline-grid;
+    width: 20px;
+    height: 20px;
+    place-items: center;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #6b7280;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+.thread-cli-tab-close:hover { color: #e5e7eb; background: rgba(255,255,255,.08); }
+.thread-cli-tab-new,
+.thread-cli-tab-bg {
+    display: inline-grid;
+    width: 24px;
+    min-height: 24px;
+    place-items: center;
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 6px;
+    background: transparent;
+    color: #9ca3af;
+    font-size: 14px;
+    cursor: pointer;
+}
+.thread-cli-tab-new:hover,
+.thread-cli-tab-bg:hover { color: #e5e7eb; border-color: rgba(249,115,22,.4); }
+.thread-cli-tab-overflow { position: relative; margin-left: 2px; }
+.thread-cli-bg-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 20;
+    min-width: 180px;
+    max-width: 260px;
+    padding: 4px;
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 8px;
+    background: #0d1220;
+    box-shadow: 0 10px 28px rgba(0,0,0,.45);
+}
+.thread-cli-bg-menu.hidden { display: none; }
+.thread-cli-bg-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #d1d5db;
+    text-align: left;
+    cursor: pointer;
+}
+.thread-cli-bg-item:hover { background: rgba(255,255,255,.06); }
+.thread-cli-bg-item strong { font-size: 11px; font-weight: 600; }
+.thread-cli-bg-item span { color: #6b7280; font-size: 10px; }
+.thread-cli-bg-empty { padding: 8px; color: #6b7280; font-size: 11px; }
+.thread-cli-xterm-hosts {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+.thread-cli-xterm-hosts > .thread-cli-xterm {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.thread-cli-xterm-hosts > .thread-cli-xterm[hidden] { display: none !important; }
+
+
+/* 2026-11-06 cli-onethread2: no tab bar — one CLI session per thread; terminal flush under chrome. */
+.thread-cli-tabs,
+.thread-cli-tab,
+.thread-cli-tab-new,
+.thread-cli-tab-bg,
+.thread-cli-tab-overflow,
+.thread-cli-bg-menu {
+    display: none !important;
+    min-height: 0 !important;
+    height: 0 !important;
+    max-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    overflow: hidden !important;
+}
+.thread-cli-pane {
+    display: flex;
+    flex-direction: column;
+}
+.thread-cli-pane.hidden {
+    display: none !important;
+}
+.thread-cli-xterm-hosts {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    padding: 0;
+    margin: 0;
+}
+.thread-cli-xterm-hosts > .thread-cli-xterm {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+}
+.thread-cli-xterm-hosts > .thread-cli-xterm[hidden] {
+    display: none !important;
+}

@@ -118,13 +118,6 @@ def spawn_workflow_for_ticket(
         )
         selected = selection.get("selected") or {}
         workflow_id = int(selected.get("workflow_id") or 0)
-        if not workflow_id and selection.get("request_profile", {}).get("software"):
-            from distr.core.workflow.phases import route_ticket_workflow_id
-
-            workflow_id = route_ticket_workflow_id(
-                "\n".join(part for part in (ticket_title, ticket_description, project_name) if part),
-                has_repo_target=True,
-            )
         if not workflow_id:
             return {
                 "success": False,

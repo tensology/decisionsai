@@ -292,7 +292,7 @@ def test_route_reject_is_deterministic(monkeypatch):
     captured = []
     monkeypatch.setattr(
         "distr.core.workflow.service.apply_run_route_approval",
-        lambda run_id, approved: captured.append((run_id, approved)) or {"success": True},
+        lambda run_id, approved, **kwargs: captured.append((run_id, approved)) or {"success": True},
     )
     result = resolve_interaction(
         token=interaction["token"], action="reject", response_text="no", chat_id=123

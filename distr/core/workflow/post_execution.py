@@ -591,7 +591,15 @@ class PostExecutionMixin:
                 run_data = json.loads(run.run_data or "{}")
                 run_data["waiting_result"] = result_text
                 run_data["waiting_passed"] = passed
-                run_data["waiting_prompt"] = handoff["prompt"]
+                from distr.core.workflow.router import _effective_wait_prompt
+                from distr.core.workflow.service import _enrich_run_record
+                identity = _enrich_run_record(db, run, run_data)
+                for key in ("project_name", "ticket_title", "ticket_id"):
+                    if identity.get(key):
+                        run_data[key] = identity[key]
+                run_data["waiting_prompt"] = _effective_wait_prompt(run_data, default_prompt=handoff["prompt"], result=result_text)
+                handoff["history_entry"] = handoff["history_entry"].replace(handoff["prompt"], run_data["waiting_prompt"])
+                handoff["prompt"] = run_data["waiting_prompt"]
                 run.run_data = json.dumps(run_data)
             # Persist a readable wait-state handoff in step history so users can
             # see exactly what the step asked for (not just raw output).

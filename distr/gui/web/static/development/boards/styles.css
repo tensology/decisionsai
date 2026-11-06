@@ -1,6 +1,7 @@
 
 .kanban-workspace { position: absolute; z-index: 4; inset: 0; display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--studio-bg); }
-.development-kanban-header { display: flex; min-width: 0; min-height: 56px; grid-row: 1; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--studio-line-soft); }
+/* Background, border, padding and gap come from the shared .task-header (threads/styles.css), same as thread and plan. */
+.development-kanban-header { min-height: 56px; grid-row: 1; }
 .development-kanban-header > #development-kanban-more { flex: 0 0 auto; width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
 .development-kanban-breadcrumb { flex: 1 1 auto; }
 .development-kanban-breadcrumb span { max-width: min(42vw, 280px); }
@@ -82,22 +83,27 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
 .kanban-list-time { padding: 0 !important; background: transparent !important; color: var(--studio-dim) !important; font: 8px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; text-transform: none !important; }
 .development-kanban-card.list-row footer { display: none; }
 .development-kanban-empty { display: grid; min-width: min(520px, 100%); min-height: 180px; place-items: center; padding: 28px; border: 1px dashed var(--studio-line); border-radius: 10px; color: var(--studio-muted); text-align: center; }
-.kanban-ticket-dialog { height: fit-content; max-height: min(82vh, 760px); }
-.kanban-ticket-dialog form { display: grid; max-height: min(82vh, 760px); grid-template-rows: auto auto minmax(0, 1fr) auto; margin: 0; }
-.kanban-ticket-dialog form > header { padding: 13px 16px; }
-.kanban-ticket-dialog form > header h2 { margin-top: 0; }
-.kanban-ticket-tabs { display: flex; min-height: 35px; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--studio-line); }
-.kanban-ticket-tabs button { position: relative; min-height: 35px; padding: 0 1px; border: 0; background: transparent; color: var(--studio-muted); font-size: 10px; }
+.kanban-ticket-dialog { width: var(--ticket-modal-width); height: var(--ticket-modal-height); max-height: var(--ticket-modal-height); border-radius: var(--ticket-modal-radius); }
+.kanban-ticket-dialog form { display: grid; height: 100%; max-height: var(--ticket-modal-height); grid-template-rows: auto auto minmax(0, 1fr) auto; margin: 0; }
+.kanban-ticket-dialog form > header { padding: var(--ticket-modal-header-pad); }
+.kanban-ticket-dialog form > header h2 { margin-top: 0; font-size: var(--ticket-modal-title-size); }
+.kanban-ticket-tabs { display: flex; min-height: var(--studio-tab-height); gap: var(--studio-tab-gap); padding: 0 calc(var(--ticket-modal-pane-pad) - 10px); border-bottom: 1px solid var(--studio-line); }
+.kanban-ticket-tabs button { position: relative; min-height: var(--studio-tab-height); padding: var(--studio-tab-padding); border: 0; background: transparent; color: var(--studio-muted); font: inherit; font-size: var(--studio-tab-font-size); font-weight: var(--studio-tab-font-weight); }
 .kanban-ticket-tabs button:hover, .kanban-ticket-tabs button:focus-visible { color: var(--studio-text); outline: 0; }
 .kanban-ticket-tabs button[aria-selected="true"] { color: var(--studio-text); }
 .kanban-ticket-tabs button[aria-selected="true"]::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--studio-accent); content: ""; }
-.kanban-ticket-tabs button span { color: var(--studio-dim); font-size: 8px; }
+.kanban-ticket-tabs button span { color: var(--studio-dim); font-size: var(--studio-tab-count-size); }
 .kanban-ticket-panels { min-height: 0; overflow: hidden; }
 .kanban-ticket-panel { height: 100%; min-height: 0; overflow-y: auto; padding-bottom: 14px; scrollbar-width: thin; }
 .kanban-ticket-panel[hidden] { display: none; }
-.kanban-ticket-panel > label { margin: 10px 16px 0; }
-.kanban-ticket-dialog #kanban-ticket-title, .kanban-ticket-dialog #kanban-ticket-description { font-size: 12px; }
+.kanban-ticket-panel > label { margin: 10px var(--ticket-modal-pane-pad) 0; font-size: var(--ticket-modal-label-size); }
+.kanban-ticket-dialog #kanban-ticket-title, .kanban-ticket-dialog #kanban-ticket-description { font-size: var(--ticket-modal-text-size); }
 .kanban-ticket-dialog #kanban-ticket-description { min-height: 112px; padding: 8px 9px; line-height: 1.5; }
+/* Fixed-size modal (tabs never resize it): the Description field grows to fill the Details panel, so the
+   footer stays right under the content instead of leaving a gap. */
+#kanban-ticket-details-panel:not([hidden]) { display: flex; flex-direction: column; }
+#kanban-ticket-details-panel > label:has(> #kanban-ticket-description) { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
+.kanban-ticket-dialog #kanban-ticket-description { height: 100%; flex: 1 1 auto; resize: none; }
 .kanban-ticket-attachments-panel { overflow-y: auto; }
 .kanban-ticket-dialog menu { min-width: 0; }
 .kanban-ticket-dialog #kanban-ticket-delete { margin-right: auto; }
@@ -111,9 +117,11 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
 .kanban-ticket-dialog menu a.secondary-button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .kanban-ticket-material { display: grid; gap: 8px; margin: 12px 16px 0; }
 .kanban-ticket-material-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.kanban-ticket-material-heading strong { font-size: 10px; }
-.kanban-ticket-material-heading span { color: var(--studio-muted); font-size: 9px; }
-.kanban-ticket-material-heading .secondary-button { min-height: 28px; padding: 0 9px; font-size: 8px; }
+.kanban-ticket-material-heading strong { font-size: var(--studio-tab-font-size); }
+.kanban-ticket-material { padding: 12px 16px 0; }
+.kanban-ticket-material .kanban-ticket-attachments { margin-top: 10px; }
+.kanban-ticket-material-heading span { color: var(--studio-muted); font-size: var(--ticket-modal-label-size); }
+.kanban-ticket-material-heading .secondary-button { min-height: 28px; padding: 0 9px; font-size: var(--ticket-modal-label-size); }
 .kanban-ticket-links, .kanban-ticket-todos { display: grid; gap: 5px; margin: 12px 16px 0; }
 .kanban-ticket-relation-row, .kanban-ticket-todo-row { display: flex; min-width: 0; min-height: 38px; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--studio-line-soft); border-radius: 7px; background: rgba(255,255,255,.025); }
 .kanban-ticket-relation-row a { display: grid; min-width: 0; flex: 1; gap: 2px; }
@@ -140,14 +148,14 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
 .kanban-ticket-file-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border-radius: 5px; background: rgba(255,255,255,.05); color: var(--studio-muted); font-size: 17px; }
 .kanban-ticket-no-attachments { margin: 0; }
 @media (max-width: 520px) {
-    .kanban-ticket-dialog { height: fit-content; max-height: calc(100vh - 24px); }
-    .kanban-ticket-dialog form { max-height: calc(100vh - 24px); }
+    .kanban-ticket-dialog { height: calc(100vh - 24px); max-height: calc(100vh - 24px); }
+    .kanban-ticket-dialog form { height: 100%; max-height: calc(100vh - 24px); }
     .kanban-ticket-dialog menu { gap: 5px; padding-right: 10px; padding-left: 10px; }
     .kanban-ticket-dialog menu .menu-spacer { display: none; }
     .kanban-ticket-dialog menu .primary-button, .kanban-ticket-dialog menu .secondary-button, .kanban-ticket-dialog menu .danger-button { flex: 1 1 auto; padding: 0 0.75rem; }
 }
 @media (max-width: 980px) {
-    .development-kanban-header { min-height: 54px; gap: 6px; padding: 0 8px; }
+    .development-kanban-header { min-height: 54px; }
     .development-kanban-header .development-kanban-breadcrumb { min-width: 0; }
     .development-kanban-header .development-kanban-breadcrumb strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .development-kanban-view-toggle { height: 44px; }

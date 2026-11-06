@@ -426,7 +426,7 @@ def build_workflow_definition(
             "config": {
                 "step_role": "implementation",
                 "max_retries": int(policy.get("max_attempts") or 2),
-                "allow_provider_failover": True,
+                "allow_provider_failover": False,
             },
         }
     ]
@@ -538,97 +538,23 @@ def find_class_workflow_id(class_key: str) -> Optional[int]:
 
 
 def ensure_class_workflows() -> dict[str, int]:
-    """Create, tag and activate the managed workflow for every weight class."""
-    created: dict[str, int] = {}
-    for class_key in WORKFLOW_CLASSES:
-        workflow_id = find_class_workflow_id(class_key)
-        if workflow_id is None:
-            workflow_id = create_phased_workflow(
-                class_workflow_name(class_key),
-                class_key,
-                goal="Complete the linked ticket using this workflow's policy.",
-                done_when="The ticket is done, evidence is returned, and the source gets a reply.",
-                description=CLASS_WORKFLOW_DESCRIPTIONS.get(class_key, ""),
-            )
-        if workflow_id:
-            _mark_managed(int(workflow_id), class_key)
-            created[class_key] = int(workflow_id)
-    return created
+    """Managed class workflows are retired; never recreate them."""
+    return {}
 
 
 def rebuild_class_workflow(
     workflow_id: int,
     class_key: str,
     *,
-    goal: str = "Complete the linked ticket using this workflow's policy.",
-    done_when: str = "The ticket is done, evidence is returned, and the source gets a reply.",
+    keep_runs: bool = True,
 ) -> int:
-    """Replace a managed workflow's steps from the current phase definition."""
-    from distr.core.db import get_session
-    from distr.core.db.workflow import AutoWorkflowStep
-    from distr.core.workflow.service import add_step
-
-    definition = build_workflow_definition(
-        class_workflow_name(class_key),
-        class_key,
-        goal=goal,
-        done_when=done_when,
-        description=CLASS_WORKFLOW_DESCRIPTIONS.get(class_key, ""),
-    )
-    with get_session() as db:
-        db.query(AutoWorkflowStep).filter(
-            AutoWorkflowStep.workflow_id == int(workflow_id)
-        ).delete(synchronize_session=False)
-        db.commit()
-    for position, step in enumerate(definition["steps"]):
-        add_step(
-            int(workflow_id),
-            name=str(step["name"]),
-            action_type=str(step["action_type"]),
-            position=position,
-            instruction=str(step["instruction"]),
-            config=dict(step.get("config") or {}),
-        )
+    """Managed class rebuild is retired; return the id unchanged."""
     return int(workflow_id)
 
 
 def refresh_managed_workflow_instructions() -> dict[str, int]:
-    """Rewrite managed workflows' step instructions from the current phase definition.
-
-    A workflow persists the instruction composed when it was created, so improving
-    the phase contract (e.g. requiring ``reply_text:``) never reached workflows that
-    already existed. This updates in place, keeping step ids and run history.
-    """
-    from distr.core.db import get_session
-    from distr.core.db.workflow import AutoWorkflowStep
-
-    updated: dict[str, int] = {}
-    for class_key in WORKFLOW_CLASSES:
-        workflow_id = find_class_workflow_id(class_key)
-        if not workflow_id:
-            continue
-        definition = build_workflow_definition(
-            class_workflow_name(class_key),
-            class_key,
-            goal="Complete the linked ticket using this workflow's policy.",
-            done_when="The ticket is done, evidence is returned, and the source gets a reply.",
-            description=CLASS_WORKFLOW_DESCRIPTIONS.get(class_key, ""),
-        )
-        with get_session() as db:
-            steps = (
-                db.query(AutoWorkflowStep)
-                .filter(AutoWorkflowStep.workflow_id == int(workflow_id))
-                .order_by(AutoWorkflowStep.position)
-                .all()
-            )
-            for step, spec in zip(steps, definition["steps"]):
-                step.name = str(spec["name"])
-                step.instruction = str(spec["instruction"])
-                if spec.get("config"):
-                    step.config = json.dumps(spec["config"])
-            db.commit()
-            updated[class_key] = len(steps)
-    return updated
+    """Managed class workflows are retired; nothing to refresh."""
+    return {}
 
 
 def route_ticket(
@@ -773,30 +699,15 @@ def route_ticket_plan(
     requested: Optional[str] = None,
     ticket_id: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Route a ticket and guarantee a usable workflow id.
-
-    Creates the managed workflows on first use so a fresh install can route work
-    without anyone hand-building a pipeline. Falls back to ``standard`` rather
-    than returning nothing, because dispatching a ticket with no workflow is
-    worse than dispatching it on the default policy.
-    """
+    """Classify only. Do not create or invent a managed workflow id."""
     plan = route_ticket(
         text,
         has_repo_target=has_repo_target,
         requested=requested,
         ticket_id=ticket_id,
     )
-    if plan.get("workflow_id"):
-        return plan
-    try:
-        ensure_class_workflows()
-    except Exception:
-        logger.warning("Could not create managed class workflows", exc_info=True)
-    plan["workflow_id"] = (
-        find_class_workflow_id(str(plan.get("class") or ""))
-        or find_class_workflow_id("standard")
-        or None
-    )
+    # Never auto-attach a managed class workflow; callers must pass an explicit id.
+    plan["workflow_id"] = None
     return plan
 
 
@@ -806,9 +717,8 @@ def route_ticket_workflow_id(
     has_repo_target: bool = True,
     requested: Optional[str] = None,
 ) -> int:
-    """Return the managed workflow id a ticket should run on."""
-    plan = route_ticket_plan(text, has_repo_target=has_repo_target, requested=requested)
-    return int(plan.get("workflow_id") or 0)
+    """Managed auto-route is retired; return 0 so callers stay on direct."""
+    return 0
 
 
 def announce_route_choice(
@@ -893,71 +803,8 @@ def apply_route_override(
     chat_id: Optional[int] = None,
     speak: bool = True,
 ) -> dict[str, Any]:
-    """Honour "make it lighter/heavier" by relinking the ticket to that policy.
-
-    Risk still wins: a migration cannot be talked down to the cheap policy, so the
-    override is floored at ``heavy`` whenever risk keywords are present.
-    """
-    direction = detect_route_override(text)
-    if not direction:
-        return {"changed": False}
-
-    from distr.core.db import get_session
-    from distr.core.db.kanban import KanbanTicket
-
-    with get_session() as db:
-        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
-        if ticket is None:
-            return {"changed": False}
-        ticket_text = f"{ticket.title or ''}\n\n{ticket.description or ''}"
-
-    base_class = classify(ticket_text, has_repo_target=True)
-    target_class = _step_class(base_class, direction)
-    if any(word in ticket_text.lower() for word in RISK_KEYWORDS) and CLASS_LADDER.index(target_class) < CLASS_LADDER.index("heavy"):
-        target_class = "heavy"
-
-    workflow_id = find_class_workflow_id(target_class)
-    if not workflow_id:
-        try:
-            ensure_class_workflows()
-        except Exception:
-            logger.warning("Could not create managed class workflows", exc_info=True)
-        workflow_id = find_class_workflow_id(target_class)
-    if not workflow_id:
-        return {"changed": False, "error": f"No workflow exists for the {target_class} policy"}
-
-    with get_session() as db:
-        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
-        if ticket is None:
-            return {"changed": False}
-        ticket.linked_workflow_id = int(workflow_id)
-        db.commit()
-
-    label = str(class_policy(target_class).get("label") or target_class)
-    announcement = (
-        f"Ticket #{int(ticket_id)} is now on the {label} workflow. "
-        f"That takes effect on the next step."
-    )
-    if chat_id:
-        try:
-            from distr.core.chat import ChatService
-
-            ChatService.append_assistant_notice(int(chat_id), announcement)
-        except Exception:
-            logger.debug("route override notice failed", exc_info=True)
-        if speak:
-            try:
-                from distr.core.signals import speak_text_directly_event_queue
-
-                speak_text_directly_event_queue(announcement)
-            except Exception:
-                logger.debug("route override speech failed", exc_info=True)
-    return {
-        "changed": True,
-        "class": target_class,
-        "workflow_id": int(workflow_id),
-        "announcement": announcement,
-    }
+    """Managed class weight overrides are retired."""
+    return {"changed": False, "workflow_id": None, "class": None, "reason": "managed_class_retired"}
 
 
 def create_phased_workflow(

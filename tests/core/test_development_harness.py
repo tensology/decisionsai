@@ -297,6 +297,32 @@ def test_direct_development_prompt_uses_ide_harness_without_workflow(tmp_path, m
         assert turn.response == "Implemented and verified the feature."
 
 
+def test_source_context_reaches_execution_and_blocker_stays_on_same_thread(tmp_path, monkeypatch):
+    get_session, chat_id, turn_id = _database(tmp_path, monkeypatch)
+    monkeypatch.setattr("distr.core.db.get_session", get_session)
+    with get_session() as db:
+        chat = db.get(Chat, chat_id)
+        params = json.loads(chat.params)
+        params["incoming_source_context"] = {"source": "whatsapp", "source_thread_id": "fixture@g.us", "message_ids": ["credential-ref"]}
+        chat.params = json.dumps(params); db.commit()
+    captured = {}
+    async def dispatch(context):
+        captured["instruction"] = context.instruction
+        return SimpleNamespace(execution_session_id=91, result=SimpleNamespace(
+            success=True, waits_for_human=False, output="Status: needs_input", error=""))
+    monkeypatch.setattr("distr.core.project_cli_backends.harness.dispatch_harness", dispatch)
+    monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend", lambda *a, **kw: {"status": {"ready": True}})
+    harness.dispatch_development_prompt(chat_id, "Retry the original quotes", routing_assessment={
+        "route": {"backend": "codex", "model": "auto"}}, dispatch_async=False)
+    assert "credential-ref" in captured["instruction"] and "source_context" in captured["instruction"]
+    with get_session() as db:
+        root = db.get(Chat, chat_id)
+        execution = json.loads(root.params)["development"]["execution"]
+        assert execution["status"] == "blocked"
+        assert not execution["outcome"]["success"]
+        assert db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).count() == 1
+
+
 def test_ticket_snapshot_keeps_more_than_one_hundred_attached_files(tmp_path, monkeypatch):
     home = tmp_path / "home"
     project = tmp_path / "project"
@@ -467,25 +493,35 @@ def test_completed_turn_can_start_a_later_turn_in_the_same_thread(tmp_path, monk
         assert execution["completed_at"]
 
 
-def test_large_multi_phase_thread_request_launches_owned_orchestrator(tmp_path, monkeypatch):
+def test_large_multi_phase_thread_request_stays_direct_by_default(tmp_path, monkeypatch):
     _, chat_id, _ = _database(tmp_path, monkeypatch)
-    captured = {}
-    # Tickets now route to a managed weight-class policy instead of planning a
-    # throwaway draft and falling back to the retired Development pipeline.
+    # Auto-wrap into managed class workflows is retired. Even a large multi-phase
+    # prompt stays on the direct harness unless the caller passed a named workflow_id.
+    monkeypatch.setattr(
+        "distr.core.workflow.work_dispatch.dispatch_work_item",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("dispatch_work_item must not auto-wrap")),
+    )
     monkeypatch.setattr(
         "distr.core.workflow.phases.route_ticket_plan",
-        lambda *_args, **_kwargs: {"workflow_id": 44, "class": "heavy"},
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("route_ticket_plan must not auto-wrap")),
     )
+
+    async def fake_dispatch(context):
+        return SimpleNamespace(
+            execution_session_id=77,
+            result=SimpleNamespace(
+                success=True,
+                waits_for_human=False,
+                output="Direct turn completed.",
+                error="",
+            ),
+        )
+
+    monkeypatch.setattr("distr.core.project_cli_backends.harness.dispatch_harness", fake_dispatch)
     monkeypatch.setattr(
-        "distr.core.workflow.planning.plan_workflow",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("planner must not be used")),
+        "distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+        lambda backend_id, settings=None: {"status": {"ready": True}, "next_step": ""},
     )
-
-    def dispatch(**kwargs):
-        captured.update(kwargs)
-        return {"run_id": 91, "chat_id": chat_id, "status": "started"}
-
-    monkeypatch.setattr("distr.core.workflow.work_dispatch.dispatch_work_item", dispatch)
 
     result = harness.dispatch_development_prompt(
         chat_id,
@@ -495,19 +531,12 @@ def test_large_multi_phase_thread_request_launches_owned_orchestrator(tmp_path, 
             "operational_state": "risk",
             "route": {"backend": "codex", "model": "gpt-test"},
         },
-        dispatch_async=True,
+        dispatch_async=False,
     )
 
-    assert result["direct"] is False
-    assert result["execution_mode"] == "workflow"
-    assert result["orchestrator_agent"] == "workflow_orchestrator"
-    assert captured["chat_id"] == chat_id
-    assert captured["workflow_id"] == 44
-    assert captured["run_metadata"]["execution_mode_decision"]["mode"] == "workflow"
-    receipt = captured["run_metadata"]["route_receipt"]
-    assert receipt["complexity"] == "high"
-    assert receipt["selected"]["backend"] == "codex"
-    assert receipt["configured"]["route_mode"] == "auto"
+    assert result.get("direct", True) is not False or result.get("execution_mode") in {None, "direct"}
+    assert result.get("execution_mode") != "workflow"
+    assert "orchestrator_agent" not in result or result.get("orchestrator_agent") != "workflow_orchestrator"
 
 
 def test_plan_mode_keeps_the_direct_harness_read_only(tmp_path, monkeypatch):

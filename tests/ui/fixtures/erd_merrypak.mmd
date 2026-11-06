@@ -1,0 +1,424 @@
+%% Merrypak ERD (fixture, 51 entities)
+erDiagram
+    direction LR
+    CUSTOMER["Customer"] {
+        int id PK "surrogate key"
+        uuid label_0 "shown on invoices"
+        uuid status_1 FK
+        text label_2 PK, FK
+    }
+    CUSTOMER_ADDRESS {
+        int id PK "surrogate key"
+        datetime notes_0
+        date name_1 "ISO 4217"
+        int qty_2 "ISO 4217"
+        datetime qty_3
+        int qty_4
+        int code_5 PK, FK "legacy field"
+    }
+    CUSTOMER_CONTACT {
+        int id PK "surrogate key"
+        int notes_0
+        decimal(12,2) ref_1
+        uuid amount_2 PK, FK "indexed"
+        text code_3 PK, FK
+        int notes_4 PK, FK
+    }
+    ORDER {
+        int id PK "surrogate key"
+        uuid label_0 "ISO 4217"
+        uuid qty_1 "legacy field"
+        string external_id_2 PK, FK
+        boolean created_at_3 FK
+        decimal(12,2) label_4 "ISO 4217"
+    }
+    ORDER_LINE {
+        int id PK "surrogate key"
+        string[] qty_0
+        uuid ref_1 UK "shown on invoices"
+        uuid notes_2 "indexed"
+        int amount_3 FK
+        uuid label_4 PK, FK
+        boolean external_id_5 PK, FK
+    }
+    ORDER_STATUS {
+        int id PK "surrogate key"
+        text qty_0 "ISO 4217"
+        varchar(255) notes_1 FK
+        date ref_2 UK
+        datetime label_3 FK
+        string[] ref_4 FK
+        int amount_5 FK
+        decimal(12,2) notes_6 UK "legacy field"
+    }
+    INVOICE {
+        int id PK "surrogate key"
+        int label_0 "ISO 4217"
+        int status_1 FK "indexed"
+        uuid label_2 "ISO 4217"
+        string qty_3 PK, FK
+    }
+    INVOICE_LINE {
+        int id PK "surrogate key"
+        decimal(12,2) notes_0 "required"
+        string[] name_1 PK, FK
+        %% inline comment inside a block
+    }
+    PAYMENT {
+        int id PK "surrogate key"
+        varchar(255) external_id_0
+        varchar(255) amount_1 PK, FK
+        date created_at_2 FK
+        text qty_3 FK "required"
+        string status_4 PK, FK "shown on invoices"
+        varchar(255) code_5 PK, FK
+        decimal(12,2) qty_6 UK "indexed"
+    }
+    PAYMENT_METHOD["Payment Method"] {
+        int id PK "surrogate key"
+        string code_0
+        uuid created_at_1
+        decimal(12,2) label_2 "legacy field"
+    }
+    REFUND {
+        int id PK "surrogate key"
+        text qty_0
+        int created_at_1 "ISO 4217"
+    }
+    CREDIT_NOTE {
+        int id PK "surrogate key"
+        string amount_0
+        boolean code_1 "required"
+        text ref_2 "legacy field"
+        date status_3
+    }
+    PRODUCT {
+        int id PK "surrogate key"
+        datetime external_id_0 "shown on invoices"
+        int name_1 UK
+        int label_2
+        datetime created_at_3 UK
+        string external_id_4 FK
+        weird line ??? that mermaid parser here can't map
+    }
+    PRODUCT_VARIANT {
+        int id PK "surrogate key"
+        int created_at_0 "indexed"
+        uuid amount_1
+        string notes_2 UK
+        uuid code_3 "ISO 4217"
+    }
+    PRODUCT_CATEGORY {
+        int id PK "surrogate key"
+        text created_at_0 "ISO 4217"
+        string[] qty_1 "required"
+        date amount_2
+        decimal(12,2) amount_3 UK
+        decimal(12,2) created_at_4 FK "ISO 4217"
+        boolean name_5 UK "shown on invoices"
+        boolean amount_6 UK
+    }
+    PRICE_LIST {
+        int id PK "surrogate key"
+        string external_id_0
+        int qty_1
+        string created_at_2 UK
+        decimal(12,2) ref_3 "indexed"
+        uuid name_4 "ISO 4217"
+        boolean name_5 PK, FK
+    }
+    PRICE_RULE {
+        int id PK "surrogate key"
+        boolean status_0 "ISO 4217"
+        date notes_1 "indexed"
+        varchar(255) created_at_2 PK, FK
+    }
+    DISCOUNT {
+        int id PK "surrogate key"
+        datetime created_at_0
+        string external_id_1 UK
+        varchar(255) notes_2 UK
+        text name_3 "required"
+        string[] qty_4 UK
+        datetime status_5 FK
+        varchar(255) created_at_6
+    }
+    PROMOTION["Promotion"] {
+        int id PK "surrogate key"
+        boolean ref_0 "shown on invoices"
+        datetime label_1
+        decimal(12,2) name_2
+        datetime status_3 UK
+        string ref_4
+    }
+    WAREHOUSE {
+        int id PK "surrogate key"
+        datetime label_0
+        string external_id_1
+        text qty_2 UK "ISO 4217"
+        date created_at_3 UK "shown on invoices"
+        varchar(255) qty_4 UK
+        string[] code_5 UK
+    }
+    STOCK_LEVEL {
+        int id PK "surrogate key"
+        decimal(12,2) notes_0
+        varchar(255) label_1 UK
+        uuid code_2 PK, FK "shown on invoices"
+        date qty_3
+        decimal(12,2) label_4 UK "indexed"
+        varchar(255) status_5 UK
+    }
+    STOCK_MOVE {
+        int id PK "surrogate key"
+        datetime notes_0 "required"
+        int label_1 PK, FK "indexed"
+    }
+    SUPPLIER {
+        int id PK "surrogate key"
+        decimal(12,2) name_0
+        int created_at_1 PK, FK "indexed"
+        datetime created_at_2 UK "legacy field"
+        datetime qty_3 FK
+        string[] name_4
+    }
+    PURCHASE_ORDER {
+        int id PK "surrogate key"
+        decimal(12,2) external_id_0
+        string[] amount_1 FK
+        int created_at_2 PK, FK
+    }
+    PURCHASE_LINE {
+        int id PK "surrogate key"
+        datetime label_0
+        date created_at_1 UK "required"
+        uuid status_2 PK, FK
+    }
+    GOODS_RECEIPT {
+        int id PK "surrogate key"
+        int code_0
+        date code_1 UK "required"
+        string[] external_id_2
+        datetime code_3 FK
+        date code_4 PK, FK
+        date notes_5 "required"
+        datetime code_6 UK "legacy field"
+    }
+    SHIPMENT {
+        int id PK "surrogate key"
+        string[] external_id_0
+        varchar(255) code_1 "indexed"
+        boolean qty_2 UK "shown on invoices"
+        date notes_3 UK
+        decimal(12,2) code_4 UK
+        boolean notes_5 UK "indexed"
+    }
+    SHIPMENT_ITEM["Shipment Item"] {
+        int id PK "surrogate key"
+        int external_id_0 "legacy field"
+        date code_1 FK
+        string code_2
+        string[] status_3 FK
+        boolean code_4 PK, FK "indexed"
+    }
+    CARRIER {
+        int id PK "surrogate key"
+        varchar(255) external_id_0 "ISO 4217"
+        boolean notes_1 UK "ISO 4217"
+        text code_2
+    }
+    DELIVERY_ROUTE {
+        int id PK "surrogate key"
+        varchar(255) label_0
+        datetime external_id_1
+        int amount_2 UK "indexed"
+        decimal(12,2) amount_3
+    }
+    DRIVER {
+        int id PK "surrogate key"
+        decimal(12,2) name_0 "legacy field"
+        boolean label_1 UK
+        decimal(12,2) status_2 FK
+    }
+    VEHICLE {
+        int id PK "surrogate key"
+        boolean code_0
+        string external_id_1 FK
+        string[] label_2 FK
+        int name_3 FK
+    }
+    PACKAGING_TYPE {
+        int id PK "surrogate key"
+        text notes_0 "required"
+        text external_id_1 PK, FK
+        string qty_2 UK "required"
+        decimal(12,2) status_3 FK
+        string code_4 "legacy field"
+        string[] code_5 FK
+        int amount_6 PK, FK
+    }
+    PALLET {
+        int id PK "surrogate key"
+        uuid label_0
+        varchar(255) created_at_1 FK "legacy field"
+        boolean notes_2 UK "required"
+        boolean external_id_3 UK "indexed"
+        text label_4 UK
+    }
+    LABEL_TEMPLATE {
+        int id PK "surrogate key"
+        uuid name_0
+        string[] amount_1 UK "required"
+        date label_2 "ISO 4217"
+        text external_id_3 UK
+        decimal(12,2) status_4 PK, FK
+        decimal(12,2) amount_5 FK
+        boolean notes_6 FK "legacy field"
+    }
+    PRINT_JOB {
+        int id PK "surrogate key"
+        boolean code_0 "shown on invoices"
+        decimal(12,2) qty_1 FK "shown on invoices"
+        uuid created_at_2 UK "legacy field"
+    }
+    USER["User"] {
+        int id PK "surrogate key"
+        boolean notes_0 "ISO 4217"
+        varchar(255) label_1
+        int name_2 FK "legacy field"
+        text status_3 FK "shown on invoices"
+    }
+    ROLE {
+        int id PK "surrogate key"
+        decimal(12,2) ref_0
+        string[] status_1 "required"
+    }
+    PERMISSION {
+        int id PK "surrogate key"
+        string external_id_0 "required"
+        datetime name_1 UK
+        text amount_2 FK
+        text qty_3 PK, FK "legacy field"
+        string[] amount_4 PK, FK "ISO 4217"
+    }
+    USER_ROLE {
+        int id PK "surrogate key"
+        date ref_0
+        varchar(255) qty_1 UK
+        string status_2
+        uuid created_at_3 UK
+        decimal(12,2) name_4 PK, FK
+    }
+    AUDIT_LOG {
+        int id PK "surrogate key"
+        text external_id_0
+        boolean code_1 PK, FK
+        datetime created_at_2 FK "ISO 4217"
+    }
+    NOTIFICATION {
+        int id PK "surrogate key"
+        date qty_0
+        text ref_1 FK "shown on invoices"
+        string[] ref_2 "shown on invoices"
+        varchar(255) qty_3 FK
+        date amount_4
+        decimal(12,2) ref_5
+        uuid qty_6 FK "required"
+    }
+    EMAIL_TEMPLATE {
+        int id PK "surrogate key"
+        text name_0
+        boolean status_1
+        boolean name_2 "indexed"
+        boolean amount_3 "legacy field"
+        string status_4 FK "required"
+        uuid status_5 PK, FK "indexed"
+        uuid qty_6
+    }
+    SETTING {
+        int id PK "surrogate key"
+        date status_0
+        string[] status_1
+    }
+    TAX_RATE {
+        int id PK "surrogate key"
+        int external_id_0 "ISO 4217"
+        int ref_1 UK "indexed"
+        int code_2 FK
+    }
+    CURRENCY["Currency"] {
+        int id PK "surrogate key"
+        uuid ref_0
+        text status_1 FK
+        string amount_2 UK "ISO 4217"
+        datetime ref_3
+    }
+    EXCHANGE_RATE {
+        int id PK "surrogate key"
+        date amount_0
+        date name_1 FK
+    }
+    COUNTRY {
+        int id PK "surrogate key"
+        string[] label_0
+        boolean notes_1 UK "shown on invoices"
+        string created_at_2 FK "ISO 4217"
+        boolean qty_3 PK, FK
+        int ref_4
+        string notes_5 "required"
+    }
+    REGION {
+        int id PK "surrogate key"
+        datetime external_id_0
+        string label_1 FK
+        boolean code_2 PK, FK
+    }
+    API_KEY {
+        int id PK "surrogate key"
+        string code_0
+        int notes_1 UK
+        date qty_2 "ISO 4217"
+    }
+    WEBHOOK {
+        int id PK "surrogate key"
+        int label_0
+        datetime qty_1 "shown on invoices"
+        uuid ref_2 "legacy field"
+        text external_id_3 PK, FK "legacy field"
+        uuid created_at_4 "required"
+        int label_5 FK "legacy field"
+        string code_6
+    }
+    WAREHOUSE |o--o{ GOODS_RECEIPT : "belongs to"
+    LABEL_TEMPLATE |o--|| PRINT_JOB : "belongs to"
+    SUPPLIER |o--o{ CUSTOMER : ships
+    VEHICLE |o--o{ WEBHOOK : "is assigned"
+    REGION |o--o{ COUNTRY : ships
+    CURRENCY ||..|| WAREHOUSE : contains
+    PAYMENT ||..|{ GOODS_RECEIPT : contains
+    DISCOUNT }o..o{ CUSTOMER_CONTACT : "has many"
+    PERMISSION ||--|{ LABEL_TEMPLATE : "has many"
+    LABEL_TEMPLATE |o--o{ ROLE : "belongs to"
+    STOCK_MOVE ||..|{ SHIPMENT : "is assigned"
+    COUNTRY ||--|| PAYMENT_METHOD : ships
+    GOODS_RECEIPT ||--o{ PRICE_LIST : contains
+    PROMOTION ||--|{ DRIVER : "has many"
+    COUNTRY |o--o{ ORDER_LINE : bills
+    PRODUCT }o--o{ ROLE : places
+    PRICE_LIST ||--o{ EXCHANGE_RATE : "has many"
+    PAYMENT ||--o{ COUNTRY : bills
+    USER ||--|| CARRIER : bills
+    SUPPLIER ||..o{ SHIPMENT_ITEM : bills
+    STOCK_MOVE }o--o{ PALLET : "belongs to"
+    TAX_RATE }o--o{ ORDER : bills
+    DISCOUNT ||--|{ PURCHASE_ORDER : "is assigned"
+    PRODUCT ||--|| PROMOTION : places
+    INVOICE ||--|| TAX_RATE : "is assigned"
+    PACKAGING_TYPE }o--o{ SETTING : "is assigned"
+    INVOICE |o--|| ORDER_LINE : bills
+    PRODUCT_CATEGORY |o..o{ STOCK_MOVE : places
+    ROLE ||--|| ORDER : "belongs to"
+    TAX_RATE |o--o{ PALLET : "has many"
+    style CUSTOMER fill:#f97316
+    classDef hot fill:#f00
+    %% trailing comment

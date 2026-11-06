@@ -13,6 +13,41 @@ from distr.core.db.time import utc_now_naive
 
 Base = declarative_base()
 
+class IncomingProposalDismissal(Base):
+    """Durable user decisions, separate from the disposable triage cache."""
+    __tablename__ = 'incoming_proposal_dismissals'
+
+    key = Column(String, primary_key=True)
+    conversation_key = Column(String, nullable=False, index=True)
+    message_ids = Column(Text, nullable=False, default='[]')
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    # Plain-text snapshot so "Recently dismissed" can name it after a restart (nullable: legacy rows).
+    title = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    # NOTE: a nullable ``snapshot`` TEXT column (full redacted proposal JSON for Undo) is
+    # added by migrations.ensure_incoming_dismissal_snapshot_columns and read/written
+    # with raw SQL only when present. It is deliberately NOT mapped here so ORM
+    # inserts/selects work on databases that have not run the migration yet.
+
+
+class IncomingProposalRestoration(Base):
+    """Explicitly restored proposals survive disposable triage and process restarts."""
+    __tablename__ = 'incoming_proposal_restorations'
+
+    key = Column(String, primary_key=True)
+    snapshot = Column(Text, nullable=False)
+    restored_at = Column(DateTime, nullable=False, default=utc_now_naive)
+
+
+class IncomingProposalSnapshot(Base):
+    """First local work snapshot, retained through expiry and process restarts."""
+    __tablename__ = 'incoming_proposal_snapshots'
+
+    key = Column(String, primary_key=True)
+    snapshot = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+
+
 class Settings(Base):
     __tablename__ = 'settings'
 
@@ -29,6 +64,7 @@ class Settings(Base):
     show_about = Column(Boolean, default=True)
     notification_sound = Column(String, default='bell')
     incoming_proposal_sound_enabled = Column(Boolean, default=True)
+    incoming_proposals_auto_accept = Column(Boolean, default=False)
     welcome_greet_me = Column(Boolean, default=True)
     telegram_send_online_notice = Column(Boolean, default=False)
     load_on_startup = Column(Boolean, default=True)
@@ -608,6 +644,7 @@ class WhatsAppPhoneLink(Base):
     """Link a WhatsApp phone JID to a Ticket Board.
     When a number is linked, its messages show up in the board's WhatsApp tab,
     and Automations can create approved intake tickets from linked messages.
+    One chat identity (phone_jid) maps to at most one link row.
     """
     __tablename__ = 'whatsapp_phone_links'
 
@@ -618,6 +655,10 @@ class WhatsAppPhoneLink(Base):
     contact_name = Column(String)  # display name from WhatsApp contacts
     auto_snapshot = Column(Boolean, default=False)  # auto-create ticket on new message?
     created_date = Column(DateTime, default=utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint('phone_jid', name='uq_whatsapp_phone_links_phone_jid'),
+    )
 
 
 class WhatsAppComposeDraft(Base):
@@ -813,6 +854,7 @@ try:
                 # Notification sound choice (see distr.core.notification_sounds)
                 ("notification_sound", "VARCHAR DEFAULT 'bell'"),
                 ("incoming_proposal_sound_enabled", "BOOLEAN DEFAULT 1"),
+                ("incoming_proposals_auto_accept", "BOOLEAN DEFAULT 0"),
                 # Monk Mode
                 ("monk_mode_enabled", "BOOLEAN DEFAULT 0"),
                 ("monk_sites", "TEXT DEFAULT '[]'"),

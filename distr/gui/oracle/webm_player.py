@@ -10,9 +10,10 @@ Requirements: 4.3, 4.4, 4.5
 from __future__ import annotations
 
 import time
+from threading import Event
 from typing import List, Tuple
 
-from PyQt6.QtCore import QObject, QSize, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QRunnable, QSize, QThreadPool, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 
 
@@ -156,7 +157,7 @@ def _apply_chroma_key_to_image(qimg: QImage, key_rgb: tuple, threshold: int = 35
     return QImage(pixels.data, w, h, w * 4, QImage.Format.Format_ARGB32).copy()
 
 
-def _extract_frames_imageio(path: str) -> Tuple[List[QImage], float]:
+def _extract_frames_imageio(path: str, prepare_frame=None) -> Tuple[List[QImage], float]:
     """Extract frames from a WebM file using *imageio*.
 
     Returns ``(list_of_QImage, fps)``.
@@ -171,7 +172,8 @@ def _extract_frames_imageio(path: str) -> Tuple[List[QImage], float]:
     if hasattr(props, "fps") and props.fps:
         fps = float(props.fps)
 
-    for frame_np in iio.imread(path, plugin="pyav"):
+    # Iterate instead of materialising the whole full-resolution video.
+    for frame_np in iio.imiter(path, plugin="pyav"):
         frame_np = np.ascontiguousarray(frame_np)
         h, w = frame_np.shape[:2]
         channels = frame_np.shape[2] if frame_np.ndim == 3 else 1
@@ -184,12 +186,12 @@ def _extract_frames_imageio(path: str) -> Tuple[List[QImage], float]:
             fmt = QImage.Format.Format_Grayscale8
 
         qimg = QImage(frame_np.data, w, h, frame_np.strides[0], fmt).copy()
-        frames.append(qimg)
+        frames.append(prepare_frame(qimg) if prepare_frame else qimg)
 
     return frames, fps
 
 
-def _extract_frames_cv2(path: str) -> Tuple[List[QImage], float]:
+def _extract_frames_cv2(path: str, prepare_frame=None) -> Tuple[List[QImage], float]:
     """Fallback frame extraction using *cv2.VideoCapture*."""
     import cv2
 
@@ -197,22 +199,23 @@ def _extract_frames_cv2(path: str) -> Tuple[List[QImage], float]:
     fps = cap.get(cv2.CAP_PROP_FPS) or _DEFAULT_FPS
     frames: List[QImage] = []
 
-    while True:
-        ret, frame_bgr = cap.read()
-        if not ret:
-            break
-        # BGR → RGB
-        import numpy as np
+    try:
+        while True:
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+            # BGR → RGB
+            import numpy as np
 
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        frame_rgb = np.ascontiguousarray(frame_rgb)
-        h, w, ch = frame_rgb.shape
-        qimg = QImage(
-            frame_rgb.data, w, h, frame_rgb.strides[0], QImage.Format.Format_RGB888
-        ).copy()
-        frames.append(qimg)
-
-    cap.release()
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            frame_rgb = np.ascontiguousarray(frame_rgb)
+            h, w, ch = frame_rgb.shape
+            qimg = QImage(
+                frame_rgb.data, w, h, frame_rgb.strides[0], QImage.Format.Format_RGB888
+            ).copy()
+            frames.append(prepare_frame(qimg) if prepare_frame else qimg)
+    finally:
+        cap.release()
     return frames, fps
 
 
@@ -223,10 +226,81 @@ def _extract_frames_cv2(path: str) -> Tuple[List[QImage], float]:
 _DEFAULT_INTERVAL_MS = 66  # ~15 fps fallback and maximum render rate
 
 
+class _DecodeSignals(QObject):
+    first_frame = pyqtSignal(int, QImage)
+    next_frame = pyqtSignal(int, QImage)
+    finished = pyqtSignal(int, object, float)
+
+
+class _DecodeCancelled(Exception):
+    pass
+
+
+class _DecodeTask(QRunnable):
+    """Decode QImages only. QPixmaps and playback stay on the GUI thread."""
+
+    def __init__(self, generation, path, size, dpr, key, threshold):
+        super().__init__()
+        self.signals = _DecodeSignals()
+        self.cancelled = Event()
+        self.generation, self.path = generation, path
+        self.size, self.dpr, self.key, self.threshold = size, dpr, key, threshold
+
+    def run(self):
+        first = True
+        effective_key = self.key
+
+        def prepare(image):
+            nonlocal first, effective_key
+            if self.cancelled.is_set():
+                raise _DecodeCancelled()
+            if first and self.key is not None:
+                effective_key = _sample_background_color(image)
+            if effective_key is not None:
+                image = _apply_chroma_key_to_image(image, effective_key, self.threshold)
+            if self.size is not None:
+                image = image.scaled(
+                    QSize(max(1, int(self.size.width() * self.dpr)),
+                          max(1, int(self.size.height() * self.dpr))),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            if first:
+                self.signals.first_frame.emit(self.generation, image)
+                first = False
+            else:
+                self.signals.next_frame.emit(self.generation, image)
+            return image
+
+        try:
+            if self.cancelled.is_set():
+                return
+            try:
+                images, fps = _extract_frames_imageio(self.path, prepare_frame=prepare)
+            except _DecodeCancelled:
+                return
+            except Exception:
+                first, effective_key = True, self.key
+                images, fps = _extract_frames_cv2(self.path, prepare_frame=prepare)
+            if not self.cancelled.is_set():
+                self.signals.finished.emit(self.generation, images, fps)
+        except _DecodeCancelled:
+            pass
+        except Exception:
+            if not self.cancelled.is_set():
+                self.signals.finished.emit(self.generation, [], _DEFAULT_FPS)
+
+
+# Serial decoding bounds transient video memory. Foreground loads take priority
+# over queued preloads without ever blocking the Qt event loop.
+_decode_pool = None
+
+
 class WebMPlayer(QObject):
     """Plays WebM animations with ping-pong looping via frame extraction."""
 
     frame_ready = pyqtSignal(QPixmap)
+    loaded = pyqtSignal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -242,10 +316,73 @@ class WebMPlayer(QObject):
         self._last_advance_at: float | None = None
         self._size: QSize | None = None
         self._device_pixel_ratio: float = 1.0
+        self._decode_generation = 0
+        self._decode_task = None
+        self._play_requested = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @property
+    def memory_bytes(self) -> int:
+        """Decoded pixel storage, including physical pixels on Retina screens."""
+        return sum(frame.width() * frame.height() * frame.depth() // 8
+                   for frame in self._frames)
+
+    def release_frames(self) -> None:
+        """Release evicted pixels now rather than waiting for Qt's event loop."""
+        self.stop()
+        self._cancel_decode()
+        self._frames = []
+        self._source_images = []
+
+    def _cancel_decode(self):
+        self._decode_generation += 1
+        if self._decode_task is not None:
+            self._decode_task.cancelled.set()
+            self._decode_task = None
+
+    def load_async(self, webm_path, playback="pingpong", chroma_key=None,
+                   chroma_threshold=35, *, priority=1):
+        """Show the first decoded frame without waiting for the whole clip."""
+        global _decode_pool
+        self.release_frames()
+        self._current_index, self._forward = 0, True
+        self._pingpong = playback == "pingpong"
+        task = _DecodeTask(self._decode_generation, webm_path, self._size,
+                           self._device_pixel_ratio, chroma_key, chroma_threshold)
+        task.signals.first_frame.connect(self._on_decoded_first_frame)
+        task.signals.next_frame.connect(self._on_decoded_next_frame)
+        task.signals.finished.connect(self._on_decoded_frames)
+        self._decode_task = task
+        if _decode_pool is None:
+            _decode_pool = QThreadPool()
+            _decode_pool.setMaxThreadCount(1)
+        _decode_pool.start(task, priority)
+
+    def _on_decoded_first_frame(self, generation, image):
+        if generation != self._decode_generation:
+            return
+        self._source_images = [image]
+        self._rebuild_frames()
+        if self._play_requested:
+            self.play()
+
+    def _on_decoded_next_frame(self, generation, image):
+        if generation == self._decode_generation:
+            self._frames.append(self._display_frame(image))
+
+    def _on_decoded_frames(self, generation, images, fps):
+        if generation != self._decode_generation:
+            return
+        self._decode_task = None
+        # Frames have already been delivered in order on the GUI thread.
+        # Do not rebuild the entire clip here and stall its playback again.
+        self._interval_ms = max(_DEFAULT_INTERVAL_MS, int(1000.0 / fps)) if fps > 0 else _DEFAULT_INTERVAL_MS
+        if self._play_requested:
+            self.play()
+        self.loaded.emit()
 
     def load(self, webm_path: str, playback: str = "pingpong",
              chroma_key: tuple | None = None, chroma_threshold: int = 35) -> None:
@@ -255,6 +392,7 @@ class WebMPlayer(QObject):
         during frame extraction so the resulting pixmaps have transparency.
         """
         self.stop()
+        self._cancel_decode()
         self._frames = []
         self._source_images = []
         self._current_index = 0
@@ -263,27 +401,37 @@ class WebMPlayer(QObject):
 
         qimages: List[QImage] = []
         fps = _DEFAULT_FPS
+        effective_key = chroma_key
+        first_frame = True
+
+        def prepare_frame(image):
+            nonlocal effective_key, first_frame
+            if first_frame and chroma_key is not None:
+                effective_key = _sample_background_color(image)
+            first_frame = False
+            if effective_key is not None:
+                image = _apply_chroma_key_to_image(image, effective_key, chroma_threshold)
+            if self._size is not None:
+                image = image.scaled(
+                    QSize(max(1, int(self._size.width() * self._device_pixel_ratio)),
+                          max(1, int(self._size.height() * self._device_pixel_ratio))),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            return image
+
         try:
-            qimages, fps = _extract_frames_imageio(webm_path)
+            qimages, fps = _extract_frames_imageio(webm_path, prepare_frame=prepare_frame)
         except Exception:
             try:
-                qimages, fps = _extract_frames_cv2(webm_path)
+                first_frame = True
+                effective_key = chroma_key
+                qimages, fps = _extract_frames_cv2(webm_path, prepare_frame=prepare_frame)
             except Exception:
                 return
 
         if not qimages:
             return
-
-        # Auto-detect background color from first frame if chroma_key is provided
-        # This handles files where the background color differs from the skin config value
-        effective_key = chroma_key
-        if chroma_key is not None:
-            effective_key = _sample_background_color(qimages[0])
-
-        # Apply chroma-key removal if configured (done once at load time)
-        if effective_key is not None:
-            qimages = [_apply_chroma_key_to_image(img, effective_key, chroma_threshold)
-                       for img in qimages]
 
         self._source_images = qimages
         self._rebuild_frames()
@@ -295,6 +443,7 @@ class WebMPlayer(QObject):
 
     def play(self) -> None:
         """Start the ping-pong playback loop."""
+        self._play_requested = True
         if not self._frames:
             return
         # Emit the first frame immediately
@@ -304,6 +453,7 @@ class WebMPlayer(QObject):
 
     def stop(self) -> None:
         """Stop playback."""
+        self._play_requested = False
         self._timer.stop()
         self._last_advance_at = None
 
@@ -334,7 +484,11 @@ class WebMPlayer(QObject):
         steps, self._last_advance_at = elapsed_frame_steps(
             self._last_advance_at, now, self._interval_ms
         )
-        if self._pingpong:
+        if self._decode_task is not None:
+            # The end of the available buffer is not the end of the clip.
+            # Wait there for more frames instead of reversing or looping early.
+            self._current_index = min(self._current_index + steps, len(self._frames) - 1)
+        elif self._pingpong:
             steps %= max(1, 2 * (len(self._frames) - 1))
             for _ in range(steps):
                 self._current_index, self._forward = advance_pingpong(
@@ -346,30 +500,25 @@ class WebMPlayer(QObject):
 
     def _rebuild_frames(self) -> None:
         """Rebuild display frames from original decoded images."""
-        rebuilt: List[QPixmap] = []
-        target_size = self._size
-        dpr = max(1.0, float(self._device_pixel_ratio or 1.0))
         # The decoded source video can be hundreds of megabytes even for a
         # tiny 80px oracle.  Use existing pixmaps as resize sources after the
         # initial build, then release decoded QImages instead of retaining two
         # full frame sets for the lifetime of the app.
         source_images = self._source_images or [px.toImage() for px in self._frames]
-        for qimg in source_images:
-            out = qimg
-            if target_size is not None:
-                physical_size = QSize(
-                    max(1, int(target_size.width() * dpr)),
-                    max(1, int(target_size.height() * dpr)),
-                )
-                out = out.scaled(
-                    physical_size,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            px = QPixmap.fromImage(out)
-            px.setDevicePixelRatio(dpr)
-            rebuilt.append(px)
-        self._frames = rebuilt
+        self._frames = [self._display_frame(image) for image in source_images]
         self._source_images = []
         if self._frames:
             self._current_index = max(0, min(self._current_index, len(self._frames) - 1))
+
+    def _display_frame(self, image):
+        dpr = max(1.0, float(self._device_pixel_ratio or 1.0))
+        if self._size is not None:
+            image = image.scaled(
+                QSize(max(1, int(self._size.width() * dpr)),
+                      max(1, int(self._size.height() * dpr))),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        pixmap = QPixmap.fromImage(image)
+        pixmap.setDevicePixelRatio(dpr)
+        return pixmap

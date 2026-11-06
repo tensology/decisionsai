@@ -400,14 +400,18 @@ class CliHarnessTurnRuntime:
         )
         token.raise_if_cancelled()
         result = handle.result
+        from distr.core.project_cli_backends.contracts import normalize_execution_result
+
+        outcome = normalize_execution_result(result)
         return TurnResult(
-            success=bool(result and result.success),
+            success=outcome.success,
+            status=outcome.status,
             runtime_id=self.runtime_id,
             backend_id=route.backend_id,
             model=route.model,
             output=str((result.output if result else "") or ""),
-            error=str((result.error if result else "") or ""),
-            waits_for_human=bool(result and result.waits_for_human),
+            error=outcome.error,
+            waits_for_human=outcome.waits_for_human,
             execution_session_id=handle.execution_session_id,
             evidence={**dict(getattr(handle, "evidence", {}) or {}),
                       **({"proposal_error": (getattr(result, "diagnostics", {}) or {}).get("proposal_error")}
