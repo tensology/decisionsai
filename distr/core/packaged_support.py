@@ -45,6 +45,9 @@ def _read_json(url):
 
 def _diagnose(root: Path):
     messages = []
+    from distr.core.paths import user_data_root
+    if not (user_data_root() / "models/kokoro-v1.0.onnx").is_file():
+        messages.append("Local voice output is not installed. Use Speech engine > Download optional Kokoro local voice, or configure a cloud voice in Settings. Nothing is downloaded automatically.")
     # Own only the child started here. Never stop a pre-existing sidecar.
     try:
         _read_json("http://127.0.0.1:11435/health")

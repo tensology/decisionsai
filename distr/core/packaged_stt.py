@@ -63,7 +63,9 @@ def download_model(engine, progress, cancelled):
                 progress(received, total)
         if received != total or sha.hexdigest() != meta["sha256"]:
             raise ValueError("Model checksum or size mismatch; no model activated")
-        if engine in ("vosk", "optional_media"):
+        if cancelled.is_set():
+            raise InterruptedError("Download cancelled; no model activated")
+        if engine in ("vosk", "optional_media", "kokoro"):
             extracted = Path(temporary) / "extracted"
             with zipfile.ZipFile(archive) as stream:
                 members = stream.infolist()
@@ -74,6 +76,12 @@ def download_model(engine, progress, cancelled):
                     if not dest.is_relative_to(extracted.resolve()):
                         raise ValueError("Unsafe model archive")
                 stream.extractall(extracted)
+            if engine == "kokoro":
+                from distr.core.paths import user_data_root
+                if not (extracted / "kokoro-v1.0.onnx").is_file() or not (extracted / "voices-v1.0.bin").is_file():
+                    raise ValueError("Incomplete local voice payload")
+                shutil.copytree(extracted, user_data_root() / "models", dirs_exist_ok=True)
+                return str(user_data_root() / "models")
             if engine == "optional_media":
                 from distr.core.paths import user_data_root
                 shutil.copytree(extracted, user_data_root() / "assets", dirs_exist_ok=True)
@@ -94,9 +102,9 @@ def download_model(engine, progress, cancelled):
         return str(target)
 
 
-def choose_stt(*, force=False, media_only=False):
+def choose_stt(*, force=False, media_only=False, voice_only=False):
     """First-run dialog and later menu action. Downloads begin only on a click."""
-    if selected_model() and not force and not media_only:
+    if selected_model() and not force and not media_only and not voice_only:
         return
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QPushButton, QProgressBar
@@ -115,6 +123,11 @@ def choose_stt(*, force=False, media_only=False):
         engine.addItem("Optional avatars, intro and sounds (~119 MB)", "optional_media")
         label.setText("Optional visual media and sounds are not bundled. Click Download to install them into Application Support. The basic app works without this pack.")
         dialog.setWindowTitle("DecisionsAI — optional media")
+    if voice_only:
+        engine.clear()
+        engine.addItem("Kokoro local voice (separate optional download)", "kokoro")
+        label.setText("Local voice output requires Kokoro weights (~354 MB uncompressed). Click Download to install them in Application Support, or configure a cloud voice in Settings instead.")
+        dialog.setWindowTitle("DecisionsAI — optional local voice")
     layout.addWidget(engine)
     bar = QProgressBar()
     layout.addWidget(bar)
@@ -158,6 +171,10 @@ def choose_stt(*, force=False, media_only=False):
         threading.Thread(target=worker, daemon=True, name="speech-model-download").start()
         timer.start(100)
     start.clicked.connect(begin)
+    # Installer smoke runs have an isolated HOME/data root and intentionally skip
+    # optional downloads. Real first launch never chooses or downloads silently.
+    if os.environ.get("DECISIONSAI_SMOKE_TEST") == "1" and os.environ.get("DECISIONS_DATA_DIR"):
+        QTimer.singleShot(100, dialog.reject)
     dialog.exec()
     cancel.set()
 
@@ -177,4 +194,7 @@ def install_speech_menu(app):
     media = QAction("Download optional avatars and sounds…", menu)
     media.triggered.connect(lambda: choose_stt(force=True, media_only=True))
     speech.addAction(media)
+    voice = QAction("Download optional Kokoro local voice…", menu)
+    voice.triggered.connect(lambda: choose_stt(force=True, voice_only=True))
+    speech.addAction(voice)
     app._speech_menu = menu

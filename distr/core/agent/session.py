@@ -603,6 +603,9 @@ class AgentSession:
         """Create STT service based on configuration"""
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
         models_dir = os.path.join(base_dir, "distr", "core", "agent", "models")
+        if getattr(sys, "frozen", False):
+            from distr.core.paths import user_data_root
+            models_dir = str(user_data_root() / "models")
 
         # Clean up old STT service before creating new one
         # CRITICAL: Preserve hands-free and PTT state before cleanup
@@ -836,6 +839,9 @@ class AgentSession:
 
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
         models_dir = os.path.join(base_dir, "distr", "core", "agent", "models")
+        if getattr(sys, "frozen", False):
+            from distr.core.paths import user_data_root
+            models_dir = str(user_data_root() / "models")
 
         # Create ChatManager for agent process
         # This ensures we have a database connection and can manage chats
@@ -1289,6 +1295,9 @@ class AgentSession:
         from . import service_factory
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
         models_dir = os.path.join(base_dir, "distr", "core", "agent", "models")
+        if getattr(sys, "frozen", False):
+            from distr.core.paths import user_data_root
+            models_dir = str(user_data_root() / "models")
         # Build a settings dict with _event_queue so the factory can pass it through
         factory_settings = dict(self.settings)
         factory_settings['_event_queue'] = self.event_queue

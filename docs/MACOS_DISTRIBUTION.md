@@ -59,9 +59,9 @@ No Whisper/Vosk model is bundled. First launch prompts for Vosk small English
 (~40 MB) or Whisper base.en (~148 MB), or **Not now**. The explicit Download button
 shows byte progress; failed/cancelled downloads do not activate a model. Later,
 the native **Speech engine** menu can change/download the engine or the optional
-avatar/media pack. SHA-256 and size are checked before activation; Vosk archives
+avatar/media pack and optional Kokoro local voice (~354 MB uncompressed). SHA-256 and size are checked before activation; Vosk archives
 are path-validated before extraction. The mirror manifest lives at
-`/downloads/models/manifest.json`, keys `vosk`, `whisper`, `optional_media`, each
+`/downloads/models/manifest.json`, keys `vosk`, `whisper`, `optional_media`, `kokoro`, each
 with HTTPS `url`, `bytes` and `sha256`. Models live in Application Support under
 `models/speech`; media goes under `assets`. Existing developer models are untouched.
 No local model choice means the voice worker does not start.
@@ -73,6 +73,11 @@ languages and is generally preferable on difficult audio, with larger models and
 more computation. This release offers **English defaults**, not a multilingual
 accuracy guarantee. Accuracy was not benchmarked on Paul's speech in this job.
 Official Whisper model source: https://huggingface.co/ggerganov/whisper.cpp .
+
+Local ignored model inventory: Vosk full English 2,865,977,882 bytes; Qwen3-TTS
+2,498,389,744 bytes; Kokoro ONNX 325,532,387 bytes; voices 28,214,398 bytes.
+None are bundled. Qwen remains an advanced optional provider, not mirrored or
+automatically provisioned by this first-release installer.
 
 The 5.3 GB local `distr/core/agent/models` directory was already ignored, not
 tracked. Tracked tree measured 247,509,074 bytes before cleanup; optional assets

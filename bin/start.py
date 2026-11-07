@@ -163,6 +163,7 @@ if __name__ == "__main__" and getattr(sys, "frozen", False):
             raise SystemExit(0)
     os.environ["DECISIONS_DOCK_APP"] = "1"
     os.environ["DECISIONS_AI_SKIP_MODEL_PREFETCH"] = "1"
+    os.environ.setdefault("DECISIONS_MEMPALACE_MEMORY_BACKEND", "0")
 
 
 
@@ -226,7 +227,8 @@ if PROJECT_ROOT not in sys.path:
 try:
     from distr.core.launch_env import bootstrap_gui_launch_environment
 
-    bootstrap_gui_launch_environment()
+    if not getattr(sys, "frozen", False):
+        bootstrap_gui_launch_environment()
 except Exception:
     pass
 

@@ -1245,6 +1245,11 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         """Play the intro video in its own process so app startup cannot freeze it."""
         if self._startup_splash_process is not None:
             return
+        if getattr(sys, "frozen", False):
+            # sys.executable is the app bootloader, not a Python CLI. Spawning
+            # a .py path would recursively launch another DecisionsAI instance.
+            self._maybe_show_about_window()
+            return
         try:
             import subprocess
             import sys

@@ -92,6 +92,7 @@ def main() -> int:
             "DECISIONS_SKIP_UI_SCREEN_CAPTURE": "1",
             "DECISIONS_WEB_PORT": str(web_port),
             "QT_QPA_PLATFORM": "offscreen",
+            "DECISIONSAI_SMOKE_TEST": "1",
         }
         if not args.allow_harness_maintenance:
             env["DECISIONSAI_SKIP_HARNESS_STACK_SETUP"] = "1"
