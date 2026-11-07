@@ -1,3 +1,4 @@
+import sys
 """Agent process lifecycle mixin for the Application class.
 
 Handles starting, stopping, reloading, health-checking, and communicating
@@ -479,6 +480,11 @@ class AgentLifecycleMixin:
 
     def start_agent_session(self, skip_welcome=False, chat_id=None):
         """Start the agent session in a separate process."""
+        if getattr(sys, "frozen", False):
+            from distr.core.packaged_stt import selected_model
+            if not selected_model():
+                logger.warning("Voice is disabled until you choose and download a speech engine from the Speech engine menu.")
+                return
         from distr.app.agent_worker import run_agent_session
 
         try:

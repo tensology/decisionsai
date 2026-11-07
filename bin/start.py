@@ -27,6 +27,18 @@ if __name__ == "__main__" and any(flag in sys.argv[1:] for flag in ("-h", "--hel
     print(STARTUP_HELP, end="")
     raise SystemExit(0)
 
+if __name__ == "__main__" and "--bundle-self-test" in sys.argv:
+    import json
+    from pathlib import Path
+    import PyQt6.QtCore
+    import sqlite3
+    root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+    print(json.dumps({"frozen": bool(getattr(sys, "frozen", False)),
+                      "executable": sys.executable, "resource_root": str(root),
+                      "python": sys.version.split()[0], "qt": PyQt6.QtCore.QT_VERSION_STR,
+                      "assets": (root / "assets").is_dir()}))
+    raise SystemExit(0)
+
 # On Windows, prevent ALL child processes from flashing a console window.
 # This patches subprocess.Popen to always use CREATE_NO_WINDOW.
 if sys.platform == 'win32':
@@ -141,6 +153,18 @@ import multiprocessing
 # freeze_support() MUST be called at module level before any other code on Windows
 # to handle the multiprocessing spawn bootstrap correctly.
 multiprocessing.freeze_support()
+
+if __name__ == "__main__" and getattr(sys, "frozen", False):
+    import socket
+    with socket.socket() as probe:
+        probe.settimeout(0.3)
+        if probe.connect_ex(("127.0.0.1", int(os.environ.get("DECISIONS_WEB_PORT", "8765")))) == 0:
+            print("DecisionsAI is already running on this port. Quit it explicitly before opening another copy.")
+            raise SystemExit(0)
+    os.environ["DECISIONS_DOCK_APP"] = "1"
+    os.environ["DECISIONS_AI_SKIP_MODEL_PREFETCH"] = "1"
+
+
 
 
 def _run_database_maintenance_if_requested():
@@ -455,6 +479,7 @@ if __name__ == "__main__":
     from distr.app.main import run
     skip_kill = (
         "--skip-kill-existing" in sys.argv
+        or bool(getattr(sys, "frozen", False))
         or os.environ.get("DECISIONS_RESTARTING") == "1"
     )
     if skip_kill:

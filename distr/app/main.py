@@ -382,6 +382,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     
     def __init__(self, argv):
         super().__init__(argv)
+        if getattr(sys, "frozen", False):
+            from distr.core.packaged_stt import choose_stt
+            choose_stt()
         self._startup_exit_intent = clear_exit_intent()
         append_runtime_event(
             "app_start",
@@ -415,7 +418,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Also kill any detached DecisionsAI leftovers not covered by tracked worker PID file.
         try:
             from distr.core.process_tracker import kill_rogue_decisions_processes as _kill_rogue
-            _kill_rogue()
+            if not getattr(sys, "frozen", False):
+                _kill_rogue()
         except Exception as _rogue_err:
             logging.getLogger(__name__).debug("rogue process cleanup failed: %s", _rogue_err)
 
@@ -2290,6 +2294,9 @@ def run():
     logger.info("Starting application")
     
     app = Application(sys.argv)
+    if getattr(sys, "frozen", False):
+        from distr.core.packaged_support import schedule_packaged_support
+        schedule_packaged_support(app)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

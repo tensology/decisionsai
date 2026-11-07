@@ -77,11 +77,21 @@ if [ "$RELEASE" -eq 1 ]; then
     command -v xcrun >/dev/null 2>&1 || { printf 'xcrun is required for release builds.\n' >&2; exit 1; }
 fi
 
+# Never package an operator's dirty worktree or local credentials. The release
+# source is an archive of the committed revision, not a checkout or runtime dependency.
+case "$BUILD_DIR" in "$PROJECT_ROOT/installer/build"|*/decisionsai-build-*) ;; *)
+    printf 'Unsafe build directory; use installer/build or a decisionsai-build-* path.\n' >&2; exit 1;; esac
 rm -rf "$BUILD_DIR"
 mkdir -p "$DIST_DIR" "$WORK_DIR" "$SPEC_DIR" "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR/$APP_NAME.app"
 rm -f "$OUTPUT_DIR/$APP_NAME-$VERSION.dmg" "$OUTPUT_DIR/SHA256SUMS"
 
+SOURCE_ROOT="$BUILD_DIR/source"
+mkdir -p "$SOURCE_ROOT"
+git -C "$PROJECT_ROOT" archive HEAD | tar -x -C "$SOURCE_ROOT"
+SOURCE_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+PROJECT_ROOT="$SOURCE_ROOT"
+printf '%s\n' "$SOURCE_COMMIT" > "$OUTPUT_DIR/SOURCE_COMMIT"
 # Bundle application resources, but never copy mutable user data, downloaded
 # models, caches, logs, or scratch files into a release artifact.
 DATA_DIR="$BUILD_DIR/data"
@@ -96,12 +106,19 @@ rsync -a \
     --exclude '*.pyc' \
     --exclude 'core/agent/models/' \
     --exclude 'core/db/tool_embeddings_cache.json' \
-    --exclude 'db/' \
     --exclude 'recordings/' \
     "$PROJECT_ROOT/distr/" "$DATA_DIR/distr/"
 # Includes distr/seed-corpus-pack (MemPalace wing seed_corpus_pack; first-run mine).
 # Do not rsync chroma DBs — mine on first run into ~/.decisions/mempalace/palace.
 
+# Ship the sidecar binary, never require Go on a customer's Mac.
+SIDECAR_ARGS=()
+if command -v go >/dev/null 2>&1; then
+    (cd "$PROJECT_ROOT/sidecar" && go build -ldflags="-s -w" -o "$DATA_DIR/decisionsai-sidecar" .)
+    SIDECAR_ARGS=(--add-binary "$DATA_DIR/decisionsai-sidecar:.")
+else
+    printf 'WARNING: Go unavailable; app will report desktop sidecar unavailable.\n' >&2
+fi
 cd "$PROJECT_ROOT"
 "$PYTHON_BIN" -m PyInstaller \
     --noconfirm \
@@ -119,6 +136,7 @@ cd "$PROJECT_ROOT"
     --add-data "$PROJECT_ROOT/README.md:." \
     --add-data "$PROJECT_ROOT/LICENSE.md:." \
     --add-data "$PROJECT_ROOT/requirements.txt:." \
+    "${SIDECAR_ARGS[@]}" \
     --hidden-import PyQt6.QtCore \
     --hidden-import PyQt6.QtGui \
     --hidden-import PyQt6.QtWidgets \
@@ -154,6 +172,8 @@ set_plist() {
     /usr/libexec/PlistBuddy -c "Set :$1 $2" "$PLIST" 2>/dev/null || \
         /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$PLIST"
 }
+set_plist CFBundleName "$APP_NAME"
+set_plist CFBundleDisplayName "$APP_NAME"
 set_plist CFBundleIdentifier "$BUNDLE_ID"
 set_plist CFBundleShortVersionString "$VERSION"
 set_plist CFBundleVersion "$VERSION"
@@ -165,8 +185,10 @@ set_plist NSScreenCaptureUsageDescription "Decisions captures the screen to see 
 
 if [ "$RELEASE" -eq 1 ]; then
     codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$BUILT_APP"
-    codesign --verify --deep --strict --verbose=2 "$BUILT_APP"
+else
+    codesign --force --deep --sign - "$BUILT_APP"
 fi
+codesign --verify --deep --strict --verbose=2 "$BUILT_APP"
 
 ditto "$BUILT_APP" "$OUTPUT_DIR/$APP_NAME.app"
 if [ "$RELEASE" -eq 1 ]; then
@@ -199,5 +221,5 @@ fi
 
 printf 'Built DecisionsAI %s at %s\n' "$VERSION" "$OUTPUT_DIR"
 if [ "$RELEASE" -eq 0 ]; then
-    printf 'Artifact is unsigned. Re-run with --release for distribution.\n'
+    printf 'Artifact is ad-hoc signed (NOT notarized). Gatekeeper-friendly distribution requires --release.\n'
 fi

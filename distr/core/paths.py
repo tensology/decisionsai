@@ -41,6 +41,13 @@ TOOL_ARTIFACTS_DIR = os.path.join(MODELS_DIR, "tool_artifacts")
 MESSAGE_BUS_MAPPING_PATH = os.path.join(MODELS_DIR, "integration_message_bus_mapping.json")
 
 ASSETS_DIR = os.path.join(CORE_DIR, "assets")
+if IS_FROZEN:
+    # Bundle contains only lightweight defaults; optional media goes in user data.
+    import shutil
+    _installed_assets = user_data_root() / "assets"
+    if not _installed_assets.exists():
+        shutil.copytree(ASSETS_DIR, _installed_assets)
+    ASSETS_DIR = str(_installed_assets)
 
 DB_DIR = os.environ.get("DECISIONS_DB_DIR") or os.path.join(DATA_DIR, "db")
 

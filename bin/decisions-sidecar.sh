@@ -53,6 +53,7 @@ decisions_start_sidecar() {
     fi
 
     if [ ! -f "$sidecar_bin" ]; then
+        echo "WARNING: Desktop sidecar unavailable. Install Go and rerun setup, or use the bundled macOS app. Accessibility tree tools are disabled." >&2
         return 0
     fi
 

@@ -203,3 +203,18 @@ clone/
 
 # Compiled macOS audio helper (rebuilt from bin/decisions_echo_helper.swift)
 /bin/decisions_echo_helper
+
+# DMG installer outputs and opt-in downloadable model/media payloads
+installer/build-audit/
+**/ggml-*.bin
+**/vosk-model*/
+**/vosk-model*.zip
+**/kokoro-*.onnx
+**/voices*.bin
+assets/**/*.webm
+assets/**/*.mp4
+assets/**/*.wav
+assets/**/*.mp3
+
+!docs/MACOS_DISTRIBUTION.md
+!scripts/update_site_downloads.py

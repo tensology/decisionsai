@@ -326,6 +326,13 @@ class AgentSession:
                 transcription_model = stt_engine
                 self.logger.debug(f"📝 STT Configuration: Using agent config fallback: '{transcription_model}'")
         
+        if getattr(sys, "frozen", False):
+            from distr.core.packaged_stt import selected_model
+            selection = selected_model()
+            if not selection:
+                raise RuntimeError("Choose and download a speech engine using the Speech engine menu before enabling voice.")
+            transcription_model = "Vosk" if selection["engine"] == "vosk" else "Whisper"
+
         self.logger.debug(f"📝 STT Configuration: transcription_model='{transcription_model}'")
         self.logger.debug(f"📝 STT Configuration: All settings keys: {list(self.settings.keys())}")
         self.logger.debug(f"📝 STT Configuration: input_speech='{self.settings.get('input_speech', 'NOT SET')}'")
@@ -663,6 +670,9 @@ class AgentSession:
                 stt_config['engine'] = 'vosk'
             else:
                 whisper_model = stt_config['model_path']
+                if getattr(sys, "frozen", False):
+                    from distr.core.packaged_stt import selected_model
+                    whisper_model = selected_model()["path"]
                 self.logger.info(f"🔧 Creating Whisper.cpp STT service with model: {whisper_model} (managed by pywhispercpp)")
                 self.stt_service = WhisperSTTService(
                     model_path=whisper_model,
@@ -675,6 +685,9 @@ class AgentSession:
             if not VOSK_AVAILABLE or VoskSTTService is None:
                 raise ImportError("VoskSTTService is not available. Please ensure vosk is installed and model is downloaded.")
             vosk_model_path = os.path.join(models_dir, DEFAULT_VOSK_MODEL_DIR)
+            if getattr(sys, "frozen", False):
+                from distr.core.packaged_stt import selected_model
+                vosk_model_path = selected_model()["path"]
             if not os.path.exists(vosk_model_path):
                 raise FileNotFoundError(f"Vosk model not found at {vosk_model_path}. Please download it using Settings > AI > Transcription Model.")
             self.stt_service = VoskSTTService(
