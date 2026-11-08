@@ -199,3 +199,13 @@ Issues and pull requests are welcome. Please check existing issues before openin
 DecisionsAI is licensed under the [MIT License](LICENSE.md). Third-party components and assets remain subject to their own notices and licences.
 
 > DecisionsAI has no cryptocurrency or token. Any coin using the name is unaffiliated with this project.
+
+## Time ledger operator credential
+
+The time-ledger write API can be called with the existing internal credential or with a separate operator file created on this Mac. Generation is local only: `python distr/gui/web/security.py provision-time-ledger --confirm provision-time-ledger`. The current user must own `~/.decisionsai/internal_api_token` at mode `0600`. The command writes `~/.decisionsai/time_ledger_operator_token` at mode `0600`, does not print the secret, and does not rotate the internal credential. A second run leaves the same file in place.
+
+After the process that loads this code is restarted, a client reads `~/.decisionsai/time_ledger_operator_token` in its own process and sends `X-DecisionsAI-Ledger-Token` only on POST `/api/workflows/studio/time-ledger/backups`, `/entries`, `/delete`, and `/restore`. The secret is not placed on a command line. Other API writes still require `X-DecisionsAI-Internal-Token`. Delete the operator file to revoke it. The full request shapes are in `docs/api.md`. This setup does not change stored time entries.
+
+## Projection store
+
+`python distr/gui/web/security.py provision-projection-store --confirm provision-projection-store` writes a separate `~/.decisionsai/projection_operator_token`. After restart, `X-DecisionsAI-Projection-Token` authorizes only the projection-store backup, apply, revoke, and restore posts. Those calls can remove the collator's 60 second local-session pad from the report only while the provider file still matches the backup. They do not rewrite provider files or database run rows, and they do not change a stored project. `provision-evidence-reader` creates a separate token for GET `/api/workflows/studio/projection-store/work-evidence`, which returns redacted recorded completions for explicit ids. Details are in `docs/api.md`.
