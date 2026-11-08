@@ -1,0 +1,26 @@
+{
+  "distr/core/db/__init__.py": {
+    "sha256": "fcc9fdd1664d894b8a4066ee71257f12e492682c1929ff45ffe98268f96978f3",
+    "size": 60465
+  },
+  "distr/core/db/workflow.py": {
+    "sha256": "9164a3efd56eea98081e4f8a433bac229e98fa569c53aed96ba678c399b28f5c",
+    "size": 21086
+  },
+  "distr/core/db/automation.py": {
+    "sha256": "e6cdcd35871ac1c2143e6d921582979a3011a569bd7efe11ee31559362b1419d",
+    "size": 2640
+  },
+  "distr/core/db/kanban.py": {
+    "sha256": "20983d7eb0f4f14614477836b8b85a60d9cc5a1edb36599daa94ae68e14952a5",
+    "size": 11572
+  },
+  "distr/core/db/projects.py": {
+    "sha256": "cae1081b800d27bbb2f8dc81b8937b1810ffeadf46f749e6cf452971907e71c3",
+    "size": 5074
+  },
+  "distr/core/db/orchestrator.py": {
+    "sha256": "80b4c7a73f527dfa9b422fe3458436b482fe771b45630ce3d4428f4bdbcab29c",
+    "size": 13073
+  }
+}

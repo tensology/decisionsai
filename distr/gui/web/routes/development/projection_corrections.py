@@ -79,6 +79,7 @@ def register_routes(router, templates, get_session=None, backup_dir=None):
     directory = backup_dir or (default_backup_dir().parent / "projection_store_backups")
     if get_session is None:
         from distr.core.db import get_session as get_session
+    session_factory = get_session
 
     @router.post("/workflows/studio/projection-store/backups")
     async def backup_projection_store(data: BackupBody):

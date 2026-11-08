@@ -326,6 +326,11 @@ def create_backup(get_session, directory: Path, sources: list[str], lo: datetime
     chosen = set(sources)
     if not chosen or not chosen <= SOURCES:
         raise ProjectionStoreError(400, "invalid_source", "sources must be execution, automation, workflow, pi_local, or codex_local")
+    home = Path.home()
+    if "pi_local" in chosen and pi_root is None:
+        pi_root = home / ".pi" / "agent" / "sessions"
+    if "codex_local" in chosen and codex_root is None:
+        codex_root = home / ".codex" / "sessions"
     images = collect_database_images(get_session, lo, hi, chosen)
     images.extend(collect_jsonl_images(lo, hi, chosen, pi_root=pi_root, codex_root=codex_root))
     images.extend(collect_correction_images(get_session))

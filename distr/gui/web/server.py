@@ -272,9 +272,19 @@ def create_app() -> FastAPI:
         }
         try:
             if path.startswith("/api/"):
-                from distr.gui.web.security import EVIDENCE_AUTH_HEADER, EVIDENCE_GET_PATH, evidence_header_authorizes_read
+                from distr.gui.web.security import (
+                    EVIDENCE_AUTH_HEADER,
+                    EVIDENCE_GET_PATH,
+                    PROJECTION_AUTH_HEADER,
+                    PROJECTION_GET_PATHS,
+                    evidence_header_authorizes_read,
+                    projection_header_authorizes_read,
+                )
                 if path == EVIDENCE_GET_PATH or path.startswith(EVIDENCE_GET_PATH + "-") or path.startswith(EVIDENCE_GET_PATH + "/"):
                     if not evidence_header_authorizes_read(path, method, request.headers.get(EVIDENCE_AUTH_HEADER, "")):
+                        require_internal_token_request(request)
+                if path in PROJECTION_GET_PATHS:
+                    if not projection_header_authorizes_read(path, method, request.headers.get(PROJECTION_AUTH_HEADER, "")):
                         require_internal_token_request(request)
                 # /api/mcp* (MCP config, local commands, server-mode token) is sensitive on read too.
                 is_mcp_path = path == "/api/mcp" or path.startswith("/api/mcp/")

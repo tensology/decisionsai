@@ -38,6 +38,9 @@ PROJECTION_POST_PATHS = frozenset({
     "/api/workflows/studio/projection-store/revoke",
     "/api/workflows/studio/projection-store/restore",
 })
+PROJECTION_GET_PATHS = frozenset({
+    "/api/workflows/studio/projection-store/evidence",
+})
 EVIDENCE_AUTH_HEADER = "X-DecisionsAI-Evidence-Token"
 EVIDENCE_PROVISION_CONFIRM = "provision-evidence-reader"
 EVIDENCE_GET_PATH = "/api/workflows/studio/projection-store/work-evidence"
@@ -516,6 +519,14 @@ def projection_header_authorizes_write(path: str, method: str, projection_header
     if method != "POST":
         return False
     if str(path or "") not in PROJECTION_POST_PATHS:
+        return False
+    return projection_token_matches(projection_header)
+
+
+def projection_header_authorizes_read(path: str, method: str, projection_header: str) -> bool:
+    if method != "GET":
+        return False
+    if str(path or "") not in PROJECTION_GET_PATHS:
         return False
     return projection_token_matches(projection_header)
 
