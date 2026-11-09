@@ -1,5 +1,5 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261022-tips2';
-import { createReports } from './reports/index.js?v=20261028-responsive';
+import { createReports } from './reports/index.js?v=20261109-invoice-review2';
 import { createThreadLiveUpdates } from './threads/live.js?v=20261027f';
 import { createThreadSession } from './threads/session.js?v=20261030-chat-run-scope';
 import { createCatalogLoader } from './shell/catalog.js';
@@ -8,19 +8,19 @@ import { catalogModels, providerLabel } from './shared/models.js';
 import { createPlanning } from './planning/index.js?v=20261103-rows1';
 import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261102-verify';
-import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml } from './planning/view-switch.js?v=20261103-section';
+import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261107-nav68';
 
-import { createSidebar } from './sidebar/index.js?v=20261106-sidebar-collapse1';
+import { createSidebar } from './sidebar/index.js?v=20261109-invoice-review2';
 
 import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
-import { createIncoming } from './incoming/index.js?v=20261106-source-chronology';
+import { createIncoming } from './incoming/index.js?v=20261109-proposal-sync2';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
 import { createBoards } from './boards/index.js?v=20261102-verify';
 
-import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261106-cli-clean1';
+import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261107-nav68';
 
 import { createThreadsTranscript } from './threads/transcript/index.js?v=20261031-completed-run-history';
 
@@ -1169,6 +1169,7 @@ async function clearThreadContext() {
 
 function setWorkspaceMode(mode, options) {
     if (state.workspaceMode === 'reports' && mode !== 'reports') reports.leave();
+    if (state.workspaceMode === 'incoming' && mode !== 'incoming') incoming.leave();
     if (mode !== 'chat') {
         threadSession.cancel();
         disconnectLiveUpdates();
@@ -1215,6 +1216,10 @@ function setWorkspaceMode(mode, options) {
     if (!planMode) {
         clearPlanCrumbs(document);
         syncHeader();
+    } else {
+        // Plan keeps the breadcrumb. Still park the Live PTY pane and the
+        // Chat/CLI toggle; syncFromShell does not turn CLI mode off or close the PTY.
+        threadCliMode.syncFromShell();
     }
     // CLI mode on + project thread: keep the CLI pane up; never re-reveal the
     // transcript/composer (that was the chat flash when switching projects from CLI).
@@ -1294,54 +1299,37 @@ async function waitForRouteReady() {
     while (state.routeLoading) await new Promise((resolve) => window.setTimeout(resolve, 20));
 }
 
-// Planning, Kanban, or Last thread. A specific thread counts as Last thread. Anything else (terminals,
-// reports, the empty composer) is not one of those sections.
-function currentMainSection() {
-    if (state.workspaceMode === 'kanban') return 'kanban';
-    if (state.workspaceMode === 'plan' && state.planBoardView) return 'plan';
-    if (state.workspaceMode === 'chat' && state.currentChat) return 'thread';
-    return '';
-}
-
 async function openBoardFromSidebar(boardKey) {
     await waitForRouteReady();
     const board = boardByKey(boardKey);
     if (!board) return;
-    // Already on the terminals view: stay there, showing the clicked project's terminals.
-    // Otherwise a project click never jumps to terminals (setting only affects startup + play).
-    if (['terminals', 'terminals_home'].includes(state.workspaceMode) && boardHasTerminalProject(board)) {
+    // Terminals stay on terminals. CLI opens the clicked project's last thread only
+    // from an open thread (no chat flash). Kanban and Plan keep that section.
+    const target = projectClickTarget({
+        workspaceMode: state.workspaceMode,
+        planBoardView: state.planBoardView,
+        hasCurrentChat: Boolean(state.currentChat),
+        cliOn: threadCliMode.isOn(),
+        boardHasTerminalProject: boardHasTerminalProject(board),
+        boardSupportsKanban: boardSupportsKanban(board),
+        boardHasPlanProject: Boolean(board.project_id && projectById(board.project_id)),
+        lastSection: boardLastSection(window.localStorage, boardKey),
+        lastThreadId: boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey)
+    });
+    if (target.action === 'terminals') {
         await openBoardTerminals(board.key);
         return;
     }
-    // CLI mode on: open that project's last thread straight into its CLI (no chat flash,
-    // no jump to the terminals workspace).
-    if (threadCliMode.isOn()) {
-        const cliChatId = boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey);
-        if (cliChatId) {
-            await loadChat(cliChatId);
-            return;
-        }
+    if (target.action === 'cli-thread' || target.action === 'thread') {
+        await loadChat(target.chatId);
+        return;
     }
-    // In Planning, Kanban, or Last thread: keep that section on the project just clicked.
-    // A specific thread is Last thread for the clicked project, not the thread left behind.
-    // Otherwise use the section last viewed on that project.
-    let section = currentMainSection() || boardLastSection(window.localStorage, boardKey);
-    if (section === 'plan' && (!board.project_id || !projectById(board.project_id))) section = '';
-    if (section === 'kanban' && !boardSupportsKanban(board)) section = '';
-    if (section === 'thread') {
-        const chatId = boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey);
-        if (chatId) {
-            await loadChat(chatId);
-            return;
-        }
-        section = '';
-    }
-    if (section === 'plan') {
+    if (target.action === 'plan') {
         await openBoardPlan(boardKey);
         return;
     }
     const selection = ++state.chatLoadToken;
-    if ((section === 'kanban' || !section) && boardSupportsKanban(board)) {
+    if (target.action === 'kanban') {
         const detail = state.boardDetails[boardKey] || (await loadBoardTickets(boardKey));
         if (selection !== state.chatLoadToken) return;
         if (detail) {
@@ -3176,7 +3164,7 @@ const threads_inspector = createThreadsInspector({
     token
 });
 
-const reports = createReports({ api, root: el('reports-workspace'), escapeHtml });
+const reports = createReports({ api, root: el('reports-workspace'), escapeHtml, getPinnedProjectIds: () => sidebar.pinnedProjectIds() });
 
 const planning = createPlanning({
     api,

@@ -19,6 +19,72 @@ PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 PDF = b'%PDF-1.4\nsource PDF acceptance bytes\n%%EOF'
 
 
+def test_large_cached_video_keeps_mime_and_supports_range_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    calls = []
+    header = b'\x00\x00\x00\x18ftypisom\x00\x00\x00\x00'
+    def download(location, destination, *, max_bytes, metadata):
+        assert max_bytes == media.MAX_MEDIA_BYTES
+        calls.append(location)
+        with destination.open('wb') as handle:
+            handle.write(header)
+            handle.truncate(17 * 1024 * 1024)
+        metadata['content_type'] = 'video/mp4'
+
+    client = Mock()
+    client.download.side_effect = download
+    location = 'work-requests/91/attachment?snapshot_id=12795'
+    path, mime = media.cached_tensology_attachment_file(location, client=client)
+    assert path.stat().st_size > 15 * 1024 * 1024
+    assert mime == 'video/mp4'
+    assert media.cached_tensology_attachment_file(location, client=client) == (path, mime)
+    assert calls == [location]
+    monkeypatch.setattr(media, 'cached_tensology_attachment_file', lambda value: (path, mime))
+    from distr.gui.web.routes.development.incoming import register_routes
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    response = TestClient(app).get('/workflows/studio/incoming/proposals/attachment',
+        params={'path': location}, headers={'Range': 'bytes=0-15'})
+    assert response.status_code == 206
+    assert response.content == header
+    assert response.headers['content-type'] == 'video/mp4'
+    assert response.headers['content-range'] == f'bytes 0-15/{path.stat().st_size}'
+    assert response.headers['x-content-type-options'] == 'nosniff'
+    monkeypatch.setattr('distr.core.incoming.proposals.list_incoming_proposals', lambda **kw: {'proposals': [{'id': 'tensology:91'}]})
+    monkeypatch.setattr(media, 'resolve_proposal_managed_attachment', lambda *a: (path, {'name': 'source.mp4', 'mime_type': mime}))
+    managed = TestClient(app).get('/workflows/studio/incoming/proposals/files/video',
+        params={'proposal_id': 'tensology:91'}, headers={'Range': 'bytes=0-15'})
+    assert managed.status_code == 206
+    assert managed.content == header
+    assert managed.headers['content-type'] == 'video/mp4'
+
+
+def test_old_cache_recovers_original_mime_without_redownloading(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    client = Mock()
+    def download(location, destination, **kwargs):
+        destination.write_bytes(PNG)
+    client.download.side_effect = download
+    first = media.cached_tensology_attachment_file('work-requests/89/attachment?snapshot_id=4372', client=client)
+    second = media.cached_tensology_attachment_file('work-requests/89/attachment?snapshot_id=4372', client=client)
+    assert first == second
+    assert first[1] == 'image/png'
+    assert client.download.call_count == 1
+
+
+def test_untrusted_active_media_is_not_served_as_inline_html(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    client = Mock()
+    def download(location, destination, *, metadata, **kwargs):
+        destination.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+        metadata['content_type'] = 'image/svg+xml'
+    client.download.side_effect = download
+    for _ in range(2):
+        _, mime = media.cached_tensology_attachment_file('work-requests/1/attachment?snapshot_id=1', client=client)
+        assert mime == 'application/octet-stream'
+
+
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
@@ -83,6 +149,7 @@ def test_missing_whatsapp_media_is_skipped_and_reported_not_blocking_thread(stor
     monkeypatch.setattr('distr.core.db.get_session', sessions)
     with sessions() as db:
         db.add(Project(id=7, name='Media test project'))
+        db.add(Chat(id=901, project_id=7, title='Media handoff test', provider='ollama', model_name='test'))
         db.add(WhatsAppMessage(message_id='missing', jid='client@g.us', media_type='document', media_filename='brief.pdf'))
     monkeypatch.setattr(media, '_download_whatsapp', Mock(side_effect=OSError('gone')))
     from distr.core.incoming import proposals
@@ -105,7 +172,7 @@ def test_missing_whatsapp_media_is_skipped_and_reported_not_blocking_thread(stor
 def test_remote_multiple_files_on_same_snapshot_identity_and_scoped_urls(store):
     _, cid = store
     client = Mock()
-    def download(location, path):
+    def download(location, path, **kwargs):
         path.write_bytes(PDF if 'attachment_index=1' in location else PNG)
     client.download.side_effect = download
     entries = [dict(name='same-name', mime_type=mime, snapshot_id=8, api_path=f'work-requests/45/attachment?snapshot_id=8&attachment_index={index}')

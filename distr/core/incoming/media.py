@@ -162,7 +162,7 @@ def ensure_proposal_attachments(
                 if client is None:
                     from distr.core.tensology_client import configured_tensology_client
                     client = configured_tensology_client(source='incoming-proposal-media')
-                client.download(location, destination)
+                client.download(location, destination, max_bytes=MAX_MEDIA_BYTES)
                 attachments.append(_record(destination, name, str(item.get('mime_type') or item.get('type') or ''), identity,
                                            source_message_id=str(item.get('source_message_id') or ''),
                                            transcript=str(item.get('transcript') or '')))
@@ -264,8 +264,8 @@ def proposal_attachments(proposal: dict[str, Any], project_id: int | None, *, cl
     return result['attachments']
 
 
-def cached_tensology_attachment_bytes(api_path: str, *, client=None) -> tuple[bytes, str]:
-    """Download a Tensology attachment once into managed storage and return its bytes + mime."""
+def cached_tensology_attachment_file(api_path: str, *, client=None) -> tuple[Path, str]:
+    """Cache original media on disk so large video previews can stream and seek."""
     path = str(api_path or '').strip().lstrip('/')
     if not (path.startswith('work-requests/') or path.startswith('tickets/')):
         raise ValueError('Unsupported attachment path.')
@@ -275,16 +275,39 @@ def cached_tensology_attachment_bytes(api_path: str, *, client=None) -> tuple[by
     identity = f'proxy:{path}'
     root = _root(None, 'tensology-proxy-cache')
     name = Path(urllib.parse.urlsplit(path).path).name or 'attachment'
-    # Prefer filename from query when present.
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
     destination = _destination(root, identity, name if name != 'attachment' else 'attachment.bin')
+    mime_path = destination.with_name(destination.name + '.mime')
     mime = mimetypes.guess_type(destination.name)[0] or 'application/octet-stream'
     if not (destination.is_file() and 0 < destination.stat().st_size <= MAX_MEDIA_BYTES):
-        client.download(path, destination)
-    data = destination.read_bytes()
-    if len(data) > 15 * 1024 * 1024:
-        raise ValueError('Attachment is too large to preview.')
-    return data, mime
+        metadata = {}
+        client.download(path, destination, max_bytes=MAX_MEDIA_BYTES, metadata=metadata)
+        mime = str(metadata.get('content_type') or mime).split(';', 1)[0].strip().lower()
+        # Untrusted active documents must remain downloads on this app origin.
+        if mime in {'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif',
+                    'audio/ogg', 'audio/opus', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/webm',
+                    'video/mp4', 'video/webm', 'video/quicktime', 'video/3gpp', 'application/pdf'}:
+            mime_path.write_text(mime, encoding='utf-8')
+        else:
+            mime = 'application/octet-stream'
+    elif mime_path.is_file():
+        mime = mime_path.read_text(encoding='utf-8').strip()
+    if mime == 'application/octet-stream':
+        # Existing caches were saved as attachment.bin without response headers.
+        with destination.open('rb') as handle:
+            signature = handle.read(16)
+        if signature.startswith(b'\xff\xd8\xff'): mime = 'image/jpeg'
+        elif signature.startswith(b'\x89PNG\r\n\x1a\n'): mime = 'image/png'
+        elif signature.startswith((b'GIF87a', b'GIF89a')): mime = 'image/gif'
+        elif signature.startswith(b'OggS'): mime = 'audio/ogg'
+        elif signature.startswith(b'%PDF-'): mime = 'application/pdf'
+        elif signature[4:8] == b'ftyp': mime = 'audio/mp4' if signature[8:12] in (b'M4A ', b'M4B ') else 'video/mp4'
+        elif signature.startswith(b'RIFF') and signature[8:12] == b'WEBP': mime = 'image/webp'
+    return destination, mime
+
+
+def cached_tensology_attachment_bytes(api_path: str, *, client=None) -> tuple[bytes, str]:
+    path, mime = cached_tensology_attachment_file(api_path, client=client)
+    return path.read_bytes(), mime
 
 
 def public_managed_attachments(records: list[dict[str, Any]], *, proposal_id: str = '', chat_id: int | None = None) -> list[dict[str, Any]]:

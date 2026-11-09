@@ -154,31 +154,35 @@ def test_reports_tabs_switch_and_survive_run_outage(page: Page, width, height):
     page.route("**/api/workflows/studio/reports/time?*", lambda route: route.fulfill(json={"items": [
         {"id": "time:1", "chat_id": 17, "thread_title": "Timed thread", "ticket_title": "DEV-1", "ticket_key": "DEV-1", "board_key": "decisions:1", "started_at": "2026-09-05T09:00:00", "ended_at": "2026-09-05T09:05:00", "seconds": 300, "source": "play"},
     ]}))
+    page.route("**/api/workflows/studio/reports/history?*", lambda route: route.fulfill(json={"items": [
+        {"id": "workflow:1", "description": "Release verification", "status": "completed", "project_name": "DecisionsAI", "started_at": "2026-09-05T09:00:00", "ended_at": "2026-09-05T09:00:48", "duration_seconds": 48},
+        {"id": "automation:2", "description": "Morning checks", "status": "failed", "project_name": None, "started_at": "2026-09-05T09:01:00", "ended_at": None, "duration_seconds": 3},
+        {"id": "time:1", "description": "Timed thread", "status": None, "project_name": "DecisionsAI", "chat_id": 17, "started_at": "2026-09-05T09:00:00", "ended_at": "2026-09-05T09:05:00", "duration_seconds": 300},
+    ], "counting": {"rows": "Each row is one recorded run or closed timer interval. Rows are not merged.", "duration": "Duration is that row only.", "wall_clock": "Clock time on Stats unions overlapping intervals.", "unknown": "Missing description, status, start, or end stays unknown."}}))
     page.goto(BASE + "/development/reports/")
+    expect(page.locator("#reports-tab-report")).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#reports-refresh")).to_have_count(0)
+    page.locator("#reports-tab-runs").click()
     expect(page.locator("#reports-tab-runs")).to_be_visible()
-    expect(page.locator("#reports-tab-time")).to_be_visible()
-    expect(page.locator("#reports-results tbody tr")).to_have_count(2)
+    expect(page.locator("#reports-tab-time")).to_have_count(0)
+    expect(page.locator("#reports-results tbody tr")).to_have_count(3)
     output = ROOT / "artifacts/development-refactor-2026-09-05"
     output.mkdir(exist_ok=True)
     page.screenshot(path=str(output / f"reports-populated-{width}.png"), full_page=True, animations="disabled")
     if width < 680:
         page.locator(".reports-table-scroll").evaluate("node => node.scrollLeft = node.scrollWidth")
         page.screenshot(path=str(output / f"reports-details-{width}.png"), full_page=True, animations="disabled")
-    page.locator("#reports-source").select_option("automation")
-    expect(page.locator("#reports-results tbody tr")).to_have_count(1)
+    expect(page.locator("#reports-results")).to_contain_text("Timed thread")
+    expect(page.locator("#reports-results")).to_contain_text("5m")
+    assert page.locator("#reports-results th").evaluate_all("nodes => nodes.every(node => node.textContent !== 'Source')")
     page.locator("#reports-status").select_option("failed")
     expect(page.locator("#reports-results tbody tr")).to_have_count(1)
     expect(page.locator("#reports-results")).to_contain_text("Morning checks")
-    page.locator("#reports-tab-time").click()
-    expect(page.locator("#reports-heading")).to_have_text("Time log")
-    expect(page.locator("#reports-results")).to_contain_text("Timed thread")
-    expect(page.locator("#reports-results")).to_contain_text("5m")
+    page.locator("#reports-status").select_option("all")
+    page.route("**/api/workflows/studio/reports?limit=100", lambda route: route.fulfill(status=503, json={"detail": "Temporary report outage"}))
     page.locator("#reports-tab-runs").click()
-    page.route("**/api/workflows/studio/reports?*", lambda route: route.fulfill(status=503, json={"detail": "Temporary report outage"}))
-    page.locator("#reports-refresh").click()
-    expect(page.locator("#reports-results")).to_contain_text("Use Refresh to retry")
-    page.locator("#reports-source").select_option("workflow")
-    expect(page.locator("#reports-results")).to_contain_text("Use Refresh to retry")
+    expect(page.locator("#reports-results")).to_contain_text("Could not load history")
+    expect(page.locator("#reports-results")).to_contain_text("Temporary report outage")
 
 
 @pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])

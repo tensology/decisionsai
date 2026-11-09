@@ -289,9 +289,15 @@ def register_routes(router, templates):
         settings = load_settings_from_db()
 
         def _agent_llm_settings_fingerprint(s: dict) -> tuple:
-            """Stable tuple of all LLMs-tab fields that affect the running agent or tools."""
+            """Stable tuple of LLMs-tab fields that affect the running agent or tools.
+
+            Excludes ``transcription_model`` on purpose: the speech-to-text model has
+            its own dedicated notification (``notify_stt_model_saved_for_running_agent``)
+            which swaps only the STT processor. Including it here made an STT-only save
+            also fire a conversational-LLM/TTS hot-swap, churning the pipeline and
+            breaking live dictation capture.
+            """
             return (
-                (s.get("transcription_model") or "").strip(),
                 (s.get("conversational_llm_provider") or "ollama").strip().lower(),
                 (s.get("conversational_llm_model") or "").strip(),
                 (s.get("coding_llm_provider") or "ollama").strip().lower(),

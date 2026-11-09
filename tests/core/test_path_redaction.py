@@ -140,3 +140,32 @@ def test_spoken_result_summary_shortens_model_errors():
     out = spoken_result_summary(raw)
     assert "Available models" not in out
     assert "isn't available" in out
+
+def test_clean_text_for_tts_speaks_domain_like_names_in_full():
+    from distr.core.agent.services.llm.text_utils import humanize_domain_like_names_for_tts
+
+    assert humanize_domain_like_names_for_tts("merrypak.co.za") == "merrypak dot co dot za"
+    assert humanize_domain_like_names_for_tts("site.co.today") == "site dot co dot today"
+    assert humanize_domain_like_names_for_tts("www.jackcat.co.za") == "www dot jackcat dot co dot za"
+
+    out = clean_text_for_tts(
+        "Project merrypak.co.za startup terminals started.",
+        spoken_prose=True,
+    )
+    assert "merrypak dot co dot za" in out
+    assert out.startswith("Project merrypak")
+
+    www = clean_text_for_tts(
+        "Project www.merrypak.co.za startup terminals stopped.",
+        spoken_prose=True,
+    )
+    assert "www dot merrypak dot co dot za" in www
+    # Elongation clamp must not crush hostname "www" into "ww".
+    assert www.count("www") >= 1
+
+
+def test_clean_text_for_tts_still_humanizes_filenames_before_domains():
+    out = clean_text_for_tts("Saved to report.pdf for merrypak.co.za", spoken_prose=True)
+    assert "report PDF file" in out
+    assert "merrypak dot co dot za" in out
+

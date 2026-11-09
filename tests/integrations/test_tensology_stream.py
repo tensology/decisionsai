@@ -324,6 +324,16 @@ def test_download_sends_key_only_to_tensology_host(tmp_path):
     assert not list(tmp_path.glob("*.part"))
 
 
+def test_download_retains_original_content_type_for_cached_previews(tmp_path):
+    client = TensologyClient("https://www.tensology.com", "test-key")
+    response = FakeResponse(PNG)
+    response.headers['Content-Type'] = 'image/png'
+    metadata = {}
+    with patch('urllib.request.urlopen', return_value=response):
+        assert client.download('work-requests/1/attachment?snapshot_id=1', tmp_path / 'image.bin', metadata=metadata) == len(PNG)
+    assert metadata == {'content_type': 'image/png'}
+
+
 def test_download_rejects_too_large_and_http_errors(tmp_path):
     client = TensologyClient("https://www.tensology.com", "k")
     with patch("urllib.request.urlopen", return_value=FakeResponse(PNG, length=10**9)):

@@ -32,11 +32,11 @@ MAX_INPUT_CHARS = 12000
 def resolve_oracle_model(settings: Dict[str, Any]) -> Tuple[str, str]:
     """Same precedence the oracle's AgentSession uses when no chat override applies:
     conversational_llm_* then legacy agent_*."""
-    from distr.core.llm_factory import normalize_provider
+    from distr.core.llm_factory import infer_provider_from_model, normalize_provider
 
     provider = (settings.get("conversational_llm_provider") or settings.get("agent_provider") or "Ollama")
     model = (settings.get("conversational_llm_model") or settings.get("agent_model") or "").strip()
-    return normalize_provider(provider), model
+    return infer_provider_from_model(normalize_provider(provider), model), model
 
 
 def build_messages(text: str):
@@ -120,11 +120,11 @@ def speak_spoken_text(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    speak_text_directly_event_queue(t)
-    return True
+    return bool(speak_text_directly_event_queue(t))
 
 
 ORACLE_NOTE_PREFIX = "Spoken aloud to the user from Development thread "
+PROPOSAL_NOTE_PREFIX = "Spoken aloud to the user from Incoming proposal "
 
 
 def _thread_spoken_rows(session, chat_id: int):
@@ -192,4 +192,39 @@ def add_oracle_context_note(session, thread_id: int, spoken: str, *, source_row_
         session, oracle_root, note,
         source_row_id=source_row_id, provider="", model="",
         extra_context={"oracle_note": True, "source_thread_id": thread_root},
+    )
+
+
+def add_oracle_context_note_for_proposal(
+    session,
+    spoken: str,
+    *,
+    proposal_id: Any,
+    title: str,
+    current_chat_id: Optional[int],
+) -> Optional[int]:
+    """Mirror a spoken Incoming-proposal summary into the oracle's current chat.
+
+    Same read-only contract as ``add_oracle_context_note``: never changes the
+    oracle's current chat, and dedupes per proposal plus identical text.
+    """
+    from distr.core.chat_manager import _thread_root_id
+
+    text = (spoken or "").strip()
+    if not text or current_chat_id is None:
+        return None
+    oracle_root = _thread_root_id(session, int(current_chat_id))
+    for row, ctx in _thread_spoken_rows(session, oracle_root):
+        if not ctx.get("oracle_note"):
+            continue
+        if str(ctx.get("source_proposal_id")) != str(proposal_id):
+            continue
+        if (row.response or "").endswith(text):
+            return None
+    label = (title or "").strip().replace("\n", " ")[:80]
+    note = f"{PROPOSAL_NOTE_PREFIX}{proposal_id} ('{label}'): {text}"
+    return store_spoken_message(
+        session, oracle_root, note,
+        source_row_id=None, provider="", model="",
+        extra_context={"oracle_note": True, "source_proposal_id": str(proposal_id)},
     )

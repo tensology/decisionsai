@@ -385,6 +385,23 @@ class AgentLifecycleMixin:
         try:
             agent_alive = hasattr(self, 'agent_process') and self.agent_process and self.agent_process.is_alive()
 
+            if (ensure_alive
+                    and command in {'speak_text_directly', 'process_text_input'}
+                    and getattr(self, '_agent_lifecycle_state', None) == 'starting'):
+                if self._quitting:
+                    return
+                # A live subprocess may still be constructing its LLM/TTS
+                # services. Forwarding now silently drops reads and Telegram
+                # input; use the existing bounded ready queue instead.
+                pending = getattr(self, '_pending_agent_commands', None)
+                if pending is None:
+                    pending = self._pending_agent_commands = []
+                start_poll = not pending
+                pending.append((command, params))
+                if start_poll:
+                    self._check_agent_ready_and_send_pending()
+                return
+
             if not agent_alive and ensure_alive:
                 if self._quitting:
                     logger.debug(f"Skipping agent reload during shutdown for command: {command}")

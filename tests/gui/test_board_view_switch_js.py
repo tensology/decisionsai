@@ -109,7 +109,10 @@ def test_switcher_and_contextual_controls_are_wired():
     assert "rememberBoardSection(window.localStorage, chatBoardKey(chat), 'thread');" in app
     assert "rememberBoardSection(window.localStorage, board.key, 'plan');" in app
     assert "rememberBoardSection(window.localStorage, board.key, 'kanban');" in app
-    assert "let section = currentMainSection() || boardLastSection(window.localStorage, boardKey);" in app
+    assert "projectClickTarget(" in app
+    assert "lastSection: boardLastSection(window.localStorage, boardKey)" in app
+    switch = (STATIC / 'planning/view-switch.js').read_text()
+    assert "let section = current || lastSection;" in switch
     assert "planControlsSlot: () => el('development-header-context')," in app
     assert "if (button && button.getAttribute('aria-disabled') !== 'true') switchBoardView(button.dataset.boardView);" in app
     # plan toolbar (tabs, Build tickets) mounts in the contextual area, beside the view switch
@@ -118,5 +121,5 @@ def test_switcher_and_contextual_controls_are_wired():
     assert "planBar().querySelector('#plan-build').onclick" in conv
     assert "className = 'plan-header-actions'" in conv
     assert "planBar().querySelectorAll('[data-plan-tab]')" in conv
-    assert './planning/view-switch.js?v=20261103-section' in (STATIC / 'app.js').read_text()
+    assert './planning/view-switch.js?v=20261107-nav68' in (STATIC / 'app.js').read_text()
     assert "./shared/components.css?v=20261102-verify" in (STATIC / 'styles.css').read_text()

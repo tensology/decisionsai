@@ -170,3 +170,92 @@ def cost_rollups(*, display=None):
     from distr.core.cost_ledger.service import cost_rollups as _rollups
 
     return _rollups(display=display)
+
+
+def _known_text(value) -> str | None:
+    text = " ".join(str(value or "").split())
+    return text or None
+
+
+def list_work_history(*, limit=100):
+    """One history list of runs and closed timers.
+
+    Descriptions, statuses, and dates come from stored fields. A missing field
+    stays null. Execution rows do not invent a name from the harness. Row
+    durations are not merged; clock time lives on the period report.
+    """
+    limit = max(1, min(int(limit), 200))
+    runs = list_reports(limit=limit)["items"]
+    times = list_time_entries(limit=limit)["items"]
+    execution_ids = []
+    for row in runs:
+        if row.get("kind") != "execution":
+            continue
+        try:
+            execution_ids.append(int(str(row["id"]).split(":", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    ticket_by_session = {}
+    chat_project = {}
+    chat_ids = {int(row["chat_id"]) for row in times if row.get("chat_id") is not None}
+    if execution_ids or chat_ids:
+        with get_session() as db:
+            if execution_ids:
+                sessions = db.query(ProjectExecutionSession).filter(ProjectExecutionSession.id.in_(execution_ids)).all()
+                ticket_ids = {session.ticket_id for session in sessions if session.ticket_id}
+                titles = {}
+                if ticket_ids:
+                    from distr.core.db.kanban import KanbanTicket
+                    titles = dict(db.query(KanbanTicket.id, KanbanTicket.title).filter(KanbanTicket.id.in_(ticket_ids)).all())
+                ticket_by_session = {int(session.id): _known_text(titles.get(session.ticket_id)) for session in sessions}
+            if chat_ids:
+                chats = db.query(Chat.id, Chat.project_id).filter(Chat.id.in_(chat_ids)).all()
+                project_ids = {pid for _, pid in chats if pid}
+                names = dict(db.query(Project.id, Project.name).filter(Project.id.in_(project_ids)).all()) if project_ids else {}
+                chat_project = {int(cid): _known_text(names.get(pid)) if pid else None for cid, pid in chats}
+
+    items = []
+    for row in runs:
+        description = _known_text(row.get("name"))
+        if row.get("kind") == "execution":
+            try:
+                session_id = int(str(row["id"]).split(":", 1)[1])
+            except (IndexError, ValueError):
+                session_id = None
+            description = ticket_by_session.get(session_id) if session_id is not None else None
+        items.append({
+            "id": row["id"],
+            "description": description,
+            "status": _known_text(row.get("status")),
+            "started_at": row.get("started_at") or None,
+            "ended_at": row.get("completed_at") or None,
+            "duration_seconds": row.get("duration_seconds"),
+            "project_name": _known_text(row.get("project_name")),
+            "chat_id": row.get("chat_id"),
+        })
+    for row in times:
+        fallback = f"Thread {row.get('chat_id')}"
+        description = _known_text(row.get("ticket_title")) or _known_text(row.get("thread_title"))
+        if description == fallback:
+            description = None
+        items.append({
+            "id": row["id"],
+            "description": description,
+            "status": None,
+            "started_at": row.get("started_at") or None,
+            "ended_at": row.get("ended_at") or None,
+            "duration_seconds": row.get("seconds"),
+            "project_name": chat_project.get(int(row["chat_id"])) if row.get("chat_id") is not None else None,
+            "chat_id": row.get("chat_id"),
+        })
+    items.sort(key=lambda row: (row["started_at"] is not None, row["started_at"] or "", row["id"]), reverse=True)
+    return {
+        "items": items[:limit],
+        "limit": limit,
+        "counting": {
+            "rows": "Each row is one recorded run or closed timer interval. Rows are not merged.",
+            "duration": "Duration is that row only. Adding durations double-counts overlap.",
+            "wall_clock": "Clock time on Stats unions overlapping intervals and counts that span once.",
+            "unknown": "Missing description, status, start, or end stays unknown. Nothing is filled in.",
+        },
+    }

@@ -63,3 +63,44 @@ export function boardViewOptions(current, threadId) {
 export function boardViewSwitchHtml(options) {
     return options.map((option) => `<button type="button" data-board-view="${option.view}" title="${option.title}" aria-label="${option.title}" aria-pressed="${option.active}"${option.disabled ? ' aria-disabled="true"' : ''} class="icon-button">${VIEW_ICONS[option.view]}</button>`).join('');
 }
+
+// Sidebar project click.
+// Terminals stay on terminals. CLI priority applies only while a thread is open,
+// so Kanban and Plan keep that section. Otherwise the current section, or the
+// section last viewed on the clicked board.
+export function projectClickTarget({
+    workspaceMode = '',
+    planBoardView = false,
+    hasCurrentChat = false,
+    cliOn = false,
+    boardHasTerminalProject = false,
+    boardSupportsKanban = false,
+    boardHasPlanProject = false,
+    lastSection = '',
+    lastThreadId = 0
+} = {}) {
+    const current = workspaceMode === 'kanban'
+        ? 'kanban'
+        : workspaceMode === 'plan' && planBoardView
+            ? 'plan'
+            : workspaceMode === 'chat' && hasCurrentChat
+                ? 'thread'
+                : '';
+    const threadId = Number(lastThreadId || 0);
+    if ((workspaceMode === 'terminals' || workspaceMode === 'terminals_home') && boardHasTerminalProject) {
+        return { action: 'terminals' };
+    }
+    if (cliOn && current === 'thread' && threadId) {
+        return { action: 'cli-thread', chatId: threadId };
+    }
+    let section = current || lastSection;
+    if (section === 'plan' && !boardHasPlanProject) section = '';
+    if (section === 'kanban' && !boardSupportsKanban) section = '';
+    if (section === 'thread') {
+        if (threadId) return { action: 'thread', chatId: threadId };
+        section = '';
+    }
+    if (section === 'plan') return { action: 'plan' };
+    if ((section === 'kanban' || !section) && boardSupportsKanban) return { action: 'kanban' };
+    return { action: 'draft' };
+}

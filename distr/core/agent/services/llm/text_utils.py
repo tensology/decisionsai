@@ -152,6 +152,41 @@ def humanize_filenames_for_tts(text: str) -> str:
     return _BARE_EXTENSION_RE.sub(lambda m: _spoken_ext(m.group(1)), text)
 
 
+# Domain-like project/folder names. Require either 2+ dots (co.za / co.today)
+# with a lowercase final label, or a single lowercase public-suffix-style TLD.
+# Do not match "immediately.Gamma" (sentence stop with no space + capital).
+_DOMAIN_LIKE_COMMON_TLDS = (
+    "com|net|org|io|ai|dev|app|co|za|uk|us|info|biz|today|xyz|me|tv|cc|cloud|tech"
+)
+_DOMAIN_LIKE_NAME_RE = re.compile(
+    rf"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{{0,61}}[A-Za-z0-9])?\.){{2,}}[a-z]{{2,24}}\b"
+    rf"|\b[A-Za-z0-9](?:[A-Za-z0-9-]{{0,61}}[A-Za-z0-9])?\.(?:{_DOMAIN_LIKE_COMMON_TLDS})\b"
+)
+
+
+def humanize_domain_like_names_for_tts(text: str) -> str:
+    """Speak domain-like names in full: ``merrypak.co.za`` -> ``merrypak dot co dot za``.
+
+    TTS sentence splitters and some engines treat internal dots as stops or URL
+    markers and drop the leading labels (heard as only ".co.za"). Expanding the
+    dots keeps every label while remaining natural to hear.
+    """
+    if not text:
+        return text
+
+    def _repl(match: re.Match) -> str:
+        token = match.group(0)
+        labels = token.split(".")
+        if len(labels) < 2:
+            return token
+        # Defensive: never rewrite pure numeric dotted sequences.
+        if all(lab.isdigit() for lab in labels):
+            return token
+        return " dot ".join(labels)
+
+    return _DOMAIN_LIKE_NAME_RE.sub(_repl, text)
+
+
 def _path_or_basename(path: str) -> str:
     """Keep a readable filename from a path; redact bare directories to a placeholder.
 
@@ -335,6 +370,9 @@ def clean_text_for_tts(
     text = re.sub(r'\bWinamp\b', 'Win amp', text, flags=re.IGNORECASE)
     # Speak filenames and extensions as words before any punctuation is stripped.
     text = humanize_filenames_for_tts(text)
+    # Then expand remaining domain-like dotted names so splitters/engines cannot
+    # drop leading labels ("merrypak.co.za" must not become ".co.za").
+    text = humanize_domain_like_names_for_tts(text)
     if speakable_symbols:
         text = _make_symbols_speakable_for_tts(text)
     # Any surviving bare < or > could still confuse ElevenLabs; replace with parens.
@@ -349,8 +387,9 @@ def clean_text_for_tts(
 
     # Remove common filler words/interjections that sound unnatural in TTS.
     text = re.sub(r'\b(?:uh+|um+|ah+|er+|hmm+)\b[\s,.;:!?-]*', '', text, flags=re.IGNORECASE)
-    # Clamp exaggerated letter elongations ("soooo", "ahhhh") to keep speech natural.
-    text = re.sub(r'([A-Za-z])\1{2,}', r'\1\1', text)
+    # Clamp exaggerated vowel elongations ("soooo", "ahhhh") only. Applying this to
+    # every letter crushed hostnames like "www.merrypak.co.za" into "ww....".
+    text = re.sub(r'([aeiouAEIOU])\1{2,}', r'\1\1', text)
 
     # Remove emojis / unspeakable characters (strict BMP) or category-based (spoken prose)
     sanitized_chars = []

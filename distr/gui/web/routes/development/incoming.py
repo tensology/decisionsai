@@ -1,11 +1,12 @@
 """Incoming HTTP boundary. Existing URLs remain compatible."""
 from fastapi import Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 import asyncio
 from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
+PROPOSAL_READ_TIMEOUT_SECONDS = 60
 
 
 def register_routes(router, templates):
@@ -77,10 +78,13 @@ def register_routes(router, templates):
     async def workflow_studio_proposal_attachment(path: str = ""):
         """Serve a Tensology proposal attachment from managed local cache (download once)."""
         try:
-            from distr.core.incoming.proposals import fetch_attachment
+            from distr.core.incoming.media import cached_tensology_attachment_file
 
-            data, mime = await asyncio.to_thread(fetch_attachment, path)
-            return Response(content=data, media_type=mime, headers={"Cache-Control": "private, max-age=600"})
+            cached, mime = await asyncio.to_thread(cached_tensology_attachment_file, path)
+            headers = {"Cache-Control": "private, max-age=600", "X-Content-Type-Options": "nosniff"}
+            if mime == 'application/octet-stream':
+                headers['Content-Disposition'] = 'attachment'
+            return FileResponse(cached, media_type=mime, headers=headers)
         except ValueError as e:
             logger.warning("Proposal attachment rejected: %s", e)
             return JSONResponse({"success": False, "error": str(e)}, status_code=404)
@@ -148,7 +152,6 @@ def register_routes(router, templates):
                 return path, record
 
             path, record = await asyncio.to_thread(_run)
-            data = path.read_bytes()
             mime = str(record.get("mime_type") or "application/octet-stream")
             # Browsers accept audio/ogg; drop long parameter lists that break <audio>.
             media_type = mime.split(";", 1)[0].strip() or "application/octet-stream"
@@ -159,7 +162,7 @@ def register_routes(router, templates):
                 "Cache-Control": "private, max-age=600",
                 "Content-Disposition": f'inline; filename="{filename}"',
             }
-            return Response(content=data, media_type=media_type, headers=headers)
+            return FileResponse(path, media_type=media_type, headers=headers)
         except FileNotFoundError as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=404)
         except Exception as e:
@@ -239,6 +242,30 @@ def register_routes(router, templates):
             return JSONResponse({"success": False, "error": str(e)}, status_code=502)
 
 
+    @router.put("/workflows/studio/incoming/proposals/details")
+    async def workflow_studio_proposal_details(request: Request):
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or not isinstance(body.get('proposal_id'), str) or not isinstance(body.get('message_ids'), list):
+                raise ValueError('A proposal and exact source messages are required.')
+            from distr.core.incoming.proposals import list_incoming_proposals
+            from distr.core.incoming.proposal_sync import update_proposal
+            listing = await asyncio.to_thread(list_incoming_proposals, refresh_local=False)
+            proposal = next((row for row in listing['proposals'] if row['id'] == body['proposal_id']), None)
+            if proposal is None:
+                return JSONResponse({'error': 'The proposal is no longer available. Refresh Incoming.'}, status_code=404)
+            if sorted(map(str, body['message_ids'])) != sorted(map(str, proposal.get('message_ids') or [])):
+                return JSONResponse({'error': 'The source snapshot changed. Reload Incoming.'}, status_code=409)
+            changes = {key: value for key, value in body.items() if key not in {'proposal_id', 'message_ids', 'expected_updated_at'}}
+            updated = await asyncio.to_thread(update_proposal, proposal, changes, expected_updated_at=body.get('expected_updated_at'))
+            return JSONResponse({'success': True, 'proposal': updated})
+        except ValueError as exc:
+            return JSONResponse({'error': str(exc)}, status_code=409)
+        except Exception as exc:
+            from distr.core.tensology_client import TensologyApiError
+            status_code = exc.status if isinstance(exc, TensologyApiError) and exc.status in {400, 403, 404, 409} else 502
+            return JSONResponse({'error': str(exc)}, status_code=status_code)
+
     @router.put("/workflows/studio/incoming/proposals/project")
     async def workflow_studio_proposal_project(request: Request):
         try:
@@ -255,6 +282,8 @@ def register_routes(router, templates):
         proposal = next((row for row in listing['proposals'] if row['id'] == body['proposal_id']), None)
         if proposal is None:
             return JSONResponse({'error': 'The proposal is no longer available. Refresh Incoming.'}, status_code=404)
+        if body.get('expected_updated_at') is not None and body['expected_updated_at'] != proposal.get('updated_at'):
+            return JSONResponse({'error': 'The proposal changed. Reload Incoming before saving.'}, status_code=409)
         if sorted(str(v) for v in body['message_ids']) != sorted(str(v) for v in proposal.get('message_ids', [])):
             return JSONResponse({'error': 'The proposal has changed. Refresh Incoming before changing its project.'}, status_code=409)
         try:
@@ -312,6 +341,73 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Proposal thread creation failed: %s", e, exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+    @router.post("/workflows/studio/incoming/proposals/read")
+    async def workflow_studio_proposal_read(request: Request):
+        """Read an Incoming proposal aloud: LLM spoken summary + oracle direct TTS."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        text = body.get("text")
+        if not isinstance(text, str):
+            return JSONResponse({"success": False, "error": "Text to read must be a string."}, status_code=422)
+        text = text.strip()
+        if not text:
+            return JSONResponse({"success": False, "error": "Text to read is required."}, status_code=422)
+        proposal_id = body.get("proposal_id")
+        title = str(body.get("title") or "").strip()
+
+        from distr.core import read_response as rr
+        from distr.core.settings import load_settings_from_db
+        from distr.core.chat import ChatService
+
+        if len(text) > rr.MAX_INPUT_CHARS:
+            return JSONResponse({"success": False, "error": "This proposal is too long to read aloud."}, status_code=413)
+        try:
+            # Capture the originating Oracle chat before waiting on the model.
+            current = ChatService.get_current_chat_id()
+            settings = load_settings_from_db()
+            spoken, provider, model = await asyncio.wait_for(
+                asyncio.to_thread(rr.generate_spoken_text, text, settings),
+                timeout=PROPOSAL_READ_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            return JSONResponse({"success": False, "error": "Preparing speech timed out. Please try again."}, status_code=504)
+        except Exception as e:
+            logger.warning("Proposal read-aloud generation failed: %s", e)
+            return JSONResponse({"success": False, "error": "Could not prepare the spoken version."}, status_code=502)
+
+        if await request.is_disconnected():
+            return JSONResponse({"success": False, "error": "The read request was cancelled."}, status_code=499)
+        try:
+            spoken_ok = bool(rr.speak_spoken_text(spoken))
+        except Exception:
+            logger.warning("Proposal speech dispatch failed", exc_info=True)
+            spoken_ok = False
+        if not spoken_ok:
+            return JSONResponse({"success": False, "error": "Speech is unavailable. Check that the Oracle is running and try again."}, status_code=503)
+        note_id = None
+        if spoken_ok:
+            try:
+                from distr.core.db import get_session
+
+                with get_session() as session:
+                    note_id = rr.add_oracle_context_note_for_proposal(
+                        session, spoken,
+                        proposal_id=proposal_id, title=title, current_chat_id=current,
+                    )
+            except Exception as e:
+                logger.warning("Proposal oracle context note failed: %s", e)
+        return JSONResponse({
+            "success": True,
+            "spoken_text": spoken,
+            "provider": provider,
+            "model": model,
+            "oracle_note_row_id": note_id,
+        })
 
 
     @router.post("/workflows/studio/incoming/proposals/dismiss")

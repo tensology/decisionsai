@@ -173,7 +173,32 @@ class FastActionMixin:
             await self.push_frame(TextFrame(text=cleaned))
         await self.push_frame(LLMFullResponseEndFrame())
 
-    async def _fa_deliver_spoken_response(self, text: str, *, speakable_symbols: bool = False) -> None:
+    async def _fa_push_read_aloud(self, text: str, direction=None) -> None:
+        """Keep read-all mode active until TTS has consumed and drained the text."""
+        from distr.core.agent.libs import LLMFullResponseStartFrame, LLMFullResponseEndFrame, TextFrame
+
+        tts = getattr(self, "_tts_service", None)
+        if tts is None or not hasattr(tts, "begin_read_all"):
+            await self._fa_push_tts(text)
+            return
+        if direction is None:
+            from pipecat.processors.frame_processor import FrameDirection
+            direction = FrameDirection.DOWNSTREAM
+        was_read_all = getattr(tts, "_read_all_sentences", False)
+        tts.begin_read_all()
+        try:
+            # push_frame queues work asynchronously. Sending directly to TTS,
+            # as speak_text_directly does, keeps the flag set through playback.
+            await tts.process_frame(LLMFullResponseStartFrame(), direction)
+            await tts.process_frame(TextFrame(text=text), direction)
+            await tts.process_frame(LLMFullResponseEndFrame(), direction)
+        finally:
+            if not was_read_all:
+                tts.end_read_all()
+
+    async def _fa_deliver_spoken_response(
+        self, text: str, *, speakable_symbols: bool = False, read_all: bool = False
+    ) -> None:
         """Speak on desktop speakers or deliver voice to Telegram / remote control."""
         cleaned = clean_text_for_tts(
             str(text or "").strip(),
@@ -185,7 +210,10 @@ class FastActionMixin:
         if getattr(self, "_is_telegram_request", False):
             self._emit_telegram_response(cleaned, "")
             return
-        await self._fa_push_tts(cleaned)
+        if read_all:
+            await self._fa_push_read_aloud(cleaned)
+        else:
+            await self._fa_push_tts(cleaned)
 
     def _fa_save_to_history(self, chat_id, text: str, emit_signals: bool = False):
         """Helper: save assistant message and optionally emit UI signals."""
@@ -486,15 +514,14 @@ class FastActionMixin:
                 tool._last_read_text = None
             if text_read:
                 self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
-                if getattr(self, "_is_telegram_request", False):
-                    await self._fa_deliver_spoken_response(text_read, speakable_symbols=True)
+                # The clipboard task owns delivery on desktop and remote routes.
             else:
                 self._fa_record_read_aloud_activity(chat_id, "Read aloud", "(selection read aloud)", user_text)
 
         elif result and isinstance(result, str) and result.startswith("READ_ACTION:"):
             text_to_read = result[len("READ_ACTION:"):]
             text_read = text_to_read
-            await self._fa_deliver_spoken_response(text_to_read, speakable_symbols=True)
+            await self._fa_deliver_spoken_response(text_to_read, speakable_symbols=True, read_all=True)
             self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
         else:
             logger.warning("LLM: TTS path fallback, no _read_task and no READ_ACTION, result=%s", result)
@@ -513,7 +540,7 @@ class FastActionMixin:
 
             if text_to_read and text_to_read.strip():
                 self._fa_remember_clipboard_context(chat_id, text_to_read)
-                await self._fa_deliver_spoken_response(text_to_read, speakable_symbols=True)
+                await self._fa_deliver_spoken_response(text_to_read, speakable_symbols=True, read_all=True)
                 self._fa_record_read_aloud_activity(
                     chat_id, "Read from clipboard", text_to_read, user_text
                 )
@@ -566,8 +593,6 @@ class FastActionMixin:
 
     async def _handle_read_this_directly(self, direction, use_clipboard_directly=False):
         """Handle 'read this' command by sending clipboard content directly to TTS, bypassing LLM."""
-        from distr.core.agent.libs import LLMFullResponseStartFrame, LLMFullResponseEndFrame, TextFrame
-
         try:
             pipeline_dir = getattr(self, '_pipeline_direction', None) or direction
             if not pipeline_dir:
@@ -603,8 +628,6 @@ class FastActionMixin:
                 return
 
             self._cancelled = False
-            await self.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
-            await asyncio.sleep(0.05)
 
             # Normalise BEFORE splitting: links and ellipses otherwise corrupt the
             # sentence boundaries (URL dots / "..." look like full stops), which made
@@ -623,21 +646,8 @@ class FastActionMixin:
             normalized = _re.sub(r"\s+([.,!?;:])", r"\1", normalized)
             normalized = _re.sub(r"\s+", " ", normalized).strip()
 
-            chunks = self._split_text_into_chunks(normalized)
-            for i, chunk in enumerate(chunks):
-                if self._cancelled:
-                    break
-                cleaned = clean_text_for_tts(
-                    chunk,
-                    strip_whitespace=False,
-                    speakable_symbols=True,
-                )
-                if cleaned:
-                    await self.push_frame(TextFrame(text=cleaned), pipeline_dir)
-                await asyncio.sleep(0.05)
-
-            await self.push_frame(LLMFullResponseEndFrame(), pipeline_dir)
-            logger.debug("Read this: Sent %d chars in %d chunks to TTS", len(clipboard_text), len(chunks))
+            await self._fa_push_read_aloud(normalized, pipeline_dir)
+            logger.debug("Read this: Sent %d chars to TTS", len(clipboard_text))
 
         except Exception as e:
             logger.error("Error handling read this directly: %s", e, exc_info=True)

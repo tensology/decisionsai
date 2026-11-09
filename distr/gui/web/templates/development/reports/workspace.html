@@ -1,21 +1,33 @@
 <section class="development-workspace reports-workspace hidden" id="reports-workspace" aria-label="Reports">
-    <header>
-        <strong id="reports-heading">Run history</strong>
-        <button type="button" id="reports-refresh" class="secondary-button">Refresh</button>
+    <header class="reports-toolbar-row">
+        <div class="reports-tabs" role="tablist" aria-label="Report views">
+            <button type="button" class="reports-tab is-active" role="tab" id="reports-tab-report" data-reports-tab="report" aria-selected="true">Report</button>
+            <button type="button" class="reports-tab" role="tab" id="reports-tab-stats" data-reports-tab="stats" aria-selected="false">Stats</button>
+            <button type="button" class="reports-tab" role="tab" id="reports-tab-runs" data-reports-tab="runs" aria-selected="false">History</button>
+            <button type="button" class="reports-tab" role="tab" id="reports-tab-costs" data-reports-tab="costs" aria-selected="false">Costs</button>
+        </div>
+        <div class="reports-header-actions">
+            <div class="reports-period" id="reports-period-controls">
+                <button type="button" class="reports-icon-button" id="reports-period-prev" aria-label="Previous period" title="Previous period">‹</button>
+                <select id="reports-period-select" aria-label="Report period"></select>
+                <button type="button" class="reports-icon-button" id="reports-period-next" aria-label="Next period" title="Next period">›</button>
+            </div>
+            <div class="reports-projects" id="reports-projects">
+                <button type="button" class="reports-select-button" id="reports-projects-button" aria-haspopup="true" aria-expanded="false">All projects</button>
+                <div class="reports-projects-menu" id="reports-projects-menu" hidden></div>
+            </div>
+            <span id="reports-built" class="reports-built" hidden></span>
+            <button type="button" id="reports-build" class="primary-button">Build report</button>
+        </div>
     </header>
-    <p id="reports-description">Recent workflow, automation and standalone execution records. Linked records may describe stages of the same work.</p>
-    <div class="reports-tabs" role="tablist" aria-label="Report views">
-        <button type="button" class="reports-tab is-active" role="tab" id="reports-tab-runs" data-reports-tab="runs" aria-selected="true">Run history</button>
-        <button type="button" class="reports-tab" role="tab" id="reports-tab-time" data-reports-tab="time" aria-selected="false">Time log</button>
-        <button type="button" class="reports-tab" role="tab" id="reports-tab-costs" data-reports-tab="costs" aria-selected="false">Costs</button>
-    </div>
-    <div class="reports-filters" id="reports-run-filters">
-        <label>Source<select id="reports-source"><option value="all">All sources</option><option value="workflow">Workflows</option><option value="automation">Automations</option><option value="execution">Standalone executions</option></select></label>
+    <div class="reports-filters" id="reports-run-filters" hidden>
         <label>Status<select id="reports-status"><option value="all">All statuses</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="running">Running</option><option value="cancelled">Cancelled</option></select></label>
     </div>
     <div class="reports-filters" id="reports-cost-filters" hidden>
-        <label>Display<select id="reports-cost-display"><option value="blended">Blended (default)</option><option value="explicit">Explicit</option></select></label>
+        <label>Cost detail<select id="reports-cost-display"><option value="blended">One combined amount</option><option value="explicit">Provider and computer separately</option></select></label>
         <label>Source<select id="reports-cost-source"><option value="all">All sources</option><option value="workflow">Workflow</option><option value="harness">Harness</option><option value="chat">Chat</option><option value="execution">Execution</option></select></label>
     </div>
-    <div id="reports-results" aria-live="polite"></div>
+    <div id="reports-period-view" class="reports-period-view" aria-live="polite"></div>
+    <div id="reports-stats-view" class="reports-stats-view" aria-live="polite" hidden></div>
+    <div id="reports-results" aria-live="polite" hidden></div>
 </section>

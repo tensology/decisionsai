@@ -808,6 +808,12 @@ export function createSidebar({ context, actions, el }) {
             else actions.toast('This action is unavailable for this project.', 'error');
         },
         applyPinnedBoards,
+        pinnedProjectIds() {
+            return [...new Set(context.boards
+                .filter((board) => [board.key, ...(board.aliases || [])].some((key) => state.pinnedBoardKeys.includes(key)))
+                .map((board) => Number(board.project_id))
+                .filter((id) => id > 0))];
+        },
         bindEvents,
         boardTerminalActionHtml,
         closeBoardContextMenu,

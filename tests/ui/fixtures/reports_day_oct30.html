@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Friday 30 Oct day fixture</title>
+    <link rel="stylesheet" href="../../../distr/gui/web/static/development/shell.css">
+    <link rel="stylesheet" href="../../../distr/gui/web/static/development/shared/components.css">
+    <link rel="stylesheet" href="../../../distr/gui/web/static/development/reports/styles.css">
+    <style>
+        html, body { margin: 0; height: 100%; background: #0d1642; }
+        #stage { height: 100vh; }
+        .synthetic-badge { position: absolute; z-index: 20; top: 8px; right: 10px; color: #fde68a; font: 11px sans-serif; }
+    </style>
+</head>
+<body>
+    <div id="stage">
+        <p class="synthetic-badge">SYNTHETIC FRI 30 OCT</p>
+        <section class="development-workspace reports-workspace" id="reports-workspace" aria-label="Reports">
+            <header class="reports-toolbar-row">
+                <div class="reports-tabs"><button type="button" class="reports-tab is-active" data-reports-tab="report">Report</button></div>
+                <div class="reports-header-actions">
+                    <div class="reports-period" id="reports-period-controls">
+                        <button type="button" class="reports-icon-button" id="reports-period-prev">‹</button>
+                        <select id="reports-period-select" aria-label="Report period"></select>
+                        <button type="button" class="reports-icon-button" id="reports-period-next">›</button>
+                    </div>
+                    <div class="reports-projects" id="reports-projects">
+                        <button type="button" class="reports-select-button" id="reports-projects-button">All projects</button>
+                        <div class="reports-projects-menu" id="reports-projects-menu" hidden></div>
+                    </div>
+                    <span id="reports-built" class="reports-built" hidden></span>
+                    <button type="button" id="reports-build" class="primary-button">Build report</button>
+                </div>
+            </header>
+            <div id="reports-period-view" class="reports-period-view"></div>
+            <div id="reports-stats-view" class="reports-stats-view" hidden></div>
+            <div id="reports-results" hidden></div>
+        </section>
+    </div>
+    <script>
+        localStorage.setItem('decisions.reports.period.v1', JSON.stringify({ calView: 'day', projects: [], hourPx: 36 }));
+    </script>
+    <script type="module">
+        import { createReports } from '../../../distr/gui/web/static/development/reports/index.js';
+        const block = (id, ref, projectId, name, source, sourceLabel, title, start, end, seconds) => ({
+            id, ref, source, family: 'decisions', source_label: sourceLabel,
+            project_id: projectId, project_name: name, title,
+            start, end, start_local: start, end_local: end,
+            job_start: start, job_end: end, job_start_local: start, job_end_local: end,
+            starts_before_period: false, ends_after_period: false, seconds
+        });
+        const ide = '[DECISIONS DEVELOPMENT THREAD] Work as the active IDE coding agent. Inspect, edit, run checks, and continue until this request is genuinely handled.';
+        const period = {
+            period: { start: '2026-10-06', end: '2026-11-07', kind: 'rolling', label: '6 Oct 2026 – 7 Nov 2026', key: '2026-10-06_2026-11-07', timezone: 'Africa/Johannesburg' },
+            period_options: [{ value: 'rolling', label: '6 Oct 2026 – 7 Nov 2026 (default)' }],
+            projects: [{ id: 0, name: 'Unassigned' }, { id: 10, name: 'Spoortrack' }, { id: 2, name: 'Merrypak' }],
+            project_ids: [],
+            totals: { seconds: 90000, activity_seconds: 140000, blocks: 6, projects: 3, active_days: 2 },
+            by_project: [
+                { project_id: 0, name: 'Unassigned', seconds: 80000, days: 2 },
+                { project_id: 10, name: 'Spoortrack', seconds: 7200, days: 1 },
+                { project_id: 2, name: 'Merrypak', seconds: 900, days: 1 }
+            ],
+            by_day: [
+                { date: '2026-10-22', seconds: 60, projects: {} },
+                { date: '2026-10-29', seconds: 4000, projects: {} },
+                { date: '2026-10-30', seconds: 90000, projects: { '0': 80000, '10': 7200, '2': 900 } }
+            ],
+            blocks: [
+                block('b413', 'chat:158', 0, 'Unassigned', 'decisions_thread', 'Decisions thread timer', 'Thread 158', '2026-10-29T14:33:33', '2026-10-30T08:50:29', 65816),
+                block('b415', 'chat:168', 0, 'Unassigned', 'decisions_thread', 'Decisions thread timer', 'Thread 168', '2026-10-29T22:34:21', '2026-10-30T15:07:22', 59580),
+                block('b901', 'chat:584', 10, 'Spoortrack', 'decisions_thread', 'Decisions thread timer', 'Load latest Spoortrack DB', '2026-10-30T09:01:00', '2026-10-30T09:03:00', 120),
+                block('b902', 'pi:901', 10, 'Spoortrack', 'pi_decisions', 'Pi via Decisions', ide, '2026-10-30T09:01:05', '2026-10-30T09:16:00', 895),
+                block('b903', 'chat:475', 2, 'Merrypak', 'decisions_thread', 'Decisions thread timer', 'Fix missing CAPTCHA on customer registration', '2026-10-30T09:01:10', '2026-10-30T09:01:30', 20),
+                block('b904', 'chat:475b', 2, 'Merrypak', 'decisions_thread', 'Decisions thread timer', 'Fix missing CAPTCHA on customer registration', '2026-10-30T11:00:00', '2026-10-30T11:20:00', 1200),
+                block('b220', 'pi:old', 10, 'Spoortrack', 'pi_decisions', 'Pi via Decisions', ide, '2026-10-22T09:00:00', '2026-10-22T09:05:00', 300)
+            ],
+            sources: [{ source: 'decisions_thread', label: 'Decisions thread timer', state: 'data', seconds: 65816 }],
+            notes: [],
+            saved: null
+        };
+        createReports({
+            api: async (path) => {
+                if (String(path).includes('/period')) return period;
+                if (String(path).includes('/time')) return { items: [], limit: 100 };
+                if (String(path).includes('/reports')) return { items: [], limit: 100 };
+                if (String(path).includes('/chats')) return { chats: [] };
+                if (String(path).includes('/projects')) return [];
+                return { items: [] };
+            },
+            root: document.querySelector('#reports-workspace'),
+            escapeHtml: (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
+        }).enter();
+    </script>
+</body>
+</html>

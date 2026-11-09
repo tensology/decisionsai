@@ -406,83 +406,18 @@ class ClipboardActionTool(BaseTool):
             return f"Error sending to LLM: {str(e)}"
     
     async def _handle_read_async(self, text: str) -> str:
-        """Send text to TTS for reading - EXACT text, streamed in chunks like LLM."""
+        """Use the same lossless read-aloud path as clipboard fast actions."""
         if not self._llm_service:
-            logger.error("Clipboard read error: LLM service not available")
             return "Error: LLM service not available (needed to push TextFrame)"
-        
-        logger.info(f"Starting clipboard read: {len(text)} chars")
-        
         try:
-            # Send TextFrame to TTS via the LLM service's pipeline
-            # Sanitize emojis for TTS but preserve text content
-            # Stream it in chunks like the LLM does for better responsiveness
-            from pipecat.frames.frames import TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
-            from distr.core.agent.services.llm.utils import clean_text_for_tts
-            import asyncio
-            import re
-            
-            # Sanitize emojis for TTS (but preserve text content)
-            exact_text = clean_text_for_tts(text, speakable_symbols=True) if text else ""
-            
-            # CRITICAL: Send start frame FIRST - TTS expects StartFrame → TextFrame(s) → EndFrame
-            logger.info("TTS: Sending LLMFullResponseStartFrame")
-            await self._llm_service.push_frame(LLMFullResponseStartFrame(), self._llm_service._pipeline_direction)
-            
-            # Stream text in chunks (by sentences or words) for better responsiveness
-            # Split by sentences first, then by words if needed
-            # Use regex to split on sentence boundaries while preserving the text exactly
-            sentence_pattern = r'([.!?]+[\s\n]+|[\n]{2,})'
-            sentences = re.split(sentence_pattern, exact_text)
-            
-            # Recombine sentences with their punctuation
-            chunks = []
-            for i in range(0, len(sentences), 2):
-                if i < len(sentences):
-                    chunk = sentences[i]
-                    if i + 1 < len(sentences):
-                        chunk += sentences[i + 1]  # Add punctuation/separator back
-                    if chunk.strip():
-                        chunks.append(chunk)
-            
-            # If no sentence breaks found, split by words (max 10 words per chunk)
-            if len(chunks) == 1 and len(chunks[0].split()) > 10:
-                words = chunks[0].split()
-                chunks = []
-                for i in range(0, len(words), 10):
-                    chunk = ' '.join(words[i:i+10])
-                    if i + 10 < len(words):
-                        chunk += ' '  # Add space for next chunk
-                    chunks.append(chunk)
-            
-            if not chunks and exact_text:
-                chunks = [exact_text]
-                
-            logger.info(f"TTS: Streaming {len(chunks)} chunks")
-            
-            # Send each chunk as a separate TextFrame with small delays (like LLM streaming)
-            for i, chunk in enumerate(chunks):
-                if self._llm_service._cancelled:
-                    logger.info("TTS: Read cancelled, stopping chunk streaming")
-                    break
-                
-                # Send chunk - EXACT text, no cleaning, no modification
-                logger.info(f"TTS: Push chunk {i+1}/{len(chunks)}: '{chunk[:20]}...'")
-                await self._llm_service.push_frame(TextFrame(text=chunk), self._llm_service._pipeline_direction)
-                
-                # Small delay between chunks for streaming effect (similar to LLM)
-                await asyncio.sleep(0.05)
-            
-            # Send end frame to trigger final TTS processing
-            logger.info("TTS: Sending LLMFullResponseEndFrame")
-            await self._llm_service.push_frame(LLMFullResponseEndFrame(), self._llm_service._pipeline_direction)
-            
-            logger.info(f"Streaming EXACT text ({len(exact_text)} chars) to TTS in chunks - preserving exact content: '{exact_text[:100]}...'")
-            return f"Reading {len(exact_text)} characters exactly as copied"
+            await self._llm_service._fa_deliver_spoken_response(
+                text, speakable_symbols=True, read_all=True
+            )
+            return f"Reading {len(text)} characters exactly as copied"
         except Exception as e:
-            logger.error(f"Error handling read: {e}", exc_info=True)
-            return f"Error sending to TTS: {str(e)}"
-    
+            logger.error("Error handling read: %s", e, exc_info=True)
+            return f"Error sending to TTS: {e}"
+
     async def _arun(self, action: str = "", text: str = "", **kwargs) -> str:
         # Execute _run to determine action and get data
         logger.info(f"ClipboardActionTool._arun called with action='{action}', text='{text[:50] if text else ''}'")

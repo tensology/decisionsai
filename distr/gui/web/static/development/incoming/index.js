@@ -53,12 +53,15 @@ export function compareIncomingProposalsNewestFirst(left, right) {
 export function createIncoming({ context, actions, el }) {
     let dismissExpiredBusy = false;
     const proposalMutations = new Set();
+    const proposalSpokenText = new Map();
+    let proposalReadRequest = null;
     const state = {
         incoming: [],
         incomingLinks: [],
         incomingChannels: {},
         incomingProposals: [],
         incomingProposalsError: '',
+        incomingProposalSync: null,
         incomingError: '',
         incomingLoad: null,
         incomingLoadedAt: 0,
@@ -773,6 +776,8 @@ export function createIncoming({ context, actions, el }) {
             ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}" title="Creates the thread and hands it to Decisions, like Send to Decisions.">Create Thread</button>`
             : `<span class="proposal-btn muted" title="Link this conversation to a project first">No project</span>`;
         const dismiss = `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
+        const preparing = proposalReadRequest?.key === String(proposal.id);
+        const read = `<button type="button" class="proposal-btn ghost${preparing ? ' is-loading' : ''}" data-incoming-proposal-read="${proposalId}" title="Read this proposal aloud"${proposalReadRequest ? ' disabled' : ''}${preparing ? ' aria-busy="true"' : ''}>${preparing ? 'Preparing...' : 'Read to me'}</button>`;
         const projectKey = actions.escapeHtml(String(proposal.project_id || ''));
         return `<article class="proposal-card${expired ? ' proposal-expired' : ''}" data-incoming-proposal-open="${proposalId}" data-proposal-project="${projectKey}" draggable="true" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
             ${expired ? '<span class="proposal-expired-ribbon">Expired</span>' : ''}
@@ -782,7 +787,7 @@ export function createIncoming({ context, actions, el }) {
                 <span class="proposal-source" title="${actions.escapeHtml(tooltip)}" data-incoming-proposal-open="${proposalId}">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span>
             </div>
             ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
-            <div class="proposal-actions">${push}${dismiss}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button><span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span></span></div>
+            <div class="proposal-actions">${push}${dismiss}${read}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button><span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span></span></div>
         </article>`;
     }
 
@@ -802,6 +807,56 @@ export function createIncoming({ context, actions, el }) {
             actions.toast('Proposal title and description copied.');
         } catch (_) {
             actions.toast('Could not copy the proposal. Check clipboard permissions and try again.', 'error');
+        }
+    }
+
+    function syncProposalReadButtons() {
+        el('incoming-proposals-list')?.querySelectorAll('[data-incoming-proposal-read]').forEach((button) => {
+            const preparing = proposalReadRequest?.key === button.dataset.incomingProposalRead;
+            button.disabled = Boolean(proposalReadRequest);
+            button.classList.toggle('is-loading', preparing);
+            button.setAttribute('aria-busy', String(preparing));
+            button.textContent = preparing ? 'Preparing...' : 'Read to me';
+        });
+    }
+
+    async function readProposalAloud(proposalId, button) {
+        const proposal = proposalById(proposalId);
+        if (!proposal || proposalReadRequest || proposalMutations.has(String(proposalId))) return;
+        const key = String(proposalId);
+        const text = [proposal.title, proposal.description || proposal.rationale]
+            .map((part) => String(part || '').trim()).filter(Boolean).join('\n\n');
+        if (!text) {
+            actions.toast('There is nothing to read in this proposal.', 'error');
+            return;
+        }
+        const cached = proposalSpokenText.get(key);
+        const controller = new AbortController();
+        proposalReadRequest = { key, controller };
+        syncProposalReadButtons();
+        let timedOut = false;
+        const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 65_000);
+        try {
+            if (cached?.source === text) {
+                const result = await actions.api('/chats/speak-spoken', { method: 'POST', body: { text: cached.spoken }, signal: controller.signal });
+                if (result?.ok !== true) throw new Error('Speech is unavailable. Check that the Oracle is running and try again.');
+                return;
+            }
+            const result = await actions.api('/workflows/studio/incoming/proposals/read', {
+                method: 'POST',
+                signal: controller.signal,
+                body: { text, proposal_id: proposal.id || proposalId, title: proposal.title || '' }
+            });
+            const spoken = String(result?.spoken_text || '').trim();
+            if (result?.success !== true || !spoken) throw new Error(result?.error || 'Could not prepare the spoken version. Please try again.');
+            proposalSpokenText.set(key, { source: text, spoken });
+        } catch (error) {
+            if (controller.signal.aborted && !timedOut) return;
+            actions.toast(timedOut ? 'Preparing speech timed out. Please try again.' : error.data?.error || error.message || 'Could not read the proposal.', 'error');
+        } finally {
+            clearTimeout(timeout);
+            proposalReadRequest = null;
+            syncProposalReadButtons();
         }
     }
 
@@ -1069,24 +1124,10 @@ export function createIncoming({ context, actions, el }) {
         return stripTranscriptionPrefix(hit.text || hit.snippet || '');
     }
 
-    function proposalTaskDoneKey(proposalId) {
-        return `incoming.proposal.tasks.done:${String(proposalId || '')}`;
-    }
-
     function loadProposalTaskDone(proposalId) {
-        try {
-            const raw = localStorage.getItem(proposalTaskDoneKey(proposalId));
-            const parsed = raw ? JSON.parse(raw) : [];
-            return new Set(Array.isArray(parsed) ? parsed.map(Number).filter((n) => Number.isFinite(n)) : []);
-        } catch (_) {
-            return new Set();
-        }
-    }
-
-    function saveProposalTaskDone(proposalId, doneSet) {
-        try {
-            localStorage.setItem(proposalTaskDoneKey(proposalId), JSON.stringify([...doneSet].sort((a, b) => a - b)));
-        } catch (_) { /* ignore quota */ }
+        const proposal = proposalById(proposalId);
+        const indexes = proposal?.task_completed_indexes;
+        return new Set(Array.isArray(indexes) ? indexes.filter((n) => Number.isInteger(n) && n >= 0 && n < (proposal.tasks || []).length) : []);
     }
 
     function proposalTasksHtml(tasks, proposalId) {
@@ -1121,7 +1162,7 @@ export function createIncoming({ context, actions, el }) {
                 ${body}
             </li>`;
         }).join('');
-        return `<ol class="proposal-task-list" data-proposal-tasks-for="${actions.escapeHtml(String(proposalId || ''))}">${cards}</ol>`;
+        return `<p class="proposal-task-save-status" role="status" aria-live="polite" data-proposal-task-save-status></p><ol class="proposal-task-list" data-proposal-tasks-for="${actions.escapeHtml(String(proposalId || ''))}">${cards}</ol>`;
     }
 
     // Proposals have no local file storage yet, so the shared drop zone is shown read-only.
@@ -1216,6 +1257,8 @@ export function createIncoming({ context, actions, el }) {
             body = `<img class="file-preview-image" src="${actions.escapeHtml(meta.url)}" alt="${actions.escapeHtml(name)}" />`;
         } else if (mime.startsWith('audio/') || isAudioAttachment({ mime_type: mime, name: filename, kind: meta.kind })) {
             body = `<audio class="file-preview-audio" controls autoplay preload="metadata" src="${actions.escapeHtml(meta.url)}"></audio>`;
+        } else if (mime.startsWith('video/') || /\.(mp4|webm|mov|3gp)$/i.test(filename)) {
+            body = `<video class="file-preview-image" controls preload="metadata" src="${actions.escapeHtml(meta.url)}"></video>`;
         } else if (mime === 'application/pdf' || String(filename).toLowerCase().endsWith('.pdf')) {
             body = `<iframe class="file-preview-frame" title="${actions.escapeHtml(name)}" src="${actions.escapeHtml(meta.url)}"></iframe>`;
         } else if (mime.startsWith('text/') || mime === 'application/json' || /\.(txt|md|csv|json|log)$/i.test(filename)) {
@@ -1263,11 +1306,13 @@ export function createIncoming({ context, actions, el }) {
     }
 
 
-    function bindProposalTaskToggles(root, proposalId) {
+    function bindProposalTaskToggles(root, proposalId, onSaved) {
         if (!root) return;
         const list = root.querySelector('[data-proposal-tasks-for]');
         if (!list) return;
-        const done = loadProposalTaskDone(proposalId);
+        let currentProposalId = proposalId;
+        let saving = false;
+        const status = root.querySelector('[data-proposal-task-save-status]');
         const apply = (card, index, isDone) => {
             card.classList.toggle('is-done', isDone);
             const button = card.querySelector('[data-proposal-task-toggle]');
@@ -1279,15 +1324,52 @@ export function createIncoming({ context, actions, el }) {
             if (number) number.textContent = isDone ? '✓' : String(index + 1);
         };
         list.querySelectorAll('[data-proposal-task-toggle]').forEach((button) => {
-            const activate = () => {
+            const activate = async () => {
+                if (saving) return;
                 const index = Number(button.getAttribute('data-proposal-task-toggle'));
                 if (!Number.isFinite(index)) return;
                 const card = button.closest('.proposal-task-card');
                 if (!card) return;
+                const current = proposalById(currentProposalId);
+                if (!current) return;
+                const restoreFocus = document.activeElement === button;
+                const done = loadProposalTaskDone(currentProposalId);
                 if (done.has(index)) done.delete(index);
                 else done.add(index);
-                saveProposalTaskDone(proposalId, done);
-                apply(card, index, done.has(index));
+                saving = true;
+                list.setAttribute('aria-busy', 'true');
+                list.querySelectorAll('[data-proposal-task-toggle]').forEach((control) => { control.disabled = true; });
+                if (status) { status.textContent = 'Saving...'; status.classList.remove('error'); }
+                try {
+                    const result = await actions.api('/workflows/studio/incoming/proposals/details', {
+                        method: 'PUT', body: {
+                            proposal_id: currentProposalId,
+                            message_ids: current.message_ids || [],
+                            expected_updated_at: current.updated_at || '',
+                            task_completed_indexes: [...done].sort((a, b) => a - b),
+                        },
+                    });
+                    if (!result?.success || !result.proposal) throw new Error(result?.error || 'Could not save task completion.');
+                    state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(currentProposalId) ? result.proposal : row);
+                    currentProposalId = result.proposal.id;
+                    const saved = loadProposalTaskDone(currentProposalId);
+                    list.querySelectorAll('[data-proposal-task-index]').forEach((node) => {
+                        const taskIndex = Number(node.getAttribute('data-proposal-task-index'));
+                        apply(node, taskIndex, saved.has(taskIndex));
+                    });
+                    if (status) status.textContent = 'Saved';
+                    onSaved?.(result.proposal);
+                } catch (error) {
+                    if (status) {
+                        status.textContent = error.data?.error || error.message || 'Could not save task completion. Try again.';
+                        status.classList.add('error');
+                    }
+                } finally {
+                    saving = false;
+                    list.setAttribute('aria-busy', 'false');
+                    list.querySelectorAll('[data-proposal-task-toggle]').forEach((control) => { control.disabled = false; });
+                    if (restoreFocus && button.isConnected && document.activeElement === document.body) button.focus();
+                }
             };
             button.addEventListener('click', activate);
             button.addEventListener('keydown', (event) => {
@@ -1316,16 +1398,12 @@ export function createIncoming({ context, actions, el }) {
                 body: { proposal },
             });
             const attachments = [...(result.attachments || []), ...(result.failures || [])];
-            if (attachments.length) {
-                proposal.attachments = attachments;
-                const listed = (state.incomingProposals || []).find((row) => String(row.id) === String(proposal.id));
-                if (listed) listed.attachments = attachments;
-            }
+            // Keep the source manifest intact for reopening, retrying, and thread handoff.
+            // Managed preview records do not contain the original scoped download links.
             return attachments;
         } catch (error) {
             const message = error?.message || String(error);
-            proposal.attachments = [{ name: 'Attachments', download_error: message }];
-            return proposal.attachments;
+            return [{ name: 'Attachments', download_error: message }];
         }
     }
 
@@ -1468,7 +1546,12 @@ export function createIncoming({ context, actions, el }) {
         </div>`;
         document.body.appendChild(overlay);
         bindProposalFilePreview(overlay);
-        bindProposalTaskToggles(overlay, proposal.id);
+        bindProposalTaskToggles(overlay, proposal.id, (updated) => {
+            proposalId = updated.id;
+            renderIncomingWorkspace();
+            overlay._returnFocus = [...(el('incoming-proposals-list')?.querySelectorAll('.proposal-card') || [])]
+                .find((node) => node.dataset.incomingProposalOpen === String(proposalId)) || overlay._returnFocus;
+        });
         overlay.querySelectorAll('[data-proposal-jump-source]').forEach((button) => {
             button.addEventListener('click', () => jumpProposalSource(button.getAttribute('data-proposal-jump-source') || ''));
         });
@@ -1504,10 +1587,11 @@ export function createIncoming({ context, actions, el }) {
             projectStatus.classList.remove('error');
             try {
                 const result = await actions.api('/workflows/studio/incoming/proposals/project', {
-                    method: 'PUT', body: { proposal_id: proposalId, project_id: selectedId, message_ids: current.message_ids || [] }
+                    method: 'PUT', body: { proposal_id: proposalId, project_id: selectedId, message_ids: current.message_ids || [], expected_updated_at: current.updated_at || '' }
                 });
                 if (!result?.success || !result.proposal) throw new Error(result?.error || 'Could not save the project.');
                 state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(proposalId) ? result.proposal : row);
+                proposalId = result.proposal.id;
                 projectSelect.value = String(result.proposal.project_id);
                 projectStatus.textContent = 'Saved';
                 renderIncomingWorkspace();
@@ -1819,6 +1903,19 @@ export function createIncoming({ context, actions, el }) {
         if (proposalsPanel) proposalsPanel.classList.toggle('hidden', state.incomingFilter !== 'proposals');
         const proposalsCount = el('incoming-proposals-count');
         if (proposalsCount) proposalsCount.textContent = String((state.incomingProposals || []).length);
+        const syncStatus = el('incoming-proposal-sync-status');
+        if (syncStatus) {
+            const sync = state.incomingProposalSync;
+            const conflicts = Array.isArray(sync?.conflicts) ? sync.conflicts : [];
+            const incomplete = sync?.state === 'partial' || conflicts.length > 0;
+            syncStatus.classList.toggle('hidden', !['pending', 'partial', 'complete'].includes(sync?.state));
+            syncStatus.classList.toggle('error', incomplete);
+            syncStatus.textContent = !sync?.state ? '' : sync.state === 'pending'
+                ? 'Checking proposal synchronization...'
+                : incomplete
+                  ? ['Synchronization incomplete.', sync.error || '', conflicts.length ? `${conflicts.length} proposal${conflicts.length === 1 ? '' : 's'} could not be synchronized.` : ''].filter(Boolean).join(' ')
+                  : sync.state === 'complete' ? 'Synchronized with Tensology.' : '';
+        }
         const dismissExpiredButton = el('incoming-dismiss-expired');
         if (dismissExpiredButton) {
             dismissExpiredButton.disabled = dismissExpiredBusy || proposalMutations.size > 0 || !(state.incomingProposals || []).some(proposalIsExpired);
@@ -1848,9 +1945,12 @@ export function createIncoming({ context, actions, el }) {
             proposalsList.querySelectorAll('[data-incoming-proposal-copy]').forEach((button) =>
                 button.addEventListener('click', () => copyProposal(button.dataset.incomingProposalCopy))
             );
+            proposalsList.querySelectorAll('[data-incoming-proposal-read]').forEach((button) =>
+                button.addEventListener('click', () => readProposalAloud(button.dataset.incomingProposalRead, button))
+            );
             proposalsList.querySelectorAll('[data-incoming-proposal-open]').forEach((node) =>
                 node.addEventListener('click', (event) => {
-                    if (event.target.closest('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss],[data-incoming-proposal-copy]')) return;
+                    if (event.target.closest('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss],[data-incoming-proposal-copy],[data-incoming-proposal-read]')) return;
                     openProposalDetail(node.dataset.incomingProposalOpen);
                 })
             );
@@ -2425,6 +2525,16 @@ export function createIncoming({ context, actions, el }) {
                 }
                 return;
             }
+            if (['proposal_sync', 'reconciled', 'proposal_updated'].includes(status)) {
+                clearTimeout(incomingPushTimer);
+                incomingPushTimer = setTimeout(() => {
+                    state.incomingLoadedAt = 0;
+                    // A reconciliation result is already in the server cache.
+                    // Forcing triage here would start another reconciliation.
+                    if (context.workspaceMode === 'incoming') refreshIncomingData();
+                }, 250);
+                return;
+            }
             clearTimeout(incomingPushTimer);
             incomingPushTimer = setTimeout(() => {
                 state.incomingLoadedAt = 0;
@@ -2492,7 +2602,9 @@ export function createIncoming({ context, actions, el }) {
         connectIncomingPush();
         const seq = ++incomingLoadSeq;
         const force = Boolean(options?.force);
+        if (force) state.incomingProposalSync = { state: 'pending' };
         setResyncBusy(true);
+        if (force && context.workspaceMode === 'incoming') renderIncomingWorkspace();
         const load = (async () => {
             // Proposals and channels load in parallel; paint proposals as soon as
             // their own response returns. Soft load never sends refresh=1 / cache-bust.
@@ -2507,14 +2619,15 @@ export function createIncoming({ context, actions, el }) {
                 if (seq !== incomingLoadSeq) return;
                 state.incomingProposals = result.proposals || [];
                 state.incomingProposalsError = result.error || '';
+                state.incomingProposalSync = result.sync || null;
                 const autoAccept = el('incoming-auto-accept');
                 if (autoAccept && !autoAccept.disabled) autoAccept.checked = result.auto_accept === true;
                 setResyncBusy(false);
                 if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
             }, () => {
                 if (seq !== incomingLoadSeq) return;
-                state.incomingProposals = [];
-                state.incomingProposalsError = 'Proposals are temporarily unavailable.';
+                state.incomingProposalsError = state.incomingProposals.length ? '' : 'Proposals are temporarily unavailable.';
+                state.incomingProposalSync = { state: 'partial', error: 'Proposals are temporarily unavailable. Try Resync again.' };
                 setResyncBusy(false);
                 if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
             });
@@ -2610,6 +2723,9 @@ export function createIncoming({ context, actions, el }) {
         window.DecisionsIncoming = Object.assign(window.DecisionsIncoming || {}, { openFilePreview });
     }
     return {
+        leave() {
+            proposalReadRequest?.controller.abort();
+        },
         bindEvents,
         incomingConversations,
         openFilePreview,

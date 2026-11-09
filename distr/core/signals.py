@@ -2,6 +2,9 @@ from PyQt6.QtCore import QObject, pyqtSignal
 import time
 import threading
 import warnings
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SignalManager(QObject):
 
@@ -280,7 +283,7 @@ def get_agent_event_queue():
     return _agent_event_queue
 
 
-def speak_text_directly_event_queue(text: str):
+def speak_text_directly_event_queue(text: str) -> bool:
     """Emit speak_text_directly through event_queue (preferred) or signal_manager (fallback).
 
     In the agent subprocess, Qt signals don't reach the main process.
@@ -290,26 +293,29 @@ def speak_text_directly_event_queue(text: str):
     global _agent_event_queue, _last_speak_text, _last_speak_ts
     message = (text or "").strip()
     if not message:
-        return
+        return False
     # Guardrail: suppress duplicate short-burst speaks to avoid double confirmations.
     with _speak_dedup_lock:
         now = time.time()
         if message == _last_speak_text and (now - _last_speak_ts) < 1.0:
-            return
-        _last_speak_text = message
-        _last_speak_ts = now
-    if _agent_event_queue:
-        # Always route through the queue when registered. FastAPI/web routes run on a
-        # background thread where direct Qt signal emits are unreliable; the main
-        # process drains the queue on the Qt thread and emits speak_text_directly there.
-        try:
-            _agent_event_queue.put(('speak_text_directly', {'text': message}), block=False)
-            return
-        except Exception:
-            pass
-    # Fallback: signal_manager only works in the main process or same-thread
-    # with DirectConnection in the agent subprocess.
-    try:
-        signal_manager.speak_text_directly.emit(message)
-    except Exception:
-        pass
+            return True
+        accepted = False
+        if _agent_event_queue is not None:
+            # The main process drains this queue on the Qt thread.
+            try:
+                _agent_event_queue.put(('speak_text_directly', {'text': message}), block=False)
+                accepted = True
+            except Exception:
+                logger.warning("Could not queue direct speech", exc_info=True)
+        if not accepted:
+            try:
+                # Emitting an unconnected Qt signal silently discards speech.
+                if signal_manager.receivers(signal_manager.speak_text_directly) > 0:
+                    signal_manager.speak_text_directly.emit(message)
+                    accepted = True
+            except Exception:
+                logger.warning("Could not dispatch direct speech", exc_info=True)
+        if accepted:
+            _last_speak_text = message
+            _last_speak_ts = now
+        return accepted

@@ -882,7 +882,7 @@ class EventHandlerMixin:
         elif event == 'speak_text_directly':
             text = data.get('text', '')
             logger.info(f"[EVENT QUEUE] Received speak_text_directly event: {text}")
-            signal_manager.speak_text_directly.emit(text)
+            self._send_command_to_agent('speak_text_directly', {'text': text})
         elif event == 'speak_on_desktop':
             text = data.get('text', '')
             logger.info(f"[EVENT QUEUE] Received speak_on_desktop event: {text}")

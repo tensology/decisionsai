@@ -157,6 +157,10 @@ export function createTerminals({ context, actions, el, token }) {
             }
         });
         state.terminalViews.clear();
+        // The xterm hosts are gone. Keeping sessionKey made the next visit of the
+        // same project return before connectTerminalView, so the panels stayed blank.
+        const sessionList = el('terminal-session-list');
+        if (sessionList?.dataset) delete sessionList.dataset.sessionKey;
     }
 
     function openTerminalUrl(value) {

@@ -4,11 +4,11 @@
 @import './sidebar/styles.css?v=20261106-sidebar-collapse1';
 @import './boards/styles.css?v=20261102-verify';
 @import './planning/styles.css?v=20261103-rows1';
-@import './incoming/styles.css?v=20261106-source-chronology';
+@import './incoming/styles.css?v=20261109-proposal-sync1';
 @import './automations/styles.css?v=20261030-calendar-groups';
 @import './workflows/styles.css?v=20261028-responsive';
 @import './terminals/styles.css?v=20261028-responsive';
-@import './reports/styles.css?v=20261028-responsive';
+@import './reports/styles.css?v=20261109-reports-filter1';
 
 /* Shared page layout (2026-10-22): every Development page uses the Reports gutter (--page-gutter from shared base.css). */
 .reports-workspace { padding: var(--page-gutter, 24px); }

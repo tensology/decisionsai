@@ -138,6 +138,8 @@ def save_pinned_boards(keys) -> list[str]:
 
     normalized = normalize_board_keys(keys)
     save_settings_to_db({PINNED_BOARDS_SETTING: json.dumps(normalized)})
+    from distr.core.tensology_project_sync import invalidate_pinned_project_sync
+    invalidate_pinned_project_sync()
     return normalized
 
 

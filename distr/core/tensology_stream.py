@@ -105,6 +105,16 @@ def handle_work_request_signal(event: Any) -> None:
 
     status = str(event.get("status") or "pending")
     kind = str(event.get("event") or "proposal_created")
+    if kind == "reconcile_requested":
+        from distr.core.incoming.proposals import list_incoming_proposals
+        list_incoming_proposals(force=True, reconcile_request_id=str(event.get('request_id') or ''))
+        publish_incoming_change(status='reconciled')
+        return
+    if kind == "proposal_updated":
+        from distr.core.incoming.proposals import invalidate_proposals_list_cache
+        invalidate_proposals_list_cache()
+        publish_incoming_change(request_id=event.get('request_id'), status='proposal_updated')
+        return
     publish_incoming_change(request_id=event.get("request_id"), status=status)
     if kind == "proposal_decided" or status in {"dismissed", "sent_to_decisions", "approved"}:
         try:

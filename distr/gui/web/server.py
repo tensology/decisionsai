@@ -54,6 +54,7 @@ async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_
         send_tensology_heartbeat,
         sync_tensology_execution_states,
     )
+    from distr.core.tensology_project_sync import sync_pinned_projects
 
     last_presence = float("-inf")
     while True:
@@ -62,6 +63,7 @@ async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_
             last_presence = _time.monotonic()
             operations.append(("presence", send_tensology_heartbeat))
         operations += [
+            ("pinned project sync", sync_pinned_projects),
             ("discussion assessments", process_tensology_discussion_assessments),
             ("discussion context", process_tensology_discussion_context),
             ("ticket state sync", sync_tensology_execution_states),
@@ -272,12 +274,39 @@ def create_app() -> FastAPI:
         }
         try:
             if path.startswith("/api/"):
+                from distr.gui.web.security import (
+                    EVIDENCE_AUTH_HEADER,
+                    EVIDENCE_GET_PATH,
+                    PROJECTION_AUTH_HEADER,
+                    PROJECTION_GET_PATHS,
+                    evidence_header_authorizes_read,
+                    projection_header_authorizes_read,
+                )
+                if path == EVIDENCE_GET_PATH or path.startswith(EVIDENCE_GET_PATH + "-") or path.startswith(EVIDENCE_GET_PATH + "/"):
+                    if not evidence_header_authorizes_read(path, method, request.headers.get(EVIDENCE_AUTH_HEADER, "")):
+                        require_internal_token_request(request)
+                if path in PROJECTION_GET_PATHS:
+                    if not projection_header_authorizes_read(path, method, request.headers.get(PROJECTION_AUTH_HEADER, "")):
+                        require_internal_token_request(request)
                 # /api/mcp* (MCP config, local commands, server-mode token) is sensitive on read too.
                 is_mcp_path = path == "/api/mcp" or path.startswith("/api/mcp/")
                 if path not in unauthenticated_local_posts and (
                     method != "GET" or path in sensitive_settings_reads or is_mcp_path
                 ):
-                    require_internal_token_request(request)
+                    from distr.gui.web.security import (
+                        LEDGER_AUTH_HEADER,
+                        PROJECTION_AUTH_HEADER,
+                        ledger_header_authorizes_write,
+                        projection_header_authorizes_write,
+                    )
+                    ledger_ok = ledger_header_authorizes_write(
+                        path, method, request.headers.get(LEDGER_AUTH_HEADER, "")
+                    )
+                    projection_ok = projection_header_authorizes_write(
+                        path, method, request.headers.get(PROJECTION_AUTH_HEADER, "")
+                    )
+                    if not ledger_ok and not projection_ok:
+                        require_internal_token_request(request)
             # Legacy Board API (mounted at /board): token required on every method,
             # reads included (board UI XHRs get the header via the board.py shim).
             # /hooks/slack/events is called by Slack's servers: it is verified by

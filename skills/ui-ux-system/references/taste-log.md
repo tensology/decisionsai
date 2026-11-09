@@ -180,3 +180,13 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-11-04 | Did: Put auth inputs inside a fieldset with a legend in normal flow, making the outline taller than the input | Wanted: The notched outline and input must share the same compact height, including the autofill background | Why: Paul explicitly rejected the extra empty strip above Email and Password
 
 2026-11-05 | Did: Expiry disabled proposal actions and the corner ribbon reserved header space | Wanted: Expired is only a source-date indicator, Send and Queue remain available, and the ribbon overlays the source badge and description without shifting their layout | Why: Paul explicitly corrected both behaviour and layering
+
+2026-11-09 | Did: Reports modal used cramped paragraph styles, separate timestamp columns, mixed reference typography and an overlay below the shell | Wanted: Consistent existing font family and sizes, compact label-left/value-right rows, and a viewport overlay above both header and sidebar | Why: Paul explicitly rejected the spacing, wasted space and layering
+
+2026-11-09 | Did: Repeated a Close button in the Incoming proposal footer below the top-right X | Wanted: Remove the footer Close button and retain the header X | Why: Paul explicitly called the duplicate footer Close random and asked to remove it
+
+2026-11-09 | Did: Moved and shrank the Incoming modal to make room for the audio player, with no voice selector or matching portraits | Wanted: Player floats above every modal without changing modal geometry, with voice selection and matching voice profile pictures | Why: Paul explicitly corrected player layering and missing voice controls
+
+2026-11-09 | Did: Mailshot used a large voice grid modal and generated avatars for most voices | Wanted: The approved compact Tensology voice dropdown, retaining matching profile pictures | Why: Paul called the Tensology dropdown perfect and explicitly requested the same in Mailshot
+
+2026-11-09 | Did: Put top padding on the entire Tensology Incoming tab header, making Check incoming, Dismissed and Dismiss expired sit below its visual center | Wanted: Center the action buttons vertically in the full tab row, with balanced spacing when wrapped | Why: Paul explicitly said the buttons looked like they were dropping to the floor

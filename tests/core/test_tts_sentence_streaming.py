@@ -357,3 +357,47 @@ def test_llm_end_flushes_partial_batch_when_text_buffer_empty():
     asyncio.run(service.process_frame(LLMFullResponseEndFrame(), None))
 
     assert enqueued == ["Yep. I can hear you."]
+
+def test_sentence_splitter_keeps_domain_like_project_names_intact():
+    """Domain dots must not drop the leading labels (heard as only ".co.za")."""
+    cases = [
+        (
+            "Project merrypak.co.za startup terminals started.",
+            ["Project merrypak.co.za startup terminals started."],
+        ),
+        (
+            "Project www.merrypak.co.za startup terminals stopped.",
+            ["Project www.merrypak.co.za startup terminals stopped."],
+        ),
+        (
+            "Project site.co.today startup terminals started.",
+            ["Project site.co.today startup terminals started."],
+        ),
+        (
+            "Opening folder something.co.today now.",
+            ["Opening folder something.co.today now."],
+        ),
+        (
+            "Talk to Co. Smith about merrypak.co.za next.",
+            ["Talk to Co. Smith about merrypak.co.za next."],
+        ),
+    ]
+    for raw, expected in cases:
+        sentences, remaining = extract_complete_sentences(raw)
+        assert remaining == ""
+        assert sentences == expected, (raw, sentences)
+
+
+def test_streaming_path_keeps_domain_names_after_tts_cleaning():
+    chunks = [
+        "Project www.merrypak.co.za ",
+        "startup terminals started.",
+    ]
+    emitted = _stream_sentences(chunks)
+    joined = " ".join(emitted)
+    assert "merrypak" in joined.lower()
+    assert "co" in joined.lower()
+    assert "za" in joined.lower()
+    # Leading www must survive cleaning (no longer crushed to "ww").
+    assert "www" in joined.lower()
+

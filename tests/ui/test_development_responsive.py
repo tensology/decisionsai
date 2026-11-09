@@ -34,6 +34,10 @@ def install_responsive_api(page):
         'board_key': 'decisions:70', 'started_at': '2026-09-05T09:00:00', 'ended_at': '2026-09-05T09:05:00',
         'seconds': 300, 'source': 'play',
     }]}))
+    page.route('**/api/workflows/studio/reports/history?*', lambda route: route.fulfill(json={'items': [
+        {'id': 'workflow:1', 'description': 'Release verification with a descriptive workflow title', 'status': 'completed', 'project_name': 'DecisionsAI', 'started_at': '2026-09-05T09:00:00', 'ended_at': '2026-09-05T09:00:48', 'duration_seconds': 48},
+        {'id': 'time:1', 'description': 'Timed implementation review', 'status': None, 'project_name': 'DecisionsAI', 'chat_id': 17, 'started_at': '2026-09-05T09:00:00', 'ended_at': '2026-09-05T09:05:00', 'duration_seconds': 300},
+    ], 'counting': {'rows': 'Each row is one recorded run or closed timer interval.', 'unknown': 'Missing values stay unknown.'}}))
     page.route('**/api/workflows/studio/reports/costs?*', lambda route: route.fulfill(json={
         'display': 'explicit' if 'display=explicit' in route.request.url else 'blended',
         'items': [{'run_id': 99, 'provider': 'openai', 'model': 'gpt-test', 'source': 'workflow',
@@ -207,21 +211,23 @@ def test_report_views_preserve_every_column_and_filters(page: Page, width):
     install_responsive_api(page)
     page.set_viewport_size({'width': width, 'height': 900})
     page.goto(BASE + '/development/reports/')
-    for tab in ['runs', 'time', 'costs']:
+    expect(page.locator('#reports-refresh')).to_have_count(0)
+    expect(page.locator('#reports-tab-time')).to_have_count(0)
+    for tab, count in [('runs', 2), ('costs', 1)]:
         page.locator(f'#reports-tab-{tab}').click()
-        expect(page.locator('#reports-results tbody tr')).to_have_count(1)
+        expect(page.locator('#reports-results tbody tr')).to_have_count(count)
         expect(page.locator('#reports-run-filters')).to_be_visible() if tab == 'runs' else expect(page.locator('#reports-run-filters')).to_be_hidden()
         expect(page.locator('#reports-cost-filters')).to_be_visible() if tab == 'costs' else expect(page.locator('#reports-cost-filters')).to_be_hidden()
-        assert page.locator('#reports-results').evaluate('''root => [...root.querySelectorAll('th')].every(th => th.scope === 'col') && [...root.querySelectorAll('tbody tr')].every(row => [...row.cells].every((cell, i) => cell.dataset.label === root.querySelectorAll('th')[i].textContent))''')
+        assert page.locator('#reports-results').evaluate('''root => [...root.querySelectorAll('th')].every(th => th.scope === 'col' && th.textContent !== 'Source') && [...root.querySelectorAll('tbody tr')].every(row => [...row.cells].every((cell, i) => cell.dataset.label === root.querySelectorAll('th')[i].textContent))''')
         if width <= 980:
             assert page.locator('.reports-table-scroll').evaluate('node => node.scrollWidth <= node.clientWidth')
         capture(page, f'reports-{tab}', width)
     page.locator('#reports-cost-display').select_option('explicit')
     expect(page.locator('#reports-results th')).to_have_count(8)
     capture(page, 'reports-explicit', width)
-    page.route('**/api/workflows/studio/reports?*', lambda route: route.fulfill(status=503, json={'detail': 'Temporary report outage'}))
-    page.locator('#reports-refresh').click()
-    expect(page.locator('#reports-results')).to_contain_text('Use Refresh to retry')
+    page.route('**/api/workflows/studio/reports?limit=100', lambda route: route.fulfill(status=503, json={'detail': 'Temporary report outage'}))
+    page.locator('#reports-tab-runs').click()
+    expect(page.locator('#reports-results')).to_contain_text('Could not load history')
     capture(page, 'reports-error', width)
 
 

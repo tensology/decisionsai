@@ -1971,6 +1971,7 @@ class AgentSession:
             @self.task.event_handler("on_pipeline_started")
             async def _mark_pipeline_ready(_task, _frame):
                 pipeline_ready_event.set()
+                self._emit_agent_ready()
         
         # Create runner (will use current running event loop)
         self.runner = PipelineRunner()
@@ -2257,6 +2258,8 @@ class AgentSession:
     
     def _emit_agent_ready(self):
         """Send a one-shot 'agent_ready' event to the main process (best effort)."""
+        if getattr(self, '_agent_ready_emitted', False):
+            return
         queue = getattr(self, "event_queue", None)
         if not queue:
             return
@@ -2264,6 +2267,7 @@ class AgentSession:
             import os as _os
             import time as _time
             queue.put(("agent_ready", {"pid": _os.getpid(), "timestamp": _time.time()}), block=False)
+            self._agent_ready_emitted = True
         except Exception:
             self.logger.debug("Could not emit agent_ready event", exc_info=True)
 
@@ -2279,10 +2283,6 @@ class AgentSession:
         if self.command_queue:
             self._command_thread = threading.Thread(target=self._command_worker, daemon=True)
             self._command_thread.start()
-
-        # Tell the main process construction finished and commands are being consumed,
-        # so its health check can switch from the startup grace to the probe clock.
-        self._emit_agent_ready()
 
         # Run pipeline in async context (like test_pipecat.py)
         try:

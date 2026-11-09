@@ -34,6 +34,21 @@ def test_resolve_falls_back_to_agent_model():
     assert (provider.lower(), model) == ("ollama", "m1")
 
 
+def test_resolve_corrects_legacy_ollama_provider_for_openai_model():
+    provider, model = rr.resolve_oracle_model({
+        "conversational_llm_provider": "ollama",
+        "conversational_llm_model": "gpt-5.6-luna",
+        "agent_provider": "OpenAI",
+        "agent_model": "gpt-5.6-luna",
+    })
+    assert (provider, model) == ("OpenAI", "gpt-5.6-luna")
+
+
+def test_resolve_keeps_configured_local_and_openrouter_routes():
+    assert rr.resolve_oracle_model({"conversational_llm_provider": "ollama", "conversational_llm_model": "qwen3:8b"}) == ("Ollama", "qwen3:8b")
+    assert rr.resolve_oracle_model({"conversational_llm_provider": "openrouter", "conversational_llm_model": "openai/gpt-5"}) == ("OpenRouter", "openai/gpt-5")
+
+
 def test_prompt_forbids_markdown_paths_urls():
     msgs = rr.build_messages("| a | b |")
     sys_prompt = msgs[0]["content"].lower()

@@ -101,7 +101,7 @@ class TensologyClient:
             raise TensologyApiError(error.get("message", "Tensology request failed"), code=error.get("code", "request_failed"))
         return envelope.get("data")
 
-    def download(self, location: str, destination: Path, *, max_bytes: int = ATTACHMENT_MAX_BYTES) -> int:
+    def download(self, location: str, destination: Path, *, max_bytes: int = ATTACHMENT_MAX_BYTES, metadata: dict | None = None) -> int:
         """Download a ticket attachment. The API key is only ever sent to the Tensology host."""
         base = urllib.parse.urlsplit(self.base_url)
         if location.startswith(("http://", "https://")):
@@ -119,6 +119,8 @@ class TensologyClient:
         request = urllib.request.Request(url, method="GET", headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                if metadata is not None:
+                    metadata['content_type'] = response.headers.get('Content-Type', '')
                 declared = response.headers.get("Content-Length") if getattr(response, "headers", None) else None
                 if declared and str(declared).isdigit() and int(declared) > max_bytes:
                     raise TensologyApiError(f"Attachment is larger than {max_bytes} bytes.", code="attachment_too_large")

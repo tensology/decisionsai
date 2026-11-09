@@ -289,6 +289,11 @@
 @media (min-width: 1000px) { .proposal-cards { grid-template-columns: 1fr 1fr; } }
 .proposal-cards.proposal-cards-status { display: flex; align-items: center; justify-content: center; }
 .proposal-list-status { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; color: var(--studio-muted); font-size: 12px; text-align: center; }
+.incoming-proposal-sync-status { flex: 0 0 auto; margin: 0 0 12px; color: var(--studio-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.incoming-proposal-sync-status.error, .proposal-task-save-status.error { color: var(--studio-danger-text); }
+.proposal-task-save-status { margin: 0 0 12px; color: var(--studio-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.proposal-task-save-status:empty { display: none; }
+.proposal-task-check:disabled { cursor: wait; }
 .proposal-loading-spinner { width: 24px; height: 24px; box-sizing: border-box; border: 2px solid var(--studio-line); border-top-color: var(--studio-muted); border-radius: 50%; animation: incoming-resync-spin .8s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .proposal-loading-spinner { animation: none; } }
 .proposal-card { border: 1px solid var(--studio-line); border-radius: 12px; background: var(--studio-raised); padding: 16px; }
@@ -309,6 +314,7 @@
 .proposal-btn.ghost { background: transparent; border-color: var(--studio-line); color: var(--studio-muted); }
 .proposal-btn.ghost:hover { background: rgba(255,255,255,.07); color: var(--studio-text); }
 .proposal-btn.muted { border-style: dashed; border-color: var(--studio-line); color: var(--studio-dim); cursor: default; }
+.proposal-btn.is-loading, .proposal-actions .proposal-btn:disabled { opacity: .6; cursor: default; }
 
 /* One frame for intake, with shared type and spacing across its conversation views. */
 .incoming-folder-tabs button > strong { font-size: 12px; font-weight: 600; }
@@ -654,36 +660,49 @@ button.proposal-media, button.proposal-file, button.proposal-file-card { cursor:
 .incoming-new-dot:focus-visible { outline: 2px solid var(--studio-accent-light); outline-offset: 2px; }
 .incoming-row-meta { gap: 6px; }
 
-/* Proposal start/end markers inside WhatsApp message stream. */
-.incoming-proposal-marker {
+/* Proposal start/end markers inside the WhatsApp message stream.
+   The label uses the message column and wraps. A nowrap pill capped at
+   min(420px, 70vw) clipped long titles and the start/end word. */
+.incoming-whatsapp-messages > .incoming-proposal-marker {
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: minmax(12px, 28px) minmax(0, 1fr) minmax(12px, 28px);
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    flex: 0 0 auto;
+    align-self: stretch;
+    box-sizing: border-box;
     margin: 10px 0;
     color: var(--studio-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 650;
-    letter-spacing: .02em;
+    letter-spacing: .01em;
+    line-height: 1.35;
     text-transform: none;
 }
-.incoming-proposal-marker::before,
-.incoming-proposal-marker::after {
+.incoming-whatsapp-messages > .incoming-proposal-marker::before,
+.incoming-whatsapp-messages > .incoming-proposal-marker::after {
     content: "";
     height: 1px;
     background: rgba(124, 142, 188, 0.45);
 }
-.incoming-proposal-marker > span {
-    padding: 3px 10px;
+.incoming-whatsapp-messages > .incoming-proposal-marker > span {
+    min-width: 0;
+    max-width: 100%;
+    padding: 6px 12px;
     border: 1px solid rgba(124, 142, 188, 0.35);
-    border-radius: 9999px;
+    border-radius: 10px;
     background: rgba(17, 25, 68, 0.92);
     color: #cdd8ff;
-    white-space: nowrap;
-    max-width: min(420px, 70vw);
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    text-align: center;
+    line-height: 1.4;
 }
 
 /* Gmail / Mailshot readable mail body. */

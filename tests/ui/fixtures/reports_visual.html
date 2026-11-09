@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Synthetic Reports fixture</title>
+    <link rel="stylesheet" href="../../../distr/gui/web/static/development/shell.css">
+    <link rel="stylesheet" href="../../../distr/gui/web/static/development/shared/components.css">
+    <link rel="stylesheet" href="../../../distr/gui/web/static/development/reports/styles.css">
+    <style>
+        html, body { margin: 0; height: 100%; background: var(--studio-bg, #0d1642); }
+        #stage { position: relative; height: 100vh; }
+        .synthetic-badge { position: absolute; z-index: 20; top: 8px; right: 10px; font: 11px/1.2 var(--studio-sans, sans-serif); color: #fde68a; letter-spacing: .04em; }
+    </style>
+</head>
+<body>
+    <div id="stage">
+        <p class="synthetic-badge">SYNTHETIC FIXTURE</p>
+        <section class="development-workspace reports-workspace" id="reports-workspace" aria-label="Reports">
+            <header class="reports-toolbar-row">
+                <div class="reports-tabs" role="tablist" aria-label="Report views">
+                    <button type="button" class="reports-tab is-active" role="tab" id="reports-tab-report" data-reports-tab="report" aria-selected="true">Report</button>
+                    <button type="button" class="reports-tab" role="tab" id="reports-tab-stats" data-reports-tab="stats" aria-selected="false">Stats</button>
+                    <button type="button" class="reports-tab" role="tab" id="reports-tab-runs" data-reports-tab="runs" aria-selected="false">History</button>
+                    <button type="button" class="reports-tab" role="tab" id="reports-tab-costs" data-reports-tab="costs" aria-selected="false">Costs</button>
+                </div>
+                <div class="reports-header-actions">
+                    <div class="reports-period" id="reports-period-controls">
+                        <button type="button" class="reports-icon-button" id="reports-period-prev" aria-label="Previous period">‹</button>
+                        <select id="reports-period-select" aria-label="Report period"></select>
+                        <button type="button" class="reports-icon-button" id="reports-period-next" aria-label="Next period">›</button>
+                    </div>
+                    <div class="reports-projects" id="reports-projects">
+                        <button type="button" class="reports-select-button" id="reports-projects-button" aria-haspopup="true" aria-expanded="false">All projects</button>
+                        <div class="reports-projects-menu" id="reports-projects-menu" hidden></div>
+                    </div>
+                    <span id="reports-built" class="reports-built" hidden></span>
+                    <button type="button" id="reports-build" class="primary-button">Build report</button>
+                </div>
+            </header>
+            <div class="reports-filters" id="reports-run-filters" hidden>
+                <label>Status<select id="reports-status"><option value="all">All statuses</option><option value="failed">Failed</option></select></label>
+            </div>
+            <div class="reports-filters" id="reports-cost-filters" hidden>
+                <label>Display<select id="reports-cost-display"><option value="blended">Blended (default)</option></select></label>
+                <label>Source<select id="reports-cost-source"><option value="all">All sources</option></select></label>
+            </div>
+            <div id="reports-period-view" class="reports-period-view" aria-live="polite"></div>
+            <div id="reports-stats-view" class="reports-stats-view" aria-live="polite" hidden></div>
+            <div id="reports-results" aria-live="polite" hidden></div>
+        </section>
+    </div>
+    <script>
+        const params = new URLSearchParams(location.search);
+        const view = params.get('view') || 'month';
+        localStorage.setItem('decisions.reports.period.v1', JSON.stringify({
+            calView: view === 'week' || view === 'day' ? view : 'month',
+            projects: [],
+            hourPx: Number(params.get('hour') || 36)
+        }));
+    </script>
+    <script type="module">
+        import { createReports } from '../../../distr/gui/web/static/development/reports/index.js';
+
+        const block = (id, projectId, name, title, start, end, seconds) => ({
+            id, source: 'decisions_thread', family: 'decisions', source_label: 'Decisions thread timer',
+            project_id: projectId, project_name: name, title,
+            start, end, start_local: start, end_local: end,
+            job_start: start, job_end: end, job_start_local: start, job_end_local: end,
+            starts_before_period: false, ends_after_period: false, seconds, ref: id
+        });
+        const period = {
+            period: { start: '2026-10-01', end: '2026-10-31', kind: 'month', label: 'October 2026', key: '2026-10-01_2026-10-31', timezone: 'Africa/Johannesburg' },
+            period_options: [
+                { value: 'rolling', label: '6 Oct 2026 – 7 Nov 2026 (default)' },
+                { value: '2026-10', label: 'October 2026' }
+            ],
+            projects: [
+                { id: 1, name: 'Alpha' }, { id: 2, name: 'Beta' }, { id: 3, name: 'Gamma' },
+                { id: 4, name: 'Delta' }, { id: 5, name: 'Epsilon' }, { id: 0, name: 'Unassigned' }
+            ],
+            totals: { seconds: 8 * 3600, activity_seconds: 11 * 3600, blocks: 8, projects: 5, active_days: 4 },
+            by_project: [
+                { project_id: 1, name: 'Alpha', seconds: 4 * 3600, activity_seconds: 5 * 3600, blocks: 2, days: 2, first_start_local: '2026-09-30T22:00:00' },
+                { project_id: 2, name: 'Beta', seconds: 2 * 3600, activity_seconds: 2 * 3600, blocks: 1, days: 1, first_start_local: '2026-10-15T09:15:00' },
+                { project_id: 3, name: 'Gamma', seconds: 90 * 60, activity_seconds: 90 * 60, blocks: 1, days: 1, first_start_local: '2026-10-15T09:30:00' },
+                { project_id: 4, name: 'Delta', seconds: 60 * 60, activity_seconds: 60 * 60, blocks: 1, days: 1, first_start_local: '2026-10-15T09:00:00' },
+                { project_id: 5, name: 'Epsilon', seconds: 70 * 60, activity_seconds: 70 * 60, blocks: 1, days: 1, first_start_local: '2026-10-15T09:10:00' }
+            ],
+            by_day: [
+                { date: '2026-10-02', seconds: 3600, projects: { '1': 3600 } },
+                { date: '2026-10-08', seconds: 1800, projects: { '2': 1800 } },
+                { date: '2026-10-15', seconds: 5 * 3600, projects: { '1': 3 * 3600, '2': 2 * 3600, '3': 90 * 60, '4': 3600, '5': 70 * 60 } },
+                { date: '2026-10-21', seconds: 2400, projects: { '1': 2400, '3': 1200 } }
+            ],
+            blocks: [
+                block('a1', 1, 'Alpha', 'Checkout flow', '2026-10-15T09:00:00', '2026-10-15T12:00:00', 3 * 3600),
+                block('b1', 2, 'Beta', 'Invoice export', '2026-10-15T09:15:00', '2026-10-15T11:00:00', 105 * 60),
+                block('c1', 3, 'Gamma', 'Map tiles', '2026-10-15T09:30:00', '2026-10-15T13:00:00', 210 * 60),
+                block('d1', 4, 'Delta', 'Search index', '2026-10-15T09:00:00', '2026-10-15T10:00:00', 3600),
+                block('e1', 5, 'Epsilon', 'Permissions', '2026-10-15T09:10:00', '2026-10-15T10:20:00', 70 * 60),
+                block('a2', 1, 'Alpha', 'Evening notes', '2026-10-15T14:00:00', '2026-10-15T18:00:00', 4 * 3600),
+                block('a3', 1, 'Alpha', 'Monday setup', '2026-10-12T10:00:00', '2026-10-12T11:30:00', 90 * 60),
+                block('b2', 2, 'Beta', 'Friday review', '2026-10-16T15:00:00', '2026-10-16T16:00:00', 3600)
+            ],
+            sources: [
+                { source: 'pi_local', label: 'Pi (Py) local sessions', state: 'data', seconds: 2400, records: 1, blocks: 1 },
+                { source: 'codex_local', label: 'Codex local sessions', state: 'unavailable', seconds: 0, records: 0, blocks: 0 },
+                { source: 'cursor_local', label: 'Cursor IDE local history', state: 'not_read', seconds: 0, records: 0, blocks: 0 },
+                { source: 'claude_local', label: 'Claude local history', state: 'unsupported', seconds: 0, records: 0, blocks: 0 },
+                { source: 'decisions_thread', label: 'Decisions thread timer', state: 'data', seconds: 8 * 3600, records: 4, blocks: 4 }
+            ],
+            notes: [
+                'Clock time merges overlapping intervals, so a thread timer and the agent run inside it count once.',
+                'Recorded time adds every block. The same span from a timer and a run counts in both.',
+                'Cursor IDE history is not read. Claude has no adapter.'
+            ],
+            costs: {
+                available: true,
+                currency: 'USD',
+                entries: 2,
+                total_cost_usd: 12.9,
+                counting: 'Each cost ledger row is added once. Provider and resource amounts are not added again on top of the blended total.',
+                by_project: [
+                    { project_id: 1, name: 'Alpha', cost_usd: 12.5, entries: 1 },
+                    { project_id: 3, name: 'Gamma', cost_usd: 0.4, entries: 1 }
+                ]
+            },
+            analysis_route: {
+                requested: { harness: 'pi', provider: 'openrouter', model: 'DeepSeek 4.1', verified: false },
+                configured: { provider: 'ollama', model: 'qwen3:8b' },
+                selected: { provider: 'ollama', model: 'qwen3:8b' },
+                substituted: false,
+                limitation: 'DeepSeek 4.1 is not a verified model id.'
+            },
+            collected_at: '2026-11-07T10:00:00Z'
+        };
+        const history = {
+            items: [
+                { id: 'time:1', description: 'Checkout flow', status: null, project_name: 'Alpha', started_at: '2026-10-15T07:00:00Z', ended_at: '2026-10-15T10:00:00Z', duration_seconds: 3 * 3600, chat_id: 17 },
+                { id: 'execution:9', description: null, status: 'completed', project_name: 'Beta', started_at: '2026-10-15T07:15:00Z', ended_at: '2026-10-15T08:00:00Z', duration_seconds: 2700, chat_id: null }
+            ],
+            counting: {
+                rows: 'Each row is one recorded run or closed timer interval. Rows are not merged.',
+                duration: 'Duration is that row only. Adding durations double-counts overlap.',
+                wall_clock: 'Clock time on Stats unions overlapping intervals and counts that span once.',
+                unknown: 'Missing description, status, start, or end stays unknown. Nothing is filled in.'
+            }
+        };
+        const costs = {
+            items: [
+                { project_id: 1, day_sast: '2026-10-15', cost_usd: 12.5, source: 'workflow', provider: 'openrouter', model: 'fixture' },
+                { project_id: 3, day_sast: '2026-10-21', cost_usd: 0.4, source: 'execution', provider: 'openrouter', model: 'fixture' }
+            ],
+            rollups: {
+                total_cost_usd: 12.9,
+                entry_count: 2,
+                by_day: [
+                    { key: '2026-10-15', cost_usd: 12.5, entries: 1 },
+                    { key: '2026-10-21', cost_usd: 0.4, entries: 1 }
+                ]
+            },
+            display: 'blended'
+        };
+        const runs = { items: [
+            { id: 'workflow:1', kind: 'workflow', name: 'Checkout flow', status: 'completed', project_name: 'Alpha', started_at: '2026-10-15T07:00:00', completed_at: '2026-10-15T10:00:00', duration_seconds: 10800 }
+        ] };
+        const times = { items: [
+            { id: 'time:1', chat_id: 17, thread_title: 'Checkout flow', ticket_title: 'Checkout flow', ticket_key: 'DEV-1', started_at: '2026-10-15T07:00:00', ended_at: '2026-10-15T10:00:00', seconds: 10800 },
+            { id: 'time:9', chat_id: 1746, thread_title: 'Thread 1746', started_at: '2026-10-01T00:00:00', ended_at: '2026-10-01T00:05:00', seconds: 300 }
+        ] };
+        const reports = createReports({
+            api: async (path) => {
+                const url = String(path);
+                if (url.includes('/costs')) return costs;
+                if (url.includes('/build')) throw Object.assign(new Error('synthetic fixture does not call a provider'), { status: 400 });
+                if (url.includes('/period')) return period;
+                if (url.includes('/time')) return times;
+                if (url.includes('/reports')) return runs;
+                return { items: [] };
+            },
+            root: document.querySelector('#reports-workspace'),
+            escapeHtml: (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
+        });
+        reports.enter();
+        const tab = params.get('tab');
+        if (tab) document.querySelector(`[data-reports-tab="${tab}"]`)?.click();
+    </script>
+</body>
+</html>

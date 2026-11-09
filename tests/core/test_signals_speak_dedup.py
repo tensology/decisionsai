@@ -74,3 +74,48 @@ def test_speak_text_directly_event_queue_uses_queue_even_with_qapplication(monke
         {"text": "Synced 3 new messages from WhatsApp."},
     )
     assert direct_emit_calls == []
+
+
+def test_unavailable_speech_reports_failure_and_does_not_suppress_retry(monkeypatch):
+    monkeypatch.setattr(signals_mod, "_agent_event_queue", None)
+    monkeypatch.setattr(signals_mod, "_last_speak_text", "")
+    monkeypatch.setattr(signals_mod, "_last_speak_ts", 0.0)
+    emitted = []
+    monkeypatch.setattr(signals_mod, "signal_manager", types.SimpleNamespace(
+        receivers=lambda signal: 0,
+        speak_text_directly=types.SimpleNamespace(emit=emitted.append),
+    ))
+    assert signals_mod.speak_text_directly_event_queue("Retry me") is False
+    assert emitted == []
+    q = _QueueStub()
+    monkeypatch.setattr(signals_mod, "_agent_event_queue", q)
+    assert signals_mod.speak_text_directly_event_queue("Retry me") is True
+    assert len(q.events) == 1
+    assert signals_mod.speak_text_directly_event_queue("Retry me") is True
+    assert len(q.events) == 1
+
+
+def test_full_queue_and_no_listener_reports_failure(monkeypatch):
+    class FullQueue:
+        def put(self, *args, **kwargs):
+            raise RuntimeError("full")
+
+    monkeypatch.setattr(signals_mod, "_agent_event_queue", FullQueue())
+    monkeypatch.setattr(signals_mod, "_last_speak_text", "")
+    monkeypatch.setattr(signals_mod, "signal_manager", types.SimpleNamespace(
+        receivers=lambda signal: 0,
+        speak_text_directly=types.SimpleNamespace(emit=lambda text: None),
+    ))
+    assert signals_mod.speak_text_directly_event_queue("Queue is full") is False
+
+
+def test_connected_signal_fallback_accepts_speech(monkeypatch):
+    monkeypatch.setattr(signals_mod, "_agent_event_queue", None)
+    monkeypatch.setattr(signals_mod, "_last_speak_text", "")
+    emitted = []
+    monkeypatch.setattr(signals_mod, "signal_manager", types.SimpleNamespace(
+        receivers=lambda signal: 1,
+        speak_text_directly=types.SimpleNamespace(emit=emitted.append),
+    ))
+    assert signals_mod.speak_text_directly_event_queue("Connected") is True
+    assert emitted == ["Connected"]

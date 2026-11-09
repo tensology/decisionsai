@@ -404,6 +404,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         if is_dock_app():
             persist_dock_launch_preference(resolve_app_bundle_path(CORE_DIR))
         self.agent_process = None
+        self._agent_lifecycle_state = 'starting'
         self.selected_input_device = None
         self.selected_output_device = None
 

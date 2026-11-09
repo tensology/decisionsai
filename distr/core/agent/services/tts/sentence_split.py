@@ -17,6 +17,17 @@ _ABBREV_RE = re.compile(
     r")\.",
     re.IGNORECASE,
 )
+# Hostnames / domain-like project folder names ("merrypak.co.za", "site.co.today").
+# Protect every internal dot so sentence splitting cannot treat them as stops and
+# drop the leading labels (heard as only ".co.za"). Require 2+ dots or a common
+# lowercase TLD so "immediately.Gamma" stays a real sentence boundary.
+_DOMAIN_LIKE_COMMON_TLDS = (
+    "com|net|org|io|ai|dev|app|co|za|uk|us|info|biz|today|xyz|me|tv|cc|cloud|tech"
+)
+_DOMAIN_LIKE_RE = re.compile(
+    rf"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{{0,61}}[A-Za-z0-9])?\.){{2,}}[a-z]{{2,24}}\b"
+    rf"|\b[A-Za-z0-9](?:[A-Za-z0-9-]{{0,61}}[A-Za-z0-9])?\.(?:{_DOMAIN_LIKE_COMMON_TLDS})\b"
+)
 _WORD_RE = re.compile(r"\b[\w']+\b")
 _SENTENCE_BOUNDARY_RE = re.compile(
     r"([^.!?]*\w[^.!?]*[.!?]+[\"'”’)\]]*)(\s+|$|(?=[A-Z0-9]))"
@@ -57,10 +68,10 @@ def extract_complete_sentences(text: str) -> tuple[list[str], str]:
     """Extract complete sentences from a streaming text buffer.
 
     The live TTS providers receive arbitrary deltas, so sentence boundaries can
-    arrive around decimals, abbreviations, markdown cleanup, or punctuation with
-    no following whitespace. This splitter protects common non-boundary dots and
-    advances by match end position, which prevents skipped/duplicated fragments
-    when a sentence match starts after a protected or stray punctuation mark.
+    arrive around decimals, abbreviations, domain-like names, markdown cleanup,
+    or punctuation with no following whitespace. This splitter protects common
+    non-boundary dots and keeps any text before a mid-buffer match so leading
+    labels of hostnames are never dropped.
     """
     if not text:
         return [], ""
@@ -75,6 +86,14 @@ def extract_complete_sentences(text: str) -> tuple[list[str], str]:
             break
         protected = replaced
 
+    # Protect hostnames before abbreviations: otherwise \bCo. inside
+    # "merrypak.co.za" is treated as the company abbreviation and only the
+    # trailing ".co.za" fragment survives as a spoken sentence.
+    protected = _DOMAIN_LIKE_RE.sub(
+        lambda match: match.group(0).replace(".", _PLACEHOLDER),
+        protected,
+    )
+
     protected = _ABBREV_RE.sub(
         lambda match: match.group(0).replace(".", _PLACEHOLDER),
         protected,
@@ -86,15 +105,19 @@ def extract_complete_sentences(text: str) -> tuple[list[str], str]:
         match = _SENTENCE_BOUNDARY_RE.search(protected[pos:])
         if not match:
             break
-        sentence = match.group(1).strip()
-        if pos + match.end() >= len(protected) and re.search(
+        # search() can match after the current cursor (false boundary dots). Keep
+        # the skipped prefix so "Project merrypak.co.za started." is not reduced
+        # to "co.za started."
+        absolute_end = pos + match.end()
+        sentence = (protected[pos:pos + match.start()] + match.group(1)).strip()
+        if absolute_end >= len(protected) and re.search(
             rf"\b[vV]?\d+(?:{re.escape(_PLACEHOLDER)}\d+)*\.$",
             sentence,
         ):
             break
         if len(sentence.replace(_PLACEHOLDER, "")) >= 2:
             sentences_raw.append(sentence)
-        pos += match.end()
+        pos = absolute_end
 
     remaining = protected[pos:]
 

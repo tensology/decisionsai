@@ -532,6 +532,9 @@ def test_proposals_list_cache_serves_until_invalidated(monkeypatch):
         }]
 
     monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', fetch)
+    monkeypatch.setattr('distr.core.incoming.proposal_sync.fetch_remote_proposals', fetch)
+    monkeypatch.setattr('distr.core.incoming.proposal_sync.reconcile', lambda local, remote, **kwargs: (remote, {'state': 'complete'}))
+    monkeypatch.setattr('distr.core.tensology_project_sync.sync_pinned_projects', lambda **kwargs: {})
     monkeypatch.setattr('distr.core.incoming.service.list_development_incoming', lambda **k: {'items': []})
     monkeypatch.setattr(proposals_mod, '_local_proposals', lambda *a, **k: [])
     monkeypatch.setattr(proposals_mod, '_project_map', lambda: {})
