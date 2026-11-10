@@ -2126,6 +2126,7 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
 def _scoped_proposals(rows):
     from distr.core.incoming.project_links import source_project_index, proposal_in_scope
     from distr.core.incoming.proposal_sync import source_identity
+    rows = apply_project_corrections(rows)
     index, result, seen = source_project_index(), [], set()
     # Canonical shared records take precedence over local fallback snapshots.
     for row in sorted(rows, key=lambda item: item.get('origin') != 'tensology'):

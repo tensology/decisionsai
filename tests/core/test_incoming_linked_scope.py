@@ -90,3 +90,16 @@ def test_claimed_merged_scope_cannot_override_an_unlinked_actual_source():
     row = {'project_id': 3, 'source': 'whatsapp', 'source_thread_id': 'personal@g.us',
            'source_scope': [{'source': 'whatsapp', 'source_thread_id': 'work'}]}
     assert not project_links.proposal_in_scope(row, scope)
+
+
+def test_saved_human_assignment_is_applied_before_rejecting_legacy_wrong_project(projects, monkeypatch):
+    from distr.core.db.projects import IncomingProposalProject
+    row = {'id': 'local:whatsapp:shared', 'origin': 'local', 'source': 'whatsapp', 'source_thread_id': 'shared',
+           'message_ids': ['m1'], 'project_id': 16, 'title': 'Corrected billing request'}
+    with projects() as db:
+        db.add(IncomingProposalProject(key=proposals._proposal_handoff_key(row), project_id=3))
+        db.commit()
+    monkeypatch.setattr(project_links, 'source_project_index', lambda **kwargs: {('whatsapp', 'shared'): {3}})
+    result = proposals._scoped_proposals([row])
+    assert result[0]['project_id'] == 3
+    assert result[0]['project_corrected'] is True
