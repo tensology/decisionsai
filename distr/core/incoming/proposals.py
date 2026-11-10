@@ -560,6 +560,8 @@ _TRIAGE_SYSTEM = (
     "Use related_ticket_id when this extends an existing ticket. "
     "Choose the project from candidate_projects using the actual request and conversation context. "
     "A participant may work on several projects: do not assign by their name alone. "
+    "When several projects are linked, require the request or developer context to name the selected project. "
+    "A generic request with no identified project is not actionable; never guess from generic billing or frontend keywords. "
     "Outbound messages are context from the developer, not new client requests on their own. "
     "For independent requests about different projects return {proposals: [...]} with one entry per request, "
     "each containing exact inbound source_message_ids. Never assign the same source message to two projects. "
@@ -830,6 +832,14 @@ def _triage_conversations(
                 assigned.update(ids)
                 scoped = {**conversation, 'items': [row for row in conversation['items']
                           if str(row.get('source_message_id')) in ids or row.get('from_me') or row.get('direction') == 'outbound']}
+            if len(candidates) > 1:
+                # A shared contact is not evidence for one of their projects.
+                # Hold ambiguous requests instead of guessing from generic tasks.
+                normalize = lambda value: re.sub(r'[^a-z0-9]', '', str(value).lower())
+                context = normalize(' '.join(str(row.get('text') or '') for row in scoped['items']))
+                name = normalize(project.get('name'))
+                if not name or name not in context:
+                    continue
             proposal = _proposal_from_triage(scoped, project, record)
             if split:
                 import hashlib
@@ -1888,7 +1898,8 @@ def _record_proposal_handoff(chat_id: int, proposal: dict[str, Any], *, project_
         params = _chat_params(chat.params)
         prior = params.get("incoming_proposal_handoff") or {}
         key = _proposal_handoff_key(proposal)
-        params["incoming_proposal_handoff"] = {"key": key, "started": bool(started or (prior.get('key') == key and prior.get('started')))}
+        params["incoming_proposal_handoff"] = {"key": key, "proposal": json.loads(proposal_snapshot_json(proposal)),
+                                               "started": bool(started or (prior.get('key') == key and prior.get('started')))}
         chat.params = json.dumps(params)
         db.commit()
 
@@ -2094,9 +2105,11 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
     proposal_id = _tensology_id(proposal.get("id"))
     if proposal_id is not None:
         try:
-            from distr.core.tensology_client import decide_work_request
+            from distr.core.tensology_client import configured_tensology_client
 
-            decide_work_request(proposal_id, "send_to_decisions")
+            configured_tensology_client(source='incoming-thread-receipt').post(
+                f'work-requests/{proposal_id}/action', {'action': 'acknowledge_thread', 'thread_id': int(chat_id)},
+                idempotency_key=f'proposal-thread-{proposal_id}-{chat_id}')
         except Exception:  # never fail the local thread because the site is down
             import logging
 
@@ -2178,6 +2191,10 @@ def list_incoming_proposals(*, limit: int = 100, refresh_local: bool = True, for
             remote_rows = fetch_remote_proposals()
         else:
             remote_rows = fetch_pending_work_requests(include_decided=True)
+        from distr.core.incoming.proposal_sync import reconcile_decisions
+        remote_rows, decision_errors = reconcile_decisions(remote_rows)
+        if decision_errors:
+            tensology_error = 'Some proposal decisions are awaiting synchronization: ' + '; '.join(decision_errors)[:150]
         for row in remote_rows:
             proposal = _from_tensology(row, project_map)
             if proposal:

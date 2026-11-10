@@ -56,8 +56,8 @@ def test_canonical_unmapped_links_never_fall_back_to_an_unrelated_project(monkey
 def test_shared_contact_split_preserves_exact_sources_and_rejects_overlap(monkeypatch):
     monkeypatch.setattr(proposals, '_candidate_projects', lambda: [{'id': 8, 'name': 'Snuza'}, {'id': 10, 'name': 'Spoortrack'}])
     base = {'source': 'whatsapp', 'source_thread_id': 'greg', 'sender': 'Greg', 'project_ids': [8, 10]}
-    items = [{**base, 'source_message_id': 'm1', 'text': 'Fix the monitor'},
-             {**base, 'source_message_id': 'm2', 'text': 'Fix the tracking report'}]
+    items = [{**base, 'source_message_id': 'm1', 'text': 'Fix the Snuza monitor'},
+             {**base, 'source_message_id': 'm2', 'text': 'Fix the Spoortrack tracking report'}]
     rows = [{'is_actionable': True, 'project_id': 8, 'title': 'Fix monitor', 'source_message_ids': ['m1']},
             {'is_actionable': True, 'project_id': 10, 'title': 'Fix report', 'source_message_ids': ['m2']}]
     complete = lambda *args: json.dumps({'proposals': rows})
@@ -66,6 +66,14 @@ def test_shared_contact_split_preserves_exact_sources_and_rejects_overlap(monkey
     assert len({row['id'] for row in result}) == 2
     rows[1]['source_message_ids'] = ['m1']
     assert proposals._triage_conversations(items, {}, complete=complete) == []
+
+
+def test_generic_shared_contact_request_cannot_be_assigned_by_model_guess(monkeypatch):
+    monkeypatch.setattr(proposals, '_candidate_projects', lambda: [{'id': 4, 'name': 'Player1Sport'}, {'id': 10, 'name': 'Spoortrack'}])
+    item = {'source': 'whatsapp', 'source_thread_id': 'shared', 'sender': 'Client', 'project_ids': [4, 10],
+            'source_message_id': 'billing', 'text': 'Allow the new billing type on the front end'}
+    guessed = lambda *args: json.dumps({'is_actionable': True, 'project_id': 4, 'title': 'Allow billing'})
+    assert proposals._triage_conversations([item], {}, complete=guessed) == []
 
 
 def test_canonical_project_link_cache_survives_offline_and_empty_success_clears(monkeypatch, tmp_path):

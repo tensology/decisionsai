@@ -217,3 +217,36 @@ def test_cached_read_preserves_an_existing_remote_error(monkeypatch):
                                           'sync': {'state': 'partial', 'error': 'Remote unavailable'}})
     assert incoming.list_incoming_proposals(refresh_local=False)['sync'] == {'state': 'partial', 'error': 'Remote unavailable'}
     incoming.invalidate_proposals_list_cache()
+
+
+def test_dismissal_retry_survives_offline_and_later_refresh(client, monkeypatch):
+    monkeypatch.setattr(sync, '_thread_receipts', lambda: [])
+    monkeypatch.setattr(incoming, '_undismissed_proposals', lambda rows: [])
+    client.post.side_effect = RuntimeError('Offline')
+    rows, errors = sync.reconcile_decisions([remote()])
+    assert errors and rows[0]['status'] == 'pending'
+    client.post.side_effect = None
+    client.post.return_value = {'status': 'dismissed'}
+    rows, errors = sync.reconcile_decisions([remote()])
+    assert not errors and rows[0]['status'] == 'dismissed'
+    assert client.post.call_args.args[1] == {'action': 'dismiss'}
+
+
+def test_thread_receipt_retries_by_source_identity_without_starting_work_again(client, monkeypatch):
+    proposal = incoming._from_tensology(remote(), {})
+    proposal['id'] = 'local:gmail:thread'
+    monkeypatch.setattr(sync, '_thread_receipts', lambda: [(936, {'key': 'legacy-key', 'proposal': proposal})])
+    client.post.return_value = {'status': 'sent_to_decisions'}
+    rows, errors = sync.reconcile_decisions([remote()])
+    assert not errors and rows[0]['status'] == 'sent_to_decisions'
+    assert client.post.call_args.args[1] == {'action': 'acknowledge_thread', 'thread_id': 936}
+
+
+def test_remote_decision_missed_while_offline_is_imported_without_write(client, monkeypatch):
+    monkeypatch.setattr(sync, '_thread_receipts', lambda: [])
+    record = Mock()
+    monkeypatch.setattr(incoming, 'record_remote_proposal_decision', record)
+    rows, errors = sync.reconcile_decisions([{**remote(), 'status': 'dismissed'}])
+    assert not errors and rows[0]['status'] == 'dismissed'
+    assert record.call_args.args[0]['request_id'] == 87
+    client.post.assert_not_called()

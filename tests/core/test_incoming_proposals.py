@@ -376,7 +376,8 @@ def test_proposal_thread_preserves_project_prompt_and_actions_upstream(monkeypat
     assert calls[0]['title'] == proposal['title']
     assert proposal['description'] in calls[0]['starting_question']
     assert 'Check spelling' in calls[0]['starting_question']
-    assert writes == [(45, 'send_to_decisions')]
+    assert writes == []
+    assert client.post.call_args.args[:2] == ('work-requests/45/action', {'action': 'acknowledge_thread', 'thread_id': 123})
     assert receipts == [123]
 
 

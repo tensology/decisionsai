@@ -294,3 +294,54 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
 
 def last_result():
     return dict(_LAST_RESULT)
+
+
+def _thread_receipts():
+    from distr.core.chat import _chat_params
+    from distr.core.db import Chat, get_session
+    with get_session() as db:
+        return [(chat_id, receipt) for chat_id, params in db.query(Chat.id, Chat.params).all()
+                if isinstance(receipt := _chat_params(params).get('incoming_proposal_handoff'), dict)]
+
+
+def reconcile_decisions(remote_rows):
+    """Retry durable local decisions, and import decisions missed while offline."""
+    from . import proposals as incoming
+    from distr.core.tensology_client import configured_tensology_client
+    receipts = _thread_receipts()
+    rows, errors = [], []
+    client = None
+    for remote in remote_rows:
+        row = dict(remote)
+        shaped = incoming._from_tensology(row)
+        if not shaped:
+            rows.append(row)
+            continue
+        if row.get('status') != 'pending':
+            incoming.record_remote_proposal_decision({**shaped, 'request_id': row['id'], 'status': row.get('status')})
+            rows.append(row)
+            continue
+        thread_id = None
+        for chat_id, receipt in receipts:
+            match = receipt.get('key') == incoming._proposal_handoff_key(shaped)
+            if not match and receipt.get('proposal'):
+                try:
+                    match = source_identity(receipt['proposal']) == source_identity(row)
+                except ValueError:
+                    pass
+            if match:
+                thread_id = chat_id
+                break
+        action = 'acknowledge_thread' if thread_id else ('dismiss' if not incoming._undismissed_proposals([shaped]) else None)
+        if action:
+            try:
+                client = client or configured_tensology_client(source='incoming-decision-retry')
+                body = {'action': action, **({'thread_id': thread_id} if thread_id else {})}
+                saved = client.post(f"work-requests/{row['id']}/action", body,
+                                    idempotency_key=f"proposal-decision-{row['id']}-{action}-{thread_id or ''}")
+                row['status'] = saved['status']
+                row['stored_status'] = saved['status']
+            except Exception as exc:
+                errors.append(f"{row['id']}: {str(exc)[:100]}")
+        rows.append(row)
+    return rows, errors
