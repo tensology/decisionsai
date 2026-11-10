@@ -1248,7 +1248,8 @@ def _cmd_interrupt_tts(session, params):
                             abort()
                         else:
                             stream.stop_stream()
-                        stream.start_stream()
+                        stream.close()
+                        transport_out._out_stream = None
             except Exception as e:
                 logger.debug("Interrupt: could not abort output stream: %s", e)
         else:

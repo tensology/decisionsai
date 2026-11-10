@@ -5,6 +5,20 @@ import { readFileSync } from 'node:fs';
 const period = await import('../../distr/gui/web/static/development/reports/period.js');
 const reports = await import('../../distr/gui/web/static/development/reports/index.js');
 
+test('Today uses the SAST date at the UTC midnight boundary', () => {
+    assert.equal(period.sastToday(new Date('2026-11-09T21:59:59Z')), '2026-11-09');
+    assert.equal(period.sastToday(new Date('2026-11-09T22:00:00Z')), '2026-11-10');
+    assert.equal(period.sastToday(new Date('2026-11-09T12:00:00-08:00')), '2026-11-09');
+});
+
+test('an entry ending at SAST midnight does not create a second zero-minute work row', () => {
+    const block = { start_local: '2026-10-24T23:27:02.230000', end_local: '2026-10-25T00:00:00', seconds: 1977.77 };
+    assert.equal(period.segments(block).length, 1);
+    assert.equal(period.segments(block)[0].day, '2026-10-24');
+    assert.equal(period.daySlice(block, '2026-10-25'), null);
+    assert.equal(period.daySlice(block, '2026-10-24').range, '23:27–24:00');
+});
+
 test('a selected day shows that day slice, not the whole stored span', () => {
     const carry = {
         id: 'b413',
@@ -293,13 +307,13 @@ test('desktop grid keeps the calendar on the left and the day list order untouch
     const html = readFileSync(new URL('../../distr/gui/web/templates/development/index.html', import.meta.url), 'utf8');
     const shell = readFileSync(new URL('../../distr/gui/web/static/development/styles.css', import.meta.url), 'utf8');
     const reports = readFileSync(new URL('../../distr/gui/web/static/development/reports/index.js', import.meta.url), 'utf8');
-    assert.match(app, /reports\/index\.js\?v=20261109-invoice-review2/);
+    assert.match(app, /reports\/index\.js\?v=20261109-calendar-today5/);
     assert.match(app, /view-switch\.js\?v=20261107-nav68/);
     assert.match(app, /terminals\/index\.js\?v=20261107-nav68/);
-    assert.match(reports, /period\.js\?v=20261109-invoice-review2/);
-    assert.match(shell, /reports\/styles\.css\?v=20261109-reports-filter1/);
-    assert.match(html, /styles\.css\?v=20261109-reports-filter1/);
-    assert.match(html, /app\.js\?v=20261109-invoice-review2/);
+    assert.match(reports, /period\.js\?v=20261109-calendar-today5/);
+    assert.match(shell, /reports\/styles\.css\?v=20261109-calendar-today5/);
+    assert.match(html, /styles\.css\?v=20261109-calendar-today5/);
+    assert.match(html, /app\.js\?v=20261109-calendar-today5/);
     const dayShell = periodSource.slice(periodSource.indexOf('function dayShellHtml'), periodSource.indexOf('view.addEventListener'));
     assert.equal((dayShell.match(/zoomHtml/g) || []).length, 1);
     assert.match(dayShell, /timeGridHtml\(data, 1, state\.hourPx, zoomHtml\(state\.hourPx\)\)/);

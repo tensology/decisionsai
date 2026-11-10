@@ -186,7 +186,7 @@ def _load_project(project_id: int) -> Optional[dict]:
     from distr.core.db.projects import Project
 
     with get_session() as session:
-        project = session.query(Project).filter(Project.id == project_id).first()
+        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
         if not project:
             return None
         return {
@@ -213,7 +213,7 @@ def _persist_project_startup_preferences(
     from distr.core.db.projects import Project
 
     with get_session() as session:
-        project = session.query(Project).filter(Project.id == project_id).first()
+        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
         if not project:
             return
         if startup_instructions is not None:
@@ -395,7 +395,7 @@ def start_project_startup_terminals(
             from distr.core.services import schedule_blocks as schedule_service
 
             with get_session() as session:
-                db_project = session.query(Project).filter(Project.id == project_id).first()
+                db_project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if db_project and schedule_service.project_has_linked_board(db_project):
                     schedule_service.start_project_time_tracker(session, db_project)
         except Exception as exc:
@@ -532,7 +532,7 @@ async def start_project_startup_terminals_async(
             from distr.core.services import schedule_blocks as schedule_service
 
             with get_session() as session:
-                db_project = session.query(Project).filter(Project.id == project_id).first()
+                db_project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if db_project and schedule_service.project_has_linked_board(db_project):
                     schedule_service.start_project_time_tracker(session, db_project)
         except Exception as exc:

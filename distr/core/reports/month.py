@@ -676,7 +676,8 @@ def _session_activity(path: Path, *, kind: str) -> tuple[dict, list[datetime]]:
     meta: dict = {"cwd": "", "prompt": "", "summary": "", "last_assistant": "", "task_complete": "", "id": path.stem}
     meta['activity'] = []
     stamps: list[datetime] = []
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
+    from distr.core.reports.session_files import open_session
+    with open_session(path) as handle:
         for index, line in enumerate(handle):
             head = line[:400]
             match = _TS_RE.search(head)
@@ -775,12 +776,13 @@ def activity_intervals(stamps: list[datetime], gap_seconds: int = SESSION_GAP_SE
     return [(a, b) for a, b in intervals if b > a]
 
 
-def _session_files(root: Path, lo: datetime, *, kind: str) -> list[Path]:
+def _session_files(root: Path, lo: datetime, *, kind: str, include_archived=False) -> list[Path]:
     if not root.is_dir():
         return []
     cutoff = (lo - timedelta(days=1)).replace(tzinfo=UTC).timestamp()
     files = []
-    for path in root.rglob("*.jsonl"):
+    from distr.core.reports.session_files import session_paths
+    for path in session_paths(root) if include_archived else root.rglob("*.jsonl"):
         try:
             if path.stat().st_mtime >= cutoff:
                 files.append(path)
@@ -1503,16 +1505,37 @@ def attach_report_extras(snapshot: dict, project_ids: list[int] | None) -> dict:
 def get_period_report(period: Period, project_ids: list[int] | None, **kwargs) -> dict:
     """Live collation plus the newest saved analysis for this period, projects and automation choice."""
     snapshot = collate(period, project_ids, **kwargs)
+    from distr.core.reports.calendar_review import apply_review
+    if kwargs.get('get_session') is None:
+        snapshot = apply_review(snapshot)
     snapshot["saved"] = latest_report(period, project_ids, kwargs.get("get_session"),
                                       include_automations=kwargs.get("include_automations", False))
     snapshot["default_model"] = default_model()
     snapshot["period_options"] = period_options()
+    if snapshot.get('calendar_review') and period.kind == 'custom':
+        snapshot['period_options'][0] = {**snapshot['period_options'][0], 'label': period.label,
+                                         'start': period.start.isoformat(), 'end': period.end.isoformat()}
     attach_report_extras(snapshot, project_ids)
     return snapshot
 
 
 def build_period_report(period: Period, project_ids: list[int] | None, *, provider: str | None = None,
                         model: str | None = None, include_automations: bool = False) -> dict:
+    from distr.core.reports.calendar_review import load_review, apply_review
+    reviewed = load_review()
+    if reviewed and provider is None and model is None and period.start.isoformat() <= reviewed['period']['end'] and period.end.isoformat() >= reviewed['period']['start']:
+        snapshot = apply_review(collate(period, project_ids, include_automations=include_automations, invoice_only=True))
+        snapshot['review_rows'] = snapshot['blocks']
+        analysis = {'summary': 'Audited client work matched to the existing Tensology calendar and unbilled billing preview.',
+                    'projects': [{'name': row['name'], 'hours': row['seconds']/3600,
+                                  'highlights': [b['title'] for b in snapshot['blocks'] if b['project_id']==row['project_id']]}
+                                 for row in snapshot['by_project']],
+                    'notes': ['Only verified work is included. Duplicate time, completed waiting and project days below 15 minutes are excluded.',
+                              f"{len(reviewed.get('holds', []))} source items remain in the audit record without a client charge."]}
+        saved = save_report(snapshot, analysis, provider='source-evidence', model='audited-calendar-v1')
+        result = get_period_report(period, project_ids, include_automations=include_automations)
+        result['saved'] = saved
+        return result
     verdict = report_route_verdict(provider, model)
     if verdict["blocked_unverified_label"]:
         raise ValueError(verdict["limitation"])

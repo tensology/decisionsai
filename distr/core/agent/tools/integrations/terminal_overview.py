@@ -88,7 +88,7 @@ If no project is specified, uses the currently active project.
         normalized_action = str(action or "status").strip().lower()
         if normalized_action == "list":
             with get_session() as session:
-                projects = session.query(Project).order_by(Project.position, Project.name).all()
+                projects = session.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.position, Project.name).all()
                 payload = []
                 for project in projects:
                     sessions = get_startup_sessions_for_project(int(project.id), purpose="startup")
@@ -111,11 +111,11 @@ If no project is specified, uses the currently active project.
             if project_id is not None:
                 project = session.get(Project, int(project_id))
             elif project_name:
-                project = session.query(Project).filter(
+                project = session.query(Project).filter(Project.deleted_at.is_(None),
                     Project.name.ilike(f"%{project_name}%")
                 ).first()
             else:
-                project = session.query(Project).filter(Project.in_use == True).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.in_use == True).first()
 
             if project:
                 project_id = project.id

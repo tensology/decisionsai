@@ -235,7 +235,7 @@ def stage_linked_whatsapp_batch(payload: dict[str, Any]) -> dict[str, Any]:
 
     with get_session() as session:
         board = session.query(KanbanBoard).filter(KanbanBoard.id == board_id).first()
-        project = session.query(Project).filter(Project.id == project_id).first()
+        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
         if (
             not board
             or bool(getattr(board, "archived", False))

@@ -127,7 +127,7 @@ def load_development_groups(
     )
     with session_provider() as db:
         projects = (
-            db.query(Project)
+            db.query(Project).filter(Project.deleted_at.is_(None))
             .order_by(Project.position.asc(), Project.name.asc(), Project.id.asc())
             .all()
         )

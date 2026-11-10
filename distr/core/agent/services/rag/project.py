@@ -243,7 +243,7 @@ def index_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str, A
     session = get_session()
     try:
         project = session.query(Project).get(project_id)
-        if not project:
+        if not project or project.deleted_at is not None:
             return {"success": False, "error": f"Project {project_id} not found"}
 
         # Get or create RAG service
@@ -346,7 +346,7 @@ def activate_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str
         from distr.core.kanban.scope import set_active_project
 
         project = session.query(Project).get(project_id)
-        if not project:
+        if not project or project.deleted_at is not None:
             return {"success": False, "error": f"Project {project_id} not found"}
 
         linked_board = set_active_project(session, project_id)[1]
@@ -425,7 +425,7 @@ def deactivate_project(project_id: int) -> Dict[str, Any]:
     session = get_session()
     try:
         project = session.query(Project).get(project_id)
-        if not project:
+        if not project or project.deleted_at is not None:
             return {"success": False, "error": f"Project {project_id} not found"}
 
         project.in_use = False
@@ -468,8 +468,8 @@ def get_active_project() -> Optional[Dict[str, Any]]:
 
     session = get_session()
     try:
-        project = session.query(Project).filter(Project.in_use == True).first()
-        if not project:
+        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.in_use == True).first()
+        if not project or project.deleted_at is not None:
             return None
 
         # Count context items and files
@@ -525,8 +525,8 @@ def get_active_project_context() -> Optional[str]:
 
     session = get_session()
     try:
-        project = session.query(Project).filter(Project.in_use == True).first()
-        if not project:
+        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.in_use == True).first()
+        if not project or project.deleted_at is not None:
             return None
 
         # Build context string
@@ -666,7 +666,7 @@ def reindex_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str,
     session = get_session()
     try:
         project = session.query(Project).get(project_id)
-        if not project:
+        if not project or project.deleted_at is not None:
             return {"success": False, "error": f"Project {project_id} not found"}
 
         # Clear index

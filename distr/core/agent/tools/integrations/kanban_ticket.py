@@ -4066,7 +4066,7 @@ class KanbanTicketTool(BaseTool):
             if project_id:
                 project = orm_get_by_id(s, Project, int(project_id))
             if not project and hint:
-                projects = s.query(Project).order_by(Project.name.asc()).all()
+                projects = s.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.name.asc()).all()
                 for candidate in projects:
                     if candidate.name and candidate.name.lower() == hint.lower():
                         project = candidate

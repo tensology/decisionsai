@@ -677,7 +677,7 @@ class OrchestratorIntakeService:
     ) -> tuple[KanbanBoard, KanbanLane, Project | None, AutoWorkflow | None]:
         with get_session() as session:
             request_text = intake.text.lower()
-            projects = session.query(Project).all()
+            projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
             project = None
             project_hint = str(
                 intake.project_hint
@@ -687,9 +687,9 @@ class OrchestratorIntakeService:
                 or ""
             ).strip()
             if project_hint.isdigit():
-                project = session.query(Project).filter(Project.id == int(project_hint)).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(project_hint)).first()
             elif project_hint:
-                project = session.query(Project).filter(Project.name.ilike(f"%{project_hint}%")).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.name.ilike(f"%{project_hint}%")).first()
             if project is None and request_text:
                 exact_projects = [row for row in projects if row.name and row.name.lower() in request_text]
                 if len(exact_projects) == 1:
@@ -804,7 +804,7 @@ class OrchestratorIntakeService:
             preferred = str(getattr(board, "agent_source_lane", "") or "").lower()
             lane = next((row for row in lanes if preferred and row.name.lower() == preferred), lanes[0])
             if project is None and board.default_project_id:
-                project = session.query(Project).filter(Project.id == int(board.default_project_id)).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(board.default_project_id)).first()
             workflow = hinted_workflow
             if workflow is None and board.default_workflow_id:
                 candidate = (

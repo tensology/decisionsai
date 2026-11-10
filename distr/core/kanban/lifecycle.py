@@ -29,7 +29,7 @@ _LEGACY_DELIVERY_LANE_ALIASES: dict[str, tuple[str, ...]] = {
 
 def ensure_project_boards(session: Any) -> dict[int, KanbanBoard]:
     """Return one visible primary board per project, creating only missing boards."""
-    projects = session.query(Project).order_by(Project.position, Project.name, Project.id).all()
+    projects = session.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.position, Project.name, Project.id).all()
     boards = (
         session.query(KanbanBoard)
         .order_by(KanbanBoard.archived, KanbanBoard.position, KanbanBoard.name, KanbanBoard.id)

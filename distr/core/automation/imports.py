@@ -132,7 +132,7 @@ def _match_project_id(cwds: list[str]) -> int | None:
 
         candidates = [(Path(cwd).expanduser().resolve(), cwd) for cwd in cwds if _clean(cwd)]
         with get_session() as session:
-            projects = session.query(Project).all()
+            projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
             resolved = set()
             for cwd, _ in candidates:
                 matches = []

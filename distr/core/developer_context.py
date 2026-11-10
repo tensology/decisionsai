@@ -584,7 +584,7 @@ class DeveloperContextAssembler:
 
         with get_session() as session:
             project = (
-                session.query(Project)
+                session.query(Project).filter(Project.deleted_at.is_(None))
                 .filter(Project.in_use == True)  # noqa: E712 - SQLAlchemy comparison
                 .order_by(Project.modified_date.desc())
                 .first()
@@ -1062,7 +1062,7 @@ class DeveloperContextAssembler:
                             f"ticket #{ticket.id} on board #{board.id} ({lane.name}): no linked project"
                         )
 
-            projects = session.query(Project).order_by(Project.modified_date.desc()).limit(40).all()
+            projects = session.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.modified_date.desc()).limit(40).all()
             for project in projects:
                 if not (project.folder_location or "").strip():
                     projects_missing_folder.append(f"#{project.id} {project.name or 'Project'}: no folder_location")

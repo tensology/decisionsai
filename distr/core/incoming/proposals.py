@@ -86,7 +86,7 @@ def _project_map() -> dict[str, int]:
     from distr.core.db.projects import Project
 
     with get_session() as session:
-        return {str(row.name).strip().lower(): int(row.id) for row in session.query(Project).all()}
+        return {str(row.name).strip().lower(): int(row.id) for row in session.query(Project).filter(Project.deleted_at.is_(None)).all()}
 
 
 
@@ -574,7 +574,7 @@ def _candidate_projects(limit: int = 50) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     with get_session() as session:
-        for project in session.query(Project).order_by(Project.id).limit(limit).all():
+        for project in session.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.id).limit(limit).all():
             tickets = (
                 session.query(KanbanTicket)
                 .filter(KanbanTicket.linked_project_id == project.id)
@@ -614,7 +614,7 @@ def _group_conversations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         from distr.core.db.projects import Project
 
         with get_session() as db:
-            projects = db.query(Project).all()
+            projects = db.query(Project).filter(Project.deleted_at.is_(None)).all()
             existing = {int(project.id): project for project in projects}
             boards = {int(board.id): board for board in db.query(KanbanBoard).filter(KanbanBoard.id.in_(board_ids)).all()}
             for board_id in board_ids:

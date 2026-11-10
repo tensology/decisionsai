@@ -451,6 +451,7 @@ def register_routes(router, templates):
                 reconcile_active_scope(session)
                 projects = (
                     session.query(Project)
+                    .filter(Project.deleted_at.is_(None))
                     .order_by(Project.position.asc(), desc(Project.modified_date), Project.id.asc())
                     .all()
                 )
@@ -526,6 +527,7 @@ def register_routes(router, templates):
             with get_session() as session:
                 projects = (
                     session.query(Project)
+                    .filter(Project.deleted_at.is_(None))
                     .order_by(Project.position.asc(), desc(Project.modified_date), Project.id.asc())
                     .all()
                 )
@@ -787,7 +789,7 @@ def register_routes(router, templates):
                 from distr.core.db.projects import Project
 
                 with get_session() as session:
-                    project = session.query(Project).filter(Project.id == project_id).first()
+                    project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                     if project and (project.coding_backend_model or "").strip():
                         return (project.coding_backend_model or "").strip()
             except Exception:
@@ -1108,7 +1110,7 @@ def register_routes(router, templates):
             from distr.core.db.projects import Project
 
             with db_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     return JSONResponse({"ok": False, "user_message": "Project not found"}, status_code=404)
                 cwd = (project.folder_location or "").strip() or os.path.expanduser("~")
@@ -1156,7 +1158,7 @@ def register_routes(router, templates):
                 from sqlalchemy import text
                 if project_id:
                     from distr.core.db.projects import Project
-                    project = session.query(Project).filter(Project.id == int(project_id)).first()
+                    project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(project_id)).first()
                     if project:
                         project.coding_backend_model = model
                 if backend_id == "pi":
@@ -1220,7 +1222,7 @@ def register_routes(router, templates):
 
         def _load_payload():
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 payload = get_backend_statuses(_backend_id_for_project(project))
@@ -1242,7 +1244,7 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends import get_backend, normalize_backend_id
 
         with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1295,7 +1297,7 @@ def register_routes(router, templates):
         backend_id = normalize_backend_id(body.get("coding_backend") or body.get("backend_id"))
 
         with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             project.coding_backend = backend_id
@@ -1311,7 +1313,7 @@ def register_routes(router, templates):
         from distr.core.db.projects import Project
 
         with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             return JSONResponse(_codex_project_sync_payload(project))
@@ -1325,7 +1327,7 @@ def register_routes(router, templates):
 
         plugin_install = _install_local_codex_plugin()
         with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             project.coding_backend = "codex"
@@ -1347,7 +1349,7 @@ def register_routes(router, templates):
         from distr.core.db.projects import Project
 
         with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             return JSONResponse(_cursor_project_sync_payload(project))
@@ -1361,7 +1363,7 @@ def register_routes(router, templates):
 
         plugin_install = _install_local_cursor_plugin()
         with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             project.coding_backend = "cursor"
@@ -1383,7 +1385,7 @@ def register_routes(router, templates):
         from distr.core.db.projects import Project
 
         with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
         try:
@@ -1407,7 +1409,7 @@ def register_routes(router, templates):
             from distr.core.db import get_session
             from distr.core.db.projects import Project, ProjectContextItem, ProjectFile
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 context_items = session.query(ProjectContextItem).filter(ProjectContextItem.project_id == project_id).order_by(ProjectContextItem.modified_date.desc()).all()
@@ -1444,7 +1446,7 @@ def register_routes(router, templates):
             from distr.core.db import get_session
             from distr.core.db.projects import Project, ProjectContextItem
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 title = (payload.title or "").strip()
@@ -1544,7 +1546,7 @@ def register_routes(router, templates):
             if not file.filename:
                 raise HTTPException(status_code=400, detail="No file selected")
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
             project_dir = os.path.join(PROJECT_UPLOADS_DIR, str(project_id))
@@ -1690,7 +1692,7 @@ def register_routes(router, templates):
             from distr.core.db import get_session
             from distr.core.db.projects import Project
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 if payload.name is not None:
@@ -1732,6 +1734,8 @@ def register_routes(router, templates):
                         sync_projection_for_project(project_id)
                 except Exception:
                     logger.debug("update_project: workspace sync failed", exc_info=True)
+                from distr.core.tensology_project_sync import invalidate_project_sync
+                invalidate_project_sync()
                 return JSONResponse({"success": True})
         except HTTPException:
             raise
@@ -1748,7 +1752,7 @@ def register_routes(router, templates):
             from distr.core.db.projects import Project
             from distr.core.kanban.scope import set_active_project
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 # One scope: activating the project also activates its board.
@@ -1801,6 +1805,8 @@ def register_routes(router, templates):
                 ensure_project_boards(session)
                 session.commit()
                 session.refresh(project)
+                from distr.core.tensology_project_sync import invalidate_project_sync
+                invalidate_project_sync()
                 try:
                     from distr.core.workspace_memory.provision import bootstrap_project
 
@@ -1824,7 +1830,7 @@ def register_routes(router, templates):
             if not isinstance(body, dict):
                 raise HTTPException(status_code=400, detail="Project update must be an object")
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 if "name" in body:
@@ -1843,6 +1849,8 @@ def register_routes(router, templates):
                     board.name = project.name
                 session.commit()
                 session.refresh(project)
+                from distr.core.tensology_project_sync import invalidate_project_sync
+                invalidate_project_sync()
                 return JSONResponse(
                     {
                         "id": project.id,
@@ -1863,25 +1871,21 @@ def register_routes(router, templates):
 
     @router.delete("/projects/{project_id}")
     async def delete_project(project_id: int):
-        """Delete a project by id"""
+        """Remove active delivery scope while preserving historical identity."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+        from distr.core.tensology_project_removals import remove_project, RemovalBlocked, ProjectBusy
+        from distr.core.tensology_project_sync import invalidate_project_sync
         try:
-            from distr.core.db import get_session
-            from distr.core.db.projects import Project
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
-                if not project:
+                if session.get(Project, project_id) is None:
                     raise HTTPException(status_code=404, detail="Project not found")
-                session.delete(project)
+                remove_project(session, project_id)
                 session.commit()
-            from distr.core.workspace_memory.lifecycle import hook_remove_workspace
-
-            hook_remove_workspace("projects", project_id)
+            invalidate_project_sync()
             return JSONResponse({"success": True})
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to delete project: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+        except (ProjectBusy, RemovalBlocked) as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
     @router.get("/projects/{project_id}/kanban-board")
     async def get_project_kanban_board(project_id: int):
@@ -1891,7 +1895,7 @@ def register_routes(router, templates):
             from distr.core.db.projects import Project
             from distr.core.db.kanban import KanbanBoard
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 # First check the explicit kanban_board_id link (new method)
@@ -1926,7 +1930,7 @@ def register_routes(router, templates):
             from distr.core.db.projects import Project
             from distr.core.db.kanban import KanbanBoard
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 # Check if one already exists
@@ -1975,7 +1979,7 @@ def register_routes(router, templates):
             from distr.core.db import get_session
             from distr.core.db.projects import Project
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 folder = project.folder_location or ""
@@ -2081,7 +2085,7 @@ def register_routes(router, templates):
             from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
 
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 project_name = project.name or ""
@@ -2202,7 +2206,7 @@ def register_routes(router, templates):
                     from distr.core.db.projects import Project
                     from distr.core.db.workflow import AutoWorkflow
                     with get_session() as session:
-                        project = session.query(Project).filter(Project.id == project_id).first()
+                        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                         if not project:
                             yield "data: {\"error\": \"project not found\"}\n\n"
                             return

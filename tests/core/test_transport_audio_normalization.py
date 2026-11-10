@@ -370,6 +370,14 @@ def test_transport_reports_active_output_route_for_confirmed_playback():
         "system_default_output": "Device 2",
         "output_channels": 2,
         "stream_active": True,
+        "playback_state": "IDLE",
+        "write_in_flight": False,
+        "write_stalled": False,
+        "last_write_age_ms": None,
+        "write_errors": 0,
+        "stall_count": 0,
+        "recovery_count": 0,
+        "underflow_count": 0,
     }
 
 

@@ -239,7 +239,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
             project_name = str((func_args or {}).get("project_name") or "").strip()
             with get_session() as session:
-                query = session.query(Project)
+                query = session.query(Project).filter(Project.deleted_at.is_(None))
                 if project_name:
                     project = query.filter(Project.name.ilike(f"%{project_name}%")).first()
                 else:

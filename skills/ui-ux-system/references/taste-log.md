@@ -190,3 +190,9 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-11-09 | Did: Mailshot used a large voice grid modal and generated avatars for most voices | Wanted: The approved compact Tensology voice dropdown, retaining matching profile pictures | Why: Paul called the Tensology dropdown perfect and explicitly requested the same in Mailshot
 
 2026-11-09 | Did: Put top padding on the entire Tensology Incoming tab header, making Check incoming, Dismissed and Dismiss expired sit below its visual center | Wanted: Center the action buttons vertically in the full tab row, with balanced spacing when wrapped | Why: Paul explicitly said the buttons looked like they were dropping to the floor
+
+2026-11-09 | Did: Added Tensology Group work / Source blocks controls and native report infrastructure while preparing invoice time | Wanted: Update existing time-entry data and descriptions only, preserve the user interface | Why: Paul explicitly rejected the interface changes and required their rollback
+
+2026-11-09 | Did: Decisions Reports mixed raw internal activity with reconciled calendar data and lacked a way to jump to the current day | Wanted: Reflect Tensology's reconciled entries in the normal project-filtered report and put a Today button beside the period picker or Projects | Why: Paul needs matching review data and direct calendar navigation without changing his selected projects
+
+2026-11-09 | Did: Non-billable Tensology projects all inherited blue and the project trash action only archived | Wanted: Varied saved project colours and a real Delete confirmation with an unchecked option to delete from Decisions AI when connected | Why: Paul explicitly requested a distinguishable colour range and control over deletion, then chose to retain time and invoice history while deleting associated tickets

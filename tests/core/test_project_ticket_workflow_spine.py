@@ -133,6 +133,10 @@ def _seed_project_ticket_workflow(factory):
 def test_project_ticket_workflow_context_is_captured_and_rendered_in_step_prompt():
     """The developer spine must survive launch metadata and reach WorkflowAgent prompts."""
     from distr.core.workflow.dispatcher import StepDispatcher, _active_runs, _runs_lock, start_workflow_run
+    # Import before replacing the DB provider. Otherwise a first lazy import
+    # captures this test's closure permanently in the module-level alias.
+    from distr.core.workflow import development_threads
+    original_thread_session = development_threads.get_session
 
     factory = _make_factory()
     ids = _seed_project_ticket_workflow(factory)
@@ -143,6 +147,7 @@ def test_project_ticket_workflow_context_is_captured_and_rendered_in_step_prompt
     no_op = MagicMock()
     patches = [
         patch("distr.core.db.get_session", get_session),
+        patch.object(development_threads, "get_session", get_session),
         patch("distr.core.workflow.dispatcher.get_session", get_session),
         patch("distr.core.workflow.step_executor.get_session", get_session),
         patch("distr.core.workflow.service.get_session", get_session),
@@ -209,6 +214,7 @@ def test_project_ticket_workflow_context_is_captured_and_rendered_in_step_prompt
         if ctx:
             ctx.event_loop.call_soon_threadsafe(ctx.event_loop.stop)
 
+    assert development_threads.get_session is original_thread_session
     assert "[KANBAN TICKET CONTEXT" in prompt
     assert "Ticket ID:" in prompt
     assert "Fix workflow validation" in prompt

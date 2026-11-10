@@ -51,7 +51,7 @@ def resolve_email_link(sender: str) -> EmailLinkInfo:
             project_id = int(getattr(board, "default_project_id", 0) or 0)
             if not project_id:
                 continue
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if project is None:
                 continue
             policy = _policy(getattr(board, "orchestrator_policy", None))

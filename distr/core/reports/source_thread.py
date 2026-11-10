@@ -3,6 +3,7 @@ from collections import deque
 import json
 from pathlib import Path
 import re
+from distr.core.reports.session_files import open_session, session_paths, session_variant, session_roots
 
 
 def _text(content):
@@ -55,16 +56,19 @@ def read_source_thread(ref, *, before=None, limit=50, pi_root=None, codex_root=N
     if kind not in roots:
         raise FileNotFoundError('The original IDE transcript is not available from this source.')
     root = roots[kind]
-    if not root.is_dir():
+    scan_roots = session_roots(root, kind)
+    if not scan_roots:
         raise FileNotFoundError('The original IDE transcript is no longer available locally.')
     if not ident and lookup_instruction:
         import hashlib
         from distr.core.reports.month import _session_activity, _session_files
         wanted = hashlib.sha256(' '.join(lookup_instruction.split()).encode()).hexdigest()
         matches = set()
-        for candidate in _session_files(root, execution_start, kind=kind.removesuffix('_local')):
+        candidates = [(candidate, active_root) for active_root in scan_roots
+                      for candidate in _session_files(active_root, execution_start, kind=kind.removesuffix('_local'), include_archived=True)]
+        for candidate, active_root in candidates:
             try:
-                path = _resolved_provider(candidate, root)
+                path = _resolved_provider(candidate, active_root)
                 activity, _ = _session_activity(path, kind=kind.removesuffix('_local'))
                 if any(event.get('instruction_hash') == wanted and abs((event['time'] - execution_start).total_seconds()) <= 5
                        for event in activity.get('activity', [])):
@@ -78,10 +82,11 @@ def read_source_thread(ref, *, before=None, limit=50, pi_root=None, codex_root=N
         ident = matches.pop()
     found = None
     # Historical threads are resolved by their recorded ID, never by title or recency.
-    for candidate in root.rglob('*.jsonl'):
+    candidates = ((candidate, active_root) for active_root in scan_roots for candidate in session_paths(active_root))
+    for candidate, active_root in candidates:
         try:
-            path = _resolved_provider(candidate, root)
-            with path.open(encoding='utf-8', errors='replace') as handle:
+            path = _resolved_provider(candidate, active_root)
+            with open_session(path) as handle:
                 first = json.loads(handle.readline(1024 * 1024))
             if not isinstance(first, dict):
                 continue
@@ -89,7 +94,9 @@ def read_source_thread(ref, *, before=None, limit=50, pi_root=None, codex_root=N
             if not isinstance(candidate_meta, dict):
                 continue
             candidate_id = path.stem if kind == 'cursor_local' else str(candidate_meta.get('id') or path.stem)
-            if candidate_id == ident:
+            variant = session_variant(path) if kind == 'codex_local' else None
+            explicit_variant = variant == ident and ident.split('_', 1)[0] == candidate_id
+            if candidate_id == ident or explicit_variant:
                 if found is not None:
                     raise RuntimeError('Multiple source files claim this IDE thread ID.')
                 found, meta = path, candidate_meta
@@ -123,7 +130,7 @@ def read_source_thread(ref, *, before=None, limit=50, pi_root=None, codex_root=N
             target.append({'index': index, 'role': role, 'text': text[:20000],
                            'truncated': len(text) > 20000, 'timestamp': stamp})
 
-    with found.open(encoding='utf-8', errors='replace') as handle:
+    with open_session(found) as handle:
         for line in handle:
             if len(line) > 8 * 1024 * 1024:
                 skipped = True
@@ -165,7 +172,8 @@ def read_source_thread(ref, *, before=None, limit=50, pi_root=None, codex_root=N
         reviewed = reviewed_source_project(str(ref), start, end, projects)
         if reviewed is not None:
             pid, provenance = reviewed, 'reviewed_source_evidence'
-    return {'ref': str(ref), 'thread_id': ident, 'surface': kind.removesuffix('_local'),
+    return {'ref': str(ref), 'thread_id': str(meta.get('id') or ident), 'source_variant': ident,
+            'surface': kind.removesuffix('_local'),
             'title': title, 'cwd': cwd, 'project_id': pid,
             'session_cwd': session_cwd, 'project_provenance': provenance,
             'recorded_project_id': recorded_project,

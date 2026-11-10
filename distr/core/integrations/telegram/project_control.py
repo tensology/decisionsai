@@ -269,7 +269,7 @@ async def _dispatch_project_task(
     from distr.core.project_cli_backends import run_project_task
 
     with get_session() as session:
-        project = session.query(Project).filter(Project.id == int(project_id)).first()
+        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(project_id)).first()
         if not project:
             raise ValueError(f"Project #{project_id} not found")
         return await run_project_task(
@@ -288,7 +288,7 @@ def _resolve_active_project():
 
     with get_session() as session:
         project = (
-            session.query(Project)
+            session.query(Project).filter(Project.deleted_at.is_(None))
             .filter(Project.in_use == True)  # noqa: E712
             .order_by(Project.modified_date.desc())
             .first()
@@ -302,11 +302,11 @@ def _resolve_active_project():
             .first()
         )
         if board and board.default_project_id:
-            project = session.query(Project).filter(Project.id == int(board.default_project_id)).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(board.default_project_id)).first()
             if project:
                 session.expunge(project)
                 return project
-        project = session.query(Project).filter(Project.folder_location != "").order_by(Project.modified_date.desc()).first()
+        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.folder_location != "").order_by(Project.modified_date.desc()).first()
         if project:
             session.expunge(project)
         return project
@@ -326,7 +326,7 @@ def _resolve_project(project_hint: str = ""):
         return hint in name or hint in folder
 
     with get_session() as session:
-        projects = session.query(Project).all()
+        projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
         matches = [project for project in projects if _matches(project)]
         if matches:
             matches.sort(

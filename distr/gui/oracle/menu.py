@@ -175,7 +175,7 @@ def get_projects_for_menu() -> list[tuple[int, str, bool, bool]]:
     Each row is ``(project_id, label, has_startup_commands, terminals_running)``.
     """
     with get_session() as session:
-        projects = session.query(Project).order_by(Project.name.asc()).all()
+        projects = session.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.name.asc()).all()
         rows: list[tuple[int, str, bool, bool]] = []
         for project in projects:
             has_startup = bool(parse_startup_command_lines(project.startup_instructions or ""))
@@ -290,7 +290,7 @@ def get_planning_projects_for_menu() -> list[tuple[int, str, str]]:
         project_ids = {int(board.default_project_id) for board in boards if board.default_project_id}
         projects = {
             int(project.id): project
-            for project in session.query(Project).filter(Project.id.in_(project_ids)).all()
+            for project in session.query(Project).filter(Project.deleted_at.is_(None), Project.id.in_(project_ids)).all()
         } if project_ids else {}
         rows: list[tuple[int, str, str]] = []
         seen: set[int] = set()
@@ -1283,7 +1283,7 @@ class MenuTrayMixin:
                 return
 
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     logger.warning("Oracle menu: project %s not found", project_id)
                     return

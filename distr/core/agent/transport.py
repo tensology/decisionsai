@@ -401,6 +401,92 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         # State machine
         self._state = AudioPlaybackState.IDLE
         self._playback_monitor_task = None
+        self._output_idle_task = None
+        self._output_shutting_down = False
+        self._output_write_started_at = None
+        self._output_write_timeout = 2.0
+        self._last_output_write_at = None
+        self._output_stall_count = 0
+        self._output_recovery_count = 0
+        self._output_underflow_count = 0
+        self._output_opened_at = None
+
+    async def start(self, frame):
+        """Start Pipecat's queues without opening a continuously running speaker."""
+        from pipecat.transports.base_output import BaseOutputTransport
+
+        self._output_shutting_down = False
+        self._output_channels = self._device_output_channels(self._params.output_device_index)
+        self._params.audio_out_channels = self._output_channels
+        await BaseOutputTransport.start(self, frame)
+        await self.set_transport_ready(frame)
+
+    def _close_output_stream(self, *, abort=False):
+        """Run only on the output executor, after any outstanding native write."""
+        stream, self._out_stream = self._out_stream, None
+        if stream is None:
+            return
+        try:
+            if stream.is_active():
+                abort_stream = getattr(stream, "abort_stream", None)
+                if abort and callable(abort_stream):
+                    abort_stream()
+                else:
+                    stream.stop_stream()
+        finally:
+            stream.close()
+
+    async def _close_output_stream_async(self, *, abort=False):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self._executor, lambda: self._close_output_stream(abort=abort))
+
+    _OUTPUT_IDLE_SECS = 0.5
+    _OUTPUT_WRITE_STALL_SECS = 2.0
+
+    def _schedule_idle_output_release(self):
+        task = getattr(self, "_output_idle_task", None)
+        if task is None or task.done():
+            self._output_idle_task = asyncio.create_task(self._release_idle_output())
+
+    async def _release_idle_output(self):
+        """Release after hardware drain, including speech without an end frame."""
+        try:
+            while self._out_stream is not None:
+                await asyncio.sleep(self._OUTPUT_IDLE_SECS)
+                queued = any(
+                    getattr(sender, "_audio_queue", None) is not None
+                    and not sender._audio_queue.empty()
+                    for sender in getattr(self, "_media_senders", {}).values()
+                )
+                last_write = getattr(self, "_last_output_write_at", None)
+                last_activity = last_write or getattr(self, "_output_opened_at", None)
+                if queued or self._output_write_started_at is not None or last_activity is None:
+                    continue
+                if time.monotonic() - last_activity < self._OUTPUT_IDLE_SECS:
+                    continue
+                loop = asyncio.get_running_loop()
+                idle_stream = self._out_stream
+
+                def close_if_idle():
+                    # A newer write may arrive while release waits on the executor.
+                    if (self._out_stream is idle_stream
+                            and self._last_output_write_at == last_write
+                            and self._output_write_started_at is None):
+                        self._close_output_stream()
+
+                await loop.run_in_executor(self._executor, close_if_idle)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Transport: Could not release idle output stream")
+
+    async def cancel(self, frame):
+        await super().cancel(frame)
+        await self._close_output_stream_async(abort=True)
+
+    async def stop(self, frame):
+        await super().stop(frame)
+        await self._close_output_stream_async()
 
     def _get_default_output_device_index(self) -> Optional[int]:
         from distr.core.agent.config_loader import resolve_system_default_output_device
@@ -576,6 +662,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 
     def _active_output_route(self) -> dict:
         device_index = getattr(self, "_resolved_output_device_index", None)
+        started = getattr(self, "_output_write_started_at", None)
+        last_write = getattr(self, "_last_output_write_at", None)
+        now = time.monotonic()
+        state = getattr(self, "_state", AudioPlaybackState.IDLE)
+        stalled = started is not None and now - started > getattr(self, "_output_write_timeout", 2.0)
         return {
             "configured_output": _normalize_output_device_name(getattr(self, "_output_device_name", None)),
             "output_device_index": device_index,
@@ -583,6 +674,14 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             "system_default_output": getattr(self, "_resolved_default_output_name", None),
             "output_channels": int(getattr(self, "_output_channels", 1) or 1),
             "stream_active": self._output_stream_is_active(),
+            "playback_state": state.name,
+            "write_in_flight": started is not None,
+            "write_stalled": stalled,
+            "last_write_age_ms": None if last_write is None else int(max(0, now - last_write) * 1000),
+            "write_errors": getattr(self, "_stream_error_count", 0),
+            "stall_count": getattr(self, "_output_stall_count", 0),
+            "recovery_count": getattr(self, "_output_recovery_count", 0),
+            "underflow_count": getattr(self, "_output_underflow_count", 0),
         }
 
     def _log_output_route(self, *, reason: str, force: bool = False) -> None:
@@ -667,28 +766,9 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         self._ensure_output_stream_for_configured_device(reason=reason)
 
     async def _abort_output_stream_async(self) -> None:
-        """Flush buffered speaker audio and wait until the abort is complete."""
-        stream = getattr(self, "_out_stream", None)
-        executor = getattr(self, "_executor", None)
-        if stream is None or executor is None:
-            return
-
-        def _safe_abort():
-            try:
-                if stream.is_active():
-                    abort = getattr(stream, "abort_stream", None)
-                    if abort is not None:
-                        abort()
-                    else:
-                        stream.stop_stream()
-                    stream.start_stream()
-            except Exception as e:
-                logger.warning(
-                    "Transport: Stream abort failed: %s (will recover on next write)", e
-                )
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(executor, _safe_abort)
+        """Flush and release the speaker without restarting an idle stream."""
+        if getattr(self, "_out_stream", None) is not None:
+            await self._close_output_stream_async(abort=True)
 
     async def _ready_to_emit_confirmed_tts_started(self) -> bool:
         """Confirm the output stream is alive before surfacing playback UI."""
@@ -700,6 +780,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         )
         await self._ensure_output_stream_ready_async(reason="audible audio before tts_started")
         if self._output_stream_is_active():
+            self._schedule_idle_output_release()
             return True
 
         logger.warning(
@@ -827,69 +908,81 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         return (clipped * 32767.0).astype(np.int16).tobytes()
 
     async def write_audio_frame(self, frame) -> bool:
-        """Override to write silence when interrupted and recover dead streams."""
-        if self._force_silence:
-            # Replace audio with silence so the OS buffer drains quietly
-            frame.audio = b'\x00' * len(frame.audio)
-        if not self._output_stream_is_active():
-            await self._ensure_output_stream_ready_async(reason="inactive stream before audio write")
-        try:
-            result = await super().write_audio_frame(frame)
-            # Successful write — reset error tracking
-            if self._stream_error_count > 0:
-                logger.info("Transport: Audio stream recovered after %d errors", self._stream_error_count)
-                self._stream_error_count = 0
-                self._stream_error_logged = False
-            return result
-        except Exception as e:
-            self._stream_error_count += 1
-            if not self._stream_error_logged:
-                logger.error("Transport: Audio write failed: %s — attempting stream recovery", e)
-                self._stream_error_logged = True
-            # After 3 consecutive errors, try to recreate the stream
-            if self._stream_error_count == 3:
-                await self._recover_output_stream()
-            # After 50 errors, stop trying — something is fundamentally broken
-            elif self._stream_error_count > 50:
-                if self._stream_error_count == 51:
-                    logger.error("Transport: 50+ consecutive audio errors — giving up until next session")
+        """Serialize open/write/recovery and detect native writes that stop progressing."""
+        if getattr(self, "_output_shutting_down", False):
             return False
+        if self._force_silence:
+            # Interrupted sink frames must not reopen the speaker with silence.
+            return False
+        if not frame.audio:
+            return True
+        if self._out_stream is None and not any(frame.audio):
+            return True
+        channels = max(1, int(getattr(frame, "num_channels", 1) or 1))
+        duration = len(frame.audio) / (2 * channels * max(1, self._sample_rate))
+        self._output_write_timeout = max(self._OUTPUT_WRITE_STALL_SECS, duration * 2)
+        self._output_write_started_at = time.monotonic()
 
-    async def _recover_output_stream(self):
-        """Recreate the PortAudio output stream after a fatal error."""
-        logger.warning("Transport: Attempting to recreate output stream")
-        self._params.output_device_index = self._resolve_configured_output_device_index()
-        old_stream = self._out_stream
-        self._out_stream = None
-        if old_stream:
+        def write():
             try:
-                old_stream.close()
-            except Exception:
-                pass
-        try:
-            output_channels = self._device_output_channels(self._params.output_device_index)
-            self._output_channels = output_channels
-            self._params.audio_out_channels = output_channels
-            self._out_stream = self._py_audio.open(
-                format=self._py_audio.get_format_from_width(2),
-                channels=output_channels,
-                rate=self._sample_rate,
-                frames_per_buffer=self._output_buffer_frames(),
-                output=True,
-                output_device_index=self._params.output_device_index,
-            )
-            self._out_stream.start_stream()
-            self._resolved_output_device_index = self._params.output_device_index
-            logger.info(
-                "Transport: Output stream recreated successfully on %s (%d channel%s)",
-                self._describe_output_device(self._resolved_output_device_index),
-                output_channels,
-                "" if output_channels == 1 else "s",
-            )
+                if not self._output_stream_is_active():
+                    self._ensure_output_stream_for_configured_device(reason="playback write")
+                if self._out_stream is None:
+                    raise OSError("No output stream could be opened")
+                # PyAudio otherwise silently ignores output underflows.
+                self._out_stream.write(frame.audio, exception_on_underflow=True)
+                self._last_output_write_at = time.monotonic()
+                return True
+            except Exception as exc:
+                if isinstance(exc, OSError) and exc.errno == getattr(pyaudio, "paOutputUnderflowed", -9980):
+                    # Pa_WriteStream transferred this buffer; the error reports
+                    # an earlier gap. Do not replay or discard the current chunk.
+                    self._output_underflow_count = getattr(self, "_output_underflow_count", 0) + 1
+                    self._last_output_write_at = time.monotonic()
+                    if self._output_underflow_count == 1 or self._output_underflow_count % 50 == 0:
+                        logger.warning("Transport: Output underflow (count=%d)", self._output_underflow_count)
+                    return True
+                self._stream_error_count += 1
+                logger.warning("Transport: Output write failed: %s; releasing stream", exc)
+                self._close_output_stream(abort=True)
+                self._output_recovery_count = getattr(self, "_output_recovery_count", 0) + 1
+                return False
+            finally:
+                self._output_write_started_at = None
+
+        future = asyncio.get_running_loop().run_in_executor(self._executor, write)
+
+        def write_finished(completed):
+            # The caller may be cancelled while the native write is still
+            # running. It still needs an idle release once that write returns.
+            try:
+                completed.result()
+            except (Exception, asyncio.CancelledError):
+                return
+            if self._out_stream is not None and not getattr(self, "_output_shutting_down", False):
+                self._schedule_idle_output_release()
+
+        future.add_done_callback(write_finished)
+        done, _ = await asyncio.wait({future}, timeout=self._output_write_timeout)
+        if not done:
+            self._output_stall_count = getattr(self, "_output_stall_count", 0) + 1
+            logger.error("Transport: Output write stalled for %.2fs; native stream still reports active=%s",
+                         self._output_write_timeout, self._output_stream_is_active())
+            # Never close PortAudio concurrently with a stuck native write. The
+            # heartbeat remains responsive and reports write_stalled until it returns.
+        result = await asyncio.shield(future)
+        if result:
             self._stream_error_count = 0
             self._stream_error_logged = False
-        except Exception as e:
-            logger.error("Transport: Failed to recreate output stream: %s", e)
+        return result
+
+    async def _recover_output_stream(self):
+        """Release an unhealthy stream; actual playback will reopen it."""
+        def recover():
+            self._close_output_stream(abort=True)
+            self._output_recovery_count = getattr(self, "_output_recovery_count", 0) + 1
+
+        await asyncio.get_running_loop().run_in_executor(self._executor, recover)
 
     async def _transition_to(self, new_state: AudioPlaybackState):
         """Handle state transitions and side effects."""
@@ -1049,8 +1142,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 "Transport: TTSStartedFrame state=%s pipeline_cut=%s",
                 self._state.name, self._pipeline_cut,
             )
-            await self._ensure_output_stream_ready_async(reason="TTS session start")
-            self._log_output_route(reason="TTS session start", force=True)
             # Signal AEC that speaker is active
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(True)
@@ -1237,7 +1328,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 await super().process_frame(tail_frame, direction)
             
             # Schedule playback_finished on full response end
-            if self.event_queue and isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
+            if isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
                 if self._total_output_bytes <= 0:
                     # Common when a response is interrupted before any audio is emitted.
                     if self._pipeline_cut or self._state == AudioPlaybackState.IDLE:
@@ -1247,10 +1338,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     if self._aec_ref_buf is not None:
                         self._aec_ref_buf.set_active(False)
                     await self._transition_to(AudioPlaybackState.COMPLETED)
-                    self.event_queue.put(
-                        ('playback_finished', {'playback_id': self._playback_id}),
-                        block=False,
-                    )
+                    if self.event_queue:
+                        self.event_queue.put(
+                            ('playback_finished', {'playback_id': self._playback_id}),
+                            block=False,
+                        )
                 else:
                     await self._transition_to(AudioPlaybackState.DRAINING)
 
@@ -1477,6 +1569,8 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 output_device_index=self._params.output_device_index,
             )
             self._out_stream.start_stream()
+            self._output_opened_at = time.monotonic()
+            self._last_output_write_at = None
             self._stream_error_count = 0
             self._stream_error_logged = False
             self._resolved_output_device_index = device_index
@@ -1506,6 +1600,9 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         elif device_index is None:
             self._output_device_name = "System Default"
         self._failed_output_device_index = None
+        if self._out_stream is None:
+            self._params.output_device_index = device_index
+            return
 
         target_index = self._resolve_configured_output_device_index()
 
@@ -1538,6 +1635,8 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         # Reopen on the PortAudio executor so we never close the stream while a
         # write is in flight (causes crackling / PortAudio -9986 errors).
         def _switch_output_stream():
+            if self._out_stream is None:
+                return  # An idle release won the race; defer opening to playback.
             pending_refresh_name = getattr(self, "_pending_output_backend_refresh_name", None)
             if pending_refresh_name:
                 refreshed_index = self._reopen_with_refreshed_output_backend(pending_refresh_name)
@@ -1562,6 +1661,12 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         _switch_output_stream()
 
     async def cleanup(self):
+        self._output_shutting_down = True
+        task = getattr(self, "_output_idle_task", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await self._close_output_stream_async(abort=True)
         await super().cleanup()
         if getattr(self, "_owns_py_audio", False):
             try:

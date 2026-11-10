@@ -22,7 +22,7 @@ from distr.core.db.projects import Project
 
 def linked_board(session: Any, project: Optional[Project]) -> Optional[KanbanBoard]:
     """Return the delivery board for a project, or None."""
-    if project is None:
+    if project is None or project.deleted_at is not None:
         return None
     board_id = getattr(project, "kanban_board_id", None)
     if board_id:
@@ -44,13 +44,13 @@ def linked_project(session: Any, board: Optional[KanbanBoard]) -> Optional[Proje
     """Return the project a board belongs to, or None for a standalone board."""
     if board is None or not board.default_project_id:
         return None
-    return session.get(Project, int(board.default_project_id))
+    return session.query(Project).filter(Project.id == int(board.default_project_id), Project.deleted_at.is_(None)).first()
 
 
 def active_project(session: Any) -> Optional[Project]:
     return (
         session.query(Project)
-        .filter(Project.in_use == True)  # noqa: E712
+        .filter(Project.in_use == True, Project.deleted_at.is_(None))  # noqa: E712
         .order_by(Project.modified_date.desc(), Project.id.desc())
         .first()
     )
@@ -70,7 +70,7 @@ def active_board(session: Any) -> Optional[KanbanBoard]:
 
 def _single_project(session: Any, project_id: int) -> Optional[Project]:
     session.query(Project).filter(Project.in_use == True).update({Project.in_use: False})  # noqa: E712
-    project = session.get(Project, int(project_id))
+    project = session.query(Project).filter(Project.id == int(project_id), Project.deleted_at.is_(None)).first()
     if project is not None:
         project.in_use = True
     return project

@@ -18,7 +18,7 @@ def audit_and_repair_whatsapp_bindings() -> dict[str, Any]:
     }
     with get_session() as session:
         boards = {int(board.id): board for board in session.query(KanbanBoard).all()}
-        projects = session.query(Project).all()
+        projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
         projects_by_board = {
             int(project.kanban_board_id): project
             for project in projects

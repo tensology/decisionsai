@@ -157,7 +157,7 @@ def load_project_candidates(session: Any) -> list[ProjectCandidate]:
     pinned = _pinned_ids(session)
     cutoff = datetime.now(UTC).replace(tzinfo=None) - RECENT_THREAD_WINDOW
     out: list[ProjectCandidate] = []
-    for p in session.query(Project).all():
+    for p in session.query(Project).filter(Project.deleted_at.is_(None)).all():
         try:
             words = tuple(str(w).strip().lower() for w in json.loads(p.additional_trigger_words or "[]") if str(w).strip())
         except Exception:

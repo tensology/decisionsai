@@ -79,6 +79,9 @@ def test_output_abort_is_completed_before_interrupt_returns():
         def start_stream(self):
             events.append("restart")
 
+        def close(self):
+            events.append("close")
+
     transport = _transport(_out_stream=_Stream())
     executor = ThreadPoolExecutor(max_workers=1)
     transport._executor = executor
@@ -87,7 +90,8 @@ def test_output_abort_is_completed_before_interrupt_returns():
     finally:
         executor.shutdown(wait=True)
 
-    assert events == ["stop", "restart"]
+    assert events == ["stop", "close"]
+    assert transport._out_stream is None
 
 
 def _interrupt_session(state_name: str, force_silence: bool = False):
@@ -134,10 +138,13 @@ def test_interrupt_flushes_streams_without_abort_stream():
         def start_stream(self):
             events.append("start")
 
+        def close(self):
+            events.append("close")
+
     transport_out, session = _interrupt_session("PLAYING")
     transport_out._out_stream = Stream()
     _cmd_interrupt_tts(session, {})
-    assert events == ["stop", "start"]
+    assert events == ["stop", "close"]
 
 
 def test_interrupt_serializes_stop_with_audio_writes():
@@ -151,6 +158,10 @@ def test_interrupt_serializes_stop_with_audio_writes():
         def stop_stream(self):
             assert not writing, "PortAudio stop raced an output write"
             events.append("stop")
+
+        def close(self):
+            assert not writing, "PortAudio close raced an output write"
+            events.append("close")
 
         def start_stream(self):
             events.append("start")
@@ -180,4 +191,4 @@ def test_interrupt_serializes_stop_with_audio_writes():
             executor.shutdown(wait=True)
 
     asyncio.run(scenario())
-    assert events == ["write", "stop", "start"]
+    assert events == ["write", "stop", "close"]

@@ -8,7 +8,7 @@
 @import './automations/styles.css?v=20261030-calendar-groups';
 @import './workflows/styles.css?v=20261028-responsive';
 @import './terminals/styles.css?v=20261028-responsive';
-@import './reports/styles.css?v=20261109-reports-filter1';
+@import './reports/styles.css?v=20261109-calendar-today5';
 
 /* Shared page layout (2026-10-22): every Development page uses the Reports gutter (--page-gutter from shared base.css). */
 .reports-workspace { padding: var(--page-gutter, 24px); }

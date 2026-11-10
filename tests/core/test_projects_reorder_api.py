@@ -135,6 +135,8 @@ def test_create_project_also_creates_its_development_board():
     with (
         patch("distr.core.db.get_session", get_session),
         patch("distr.core.workspace_memory.provision.bootstrap_project"),
+        patch("distr.core.tensology_project_sync.invalidate_project_sync") as wake_sync,
+        patch("distr.core.tensology_project_sync.sync_projects") as network_sync,
     ):
         response = client.post(
             "/api/projects",
@@ -142,6 +144,8 @@ def test_create_project_also_creates_its_development_board():
         )
 
     assert response.status_code == 200, response.text
+    wake_sync.assert_called_once_with()
+    network_sync.assert_not_called()
     with factory() as session:
         project = session.get(Project, response.json()["id"])
         board = session.get(KanbanBoard, project.kanban_board_id)
@@ -173,4 +177,4 @@ def test_terminal_status_returns_shared_startup_and_shell_state():
     assert payload["7"]["startup_count"] == 1
     assert payload["7"]["shell_count"] == 1
     assert [session["process_id"] for session in payload["7"]["sessions"]] == ["startup-1", "shell-1"]
-    assert payload["8"] == {"running": False, "startup_count": 0, "shell_count": 0, "sessions": []}
+    assert payload["8"] == {"running": False, "startup_count": 0, "shell_count": 0, "pi_cli_count": 0, "sessions": []}

@@ -36,7 +36,7 @@ def _project_names() -> list[tuple[int, str]]:
     from distr.core.db.projects import Project
 
     with get_session() as db:
-        return [(int(p.id), str(p.name or "")) for p in db.query(Project).all() if p.name]
+        return [(int(p.id), str(p.name or "")) for p in db.query(Project).filter(Project.deleted_at.is_(None)).all() if p.name]
 
 
 def resolve_named_project(text: str, projects: Iterable[tuple[int, str]] | None = None) -> int | None:

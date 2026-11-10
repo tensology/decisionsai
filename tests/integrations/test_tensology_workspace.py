@@ -34,12 +34,15 @@ def test_tensology_client_sends_scoped_headers_and_unwraps_data():
 
 
 def test_tensology_heartbeat_authenticates_once_before_waiting():
+    project_operations = []
     with (
         patch("distr.core.tensology_client.send_tensology_heartbeat") as heartbeat,
         patch("distr.core.tensology_client.process_tensology_discussion_assessments") as assessments,
         patch("distr.core.tensology_client.process_tensology_discussion_context") as context,
         patch("distr.core.tensology_client.process_tensology_approved_tickets") as tickets,
         patch("distr.core.tensology_client.sync_tensology_execution_states") as state_sync,
+        patch("distr.core.tensology_project_removals.process_project_removals", side_effect=lambda: project_operations.append('remove')) as project_removals,
+        patch("distr.core.tensology_project_sync.sync_projects", side_effect=lambda: project_operations.append('sync')) as project_sync,
         patch("asyncio.sleep", side_effect=asyncio.CancelledError),
     ):
         try:
@@ -53,6 +56,9 @@ def test_tensology_heartbeat_authenticates_once_before_waiting():
     # Tickets arrive by websocket push now; the loop only mirrors local state.
     tickets.assert_not_called()
     state_sync.assert_called_once_with()
+    project_sync.assert_called_once_with()
+    project_removals.assert_called_once_with()
+    assert project_operations == ['remove', 'sync']
 
 
 def test_tensology_state_sync_still_runs_when_an_unrelated_operation_fails():
@@ -65,6 +71,8 @@ def test_tensology_state_sync_still_runs_when_an_unrelated_operation_fails():
         patch("distr.core.tensology_client.process_tensology_discussion_context") as context,
         patch("distr.core.tensology_client.process_tensology_approved_tickets") as tickets,
         patch("distr.core.tensology_client.sync_tensology_execution_states") as state_sync,
+        patch("distr.core.tensology_project_sync.sync_projects", side_effect=TensologyApiError("project sync unavailable")) as project_sync,
+        patch("distr.core.tensology_project_removals.process_project_removals", side_effect=RuntimeError("removal unavailable")) as project_removals,
         patch("asyncio.sleep", side_effect=asyncio.CancelledError),
     ):
         try:
@@ -78,6 +86,8 @@ def test_tensology_state_sync_still_runs_when_an_unrelated_operation_fails():
     # Tickets arrive by websocket push now; the loop only mirrors local state.
     tickets.assert_not_called()
     state_sync.assert_called_once_with()
+    project_sync.assert_called_once_with()
+    project_removals.assert_called_once_with()
 
 
 def test_approved_ticket_creates_visible_project_thread_and_claims_remote_ticket():

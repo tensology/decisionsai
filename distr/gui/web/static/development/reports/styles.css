@@ -4,6 +4,8 @@
 .reports-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .reports-tab { border: 1px solid var(--studio-line); background: transparent; color: var(--studio-muted); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
 .reports-tab.is-active { color: var(--studio-text); border-color: var(--studio-accent, var(--studio-line)); background: var(--studio-panel); }
+.reports-today { color: var(--studio-text); white-space: nowrap; }
+.reports-today:disabled { opacity: .4; cursor: default; }
 .reports-filters { display: flex; flex-wrap: wrap; gap: 16px; flex: 0 0 auto; }
 .reports-filters[hidden] { display: none; }
 .reports-filters label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
@@ -122,6 +124,7 @@
     .reports-pie ul { flex: 0 0 auto; min-height: min-content; overflow: visible; }
 }
 @media (max-width: 900px) {
+    .reports-today { min-height: 44px; }
     .reports-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) minmax(300px, 46%); grid-template-areas: "calendar" "projects"; }
     .reports-pie-card { min-height: 0; max-height: 100%; overflow: auto; }
     .reports-pie { flex: 0 0 auto; min-height: min-content; }

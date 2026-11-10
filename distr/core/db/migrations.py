@@ -13,6 +13,14 @@ from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
 
 logger = logging.getLogger(__name__)
 
+def ensure_project_removal_schema(db_engine):
+    """Add the history-preserving project tombstone to existing databases."""
+    inspector = inspect(db_engine)
+    if 'projects' in inspector.get_table_names():
+        if 'deleted_at' not in {c['name'] for c in inspector.get_columns('projects')}:
+            with db_engine.begin() as conn:
+                conn.execute(text('ALTER TABLE projects ADD COLUMN deleted_at DATETIME DEFAULT NULL'))
+
 def run_pre_create_migrations():
     """Run migrations that must happen BEFORE Base.metadata.create_all()"""
     logger.info("Running pre-create migrations...")
@@ -46,6 +54,7 @@ def run_pre_create_migrations():
 def run_migrations():
     """Run all database migrations."""
     logger.info("Running database migrations...")
+    ensure_project_removal_schema(engine)
     
     # Handle database migration for hands_free_mode column
     try:

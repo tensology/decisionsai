@@ -520,8 +520,10 @@ def _resolve_tensology_project(ticket: dict[str, Any]):
         project = None
         if raw_id.isdigit():
             project = db.get(Project, int(raw_id))
+            if project is not None and project.deleted_at is not None:
+                return None
         if project is None and name:
-            project = db.query(Project).filter(Project.name.ilike(name)).first()
+            project = db.query(Project).filter(Project.deleted_at.is_(None), Project.name.ilike(name)).first()
         if project is None:
             return None
         snapshot = {
@@ -643,7 +645,13 @@ def _create_tensology_project(client: TensologyClient, ticket: dict[str, Any]) -
     if not backend or not model or is_local_model_route(backend_id=backend, model=model, provider=provider):
         return None
     with get_session() as db:
+        source_id = str(ticket.get("decisions_project_id") or "").strip()
+        source = db.get(Project, int(source_id)) if source_id.isdigit() else None
+        if source is not None and source.deleted_at is not None:
+            return None
         project = db.query(Project).filter(Project.name.ilike(name)).first()
+        if project is not None and project.deleted_at is not None:
+            return None
         if project is None:
             db.add(Project(
                 name=name,

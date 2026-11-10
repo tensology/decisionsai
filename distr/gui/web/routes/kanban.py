@@ -3326,6 +3326,11 @@ def create_routes():
             board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
+            target_project_id = payload.default_project_id if payload.default_project_id is not None else board.default_project_id
+            if target_project_id:
+                target_project = s.get(Project, int(target_project_id))
+                if target_project is None or target_project.deleted_at is not None:
+                    raise HTTPException(409, "Project is not available for active work")
             previous_default_project_id = board.default_project_id
             if payload.name is not None:
                 board.name = payload.name
@@ -3410,7 +3415,19 @@ def create_routes():
             if not board:
                 raise HTTPException(404, "Board not found")
             project = s.get(Project, int(board.default_project_id)) if board.default_project_id else None
-            repository_path = str(project.folder_location or "").strip() if project else ""
+            if project is not None:
+                if delete_repository:
+                    raise HTTPException(400, "Project removal preserves repository files")
+                from distr.core.tensology_project_removals import remove_project, RemovalBlocked
+                from distr.core.tensology_project_sync import invalidate_project_sync
+                try:
+                    remove_project(s, project.id)
+                    s.commit()
+                except RemovalBlocked as exc:
+                    raise HTTPException(409, str(exc))
+                invalidate_project_sync()
+                return JSONResponse({"success": True, "repository_path": project.folder_location or "", "repository_deleted": False})
+            repository_path = ""
             if delete_repository and repository_path:
                 target = Path(repository_path).expanduser().resolve()
                 home = Path.home().resolve()
@@ -3457,8 +3474,6 @@ def create_routes():
                     s.query(PlanItem).filter(PlanItem.id.in_(item_ids)).delete(synchronize_session=False)
                 s.delete(workspace)
             s.delete(board)
-            if project is not None:
-                s.delete(project)
             s.commit()
         managed_roots = [
             Path(DB_DIR).expanduser().resolve(),
@@ -5504,7 +5519,7 @@ def create_routes():
         with get_session() as s:
             from distr.core.db import Action
             from distr.core.db.projects import Project
-            projects = [{"id": p.id, "name": p.name} for p in s.query(Project).all()]
+            projects = [{"id": p.id, "name": p.name} for p in s.query(Project).filter(Project.deleted_at.is_(None)).all()]
             actions = [{"id": a.id, "title": a.title or f"Action #{a.id}"} for a in s.query(Action).all()]
             return JSONResponse({"workflows": workflows, "projects": projects, "actions": actions})
 

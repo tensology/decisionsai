@@ -452,7 +452,7 @@ class ListProjectsTool(BaseTool):
             session = get_session()
             try:
                 # Always fetch fresh from database
-                projects = session.query(Project).order_by(Project.modified_date.desc()).all()
+                projects = session.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.modified_date.desc()).all()
 
                 if not projects:
                     return "No projects found. You can create a new project in the Projects Manager or by dropping a folder."
@@ -566,7 +566,7 @@ class GetProjectDetailsTool(BaseTool):
                 
                 if search_name:
                     # Fuzzy match to find project
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     best_match = None
                     best_score = 0.0
                     
@@ -582,13 +582,13 @@ class GetProjectDetailsTool(BaseTool):
                 
                 # If no specific project, get the active one
                 if not project:
-                    project = session.query(Project).filter(Project.in_use == True).first()
+                    project = session.query(Project).filter(Project.deleted_at.is_(None), Project.in_use == True).first()
                     if project:
                         logger.info(f"GetProjectDetails: Using active project '{project.name}'")
                 
                 if not project:
                     # List all projects instead
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     if all_projects:
                         names = [p.name for p in all_projects]
                         return f"No matching project found. Available projects: {', '.join(names)}"
@@ -716,7 +716,7 @@ class OpenAndStartProjectTool(BaseTool):
                         """Calculate similarity ratio between two strings."""
                         return SequenceMatcher(None, a.lower(), b.lower()).ratio()
                     
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     logger.info("Found %s projects in database: %s", len(all_projects), [p.name for p in all_projects])
                     best_match = None
                     best_score = 0.0
@@ -761,7 +761,7 @@ class OpenAndStartProjectTool(BaseTool):
                 # Try trigger words - but ONLY if we have a specific search_name
                 # Don't match trigger words against the full text (too permissive)
                 if not project and search_name:
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     for p in all_projects:
                         try:
                             trigger_words = json.loads(p.additional_trigger_words) if p.additional_trigger_words else []
@@ -783,18 +783,18 @@ class OpenAndStartProjectTool(BaseTool):
                     # If no project name was provided, use active project
                     if not search_name:
                         # Use the currently active project
-                        project = session.query(Project).filter(Project.in_use == True).first()
+                        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.in_use == True).first()
                         if project:
                             logger.info(f"No project name specified, using active project: {project.name}")
 
                 if not project:
                     # Check if there's an active project they might want
-                    active_project = session.query(Project).filter(Project.in_use == True).first()
+                    active_project = session.query(Project).filter(Project.deleted_at.is_(None), Project.in_use == True).first()
                     if active_project:
                         return f"Project not found. Did you mean the active project '{active_project.name}'? Say 'open the project and start it' to use it, or specify a project name."
                     
                     # List available projects to help the user
-                    projects = session.query(Project).order_by(Project.name).all()
+                    projects = session.query(Project).filter(Project.deleted_at.is_(None)).order_by(Project.name).all()
                     if projects:
                         project_list = ", ".join([p.name for p in projects])
                         return f"Project not found. Available projects: {project_list}\n\nSay 'open project <name> and start it' with one of these project names."
@@ -911,13 +911,13 @@ class SwitchProjectTool(BaseTool):
                 # Try to find by ID if it looks like a number
                 if search_name and search_name.isdigit():
                     project_id = int(search_name)
-                    project = session.query(Project).filter(Project.id == project_id).first()
+                    project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                     if project:
                         logger.info("SwitchProject found by ID: %s", project.name)
 
                 # Search for project by name with fuzzy matching
                 if search_name and not project:
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     logger.info("SwitchProject found %s projects: %s", len(all_projects), [p.name for p in all_projects])
                     best_match = None
                     best_score = 0.0
@@ -956,7 +956,7 @@ class SwitchProjectTool(BaseTool):
 
                 # Try trigger words as exact/substring match (fallback)
                 if not project and search_name:
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     for p in all_projects:
                         try:
                             trigger_words = json.loads(p.additional_trigger_words) if p.additional_trigger_words else []
@@ -972,7 +972,7 @@ class SwitchProjectTool(BaseTool):
 
                 if not project:
                     # List available projects to help
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     if all_projects:
                         project_list = ", ".join([p.name for p in all_projects])
                         return f"Project not found. Available projects: {project_list}"
@@ -1167,7 +1167,7 @@ class CreateProjectFromFolderTool(BaseTool):
             session = get_session()
             try:
                 # Check if project already exists
-                existing = session.query(Project).filter(
+                existing = session.query(Project).filter(Project.deleted_at.is_(None),
                     (Project.name == project_name) | (Project.folder_location == folder_path)
                 ).first()
 
@@ -1380,7 +1380,7 @@ class CreateProjectTicketTool(BaseTool):
             switched_msg = ""
             session = get_session()
             try:
-                candidates = session.query(Project).all()
+                candidates = session.query(Project).filter(Project.deleted_at.is_(None)).all()
             finally:
                 session.close()
 
@@ -1781,7 +1781,7 @@ class StartProjectTool(BaseTool):
                 from difflib import SequenceMatcher
 
                 with get_db_session() as session:
-                    all_projects = session.query(Project).all()
+                    all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                     best_match = None
                     best_score = 0.0
                     for p in all_projects:

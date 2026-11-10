@@ -32,6 +32,12 @@ class AssignProjectBody(BaseModel):
 def _period_args(month, start, end, projects):
     from distr.core.reports.month import parse_project_ids, resolve_period
     try:
+        if not any((month, start, end)):
+            from distr.core.reports.calendar_review import load_review
+            from distr.core.reports.month import today_sast
+            review = load_review()
+            if review and review['period']['end'] == today_sast().isoformat():
+                start, end = review['period']['start'], review['period']['end']
         return resolve_period(month=month, start=start, end=end), parse_project_ids(projects)
     except ValueError as exc:
         from fastapi import HTTPException

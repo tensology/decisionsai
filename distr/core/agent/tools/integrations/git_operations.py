@@ -164,12 +164,12 @@ def get_project_path(project_name: Optional[str] = None) -> Optional[str]:
             
             # If no name or 'current', get active project
             if not project_name or project_name.lower() in ('current', 'active', 'the project'):
-                project = session.query(Project).filter(Project.in_use == True).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.in_use == True).first()
                 if project:
                     logger.info(f"Using active project: {project.name}")
             else:
                 # Fuzzy match project name
-                all_projects = session.query(Project).all()
+                all_projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
                 best_match = None
                 best_score = 0.0
                 

@@ -53,6 +53,64 @@ def test_codex_conversation_excludes_tools_and_duplicate_event_messages(tmp_path
     assert path.read_bytes() == original
 
 
+def test_compressed_codex_archive_preserves_exact_thread_clock_and_source(tmp_path):
+    import zstandard
+    from distr.core.reports.month import _session_activity
+    rows = [
+        {'type':'session_meta','timestamp':'2026-10-23T08:00:00Z','payload':{'id':'archived-exact','cwd':'/work/client'}},
+        {'type':'event_msg','timestamp':'2026-10-23T08:00:01Z','payload':{'type':'user_message','message':'Correct registration validation.'}},
+        {'type':'response_item','timestamp':'2026-10-23T08:15:01Z','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':'Corrected validation and verified the regression tests.'}]}},
+    ]
+    path=tmp_path/'historical.jsonl.zst'
+    path.write_bytes(zstandard.ZstdCompressor().compress(('\n'.join(json.dumps(row) for row in rows)+'\n').encode()))
+    original=path.read_bytes()
+    meta,stamps=_session_activity(path,kind='codex')
+    assert meta['id']=='archived-exact'
+    assert stamps[-1]-stamps[0]==__import__('datetime').timedelta(minutes=15,seconds=1)
+    result=source_thread.read_source_thread('codex_local:archived-exact',codex_root=tmp_path,
+              start=datetime(2026,10,23,8),end=datetime(2026,10,23,8,16))
+    assert result['thread_id']=='archived-exact' and result['scoped']
+    assert result['messages'][0]['text']=='Corrected validation and verified the regression tests.'
+    assert path.read_bytes()==original and not (tmp_path/'historical.jsonl').exists()
+
+
+def test_corrupt_archive_does_not_hide_a_valid_exact_source_thread(tmp_path):
+    (tmp_path/'broken.jsonl.zst').write_bytes(b'not a zstandard frame')
+    write_session(tmp_path,'valid.jsonl',[{'id':'valid','cwd':'/work/client'}])
+    result=source_thread.read_source_thread('pi_local:valid',pi_root=tmp_path)
+    assert result['thread_id']=='valid'
+
+
+def test_archived_continuation_is_selected_by_exact_variant_not_parent_uuid(tmp_path):
+    import zstandard
+    original_id='01a17ddf-acc7-70e3-809e-0909fd1edfb0'
+    branch_id='01a17de9-367c-7841-9021-f7a040f17091'
+    rows=[{'type':'session_meta','payload':{'id':original_id,'cwd':'/work/client'}},
+          {'type':'response_item','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':'Continued billing changes.'}]}}]
+    write_session(tmp_path,f'parent-{original_id}.jsonl',rows[:1])
+    archive=tmp_path/f'rollout-2026-10-27T17-09-58-{original_id}_{branch_id}.jsonl.zst'
+    archive.write_bytes(zstandard.ZstdCompressor().compress('\n'.join(json.dumps(r) for r in rows).encode()))
+    with pytest.raises(RuntimeError,match='Multiple'):
+        source_thread.read_source_thread('codex_local:'+original_id,codex_root=tmp_path)
+    result=source_thread.read_source_thread(f'codex_local:{original_id}_{branch_id}',codex_root=tmp_path)
+    assert result['thread_id']==original_id
+    assert result['messages'][0]['text']=='Continued billing changes.'
+    assert result['source_variant']==f'{original_id}_{branch_id}'
+
+
+def test_default_codex_lookup_includes_archived_sessions_without_extracting(tmp_path,monkeypatch):
+    import zstandard
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:tmp_path))
+    root=tmp_path/'.codex'/'archived_sessions';root.mkdir(parents=True)
+    rows=[{'type':'session_meta','payload':{'id':'archived-only','cwd':'/work/client'}},
+          {'type':'response_item','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':'Historical client work.'}]}}]
+    path=root/'older.jsonl.zst';path.write_bytes(zstandard.ZstdCompressor().compress('\n'.join(json.dumps(r) for r in rows).encode()))
+    original=path.read_bytes()
+    result=source_thread.read_source_thread('codex_local:archived-only')
+    assert result['messages'][0]['text']=='Historical client work.'
+    assert path.read_bytes()==original and not (root/'older.jsonl').exists()
+
+
 def test_missing_and_invalid_reference_do_not_fall_back_to_another_thread(tmp_path):
     write_session(tmp_path, 'other.jsonl', [{'id': 'other', 'cwd': '/work/client'}])
     with pytest.raises(FileNotFoundError):

@@ -88,7 +88,7 @@ def register_routes(router, templates):
             from distr.core.db import get_session
             from distr.core.db.projects import Project
             with get_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     await websocket.send_json({"type": "error", "message": "Project not found"})
                     await websocket.close(code=1008, reason="Project not found")
@@ -383,7 +383,7 @@ def register_routes(router, templates):
 
         board_id = _coerce_optional_int(board_id)
         with db_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 return JSONResponse({"buffer": "", "alive": False, "project_id": project_id, "backend_id": "", "supports_rpc": False})
             backend_id = _backend_id_for_project(project)
@@ -474,7 +474,7 @@ def register_routes(router, templates):
         body = await request.json()
         backend_id = normalize_backend_id(body.get("backend_id") or "")
         with db_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 return JSONResponse({"success": False, "error": "Project not found"}, status_code=404)
             folder = project.folder_location or os.path.expanduser("~")
@@ -504,7 +504,7 @@ def register_routes(router, templates):
 
         try:
             with db_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 cwd = project.folder_location or os.path.expanduser("~")
@@ -549,7 +549,7 @@ def register_routes(router, templates):
             from distr.core.db.projects import Project
 
             with db_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 folder = (project.folder_location or "").strip() if project else ""
             managed_pids = {int(row.get("pid") or 0) for row in sessions + pi_cli}
             discovered = _discover_project_server_processes(
@@ -645,7 +645,7 @@ def register_routes(router, templates):
         from distr.core.db.projects import Project
 
         with db_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 return None, None, "Project not found"
             folder = (project.folder_location or "").strip()
@@ -990,7 +990,7 @@ def register_routes(router, templates):
             force_new = bool(isinstance(body, dict) and body.get("new"))
 
         with db_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 return JSONResponse({"success": False, "error": "Project not found"}, status_code=404)
             folder = (project.folder_location or "").strip()
@@ -1038,7 +1038,7 @@ def register_routes(router, templates):
         from distr.core.terminal import create_startup_shell_session
 
         with db_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 return JSONResponse({"success": False, "error": "Project not found"}, status_code=404)
             folder = (project.folder_location or "").strip()
@@ -1140,7 +1140,7 @@ def register_routes(router, templates):
 
             project_id = int(body["project_id"])
             with db_session() as session:
-                project = session.query(Project).filter(Project.id == project_id).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
                 folder = (project.folder_location or "").strip() if project else ""
             ok = await asyncio.to_thread(_stop_discovered_project_process, pid, folder)
         else:
@@ -1159,7 +1159,7 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends import get_backend
 
         with db_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == project_id).first()
             if not project:
                 return JSONResponse({"error": "Project not found"}, status_code=404)
             backend = get_backend(_backend_id_for_project(project))

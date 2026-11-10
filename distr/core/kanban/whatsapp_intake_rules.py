@@ -199,7 +199,7 @@ def resolve_whatsapp_link(jid: str, *, jid_phone: str = "") -> WhatsAppLinkInfo:
             info.board_name = str(getattr(board, "name", "") or "") if board else ""
             default_project_id = getattr(board, "default_project_id", None) if board else None
             if default_project_id:
-                project = session.query(Project).filter(Project.id == int(default_project_id)).first()
+                project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(default_project_id)).first()
                 info.project_id = int(project.id) if project is not None else None
             info.contact_name = str(link.contact_name or "")
             info.phone_jid = str(link.phone_jid or jid or "")

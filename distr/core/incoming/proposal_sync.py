@@ -77,7 +77,7 @@ def _mapped_projects(client) -> dict[int, int]:
         return os.path.normpath(str(value).strip()) if str(value or '').strip() else None
     with get_session() as db:
         paths = {}
-        for local in db.query(Project).all():
+        for local in db.query(Project).filter(Project.deleted_at.is_(None)).all():
             if key := path(local.folder_location):
                 paths.setdefault(key, []).append(local.id)
     result = {}

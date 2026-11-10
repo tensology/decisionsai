@@ -25,6 +25,7 @@ def _clear_turn_binding():
 def _fake_session(projects):
     session = MagicMock()
     query = session.query.return_value
+    query.filter.return_value = query
     query.order_by.return_value.all.return_value = projects
     query.filter.return_value.first.return_value = projects[0] if projects else None
     query.all.return_value = projects

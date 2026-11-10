@@ -114,7 +114,7 @@ def test_board_crud_owns_the_project_folder_and_terminal_commands(board_api):
     assert repository.is_dir()
     with get_session() as db:
         assert db.get(KanbanBoard, board_id) is None
-        assert db.get(Project, project_id) is None
+        assert db.get(Project, project_id).deleted_at is not None
 
 
 def test_board_catalog_repairs_missing_project_boards_without_duplicates(board_api):
@@ -167,7 +167,18 @@ def test_board_catalog_repairs_missing_project_boards_without_duplicates(board_a
         assert [lane.name for lane in board.lanes] == ["Backlog", "In Progress", "QA", "Complete"]
 
 
-def test_board_delete_can_optionally_remove_only_the_exact_repository(board_api):
+def test_board_cannot_be_reassigned_to_removed_project(board_api):
+    client, get_session, _ = board_api
+    removed = client.post('/api/tickets/boards',json={'name':'Past'}).json()
+    current = client.post('/api/tickets/boards',json={'name':'Current'}).json()
+    assert client.delete(f"/api/tickets/boards/{removed['id']}").status_code == 200
+    assert client.put(f"/api/tickets/boards/{current['id']}",json={'default_project_id':removed['project_id']}).status_code == 409
+    with get_session() as db:
+        assert db.get(KanbanBoard,current['id']).default_project_id == current['project_id']
+        assert db.get(Project,removed['project_id']).kanban_board_id is None
+
+
+def test_project_board_removal_rejects_repository_deletion(board_api):
     client, _get_session, tmp_path = board_api
     repository = tmp_path / "managed" / "topic-repo"
     repository.mkdir(parents=True)
@@ -178,13 +189,12 @@ def test_board_delete_can_optionally_remove_only_the_exact_repository(board_api)
     }).json()
 
     deleted = client.delete(f"/api/tickets/boards/{created['id']}?delete_repository=true")
-    assert deleted.status_code == 200
-    assert deleted.json()["repository_path"] == str(repository)
-    assert deleted.json()["repository_deleted"] is True
-    assert not repository.exists()
+    assert deleted.status_code == 400
+    assert repository.is_dir()
+    assert client.get("/api/tickets/boards").status_code == 200
 
 
-def test_board_delete_cascades_its_ticket_thread_time_and_snapshot_files(board_api):
+def test_board_removal_retains_thread_time_and_snapshot_files(board_api):
     client, get_session, tmp_path = board_api
     repository = tmp_path / "cascade" / "repo"
     intake = repository / ".decisions" / "intake" / "ticket"
@@ -231,14 +241,18 @@ def test_board_delete_cascades_its_ticket_thread_time_and_snapshot_files(board_a
     deleted = client.delete(f"/api/tickets/boards/{created['id']}")
     assert deleted.status_code == 200
     assert repository.is_dir()
-    assert not transcript.exists()
+    assert transcript.exists()
     with get_session() as db:
-        assert db.get(Chat, root_id) is None
-        assert db.get(Chat, child_id) is None
-        assert db.query(DevelopmentWorkItem).filter_by(chat_id=root_id).first() is None
+        assert db.get(Chat, root_id) is not None
+        assert db.get(Chat, child_id) is not None
+        item = db.query(DevelopmentWorkItem).filter_by(chat_id=root_id).one()
+        assert item.time_accumulated_seconds == 300
+        assert item.local_ticket_id is None
+        assert db.get(Project, created["project_id"]).deleted_at is not None
+        assert db.query(KanbanTicket).count() == 0
 
 
-def test_board_delete_removes_board_automation_thread_and_plan_workspace(board_api):
+def test_board_removal_pauses_automation_and_retains_thread_and_plan_workspace(board_api):
     client, get_session, _tmp_path = board_api
     created = client.post("/api/tickets/boards", json={"name": "Owned planning"}).json()
     board_id = int(created["id"])
@@ -281,9 +295,10 @@ def test_board_delete_removes_board_automation_thread_and_plan_workspace(board_a
 
     assert client.delete(f"/api/tickets/boards/{board_id}").status_code == 200
     with get_session() as db:
-        assert db.get(Chat, thread_id) is None
-        assert db.get(Automation, automation_id) is None
-        assert db.get(PlanWorkspace, workspace_id) is None
+        assert db.get(Chat, thread_id) is not None
+        assert db.get(Automation, automation_id).status == "paused"
+        assert db.get(PlanWorkspace, workspace_id) is not None
+        assert db.query(PlanItemRevision).one().content == "Requirements"
 
 
 def test_ticket_delete_can_also_delete_its_linked_thread(board_api):

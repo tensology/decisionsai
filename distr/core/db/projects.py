@@ -31,6 +31,7 @@ class Project(Base):
     coding_backend = Column(String, nullable=False, default="pi")  # Project coding CLI backend
     coding_backend_model = Column(String, nullable=True)  # Optional per-project model/alias for the selected CLI backend
     position = Column(Integer, default=0)  # Manual order in the Projects sidebar
+    deleted_at = Column(DateTime, nullable=True, index=True)
 
     created_date = Column(DateTime, default=utc_now_naive)
     modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
@@ -39,6 +40,19 @@ class Project(Base):
     context_items = relationship("ProjectContextItem", back_populates="project", cascade="all, delete-orphan")
     files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
     board_columns = relationship("BoardColumn", back_populates="project", cascade="all, delete-orphan")
+
+
+class ProjectRemoval(Base):
+    """Durable removal receipt, retained independently of delivery boards."""
+    __tablename__ = 'project_removals'
+
+    id = Column(String, primary_key=True)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False)
+    source_name = Column(String, nullable=False)
+    local_folder_path = Column(String, nullable=False, default='')
+    audit_snapshot = Column(Text, nullable=False, default='{}')
+    completed_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    acknowledged_at = Column(DateTime, nullable=True)
 
 
 class ProjectContextItem(Base):

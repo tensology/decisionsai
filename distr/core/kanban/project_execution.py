@@ -57,6 +57,10 @@ def create_execution_session(
     ensure_project_execution_tables()
     safe_input_packet = _redact_persisted_execution_value(input_packet or {})
     with get_session() as session:
+        from distr.core.db.projects import Project
+        project = session.get(Project, int(project_id))
+        if project is not None and project.deleted_at is not None:
+            raise ValueError("Project has been removed from active work")
         row = ProjectExecutionSession(
             ticket_id=ticket_id,
             project_id=int(project_id),

@@ -157,3 +157,5 @@ yt-dlp>=2024.8.0
 # (2.x+ pulls urllib3-future which shadows urllib3).
 caldav==1.6.0
 icalendar==7.3.0
+# Stream retained Codex session archives without extracting them.
+zstandard>=0.25.0

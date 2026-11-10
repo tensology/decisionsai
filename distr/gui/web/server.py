@@ -54,7 +54,8 @@ async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_
         send_tensology_heartbeat,
         sync_tensology_execution_states,
     )
-    from distr.core.tensology_project_sync import sync_pinned_projects
+    from distr.core.tensology_project_sync import sync_projects
+    from distr.core.tensology_project_removals import process_project_removals
 
     last_presence = float("-inf")
     while True:
@@ -63,7 +64,8 @@ async def _tensology_heartbeat_loop(interval_seconds: int = TENSOLOGY_HEARTBEAT_
             last_presence = _time.monotonic()
             operations.append(("presence", send_tensology_heartbeat))
         operations += [
-            ("pinned project sync", sync_pinned_projects),
+            ("project removals", process_project_removals),
+            ("project sync", sync_projects),
             ("discussion assessments", process_tensology_discussion_assessments),
             ("discussion context", process_tensology_discussion_context),
             ("ticket state sync", sync_tensology_execution_states),
@@ -616,7 +618,7 @@ def create_app() -> FastAPI:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
             session = get_session()
-            projects = session.query(Project).all()
+            projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
             return [
                 {"name": p.name, "path": p.folder_location}
                 for p in projects

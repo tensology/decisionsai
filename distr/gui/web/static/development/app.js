@@ -1,5 +1,5 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261022-tips2';
-import { createReports } from './reports/index.js?v=20261109-invoice-review2';
+import { createReports } from './reports/index.js?v=20261109-calendar-today5';
 import { createThreadLiveUpdates } from './threads/live.js?v=20261027f';
 import { createThreadSession } from './threads/session.js?v=20261030-chat-run-scope';
 import { createCatalogLoader } from './shell/catalog.js';

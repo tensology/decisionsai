@@ -9,6 +9,14 @@ export const WEEK_HOUR_PX = 28;
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const STATE_WORD = { empty: 'No records', unavailable: 'Not found', not_read: 'Not read', excluded: 'Excluded', unsupported: 'No adapter' };
 
+export function sastToday(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en', {
+        timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(now);
+    const value = (kind) => parts.find((part) => part.type === kind).value;
+    return `${value('year')}-${value('month')}-${value('day')}`;
+}
+
 export function projectColor(id) {
     const n = Number(id);
     return n === 0 ? '#94a3b8' : PALETTE[((n % PALETTE.length) + PALETTE.length) % PALETTE.length];
@@ -288,6 +296,7 @@ export function segments(block) {
     let start = minutes(st);
     for (let guard = 0; guard < 3; guard++) {
         const last = day === ed;
+        if (last && day !== sd && minutes(et) === 0) break;
         out.push({ day, start, end: last ? Math.max(start + 1, minutes(et)) : 1440 });
         if (last) break;
         day = addDays(day, 1);
@@ -323,6 +332,7 @@ export function daySlice(block, day) {
     const start = day === startDay ? localMinutes(block.start_local) : 0;
     const end = day === endDay ? localMinutes(block.end_local) : 1440;
     if (start == null || end == null || end < start) return null;
+    if (day === endDay && day !== startDay && end === 0) return null;
     return {
         start,
         end,
@@ -369,6 +379,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
     const esc = escapeHtml;
     const view = root.querySelector('#reports-period-view');
     const periodSelect = root.querySelector('#reports-period-select');
+    const todayButton = root.querySelector('#reports-today');
     const buildButton = root.querySelector('#reports-build');
     const projectsButton = root.querySelector('#reports-projects-button');
     const projectsMenu = root.querySelector('#reports-projects-menu');
@@ -1093,6 +1104,21 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         state.period = periodSelect.value || 'rolling';
         state.cursor = '';
         load();
+    });
+    todayButton.addEventListener('click', async () => {
+        state.cursor = sastToday();
+        // Like selecting a calendar date, Today opens that day's work directly.
+        state.calView = 'day';
+        savePrefs();
+        projectsMenu.hidden = true;
+        projectsButton.setAttribute('aria-expanded', 'false');
+        const period = state.data?.period || {};
+        if (state.loading || state.error || !period.start || state.cursor < period.start || state.cursor > period.end) {
+            state.period = 'rolling';
+            await load();
+        } else {
+            render();
+        }
     });
     for (const [id, delta] of [['#reports-period-prev', 1], ['#reports-period-next', -1]]) {
         // Options run newest first, so "previous period" moves down the list.

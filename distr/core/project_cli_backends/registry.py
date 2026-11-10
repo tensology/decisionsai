@@ -3433,6 +3433,9 @@ async def run_project_task(
     board_id_override: Optional[int] = None,
     adapter_options: Optional[dict[str, Any]] = None,
 ) -> BackendTaskResult:
+    from distr.core.db.projects import Project
+    if isinstance(project, Project) and project.deleted_at is not None:
+        return BackendTaskResult(False, "", "project_removed", error="Project has been removed from active work")
     if (adapter_options or {}).get("proposal_only"):
         # This branch precedes snapshots, database execution records, instruction
         # enrichment and normal backend normalization (which defaults unknown IDs
