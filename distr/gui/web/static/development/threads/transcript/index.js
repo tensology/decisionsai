@@ -1,5 +1,6 @@
 import { bindWorkflowStepNumbers, nextWorkflowLoopId, workflowLoopHtml, workflowStepDataAttrs, workflowStepNumbersHtml, workflowViewSwitchHtml } from '../../shared/workflow-loop.js?v=20261022-threadring2';
 import { shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
+import { splitProposalSourceContext } from './source-context.js?v=20261110-readable1';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
     const activityDisclosureState = new Map();
@@ -349,10 +350,11 @@ export function createThreadsTranscript({ context, actions, el, token }) {
 
     function userMessagePresentation(message) {
         const marker = '\n\nFocused context for this turn:\n\n';
-        const content = String(message.content || '');
+        const source = splitProposalSourceContext(message.content);
+        const content = source.content;
         const markerIndex = content.indexOf(marker);
         const skills = Array.isArray(message.skills) ? [...message.skills] : [];
-        if (markerIndex < 0) return { content, skills };
+        if (markerIndex < 0) return { content, skills, evidence: source.evidence };
         const generatedSkillBlock =
             /\[Skill:\s*[^\]]+\]\s*\nUse the installed skill "([^"]+)" for this turn\. Read it with read_harness_skill before acting, then follow its instructions for this request\./g;
         const context = content.slice(markerIndex + marker.length);
@@ -365,11 +367,24 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             })
             .replace(/\n{3,}/g, '\n\n')
             .trim();
-        if (!matched) return { content, skills };
+        if (!matched) return { content, skills, evidence: source.evidence };
         return {
             content: content.slice(0, markerIndex) + (remainingContext ? `${marker}${remainingContext}` : ''),
-            skills
+            skills, evidence: source.evidence
         };
+    }
+
+    function sourceEvidenceHtml(evidence, key) {
+        if (!evidence?.length) return '';
+        const rows = evidence.map(row => {
+            const who = row.sender_name || (row.direction === 'outbound' ? 'Developer reply' : 'Source message');
+            const date = row.sent_at ? new Date(row.sent_at) : null;
+            const when = date && !Number.isNaN(date.getTime()) ? date.toLocaleString([], {dateStyle:'medium', timeStyle:'short'}) : '';
+            const body = row.body || row.caption || row.transcript || '';
+            const transcript = row.transcript && row.transcript !== body ? `<p>${actions.escapeHtml(row.transcript)}</p>` : '';
+            return `<section class="thread-source-context-message"><div><strong>${actions.escapeHtml(who)}</strong>${when ? `<time>${actions.escapeHtml(when)}</time>` : ''}</div><p>${actions.escapeHtml(body)}</p>${transcript}</section>`;
+        }).join('');
+        return `<details class="turn-activity-disclosure thread-source-context" data-activity-key="${actions.escapeHtml(activityKey(`source:${key}`))}"><summary>Source context (${evidence.length} messages)<span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="thread-source-context-messages">${rows}</div></details>`;
     }
 
     function turnEventIconSvg(kind) {
@@ -692,7 +707,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 const thumb = kind === 'image' ? `<img src="${actions.escapeHtml(item.url)}" alt="" loading="lazy">` : icon;
                 return `<button type="button" class="thread-source-file thread-media-${kind}" title="${actions.escapeHtml(tip)}" data-tooltip="${actions.escapeHtml(tip)}" aria-label="Open ${label.toLowerCase()}: ${actions.escapeHtml(name)}" data-thread-file-preview="${payload}">${thumb}<span>${label}</span></button>`;
             }).join('');
-            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}${media ? `<div class="thread-source-files" aria-label="Source attachments">${media}</div>` : ''}</div></article>`;
+            return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}${media ? `<div class="thread-source-files" aria-label="Source attachments">${media}</div>` : ''}${sourceEvidenceHtml(presentation.evidence, message.chat_row_id || index)}</div></article>`;
         }
         if (role === 'tool') {
             const tool = message.tool_event || {};

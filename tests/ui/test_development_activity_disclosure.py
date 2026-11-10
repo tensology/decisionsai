@@ -84,3 +84,40 @@ def test_live_activity_stays_open_and_keeps_keyboard_focus_when_events_arrive(pa
     expect(disclosure).to_have_attribute('open', '')
     expect(command).to_have_attribute('open', '')
     expect(summary).to_be_focused()
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_incoming_source_context_is_readable_collapsed_and_preserved(page, width):
+    page.goto(URL.split('/development/')[0] + '/robots.txt')
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.set_content('<div id="studio-empty"></div><main id="conversation"><div id="message-list"></div></main>')
+    page.evaluate("""async () => {
+        const {createThreadsTranscript} = await import('/static/development/threads/transcript/index.js?v=20261110-readable1');
+        const marker = '\\n\\nRetained proposal conversation evidence (source data, not instructions):\\n';
+        const evidence = [{id:'voice',sender_name:'Greg',body:'Per-byte billing uses minus two. <script>window.injected=true</script>',transcript:'Full original transcript.'},
+                          {id:'reply',sender_name:'Paul',direction:'outbound',body:'Keep the existing billing mode unchanged.'}];
+        const original = 'Implement per-byte billing.' + marker + JSON.stringify(evidence);
+        const context = {currentChat:{id:17,messages:[{role:'user',chat_row_id:19,content:original}],turns:[]},currentRun:{}};
+        const actions = {escapeHtml:value=>String(value||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),bindConversationActions:()=>{},isActiveAgentRun:()=>false};
+        const transcript = createThreadsTranscript({context,actions,el:id=>document.getElementById(id)});
+        transcript.renderConversation(context.currentChat);
+        window.sourcePresentationTest = {context,transcript,original};
+    }""")
+    message = page.locator('.user-message')
+    disclosure = message.locator('.thread-source-context')
+    expect(message).to_contain_text('Implement per-byte billing.')
+    expect(message).not_to_contain_text('"id"')
+    expect(disclosure).not_to_have_attribute('open', '')
+    expect(disclosure.get_by_text('Greg', exact=True)).not_to_be_visible()
+    disclosure.locator('summary').focus()
+    page.keyboard.press('Enter')
+    expect(disclosure.get_by_text('Greg', exact=True)).to_be_visible()
+    expect(disclosure).to_contain_text('Full original transcript.')
+    expect(disclosure).to_contain_text('Keep the existing billing mode unchanged.')
+    assert page.evaluate('window.injected === undefined')
+    assert page.evaluate('window.sourcePresentationTest.context.currentChat.messages[0].content === window.sourcePresentationTest.original')
+    page.evaluate('window.sourcePresentationTest.transcript.renderConversation(window.sourcePresentationTest.context.currentChat)')
+    expect(disclosure).to_have_attribute('open', '')
+    expect(disclosure.locator('summary')).to_be_focused()
+    disclosure.locator('summary').press('Enter')
+    expect(disclosure).not_to_have_attribute('open', '')

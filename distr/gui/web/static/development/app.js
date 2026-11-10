@@ -22,7 +22,7 @@ import { createBoards } from './boards/index.js?v=20261102-verify';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261107-nav68';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-oga1';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-readable1';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261110-queue1';
 
