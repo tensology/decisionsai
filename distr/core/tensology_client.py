@@ -816,6 +816,8 @@ def _execution_prompt(
     default_branch: str = "main",
     ops_incident: bool | None = None,
 ) -> str:
+    from distr.core.incoming.source_context import proposal_evidence_prompt
+
     tasks = ticket.get("tasks") if isinstance(ticket.get("tasks"), list) else []
     criteria = ticket.get("success_criteria") if isinstance(ticket.get("success_criteria"), list) else []
     task_lines = "\n".join(f"- {str(item)}" for item in tasks if str(item).strip()) or "- Derive implementation tasks from the approved scope."
@@ -841,6 +843,10 @@ def _execution_prompt(
         f"Tasks:\n{task_lines}\n\n"
         f"Acceptance criteria:\n{criteria_lines}\n\n"
         f"Source, discussion, and attachment context:\n{delivery_context}\n\n"
+        + proposal_evidence_prompt(ticket.get('incoming_proposal') or {}) + "\n\n"
+        + ("Original proposal task details:\n" + json.dumps(ticket['incoming_proposal']['source_task_details'], ensure_ascii=False)
+           + "\n\n" if (ticket.get('incoming_proposal') or {}).get('source_task_details') else "")
+        +
         "Treat this as one explicit goal. Follow these observable gates in order: Development, Testing, "
         "Polish or refinement only when evidence shows it is needed, Retesting when refinement changed behavior, "
         "Final verification, then Done. At the start of each gate, emit exactly one line in the form "
@@ -993,6 +999,8 @@ def _ensure_tensology_kanban_ticket(
 def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) -> tuple[int, dict[str, str]]:
     from distr.core.workflow.execution_mode import proposal_execution_scope, choose_proposal_execution_mode
 
+    if (ticket.get('source_metadata') or {}).get('incoming_proposal_id') and not ticket.get('incoming_proposal'):
+        raise TensologyApiError('The originating proposal pack is missing. Refresh the ticket before starting work.', code='proposal_pack_missing')
     complexity = choose_proposal_execution_mode(ticket)["complexity"]
     # Raises TensologyRouteError before anything is created when the route is unset or local.
     route = _tensology_project_route(project)
@@ -1009,11 +1017,19 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
     skill_ids, use_playwright = _execution_skill_ids(ticket)
     attachments = _tensology_thread_files(ticket)
     from distr.core.incoming.transcription import thread_preparation_timeout
+    from distr.core.incoming.source_context import proposal_source_context
+    pack = ticket.get('incoming_proposal') or {}
+    source_context = proposal_source_context({
+        'source': pack.get('source'),
+        'source_thread_id': (pack.get('source_conversation') or {}).get('thread_id'),
+        'message_ids': pack.get('source_message_ids') or [],
+    })
     response = _local_api_post(
         "workflows/studio/tasks",
         {
             "prompt": prompt,
             "attachments": attachments,
+            "incoming_source_context": source_context or None,
             "title": f"{ticket.get('reference')} - {ticket.get('title')}",
             "project_id": project["id"],
             "workflow_id": None,

@@ -10,6 +10,32 @@ from tests.core.test_incoming_media import store
 from distr.core.incoming import media, proposals, transcription
 
 
+@pytest.mark.parametrize('surface', ['decisions', 'tensology'])
+def test_both_handoff_prompts_keep_full_retained_conversation_and_transcript(surface):
+    from distr.core.tensology_client import _execution_prompt
+
+    transcript = 'Voice detail. ' * 1500 + 'Final billing instruction.'
+    task = {'title': 'Update billing', 'description': 'Handle allowance minus two.', 'acceptance_criteria': 'Verify the sync button.'}
+    pack = {'title': 'Billing change', 'description': 'Original brief', 'tasks': [task], 'source_task_details': [task],
+            'evidence': [{'id': 'client-request', 'direction': 'inbound', 'body': 'Please update billing.',
+                          'sender_name': 'Client', 'sent_at': '2026-11-10T10:00:00Z'},
+                         {'id': 'voice-note', 'direction': 'inbound', 'body': transcript, 'transcript': transcript},
+                         {'id': 'credential', 'body': 'password: FixturePassword42'}],
+            'context_evidence': [{'id': 'developer-reply', 'direction': 'outbound',
+                                  'body': 'Which allowance value should I use?'}]}
+    if surface == 'decisions':
+        prompt = proposals._proposal_prompt(pack)
+    else:
+        prompt = _execution_prompt({'reference': 'TEST-1', 'incoming_proposal': pack}, 'low')
+    assert 'Please update billing.' in prompt
+    assert 'Which allowance value should I use?' in prompt
+    assert transcript in prompt
+    assert 'developer-reply' in prompt and 'outbound' in prompt
+    assert 'Handle allowance minus two.' in prompt and 'Verify the sync button.' in prompt
+    assert 'FixturePassword42' not in prompt
+    assert 'credential' in prompt
+
+
 @pytest.fixture(autouse=True)
 def linked_media_sources(monkeypatch):
     from distr.core.incoming import project_links
@@ -61,7 +87,17 @@ def _handoff(store, monkeypatch, records):
 
 def test_first_dispatch_contains_both_originals_and_generated_and_existing_transcripts(store, tmp_path, monkeypatch):
     records = [_original(tmp_path, 1), _original(tmp_path, 2, transcript='Existing source transcript.')]
+    image = tmp_path / '.decisions/workspaces/projects/7/attachments/screenshot.png'
+    image.write_bytes(b'original image fixture')
+    records.append(media._record(image, image.name, 'image/png', 'image'))
     chat_id, proposal, dispatched = _handoff(store, monkeypatch, records)
+    proposal['evidence'] = [{'id': 'context-reply', 'direction': 'outbound', 'body': 'Use the new billing allowance.'}]
+    from distr.core.workflow import development_harness
+    dispatch = development_harness.dispatch_development_prompt
+    def inspect_dispatch(cid, prompt, **kwargs):
+        assert 'Use the new billing allowance.' in prompt
+        return dispatch(cid, prompt, **kwargs)
+    monkeypatch.setattr(development_harness, 'dispatch_development_prompt', inspect_dispatch)
     transcribe = Mock(return_value='Generated before dispatch.')
     monkeypatch.setattr(transcription, '_transcribe', transcribe)
     assert proposals.create_proposal_thread(proposal, start_work=True) == chat_id
@@ -69,6 +105,7 @@ def test_first_dispatch_contains_both_originals_and_generated_and_existing_trans
     originals = [item for item in dispatched[0] if item['mime_type'] == 'video/mp4']
     companions = [item for item in dispatched[0] if item['mime_type'] == 'text/plain']
     assert {Path(item['path']).read_bytes() for item in originals} == {b'original media 1', b'original media 2'}
+    assert [Path(item['path']).read_bytes() for item in dispatched[0] if item['mime_type'] == 'image/png'] == [b'original image fixture']
     assert {Path(item['path']).read_text() for item in companions} == {'Generated before dispatch.', 'Existing source transcript.'}
     assert {item['name'] for item in companions} == {'source-1.mp4.transcript.txt', 'source-2.mp4.transcript.txt'}
     transcribe.assert_called_once()
@@ -135,12 +172,23 @@ def test_tensology_task_endpoint_prepares_media_before_dispatch_and_reuses_suppl
     monkeypatch.setattr(development_control, 'resume_thread_time', lambda *args, **kwargs: None)
     decoder = Mock(side_effect=RuntimeError('Decoder unavailable')) if decoder_fails else Mock(return_value='Prepared in task endpoint.')
     monkeypatch.setattr(transcription, '_transcribe', decoder)
-    ticket = {'attachments': [{'name': row['name'], 'mime_type': row['mime_type'], 'local_path': row['path'], 'transcript': row['transcript']} for row in records]}
+    ticket = {'attachments': [{'name': row['name'], 'mime_type': row['mime_type'], 'local_path': row['path'], 'transcript': row['transcript']} for row in records],
+              'incoming_proposal': {'evidence': [{'id': 'reply', 'direction': 'outbound', 'body': 'Use the new billing allowance.'}]}}
+    from distr.core.workflow import development_harness
+    registered = []
+    monkeypatch.setattr('distr.core.incoming.source_context.register_source_context', lambda cid, context: registered.append((cid, context)))
+    dispatch = development_harness.dispatch_development_prompt
+    def inspect_dispatch(cid, prompt, **kwargs):
+        assert 'Use the new billing allowance.' in prompt
+        assert registered == [(chat_id, {'source': 'whatsapp', 'source_thread_id': 'scoped-contact', 'message_ids': ['client-source'], 'project_id': 7})]
+        return dispatch(cid, prompt, **kwargs)
+    monkeypatch.setattr(development_harness, 'dispatch_development_prompt', inspect_dispatch)
     attachments = tensology_client._tensology_thread_files(ticket)
     app, router = FastAPI(), APIRouter()
     register_routes(router, None)
     app.include_router(router)
-    response = TestClient(app).post('/workflows/studio/tasks', json={'prompt': 'Review incoming media', 'project_id': 7, 'attachments': attachments})
+    response = TestClient(app).post('/workflows/studio/tasks', json={'prompt': tensology_client._execution_prompt(ticket, 'low'), 'project_id': 7, 'attachments': attachments,
+        'incoming_source_context': {'source': 'whatsapp', 'source_thread_id': 'scoped-contact', 'message_ids': ['client-source']}})
     assert response.status_code == 200, response.text
     assert len(dispatched) == 1
     assert len([item for item in dispatched[0] if item['mime_type'] == 'video/mp4']) == 2
@@ -149,10 +197,23 @@ def test_tensology_task_endpoint_prepares_media_before_dispatch_and_reuses_suppl
     decoder.assert_called_once()
 
 
+def test_tensology_handoff_rejects_missing_origin_pack_before_creating_anything(monkeypatch):
+    from distr.core import tensology_client as tc
+    create = Mock()
+    monkeypatch.setattr(tc, '_ensure_tensology_kanban_ticket', create)
+    with pytest.raises(tc.TensologyApiError, match='proposal pack is missing'):
+        tc._create_tensology_thread({'source_metadata': {'incoming_proposal_id': 99}}, {'id': 7})
+    create.assert_not_called()
+
+
 def test_tensology_bridge_creation_allows_bounded_transcription_without_changing_other_http_calls(tmp_path, monkeypatch):
     from distr.core import tensology_client as tc
     records = [_original(tmp_path, 1), _original(tmp_path, 2)]
     ticket = {'id': 17, 'reference': 'MEDIA-17', 'project_id': 90, 'title': 'Media handoff',
+              'source_metadata': {'incoming_proposal_id': 99},
+              'incoming_proposal': {'source': 'whatsapp', 'source_conversation': {'thread_id': 'scoped-contact'},
+                                    'source_message_ids': ['source-1', 'source-2'],
+                                    'evidence': [{'id': 'source-1', 'body': 'Original request context.'}]},
               'attachments': [{'name': row['name'], 'mime_type': row['mime_type'], 'local_path': row['path']} for row in records]}
     monkeypatch.setattr(tc, '_tensology_project_route', lambda project: {'backend': 'pi', 'provider': 'fixture', 'model': 'fixture'})
     monkeypatch.setattr(tc, '_ensure_tensology_kanban_ticket', lambda *args: 123)
@@ -160,6 +221,10 @@ def test_tensology_bridge_creation_allows_bounded_transcription_without_changing
     calls = []
     def request(request, *, timeout):
         calls.append((request.full_url, timeout))
+        if request.full_url.endswith('workflows/studio/tasks'):
+            payload = json.loads(request.data)
+            assert payload['incoming_source_context'] == {'source': 'whatsapp', 'source_thread_id': 'scoped-contact', 'message_ids': ['source-1', 'source-2']}
+            assert 'Original request context.' in payload['prompt']
         return io.BytesIO(json.dumps({'task': {'id': 77}}).encode())
     monkeypatch.setattr(tc.urllib.request, 'urlopen', request)
     assert tc._create_tensology_thread(ticket, {'id': 7, 'name': 'Media project'})[0] == 77

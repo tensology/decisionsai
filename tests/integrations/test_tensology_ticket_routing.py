@@ -80,7 +80,7 @@ def test_route_block_is_not_re_reported_when_unchanged():
 
 
 class _Row(SimpleNamespace):
-    pass
+    deleted_at = None
 
 
 @contextmanager
@@ -179,7 +179,7 @@ def test_local_simulation_against_stub_tensology(stub_tensology):
     client = tc.TensologyClient(base_url=stub_tensology, api_key="stub-not-a-real-key", source="decisionsai-ticket-runner")
     captured = {}
 
-    def fake_local_post(path, body):
+    def fake_local_post(path, body, **kwargs):
         captured["path"], captured["body"] = path, body
         return {"task": {"id": 4242}}
 

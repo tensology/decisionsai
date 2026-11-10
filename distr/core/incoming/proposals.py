@@ -187,6 +187,7 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
         "status": str(row.get("status") or "pending"),
         "created_at": at.isoformat() if at else "",
         "message_ids": [str(value) for value in row.get('source_message_ids') or [] if value] or [str(ev.get("id")) for ev in (row.get("evidence") or []) if isinstance(ev, dict) and ev.get("id")],
+        "source_context_message_ids": [str(value) for value in row.get('source_context_message_ids') or []],
         "stored_status": str(row.get('stored_status') or row.get('status') or 'pending'),
         "source_started_at": source_started.isoformat() if source_started else None,
         "evidence": [
@@ -1276,8 +1277,7 @@ def _proposal_prompt(proposal: dict[str, Any]) -> str:
         rendered = []
         for task in tasks:
             if isinstance(task, dict):
-                title = str(task.get("title") or "Task").strip()
-                rendered.append(title)
+                rendered.append(json.dumps(task, ensure_ascii=False))
             else:
                 rendered.append(str(task))
         lines += ["", "Tasks:"] + [f"- {task}" for task in rendered if task]
@@ -1285,7 +1285,9 @@ def _proposal_prompt(proposal: dict[str, Any]) -> str:
     participant = str(proposal.get("participant") or "").strip()
     if source:
         lines += ["", f"Source: {source}" + (f" — {participant}" if participant else "")]
-    return "\n".join(lines)
+    from distr.core.incoming.source_context import proposal_evidence_prompt
+
+    return "\n".join(lines) + proposal_evidence_prompt(proposal)
 
 
 def _tensology_id(proposal_id: Any) -> int | None:

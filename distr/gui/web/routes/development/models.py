@@ -147,6 +147,7 @@ class StudioTaskCreateRequest(BaseModel):
     service_tier: str = "standard"
     routing_assessment: Optional[dict] = None
     attachments: Optional[List[dict]] = None
+    incoming_source_context: Optional[dict] = None
     skill_ids: Optional[List[str]] = None
     use_playwright: bool = False
     skip_human_checkpoints: bool = False

@@ -255,6 +255,12 @@ def register_routes(router, templates):
             )
             from distr.core.workflow.development_threads import mark_development_thread
 
+            if data.incoming_source_context:
+                from distr.core.incoming.source_context import register_source_context
+
+                await asyncio.to_thread(register_source_context, int(chat_id), {
+                    **data.incoming_source_context, 'project_id': data.project_id,
+                })
             if data.attachments:
                 from distr.core.workflow.development_harness import _safe_turn_attachments
                 from distr.core.incoming.media import register_thread_attachments
