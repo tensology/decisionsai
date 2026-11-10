@@ -22,7 +22,7 @@ import { createBoards } from './boards/index.js?v=20261102-verify';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-reply1';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-reply2';
 import { openSourceReply } from './threads/source-reply.js?v=20261110-reply1';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261110-queue1';

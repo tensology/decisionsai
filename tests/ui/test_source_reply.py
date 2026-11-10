@@ -64,7 +64,7 @@ def test_choose_source_edit_rewrite_approve_once(page, width):
     state = install(page)
     reply = page.get_by_role('button', name='Reply', exact=True)
     expect(reply).to_be_visible()
-    assert reply.evaluate('(el) => el.nextElementSibling.hasAttribute("data-fork-current")')
+    assert reply.evaluate('(el) => el.previousElementSibling.hasAttribute("data-fork-current") && el.nextElementSibling === null')
     reply.scroll_into_view_if_needed()
     shot(page, f'{width}-reply-button')
     reply.click()

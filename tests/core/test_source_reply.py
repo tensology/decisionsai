@@ -95,6 +95,7 @@ def test_reply_all_deduplicates_self_honors_reply_to_and_keeps_cc():
     assert target['cc'] == ['reviewer@example.com']
     assert target['in_reply_to'] == '<rfc@example.com>'
     assert target['subject'] == 'Re: Billing'
+    assert target['recipient_names'] == ['Support', 'Friend']
     with pytest.raises(ValueError, match='identity'):
         replies.mail_target('mailshot', {'from': 'client@example.com'}, [])
 
@@ -213,6 +214,53 @@ def test_draft_prompt_contains_transcript_selected_response_and_humanizer_rules(
     assert 'Deployment has not happened.' in prompt
     assert 'Never invent facts' in prompt and 'Humanizer' in prompt
     assert draft['text'] == 'Changed,pending deployment.'
+
+
+@pytest.mark.parametrize('channel', ['whatsapp', 'gmail', 'mailshot'])
+def test_draft_greets_relevant_people_before_a_plain_language_update(monkeypatch, channel):
+    from datetime import datetime
+    from distr.core import read_response, settings
+    monkeypatch.setattr(settings, 'load_settings_from_db', lambda: {})
+    monkeypatch.setattr(read_response, 'resolve_oracle_model', lambda settings: ('fixture', 'fixture'))
+    seen = []
+    text, _ = replies.generate_draft(
+        {'evidence': [{'id': 'current', 'sender_name': 'Greg', 'body': 'Can you change the billing?'},
+                      {'id': 'unrelated', 'sender_name': 'Someone Else', 'body': 'Another project.'}]},
+        {'channel': channel, 'label': 'Project group', 'message_ids': ['current'], 'recipient_names': ['Greg']},
+        'The billing calculation has changed. Deployment is pending.',
+        previous='A technical draft.', instruction='Make it clearer.',
+        complete=lambda p, m, messages, s: (seen.extend(messages) or 'Hi Greg,\n\nI have changed how the usage charge is calculated. It is not live yet.'))
+    rules = seen[0]['content']
+    context = json.loads(seen[1]['content'])
+    assert 'Start with a friendly greeting' in rules
+    assert 'Hi when the recipients\' local time is unknown' in rules
+    assert 'Do not greet Paul' in rules and 'invent a name' in rules
+    assert 'everyday language' in rules and 'test counts' in rules
+    assert 'Do not claim completion' in rules
+    assert context['recipient_names'] == ['Greg']
+    assert context['source_messages'][0]['sender_name'] == 'Greg'
+    assert len(context['source_messages']) == 1
+    assert datetime.fromisoformat(context['current_local_time']).tzinfo is not None
+    assert context['rewrite_request'] == 'Make it clearer.'
+    assert text.startswith('Hi Greg,')
+
+
+def test_email_greeting_names_are_from_actual_recipients_only():
+    target = replies.mail_target('gmail', {
+        'from': 'Old Sender <old@example.com>', 'reply_to': 'Greg <greg@example.com>',
+        'to': [{'name': 'Paul', 'email': 'paul@example.com'}, {'name': 'Jane', 'email': 'jane@example.com'}],
+        'cc': 'Jane <jane@example.com>, unnamed@example.com'}, ['paul@example.com'])
+    assert target['recipient_names'] == ['Greg', 'Jane']
+    assert 'unnamed@example.com' in target['cc']
+
+
+def test_create_draft_keeps_verified_names_for_greeting(thread, monkeypatch):
+    monkeypatch.setattr(replies, 'resolve_target', lambda source: {
+        'channel': 'whatsapp', 'jid': source['thread_id'], 'recipient_names': ['Greg', 'Jane']})
+    seen = []
+    replies.create_draft(*thread, 'whatsapp:fixture@g.us',
+        complete=lambda p, m, messages, s: (seen.extend(messages) or 'Hi Greg and Jane,\n\nThe change is ready to put live.'))
+    assert json.loads(seen[1]['content'])['recipient_names'] == ['Greg', 'Jane']
 
 
 def test_gmail_transport_keeps_approved_to_cc_and_rfc_thread_headers(monkeypatch):

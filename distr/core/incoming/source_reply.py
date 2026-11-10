@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime
 from email.message import EmailMessage
 from email.utils import getaddresses
 from uuid import uuid4
@@ -109,10 +110,21 @@ def mail_target(channel, message, own_addresses):
     cc = [address for address in _addresses(message.get('cc')) if address not in own and address not in to]
     if not to:
         raise ValueError('No external reply recipient could be verified.')
+    # Keep display names for the greeting, without deriving names from addresses
+    # or introducing people who are not part of this Reply all destination.
+    def named_addresses(value):
+        if isinstance(value, list):
+            return [pair for item in value for pair in named_addresses(item)]
+        if isinstance(value, dict):
+            return [(value.get('name') or '', address) for address in _addresses(value)]
+        return getaddresses([str(value or '')])
+    names = list(dict.fromkeys(name.strip() for field in ('reply_to', 'from', 'to', 'cc')
+        for name, address in named_addresses(message.get(field))
+        if name.strip() and address.lower() in set(to + cc)))
     subject = str(message.get('subject') or '')
     if not subject.lower().startswith('re:'):
         subject = 'Re: ' + subject
-    return {'channel': channel, 'to': to, 'cc': cc, 'subject': subject,
+    return {'channel': channel, 'to': to, 'cc': cc, 'subject': subject, 'recipient_names': names,
             'message_id': str(message.get('id') or message.get('_id') or ''),
             'thread_id': str(message.get('threadId') or message.get('thread_id') or ''),
             'in_reply_to': str(message.get('message_id_header') or message.get('messageId') or ''),
@@ -131,6 +143,8 @@ def resolve_target(source):
             if not any(not row.from_me for row in rows):
                 raise ValueError('The original WhatsApp conversation is unavailable.')
             return {'channel': channel, 'jid': thread, 'label': source['label'],
+                    'recipient_names': list(dict.fromkeys(row.sender_push_name.strip() for row in reversed(rows)
+                        if not row.from_me and row.sender_push_name and row.sender_push_name.strip())),
                     'source_message_ids': ids if source.get('scoped_ids') else [row.message_id for row in rows]}
     if not ids:
         raise ValueError('The original email reference is unavailable.')
@@ -174,10 +188,19 @@ def generate_draft(proposal, source, response, *, previous='', instruction='', c
     humanizer = skill.read_text() if skill.is_file() else ''
     evidence = [row for row in [*(proposal.get('evidence') or []), *(proposal.get('context_evidence') or [])]
                 if isinstance(row, dict) and str((row.get('original_source') or {}).get('source_message_id') or row.get('id')) in set(map(str, source['message_ids']))]
+    local_time = datetime.now().astimezone()
     prompt = [
         {'role': 'system', 'content': 'Write a reply from Paul to the selected original source. '
          'Use the Humanizer skill in embedded mode: draft, audit and revise internally; return only the final message. '
          'Address a nontechnical client. Write as one developer: I, me, my, never we/us/our for development work. '
+         'Start with a friendly greeting: Hi, Good morning, Good afternoon or Good evening, followed by the relevant people\'s names and a comma. '
+         'Use Hi when the recipients\' local time is unknown; never use the old source-message timestamp as the current time. '
+         'Choose names from the selected source messages and verified recipient_names, addressing the people involved in the current request. '
+         'For a group, name the relevant requesters, not everyone mentioned in older history. Do not greet Paul, quote a group/project title as a person, '
+         'invent a name, or infer one from an email address or phone number. If no person can be identified, use Hi, without a name. '
+         'After the greeting, give a short update on their request in everyday language: what changed, what it means for them, '
+         'and any remaining step or question. Translate technical findings into the visible result for the recipient. '
+         'Leave out jargon, implementation details, test counts, commands and internal tools. '
          'Be short, natural and direct. Explain the result and relevant next step without code, JSON, paths or internal logs. '
          'Prioritize the latest relevant source request and selected response. Older unrelated history does not add work or completion claims. '
          'Do not claim completion, testing or deployment beyond the selected response evidence. Never invent facts or promises. '
@@ -185,6 +208,7 @@ def generate_draft(proposal, source, response, *, previous='', instruction='', c
          'WhatsApp uses brief conversational plain text, no email subject/signature. Email uses short natural paragraphs. '
          'No filler opening, AI jargon, em dash or en dash.\n\nHumanizer skill:\n' + humanizer},
         {'role': 'user', 'content': json.dumps({'channel': source['channel'], 'source': source['label'],
+         'recipient_names': source.get('recipient_names') or [], 'current_local_time': local_time.isoformat(),
          'source_messages': evidence, 'selected_response': safe_source_body(response),
          'previous_draft': previous, 'rewrite_request': instruction}, ensure_ascii=False)}]
     settings = load_settings_from_db()
@@ -215,7 +239,8 @@ def create_draft(chat_id, response_id, source_key, *, previous='', instruction='
             execution = ((_chat_params(root.params).get('development') or {}).get('execution') or {})
             response = str(execution.get('summary') or response)
     target = resolve_target(source)
-    source = {**source, 'message_ids': target.get('source_message_ids') or source['message_ids']}
+    source = {**source, 'message_ids': target.get('source_message_ids') or source['message_ids'],
+              'recipient_names': target.get('recipient_names') or []}
     text, route = generate_draft(proposal, source, response, previous=previous, instruction=instruction, complete=complete)
     draft = {'id': uuid4().hex, 'source_key': source_key, 'response_id': int(response_id),
              'target': target, 'text': text, 'route': route, 'status': 'draft'}
