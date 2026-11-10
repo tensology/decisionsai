@@ -1,13 +1,13 @@
 @import './shell.css?v=20261102-verify';
 @import './shared/components.css?v=20261102-verify';
-@import './threads/styles.css?v=20261110-queue1';
+@import './threads/styles.css?v=20261110-source-reply1';
 @import './sidebar/styles.css?v=20261110-media-nav1';
 @import './boards/styles.css?v=20261102-verify';
 @import './planning/styles.css?v=20261103-rows1';
 @import './incoming/styles.css?v=20261110-incoming2';
 @import './automations/styles.css?v=20261030-calendar-groups';
 @import './workflows/styles.css?v=20261028-responsive';
-@import './terminals/styles.css?v=20261028-responsive';
+@import './terminals/styles.css?v=20261110-layout1';
 @import './reports/styles.css?v=20261109-calendar-today5';
 
 /* Shared page layout (2026-10-22): every Development page uses the Reports gutter (--page-gutter from shared base.css). */

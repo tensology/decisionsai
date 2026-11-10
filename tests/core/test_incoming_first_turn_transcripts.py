@@ -223,7 +223,10 @@ def test_tensology_bridge_creation_allows_bounded_transcription_without_changing
         calls.append((request.full_url, timeout))
         if request.full_url.endswith('workflows/studio/tasks'):
             payload = json.loads(request.data)
-            assert payload['incoming_source_context'] == {'source': 'whatsapp', 'source_thread_id': 'scoped-contact', 'message_ids': ['source-1', 'source-2']}
+            source = payload['incoming_source_context']
+            assert source['source'] == 'whatsapp' and source['source_thread_id'] == 'scoped-contact'
+            assert source['message_ids'] == ['source-1', 'source-2']
+            assert source['evidence'][0]['body'] == 'Original request context.'
             assert 'Original request context.' in payload['prompt']
         return io.BytesIO(json.dumps({'task': {'id': 77}}).encode())
     monkeypatch.setattr(tc.urllib.request, 'urlopen', request)

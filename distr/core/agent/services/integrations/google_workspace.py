@@ -439,6 +439,7 @@ class GoogleWorkspaceConnector:
         
         # Parse email data
         headers = {h['name']: h['value'] for h in result.get('payload', {}).get('headers', [])}
+        reply_headers = {key.lower(): value for key, value in headers.items()}
         text_body = ""
         html_body = ""
         attachments: List[Dict[str, Any]] = []
@@ -496,6 +497,10 @@ class GoogleWorkspaceConnector:
             'subject': headers.get('Subject', ''),
             'from': headers.get('From', ''),
             'to': headers.get('To', ''),
+            'cc': reply_headers.get('cc', ''),
+            'reply_to': reply_headers.get('reply-to', ''),
+            'message_id_header': reply_headers.get('message-id', ''),
+            'references': reply_headers.get('references', ''),
             'date': headers.get('Date', ''),
             'snippet': result.get('snippet', ''),
             'body': body,

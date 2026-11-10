@@ -9,6 +9,44 @@ from .models import StudioArtifactCreateRequest, StudioArtifactUpdateRequest
 
 
 def register_routes(router, templates):
+    from fastapi import Request
+
+    @router.get('/workflows/studio/tasks/{chat_id}/source-replies')
+    async def source_reply_choices(chat_id: int):
+        from distr.core.incoming.source_reply import proposal_for_thread, source_choices
+        try:
+            return JSONResponse({'sources': await asyncio.to_thread(lambda: source_choices(proposal_for_thread(chat_id)))})
+        except ValueError as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=422)
+
+    @router.post('/workflows/studio/tasks/{chat_id}/source-replies')
+    async def source_reply_draft(chat_id: int, request: Request):
+        from distr.core.incoming.source_reply import create_draft
+        try:
+            body = await request.json()
+            draft = await asyncio.to_thread(create_draft, chat_id, int(body['response_id']), str(body['source_key']),
+                previous=str(body.get('previous') or ''), instruction=str(body.get('instruction') or ''),
+                replaces=str(body.get('replaces') or ''))
+            return JSONResponse(draft)
+        except (ValueError, KeyError, TypeError) as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=422)
+        except Exception:
+            logger.exception('Source reply draft failed')
+            return JSONResponse({'detail': 'Could not draft the reply. Your text has been kept. Please retry.'}, status_code=502)
+
+    @router.post('/workflows/studio/tasks/{chat_id}/source-replies/{draft_id}/{action}')
+    async def source_reply_action(chat_id: int, draft_id: str, action: str, request: Request):
+        from distr.core.incoming.source_reply import act_on_draft
+        try:
+            body = await request.json()
+            if action == 'approve' and body.get('approved') is not True:
+                return JSONResponse({'detail': 'Approve the displayed reply before sending.'}, status_code=409)
+            return JSONResponse(await asyncio.to_thread(act_on_draft, chat_id, draft_id, action, str(body.get('text') or '')))
+        except ValueError as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=409)
+        except Exception:
+            return JSONResponse({'detail': 'Send was not confirmed. Check the source before retrying; your text is retained.'}, status_code=502)
+
     @router.get("/workflows/studio/tasks/{chat_id}/artifacts")
     async def workflow_studio_artifacts(chat_id: int):
         try:

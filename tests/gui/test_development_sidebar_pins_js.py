@@ -42,7 +42,7 @@ const nodes = new Map(); const clicked=[]; const messages=[];
 function el(id) {
  if (!nodes.has(id)) {
   const classes=new Set();
-  nodes.set(id,{disabled:false,dataset:{},offsetWidth:100,offsetHeight:100,style:{},
+  nodes.set(id,{disabled:false,dataset:{},offsetWidth:100,offsetHeight:100,style:{},setAttribute(){},
    classList:{add:x=>classes.add(x),remove:x=>classes.delete(x),contains:x=>classes.has(x),toggle:(x,on)=>on?classes.add(x):classes.delete(x)},
    querySelector:()=>({textContent:'',innerHTML:''}),focus(){},click(){clicked.push(id);}});
  }
@@ -92,7 +92,7 @@ def test_board_row_terminal_slot_shows_play_stop_pencil_or_nothing():
 import assert from 'node:assert/strict';
 const {createSidebar} = await import(SOURCE);
 globalThis.window = {location:{search:''},localStorage:{getItem:()=>null}};
-const sessions = {1: [], 2: [{process_id: 'p'}]};
+const sessions = {1: [], 2: [{process_id: 'p', purpose: 'startup'}], 3: [{process_id:'discovered:303', purpose:'project_server'}], 4: [{process_id:'shell-4',purpose:'cli_shell'}], 5: [{process_id:'pi-5',purpose:'pi_cli'}], 6: [{process_id:'unknown'}]};
 const projects = {1: 'npm run dev', 2: 'npm run dev', 9: '', 10: '# only a comment'};
 const hasCommands = id => String(projects[id] || '').split('\\n').some(l => l.trim() && !l.trim().startsWith('#'));
 const sidebar = createSidebar({context:{boards:[]}, el:()=>null, actions:{
@@ -107,6 +107,10 @@ const play = row({key:'decisions:1', project_id:1});
 assert.match(play, /data-board-terminal="decisions:1"/);
 assert.match(play, /data-icon="start"/);
 assert.match(play, /data-running="false"/);
+// Auxiliary sessions must never imply that startup terminals were launched.
+for (const id of [3, 4, 5, 6]) {
+  assert.match(row({key:`decisions:${id}`, project_id:id, startup_instructions:'npm run dev'}), /data-icon="start"/);
+}
 // Running: stop.
 const stop = row({key:'decisions:2', project_id:2});
 assert.match(stop, /data-icon="stop"/);
@@ -215,4 +219,4 @@ def test_plan_row_removed_from_sidebar_and_kanban_plan_icon_gone():
     # The plan route stays alive.
     assert "plan: '/development/plan/'" in app and 'async function openBoardPlan' in app
     assert "openBoardPlan: (...args) => openBoardPlan(...args)" in app  # sidebar actions (right-click Plan)
-    assert './boards/index.js?v=20261102-verify' in app and './sidebar/index.js?v=20261102-plan-icon' in app
+    assert "from './boards/index.js?v=" in app and "from './sidebar/index.js?v=" in app

@@ -1567,6 +1567,12 @@ def test_terminal_project_cards_show_every_command_and_control_processes(page: P
     assert card.locator(".terminal-project-screen").evaluate(
         "node => getComputedStyle(node).overflowY === 'auto' && node.scrollHeight > node.clientHeight"
     )
+    expect(card.locator('.terminal-project-command')).to_have_count(12)
+    card.locator('.terminal-project-command').last.evaluate("node => node.scrollIntoView({block: 'nearest'})")
+    screen = card.locator('.terminal-project-screen').bounding_box()
+    last = card.locator('.terminal-project-command').last.bounding_box()
+    assert screen and last and last['y'] >= screen['y'] and last['y'] + last['height'] <= screen['y'] + screen['height'] + 1
+    page.screenshot(path='/tmp/decisions-terminal-layout-commands.png', full_page=True)
     expect(card.locator(".terminal-project-metric")).to_have_text("12 configured commands")
     expect(card.locator(".terminal-state")).to_have_attribute("aria-label", "Stopped")
 
@@ -1624,7 +1630,7 @@ def test_terminal_stop_never_uses_an_animated_pending_icon(page: Page):
     expect(page.locator('[data-terminal-project="7"] .terminal-action-spinner')).to_have_count(0)
 
 
-def test_stopping_one_terminal_card_keeps_other_cards_and_stops_shell_sessions(page: Page):
+def test_stopping_one_terminal_card_preserves_other_cards_and_shell_sessions(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, terminal_session=True, shell_terminal_session=True)
     page.set_viewport_size({"width": 1440, "height": 900})
@@ -1632,18 +1638,15 @@ def test_stopping_one_terminal_card_keeps_other_cards_and_stops_shell_sessions(p
 
     target = page.locator('[data-terminal-project="7"]')
     other = page.locator('[data-terminal-project="8"]')
-    expect(target.locator(".terminal-project-metric")).to_have_text("Memory 192 MB")
-    assert float(target.locator(".terminal-project-command code").first.evaluate(
-        "node => parseFloat(getComputedStyle(node).fontSize)"
-    )) <= 11
+    expect(target.locator(".terminal-project-metric")).to_have_text("Memory 128 MB")
     other.evaluate("node => { node.dataset.isolationMarker = 'preserve'; }")
 
     page.get_by_role("button", name="Stop terminals for DecisionsAI").click()
     expect(page.get_by_role("button", name="Start terminals for DecisionsAI")).to_be_enabled()
     expect(target.locator(".terminal-action-spinner")).to_have_count(0)
-    expect(page.locator("#studio-toast")).to_contain_text("Stopped 2 terminals for DecisionsAI.")
+    expect(page.locator("#studio-toast")).to_contain_text("Stopped 1 terminal for DecisionsAI.")
     expect(other).to_have_attribute("data-isolation-marker", "preserve")
-    assert requests.count(("POST", "/api/projects/kill-terminal")) == 1
+    assert requests.count(("POST", "/api/projects/kill-terminal")) == 0
     assert ("POST", "/api/projects/7/startup-terminals/stop") in requests
 
 
@@ -3285,8 +3288,16 @@ def test_started_terminal_workspace_stays_visible_through_shell_polling(page: Pa
     editor = page.locator("#terminal-command-form").bounding_box()
     assert shell and editor
     assert shell["width"] >= 1050
-    assert abs(shell["x"] - editor["x"]) < 2
-    assert abs(shell["width"] - editor["width"]) <= 2
+    # The editor, header and terminal panel share the padded shell's content edges.
+    content = page.locator('.terminal-detail-shell').evaluate("""node => {
+        const box = node.getBoundingClientRect(), css = getComputedStyle(node);
+        const left = parseFloat(css.paddingLeft), right = parseFloat(css.paddingRight);
+        return {x: box.x + left, width: box.width - left - right};
+    }""")
+    for selector in ['#terminal-command-form', '.terminal-project-header', '#terminal-session-list']:
+        box = page.locator(selector).bounding_box()
+        assert box and abs(box['x'] - content['x']) < 2
+        assert abs(box['width'] - content['width']) <= 2
     expect(page.locator(".terminal-session-tab")).to_have_count(1)
 
     page.wait_for_timeout(6_500)
@@ -3344,7 +3355,7 @@ def test_managed_terminal_child_is_not_repeated_as_a_detected_process(page: Page
 )
 def test_thread_context_toggles_its_project_terminals(page: Page, terminal_session: bool, label: str, action: str):
     requests: list[tuple[str, str]] = []
-    _install_api(page, requests, terminal_session=terminal_session)
+    _install_api(page, requests, terminal_session=terminal_session, shell_terminal_session=True, discovered_terminal_session=True)
     page.set_viewport_size({"width": 1280, "height": 800})
     page.goto(URL)
 
@@ -4370,3 +4381,63 @@ def test_image_drop_turns_red_for_a_model_without_vision(page: Page):
     expect(overlay).to_contain_text("This model cannot read images")
     assert "255, 98, 90" in overlay.evaluate("node => getComputedStyle(node).borderColor")
     page.screenshot(path="/private/tmp/development-composer-drop-invalid.png", full_page=True)
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_project_controls_ignore_auxiliary_processes_and_preserve_them(page: Page, width: int):
+    requests = []
+    _install_api(page, requests, terminal_session=False, shell_terminal_session=True,
+                 discovered_terminal_session=True, startup_instructions="npm run dev")
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(TEST_BASE_URL + "/development/terminals/")
+    card = page.locator('[data-terminal-project="7"]')
+    expect(card.locator('[data-terminal-project-action="start"]')).to_be_visible()
+    expect(card.locator('.terminal-state')).to_have_attribute('aria-label', 'Stopped')
+    sidebar = page.locator('[data-board-terminal][data-running="false"]').first
+    expect(sidebar).to_have_count(1)
+    page.screenshot(path=f"/tmp/decisions-startup-terminal-stopped-{width}.png", full_page=True)
+    card.locator('[data-terminal-project-action="start"]').click()
+    expect(card.locator('[data-terminal-project-action="stop"]')).to_be_visible()
+    page.screenshot(path=f"/tmp/decisions-startup-terminal-running-{width}.png", full_page=True)
+    card.locator('[data-terminal-project-action="stop"]').click()
+    expect(card.locator('[data-terminal-project-action="start"]')).to_be_enabled()
+    page.wait_for_timeout(2300)
+    expect(card.locator('.terminal-state')).to_have_attribute('aria-label', 'Stopped')
+    assert ('POST', '/api/projects/kill-terminal') not in requests
+    card.locator('[data-terminal-project-open]').first.click()
+    expect(page.locator('.terminal-process-row')).to_have_count(1)
+    expect(page.locator('.terminal-session-tab')).to_have_count(1)
+    page.screenshot(path=f"/tmp/decisions-startup-terminal-auxiliary-{width}.png", full_page=True)
+
+
+def test_sidebar_refreshes_startup_status_outside_terminals(page: Page):
+    sessions = []
+    _install_api(page, [], terminal_session=False, discovered_terminal_session=True,
+                 terminal_status_sessions=sessions, startup_instructions="npm run dev")
+    page.goto(URL)
+    button = page.locator('[data-board-terminal]').first
+    expect(button).to_have_attribute('data-running', 'false')
+    sessions.append({'process_id': 'startup-external', 'pid': 505, 'purpose': 'startup', 'command': 'npm run dev'})
+    expect(button).to_have_attribute('data-running', 'true', timeout=5000)
+    sessions.clear()
+    expect(button).to_have_attribute('data-running', 'false', timeout=5000)
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_terminal_layout_content_edges_and_scroll_at_supported_widths(page: Page, width: int):
+    _install_api(page, [], terminal_session=False, startup_instructions='\n'.join(f'npm run service:{i}' for i in range(12)))
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.goto(TEST_BASE_URL + '/development/terminals/')
+    card = page.locator('[data-terminal-project="7"]')
+    expect(card.locator('.terminal-project-command')).to_have_count(12)
+    card.locator('.terminal-project-command').last.evaluate("node => node.scrollIntoView({block: 'nearest'})")
+    assert card.locator('.terminal-project-screen').evaluate('node => node.scrollTop > 0')
+    assert page.evaluate('document.body.scrollWidth <= innerWidth')
+    page.screenshot(path=f'/tmp/decisions-terminal-layout-card-{width}.png', full_page=True)
+    card.locator('[data-terminal-project-open]').first.click()
+    boxes = [page.locator(selector).bounding_box() for selector in ['.terminal-project-header', '#terminal-command-form', '#terminal-session-list']]
+    assert all(boxes)
+    assert max(box['x'] for box in boxes) - min(box['x'] for box in boxes) < 2
+    assert max(box['width'] for box in boxes) - min(box['width'] for box in boxes) < 2
+    assert page.evaluate('document.body.scrollWidth <= innerWidth')
+    page.screenshot(path=f'/tmp/decisions-terminal-layout-detail-{width}.png', full_page=True)

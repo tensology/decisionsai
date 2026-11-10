@@ -1462,12 +1462,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 additional_context = _chat_additional_context(root_chat.additional_context)
                 compact_checkpoint = additional_context.get("compact_checkpoint")
                 model_route = development.get("model_route") if isinstance(development.get("model_route"), dict) else {}
+                from distr.core.chat import _chat_params
                 return JSONResponse(
                     {
                         "id": root_chat.id,
                         "title": header_payload["title"],
                         **sidebar,
                         "messages": messages,
+                        "has_reply_source": bool(_chat_params(root_chat.params).get('incoming_reply_context') or _chat_params(root_chat.params).get('incoming_proposal_handoff')),
                         "provider": provider,
                         "model_name": model_name,
                         "project_id": root_chat.project_id,

@@ -22,7 +22,7 @@
 .terminal-project-screen { position: relative; display: flex; width: 100%; min-width: 0; min-height: 0; flex-direction: column; justify-content: flex-start; gap: 8px; overflow: auto; padding: 14px 13px; border: 0; border-radius: 0; outline: 0; background: radial-gradient(circle at 88% 12%, rgba(62,74,96,.10), transparent 42%), #080c12; box-shadow: inset 0 10px 34px rgba(0,0,0,.18); color: inherit; text-align: left; scrollbar-color: #3c4658 transparent; scrollbar-width: thin; }
 .terminal-project-screen:hover, .terminal-project-screen:focus-visible { background-color: #0a0f17; box-shadow: inset 2px 0 var(--studio-accent), inset 0 10px 34px rgba(0,0,0,.18); }
 .terminal-project-screen::after { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(180deg, transparent 0, transparent 3px, rgba(255,255,255,.008) 4px); content: ""; }
-.terminal-project-command { position: relative; z-index: 1; display: grid; width: max-content; min-width: 100%; grid-template-columns: 14px max-content; align-items: baseline; gap: 8px; }
+.terminal-project-command { flex-shrink: 0; position: relative; z-index: 1; display: grid; width: max-content; min-width: 100%; grid-template-columns: 14px max-content; align-items: baseline; gap: 8px; }
 .terminal-project-command i { color: #758196; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9.5px; font-style: normal; line-height: 1.45; }
 .terminal-project-command code { color: #e0e5ed; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9.5px; line-height: 1.45; white-space: nowrap; }
 .terminal-project-command-empty code { color: #687284; }

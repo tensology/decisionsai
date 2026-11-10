@@ -1017,13 +1017,11 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
     skill_ids, use_playwright = _execution_skill_ids(ticket)
     attachments = _tensology_thread_files(ticket)
     from distr.core.incoming.transcription import thread_preparation_timeout
-    from distr.core.incoming.source_context import proposal_source_context
+    from distr.core.incoming.proposals import _from_tensology
     pack = ticket.get('incoming_proposal') or {}
-    source_context = proposal_source_context({
-        'source': pack.get('source'),
-        'source_thread_id': (pack.get('source_conversation') or {}).get('thread_id'),
-        'message_ids': pack.get('source_message_ids') or [],
-    })
+    # Retain the same source pack for replies whether the handoff starts here
+    # or through Decisions Incoming. Includes original sources on merged packs.
+    source_context = _from_tensology({**pack, 'id': pack.get('id') or (ticket.get('source_metadata') or {}).get('incoming_proposal_id')}) if pack else None
     response = _local_api_post(
         "workflows/studio/tasks",
         {

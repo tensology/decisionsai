@@ -1,3 +1,5 @@
+import { isStartupTerminal } from '../terminals/session-policy.js';
+
 // Owns sidebar rendering, interactions, and private view state.
 // Filled folder = board has threads underneath; outline = none.
 export function boardFolderIconHtml(hasThreads) {
@@ -225,7 +227,7 @@ export function createSidebar({ context, actions, el }) {
     }
 
     function paintTerminalToggle(button, board, sessions) {
-        const running = Boolean((sessions || []).length);
+        const running = (sessions || []).some(isStartupTerminal);
         button.disabled = !board?.project_id;
         button.dataset.running = String(running);
         button.querySelector('.context-menu-label').textContent = running ? 'Stop Terminals' : 'Start Terminals';
@@ -464,7 +466,7 @@ export function createSidebar({ context, actions, el }) {
 
     // Same rule as the thread header: a project with startup terminal commands
     // (hasStartupTerminalCommands, or the board's own copy of the project's
-    // startup_instructions) or live sessions has a terminal; live sessions = running.
+    // startup_instructions) or live startup sessions has a terminal.
     function hasCommandLines(text) {
         return String(text || '').split('\n').some((line) => line.trim() && !line.trim().startsWith('#'));
     }
@@ -472,7 +474,7 @@ export function createSidebar({ context, actions, el }) {
         const projectId = Number(board?.project_id || 0);
         if (!projectId) return { linked: false, running: false };
         const sessions = actions.getTerminalSessions?.(projectId) || [];
-        const running = sessions.length > 0;
+        const running = sessions.some(isStartupTerminal);
         const linked = running || Boolean(actions.hasStartupTerminalCommands?.(projectId)) || hasCommandLines(board.startup_instructions);
         return { linked, running };
     }

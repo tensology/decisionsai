@@ -1,3 +1,5 @@
+import { isStartupTerminal } from './session-policy.js';
+
 export function terminalProjectActionIcon(action, busy) {
     if (busy) return '<svg class="terminal-action-spinner" aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"></circle></svg>';
     if (action === 'stop') return '<svg aria-hidden="true" viewBox="0 0 20 20"><rect x="6" y="6" width="8" height="8" rx="1.5"></rect></svg>';
@@ -38,8 +40,6 @@ export function createTerminals({ context, actions, el, token }) {
     }
 
     function leave() {
-        window.clearInterval(state.terminalPolling);
-        state.terminalPolling = null;
         closeTerminalViews();
     }
 
@@ -258,7 +258,7 @@ export function createTerminals({ context, actions, el, token }) {
     }
 
     async function syncTerminalStatuses() {
-        if (state.terminalStatusSyncing || !['terminals_home', 'terminals'].includes(context.workspaceMode)) return;
+        if (state.terminalStatusSyncing) return;
         const projectIds = context.projects.map((project) => Number(project.id)).filter(Boolean);
         if (!projectIds.length) return;
         state.terminalStatusSyncing = true;
@@ -266,18 +266,24 @@ export function createTerminals({ context, actions, el, token }) {
             const data = await actions.api(`/projects/terminal-status?project_ids=${projectIds.join(',')}`);
             const statuses = data.projects || {};
             let refreshOpenProject = false;
+            let refreshSidebar = false;
             projectIds.forEach((projectId) => {
                 const previous = state.terminalSessions[String(projectId)] || [];
                 // terminal-status may include purpose=pi_cli rows: drop them (CLI is not a terminal).
                 const next = withoutPiCli(projectId, statuses[String(projectId)]?.sessions || []);
                 const changed = terminalManagedSessionKey(previous) !== terminalManagedSessionKey(next);
                 if (!changed) return;
-                state.terminalSessions[String(projectId)] = next;
+                // Bulk status reports managed sessions only; keep detected rows for the detail view.
+                state.terminalSessions[String(projectId)] = [...next, ...previous.filter(session => String(session.process_id || '').startsWith('discovered:'))];
+                refreshSidebar = true;
                 if (context.workspaceMode === 'terminals_home') paintTerminalProjectCard(projectId);
                 if (context.workspaceMode === 'terminals' && Number(state.terminalProjectId) === projectId) refreshOpenProject = true;
             });
+            if (refreshSidebar) actions.renderSidebar();
             if (refreshOpenProject) await refreshTerminalSessions();
         } catch (_) {
+            // Background status polling must not materialize queued launches on a read failure.
+            if (!['terminals_home', 'terminals'].includes(context.workspaceMode)) return;
             const fallbackIds = context.workspaceMode === 'terminals' && state.terminalProjectId ? [Number(state.terminalProjectId)] : projectIds;
             await Promise.allSettled(
                 fallbackIds.map(async (projectId) => {
@@ -286,6 +292,7 @@ export function createTerminals({ context, actions, el, token }) {
                     if (context.workspaceMode === 'terminals' && Number(state.terminalProjectId) === projectId) renderTerminalWorkspace();
                 })
             );
+            actions.renderSidebar();
         } finally {
             state.terminalStatusSyncing = false;
         }
@@ -307,9 +314,8 @@ export function createTerminals({ context, actions, el, token }) {
     }
 
     function terminalProjectCard(project) {
-        const sessions = state.terminalSessions[String(project.id)] || [];
-        const managedSessions = sessions.filter((session) => !isPiCliSession(session));
-        const count = managedSessions.length;
+        const sessions = getTerminalSessions(project.id).filter(isStartupTerminal);
+        const count = sessions.length;
         const commandsLoaded = Object.prototype.hasOwnProperty.call(project, 'startup_instructions');
         const commandsFailed = Boolean(project._terminalConfigError);
         const sessionCommands = sessions.map((session) => String(session.command || '').trim()).filter(Boolean);
@@ -388,40 +394,21 @@ export function createTerminals({ context, actions, el, token }) {
                 });
                 if (result?.success === false) throw new Error(result.message || 'Could not start the project terminals.');
                 const returnedSessions = withoutPiCli(projectId, result.sessions || []);
-                state.terminalSessions[String(projectId)] = returnedSessions.length
+                const startupSessions = returnedSessions.length
                     ? returnedSessions
                     : commands.map((command, index) => ({
+                          purpose: 'startup',
                           process_id: `starting:${projectId}:${index}`,
                           command,
                           status: 'starting'
                       }));
+                state.terminalSessions[String(projectId)] = [...getTerminalSessions(projectId).filter(session => !isStartupTerminal(session)), ...startupSessions];
                 actions.toast(result.message || 'Project terminals started.');
             } else {
-                const displayedSessions = state.terminalSessions[String(projectId)] || [];
-                const auxiliarySessions = displayedSessions.filter((session) => {
-                    const processId = String(session.process_id || session.terminal_id || '');
-                    const purpose = String(session.purpose || '').toLowerCase();
-                    // Never treat purpose=pi_cli as a startup/shell process for Stop all.
-                    if (!processId || processId.startsWith('starting:') || purpose === 'pi_cli') return false;
-                    return purpose === 'cli_shell' || processId.startsWith('discovered:');
-                });
-                const auxiliaryResults = await Promise.allSettled(
-                    auxiliarySessions.map((session) =>
-                        actions.terminalActionApi('/projects/kill-terminal', {
-                            method: 'POST',
-                            body: {
-                                process_id: session.process_id || session.terminal_id,
-                                pid: Number(session.pid || 0) || undefined,
-                                project_id: Number(projectId)
-                            }
-                        })
-                    )
-                );
                 const result = await actions.terminalActionApi(`/projects/${Number(projectId)}/startup-terminals/stop`, { method: 'POST', body: {} });
                 if (result?.success === false) throw new Error(result.message || 'Could not stop the project terminals.');
-                const auxiliaryStopped = auxiliaryResults.filter((settled) => settled.status === 'fulfilled' && settled.value?.success !== false).length;
-                const stopped = Number(result.stopped || 0) + auxiliaryStopped;
-                state.terminalSessions[String(projectId)] = [];
+                const stopped = Number(result.stopped || 0);
+                state.terminalSessions[String(projectId)] = getTerminalSessions(projectId).filter(session => !isStartupTerminal(session));
                 actions.toast(
                     stopped
                         ? `Stopped ${stopped} terminal${stopped === 1 ? '' : 's'} for ${project.name || 'this project'}.`
@@ -430,6 +417,7 @@ export function createTerminals({ context, actions, el, token }) {
                 );
             }
             paintTerminalProjectCard(projectId);
+            actions.renderSidebar();
             window.setTimeout(
                 async () => {
                     if (context.workspaceMode !== 'terminals_home') return;

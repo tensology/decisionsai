@@ -1047,7 +1047,11 @@ def _combine_frac_proposals(first: dict[str, Any], second: dict[str, Any]) -> di
         "evidence": evidence,
         "attachments": _dedupe_preserve(list(first.get("attachments") or []) + list(second.get("attachments") or [])),
         "merged_from": [str(first.get("id") or ""), str(second.get("id") or "")],
-        "source_scope": [ref for row in (first, second) for ref in (row.get("source_scope") or [{"source": row.get("source"), "source_thread_id": row.get("source_thread_id")}])],
+        "source_scope": [ref for row in (first, second) for ref in (row.get("source_scope") or [{
+            "source": row.get("source"), "source_thread_id": row.get("source_thread_id"),
+            "message_ids": row.get("message_ids") or [],
+            "source_context_message_ids": row.get("source_context_message_ids") or [],
+            "participant": row.get("participant") or row.get("source_label") or ""}])],
         "status": "merged",
     }
 

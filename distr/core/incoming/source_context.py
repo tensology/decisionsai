@@ -79,8 +79,11 @@ def register_source_context(chat_id: int, proposal: dict) -> None:
     from distr.core.chat import _chat_params
     from distr.core.db import Chat, get_session
 
+    from distr.core.incoming.source_reply import register_reply_context
+
     context = proposal_source_context(proposal)
     if not context:
+        register_reply_context(chat_id, proposal)
         return
     with get_session() as db:
         chat = db.get(Chat, chat_id)
@@ -94,6 +97,7 @@ def register_source_context(chat_id: int, proposal: dict) -> None:
         params["incoming_source_context"] = context
         chat.params = json.dumps(params)
         db.commit()
+    register_reply_context(chat_id, proposal)
     sync_ticket_source_context(chat_id)
 
 

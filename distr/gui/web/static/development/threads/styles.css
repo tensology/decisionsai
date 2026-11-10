@@ -2174,3 +2174,25 @@ button.thread-source-file:focus-visible { outline: 2px solid var(--studio-accent
     .is-editing-queue .composer-attachment-icon { width: 64px; height: 64px; }
     .is-editing-queue .composer-attachment-icon button { min-width: 44px; min-height: 44px; }
 }
+.message-actions button.source-reply-button { display: flex; width: auto; min-height: 32px; gap: 6px; padding: 0 8px; border: 1px solid var(--studio-line); border-radius: 6px; font: inherit; font-size: 12px; }
+.message-actions:has(.source-reply-button) { opacity: 1; }
+.source-reply-dialog { background: var(--studio-panel); color: var(--studio-text); border-color: var(--studio-line); }
+.source-reply-dialog header, .source-reply-dialog footer { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+.source-reply-dialog header { justify-content: space-between; border-bottom: 1px solid var(--studio-line); }
+.source-reply-dialog h2 { margin: 0; font: inherit; font-size: 16px; font-weight: 600; }
+.source-reply-dialog footer { justify-content: flex-end; border-top: 1px solid var(--studio-line); }
+.source-reply-content { display: grid; gap: 8px; padding: 16px; font-size: 14px; }
+.source-reply-content label { margin: 0; font-weight: 500; }
+.source-reply-content select, .source-reply-content input, .source-reply-content textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 12px; border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-raised); color: var(--studio-text); font: inherit; }
+.source-reply-content textarea { resize: vertical; min-height: 160px; }
+.source-reply-content :focus-visible, .source-reply-dialog button:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
+.source-reply-destination { overflow-wrap: anywhere; color: var(--studio-muted); font-size: 12px; }
+.source-reply-destination p { margin: 0 0 4px; }
+.source-reply-status { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--studio-muted); }
+.source-reply-dialog button { min-height: 36px; }
+.source-reply-dialog button:disabled { opacity: .45; cursor: not-allowed; }
+.source-reply-content [data-draft-fields]:not([hidden]) { display: grid; gap: 8px; }
+@media (max-width: 680px) {
+    .message-actions button.source-reply-button, .source-reply-dialog button { min-height: 44px; }
+    .source-reply-content select, .source-reply-content input, .source-reply-content textarea { font-size: 16px; }
+}

@@ -48,6 +48,17 @@ class IncomingProposalSnapshot(Base):
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
 
 
+class SourceReplyDraft(Base):
+    """Reviewed outbound messages, independent of engine-owned thread parameters."""
+    __tablename__ = 'source_reply_drafts'
+    id = Column(String, primary_key=True)
+    chat_id = Column(Integer, ForeignKey('chats.id', ondelete='CASCADE'), nullable=False, index=True)
+    payload = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default='draft')
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    modified_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+
 class Settings(Base):
     __tablename__ = 'settings'
 

@@ -296,6 +296,8 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5"></rect><path d="M3 10V4.5A1.5 1.5 0 0 1 4.5 3H10"></path></svg>';
         const forkIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5"></circle><circle cx="12" cy="5" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><path d="M4 4.5v3A4.5 4.5 0 0 0 8.5 12h2M5.5 5h5"></path></svg>';
+        const replyButton = latestAssistant && context.currentChat?.has_reply_source && !message.spoken
+            ? `<button type="button" class="source-reply-button" data-source-reply="${index}" title="Draft a reply to the original source for your approval"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3 2 7l4 4M2 7h7a4 4 0 0 1 4 4v2"></path></svg><span>Reply</span></button>` : '';
         const mouthIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8c2-2.2 4-2.2 6-1.2C10 5.8 12 5.8 14 8c-1.6 2.6-3.8 3.6-6 3.6S3.6 10.6 2 8z"></path><path d="M3.5 8.2h9"></path></svg>';
         const playButton = message.spoken
@@ -304,7 +306,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const readButton = latestAssistant && !message.spoken && !playButton
             ? `<button type="button" class="read-response-button" data-read-response="${index}" aria-label="Read response aloud" title="Read response: speak a short spoken version and add it to this thread">${mouthIcon}</button>`
             : playButton;
-        return `<footer class="message-footer"><div class="message-actions" aria-label="Response actions"><button type="button" data-copy-message="${index}" aria-label="Copy response" title="Copy response to clipboard">${copyIcon}</button>${readButton}${latestAssistant ? `<button type="button" data-fork-current aria-label="Fork thread" title="Continue from this transcript in a new independent thread. This does not create a Git branch.">${forkIcon}</button>` : ''}</div>${turnTimingHtml(message)}</footer>`;
+        return `<footer class="message-footer"><div class="message-actions" aria-label="Response actions"><button type="button" data-copy-message="${index}" aria-label="Copy response" title="Copy response to clipboard">${copyIcon}</button>${readButton}${replyButton}${latestAssistant ? `<button type="button" data-fork-current aria-label="Fork thread" title="Continue from this transcript in a new independent thread. This does not create a Git branch.">${forkIcon}</button>` : ''}</div>${turnTimingHtml(message)}</footer>`;
     }
 
     function skillIconSvg() {

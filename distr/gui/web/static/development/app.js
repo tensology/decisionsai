@@ -10,7 +10,7 @@ import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261102-verify';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261107-nav68';
 
-import { createSidebar } from './sidebar/index.js?v=20261110-media-nav1';
+import { createSidebar } from './sidebar/index.js?v=20261110-startup-only1';
 
 import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
@@ -20,9 +20,10 @@ import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
 import { createBoards } from './boards/index.js?v=20261102-verify';
 
-import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261107-nav68';
+import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-readable1';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-reply1';
+import { openSourceReply } from './threads/source-reply.js?v=20261110-reply1';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261110-queue1';
 
@@ -1630,6 +1631,9 @@ function bindConversationActions(list, messages) {
         })
     );
     list.querySelector('[data-fork-current]')?.addEventListener('click', forkCurrentThread);
+    list.querySelectorAll('[data-source-reply]').forEach((button) => button.addEventListener('click', () =>
+        openSourceReply({ chatId: state.currentChat.id, responseId: messages[Number(button.dataset.sourceReply)]?.chat_row_id, api, opener: button })
+    ));
     list.querySelectorAll('[data-read-response]').forEach((button) =>
         button.addEventListener('click', () => readResponse(button, messages[Number(button.dataset.readResponse)], messages))
     );
@@ -3196,6 +3200,7 @@ incoming.bindEvents();
 workflows.bindEvents();
 boards.bindEvents();
 terminals.bindEvents();
+terminals.startTerminalPolling();
 threadCliMode.bind();
 loadPlayOpensTerminals();
 
