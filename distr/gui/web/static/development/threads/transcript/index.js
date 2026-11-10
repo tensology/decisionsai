@@ -674,17 +674,23 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         if (role === 'user') {
             const presentation = userMessagePresentation(message);
             const media = (message.attachments || []).map(item => {
-                const err = item.download_error || item.error || '';
-                const name = actions.escapeHtml(item.name || 'Attachment');
-                if (err) {
-                    return `<div class="thread-source-file thread-source-file-failed" role="status" title="${actions.escapeHtml(err)}"><span>${name}</span><small>${actions.escapeHtml(err)}</small></div>`;
-                }
+                const mime = String(item.mime_type || '').toLowerCase();
+                const name = String(item.name || 'Attachment');
+                const kind = mime.startsWith('audio/') || ['audio', 'voice', 'ptt'].includes(String(item.kind || '').toLowerCase()) ? 'audio' : mime.startsWith('video/') ? 'video' : mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(name) ? 'image'
+                    : mime.startsWith('video/') || /\.(mp4|webm|mov|3gp)$/i.test(name) ? 'video'
+                    : mime.startsWith('audio/') || ['audio', 'voice', 'ptt'].includes(item.kind) || /\.(oga|ogg|opus|mp3|m4a|wav|aac|flac)$/i.test(name) ? 'audio' : 'file';
+                const label = { image: 'Image', video: 'Video', audio: 'Audio', file: 'File' }[kind];
+                const error = item.download_error || item.error || '';
+                const tip = `${name}${item.transcript ? `\n\nTranscript:\n${item.transcript}` : ''}${error ? `\n${error}` : ''}`;
+                const paths = { video: 'M6 3 13 8 6 13z', audio: 'M3 6v4h3l4 3V3L6 6zm10-1v6', file: 'M4 2h5l3 3v9H4zM9 2v4h3' };
+                const icon = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="${paths[kind] || paths.file}"/></svg>`;
+                if (error) return `<div class="thread-source-file thread-source-file-failed" role="status" title="${actions.escapeHtml(tip)}">${icon}<span>Unavailable</span></div>`;
                 if (!/^\/api\/workflows\/studio\/tasks\/\d+\/attachments\/[a-f0-9]+$/.test(item.url || '')) return '';
-                const url = actions.escapeHtml(item.url);
-                const mime = String(item.mime_type || '');
-                const payload = actions.escapeHtml(JSON.stringify({ url: item.url, name: item.name || 'Attachment', mime_type: mime }));
-                const thumb = mime.startsWith('image/') ? `<img src="${url}" alt="${name}" loading="lazy">` : '';
-                return `<button type="button" class="thread-source-file" data-thread-file-preview="${payload}">${thumb}<span>${name}</span></button>`;
+                const meta = { ...item, display_name: label,
+                    transcription_url: ['audio', 'video'].includes(kind) ? `${item.url}/transcript` : '' };
+                const payload = actions.escapeHtml(JSON.stringify(meta));
+                const thumb = kind === 'image' ? `<img src="${actions.escapeHtml(item.url)}" alt="" loading="lazy">` : icon;
+                return `<button type="button" class="thread-source-file thread-media-${kind}" title="${actions.escapeHtml(tip)}" data-tooltip="${actions.escapeHtml(tip)}" aria-label="Open ${label.toLowerCase()}: ${actions.escapeHtml(name)}" data-thread-file-preview="${payload}">${thumb}<span>${label}</span></button>`;
             }).join('');
             return `<article class="studio-message user"><div class="user-message">${actions.escapeHtml(presentation.content)}${messageSkillIconsHtml({ skills: presentation.skills })}${media ? `<div class="thread-source-files" aria-label="Source attachments">${media}</div>` : ''}</div></article>`;
         }

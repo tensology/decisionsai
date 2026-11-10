@@ -1326,6 +1326,7 @@ def _safe_turn_attachments(
                 "mime_type": str(raw.get("mime_type") or "application/octet-stream")[:120],
                 "size": int(raw.get("size") or path.stat().st_size),
                 "trust": str(raw.get("trust") or "")[:80],
+                **({"transcript": str(raw["transcript"])} if raw.get("transcript") else {}),
             }
         )
     return attachments
@@ -1354,35 +1355,47 @@ def _start_next_queued_instruction(chat_id: int) -> None:
             db.query(DevelopmentCommand)
             .filter(
                 DevelopmentCommand.chat_id == int(chat_id),
-                DevelopmentCommand.status == "queued",
+                DevelopmentCommand.status.in_(['queued', 'editing', 'dispatching']),
             )
             .order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc())
             .first()
         )
-        if command is None:
+        if command is None or command.status != 'queued':
             return
+        if not db.query(DevelopmentCommand).filter_by(id=command.id, status='queued').update({'status': 'dispatching'}, synchronize_session=False):
+            return
+        command_id = command.id
         content = str(command.content or "").strip()
         try:
             command_metadata = json.loads(command.metadata_json or "{}")
         except (TypeError, ValueError, json.JSONDecodeError):
             command_metadata = {}
         skill_ids = command_metadata.get("skill_ids") if isinstance(command_metadata, dict) else []
-        command.status = "delivered"
-        command.delivered_at = utc_now_naive()
-        command.result_summary = "Started after the previous agent turn completed."
+        command.status = 'dispatching'
         db.commit()
     if not content:
         return
-    ChatService.add_user_message(int(chat_id), content)
     from distr.core.workflow.development_control import resume_thread_time
-
-    resume_thread_time(int(chat_id))
-    dispatch_development_prompt(
-        int(chat_id),
-        content,
-        skill_ids=skill_ids if isinstance(skill_ids, list) else [],
-        dispatch_async=True,
-    )
+    try:
+        from distr.core.workflow.queued_submissions import record_submission_message
+        record_submission_message(int(chat_id), command_id, content)
+        resume_thread_time(int(chat_id))
+        dispatch_development_prompt(
+            int(chat_id), content, attachments=command_metadata.get('attachments') or [],
+            skill_ids=skill_ids if isinstance(skill_ids, list) else [],
+            use_playwright=bool((command_metadata.get('composer') or {}).get('use_playwright')), dispatch_async=True)
+    except Exception:
+        with get_session() as db:
+            row = db.get(DevelopmentCommand, command_id)
+            row.status = 'queued'
+            db.commit()
+        raise
+    with get_session() as db:
+        row = db.get(DevelopmentCommand, command_id)
+        row.status = 'delivered'
+        row.delivered_at = utc_now_naive()
+        row.result_summary = 'Started after the previous agent turn completed.'
+        db.commit()
 
 
 async def _run_execution(

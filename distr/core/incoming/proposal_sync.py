@@ -161,6 +161,9 @@ def update_proposal(proposal, changes, *, expected_updated_at):
 
 
 def _upload(client, row, mapping):
+    from .project_links import proposal_in_scope
+    if not proposal_in_scope(row):
+        raise ValueError('Link the source conversation to this project before syncing its proposal.')
     row = _with_source_context(row)
     project_id = row.get("project_id")
     if type(project_id) is not int or project_id not in mapping:
@@ -204,7 +207,7 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
                 except ValueError:
                     continue
             accepted = incoming._accepted_proposal_keys()
-            local_rows = incoming._undismissed_proposals([row for row in local_rows if incoming._proposal_handoff_key(row) not in accepted])
+            local_rows = incoming._scoped_proposals(incoming._undismissed_proposals([row for row in local_rows if incoming._proposal_handoff_key(row) not in accepted]))
             local_rows = [_with_source_context(row) for row in local_rows]
             for row in local_rows:
                 try:

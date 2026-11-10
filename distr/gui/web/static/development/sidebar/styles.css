@@ -105,3 +105,12 @@
 @media (max-width: 680px) {
     .sidebar-collapse-toggle { display: none; }
 }
+
+.project-threads-more { display: block; width: 100%; min-height: 32px; border: 0; padding: 8px; background: transparent; color: var(--studio-muted); text-align: center; cursor: pointer; font: inherit; font-size: 12px; }
+.project-threads-more:hover { color: var(--studio-text); }
+.project-threads-more:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
+.project-folder .folder-icon { position: relative; display: inline-flex; }
+.folder-running-glow { display: none; position: absolute; inset: 0; color: var(--studio-warning); filter: drop-shadow(0 0 4px currentColor); pointer-events: none; }
+.project-group.has-running-thread .project-folder:not(.expanded) .folder-running-glow { display: inline-flex; animation: project-folder-working 1.8s cubic-bezier(.4,0,.2,1) infinite; }
+@keyframes project-folder-working { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .project-group.has-running-thread .project-folder:not(.expanded) .folder-running-glow { animation: none; opacity: 1; } }

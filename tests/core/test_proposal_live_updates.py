@@ -125,6 +125,17 @@ def test_decision_invalidates_without_new_proposal_alert(monkeypatch):
     sound.assert_not_called(); event.assert_not_called()
 
 
+def test_execution_arrival_is_silent_but_preserves_desktop_notice(monkeypatch):
+    sound, desktop, ledger = Mock(), Mock(), Mock()
+    monkeypatch.setattr(sounds, 'play_incoming_sound', sound)
+    monkeypatch.setattr(sounds, 'show_desktop_notification', desktop)
+    monkeypatch.setattr('distr.core.orchestration_events.emit_user_notification', ledger)
+    sounds.notify_tensology_ticket_incoming(ticket={'id': 7, 'title': 'Approved work'}, chat_id=17)
+    sound.assert_not_called()
+    desktop.assert_called_once()
+    ledger.assert_called_once()
+
+
 def test_delivery_receipt_preserves_execution_updated_during_enqueue(store, monkeypatch):
     factory, cid = store
     monkeypatch.setattr(updates, "_manager", lambda: None)

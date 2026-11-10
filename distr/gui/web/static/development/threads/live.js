@@ -31,9 +31,8 @@ export function createThreadLiveUpdates({ token, isActive, refresh }) {
             try {
                 const message = JSON.parse(event.data);
                 if (message.type === 'pong' || Number(message.chat_id || id) !== id) return;
-                // Same notification sound as chat. The shared player only chimes
-                // when the tab is in the background, so local work stays quiet.
-                window.DecisionsNotificationSound?.playCurrent();
+                // Automatic sounds belong to new Incoming proposals. Thread
+                // progress and completion refresh the UI without a chime.
                 clearTimeout(refreshTimer);
                 refreshTimer = setTimeout(() => {
                     if (isActive(id)) refresh();

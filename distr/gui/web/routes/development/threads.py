@@ -13,6 +13,20 @@ from .models import StudioRoutingAssessmentRequest, StudioSkillCaptureRequest, S
 
 
 def register_routes(router, templates):
+    @router.post("/workflows/studio/tasks/{chat_id}/attachments/{attachment_id}/transcript")
+    async def studio_thread_attachment_transcript(chat_id: int, attachment_id: str):
+        from fastapi import HTTPException
+        from distr.core.incoming.transcription import transcribe_thread_attachment
+
+        try:
+            return await asyncio.to_thread(transcribe_thread_attachment, chat_id, attachment_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(503, 'Transcription could not be completed. Please retry.') from exc
+
     @router.get("/workflows/studio/tasks/{chat_id}/attachments/{attachment_id}")
     async def studio_thread_attachment(chat_id: int, attachment_id: str):
         from fastapi import HTTPException
@@ -246,6 +260,8 @@ def register_routes(router, templates):
                 from distr.core.incoming.media import register_thread_attachments
 
                 await asyncio.to_thread(register_thread_attachments, int(chat_id), _safe_turn_attachments(data.attachments))
+                from distr.core.incoming.transcription import prepare_thread_transcripts
+                await asyncio.to_thread(prepare_thread_transcripts, int(chat_id))
 
             await asyncio.to_thread(
                 mark_development_thread,

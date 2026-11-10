@@ -68,9 +68,12 @@ def load_desktop_proposals():
 
 def start_desktop_proposal(proposal):
     from distr.core.tensology_client import _local_api_post
+    from distr.core.incoming.media import list_proposal_attachment_manifest
+    from distr.core.incoming.transcription import thread_preparation_timeout
 
     # One application-owned endpoint handles both native and browser actions.
-    result = _local_api_post('workflows/studio/incoming/proposals/thread', {'proposal': proposal})
+    result = _local_api_post('workflows/studio/incoming/proposals/thread', {'proposal': proposal},
+                             timeout=thread_preparation_timeout(list_proposal_attachment_manifest(proposal)))
     if not isinstance(result, dict) or not result.get('chat_id'):
         raise ValueError('The proposal thread could not be started. Retry from Proposals.')
     return int(result['chat_id'])

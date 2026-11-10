@@ -62,10 +62,8 @@ def test_missing_board_mapping_never_invents_project_with_board_id(projects, cap
         db.add(KanbanBoard(id=7, name='Unmapped board', source='database'))
         db.commit()
     assert triage(item(board_id=7)) == []
-    assert 'exactly one existing project' in caplog.text
-    # Normal semantic classification remains available when the model can choose
-    # a real candidate, even when the channel's board mapping needs repair.
-    assert triage(item(board_id=7), project_id=3)[0]['project_id'] == 3
+    # An unmapped source must not reach semantic classification at all.
+    assert triage(item(board_id=7), project_id=3) == []
 
 
 def test_conflicting_board_default_and_project_link_do_not_guess(projects):

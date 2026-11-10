@@ -49,7 +49,7 @@ export function createThreadSession({ api, workflowForChat, runForWorkflow, dire
             if (run && steeringMemory) run = { ...run, steering_memory: steeringMemory };
             let controls = await get(`/workflows/studio/control-state?${query}`);
             if (!current()) return null;
-            if (isActiveAgentRun(run) && (controls.commands || []).some((command) => command.status === 'queued')) {
+            if (isActiveAgentRun(run) && (controls.commands || []).some((command) => command.status === 'queued' && command.command_type !== 'followup')) {
                 await api(`/workflows/studio/tasks/${chatId}/commands/dispatch`, { method: 'POST', body: {}, signal: controller.signal }).catch(() => null);
                 controls = await get(`/workflows/studio/control-state?${query}`);
             }

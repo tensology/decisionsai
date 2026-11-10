@@ -74,6 +74,22 @@ def register_routes(router, templates):
             return JSONResponse({"proposals": [], "counts": {}, "error": str(e)}, status_code=500)
 
 
+    @router.api_route('/workflows/studio/incoming/check', methods=['GET', 'POST'])
+    async def workflow_studio_check_incoming(request: Request):
+        from distr.core.tensology_client import configured_tensology_client
+        import uuid
+        try:
+            client = configured_tensology_client(source='incoming-manual-check')
+            if request.method == 'POST':
+                result = await asyncio.to_thread(client.post, 'incoming/check',
+                    {'sources': ['whatsapp', 'gmail', 'mailshot']}, idempotency_key='incoming-check-' + uuid.uuid4().hex)
+            else:
+                result = await asyncio.to_thread(client.get, 'incoming/check')
+            return JSONResponse({'success': True, **result})
+        except Exception:
+            return JSONResponse({'success': False, 'error': 'Tensology source checking is unavailable. Local proposals can still be refreshed.'}, status_code=503)
+
+
     @router.get("/workflows/studio/incoming/proposals/attachment")
     async def workflow_studio_proposal_attachment(path: str = ""):
         """Serve a Tensology proposal attachment from managed local cache (download once)."""

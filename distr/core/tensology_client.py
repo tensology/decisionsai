@@ -703,7 +703,7 @@ def _tensology_project_route(project: dict[str, Any]) -> dict[str, str]:
     return {"backend": backend, "provider": provider, "model": model}
 
 
-def _local_api_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
+def _local_api_post(path: str, body: dict[str, Any], *, timeout: float = 15) -> dict[str, Any]:
     from distr.gui.web.security import INTERNAL_AUTH_HEADER, get_internal_api_token
 
     encoded = json.dumps(body).encode("utf-8")
@@ -717,7 +717,7 @@ def _local_api_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:1000]
@@ -1001,11 +1001,13 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
     # Attaching a workflow here would bypass that shared dispatcher entirely.
     mirrored_ticket_id = _ensure_tensology_kanban_ticket(ticket, project, None)
     skill_ids, use_playwright = _execution_skill_ids(ticket)
+    attachments = _tensology_thread_files(ticket)
+    from distr.core.incoming.transcription import thread_preparation_timeout
     response = _local_api_post(
         "workflows/studio/tasks",
         {
             "prompt": prompt,
-            "attachments": _tensology_thread_files(ticket),
+            "attachments": attachments,
             "title": f"{ticket.get('reference')} - {ticket.get('title')}",
             "project_id": project["id"],
             "workflow_id": None,
@@ -1039,6 +1041,7 @@ def _create_tensology_thread(ticket: dict[str, Any], project: dict[str, Any]) ->
             # briefing. The run can still be stopped or steered from the thread.
             "skip_human_checkpoints": True,
         },
+        timeout=thread_preparation_timeout(attachments),
     )
     task = response.get("task") if isinstance(response, dict) else None
     chat_id = int((task or {}).get("id") or 0)
@@ -1219,7 +1222,8 @@ def _tensology_thread_files(ticket: dict[str, Any]) -> list[dict[str, Any]]:
     groups.extend(message.get('attachments') or [] for message in ticket.get('discussion') or [] if isinstance(message, dict))
     return [{'name': item.get('name') or item.get('filename') or Path(item['local_path']).name,
              'path': item['local_path'], 'mime_type': item.get('mime_type') or item.get('type') or 'application/octet-stream',
-             'size': item.get('size') or Path(item['local_path']).stat().st_size}
+             'size': item.get('size') or Path(item['local_path']).stat().st_size,
+             **({'transcript': str(item['transcript'])} if item.get('transcript') else {})}
             for group in groups for item in group if isinstance(item, dict) and item.get('local_path') and Path(item['local_path']).is_file()]
 
 

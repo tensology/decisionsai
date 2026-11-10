@@ -137,7 +137,8 @@ def register_routes(router, templates):
                 metadata=metadata,
             )
             await asyncio.to_thread(resume_thread_time, chat_id)
-            delivery = await asyncio.to_thread(dispatch_command, int(command["id"]))
+            delivery = ({'dispatched': False, 'command': command} if data.command_type == 'followup'
+                        else await asyncio.to_thread(dispatch_command, int(command["id"])))
             return JSONResponse(
                 {
                     "status": "delivered" if delivery.get("dispatched") else "queued",
@@ -162,7 +163,7 @@ def register_routes(router, templates):
         try:
             from distr.core.workflow.development_control import update_command
 
-            command = await asyncio.to_thread(update_command, command_id, content=data.content, cancel=data.cancel)
+            command = await asyncio.to_thread(update_command, command_id, **data.model_dump())
             if command is None:
                 return JSONResponse({"detail": "Command not found."}, status_code=404)
             return JSONResponse(command)
@@ -182,6 +183,29 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Studio command dispatch failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post('/workflows/studio/commands/{command_id}/run')
+    async def run_queued_submission(command_id: int, data: dict):
+        from distr.core.workflow.queued_submissions import run_submission
+        try:
+            return JSONResponse(await asyncio.to_thread(run_submission, command_id, new_thread=data.get('new_thread') is True))
+        except LookupError as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=409)
+        except Exception:
+            logger.exception('Queued submission failed')
+            return JSONResponse({'detail': 'Could not start this item. It remains queued.'}, status_code=503)
+
+    @router.get('/workflows/studio/commands/{command_id}/attachments/{index}')
+    async def queued_attachment(command_id: int, index: int):
+        from distr.core.workflow.queued_submissions import command_file
+        from fastapi.responses import FileResponse
+        try:
+            item = await asyncio.to_thread(command_file, command_id, index)
+            return FileResponse(item['path'], media_type=item['mime_type'], filename=item['name'], content_disposition_type='inline', headers={'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'"})
+        except (FileNotFoundError, ValueError):
+            return JSONResponse({'detail': 'Attachment unavailable.'}, status_code=404)
 
 
     @router.patch("/workflows/studio/tasks/{chat_id}/controls")

@@ -20,7 +20,7 @@ from distr.core.db.workflow import DevelopmentCommand, DevelopmentTimeEntry, Dev
 from distr.core.workflow.development_threads import development_thread_metadata, is_development_thread
 
 
-COMMAND_STATUSES = {"queued", "delivered", "completed", "cancelled", "failed"}
+COMMAND_STATUSES = {"queued", "editing", "dispatching", "delivered", "completed", "cancelled", "failed"}
 # Reject syncing absurd thread totals into tickets (e.g. cancelled workflow ghosts).
 MAX_TICKET_TIME_SYNC_SECONDS = 12 * 60 * 60
 DEVELOPMENT_TIMER_MENU = {
@@ -98,7 +98,7 @@ def list_commands(chat_id: int, *, include_terminal: bool = True, limit: int = 5
         _require_development_root(db, int(chat_id))
         query = db.query(DevelopmentCommand).filter(DevelopmentCommand.chat_id == int(chat_id))
         if not include_terminal:
-            query = query.filter(DevelopmentCommand.status.in_(["queued", "delivered"]))
+            query = query.filter(DevelopmentCommand.status.in_(["queued", "editing", "dispatching"]))
         rows = query.order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc()).limit(max(1, min(limit, 200))).all()
         return [_command_payload(row) for row in rows]
 
@@ -142,9 +142,12 @@ def enqueue_command(
     command_type: str = "instruction",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    instruction = redact_text(content, limit=12000, preserve_paths=True)
+    instruction = redact_text(content, limit=64000 if command_type == 'followup' else 12000, preserve_paths=True)
     if not instruction:
         raise ValueError("A development instruction is required.")
+    if command_type == 'followup':
+        from .queued_submissions import submission_metadata
+        metadata = submission_metadata(int(chat_id), metadata)
     with get_session() as db:
         _require_development_root(db, int(chat_id))
         position = int(
@@ -162,7 +165,7 @@ def enqueue_command(
             content=instruction,
             status="queued",
             position=position,
-            metadata_json=json.dumps(redact_metadata(metadata or {}), ensure_ascii=False, default=str),
+            metadata_json=json.dumps(metadata if command_type == 'followup' else redact_metadata(metadata or {}), ensure_ascii=False, default=str),
         )
         db.add(row)
         db.commit()
@@ -170,22 +173,37 @@ def enqueue_command(
         return _command_payload(row)
 
 
-def update_command(command_id: int, *, content: str | None = None, cancel: bool = False) -> dict[str, Any] | None:
+def update_command(command_id: int, *, content: str | None = None, cancel: bool = False, metadata: dict | None = None, editing: bool | None = None, expected_modified_at: str | None = None) -> dict[str, Any] | None:
     with get_session() as db:
         row = db.get(DevelopmentCommand, int(command_id))
         if row is None:
             return None
-        if row.status != "queued":
+        if row.status not in {"queued", "editing"}:
             raise ValueError("Only queued instructions can be changed.")
+        if expected_modified_at and row.modified_at.isoformat() != expected_modified_at:
+            raise ValueError('This queued item changed. Reload it before editing.')
+        previous_status = row.status
+        claimed = db.query(DevelopmentCommand).filter(DevelopmentCommand.id == command_id,
+            DevelopmentCommand.status == previous_status, DevelopmentCommand.modified_at == row.modified_at).update({'status': 'editing'}, synchronize_session=False)
+        if not claimed:
+            raise ValueError('This queued item changed. Refresh the queue.')
+        db.refresh(row)
         if cancel:
             row.status = "cancelled"
             row.cancelled_at = utc_now_naive()
             row.result_summary = "Cancelled before delivery."
         elif content is not None:
-            clean = redact_text(content, limit=12000, preserve_paths=True)
+            clean = redact_text(content, limit=64000 if row.command_type == 'followup' else 12000, preserve_paths=True)
             if not clean:
                 raise ValueError("Instruction cannot be empty.")
             row.content = clean
+        if metadata is not None and not cancel:
+            from .queued_submissions import submission_metadata
+            row.metadata_json = json.dumps(submission_metadata(row.chat_id, metadata), ensure_ascii=False, default=str)
+        if editing is not None and not cancel:
+            row.status = 'editing' if editing else 'queued'
+        elif not cancel:
+            row.status = previous_status
         db.commit()
         db.refresh(row)
         return _command_payload(row)
@@ -248,7 +266,7 @@ def list_commands_for_id(command_id: int) -> dict[str, Any] | None:
 def dispatch_pending(chat_id: int) -> dict[str, Any]:
     with get_session() as db:
         _require_development_root(db, chat_id)
-        row = db.query(DevelopmentCommand).filter_by(chat_id=int(chat_id), status="queued").order_by(DevelopmentCommand.id).first()
+        row = db.query(DevelopmentCommand).filter_by(chat_id=int(chat_id), status="queued").filter(DevelopmentCommand.command_type != 'followup').order_by(DevelopmentCommand.id).first()
         pending = [_command_payload(row)] if row else []
     if not pending:
         return {"status": "idle", "summary": "No queued instructions.", "next_actions": [], "artifacts": []}

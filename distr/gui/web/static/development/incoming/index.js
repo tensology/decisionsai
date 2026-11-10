@@ -55,6 +55,74 @@ export function createIncoming({ context, actions, el }) {
     const proposalMutations = new Set();
     const proposalSpokenText = new Map();
     let proposalReadRequest = null;
+    let incomingOperation = '';
+    let manualCheckBusy = false;
+    let checkStatusTimer = null;
+    let checkStatusGeneration = 0;
+    let incomingChecks = null;
+    let incomingCheckError = '';
+
+    function checksAreRunning() {
+        return Object.values(incomingChecks || {}).some(row => ['queued', 'running'].includes(row.source_state)
+            || ['queued', 'running'].includes(row.recalibration?.state));
+    }
+
+    function renderCheckStatus() {
+        const node = el('incoming-check-status');
+        if (!node) return;
+        const rows = Object.values(incomingChecks || {});
+        const failed = rows.some(row => row.source_state === 'failed' || ['failed', 'partial'].includes(row.recalibration?.state));
+        const checking = checksAreRunning();
+        const updated = rows.reduce((sum, row) => sum + Number(row.recalibration?.updated || 0), 0);
+        node.classList.toggle('hidden', !incomingChecks && !incomingCheckError);
+        node.classList.toggle('error', Boolean(incomingCheckError) || failed);
+        node.textContent = incomingCheckError || (checking ? 'Checking sources and proposal project assignments in the background...'
+            : failed ? 'Incoming check incomplete. Some sources or proposals could not be checked. Try Check incoming again.'
+            : `Incoming checked. ${updated} proposal${updated === 1 ? '' : 's'} updated.`);
+    }
+
+    function watchIncomingCheck(generation, remaining = 240) {
+        if (checkStatusTimer) clearTimeout(checkStatusTimer);
+        checkStatusTimer = setTimeout(async () => {
+            checkStatusTimer = null;
+            if (generation !== checkStatusGeneration || context.workspaceMode !== 'incoming' || !remaining) return;
+            if (document.hidden) { watchIncomingCheck(generation, remaining - 1); return; }
+            try {
+                const result = await actions.api('/workflows/studio/incoming/check');
+                if (generation !== checkStatusGeneration) return;
+                incomingChecks = result.checks || null;
+                incomingCheckError = '';
+                renderCheckStatus();
+                if (checksAreRunning()) watchIncomingCheck(generation, remaining - 1);
+                else await refreshIncomingData({ force: true });
+            } catch (error) {
+                incomingCheckError = error.data?.error || 'Could not check background progress. Try Check incoming again.';
+                renderCheckStatus();
+            }
+        }, 5000);
+    }
+
+    async function checkIncoming() {
+        if (manualCheckBusy || incomingOperation) return;
+        manualCheckBusy = true;
+        const generation = ++checkStatusGeneration;
+        setResyncBusy(true);
+        incomingCheckError = '';
+        try {
+            const result = await actions.api('/workflows/studio/incoming/check', { method: 'POST', body: {} });
+            if (result?.success === false) throw new Error(result.error || 'Incoming checking could not be started.');
+            incomingChecks = result.checks || null;
+            await refreshIncomingData({ force: true });
+            if (checksAreRunning()) watchIncomingCheck(generation);
+        } catch (error) {
+            incomingCheckError = error.data?.error || error.message || 'Incoming checking could not be started.';
+            await refreshIncomingData({ force: true });
+        } finally {
+            manualCheckBusy = false;
+            setResyncBusy(false);
+            renderCheckStatus();
+        }
+    }
     const state = {
         incoming: [],
         incomingLinks: [],
@@ -184,13 +252,14 @@ export function createIncoming({ context, actions, el }) {
 
 
     const INCOMING_SEEN_KEY = 'decisions.incoming.conversationSeenAt';
+    const seenConversations = {};
 
     function incomingSeenMap() {
         try {
             const raw = JSON.parse(localStorage.getItem(INCOMING_SEEN_KEY) || '{}');
-            return raw && typeof raw === 'object' ? raw : {};
+            return { ...(raw && typeof raw === 'object' ? raw : {}), ...seenConversations };
         } catch (_) {
-            return {};
+            return { ...seenConversations };
         }
     }
 
@@ -215,8 +284,17 @@ export function createIncoming({ context, actions, el }) {
         if (!conversationKey) return;
         const map = incomingSeenMap();
         const latest = conversation ? conversationLatestIncomingTs(conversation) : 0;
-        map[conversationKey] = Math.max(Date.now(), latest || 0);
-        localStorage.setItem(INCOMING_SEEN_KEY, JSON.stringify(map));
+        map[conversationKey] = latest || Date.now();
+        seenConversations[conversationKey] = map[conversationKey];
+        try { localStorage.setItem(INCOMING_SEEN_KEY, JSON.stringify(map)); } catch (_) { /* In-memory acknowledgement still works. */ }
+    }
+
+    function selectIncomingConversation(key) {
+        state.selectedIncomingConversationKey = key || '';
+        const conversation = incomingConversations('whatsapp').find(row => row.key === key);
+        if (conversation) markConversationSeen(key, conversation);
+        state.incomingMobileDetail = true;
+        renderIncomingWorkspace();
     }
 
     function proposalsForWhatsAppThread(conversation) {
@@ -460,9 +538,7 @@ export function createIncoming({ context, actions, el }) {
         if (!next) return;
         existing.replaceWith(next);
         next.addEventListener('click', () => {
-            state.selectedIncomingConversationKey = next.dataset.incomingConversation || '';
-            state.incomingMobileDetail = true;
-            renderIncomingWorkspace();
+            selectIncomingConversation(next.dataset.incomingConversation);
         });
         next.addEventListener('contextmenu', (event) => {
             event.preventDefault();
@@ -860,6 +936,42 @@ export function createIncoming({ context, actions, el }) {
         }
     }
 
+    function showIncomingProgress(title, description) {
+        const previousFocus = document.activeElement;
+        const previousOverflow = document.body.style.overflow;
+        const overlay = document.createElement('div');
+        overlay.className = 'proposal-modal-overlay incoming-progress-overlay';
+        overlay.innerHTML = `<section class="proposal-modal incoming-progress-modal" role="dialog" aria-modal="true" aria-labelledby="incoming-progress-title" aria-describedby="incoming-progress-description"><header><h3 id="incoming-progress-title"></h3><button type="button" class="proposal-btn ghost" aria-label="Close progress">×</button></header><div class="incoming-progress-body"><p id="incoming-progress-description"></p><progress aria-label="Processing proposals"></progress></div></section>`;
+        const closeButton = overlay.querySelector('button');
+        const status = el('incoming-operation-status');
+        const update = (nextTitle, nextDescription) => {
+            incomingOperation = nextTitle;
+            overlay.querySelector('h3').textContent = nextTitle;
+            overlay.querySelector('p').textContent = nextDescription;
+            if (status) { status.textContent = nextTitle; status.classList.remove('hidden'); }
+        };
+        let closed = false;
+        const close = () => {
+            if (closed) return;
+            closed = true;
+            overlay.remove();
+            document.body.style.overflow = previousOverflow;
+            if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+            else el('incoming-resync')?.focus({ preventScroll: true });
+        };
+        update(title, description);
+        closeButton.addEventListener('click', close);
+        overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+        overlay.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+            if (event.key === 'Tab') { event.preventDefault(); closeButton.focus(); }
+        });
+        document.body.style.overflow = 'hidden';
+        document.body.appendChild(overlay);
+        closeButton.focus();
+        return { update, finish() { close(); incomingOperation = ''; status?.classList.add('hidden'); } };
+    }
+
     async function mergeProposalCards(targetId, sourceId) {
         if (dismissExpiredBusy || proposalMutations.size) return;
         const first = proposalById(sourceId);
@@ -870,23 +982,31 @@ export function createIncoming({ context, actions, el }) {
             return;
         }
         proposalMutations.add(String(sourceId));
+        proposalMutations.add(String(targetId));
+        const progress = showIncomingProgress('Merging proposals...', 'Combining the requests, source files and transcripts.');
+        renderIncomingWorkspace();
         try {
             const result = await actions.api('/workflows/studio/incoming/proposals/merge', {
                 method: 'POST',
                 body: { first, second }
             });
+            if (!result?.chat_id) throw new Error(result?.error || 'The proposals could not be merged.');
             if (result && result.chat_id) {
                 actions.toast('Merged into one ticket.', 'success');
                 state.incomingProposals = (state.incomingProposals || []).filter(
                     (row) => String(row.id) !== String(sourceId) && String(row.id) !== String(targetId)
                 );
                 renderIncomingWorkspace();
-                if (actions.openThreadDialog) actions.openThreadDialog(result.chat_id);
+                progress.update('Opening thread...', 'The merged request is ready.');
+                if (actions.loadChat) await actions.loadChat(Number(result.chat_id));
+                else if (actions.openThreadDialog) actions.openThreadDialog(result.chat_id);
             }
         } catch (error) {
-            actions.toast(error.message || 'Could not merge the proposals.', 'error');
+            actions.toast(error.data?.error || error.message || 'Could not merge the proposals.', 'error');
         } finally {
             proposalMutations.delete(String(sourceId));
+            proposalMutations.delete(String(targetId));
+            progress.finish();
             renderIncomingWorkspace();
         }
     }
@@ -1037,7 +1157,7 @@ export function createIncoming({ context, actions, el }) {
         const mime = attachmentMimeBase(item?.mime_type);
         const kind = String(item?.kind || '').toLowerCase();
         const name = String(item?.name || '');
-        return mime.startsWith('audio/') || ['audio', 'voice', 'ptt'].includes(kind) || /\.(ogg|opus|mp3|m4a|wav|aac)$/i.test(name);
+        return mime.startsWith('audio/') || ['audio', 'voice', 'ptt'].includes(kind) || /\.(oga|ogg|opus|mp3|m4a|wav|aac)$/i.test(name);
     }
 
     function isImageAttachment(item) {
@@ -1234,82 +1354,136 @@ export function createIncoming({ context, actions, el }) {
         return `${imageBlock}${fileBlock}` || '<p class="proposal-empty">No attachments on this proposal.</p>';
     }
 
+    const mediaTranscriptions = new Map();
+
     function closeFilePreview() {
         const overlay = document.getElementById('incoming-file-preview-modal');
         if (!overlay) return;
+        overlay.querySelectorAll('audio, video').forEach(player => {
+            player.pause();
+            player.removeAttribute('src');
+            player.load();
+        });
         overlay.remove();
         document.body.style.overflow = overlay._previousOverflow || '';
-        document.removeEventListener('keydown', onFilePreviewKey);
+        document.removeEventListener('keydown', onFilePreviewKey, true);
+        if (overlay._returnFocus?.isConnected) overlay._returnFocus.focus({ preventScroll: true });
     }
 
     function onFilePreviewKey(event) {
-        if (event.key === 'Escape') closeFilePreview();
+        const overlay = document.getElementById('incoming-file-preview-modal');
+        if (!overlay) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            closeFilePreview();
+        }
+        if (event.key === 'Tab') {
+            const nodes = [...overlay.querySelectorAll('button, a[href], audio, video, iframe, [tabindex="0"]')]
+                .filter(node => !node.hidden && !node.disabled && node.getClientRects().length);
+            const first = nodes[0], last = nodes[nodes.length - 1];
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }
     }
 
     function openFilePreview(meta) {
-        if (!meta || !meta.url) return;
+        if (!meta?.url) return;
+        const returnFocus = document.activeElement;
         closeFilePreview();
-        const mime = String(meta.mime_type || '');
-        const name = meta.name || 'Attachment';
-        let body;
-        const filename = meta.filename || name;
-        if (mime.startsWith('image/') || isImageAttachment({ mime_type: mime, name: filename })) {
-            body = `<img class="file-preview-image" src="${actions.escapeHtml(meta.url)}" alt="${actions.escapeHtml(name)}" />`;
+        const mime = String(meta.mime_type || '').toLowerCase();
+        const filename = meta.filename || meta.name || 'Attachment';
+        const name = meta.display_name || meta.name || 'Attachment';
+        let body, playable = false;
+        if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(filename) || isImageAttachment({ mime_type: mime, name: filename })) {
+            body = `<img class="file-preview-image" src="${actions.escapeHtml(meta.url)}" alt="${actions.escapeHtml(filename)}">`;
         } else if (mime.startsWith('audio/') || isAudioAttachment({ mime_type: mime, name: filename, kind: meta.kind })) {
+            playable = true;
             body = `<audio class="file-preview-audio" controls autoplay preload="metadata" src="${actions.escapeHtml(meta.url)}"></audio>`;
         } else if (mime.startsWith('video/') || /\.(mp4|webm|mov|3gp)$/i.test(filename)) {
-            body = `<video class="file-preview-image" controls preload="metadata" src="${actions.escapeHtml(meta.url)}"></video>`;
-        } else if (mime === 'application/pdf' || String(filename).toLowerCase().endsWith('.pdf')) {
-            body = `<iframe class="file-preview-frame" title="${actions.escapeHtml(name)}" src="${actions.escapeHtml(meta.url)}"></iframe>`;
+            playable = true;
+            body = `<video class="file-preview-image" controls autoplay playsinline preload="metadata" src="${actions.escapeHtml(meta.url)}"></video>`;
+        } else if (mime === 'application/pdf' || /\.pdf$/i.test(filename)) {
+            body = `<iframe class="file-preview-frame" title="${actions.escapeHtml(filename)}" src="${actions.escapeHtml(meta.url)}"></iframe>`;
         } else if (mime.startsWith('text/') || mime === 'application/json' || /\.(txt|md|csv|json|log)$/i.test(filename)) {
-            body = `<pre class="file-preview-text" data-file-preview-text>Loading…</pre>`;
+            body = '<pre class="file-preview-text" data-file-preview-text>Loading...</pre>';
         } else {
-            body = `<div class="file-preview-other"><p>Preview is not available for this file type.</p><a class="proposal-btn primary" href="${actions.escapeHtml(meta.url)}" download="${actions.escapeHtml(filename)}">Download ${actions.escapeHtml(name)}</a></div>`;
+            body = '<p class="file-preview-other">Preview is not available for this file type. Download the original to open it.</p>';
         }
         const overlay = document.createElement('div');
         overlay.className = 'proposal-modal-overlay file-preview-overlay';
         overlay.id = 'incoming-file-preview-modal';
         overlay._previousOverflow = document.body.style.overflow;
-        overlay.innerHTML = `<div class="proposal-modal file-preview-modal" role="dialog" aria-modal="true" aria-label="${actions.escapeHtml(name)}">
-            <header>
-                <div class="proposal-modal-title"><h3>${actions.escapeHtml(name)}</h3>${meta.caption ? `<p class="proposal-modal-desc">${actions.escapeHtml(meta.caption)}</p>` : ''}</div>
-                <button type="button" class="proposal-modal-close" aria-label="Close" data-file-preview-close>×</button>
-            </header>
-            <div class="proposal-modal-body file-preview-body">${body}</div>
-            <footer>
-                <a class="proposal-btn ghost" href="${actions.escapeHtml(meta.url)}" download="${actions.escapeHtml(name)}">Download</a>
-                <button type="button" class="proposal-btn primary" data-file-preview-close>Close</button>
-            </footer>
+        overlay._returnFocus = returnFocus;
+        overlay.innerHTML = `<div class="proposal-modal file-preview-modal${playable ? ' has-transcript' : ''}" role="dialog" aria-modal="true" aria-label="${actions.escapeHtml(name)}">
+            <header><div class="proposal-modal-title"><h3 title="${actions.escapeHtml(filename)}">${actions.escapeHtml(name)}</h3>${meta.caption ? `<p class="proposal-modal-desc">${actions.escapeHtml(meta.caption)}</p>` : ''}</div><button type="button" class="proposal-modal-close" aria-label="Close" data-file-preview-close>×</button></header>
+            <div class="proposal-modal-body file-preview-body">${body}
+                <p class="file-preview-error hidden" data-media-error role="alert">This media could not be played. Download the original to open it in another player.</p>
+                ${playable ? '<section class="file-preview-transcript" aria-label="Transcript"><h4>Transcript</h4><div data-media-transcript role="status" aria-live="polite"></div><button class="proposal-btn ghost hidden" type="button" data-transcript-retry>Retry transcription</button></section>' : ''}
+            </div>
+            <footer><a class="proposal-btn ghost" href="${actions.escapeHtml(meta.url)}" download="${actions.escapeHtml(filename)}">Download</a></footer>
         </div>`;
         document.body.style.overflow = 'hidden';
         document.body.appendChild(overlay);
-        overlay.addEventListener('click', (event) => { if (event.target === overlay) closeFilePreview(); });
-        overlay.querySelectorAll('[data-file-preview-close]').forEach((btn) => btn.addEventListener('click', closeFilePreview));
-        document.addEventListener('keydown', onFilePreviewKey);
-        const textNode = overlay.querySelector('[data-file-preview-text]');
-        if (textNode) {
-            fetch(meta.url).then(async (response) => {
-                if (!response.ok) {
-                    let message = `Could not load file (${response.status}).`;
-                    try {
-                        const payload = await response.json();
-                        if (payload?.error) message = payload.error;
-                    } catch (_) {}
-                    textNode.textContent = message;
-                    return;
+        overlay.addEventListener('click', event => { if (event.target === overlay) closeFilePreview(); });
+        overlay.querySelector('[data-file-preview-close]').addEventListener('click', closeFilePreview);
+        document.addEventListener('keydown', onFilePreviewKey, true);
+        overlay.querySelector('[data-file-preview-close]').focus({ preventScroll: true });
+        const player = overlay.querySelector('audio, video');
+        overlay.querySelector('img')?.addEventListener('error', () => { const notice = overlay.querySelector('[data-media-error]'); notice.textContent = 'The image could not be loaded. Download the original to open it.'; notice.classList.remove('hidden'); });
+        player?.addEventListener('error', () => overlay.querySelector('[data-media-error]').classList.remove('hidden'));
+        if (player) player.play().catch(() => { /* Native controls remain available if autoplay is blocked. */ });
+        const transcriptNode = overlay.querySelector('[data-media-transcript]');
+        const retry = overlay.querySelector('[data-transcript-retry]');
+        const showTranscript = data => {
+            if (!overlay.isConnected) return;
+            transcriptNode.textContent = data.transcript || 'No speech detected.';
+            retry.classList.add('hidden');
+        };
+        const generateTranscript = async () => {
+            transcriptNode.textContent = 'Transcribing...';
+            retry.classList.add('hidden');
+            try {
+                if (!mediaTranscriptions.has(meta.url)) {
+                    mediaTranscriptions.set(meta.url, actions.api(meta.transcription_url.replace(/^\/api/, ''), { method: 'POST', body: {} })
+                        .catch(error => { mediaTranscriptions.delete(meta.url); throw error; }));
                 }
-                textNode.textContent = await response.text();
-            }).catch((error) => {
-                textNode.textContent = error?.message || 'Could not load file.';
-            });
+                const data = await mediaTranscriptions.get(meta.url);
+                document.querySelectorAll('[data-thread-file-preview]').forEach(button => {
+                    const item = JSON.parse(button.dataset.threadFilePreview);
+                    if (item.url !== meta.url) return;
+                    Object.assign(item, { transcript: data.transcript, transcript_status: data.status });
+                    button.dataset.threadFilePreview = JSON.stringify(item);
+                    const tip = `${item.name}\n\nTranscript:\n${data.transcript || 'No speech detected.'}`;
+                    button.title = tip;
+                    button.dataset.tooltip = tip;
+                });
+                showTranscript(data);
+            } catch (_) {
+                if (!overlay.isConnected) return;
+                transcriptNode.textContent = 'Transcription could not be completed.';
+                retry.classList.remove('hidden');
+            }
+        };
+        if (playable) {
+            if (meta.transcript || meta.transcript_status === 'empty') showTranscript(meta);
+            else if (meta.transcription_url) generateTranscript();
+            else transcriptNode.textContent = 'No transcript available.';
+            retry.addEventListener('click', generateTranscript);
         }
+        const textNode = overlay.querySelector('[data-file-preview-text]');
+        if (textNode) fetch(meta.url).then(response => {
+            if (!response.ok) throw new Error('Could not load the file.');
+            return response.text();
+        }).then(text => { textNode.textContent = text; })
+            .catch(() => { textNode.textContent = 'Could not load the file.'; });
     }
-
 
     function bindProposalTaskToggles(root, proposalId, onSaved) {
         if (!root) return;
         const list = root.querySelector('[data-proposal-tasks-for]');
         if (!list) return;
+        renderCheckStatus();
         let currentProposalId = proposalId;
         let saving = false;
         const status = root.querySelector('[data-proposal-task-save-status]');
@@ -1851,7 +2025,8 @@ export function createIncoming({ context, actions, el }) {
         const original = button.textContent;
         proposalMutations.add(String(proposalId));
         button.disabled = true;
-        button.textContent = 'Creating…';
+        button.textContent = 'Preparing...';
+        const progress = showIncomingProgress('Preparing thread...', 'Preparing source files and transcribing audio or video before the first run. If transcription fails, the thread will still be submitted.');
         try {
             const result = await actions.api('/workflows/studio/incoming/proposals/thread', {
                 method: 'POST',
@@ -1866,13 +2041,15 @@ export function createIncoming({ context, actions, el }) {
                 // The proposal is actioned (and cleared on Tensology) — drop it from the list.
                 state.incomingProposals = (state.incomingProposals || []).filter((row) => String(row.id) !== String(proposalId));
                 renderIncomingWorkspace();
+                progress.update('Opening thread...', 'The request has been submitted.');
                 await actions.loadChat(Number(result.chat_id));
                 await actions.refreshShell({ preserveConversation: true });
             }
         } catch (error) {
-            actions.toast(error.message || 'Could not create the thread.', 'error');
+            actions.toast(error.data?.error || error.message || 'Could not create the thread.', 'error');
         } finally {
             proposalMutations.delete(String(proposalId));
+            progress.finish();
             button.disabled = false;
             button.textContent = original;
             renderIncomingWorkspace();
@@ -1883,6 +2060,8 @@ export function createIncoming({ context, actions, el }) {
         scheduleProposalExpiry();
         const list = el('incoming-list');
         if (!list) return;
+        const operationStatus = el('incoming-operation-status');
+        if (operationStatus) { operationStatus.textContent = incomingOperation; operationStatus.classList.toggle('hidden', !incomingOperation); }
         el('incoming-workspace').classList.toggle('incoming-detail-open', state.incomingMobileDetail);
         document.querySelectorAll('[data-incoming-filter]').forEach((button) => {
             const selected = button.dataset.incomingFilter === state.incomingFilter;
@@ -1941,7 +2120,7 @@ export function createIncoming({ context, actions, el }) {
             proposalsList.querySelectorAll('[data-incoming-proposal-dismiss]').forEach((button) =>
                 button.addEventListener('click', () => dismissProposal(button.dataset.incomingProposalDismiss, button))
             );
-            if (dismissExpiredBusy) proposalsList.querySelectorAll('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss]').forEach(button => { button.disabled = true; });
+            if (dismissExpiredBusy || incomingOperation) proposalsList.querySelectorAll('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss]').forEach(button => { button.disabled = true; });
             proposalsList.querySelectorAll('[data-incoming-proposal-copy]').forEach((button) =>
                 button.addEventListener('click', () => copyProposal(button.dataset.incomingProposalCopy))
             );
@@ -1966,6 +2145,7 @@ export function createIncoming({ context, actions, el }) {
             // Drag one proposal onto another on the same project to merge them.
             proposalsList.querySelectorAll('.proposal-card[data-proposal-project]').forEach((node) => {
                 node.addEventListener('dragstart', (event) => {
+                    if (proposalMutations.size || incomingOperation) { event.preventDefault(); return; }
                     dragProposalId = node.dataset.incomingProposalOpen || '';
                     if (event.dataTransfer) {
                         event.dataTransfer.effectAllowed = 'move';
@@ -2008,9 +2188,7 @@ export function createIncoming({ context, actions, el }) {
               : '<div class="development-empty">No WhatsApp conversations are available.</div>';
         list.querySelectorAll('[data-incoming-conversation]').forEach((button) => {
             button.addEventListener('click', () => {
-                state.selectedIncomingConversationKey = button.dataset.incomingConversation || '';
-                state.incomingMobileDetail = true;
-                renderIncomingWorkspace();
+                selectIncomingConversation(button.dataset.incomingConversation);
             });
             button.addEventListener('contextmenu', (event) => {
                 event.preventDefault();
@@ -2439,9 +2617,7 @@ export function createIncoming({ context, actions, el }) {
                     if (source === 'whatsapp') {
                         upsertRow(el('incoming-list'), `[data-incoming-conversation="${CSS.escape(conversation.key)}"]`, incomingConversationRowHtml(conversation), (row) => {
                             row.addEventListener('click', () => {
-                                state.selectedIncomingConversationKey = row.dataset.incomingConversation || '';
-                                state.incomingMobileDetail = true;
-                                renderIncomingWorkspace();
+                                selectIncomingConversation(row.dataset.incomingConversation);
                             });
                             row.addEventListener('contextmenu', (event) => {
                                 event.preventDefault();
@@ -2591,9 +2767,11 @@ export function createIncoming({ context, actions, el }) {
         if (busy && !(state.incomingProposals || []).length && context.workspaceMode === 'incoming') renderIncomingWorkspace();
         const button = el('incoming-resync');
         if (!button) return;
-        button.disabled = busy;
+        button.disabled = busy || manualCheckBusy;
         button.classList.toggle('loading', busy);
         button.setAttribute('aria-busy', busy ? 'true' : 'false');
+        const label = button.querySelector('strong');
+        if (label) label.textContent = busy ? 'Checking...' : 'Check incoming';
     }
     function refreshIncomingData(options) {
         if (dismissExpiredBusy) return Promise.resolve();
@@ -2627,7 +2805,7 @@ export function createIncoming({ context, actions, el }) {
             }, () => {
                 if (seq !== incomingLoadSeq) return;
                 state.incomingProposalsError = state.incomingProposals.length ? '' : 'Proposals are temporarily unavailable.';
-                state.incomingProposalSync = { state: 'partial', error: 'Proposals are temporarily unavailable. Try Resync again.' };
+                state.incomingProposalSync = { state: 'partial', error: 'Proposals are temporarily unavailable. Try Check incoming again.' };
                 setResyncBusy(false);
                 if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
             });
@@ -2689,7 +2867,7 @@ export function createIncoming({ context, actions, el }) {
             el('incoming-workspace').classList.remove('incoming-detail-open');
             el(`incoming-panel-${state.incomingFilter}`)?.querySelector('.selected')?.focus();
         }));
-        el('incoming-resync')?.addEventListener('click', () => refreshIncomingData({ force: true }));
+        el('incoming-resync')?.addEventListener('click', checkIncoming);
         el('incoming-dismissed-toggle')?.addEventListener('click', () => toggleDismissedPanel());
         el('incoming-dismiss-expired')?.addEventListener('click', dismissExpiredProposals);
         el('incoming-dismissed-panel')?.addEventListener('keydown', (event) => {

@@ -32,6 +32,7 @@ def fixture_base():
     templates = Jinja2Templates(directory=str(web / 'templates'))
     app = FastAPI()
     app.mount('/static', StaticFiles(directory=str(web / 'static')), name='static')
+    app.mount('/assets', StaticFiles(directory=str(web.parents[2] / 'assets')), name='assets')
 
     @app.get('/development/{path:path}', response_class=HTMLResponse)
     async def page(request: Request, path: str):

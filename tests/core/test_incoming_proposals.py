@@ -17,7 +17,10 @@ def _assert_cards(rows, expected):
 
 
 @pytest.fixture(autouse=True)
-def _clear_incoming_proposals_list_cache():
+def _clear_incoming_proposals_list_cache(monkeypatch):
+    # These lifecycle tests assume eligible sources. Exact source authorization
+    # is exercised without a stub in test_incoming_linked_scope.py.
+    monkeypatch.setattr('distr.core.incoming.project_links.proposal_in_scope', lambda *args, **kwargs: True)
     from distr.core.db import IncomingProposalRestoration, get_session
     with get_session() as db:
         db.query(IncomingProposalRestoration).delete()
@@ -259,6 +262,7 @@ def _tensology_row(pid, thread_id, source, title):
 
 def _incoming_item(source, thread_id, text, label="Client"):
     return {
+        'project_ids': [7],
         "key": f"{source}:{thread_id}",
         "source": source,
         "source_thread_id": thread_id,

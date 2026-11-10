@@ -1,7 +1,7 @@
 // Fixed-position tooltips for the composer/selector area, so no container overflow can clip them.
 // [data-tooltip] shows its text; [data-tooltip-if-truncated] shows its own text only when it is cut off.
 // Inside an open <dialog> the tip is appended to that dialog (top layer); otherwise to <body>.
-const SCOPE = '.studio-composer, .model-dialog, .complexity-dialog';
+const SCOPE = '.studio-composer, .model-dialog, .complexity-dialog, .thread-source-files, .thread-command-queue';
 
 export function installTooltipPortal(root = document) {
     if (root.__tooltipPortal) return;
@@ -30,7 +30,7 @@ export function installTooltipPortal(root = document) {
         if (openDialog && !openDialog.contains(target)) return;
         owner = target;
         tip = document.createElement('div');
-        tip.className = 'studio-tooltip-portal';
+        tip.className = `studio-tooltip-portal${target.closest('.thread-source-files') ? ' thread-media-tooltip' : ''}`;
         tip.setAttribute('role', 'tooltip');
         tip.textContent = text;
         (target.closest('dialog[open]') || document.body).appendChild(tip);
@@ -49,6 +49,7 @@ export function installTooltipPortal(root = document) {
         }
         left = Math.max(margin, Math.min(left, window.innerWidth - box.width - margin));
         if (top < margin) top = rect.bottom + 6;
+        top = Math.max(margin, Math.min(top, window.innerHeight - box.height - margin));
         tip.style.left = `${Math.round(left)}px`;
         tip.style.top = `${Math.round(top)}px`;
     });
@@ -58,6 +59,11 @@ export function installTooltipPortal(root = document) {
         if (next instanceof Node && owner.contains(next)) return;
         hide();
     });
+    // Queue actions replace their rows after completion. A removed trigger cannot
+    // emit pointerout, so retire its tooltip when the DOM update removes it.
+    new MutationObserver(() => {
+        if (owner && !owner.isConnected) hide();
+    }).observe(root === document ? document.documentElement : root, { childList: true, subtree: true });
     ['pointerdown', 'scroll', 'keydown'].forEach((name) => root.addEventListener(name, hide, true));
     window.addEventListener('blur', hide);
 }

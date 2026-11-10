@@ -64,7 +64,7 @@ def test_tensology_auto_approval_enters_shared_dispatcher_without_preassigned_wo
     monkeypatch.setattr(tc, "_ensure_tensology_kanban_ticket", lambda ticket, project, workflow_id: mirror.append(workflow_id) or 296)
     monkeypatch.setattr(tc, "_execution_skill_ids", lambda ticket: ([], False))
     monkeypatch.setattr(tc, "_repo_default_branch", lambda path: "main")
-    monkeypatch.setattr(tc, "_local_api_post", lambda path, body: captured.append(body) or {"task": {"id": 349}})
+    monkeypatch.setattr(tc, "_local_api_post", lambda path, body, **kwargs: captured.append(body) or {"task": {"id": 349}})
     ticket = {**SIMPLE, "id": 1162, "reference": "ACCEPTANCE-1", "project_id": 175,
               "execution_complexity": "high", "source_metadata": {"approval_source": "telegram"}}
     project = {"id": 2, "name": "Merrypak", "folder_location": "/tmp", "coding_backend": "pi",
@@ -82,9 +82,9 @@ def test_native_create_uses_the_same_application_api_and_fails_closed(monkeypatc
     from distr.gui.development_hot_corner import start_desktop_proposal
     from distr.core import tensology_client as tc
     calls = []
-    monkeypatch.setattr(tc, "_local_api_post", lambda path, body: calls.append((path, body)) or {"chat_id": 349})
+    monkeypatch.setattr(tc, "_local_api_post", lambda path, body, **kwargs: calls.append((path, body)) or {"chat_id": 349})
     assert start_desktop_proposal(SIMPLE) == 349
     assert calls == [("workflows/studio/incoming/proposals/thread", {"proposal": SIMPLE})]
-    monkeypatch.setattr(tc, "_local_api_post", lambda *_: {})
+    monkeypatch.setattr(tc, "_local_api_post", lambda *_, **kwargs: {})
     with pytest.raises(ValueError, match="could not be started"):
         start_desktop_proposal(SIMPLE)

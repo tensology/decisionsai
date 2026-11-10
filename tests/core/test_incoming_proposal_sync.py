@@ -18,6 +18,7 @@ def remote():
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.setattr('distr.core.incoming.project_links.source_project_index', lambda **kwargs: {('gmail', 'thread'): {2, 3}})
     fake = Mock()
     fake.get.return_value = [{'id': 175, 'decisions_project_id': 2}, {'id': 191, 'decisions_project_id': 3}]
     fake.post.return_value = {}

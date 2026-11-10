@@ -88,19 +88,6 @@ export function createThreadsInspector({ context, actions, el, token }) {
         </section>`;
     }
 
-    function commandQueueHtml() {
-        const commands = context.controlState.commands || [];
-        if (!commands.length) return '';
-        const canSteer = Boolean(
-            context.currentWorkflow &&
-                context.currentRun?.steerable !== false &&
-                ['initializing', 'queued', 'running', 'waiting'].includes(String(context.currentRun?.status || '').toLowerCase()) &&
-                !(context.controlState.interactions || []).length
-        );
-        const icon = (path) => `<svg aria-hidden="true" viewBox="0 0 16 16"><path d="${path}"></path></svg>`;
-        return `<section class="inspect-section queue-section"><div class="inspect-title">Queued guidance <span>${commands.length}</span></div>${commands.map((command) => `<div class="command-card"><div><strong>${actions.escapeHtml(command.source === 'telegram' ? 'Telegram' : 'You')}</strong><span>${actions.escapeHtml(command.content)}</span></div><div class="command-actions"><button type="button" data-steer-command="${Number(command.id)}" aria-label="Steer queued request into active workflow" title="Steer active workflow"${canSteer ? '' : ' disabled'}>${icon('M2.5 8h9M8.5 4l4 4-4 4')}</button><button type="button" data-new-thread-command="${Number(command.id)}" aria-label="Start queued request in a new thread and ticket" title="Start in new thread and ticket">${icon('M3 3.5h7v5H6l-3 3zM12.5 2v4M10.5 4h4')}</button><button type="button" data-edit-command="${Number(command.id)}" aria-label="Edit queued request" title="Edit">${icon('M3 11.5l.5-2L10 3l2 2-6.5 6.5z')}</button><button type="button" data-cancel-command="${Number(command.id)}" aria-label="Cancel queued request" title="Cancel">${icon('M4 4l8 8M12 4l-8 8')}</button></div></div>`).join('')}</section>`;
-    }
-
     function agentPlanHtml(run) {
         const raw = run?.coordination_plan?.assignments || {};
         const assignments = Array.isArray(raw) ? raw : Object.values(raw);
@@ -191,7 +178,6 @@ export function createThreadsInspector({ context, actions, el, token }) {
         const checkpointButtons = interactionActions.filter((action) => action !== 'feedback');
         const rows = inspectorConversationActivity(chat);
         return `
-            ${commandQueueHtml()}
             ${inspectorWorkflowHtml()}
             ${learningLedgerHtml()}
             ${automationSectionHtml(chat)}
@@ -401,6 +387,7 @@ export function createThreadsInspector({ context, actions, el, token }) {
     }
 
     function renderInspector() {
+        actions.renderCommandQueue?.();
         const workflowId = Number(context.currentWorkflow?.id || 0);
         const runId = Number(actions.workflowRunId?.(context.currentRun) || 0);
         if (workflowId && runId && !context.steeringMemory && !context.currentRun?.steering_memory && !learningLedgerMemory && !learningLedgerRequest) {
@@ -504,18 +491,6 @@ export function createThreadsInspector({ context, actions, el, token }) {
             actions.closeInspector();
             el('task-prompt').focus();
         });
-        content
-            .querySelectorAll('[data-steer-command]')
-            .forEach((button) => button.addEventListener('click', () => steerQueuedCommand(Number(button.dataset.steerCommand), button)));
-        content
-            .querySelectorAll('[data-new-thread-command]')
-            .forEach((button) => button.addEventListener('click', () => startQueuedCommandInNewThread(Number(button.dataset.newThreadCommand), button)));
-        content
-            .querySelectorAll('[data-edit-command]')
-            .forEach((button) => button.addEventListener('click', () => editQueuedCommand(Number(button.dataset.editCommand))));
-        content
-            .querySelectorAll('[data-cancel-command]')
-            .forEach((button) => button.addEventListener('click', () => cancelQueuedCommand(Number(button.dataset.cancelCommand))));
         content.querySelector('[data-run-doctor]')?.addEventListener('click', (event) => runProjectDoctor(Number(event.currentTarget.dataset.runDoctor)));
         content.querySelector('[data-capture-skill]')?.addEventListener('click', captureRunSkill);
         content
@@ -551,79 +526,6 @@ export function createThreadsInspector({ context, actions, el, token }) {
             renderInspector();
         } catch (error) {
             actions.toast(error.message || 'Could not schedule this prompt.', 'error');
-        }
-    }
-
-    function editQueuedCommand(commandId) {
-        const command = (context.controlState.commands || []).find((item) => Number(item.id) === Number(commandId));
-        if (!command) return;
-        context.editingCommandId = Number(command.id);
-        actions.setGuidanceScope('thread');
-        el('task-prompt').value = command.content || '';
-        el('task-prompt').placeholder = 'Edit queued guidance...';
-        actions.resizePrompt();
-        actions.closeInspector();
-        el('task-prompt').focus();
-    }
-
-    async function steerQueuedCommand(commandId, button) {
-        const command = (context.controlState.commands || []).find((item) => Number(item.id) === Number(commandId));
-        if (!command || !context.currentWorkflow || !context.currentRun) return;
-        button.disabled = true;
-        try {
-            await actions.api(`/workflows/${context.currentWorkflow.id}/runs/${actions.workflowRunId(context.currentRun)}/steer`, {
-                method: 'POST',
-                body: { message: command.content }
-            });
-            await actions.api(`/workflows/studio/commands/${commandId}`, { method: 'PATCH', body: { cancel: true } });
-            actions.toast('Queued request moved into the active workflow.');
-            await actions.refreshShell({ preserveConversation: true });
-        } catch (error) {
-            button.disabled = false;
-            actions.toast(error.message || 'Could not steer the queued request.', 'error');
-        }
-    }
-
-    async function startQueuedCommandInNewThread(commandId, button) {
-        const command = (context.controlState.commands || []).find((item) => Number(item.id) === Number(commandId));
-        const chat = context.currentChat;
-        if (!command || !chat) return;
-        const board = actions.boardForProject(chat.project_id);
-        button.disabled = true;
-        try {
-            await actions.api('/workflows/studio/tasks', {
-                method: 'POST',
-                body: {
-                    prompt: command.content,
-                    title: String(command.content || '').split('\n')[0].slice(0, 120),
-                    project_id: chat.project_id,
-                    board_key: board?.key,
-                    board_provider: board?.provider,
-                    route_mode: chat.route_mode || 'auto',
-                    execution_profile: chat.execution_profile || 'code',
-                    autonomy_level: chat.autonomy_level || 'full',
-                    permission_mode: chat.permission_profile?.mode || 'standard'
-                }
-            });
-            await actions.api(`/workflows/studio/commands/${commandId}`, { method: 'PATCH', body: { cancel: true } });
-            actions.toast('Queued request started in a new thread and ticket.');
-            await actions.refreshShell({ preserveConversation: true });
-        } catch (error) {
-            button.disabled = false;
-            actions.toast(error.message || 'Could not start a new thread for the queued request.', 'error');
-        }
-    }
-
-    async function cancelQueuedCommand(commandId) {
-        try {
-            await actions.api(`/workflows/studio/commands/${commandId}`, {
-                method: 'PATCH',
-                body: { cancel: true }
-            });
-            actions.toast('Queued guidance cancelled.');
-            await actions.refreshShell({ preserveConversation: true });
-        } catch (error) {
-            actions.toast(error.message || 'Could not cancel the guidance.', 'error');
         }
     }
 

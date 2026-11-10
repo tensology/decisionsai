@@ -15,6 +15,13 @@ from distr.core.db import Chat, WhatsAppMessage, get_session
 MAX_MEDIA_BYTES = 512 * 1024 * 1024
 
 
+def _media_mime(name: str, mime: str = '') -> str:
+    # WhatsApp exports Ogg audio as .oga, sometimes with a generic MIME type.
+    if Path(name).suffix.lower() == '.oga' and str(mime).split(';', 1)[0].strip().lower() in {'', 'application/octet-stream', 'application/ogg'}:
+        return 'audio/ogg'
+    return mime or mimetypes.guess_type(name)[0] or 'application/octet-stream'
+
+
 def _digest(path: Path) -> str:
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
@@ -37,7 +44,7 @@ def _record(path: Path, name: str, mime: str, identity: str, **metadata) -> dict
     if not path.is_file() or not 0 < path.stat().st_size <= MAX_MEDIA_BYTES:
         raise ValueError(f'Attachment {name} is missing, empty or exceeds the media limit. Retry after syncing media.')
     return {'id': hashlib.sha256(identity.encode()).hexdigest()[:24], 'name': Path(name).name,
-            'path': str(path.resolve()), 'mime_type': mime or mimetypes.guess_type(name)[0] or 'application/octet-stream',
+            'path': str(path.resolve()), 'mime_type': _media_mime(name, mime),
             'size': path.stat().st_size, 'sha256': _digest(path), **metadata}
 
 
@@ -359,6 +366,7 @@ def resolve_proposal_managed_attachment(proposal: dict[str, Any], attachment_id:
 
 
 def thread_attachments(chat_id: int) -> list[dict[str, Any]]:
+    from distr.core.incoming.transcription import with_transcript
     with get_session() as db:
         chat = db.get(Chat, int(chat_id))
         if chat is None:
@@ -367,7 +375,8 @@ def thread_attachments(chat_id: int) -> list[dict[str, Any]]:
             params = json.loads(chat.params or '{}')
         except (ValueError, TypeError):
             return []
-        return [item for item in params.get('incoming_attachments') or [] if isinstance(item, dict)]
+        return [with_transcript({**item, 'mime_type': _media_mime(str(item.get('name') or item.get('path') or ''), str(item.get('mime_type') or ''))})
+                for item in params.get('incoming_attachments') or [] if isinstance(item, dict)]
 
 
 def register_thread_attachments(chat_id: int, attachments: list[dict[str, Any]]) -> None:
@@ -382,7 +391,8 @@ def register_thread_attachments(chat_id: int, attachments: list[dict[str, Any]])
         if not path.is_relative_to(allowed) and not is_snapshot:
             raise ValueError('Thread attachment is outside managed attachment storage.')
         normalized.append(item if item.get('sha256') and item.get('id') else
-                          _record(path, str(item.get('name') or path.name), str(item.get('mime_type') or ''), str(path)))
+                          _record(path, str(item.get('name') or path.name), str(item.get('mime_type') or ''), str(path),
+                                  **({'transcript': str(item['transcript'])} if item.get('transcript') else {})))
     with get_session() as db:
         chat = db.get(Chat, int(chat_id))
         if chat is None:
@@ -411,10 +421,22 @@ def public_thread_attachments(chat_id: int) -> list[dict[str, Any]]:
 
 
 def required_thread_attachments(chat_id: int) -> list[dict[str, Any]]:
+    from distr.core.incoming.transcription import cache_transcript, transcript_path
+
     records = thread_attachments(chat_id)
+    transcripts = []
     for item in records:
         resolve_thread_attachment(chat_id, item['id'])
-    return records
+        if str(item.get('transcript') or '').strip():
+            try:
+                cache_transcript(item, str(item['transcript']).strip())
+            except (OSError, ValueError):
+                # A companion-cache failure must not prevent original-media submission.
+                pass
+        cache = transcript_path(item)
+        if cache and cache.is_file() and cache.stat().st_size:
+            transcripts.append(_record(cache, f"{item.get('name') or 'Media'}.transcript.txt", 'text/plain', f"transcript:{item['id']}"))
+    return records + transcripts
 
 
 def resolve_thread_attachment(chat_id: int, attachment_id: str) -> tuple[Path, dict[str, Any]]:

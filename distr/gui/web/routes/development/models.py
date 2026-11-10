@@ -179,6 +179,9 @@ class StudioCommandRequest(BaseModel):
 class StudioCommandUpdateRequest(BaseModel):
     content: Optional[str] = None
     cancel: bool = False
+    metadata: Optional[dict] = None
+    editing: Optional[bool] = None
+    expected_modified_at: Optional[str] = None
 
 
 class StudioThreadControlsRequest(BaseModel):

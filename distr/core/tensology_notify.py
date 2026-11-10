@@ -2,7 +2,8 @@
 
 A Tensology ticket can land while the user is looking at another part of
 Decisions (or another window entirely), so arriving work needs a visible
-message and an audible cue rather than only a new row in a list.
+message rather than only a new row in a list. Automatic audio is reserved
+for new Incoming proposals, before any approved execution starts.
 
 Everything here is best-effort: a missing sound file, an unsupported desktop
 platform, or a denied notification permission must never block the ticket from
@@ -148,8 +149,8 @@ def notify_tensology_ticket_incoming(
 ) -> None:
     """Alert the user that a Tensology ticket has arrived and is being worked.
 
-    Plays the incoming chime and shows a desktop notification naming the
-    project and ticket. Best-effort only.
+    Shows a desktop notification naming the project and ticket. Starting
+    execution stays silent; automatic sound belongs to new Incoming proposals.
     """
     ticket = ticket or {}
     project = project or {}
@@ -162,7 +163,6 @@ def notify_tensology_ticket_incoming(
     if chat_id:
         body = f"{body} (thread {chat_id})"
 
-    play_incoming_sound()
     show_desktop_notification(heading, body)
     try:
         from distr.core.orchestration_events import emit_user_notification

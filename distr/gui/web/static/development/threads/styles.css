@@ -2120,3 +2120,50 @@ button.thread-source-file { border: 0; background: transparent; padding: 0; curs
 .thread-cli-xterm-hosts > .thread-cli-xterm[hidden] {
     display: none !important;
 }
+
+/* Source media shares one compact preview size; filenames live in tooltips. */
+.thread-source-files { align-items: stretch; gap: 8px; }
+button.thread-source-file { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; width: 96px; height: 96px; padding: 8px; border: 1px solid var(--studio-line); border-radius: 8px; background: var(--studio-raised); overflow: hidden; }
+button.thread-source-file:hover { background: var(--studio-raised-2); }
+.thread-source-file svg { width: 52px; height: 52px; padding: 12px; box-sizing: border-box; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.thread-source-file.thread-media-image img { width: 100%; height: 52px; object-fit: contain; }
+.thread-source-file span { font-size: 12px; line-height: 16px; }
+button.thread-source-file:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
+
+.studio-tooltip-portal.thread-media-tooltip { max-width: min(360px, calc(100vw - 16px)); max-height: 50dvh; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.thread-source-file.thread-source-file-failed { width: 96px; height: 96px; align-items: center; justify-content: center; gap: 8px; padding: 8px; }
+
+.thread-command-queue { width: min(820px, calc(100% - 42px)); margin: 0 auto 8px; border: 1px solid var(--studio-line); border-radius: 12px; background: var(--studio-panel); pointer-events: auto; overflow: hidden; }
+.thread-command-queue > header { padding: 8px 12px; color: var(--studio-muted); font-size: 12px; }
+.queued-items { max-height: min(30dvh, 280px); overflow-y: auto; overscroll-behavior: contain; }
+.queued-item { display: flex; gap: 12px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--studio-line); }
+.queued-copy { flex: 1; min-width: 0; }
+.queued-copy p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: var(--studio-text); font-size: 13px; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.queued-copy > small { color: var(--studio-muted); font-size: 12px; }
+.queued-actions { display: flex; flex: 0 0 auto; gap: 4px; }
+.queued-actions button { display: grid; place-items: center; width: 28px; height: 32px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: var(--studio-muted); cursor: pointer; }
+.queued-actions button:hover { background: var(--studio-raised-2); color: var(--studio-text); }
+.queued-actions button:focus-visible, .queued-edit-status button:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
+.queued-actions button:disabled { opacity: .5; cursor: wait; }
+.queued-actions svg, .queued-files svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.queued-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.queued-files > span { display: flex; gap: 4px; align-items: center; max-width: 160px; color: var(--studio-muted); }
+.queued-files img { width: 32px; height: 24px; object-fit: contain; border-radius: 4px; }
+.queued-files small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.queued-error { margin: 0; padding: 8px 12px; color: var(--studio-danger-text); font-size: 12px; }
+.queued-edit-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--studio-line); color: var(--studio-muted); font-size: 12px; }
+.queued-edit-status button { border: 0; border-radius: 6px; background: transparent; color: var(--studio-text); min-height: 32px; cursor: pointer; }
+.is-editing-queue .composer-attachment-icon { width: 48px; height: 48px; }
+.is-editing-queue .composer-attachment-icon button { display: grid; place-items: center; width: 24px; height: 24px; top: -4px; right: -4px; font-size: 14px; }
+.is-editing-queue .composer-toolbar { flex-wrap: wrap; }
+.is-editing-queue .composer-attachment-strip { order: -1; flex-basis: 100%; height: auto; min-height: 64px; flex-wrap: wrap; overflow: visible; padding: 8px; gap: 12px; }
+.is-editing-queue .composer-toolbar-end { margin-left: auto; }
+@media (max-width: 640px) {
+    .queued-item { flex-wrap: wrap; gap: 4px; }
+    .queued-copy { flex-basis: 100%; }
+    .queued-actions { margin-left: auto; }
+    .queued-actions button, .queued-edit-status button { min-width: 44px; min-height: 44px; }
+    .queued-items { max-height: 26dvh; }
+    .is-editing-queue .composer-attachment-icon { width: 64px; height: 64px; }
+    .is-editing-queue .composer-attachment-icon button { min-width: 44px; min-height: 44px; }
+}

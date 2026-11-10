@@ -1,6 +1,7 @@
 import { encodedVariant, displayModelName, shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 import { providerLabel as lookupProviderLabel, catalogModels as lookupCatalogModels } from '../../shared/models.js';
 import { loadInstalledHarnesses } from '../../../shared/harnesses.js?v=20261022-harnesssrc';
+import { createSubmissionQueue } from './queue.js?v=20261110-queue1';
 // Owns threads composer rendering, interactions, and private view state.
 export function createThreadsComposer({ context, actions, el, token }) {
     const HARNESS_OPTIONS = [
@@ -20,6 +21,58 @@ export function createThreadsComposer({ context, actions, el, token }) {
         rows.forEach((row) => BASE_HARNESS_IDS.add(row.id));
     });
     let routePreviewTimer = null;
+    let editedCommand = null;
+    let previousDraft = null;
+    const queue = createSubmissionQueue({ context, actions, el, edit: restoreQueuedDraft });
+    el('queued-edit-cancel')?.addEventListener('click', cancelQueuedEdit);
+
+    function composerMetadata(text) {
+        return { skill_ids: selectedSkillIds(), attachments: attachedFilesPayload(),
+            composer: { text, attachments: context.attachments.map(({ preview_url, ...item }) => item), use_playwright: Boolean(context.usePlaywright) } };
+    }
+
+    function restoreQueuedDraft(command) {
+        if (editedCommand) throw new Error('Finish editing the current item first.');
+        previousDraft = { text: el('task-prompt').value, attachments: context.attachments, usePlaywright: context.usePlaywright };
+        editedCommand = command;
+        const draft = command.metadata?.composer;
+        context.editingCommandId = Number(command.id);
+        el('task-prompt').value = draft?.text || command.content || '';
+        const files = command.metadata?.attachments || [];
+        context.attachments = (draft?.attachments || files.map(file => ({ kind: 'file', label: file.name, reference: file.path, mime_type: file.mime_type, size: file.size }))).map(item => {
+            const index = files.findIndex(file => file.path === item.reference);
+            return { ...item, ...(index >= 0 && String(item.mime_type).startsWith('image/') ? { preview_url: `/api/workflows/studio/commands/${command.id}/attachments/${index}` } : {}) };
+        });
+        context.usePlaywright = Boolean(draft?.use_playwright);
+        el('queued-edit-status').classList.remove('hidden');
+        el('studio-composer').classList.add('is-editing-queue');
+        el('send-button').setAttribute('aria-label', 'Save queued item');
+        el('send-button').dataset.tooltip = 'Save queued item';
+        renderAttachments(); actions.resizePrompt(); el('task-prompt').focus();
+    }
+
+    function finishQueuedEdit() {
+        context.editingCommandId = null; editedCommand = null;
+        el('queued-edit-status').classList.add('hidden');
+        el('studio-composer').classList.remove('is-editing-queue');
+        el('send-button').setAttribute('aria-label', 'Submit instruction');
+        el('send-button').dataset.tooltip = 'Send';
+        if (previousDraft) {
+            el('task-prompt').value = previousDraft.text;
+            context.attachments = previousDraft.attachments;
+            context.usePlaywright = previousDraft.usePlaywright;
+        }
+        previousDraft = null;
+        actions.resizePrompt(); renderAttachments(); queue.render();
+    }
+
+    async function cancelQueuedEdit() {
+        if (!editedCommand || context.busy) return;
+        try {
+            queue.replace(await actions.api(`/workflows/studio/commands/${editedCommand.id}`, { method: 'PATCH', body: { editing: false, expected_modified_at: editedCommand.modified_at } }));
+            finishQueuedEdit();
+        } catch (error) { actions.toast(error.data?.detail || error.message, 'error'); }
+    }
 
     function harnessOptions() {
         return HARNESS_OPTIONS;
@@ -316,7 +369,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 name: item.label || '',
                 path: item.reference || '',
                 mime_type: item.mime_type || 'application/octet-stream',
-                size: Number(item.size || 0)
+                size: Number(item.size || 0),
+                ...(item.transcript ? { transcript: item.transcript } : {})
             }));
     }
 
@@ -392,29 +446,16 @@ export function createThreadsComposer({ context, actions, el, token }) {
         const control = el('composer-guidance-target');
         const select = el('composer-guidance-scope');
         if (!control || !select) return;
-        const active = activeWorkflowRun();
-        control.classList.toggle('hidden', !active);
+        const active = activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun);
+        control.classList.add('hidden');
         if (!active) {
             context.guidanceRunId = null;
             if (!context.editingCommandId) el('task-prompt').placeholder = 'Describe what you want changed';
             return;
         }
-        const runId = String(actions.workflowRunId(context.currentRun) || '');
-        const canSteer = workflowSteeringAvailable();
-        select.querySelector('option[value="workflow"]').disabled = !canSteer;
-        if (context.guidanceRunId !== runId) {
-            context.guidanceRunId = runId;
-            context.guidanceScope = canSteer ? 'workflow' : 'thread';
-        } else if (!canSteer && context.guidanceScope === 'workflow') {
-            context.guidanceScope = 'thread';
-        }
-        select.value = context.guidanceScope || 'workflow';
-        select.title = canSteer
-            ? 'Steer this workflow now, or queue a new instruction for the whole thread.'
-            : 'Workflow steering is unavailable at this checkpoint. Thread guidance will run after the workflow.';
-        el('task-prompt').placeholder = select.value === 'workflow'
-            ? 'Steer the active workflow'
-            : 'Queue guidance for the thread';
+        context.guidanceScope = 'thread';
+        select.value = 'thread';
+        if (!context.editingCommandId) el('task-prompt').placeholder = 'Queue the next instruction';
     }
 
     function changeGuidanceScope(event) {
@@ -449,6 +490,11 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     async function sendPromptOnce(prompt) {
+        const wasEditing = Boolean(context.editingCommandId);
+        if (activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun)) context.guidanceScope = 'thread';
+        if (editedCommand && Number(editedCommand.chat_id) !== Number(context.currentChat?.id)) {
+            actions.toast('Return to the original thread to finish editing this queued item.', 'error'); return;
+        }
         const hasImages = context.attachments.some((item) => item.sourceLabel === 'Image' || String(item.text || '').includes('MIME type: image/'));
         if (hasImages && !modelSupportsImages()) {
             actions.toast('This pinned model is not image-capable. Choose Auto or an image-capable model before sending.', 'error');
@@ -482,6 +528,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
             }
         }
         const fullPrompt = promptWithContext(prompt);
+        const queuedMetadata = composerMetadata(prompt);
         context.busy = true;
         actions.renderSidebar();
         el('send-button').disabled = true;
@@ -489,30 +536,27 @@ export function createThreadsComposer({ context, actions, el, token }) {
         actions.resizePrompt();
         try {
             if (context.editingCommandId) {
-                await actions.api(`/workflows/studio/commands/${context.editingCommandId}`, { method: 'PATCH', body: { content: fullPrompt } });
-                context.editingCommandId = null;
+                const updated = await actions.api(`/workflows/studio/commands/${context.editingCommandId}`, { method: 'PATCH', body: { content: fullPrompt, metadata: queuedMetadata, editing: false, expected_modified_at: editedCommand?.modified_at } });
+                queue.replace(updated);
+                finishQueuedEdit();
                 el('task-prompt').placeholder = 'Describe what DecisionsAI should build or change...';
                 actions.toast('Queued guidance updated.');
                 await actions.refreshShell({ preserveConversation: true });
             } else if (!context.currentChat) {
                 await createTask(fullPrompt);
-            } else if (activeWorkflowRun() && context.guidanceScope === 'workflow') {
-                const result = await actions.api(`/workflows/${context.currentWorkflow.id}/runs/${actions.workflowRunId(context.currentRun)}/steer`, {
-                    method: 'POST',
-                    body: { message: fullPrompt }
-                });
-                actions.toast(result.delivered ? 'Workflow guidance delivered to the current step.' : 'Workflow guidance queued for the next step.');
-                await actions.refreshShell({ preserveConversation: true });
-            } else if (actions.isActiveAgentRun(context.currentRun)) {
+            } else if (activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun)) {
                 const result = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/commands`, {
                     method: 'POST',
                     body: {
                         content: fullPrompt,
                         source: 'web',
-                        metadata: { skill_ids: selectedSkillIds() }
+                        command_type: 'followup',
+                        metadata: queuedMetadata
                     }
                 });
                 actions.toast(result.summary || 'Guidance queued.');
+                for (const command of result.artifacts || []) if (command.id) queue.replace(command);
+                queue.render();
                 await actions.refreshShell({ preserveConversation: true });
             } else {
                 await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/messages`, {
@@ -527,8 +571,10 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 });
                 await actions.refreshShell({ preserveConversation: false });
             }
-            context.attachments = [];
-            context.usePlaywright = false;
+            if (!wasEditing) {
+                context.attachments = [];
+                context.usePlaywright = false;
+            }
             renderAttachments();
         } catch (error) {
             el('task-prompt').value = prompt;
@@ -538,6 +584,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
             context.busy = false;
             actions.renderSidebar();
             actions.syncComposerAvailability();
+            queue.render();
         }
     }
 
@@ -2128,6 +2175,13 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 : 'Nothing selected';
     }
     return {
+        renderQueue() {
+            if (editedCommand && Number(editedCommand.chat_id) !== Number(context.currentChat?.id)) {
+                previousDraft = null;
+                finishQueuedEdit();
+            }
+            queue.render();
+        },
         isRouteMenuOpen,
         openComplexityDialog,
         actionLabel,

@@ -1,7 +1,7 @@
-import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261022-tips2';
+import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261110-queue1';
 import { createReports } from './reports/index.js?v=20261109-calendar-today5';
-import { createThreadLiveUpdates } from './threads/live.js?v=20261027f';
-import { createThreadSession } from './threads/session.js?v=20261030-chat-run-scope';
+import { createThreadLiveUpdates } from './threads/live.js?v=20261110-proposal-sounds1';
+import { createThreadSession } from './threads/session.js?v=20261110-queue1';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
@@ -10,11 +10,11 @@ import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261102-verify';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261107-nav68';
 
-import { createSidebar } from './sidebar/index.js?v=20261109-invoice-review2';
+import { createSidebar } from './sidebar/index.js?v=20261110-media-nav1';
 
 import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
-import { createIncoming } from './incoming/index.js?v=20261109-proposal-sync2';
+import { createIncoming } from './incoming/index.js?v=20261110-oga1';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
@@ -22,13 +22,13 @@ import { createBoards } from './boards/index.js?v=20261102-verify';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261107-nav68';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261031-completed-run-history';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-oga1';
 
-import { createThreadsComposer } from './threads/composer/index.js?v=20261106-composer-polish1';
+import { createThreadsComposer } from './threads/composer/index.js?v=20261110-queue1';
 
 import { createThreadCliMode } from './threads/cli-mode.js?v=20261106-cli-clean1';
 
-import { createThreadsInspector } from './threads/inspector/index.js?v=20261023-queueactions1';
+import { createThreadsInspector } from './threads/inspector/index.js?v=20261110-queue1';
 
 // Composition root: shared catalog and thread context, feature interfaces, navigation.
 
@@ -1777,6 +1777,10 @@ async function loadChat(chatId, options) {
         threads_composer.updateModeLabel();
         threads_composer.syncGuidanceScope();
         syncHeader();
+        if (!options?.quiet) {
+            if (!state.chats.some(row => Number(row.id) === Number(chat.id))) state.chats.unshift(chat);
+            sidebar.revealThread(chat);
+        }
         sidebar.renderSidebar();
         threads_transcript.renderConversation(chat);
         threads_inspector.renderInspector();
@@ -2610,6 +2614,7 @@ const sidebar = createSidebar({
         startBoardDevelopment: (...args) => startBoardDevelopment(...args),
         startNewDevelopmentFromSidebar: (...args) => startNewDevelopmentFromSidebar(...args),
         systemFileManagerLabel: (...args) => systemFileManagerLabel(...args),
+        threadIsProcessing: (...args) => threadIsProcessing(...args),
         threadRowContentHtml: (...args) => threadRowContentHtml(...args),
         updateThreadTimer: (...args) => updateSidebarThreadTime(...args),
         toast: (...args) => toast(...args),
@@ -3129,6 +3134,7 @@ const threads_inspector = createThreadsInspector({
         }
     },
     actions: {
+        renderCommandQueue: () => threads_composer.renderQueue(),
         actionLabel: (...args) => threads_composer.actionLabel(...args),
         api: (...args) => api(...args),
         boardForProject: (...args) => boardForProject(...args),

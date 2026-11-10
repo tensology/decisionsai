@@ -8,6 +8,7 @@ export function createSidebar({ context, actions, el }) {
     const state = {
         pinnedBoardKeys: [],
         collapsedBoardKeys: new Set(),
+        expandedThreadBoards: new Set(),
         boardsCollapsed: false,
         boardsExpanded: false,
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
@@ -147,6 +148,15 @@ export function createSidebar({ context, actions, el }) {
         el('recents-show-more').classList.toggle('hidden', state.showAllRecents || recentThreads.length <= 5);
 
         document.querySelectorAll('[data-board-toggle]').forEach(bindProjectToggle);
+        document.querySelectorAll('[data-project-threads-more]').forEach(button => {
+            button.addEventListener('click', () => {
+                const key = button.dataset.projectThreadsMore;
+                if (state.expandedThreadBoards.has(key)) state.expandedThreadBoards.delete(key);
+                else state.expandedThreadBoards.add(key);
+                renderSidebar();
+                document.querySelector(`[data-project-threads-more="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+            });
+        });
         document.querySelectorAll('[data-board-select]').forEach((button) => {
             button.addEventListener('click', () => actions.openBoardFromSidebar(button.dataset.boardSelect));
             button.addEventListener('contextmenu', (event) => {
@@ -518,26 +528,26 @@ export function createSidebar({ context, actions, el }) {
         });
         const hasTasks = chats.length > 0;
         const collapsed = hasTasks && state.collapsedBoardKeys.has(board.key);
-        const orderedChats = chats
-            .slice()
-            .sort(
-                (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || String(b.modified_date || '').localeCompare(String(a.modified_date || ''))
-            );
-        const rows = orderedChats
-            .map((chat) => {
-                const active = isThreadActive(chat);
-                return threadRowHtml(chat, active, Boolean(chat.pinned));
-            })
-            .join('');
+        const orderedChats = chats.slice().sort((a, b) => {
+            const first = Date.parse(a.created_date), second = Date.parse(b.created_date);
+            return (Number.isFinite(first) && Number.isFinite(second) ? second - first : 0) || Number(b.id) - Number(a.id);
+        });
+        const expanded = state.expandedThreadBoards.has(board.key);
+        const visibleChats = expanded ? orderedChats : orderedChats.slice(0, 4);
+        const rows = visibleChats.map(chat => threadRowHtml(chat, isThreadActive(chat), Boolean(chat.pinned))).join('');
+        const showMore = orderedChats.length > 4
+            ? `<button type="button" class="project-threads-more" data-project-threads-more="${actions.escapeHtml(board.key)}" aria-expanded="${expanded}">${expanded ? 'Show less' : 'Show more'}</button>` : '';
+        const running = context.chats.some(chat => threadBoard(chat)?.key === board.key && actions.threadIsProcessing?.(chat));
+        const busyIcon = running ? `<span class="folder-running-glow" aria-hidden="true">${boardFolderIconHtml(true)}</span>` : '';
         const selected = !['terminals', 'terminals_home'].includes(context.workspaceMode) && context.selectedBoardKey === board.key;
         const projectRow = `<div class="project-row${selected ? ' active' : ''}">
-            ${hasTasks ? `<button class="project-toggle project-folder${collapsed ? '' : ' expanded'}" type="button" data-board-toggle="${actions.escapeHtml(board.key)}" aria-expanded="${String(!collapsed)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${actions.escapeHtml(board.name || 'board')} threads"><span class="folder-icon">${boardFolderIconHtml(true)}</span></button>` : `<span class="project-toggle project-folder empty" aria-hidden="true"><span class="folder-icon">${boardFolderIconHtml(false)}</span></span>`}
+            ${hasTasks ? `<button class="project-toggle project-folder${collapsed ? '' : ' expanded'}" type="button" data-board-toggle="${actions.escapeHtml(board.key)}" aria-expanded="${String(!collapsed)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${actions.escapeHtml(board.name || 'board')} threads"><span class="folder-icon">${boardFolderIconHtml(true)}${busyIcon}</span></button>` : `<span class="project-toggle project-folder empty" aria-hidden="true"><span class="folder-icon">${boardFolderIconHtml(false)}</span></span>`}
             <button class="project-select" type="button" data-board-select="${actions.escapeHtml(board.key)}"${selected ? ' aria-current="true"' : ''}><span>${actions.escapeHtml(board.name || 'Ticket board')}</span></button>
             <div class="board-row-tail${hasTasks ? ' has-threads' : ''}">${boardTerminalActionHtml(board)}<button class="board-row-action board-new-chat" type="button" data-board-new-chat="${actions.escapeHtml(board.key)}" aria-label="New thread in ${actions.escapeHtml(board.name || 'board')}" title="New thread in board"><span aria-hidden="true">+</span></button></div>
         </div>`;
-        return `<section class="project-group" data-board-group="${actions.escapeHtml(board.key)}">
+        return `<section class="project-group${running ? ' has-running-thread' : ''}" data-board-group="${actions.escapeHtml(board.key)}">
             ${projectRow}
-            <div class="task-list${hasTasks && !collapsed ? '' : ' hidden'}">${rows}</div>
+            <div class="task-list${hasTasks && !collapsed ? '' : ' hidden'}">${rows}${showMore}</div>
         </section>`;
     }
 
@@ -550,17 +560,15 @@ export function createSidebar({ context, actions, el }) {
             const closing = !list.classList.contains('hidden');
             const boardKey = String(button.dataset.boardToggle || '');
             const boardName = group.querySelector('[data-board-select] span')?.textContent?.trim() || 'board';
-            if (closing) state.collapsedBoardKeys.add(boardKey);
+            if (closing) { state.collapsedBoardKeys.add(boardKey); state.expandedThreadBoards.delete(boardKey); }
             else state.collapsedBoardKeys.delete(boardKey);
             try {
                 window.localStorage.setItem('decisions-development-collapsed-boards', JSON.stringify(Array.from(state.collapsedBoardKeys)));
             } catch (_) {
                 /* local preference only */
             }
-            list.classList.toggle('hidden', closing);
-            button.classList.toggle('expanded', !closing);
-            button.setAttribute('aria-expanded', String(!closing));
-            button.setAttribute('aria-label', `${closing ? 'Expand' : 'Collapse'} ${boardName} threads`);
+            renderSidebar();
+            document.querySelector(`[data-board-toggle="${CSS.escape(boardKey)}"]`)?.focus({ preventScroll: true });
         });
     }
 
@@ -824,6 +832,19 @@ export function createSidebar({ context, actions, el }) {
             state.recentsExpanded = true;
             state.showAllRecents = true;
             renderSidebar();
+        },
+        revealThread(chat) {
+            const board = threadBoard(chat);
+            if (!board) return;
+            state.collapsedBoardKeys.delete(board.key);
+            state.expandedThreadBoards.delete(board.key);
+            state.boardsCollapsed = false;
+            const unpinned = context.boards.filter(row => !state.pinnedBoardKeys.includes(row.key));
+            if (unpinned.findIndex(row => row.key === board.key) >= 6) state.boardsExpanded = true;
+            try {
+                window.localStorage.setItem('decisions-development-collapsed-boards', JSON.stringify([...state.collapsedBoardKeys]));
+                window.localStorage.setItem('decisions-development-boards-collapsed', 'false');
+            } catch (_) {}
         },
         renderSidebar,
         threadBoard

@@ -562,6 +562,8 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
     except Exception:
         pass
 
+    from distr.core.incoming.project_links import apply_project_links
+    apply_project_links(items, refresh=network)
     items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
     counts: dict[str, int] = {}
     for row in items:

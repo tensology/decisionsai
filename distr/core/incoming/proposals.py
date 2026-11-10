@@ -193,6 +193,8 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
                 "sender_name": str(ev.get("sender_name") or ""),
                 "sender_address": str(ev.get("sender_address") or ""),
                 "direction": str(ev.get("direction") or ""),
+                **({"original_source": dict(ev['original_source'])} if isinstance(ev.get('original_source'), dict) else {}),
+                **({key: str(ev[key]) for key in ('transcript', 'caption', 'media_type') if ev.get(key)}),
             }
             for ev in (row.get("evidence") or []) + (row.get('context_evidence') or [])
             if isinstance(ev, dict)
@@ -556,6 +558,11 @@ _TRIAGE_SYSTEM = (
     "Return JSON only with keys: is_actionable, project_id, related_ticket_id, title, "
     "description, tasks, priority, estimated_minutes, confidence, rationale. "
     "Use related_ticket_id when this extends an existing ticket. "
+    "Choose the project from candidate_projects using the actual request and conversation context. "
+    "A participant may work on several projects: do not assign by their name alone. "
+    "Outbound messages are context from the developer, not new client requests on their own. "
+    "For independent requests about different projects return {proposals: [...]} with one entry per request, "
+    "each containing exact inbound source_message_ids. Never assign the same source message to two projects. "
     "If not actionable, project_id may be null."
 )
 
@@ -669,10 +676,11 @@ def _group_conversations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _worth_triaging(conversation: dict[str, Any]) -> bool:
     """Cheap pre-filter: never spend an LLM call on noise, our own messages or tests."""
     rows = sorted(conversation["items"], key=lambda row: str(row.get("created_at") or ""))
-    latest = rows[-1]
-    sender = str(latest.get("sender") or "")
-    if latest.get("from_me") or str(latest.get("direction") or "").lower() == "outbound":
+    inbound = [row for row in rows if not row.get('from_me') and str(row.get('direction') or '').lower() != 'outbound']
+    if not inbound:
         return False
+    latest = inbound[-1]
+    sender = str(latest.get("sender") or "")
     if _NOISE_RE.search(sender) or _NOISE_RE.search(str(latest.get("addr") or "")):
         return False
     if _SELF_RE.search(sender):
@@ -694,6 +702,7 @@ def _triage_prompt(conversation: dict[str, Any], projects: list[dict[str, Any]])
             "id": str(row.get("source_message_id") or row.get("key") or ""),
             "sent_at": str(row.get("created_at") or ""),
             "sender": str(row.get("sender") or ""),
+            "direction": 'outbound' if row.get('from_me') or row.get('direction') == 'outbound' else 'inbound',
             "body": safe_source_body(str(row.get("text") or ""))[:8000],
         }
         for row in rows
@@ -746,8 +755,8 @@ def _proposal_from_triage(conversation: dict[str, Any], project: dict[str, Any],
         "participant": conversation["participant"],
         "status": "candidate",
         "created_at": str(latest.get("created_at") or ""),
-        "message_ids": [str(row.get("source_message_id")) for row in rows if row.get("source_message_id") and row.get('direction') != 'outbound'],
-        "source_context_message_ids": [str(row.get('source_message_id')) for row in rows if row.get('source_message_id') and row.get('direction') == 'outbound'],
+        "message_ids": [str(row.get("source_message_id")) for row in rows if row.get("source_message_id") and not row.get('from_me') and row.get('direction') != 'outbound'],
+        "source_context_message_ids": [str(row.get('source_message_id')) for row in rows if row.get('source_message_id') and (row.get('from_me') or row.get('direction') == 'outbound')],
         "can_push_to_thread": True,
         "evidence": [{'id': str(row.get('source_message_id') or ''), 'sent_at': str((row.get('source_sent_at') if conversation['source'] == 'whatsapp' else row.get('created_at')) or ''),
                       'body': str(row.get('text') or ''), 'sender_name': str(row.get('sender') or ''),
@@ -774,28 +783,61 @@ def _triage_conversations(
     for conversation in _group_conversations(items):
         if not _worth_triaging(conversation):
             continue
+        linked_ids = {int(value) for row in conversation['items'] for value in (row.get('project_ids') or [])
+                      if not isinstance(value, bool) and str(value).isdigit()}
+        if any(row.get('project_links_authoritative') for row in conversation['items']) and not linked_ids:
+            continue  # A canonical link with unmapped projects cannot fall back to unrelated projects.
+        if conversation.get('project_id') and not linked_ids:
+            linked_ids.add(conversation['project_id'])
+        if not linked_ids:
+            continue  # No explicit source/project link: do not send messages to AI.
+        candidates = [project for project in projects if project['id'] in linked_ids]
+        if not candidates:
+            continue
+        candidate_ids = {project['id'] for project in candidates}
         try:
-            raw = (complete or _default_complete)(provider, model, _triage_prompt(conversation, projects), settings)
+            raw = (complete or _default_complete)(provider, model, _triage_prompt(conversation, candidates), settings)
         except Exception:
             continue
         data = _parse_triage(raw)
-        if not data or not data.get("is_actionable"):
+        if not data:
             continue
-        try:
-            suggested = data.get("project_id")
-            project = by_id.get(int(suggested)) if not isinstance(suggested, bool) and str(suggested).strip().isdigit() else None
-        except (TypeError, ValueError):
-            project = None
-        if project is None and conversation.get("project_id"):
-            # The model could not pick one; fall back to the conversation's linked project.
-            project = by_id.get(conversation["project_id"])
-        if project is None:
-            reason = conversation.get('routing_error') or ('The linked project is unavailable for triage.' if conversation.get('project_id') else '')
-            if reason:
-                import logging
-                logging.getLogger(__name__).warning('Incoming conversation cannot be classified: %s', reason)
-            continue  # Tensology also refuses to propose projectless work
-        out.append(_proposal_from_triage(conversation, project, data))
+        split = isinstance(data.get('proposals'), list)
+        records = data['proposals'] if split else [data]
+        assigned, batch = set(), []
+        inbound_ids = {str(row.get('source_message_id')) for row in conversation['items']
+                       if row.get('source_message_id') and not row.get('from_me') and row.get('direction') != 'outbound'}
+        invalid = len(records) > 25
+        for record in records[:25]:
+            if not isinstance(record, dict) or not record.get('is_actionable'):
+                continue
+            suggested = record.get('project_id')
+            project = by_id.get(int(suggested)) if not isinstance(suggested, bool) and str(suggested).strip().isdigit() and int(suggested) in candidate_ids else None
+            if project is None and conversation.get('project_id') and len(candidate_ids) == 1:
+                project = by_id.get(conversation['project_id'])
+            if project is None:
+                if conversation.get('routing_error'):
+                    import logging
+                    logging.getLogger(__name__).warning('Incoming conversation cannot be classified: %s', conversation['routing_error'])
+                continue
+            scoped = conversation
+            if split:
+                ids = record.get('source_message_ids')
+                if (not isinstance(ids, list) or not ids or any(not isinstance(value, str) for value in ids)
+                        or not set(ids).issubset(inbound_ids) or assigned.intersection(ids)):
+                    invalid = True
+                    break
+                assigned.update(ids)
+                scoped = {**conversation, 'items': [row for row in conversation['items']
+                          if str(row.get('source_message_id')) in ids or row.get('from_me') or row.get('direction') == 'outbound']}
+            proposal = _proposal_from_triage(scoped, project, record)
+            if split:
+                import hashlib
+                identity = hashlib.sha256('|'.join(sorted(proposal['message_ids'])).encode()).hexdigest()[:16]
+                proposal['id'] += ':' + identity
+            batch.append(proposal)
+        if not invalid:
+            out.extend(batch)
     return out
 
 
@@ -941,6 +983,7 @@ def _combine_frac_proposals(first: dict[str, Any], second: dict[str, Any]) -> di
         "evidence": evidence,
         "attachments": _dedupe_preserve(list(first.get("attachments") or []) + list(second.get("attachments") or [])),
         "merged_from": [str(first.get("id") or ""), str(second.get("id") or "")],
+        "source_scope": [ref for row in (first, second) for ref in (row.get("source_scope") or [{"source": row.get("source"), "source_thread_id": row.get("source_thread_id")}])],
         "status": "merged",
     }
 
@@ -959,6 +1002,7 @@ def _attachment_dedupe_key(item: dict[str, Any]) -> str:
 def _merge_proposal_attachments(first: dict[str, Any], second: dict[str, Any], project_id: int | None) -> list[dict[str, Any]]:
     """Resolve both originals through ``ensure_proposal_attachments``, then dedupe."""
     from distr.core.incoming.media import ensure_proposal_attachments
+    from distr.core.incoming.transcription import with_transcript
 
     combined: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -983,7 +1027,7 @@ def _merge_proposal_attachments(first: dict[str, Any], second: dict[str, Any], p
             if key in seen:
                 continue
             seen.add(key)
-            combined.append(item)
+            combined.append(with_transcript(item) if item.get('path') else item)
     return combined
 
 
@@ -1000,6 +1044,10 @@ def merge_proposals(first: dict[str, Any], second: dict[str, Any], complete=None
     from distr.core.incoming.media import register_thread_attachments
 
     first, second = apply_project_corrections([first, second])
+    from distr.core.incoming.project_links import source_project_index, proposal_in_scope
+    scope = source_project_index()
+    if not all(proposal_in_scope(row, scope) for row in (first, second)):
+        raise ValueError('Link both source conversations to this project before merging their proposals.')
     if not first.get('project_id') or first.get('project_id') != second.get('project_id'):
         raise ValueError('Only proposals on the same project can be merged.')
     settings = load_settings_from_db()
@@ -1036,6 +1084,9 @@ def merge_proposals(first: dict[str, Any], second: dict[str, Any], complete=None
             "id": item.get("id"),
             "download_error": item.get("download_error") or item.get("error") or "",
             "api_path": item.get("api_path") or "",
+            "transcript": item.get("transcript") or "",
+            "caption": item.get("caption") or "",
+            "kind": item.get("kind") or "",
         }
         for item in attachments
     ]
@@ -1056,6 +1107,13 @@ def merge_proposals(first: dict[str, Any], second: dict[str, Any], complete=None
         activate=False,
     )
     register_thread_attachments(int(chat_id), [item for item in attachments if item.get("path")])
+    from distr.core.incoming.transcription import prepare_thread_transcripts
+    from distr.core.incoming.media import thread_attachments
+    prepare_thread_transcripts(int(chat_id))
+    prepared = {item['id']: item for item in thread_attachments(int(chat_id))}
+    for item in merged['attachments']:
+        if item.get('id') in prepared:
+            item['transcript'] = prepared[item['id']].get('transcript') or item.get('transcript') or ''
 
     # Clear both originals locally and on Tensology so intake never recreates them.
     for proposal in (first, second):
@@ -1919,6 +1977,9 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
     """
     from distr.core.workflow.development_threads import ensure_development_thread
     proposal = apply_project_corrections([proposal])[0]
+    from distr.core.incoming.project_links import proposal_in_scope
+    if not proposal_in_scope(proposal):
+        raise ValueError('Link this source conversation to the selected project before creating a thread.')
     project_id = proposal.get("project_id")
     proposal_id = _tensology_id(proposal.get("id"))
     client = None
@@ -1954,6 +2015,8 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
     project_id = proposal.get('project_id') if proposal.get('project_corrected') else project_id
     if not project_id:
         raise ValueError('Select an existing project before creating the thread.')
+    if not proposal_in_scope({**proposal, 'project_id': project_id}):
+        raise ValueError('This source is no longer linked to the selected project. Refresh Incoming.')
     from distr.core.incoming.media import ensure_proposal_attachments, register_thread_attachments
 
     # Per Paul: a file that cannot be fetched must not block the thread. Fetch
@@ -1981,6 +2044,8 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
 
     register_source_context(int(chat_id), {**proposal, "project_id": int(project_id)})
     ticket_report = register_thread_attachments(int(chat_id), attachments) or {}
+    from distr.core.incoming.transcription import prepare_thread_transcripts
+    prepare_thread_transcripts(int(chat_id))
     _record_attachment_report(int(chat_id), failed_attachments, ticket_report)
     if start_work:
         from distr.core.chat import _chat_params
@@ -2045,6 +2110,24 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
     return int(chat_id)
 
 
+def _scoped_proposals(rows):
+    from distr.core.incoming.project_links import source_project_index, proposal_in_scope
+    from distr.core.incoming.proposal_sync import source_identity
+    index, result, seen = source_project_index(), [], set()
+    # Canonical shared records take precedence over local fallback snapshots.
+    for row in sorted(rows, key=lambda item: item.get('origin') != 'tensology'):
+        if not proposal_in_scope(row, index):
+            continue
+        try:
+            key = source_identity(row)
+        except ValueError:
+            key = _proposal_handoff_key(row)
+        if key not in seen:
+            seen.add(key)
+            result.append(row)
+    return result
+
+
 def list_incoming_proposals(*, limit: int = 100, refresh_local: bool = True, force: bool = False, reconcile_request_id: str | None = None) -> dict[str, Any]:
     """Return the Incoming proposal list: Tensology (canonical) first, then local.
 
@@ -2058,6 +2141,11 @@ def list_incoming_proposals(*, limit: int = 100, refresh_local: bool = True, for
     if not force:
         cached = _cached_proposals_list()
         if cached is not None:
+            cached['proposals'] = _scoped_proposals(cached.get('proposals') or [])
+            cached['counts'] = {}
+            for row in cached['proposals']:
+                source = row.get('source') or ''
+                cached['counts'][source] = cached['counts'].get(source, 0) + 1
             from distr.core.incoming.proposal_sync import last_result
             latest = last_result()
             if latest.get('state') != 'idle' and not (cached.get('tensology') or {}).get('error'):
@@ -2081,6 +2169,8 @@ def list_incoming_proposals(*, limit: int = 100, refresh_local: bool = True, for
         if force:
             from distr.core.tensology_project_sync import sync_pinned_projects
             sync_pinned_projects(force=True)
+            from distr.core.incoming.project_links import project_links
+            project_links(force=True)
 
         project_map = _project_map()
         if force:
@@ -2120,7 +2210,7 @@ def list_incoming_proposals(*, limit: int = 100, refresh_local: bool = True, for
             if live and any(source_instant(item.get('sent_at')) for item in saved.get('evidence') or [] if isinstance(item, dict)):
                 combined['evidence'] = saved['evidence']
             by_key[key] = combined
-        local = list(by_key.values())
+        local = _scoped_proposals(list(by_key.values()))
         if force and not tensology_error:
             from distr.core.incoming.proposal_sync import reconcile
             remote_rows, sync_result = reconcile(apply_project_corrections(local), remote_rows, request_id=reconcile_request_id)
@@ -2151,7 +2241,7 @@ def list_incoming_proposals(*, limit: int = 100, refresh_local: bool = True, for
     for row in proposals:
         id_counts[str(row.get('id'))] = id_counts.get(str(row.get('id')), 0) + 1
     proposals = [_restored_card(row) if row.get('origin') == 'local' and id_counts[str(row.get('id'))] > 1 else row for row in proposals]
-    proposals = [_dated_proposal(_with_source_dates(row)) for row in apply_project_corrections(proposals)]
+    proposals = [_dated_proposal(_with_source_dates(row)) for row in _scoped_proposals(apply_project_corrections(proposals))]
     proposals.sort(key=proposal_source_order_key)
     from distr.core.settings import load_settings_from_db
     auto_accept = load_settings_from_db().get("incoming_proposals_auto_accept") is True
