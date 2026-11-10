@@ -98,7 +98,7 @@ def source_project_index(*, refresh=False):
     return index
 
 
-def proposal_in_scope(proposal, index=None):
+def proposal_in_scope(proposal, index=None, *, allow_review=False):
     index = source_project_index() if index is None else index
     source = str(proposal.get('source') or '')
     thread = str(proposal.get('source_thread_id') or (proposal.get('source_conversation') or {}).get('thread_id') or '')
@@ -110,6 +110,9 @@ def proposal_in_scope(proposal, index=None):
                                            if isinstance(item, dict) and isinstance(item.get('original_source'), dict)]
     refs = [{'source': source, 'source_thread_id': thread}, *refs]
     selected = proposal.get('project_id')
+    if allow_review and selected is None and proposal.get('needs_project') is True:
+        return all(isinstance(ref, dict) and bool(index.get((
+            str(ref.get('source') or ref.get('channel') or ''), str(ref.get('source_thread_id') or '')), set())) for ref in refs)
     return type(selected) is int and bool(refs) and all(
         selected in index.get((str(ref.get('source') or ref.get('channel') or ''), str(ref.get('source_thread_id') or '')), set())
         for ref in refs if isinstance(ref, dict)) and all(isinstance(ref, dict) for ref in refs)

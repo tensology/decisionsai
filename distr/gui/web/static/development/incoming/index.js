@@ -840,30 +840,35 @@ export function createIncoming({ context, actions, el }) {
         }, Math.min(2_147_483_647, Math.max(1, Math.min(...deadlines) - Date.now() + 1)));
     }
 
+    function proposalNeedsProject(proposal) {
+        return proposal?.needs_project === true || !proposal?.project_id;
+    }
+
     function incomingProposalRowHtml(proposal) {
         const expired = proposalIsExpired(proposal);
+        const needsProject = proposalNeedsProject(proposal);
         const source = String(proposal.source_label || proposal.source || '').trim();
         const project = String(proposal.project_name || (proposal.project_id ? `Project ${proposal.project_id}` : '')).trim();
         const origin = proposal.origin === 'tensology' ? 'Synced from Tensology' : 'Detected here';
         const description = String(proposal.description || proposal.rationale || '').trim();
         const proposalId = actions.escapeHtml(proposal.id || '');
         const tooltip = proposalFirstMessage(proposal) || `${origin} · ${source}`;
-        const push = proposal.project_id
+        const push = !needsProject
             ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}" title="Creates the thread and hands it to Decisions, like Send to Decisions.">Create Thread</button>`
-            : `<span class="proposal-btn muted" title="Link this conversation to a project first">No project</span>`;
+            : `<button type="button" class="proposal-btn primary" data-incoming-proposal-confirm="${proposalId}">Confirm project</button>`;
         const dismiss = `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
         const preparing = proposalReadRequest?.key === String(proposal.id);
         const read = `<button type="button" class="proposal-btn ghost${preparing ? ' is-loading' : ''}" data-incoming-proposal-read="${proposalId}" title="Read this proposal aloud"${proposalReadRequest ? ' disabled' : ''}${preparing ? ' aria-busy="true"' : ''}>${preparing ? 'Preparing...' : 'Read to me'}</button>`;
         const projectKey = actions.escapeHtml(String(proposal.project_id || ''));
-        return `<article class="proposal-card${expired ? ' proposal-expired' : ''}" data-incoming-proposal-open="${proposalId}" data-proposal-project="${projectKey}" draggable="true" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
+        return `<article class="proposal-card${expired ? ' proposal-expired' : ''}" data-incoming-proposal-open="${proposalId}" data-proposal-project="${needsProject ? '' : projectKey}" draggable="${!needsProject}" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
             ${expired ? '<span class="proposal-expired-ribbon">Expired</span>' : ''}
             <div class="proposal-head">
-                <p class="proposal-project${project ? '' : ' none'}">${actions.escapeHtml(project || 'Not linked to a project')}</p>
+                <p class="proposal-project${needsProject ? ' none' : ''}">${actions.escapeHtml(needsProject ? 'Confirm project' : project)}</p>
                 <h3 class="proposal-title">${actions.escapeHtml(proposal.title || 'Proposal')}</h3>
                 <span class="proposal-source" title="${actions.escapeHtml(tooltip)}" data-incoming-proposal-open="${proposalId}">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span>
             </div>
             ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
-            <div class="proposal-actions">${push}${dismiss}${read}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button><span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span></span></div>
+            <div class="proposal-actions">${push}${dismiss}${read}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"></path></svg></button>${needsProject ? '' : '<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span>'}</span></div>
         </article>`;
     }
 
@@ -977,7 +982,7 @@ export function createIncoming({ context, actions, el }) {
         const first = proposalById(sourceId);
         const second = proposalById(targetId);
         if (!first || !second || String(first.id) === String(second.id)) return;
-        if (!first.project_id || String(first.project_id) !== String(second.project_id)) {
+        if (proposalNeedsProject(first) || proposalNeedsProject(second) || String(first.project_id) !== String(second.project_id)) {
             actions.toast('Only proposals on the same project can be merged.', 'error');
             return;
         }
@@ -1669,7 +1674,7 @@ export function createIncoming({ context, actions, el }) {
         if (!proposal) return;
         closeProposalDetail();
         const source = String(proposal.source_label || proposal.source || '').trim();
-        const project = String(proposal.project_name || 'Not linked to a project').trim();
+        const project = String(proposal.project_name || 'Confirm project').trim();
         const conversation = proposal.source_conversation || {};
         const tasks = proposal.tasks || [];
         const files = proposal.attachments || [];
@@ -1680,11 +1685,12 @@ export function createIncoming({ context, actions, el }) {
             ['Priority', proposal.priority || ''],
             ['Source thread', conversation.thread_id || ''],
         ].filter((row) => row[1]);
-        const projects = [...(context.projects || [])];
-        if (proposal.project_id && !projects.some((p) => Number(p.id) === Number(proposal.project_id))) {
+        const linkedCandidates = Array.isArray(proposal.candidate_projects);
+        const projects = [...(linkedCandidates ? proposal.candidate_projects : (context.projects || []))];
+        if (!linkedCandidates && proposal.project_id && !projects.some((p) => Number(p.id) === Number(proposal.project_id))) {
             projects.push({ id: proposal.project_id, name: project });
         }
-        const projectOptions = '<option value="">Choose project</option>' + projects
+        const projectOptions = '<option value="">Choose linked project</option>' + projects
             .sort((a, b) => String(a.name).localeCompare(String(b.name)))
             .map((p) => `<option value="${Number(p.id)}"${Number(p.id) === Number(proposal.project_id) ? ' selected' : ''}>${actions.escapeHtml(p.name)}</option>`).join('');
         const details = `<div class="proposal-project-field"><label for="proposal-project-select">Project</label>
@@ -1715,7 +1721,7 @@ export function createIncoming({ context, actions, el }) {
             </div>
             <footer>
                 <button type="button" class="proposal-btn ghost" data-proposal-close>Close</button>
-                <button type="button" class="proposal-btn primary" data-proposal-thread="${actions.escapeHtml(proposal.id || '')}"${proposal.project_id ? '' : ' disabled'}>Create Thread</button>
+                <button type="button" class="proposal-btn primary" data-proposal-thread="${actions.escapeHtml(proposal.id || '')}"${proposalNeedsProject(proposal) ? ' disabled' : ''}>Create Thread</button>
             </footer>
         </div>`;
         document.body.appendChild(overlay);
@@ -1755,6 +1761,12 @@ export function createIncoming({ context, actions, el }) {
             if (!current) return;
             const selectedId = Number(projectSelect.value);
             if (!selectedId) { projectSelect.value = String(current.project_id || ''); return; }
+            if (Array.isArray(current.candidate_projects) && !current.candidate_projects.some((item) => Number(item.id) === selectedId)) {
+                projectSelect.value = String(current.project_id || '');
+                projectStatus.textContent = 'Choose one of this source\'s linked projects.';
+                projectStatus.classList.add('error');
+                return;
+            }
             projectSelect.disabled = true;
             threadButton.disabled = true;
             projectStatus.textContent = 'Saving...';
@@ -1766,6 +1778,7 @@ export function createIncoming({ context, actions, el }) {
                 if (!result?.success || !result.proposal) throw new Error(result?.error || 'Could not save the project.');
                 state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(proposalId) ? result.proposal : row);
                 proposalId = result.proposal.id;
+                threadButton.dataset.proposalThread = String(proposalId);
                 projectSelect.value = String(result.proposal.project_id);
                 projectStatus.textContent = 'Saved';
                 renderIncomingWorkspace();
@@ -1777,7 +1790,7 @@ export function createIncoming({ context, actions, el }) {
                 projectStatus.classList.add('error');
             } finally {
                 projectSelect.disabled = false;
-                threadButton.disabled = !proposalById(proposalId)?.project_id;
+                threadButton.disabled = proposalNeedsProject(proposalById(proposalId));
                 projectSelect.focus();
             }
         });
@@ -2022,6 +2035,10 @@ export function createIncoming({ context, actions, el }) {
         if (button?.disabled || dismissExpiredBusy || proposalMutations.size) return;
         const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
         if (!proposal) return;
+        if (proposalNeedsProject(proposal)) {
+            openProposalDetail(proposalId);
+            return;
+        }
         const original = button.textContent;
         proposalMutations.add(String(proposalId));
         button.disabled = true;
@@ -2117,6 +2134,12 @@ export function createIncoming({ context, actions, el }) {
             proposalsList.querySelectorAll('[data-incoming-proposal-thread]').forEach((button) =>
                 button.addEventListener('click', () => pushProposalToThread(button.dataset.incomingProposalThread, button))
             );
+            proposalsList.querySelectorAll('[data-incoming-proposal-confirm]').forEach((button) =>
+                button.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    openProposalDetail(button.dataset.incomingProposalConfirm);
+                })
+            );
             proposalsList.querySelectorAll('[data-incoming-proposal-dismiss]').forEach((button) =>
                 button.addEventListener('click', () => dismissProposal(button.dataset.incomingProposalDismiss, button))
             );
@@ -2129,7 +2152,7 @@ export function createIncoming({ context, actions, el }) {
             );
             proposalsList.querySelectorAll('[data-incoming-proposal-open]').forEach((node) =>
                 node.addEventListener('click', (event) => {
-                    if (event.target.closest('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss],[data-incoming-proposal-copy],[data-incoming-proposal-read]')) return;
+                    if (event.target.closest('[data-incoming-proposal-thread],[data-incoming-proposal-confirm],[data-incoming-proposal-dismiss],[data-incoming-proposal-copy],[data-incoming-proposal-read]')) return;
                     openProposalDetail(node.dataset.incomingProposalOpen);
                 })
             );
@@ -2145,7 +2168,7 @@ export function createIncoming({ context, actions, el }) {
             // Drag one proposal onto another on the same project to merge them.
             proposalsList.querySelectorAll('.proposal-card[data-proposal-project]').forEach((node) => {
                 node.addEventListener('dragstart', (event) => {
-                    if (proposalMutations.size || incomingOperation) { event.preventDefault(); return; }
+                    if (proposalMutations.size || incomingOperation || proposalNeedsProject(proposalById(node.dataset.incomingProposalOpen))) { event.preventDefault(); return; }
                     dragProposalId = node.dataset.incomingProposalOpen || '';
                     if (event.dataTransfer) {
                         event.dataTransfer.effectAllowed = 'move';

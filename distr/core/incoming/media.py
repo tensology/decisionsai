@@ -260,6 +260,22 @@ def ensure_proposal_attachments(
         except Exception as exc:
             _fail(name, f'Could not attach {name}. The proposal was not pushed. Sync WhatsApp media and retry. ({exc})',
                   source_message_id=item['message_id'], mime_type=item['mime'], kind=item.get('kind') or '')
+    if project_id is not None:
+        # A review preview lives under inbox until assignment. Carry its verified
+        # transcript with the same source bytes into the assigned project cache.
+        from .transcription import with_transcript, cache_transcript
+        inbox = _root(None, reference)
+        for record in attachments:
+            prior = inbox / Path(record['path']).name
+            try:
+                if prior.is_file() and _digest(prior) == record['sha256']:
+                    text = with_transcript({**record, 'path': str(prior)}).get('transcript')
+                    if text:
+                        record['transcript'] = text
+                        cache_transcript(record, text)
+            except (OSError, ValueError):
+                # The original media and inbox transcript remain available.
+                pass
     if chat_id is not None and attachments:
         register_thread_attachments(int(chat_id), attachments)
     return {'attachments': attachments, 'failures': failures}

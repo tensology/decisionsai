@@ -38,7 +38,7 @@ def test_shared_contact_is_routed_by_context_and_outgoing_reply_is_context(monke
         payload = json.loads(messages[1]['content'])
         assert {row['id'] for row in payload['candidate_projects']} == {8, 10, 4}
         assert payload['messages'][-1]['direction'] == 'outbound'
-        return json.dumps({'is_actionable': True, 'project_id': 10, 'title': 'Fix tracking report'})
+        return json.dumps({'is_actionable': True, 'project_id': 10, 'title': 'Fix tracking report', 'confidence': .96, 'project_evidence_message_ids': ['m2']})
     result = proposals._triage_conversations(items, {}, complete=complete)
     assert result[0]['project_id'] == 10
     assert result[0]['message_ids'] == ['m1']
@@ -58,8 +58,8 @@ def test_shared_contact_split_preserves_exact_sources_and_rejects_overlap(monkey
     base = {'source': 'whatsapp', 'source_thread_id': 'greg', 'sender': 'Greg', 'project_ids': [8, 10]}
     items = [{**base, 'source_message_id': 'm1', 'text': 'Fix the Snuza monitor'},
              {**base, 'source_message_id': 'm2', 'text': 'Fix the Spoortrack tracking report'}]
-    rows = [{'is_actionable': True, 'project_id': 8, 'title': 'Fix monitor', 'source_message_ids': ['m1']},
-            {'is_actionable': True, 'project_id': 10, 'title': 'Fix report', 'source_message_ids': ['m2']}]
+    rows = [{'is_actionable': True, 'project_id': 8, 'title': 'Fix monitor', 'source_message_ids': ['m1'], 'confidence': .96, 'project_evidence_message_ids': ['m1']},
+            {'is_actionable': True, 'project_id': 10, 'title': 'Fix report', 'source_message_ids': ['m2'], 'confidence': .96, 'project_evidence_message_ids': ['m2']}]
     complete = lambda *args: json.dumps({'proposals': rows})
     result = proposals._triage_conversations(items, {}, complete=complete)
     assert {row['project_id']: row['message_ids'] for row in result} == {8: ['m1'], 10: ['m2']}
@@ -73,7 +73,10 @@ def test_generic_shared_contact_request_cannot_be_assigned_by_model_guess(monkey
     item = {'source': 'whatsapp', 'source_thread_id': 'shared', 'sender': 'Client', 'project_ids': [4, 10],
             'source_message_id': 'billing', 'text': 'Allow the new billing type on the front end'}
     guessed = lambda *args: json.dumps({'is_actionable': True, 'project_id': 4, 'title': 'Allow billing'})
-    assert proposals._triage_conversations([item], {}, complete=guessed) == []
+    review = proposals._triage_conversations([item], {}, complete=guessed)[0]
+    assert review['project_id'] is None
+    assert review['needs_project'] is True
+    assert review['message_ids'] == ['billing']
 
 
 def test_canonical_project_link_cache_survives_offline_and_empty_success_clears(monkeypatch, tmp_path):

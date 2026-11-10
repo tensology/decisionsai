@@ -145,6 +145,7 @@ def test_whatsapp_all_files_same_names_durable_and_thread_scoped(store, tmp_path
 def test_missing_whatsapp_media_is_skipped_and_reported_not_blocking_thread(store, monkeypatch):
     # Per Paul: a file that cannot be fetched no longer blocks thread creation.
     sessions, _ = store
+    monkeypatch.setattr('distr.core.incoming.project_links.source_project_index', lambda **kwargs: {('whatsapp', 'client@g.us'): {7}})
     from distr.core.db.projects import Project
     monkeypatch.setattr('distr.core.db.get_session', sessions)
     with sessions() as db:

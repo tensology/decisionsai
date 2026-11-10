@@ -162,11 +162,12 @@ def update_proposal(proposal, changes, *, expected_updated_at):
 
 def _upload(client, row, mapping):
     from .project_links import proposal_in_scope
-    if not proposal_in_scope(row):
+    if not proposal_in_scope(row, allow_review=True):
         raise ValueError('Link the source conversation to this project before syncing its proposal.')
     row = _with_source_context(row)
     project_id = row.get("project_id")
-    if type(project_id) is not int or project_id not in mapping:
+    review = row.get('needs_project') is True and project_id is None
+    if not review and (type(project_id) is not int or project_id not in mapping):
         raise ValueError("This proposal's project is not linked to Tensology.")
     tasks = row.get("tasks") or []
     from distr.core.incoming.proposals import _normalize_tasks
@@ -177,7 +178,8 @@ def _upload(client, row, mapping):
     body = {"source": row.get("source"), "source_thread_id": row.get("source_thread_id"),
             "source_message_ids": row.get("message_ids") or [], "source_identity": source_identity(row),
             "source_context_message_ids": row.get('source_context_message_ids') or [str(item['id']) for item in row.get('evidence') or [] if isinstance(item, dict) and item.get('id') and item.get('direction') == 'outbound'],
-            "project_id": mapping[project_id], "title": row.get("title"), "description": row.get("description") or "",
+            "project_id": None if review else mapping[project_id], "needs_project": review,
+            "title": row.get("title"), "description": row.get("description") or "",
             "tasks": titles, "source_task_details": details if any(isinstance(task, dict) for task in details) else [],
             "task_completed_indexes": row.get('task_completed_indexes') or [],
             "priority": row.get("priority") or "medium", "evidence": row.get("evidence") or [],
@@ -227,7 +229,7 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
                         if ids.intersection(covered):
                             result['planned_changes'].append({'proposal_id': str(row.get('id') or ''), 'action': 'review_source_window', 'source_identity': identity, 'total_messages': len(ids), 'uncovered_messages': len(ids - covered)})
                             raise ValueError(f'This source window overlaps existing proposals ({len(ids - covered)} of {len(ids)} messages uncovered). Review its exact identity before importing.')
-                        if row.get('project_id') not in mapping:
+                        if row.get('project_id') not in mapping and not (row.get('needs_project') is True and row.get('project_id') is None):
                             raise ValueError("This proposal's project is not linked to Tensology.")
                         if dry_run:
                             result["planned_changes"].append({"proposal_id": str(row.get("id") or ""), "action": "create", "source_identity": identity, "project_id": mapping.get(row.get("project_id"))})
@@ -244,7 +246,7 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
                 if row.get("status") != "pending":
                     continue
                 key = f"tensology:{row['id']}"
-                if (row.get('project') or {}).get('id') not in mapping.values():
+                if not row.get('needs_project') and (row.get('project') or {}).get('id') not in mapping.values():
                     result['conflicts'].append({'proposal_id': key, 'reason': 'The project identity is not linked to Tensology. Review its project mapping.'})
                 correction = corrections.get(key)
                 if not correction:
