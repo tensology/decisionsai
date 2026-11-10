@@ -212,6 +212,9 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
                 "caption": str(a.get("caption") or ""),
                 "transcript": str(a.get("transcript") or ""),
                 "api_path": str(a.get("api_path") or ""),
+                "source_message_id": str(a.get("source_message_id") or ""),
+                "size": a.get("size") or 0,
+                "sha256": str(a.get("sha256") or ""),
             }
             for a in (row.get("attachments") or [])
             if isinstance(a, dict)

@@ -14,6 +14,9 @@ from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base, Chat, WhatsAppMessage
 from distr.core.incoming import media
+# Import before per-test DB providers are patched; lifecycle helpers retain their
+# module-level provider and must not capture a temporary fixture session.
+from distr.core.workflow import development_threads  # noqa: F401
 
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4z0AAAAASUVORK5CYII=')
 PDF = b'%PDF-1.4\nsource PDF acceptance bytes\n%%EOF'
@@ -187,8 +190,9 @@ def test_remote_multiple_files_on_same_snapshot_identity_and_scoped_urls(store):
     with pytest.raises(ValueError, match='scoped download'):
         media.proposal_attachments({**proposal, 'attachments': [dict(entries[0], api_path='work-requests/46/attachment?snapshot_id=8')]}, 7, client=client)
     client.download.side_effect = OSError('not available')
-    with pytest.raises(ValueError, match='not pushed'):
-        media.proposal_attachments(proposal, 7, client=client)
+    # Once the immutable original is verified locally, relay loss cannot break a handoff.
+    assert media.proposal_attachments(proposal, 7, client=client) == attachments
+    assert client.download.call_count == 2
 
 
 def test_actual_download_api_returns_exact_bytes_and_rejects_missing_changed_file(store, tmp_path):
@@ -357,3 +361,111 @@ def test_ensure_tensology_missing_link_soft(store):
     assert result["attachments"] == []
     assert result["failures"]
     assert "download link" in result["failures"][0]["error"].lower() or "missing" in result["failures"][0]["error"].lower()
+
+
+def test_canonical_media_recovers_verified_existing_thread_without_running_engine(store, tmp_path):
+    import json
+    sessions, cid = store
+    source = tmp_path/'.decisions/workspaces/projects/7/attachments/original.png'
+    source.parent.mkdir(parents=True)
+    source.write_bytes(PNG)
+    original = media._record(source, 'original.png', 'image/png', 'whatsapp:original', source_message_id='original')
+    with sessions() as db:
+        chat=db.get(Chat,cid)
+        chat.params=json.dumps({'incoming_proposal_handoff':{'key':'tensology:45'},'development':{'execution':{'status':'failed'}}})
+    from distr.core.incoming.transcription import cache_transcript
+    cache_transcript(original,'Retained source transcript.')
+    media.register_thread_attachments(cid,[original])
+    client=Mock();client.download.side_effect=OSError('relay gone')
+    proposal={'id':'tensology:45','project_id':7,'source':'whatsapp','source_thread_id':'client@g.us',
+              'message_ids':['original'],'attachments':[{'name':'original.png','source_message_id':'original',
+              'mime_type':'image/png','api_path':'work-requests/45/attachment?snapshot_id=8'}]}
+    before_count=None
+    with sessions() as db:before_count=db.query(Chat).count()
+    result=media.ensure_proposal_attachments(proposal,7,client=client,strict=True)
+    assert not result['failures'] and len(result['attachments'])==1
+    assert Path(result['attachments'][0]['path']).read_bytes()==PNG
+    assert result['attachments'][0]['source_message_id']=='original'
+    assert result['attachments'][0]['transcript']=='Retained source transcript.'
+    with sessions() as db:
+        assert db.query(Chat).count()==before_count
+        assert json.loads(db.get(Chat,cid).params)['development']['execution']['status']=='failed'
+    # A different proposal/project cannot borrow the same source cache implicitly.
+    with pytest.raises(ValueError):
+        media.ensure_proposal_attachments({**proposal,'id':'tensology:46','attachments':[{
+            **proposal['attachments'][0],'api_path':'work-requests/46/attachment?snapshot_id=8'}]},8,client=client)
+
+
+def test_verified_media_cache_rejects_changed_bytes(store):
+    client=Mock();client.download.side_effect=lambda location,path,**kw:path.write_bytes(PDF)
+    proposal={'id':'tensology:45','attachments':[{'name':'source.pdf','mime_type':'application/pdf','api_path':'work-requests/45/attachment?snapshot_id=8'}]}
+    first=media.ensure_proposal_attachments(proposal,7,client=client)
+    path=Path(first['attachments'][0]['path'])
+    path.write_bytes(b'corrupted')
+    client.download.side_effect=OSError('upstream gone')
+    result=media.ensure_proposal_attachments(proposal,7,client=client,strict=False)
+    assert not result['attachments'] and result['failures']
+
+
+def test_strict_local_handoff_survives_provider_cache_deletion(store, tmp_path, monkeypatch):
+    sessions,cid=store
+    source=tmp_path/'provider.jpg';source.write_bytes(PNG)
+    with sessions() as db:
+        db.add(WhatsAppMessage(message_id='source',jid='client@g.us',media_type='photo',media_mime_type='image/png',media_local_path=str(source)))
+    proposal={'id':'local:whatsapp:retained','source':'whatsapp','source_thread_id':'client@g.us','message_ids':['source']}
+    first=media.ensure_proposal_attachments(proposal,7,chat_id=cid)
+    source.unlink()
+    monkeypatch.setattr(media,'_download_whatsapp',Mock(side_effect=OSError('upstream gone')))
+    second=media.ensure_proposal_attachments(proposal,7,chat_id=cid)
+    assert second['attachments']==first['attachments']
+    assert len(media.thread_attachments(cid))==1
+
+
+def test_tensology_attachment_manifest_keeps_source_identity_and_integrity():
+    from distr.core.incoming.proposals import _from_tensology
+    source={'id':45,'source':'whatsapp','source_message_ids':['original'],'source_conversation':{'thread_id':'client@g.us'},
+            'attachments':[{'name':'source.jpg','source_message_id':'original','size':123,'sha256':'a'*64,'mime_type':'image/jpeg','api_path':'work-requests/45/attachment?snapshot_id=8'}]}
+    result=_from_tensology(source)
+    assert result['attachments'][0]['source_message_id']=='original'
+    assert result['attachments'][0]['size']==123 and result['attachments'][0]['sha256']=='a'*64
+
+
+def test_cached_copy_can_restore_canonical_media_without_redownload(store):
+    client=Mock();client.download.side_effect=lambda location,path,**kw:path.write_bytes(PDF)
+    proposal={'id':'tensology:45','attachments':[{'name':'source.pdf','mime_type':'application/pdf','api_path':'work-requests/45/attachment?snapshot_id=8'}]}
+    first=media.ensure_proposal_attachments(proposal,7,client=client)
+    sha=first['attachments'][0]['sha256']
+    assert 'replication_error' in first['attachments'][0]
+    client.download.side_effect=OSError('relay gone')
+    client.restore_attachment.return_value={'success':True,'sha256':sha}
+    restored=media.ensure_proposal_attachments(proposal,7,client=client)
+    assert restored['attachments'][0]['remote_sha256']==sha
+    assert 'replication_error' not in restored['attachments'][0]
+    assert client.download.call_count==1
+    count=client.restore_attachment.call_count
+    media.ensure_proposal_attachments(proposal,7,client=client)
+    assert client.restore_attachment.call_count==count
+
+
+def test_corrupt_preview_cache_is_not_relabelled_as_a_verified_original(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path,'home',lambda:tmp_path)
+    client=Mock();client.download.side_effect=lambda location,path,**kw:path.write_bytes(PNG)
+    location='work-requests/45/attachment?snapshot_id=8'
+    path,_=media.cached_tensology_attachment_file(location,client=client)
+    path.write_bytes(b'corrupted preview')
+    client.download.side_effect=OSError('relay gone')
+    with pytest.raises(OSError):media.cached_tensology_attachment_file(location,client=client)
+    assert client.download.call_count==2
+
+
+def test_interrupted_recovery_copy_preserves_previous_verified_original(tmp_path, monkeypatch):
+    from distr.core.incoming import media_cache
+    source=tmp_path/'source';source.write_bytes(PNG)
+    destination=tmp_path/'original';destination.write_bytes(PDF)
+    def broken_copy(original,output):
+        output.write(b'partial')
+        raise OSError('interrupted')
+    monkeypatch.setattr(media_cache.shutil,'copyfileobj',broken_copy)
+    with pytest.raises(OSError):media_cache.copy_original(source,destination)
+    assert destination.read_bytes()==PDF
+    assert not list(tmp_path.glob('*.part'))

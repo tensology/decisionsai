@@ -121,6 +121,7 @@ class TensologyClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 if metadata is not None:
                     metadata['content_type'] = response.headers.get('Content-Type', '')
+                    metadata['cache_sha256'] = response.headers.get('X-Incoming-Cache-SHA256', '')
                 declared = response.headers.get("Content-Length") if getattr(response, "headers", None) else None
                 if declared and str(declared).isdigit() and int(declared) > max_bytes:
                     raise TensologyApiError(f"Attachment is larger than {max_bytes} bytes.", code="attachment_too_large")
@@ -147,6 +148,60 @@ class TensologyClient:
         finally:
             if partial.exists():
                 partial.unlink()
+
+    def restore_attachment(self, location: str, path: Path, *, sha256: str, mime_type: str) -> dict:
+        """Stream a verified original back to its exact canonical proposal source."""
+        import hashlib
+        import re
+
+        target = urllib.parse.urlsplit(location)
+        query = urllib.parse.parse_qs(target.query)
+        if target.scheme or target.netloc or not re.fullmatch(r'work-requests/[1-9][0-9]*/attachment', target.path):
+            raise TensologyApiError('Unsupported source attachment scope.', code='invalid_attachment')
+        if set(query) - {'snapshot_id', 'attachment_index'} or not query.get('snapshot_id'):
+            raise TensologyApiError('Missing or invalid source attachment selector.', code='invalid_attachment')
+        if any(len(values) != 1 or not values[0].isdigit() for values in query.values()):
+            raise TensologyApiError('Invalid source attachment selector.', code='invalid_attachment')
+        path = Path(path)
+        size = path.stat().st_size
+        if not 0 < size <= 512 * 1024 * 1024:
+            raise TensologyApiError('Original attachment exceeds the media limit.', code='invalid_attachment')
+        with path.open('rb') as stream:
+            if hashlib.file_digest(stream, 'sha256').hexdigest() != sha256:
+                raise TensologyApiError('Original attachment changed before restoration.', code='invalid_attachment')
+        boundary = 'decisions-' + uuid.uuid4().hex
+        name = path.name.replace('"', '').replace('\r', '').replace('\n', '')
+        mime = str(mime_type or 'application/octet-stream').split(';')[0].strip()
+        if '\r' in mime or '\n' in mime:
+            raise TensologyApiError('Invalid attachment MIME type.', code='invalid_attachment')
+        prefix = (f'--{boundary}\r\nContent-Disposition: form-data; name="sha256"\r\n\r\n{sha256}\r\n'
+                  f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\n'
+                  f'Content-Type: {mime}\r\n\r\n').encode()
+        suffix = f'\r\n--{boundary}--\r\n'.encode()
+
+        def chunks():
+            yield prefix
+            with path.open('rb') as source:
+                while chunk := source.read(65536):
+                    yield chunk
+            yield suffix
+
+        url = f"{self.base_url.rstrip('/')}/api/integrations/v1/{location}"
+        request = urllib.request.Request(url, data=chunks(), method='POST', headers={
+            'Authorization': f'Bearer {self.api_key}', 'Accept': 'application/json',
+            'Content-Type': f'multipart/form-data; boundary={boundary}',
+            'Content-Length': str(len(prefix) + size + len(suffix)),
+            'X-Request-ID': str(uuid.uuid4()), 'X-Tensology-Source': self.source,
+        })
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                envelope = json.loads(response.read())
+            if envelope.get('error'):
+                raise TensologyApiError('Canonical attachment restoration was rejected.', code='attachment_restore_failed')
+            return envelope.get('data') or {}
+        except urllib.error.HTTPError as exc:
+            raise TensologyApiError(f'Canonical attachment restoration failed: HTTP {exc.code}',
+                                   status=exc.code, code='attachment_restore_failed') from exc
 
     def get(self, path: str, query: dict[str, Any] | None = None) -> Any:
         return self._request("GET", path, query=query)

@@ -10,6 +10,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from . import media_cache
+
 from distr.core.db import Chat, WhatsAppMessage, get_session
 
 MAX_MEDIA_BYTES = 512 * 1024 * 1024
@@ -160,19 +162,36 @@ def ensure_proposal_attachments(
                 continue
             destination = _destination(root, identity, name)
             try:
-                # Cache hits are for soft ensure/backfill only. Create/push (strict) always re-fetches.
-                if (not strict) and destination.is_file() and 0 < destination.stat().st_size <= MAX_MEDIA_BYTES:
-                    attachments.append(_record(destination, name, str(item.get('mime_type') or item.get('type') or ''), identity,
-                                               source_message_id=str(item.get('source_message_id') or ''),
-                                               transcript=str(item.get('transcript') or '')))
-                    continue
+                record = media_cache.verified(destination, identity, item)
+                if record is None:
+                    retained = media_cache.retained_original(proposal, item, project_id, identity, get_session)
+                    download_metadata = {}
+                    if retained:
+                        media_cache.copy_original(retained['path'], destination)
+                    else:
+                        if client is None:
+                            from distr.core.tensology_client import configured_tensology_client
+                            client = configured_tensology_client(source='incoming-proposal-media')
+                        client.download(location, destination, max_bytes=MAX_MEDIA_BYTES, metadata=download_metadata)
+                    record = _record(destination, name, str(item.get('mime_type') or item.get('type') or ''), identity,
+                                     source_message_id=str(item.get('source_message_id') or ''),
+                                     transcript=str(item.get('transcript') or (retained or {}).get('transcript') or ''), api_path=location)
+                    if retained and retained.get('remote_sha256') == record['sha256']:
+                        record['remote_sha256'] = record['sha256']
+                    if item.get('sha256') and record['sha256'] != item['sha256']:
+                        raise ValueError('Original media checksum does not match its source.')
+                    if item.get('size') and record['size'] != int(item['size']):
+                        raise ValueError('Original media size does not match its source.')
+                    if download_metadata.get('cache_sha256') == record['sha256']:
+                        record['remote_sha256'] = record['sha256']
+                    media_cache.remember(record)
+                # Caption/transcript edits do not replace the immutable original bytes.
+                record.update(transcript=str(item.get('transcript') or record.get('transcript') or ''))
                 if client is None:
                     from distr.core.tensology_client import configured_tensology_client
                     client = configured_tensology_client(source='incoming-proposal-media')
-                client.download(location, destination, max_bytes=MAX_MEDIA_BYTES)
-                attachments.append(_record(destination, name, str(item.get('mime_type') or item.get('type') or ''), identity,
-                                           source_message_id=str(item.get('source_message_id') or ''),
-                                           transcript=str(item.get('transcript') or '')))
+                media_cache.replicate(client, location, record)
+                attachments.append(record)
             except Exception as exc:
                 _fail(name, f'Could not attach {name}. The proposal was not pushed. Sync its media and retry. ({exc})',
                       api_path=location, mime_type=str(item.get('mime_type') or item.get('type') or ''),
@@ -246,17 +265,20 @@ def ensure_proposal_attachments(
         name = item['name'] or item['message_id'] + extension
         destination = _destination(root, identity, name)
         try:
-            if (not strict) and destination.is_file() and 0 < destination.stat().st_size <= MAX_MEDIA_BYTES:
-                attachments.append(_record(destination, name, item['mime'], identity, source_message_id=item['message_id'], kind=item.get('kind') or '', duration=item.get('duration')))
+            cached = media_cache.verified(destination, identity, {})
+            if cached:
+                attachments.append(cached)
                 continue
             original = Path(resolve_whatsapp_media_disk_path(item['stored'])) if item['stored'] else None
             if original and original.is_file():
                 if original.stat().st_size > MAX_MEDIA_BYTES:
                     raise ValueError('Media exceeds the attachment limit.')
-                shutil.copyfile(original, destination)
+                media_cache.copy_original(original, destination)
             else:
                 _download_whatsapp(item['id'], item['message_id'], destination)
-            attachments.append(_record(destination, name, item['mime'], identity, source_message_id=item['message_id'], kind=item.get('kind') or '', duration=item.get('duration')))
+            record = _record(destination, name, item['mime'], identity, source_message_id=item['message_id'], kind=item.get('kind') or '', duration=item.get('duration'))
+            media_cache.remember(record)
+            attachments.append(record)
         except Exception as exc:
             _fail(name, f'Could not attach {name}. The proposal was not pushed. Sync WhatsApp media and retry. ({exc})',
                   source_message_id=item['message_id'], mime_type=item['mime'], kind=item.get('kind') or '')
@@ -301,8 +323,10 @@ def cached_tensology_attachment_file(api_path: str, *, client=None) -> tuple[Pat
     destination = _destination(root, identity, name if name != 'attachment' else 'attachment.bin')
     mime_path = destination.with_name(destination.name + '.mime')
     mime = mimetypes.guess_type(destination.name)[0] or 'application/octet-stream'
-    if not (destination.is_file() and 0 < destination.stat().st_size <= MAX_MEDIA_BYTES):
-        metadata = {}
+    integrity_record = destination.with_name(destination.name + '.record.json')
+    cached_record = media_cache.verified(destination, identity, {}) if integrity_record.is_file() else None
+    metadata = {}
+    if not (destination.is_file() and 0 < destination.stat().st_size <= MAX_MEDIA_BYTES) or (integrity_record.is_file() and not cached_record):
         client.download(path, destination, max_bytes=MAX_MEDIA_BYTES, metadata=metadata)
         mime = str(metadata.get('content_type') or mime).split(';', 1)[0].strip().lower()
         # Untrusted active documents must remain downloads on this app origin.
@@ -325,6 +349,12 @@ def cached_tensology_attachment_file(api_path: str, *, client=None) -> tuple[Pat
         elif signature.startswith(b'%PDF-'): mime = 'application/pdf'
         elif signature[4:8] == b'ftyp': mime = 'audio/mp4' if signature[8:12] in (b'M4A ', b'M4B ') else 'video/mp4'
         elif signature.startswith(b'RIFF') and signature[8:12] == b'WEBP': mime = 'image/webp'
+    record = _record(destination, destination.name, mime, identity, api_path=path)
+    if metadata.get('cache_sha256') == record['sha256']:
+        record['remote_sha256'] = record['sha256']
+    elif cached_record and cached_record.get('remote_sha256') == record['sha256']:
+        record['remote_sha256'] = record['sha256']
+    media_cache.remember(record)
     return destination, mime
 
 

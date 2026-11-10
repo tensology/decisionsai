@@ -583,3 +583,53 @@ def test_unmatched_project_block_is_reported_once():
 def test_claimed_ticket_thread_is_reused_never_recreated():
     from distr.core.tensology_client import _existing_tensology_thread
     assert _existing_tensology_thread(_unmatched_ticket(decisions_thread_id="77")) == 77
+
+
+def test_attachment_restore_streams_large_original_to_its_scoped_source(tmp_path):
+    import hashlib
+    path=tmp_path/'source.mp4'
+    with path.open('wb') as f:
+        f.write(b'\x00\x00\x00\x18ftypisom')
+        f.truncate(17*1024*1024)
+    with path.open('rb') as f: expected=hashlib.file_digest(f,'sha256').hexdigest()
+    captured={}
+    response=MagicMock();response.__enter__.return_value=response
+    response.read.return_value=json.dumps({'data':{'success':True,'sha256':expected,'size':path.stat().st_size},'error':None}).encode()
+    def accept(request,**kwargs):
+        parts=iter(request.data)
+        prefix=next(parts)
+        assert b'name="sha256"' in prefix and expected.encode() in prefix
+        assert b'name="file"' in prefix and b'video/mp4' in prefix
+        total=len(prefix);bodyhash=hashlib.sha256()
+        for chunk in parts:
+            assert len(chunk)<=65536
+            total+=len(chunk)
+            if not chunk.startswith(b'\r\n--decisions-'): bodyhash.update(chunk)
+        assert bodyhash.hexdigest()==expected
+        assert total==int(request.get_header('Content-length'))
+        captured['url']=request.full_url
+        captured['authorization']=request.get_header('Authorization')
+        return response
+    with patch('urllib.request.urlopen',side_effect=accept):
+        result=TensologyClient('https://example.test','test-credential').restore_attachment(
+            'work-requests/45/attachment?snapshot_id=8&attachment_index=1',path,sha256=expected,mime_type='video/mp4')
+    assert result['sha256']==expected
+    assert captured['url']=='https://example.test/api/integrations/v1/work-requests/45/attachment?snapshot_id=8&attachment_index=1'
+    assert captured['authorization']=='Bearer test-credential'
+
+
+def test_attachment_restore_rejects_foreign_scope_and_changed_original(tmp_path):
+    import hashlib,pytest
+    path=tmp_path/'source.pdf';path.write_bytes(b'original')
+    expected=hashlib.sha256(b'original').hexdigest()
+    client=TensologyClient('https://example.test','test-credential')
+    with patch('urllib.request.urlopen') as network:
+        for location in ['https://other.test/work-requests/45/attachment?snapshot_id=8',
+                         'tickets/45/attachment?snapshot_id=8',
+                         'work-requests/45/attachment?snapshot_id=8&path=/private',
+                         'work-requests/45/attachment?snapshot_id=8&snapshot_id=9']:
+            with pytest.raises(TensologyApiError):client.restore_attachment(location,path,sha256=expected,mime_type='application/pdf')
+        path.write_bytes(b'changed')
+        with pytest.raises(TensologyApiError,match='changed'):
+            client.restore_attachment('work-requests/45/attachment?snapshot_id=8',path,sha256=expected,mime_type='application/pdf')
+        network.assert_not_called()

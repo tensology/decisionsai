@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -146,30 +147,89 @@ def _compact_event_storage(
     return report
 
 
+_MEDIA_PATH_FIELDS = frozenset({
+    "path", "file_path", "media_local_path", "client_media_local_path",
+    "local_path", "stored_path", "transcript_path",
+})
+_MEDIA_REFERENCE_CONTAINERS = frozenset({
+    "incoming_attachments", "incoming_proposal_handoff", "incoming_reply_context",
+    "incoming_source_context", "proposal", "snapshot", "attachments", "files",
+    "media", "metadata", "evidence", "context_evidence", "source_context",
+})
+
+
+def _media_reference_paths(value: Any, *, depth: int = 0):
+    """Walk attachment structures, never message bodies or arbitrary source text."""
+    if depth > 16:
+        raise ValueError("Media reference nesting exceeds the supported layout")
+    if isinstance(value, list):
+        for item in value:
+            yield from _media_reference_paths(item, depth=depth + 1)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if key in _MEDIA_PATH_FIELDS and isinstance(item, str):
+                yield item
+            elif key in _MEDIA_REFERENCE_CONTAINERS:
+                yield from _media_reference_paths(item, depth=depth + 1)
+
+
 def _referenced_whatsapp_media(connection: sqlite3.Connection, media_root: Path) -> set[Path]:
+    """Collect retained source, proposal and thread files for both cleanup paths.
+
+    Any unreadable reference query aborts the scan before deletion. A reference
+    surviving after its WhatsApp row is removed still owns its original bytes.
+    """
+    media_root = media_root.resolve()
     referenced: set[Path] = set()
-    queries = []
+
+    def remember(stored):
+        raw = str(stored or "").strip()
+        if not raw or "://" in raw or raw.startswith("data:"):
+            return
+        candidate = Path(raw.replace("\\", "/")).expanduser()
+        if not candidate.is_absolute():
+            candidate = media_root.parent / candidate if candidate.parts and candidate.parts[0] == media_root.name else media_root / candidate.name
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(media_root) or resolved == media_root:
+            # Older clients recorded absolute paths before moving DB_DIR.
+            # Match only one basename in the managed cache, never its directory.
+            candidate = media_root / candidate.name
+            resolved = candidate.resolve()
+        if resolved != media_root and resolved.is_relative_to(media_root):
+            referenced.add(resolved)
+
+    for table, field in (("whatsapp_messages", "media_local_path"), ("kanban_ticket_files", "file_path")):
+        if _table_exists(connection, table):
+            for (value,) in connection.execute(f"SELECT {field} FROM {table} WHERE {field} IS NOT NULL"):
+                remember(value)
+
+    json_queries = []
     if _table_exists(connection, "whatsapp_messages"):
-        queries.append("SELECT media_local_path FROM whatsapp_messages WHERE media_local_path IS NOT NULL")
-    if _table_exists(connection, "kanban_ticket_files"):
-        queries.append("SELECT file_path FROM kanban_ticket_files WHERE file_path IS NOT NULL")
-    for query in queries:
-        for (stored,) in connection.execute(query):
-            raw = str(stored or "").strip()
-            if not raw:
-                continue
-            candidate = Path(raw).expanduser()
-            if not candidate.is_absolute():
-                if candidate.parts and candidate.parts[0] == media_root.name:
-                    candidate = media_root.parent / candidate
-                else:
-                    candidate = media_root / candidate.name
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(whatsapp_messages)")}
+        if "raw_data" in columns:
+            json_queries.append("SELECT raw_data FROM whatsapp_messages WHERE raw_data IS NOT NULL AND raw_data != ''")
+        if "client_media_local_path" in columns:
+            for (value,) in connection.execute("SELECT client_media_local_path FROM whatsapp_messages WHERE client_media_local_path IS NOT NULL"):
+                remember(value)
+    for table, field in (("chats", "params"), ("incoming_proposal_snapshots", "snapshot"), ("incoming_proposal_restorations", "snapshot")):
+        if _table_exists(connection, table):
+            json_queries.append(f"SELECT {field} FROM {table} WHERE {field} IS NOT NULL AND {field} != ''")
+    for query in json_queries:
+        for (encoded,) in connection.execute(query):
             try:
-                resolved = candidate.resolve()
-            except OSError:
-                continue
-            if resolved == media_root or media_root in resolved.parents:
-                referenced.add(resolved)
+                value = json.loads(encoded)
+            except (ValueError, TypeError) as exc:
+                raise ValueError("Stored media references contain unreadable JSON") from exc
+            for stored in _media_reference_paths(value):
+                remember(stored)
+
+    # Companion transcripts and integrity/MIME records belong to the original.
+    names = {path.name for path in referenced}
+    sidecars = {name + suffix for name in names for suffix in (".mime", ".json", ".metadata.json", ".record.json", ".transcript.txt")}
+    for candidate in media_root.iterdir():
+        transcript = re.fullmatch(r"(.+)\.[a-f0-9]{16}\.transcript\.txt", candidate.name)
+        if candidate.name in sidecars or (transcript and transcript[1] in names):
+            referenced.add(candidate.resolve())
     return referenced
 
 
@@ -178,12 +238,16 @@ def _prune_orphan_whatsapp_media(
     *,
     db_root: Path,
     cutoff_epoch: float,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     media_root = (db_root / "whatsapp_media").resolve()
-    report = {"orphan_media_pruned": 0, "orphan_media_bytes_reclaimed": 0}
+    report = {"orphan_media_pruned": 0, "orphan_media_bytes_reclaimed": 0, "orphan_media_pruned_files": []}
     if not media_root.is_dir():
         return report
-    referenced = _referenced_whatsapp_media(connection, media_root)
+    try:
+        referenced = _referenced_whatsapp_media(connection, media_root)
+    except (sqlite3.DatabaseError, OSError, ValueError):
+        logger.warning("Skipping orphan media cleanup: retained file references could not be verified", exc_info=True)
+        return {**report, "orphan_media_scan_incomplete": True}
     for candidate in media_root.iterdir():
         try:
             resolved = candidate.resolve()
@@ -198,6 +262,10 @@ def _prune_orphan_whatsapp_media(
             continue
         report["orphan_media_pruned"] += 1
         report["orphan_media_bytes_reclaimed"] += stat.st_size
+        # Preserve enough evidence to explain future deletions without copying
+        # source content or allowing an unbounded maintenance-state file.
+        if len(report["orphan_media_pruned_files"]) < 1000:
+            report["orphan_media_pruned_files"].append({"name": candidate.name, "bytes": stat.st_size, "reason": "unreferenced"})
     return report
 
 

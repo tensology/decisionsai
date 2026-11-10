@@ -16,7 +16,7 @@ Removes safe-to-delete runtime clutter from db/:
   - empty legacy *.db files (database.db, decisions.db)
   - manual settings.db.backup-* snapshots in db/
   - old db/backups/* folders (see --keep-backups)
-  - whatsapp_media files not referenced by whatsapp_messages
+  - whatsapp_media files not referenced by sources, proposals, threads or tickets
   - rotated log files and .DS_Store junk
 
 Options:
@@ -111,9 +111,9 @@ if [ -d "$BACKUP_ROOT" ]; then
     rm -f "$backup_list"
 fi
 
-# Orphan WhatsApp media (files on disk with no whatsapp_messages.media_local_path).
+# Orphan WhatsApp media (use the same source/proposal/thread guard as scheduled maintenance).
 if [ -f "$DB_DIR/settings.db" ] && [ -d "$DB_DIR/whatsapp_media" ]; then
-    export DB_DIR DRY_RUN
+    export DB_DIR DRY_RUN ROOT_DIR
     PYTHON_BIN="${PYTHON_BIN:-python3}"
     if [ -x "$HOME/.virtualenvs/decisions/bin/python" ]; then
         PYTHON_BIN="$HOME/.virtualenvs/decisions/bin/python"
@@ -121,7 +121,11 @@ if [ -f "$DB_DIR/settings.db" ] && [ -d "$DB_DIR/whatsapp_media" ]; then
     "$PYTHON_BIN" - <<'PY'
 import os
 import sqlite3
+import sys
 from pathlib import Path
+
+sys.path.insert(0, os.environ["ROOT_DIR"])
+from distr.core.storage_maintenance import _referenced_whatsapp_media
 
 db_dir = Path(os.environ["DB_DIR"])
 media_dir = db_dir / "whatsapp_media"
@@ -129,18 +133,20 @@ settings_db = db_dir / "settings.db"
 dry_run = os.environ.get("DRY_RUN", "false") == "true"
 
 conn = sqlite3.connect(settings_db)
-rows = conn.execute(
-    "SELECT media_local_path FROM whatsapp_messages "
-    "WHERE media_local_path IS NOT NULL AND media_local_path != ''"
-).fetchall()
-referenced = {os.path.basename(stored) for (stored,) in rows}
+try:
+    referenced = _referenced_whatsapp_media(conn, media_dir)
+except (sqlite3.DatabaseError, OSError, ValueError):
+    print("Skipping orphan WhatsApp media cleanup: retained references could not be verified", file=sys.stderr)
+    sys.exit(0)
+finally:
+    conn.close()
 
 removed = 0
 freed = 0
 for path in sorted(media_dir.iterdir()):
     if not path.is_file():
         continue
-    if path.name in referenced:
+    if path.resolve() in referenced:
         continue
     size = path.stat().st_size
     if dry_run:
