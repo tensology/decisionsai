@@ -187,7 +187,7 @@ def configured_tensology_client(source: str = "decisionsai") -> TensologyClient:
     )
 
 
-def fetch_pending_work_requests(*, include_decided: bool = False) -> list[dict[str, Any]]:
+def fetch_pending_work_requests(*, include_decided: bool = False, strict: bool = False) -> list[dict[str, Any]]:
     """Pending Tensology work proposals awaiting a decision (queue / send / dismiss).
 
     Best-effort: never raises for a missing key or a Tensology outage, so it is safe
@@ -196,6 +196,8 @@ def fetch_pending_work_requests(*, include_decided: bool = False) -> list[dict[s
     try:
         client = configured_tensology_client()
     except TensologyApiError:
+        if strict:
+            raise
         return []
     rows: dict[str, dict[str, Any]] = {}
     # The all-status endpoint is bounded. Fetch pending independently so a
@@ -204,7 +206,11 @@ def fetch_pending_work_requests(*, include_decided: bool = False) -> list[dict[s
         try:
             data = client.get("work-requests", query={"status": status})
         except TensologyApiError:
+            if strict:
+                raise
             continue
+        if strict and not isinstance(data, list):
+            raise TensologyApiError("Tensology returned an invalid proposal collection.")
         for item in data if isinstance(data, list) else []:
             if isinstance(item, dict) and item.get('id') is not None:
                 rows[str(item['id'])] = item

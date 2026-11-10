@@ -61,7 +61,7 @@ class IdeThreadInput(BaseModel):
         default=0,
         description=(
             "Decisions Development thread id (numeric chat id, e.g. the 'current Development "
-            "thread' in context). With prompt/amend, the message is posted to that thread's harness."
+            "thread' in context). read/status inspect it; prompt/amend post to its harness."
         ),
     )
 
@@ -74,6 +74,8 @@ class IdeThreadTool(BaseTool):
         "Omit thread_id to continue the locked thread for that IDE and project. "
         "Set new_thread=true only when they want a fresh thread. "
         "This lock is separate from the Development section harness. "
+        "read/status with development_thread_id inspect that Decisions thread. Auto read/status "
+        "without an external ID prefer the matching current Development thread. "
         "To message the user's current Decisions Development thread, use action=amend with "
         "development_thread_id (or surface=auto and no thread_id: it targets the current Development thread). "
         "Codex reads local rollout transcripts; Cursor reads local agent-transcripts JSONL plus Decisions IDE bridge sessions and CLI output."
@@ -115,6 +117,25 @@ class IdeThreadTool(BaseTool):
                     "the project's thread_id, or create_thread with project_id."
                 ),
             })
+        if act in ("read", "status"):
+            dev_id = int(development_thread_id or 0)
+            tid = str(thread_id or "").strip()
+            if not dev_id and tid.isdigit() and _is_development_thread(int(tid)):
+                dev_id = int(tid)
+            if not dev_id and not tid and not session_id and str(surface or "auto").lower() in ("", "auto"):
+                from distr.core.agent.services.llm.oracle_context import get_current_development_thread
+
+                current = get_current_development_thread()
+                project_matches = (not project_id or project_id == current.get("project_id")) and (
+                    not project or project.casefold().strip() == str(current.get("project_name") or "").casefold().strip()
+                )
+                query_matches = not query or query.casefold().strip() == str(current.get("title") or "").casefold().strip()
+                if project_matches and query_matches:
+                    dev_id = int(current.get("thread_id") or 0)
+            if dev_id:
+                if not _is_development_thread(dev_id):
+                    return "The selected Development thread is no longer available."
+                return _read_development_thread(dev_id, action=act, limit_messages=limit_messages)
         if act in ("prompt", "amend") and text and not new_thread:
             dev_id = int(development_thread_id or 0)
             tid = str(thread_id or "").strip()
@@ -162,6 +183,35 @@ def _current_development_thread_id() -> int:
         return int(get_current_development_thread().get("thread_id") or 0)
     except Exception:
         return 0
+
+
+def _read_development_thread(chat_id: int, *, action: str, limit_messages: int) -> str:
+    """Read the owning Decisions conversation, not an unrelated external IDE lock."""
+    import json
+    from distr.core.agent.tool_voice_format import voice_then_reference
+    from distr.core.chat import ChatService, _chat_params
+    from distr.core.db import Chat, get_session
+
+    with get_session() as db:
+        chat = db.get(Chat, chat_id)
+        if chat is None:
+            return "The selected Development thread is no longer available."
+        execution = ((_chat_params(chat.params).get("development") or {}).get("execution") or {})
+        result = {"success": True, "found": True, "surface": "development", "action": action,
+                  "thread_id": chat_id, "title": chat.title, "project_id": chat.project_id,
+                  "status": execution.get("status") or "unknown"}
+    messages = [dict(row) for row in ChatService.get_chat_history(chat_id) if row.get("role") in {"user", "assistant"}]
+    result["messages"] = messages[-max(1, min(int(limit_messages), 30)):]
+    # Keep the latest evidence inside the tool-reference budget. Prefix-truncating
+    # a chronological transcript can otherwise discard the very update being asked about.
+    while len(json.dumps(result, ensure_ascii=False)) > 6000 and len(result["messages"]) > 1:
+        result["messages"].pop(0)
+    if result["messages"] and len(json.dumps(result, ensure_ascii=False)) > 6000:
+        result["messages"][0]["content"] = str(result["messages"][0].get("content") or "")[:4500] + "\n[Message truncated]"
+    return voice_then_reference(
+        f"I read Development thread {chat_id}: {result['title']}. Status: {result['status']}.",
+        json.dumps(result, ensure_ascii=False),
+    )
 
 
 def _is_development_thread(chat_id: int) -> bool:

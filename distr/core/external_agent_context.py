@@ -667,6 +667,17 @@ def _rank_codex_threads(
     wanted_id = str(thread_id or "").strip().lower()
     scored: list[tuple[int, int, dict[str, Any]]] = []
     for index, item in enumerate(threads):
+        item_id = str(item.get("id") or "").lower()
+        if wanted_id and not item_id.startswith(wanted_id):
+            continue
+        if project.strip():
+            # Project is a scope boundary, not another keyword that an unrelated
+            # conversation can outweigh with generic words such as fix or deploy.
+            normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value).lower())
+            folder = str(item.get("cwd") or "")
+            scope = _project_name_from_path(folder) if folder else str(item.get("title") or "")
+            if normalize(project) not in normalize(scope):
+                continue
         haystack = " ".join(
             str(part or "")
             for part in (
