@@ -76,6 +76,7 @@ def test_review_can_sync_but_cannot_create_thread_merge_or_autoaccept(projects, 
     row = review()
     assert project_links.proposal_in_scope(row, allow_review=True)
     assert not project_links.proposal_in_scope(row)
+    assert not project_links.proposal_in_scope({**row, 'project_id': 3})
     engine = Mock()
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', engine)
     with pytest.raises(ValueError, match='Link this source'):

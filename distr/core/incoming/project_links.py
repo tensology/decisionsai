@@ -99,6 +99,8 @@ def source_project_index(*, refresh=False):
 
 
 def proposal_in_scope(proposal, index=None, *, allow_review=False):
+    if not allow_review and proposal.get('needs_project') is True:
+        return False
     index = source_project_index() if index is None else index
     source = str(proposal.get('source') or '')
     thread = str(proposal.get('source_thread_id') or (proposal.get('source_conversation') or {}).get('thread_id') or '')
