@@ -586,6 +586,7 @@ _TRIAGE_SYSTEM = (
     "Describe only work supported by the current inbound source_message_ids, not an older context-only request. "
     "For independent requests about different projects return {proposals: [...]} with one entry per request, "
     "each containing exact inbound source_message_ids. Never assign the same source message to two projects. "
+    "For one request, return an ordinary proposal object and omit the optional proposals field. "
     "If not actionable, project_id may be null."
 )
 
@@ -858,7 +859,9 @@ def _triage_conversations(
         data = _parse_triage(raw)
         if not data:
             continue
-        split = isinstance(data.get('proposals'), list)
+        # Models may include an empty optional list alongside a valid ordinary
+        # proposal. Only a non-empty list replaces the top-level result.
+        split = isinstance(data.get('proposals'), list) and bool(data['proposals'])
         records = data['proposals'] if split else [data]
         assigned, batch = set(), []
         inbound_ids = {str(row.get('source_message_id')) for row in conversation['items']

@@ -181,6 +181,19 @@ def test_codex_query_cannot_cross_explicit_project_scope():
     assert _rank_codex_threads([wrong, right], query='Correct carrier bag size details', project='Merrypak') == [right]
 
 
+def test_ordinary_actionable_result_with_empty_optional_proposals_is_retained(monkeypatch):
+    monkeypatch.setattr(proposals, '_candidate_projects', lambda: [{'id': 10, 'name': 'Shop'}])
+    monkeypatch.setattr(proposals, '_dismissed_message_coverage', lambda: {})
+    monkeypatch.setattr(proposals, '_latest_conversation_context', lambda conversation: [])
+    monkeypatch.setattr('distr.core.incoming.routing_context.earlier_context', lambda conversation: [])
+    item = {'source': 'whatsapp', 'source_thread_id': 'empty-wrapper', 'source_message_id': 'new',
+            'project_id': 10, 'sender': 'Client', 'text': 'Please fix checkout'}
+    result = {'is_actionable': True, 'project_id': 10, 'title': 'Fix checkout', 'proposals': []}
+    rows = proposals._triage_conversations([item], {}, complete=lambda *args: json.dumps(result))
+    assert len(rows) == 1
+    assert rows[0]['message_ids'] == ['new']
+
+
 def test_missing_codex_id_never_falls_back_to_keyword_match():
     row = {'id': 'other', 'cwd': '/repo/merrypak', 'title': 'Deploy production'}
     assert _rank_codex_threads([row], thread_id='missing', query='Deploy production', project='Merrypak') == []
