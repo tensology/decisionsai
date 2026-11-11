@@ -195,6 +195,14 @@ def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page
                             'proposal_source_review_key': keys.get(chat_id)})
 
     page.route('**/api/chats/*?surface=development', chat_route)
+    page.route('**/api/chats?*', lambda route: route.fulfill(json={'chats': [
+        {'id': chat_id, 'project_id': 7, 'title': title, 'development': True}
+        for chat_id, title in titles.items()
+    ]}))
+    for chat_id in (18, 19):
+        for surface in ('artifacts', 'plans'):
+            page.route(f'**/api/workflows/studio/tasks/{chat_id}/{surface}',
+                       lambda route: route.fulfill(json={'items': []}))
     monkeypatch.setattr(intake, 'resolve_proposal_review', lambda review_key, submitted_only=False: next((
         {'status': 'thread', 'chat_id': chat_id, 'proposal': proposals[chat_id]}
         for chat_id, key in keys.items() if submitted_only and key == review_key
@@ -240,8 +248,8 @@ def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page
     menu = page.get_by_role('button', name='Thread menu', exact=True)
     action = page.get_by_role('menuitem', name='View original conversation')
     dialog = page.get_by_role('dialog', name='Original conversation')
-    picker = dialog.get_by_label('Original conversation', exact=True)
-    open_source = dialog.get_by_role('button', name='View original conversation')
+    picker = dialog.get_by_label('Conversation', exact=True)
+    open_source = dialog.get_by_role('button', name='Open conversation')
     anchor = dialog.locator('[data-original-message]')
     EVIDENCE.mkdir(exist_ok=True)
     page.locator('#task-prompt').fill('Keep this unsent draft')

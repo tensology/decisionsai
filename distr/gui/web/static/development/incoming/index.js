@@ -1477,9 +1477,9 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
 
     function proposalSourceControlsHtml(pickerId, proposalId = '') {
         return `<div class="proposal-source-jump"><div class="proposal-source-choice hidden">
-            <label for="${pickerId}">Original conversation</label>
+            <label for="${pickerId}">${proposalId ? 'Original conversation' : 'Conversation'}</label>
             <select id="${pickerId}" data-proposal-source-choice></select></div>
-            <button type="button" class="proposal-btn ghost" data-proposal-jump-source="${actions.escapeHtml(proposalId)}">${proposalId ? 'View in conversation' : 'View original conversation'}</button>
+            <button type="button" class="proposal-btn ghost" data-proposal-jump-source="${actions.escapeHtml(proposalId)}">${proposalId ? 'View in conversation' : 'Open conversation'}</button>
             <p class="proposal-source-status hidden" data-proposal-source-status role="status"></p></div>`;
     }
 
