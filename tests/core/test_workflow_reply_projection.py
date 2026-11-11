@@ -92,7 +92,7 @@ def test_thread_refresh_shows_matching_confirmed_receipt_without_writing(store, 
     ids, body = make_review(store, monkeypatch)
     with store.begin() as db:
         row = db.query(DevApprovalRequest).one()
-        envelope = {'channel': 'whatsapp', 'recipient': '27634103646', 'project_id': 9, 'board_id': 1}
+        envelope = {'channel': 'whatsapp', 'recipient': '12025550142', 'project_id': 9, 'board_id': 1}
         workflow = {'run_id': 17, 'workflow_id': 18, 'chat_id': ids[0], 'turn_id': ids[1]}
         details = {'ticket_id': 12, 'channel': 'whatsapp', 'body': body, 'delivery': envelope, 'workflow': workflow}
         row.action = 'whatsapp'

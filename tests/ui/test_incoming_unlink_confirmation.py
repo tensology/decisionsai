@@ -9,7 +9,7 @@ pytestmark = pytest.mark.e2e_playwright
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
 def test_unlink_updates_without_refresh_and_closes_after_last_link(page, width):
     install_responsive_api(page)
-    thread = '27820000000@s.whatsapp.net'
+    thread = '12025550143@s.whatsapp.net'
     links = [dict(id=5, board_id=70, board_name='Decisions delivery', auto_snapshot=False),
              dict(id=8, board_id=71, board_name='Website refresh', auto_snapshot=False)]
     deletes = []
@@ -19,8 +19,8 @@ def test_unlink_updates_without_refresh_and_closes_after_last_link(page, width):
     def incoming(route):
         refreshes.append(route.request.url)
         route.fulfill(json={'items': [{
-            'key': 'whatsapp:test-mariam', 'source': 'whatsapp', 'source_thread_id': thread,
-            'source_message_id': 'test-message', 'conversation_label': 'Mariam (test)', 'sender': 'Mariam (test)',
+            'key': 'whatsapp:test-contact', 'source': 'whatsapp', 'source_thread_id': thread,
+            'source_message_id': 'test-message', 'conversation_label': 'Example contact', 'sender': 'Example contact',
             'text': 'Synthetic project allocation test',
             'created_at': '2026-10-30T10:00:00Z', 'links': links,
         }], 'links': [{**link, 'source': 'whatsapp', 'source_thread_id': thread} for link in links],
@@ -75,7 +75,7 @@ def test_unlink_updates_without_refresh_and_closes_after_last_link(page, width):
     expect(row).to_be_focused()
     expect(row.locator('.incoming-board-pill')).to_have_count(0)
     expect(row).to_contain_text('Synthetic project allocation test')
-    expect(page.locator('.incoming-channel-section.other')).to_contain_text('Mariam (test)')
+    expect(page.locator('.incoming-channel-section.other')).to_contain_text('Example contact')
     assert deletes[-1] == '/tickets/boards/71/whatsapp-links/8' and not links
     assert len(refreshes) == refresh_count
     capture(page, 'incoming-unlink-last-project', width)

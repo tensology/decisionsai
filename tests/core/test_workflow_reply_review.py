@@ -38,14 +38,14 @@ def review(tmp_path, monkeypatch):
         lane = KanbanLane(board_id=board.id, name='Ready', position=0)
         db.add(lane); db.flush()
         ticket = KanbanTicket(lane_id=lane.id, title='Original request', linked_project_id=9,
-                              source_provider='whatsapp', source_thread_id='27634103646')
+                              source_provider='whatsapp', source_thread_id='12025550142')
         workflow = AutoWorkflow(name='Work', workflow_type='manual', status='active')
         db.add_all([ticket, workflow]); db.flush()
         run = AutoWorkflowRun(workflow_id=workflow.id, chat_id=chat.id, ticket_id=ticket.id,
                               status='completed', run_data=json.dumps({'project_id': 9, 'terminal_receipt': {}}))
         db.add(run); db.flush()
         details = {'ticket_id': ticket.id, 'channel': 'whatsapp', 'body': 'Exact reviewed\nclosing reply.',
-                   'delivery': {'project_id': 9, 'recipient': '27634103646', 'thread_id': '27634103646'},
+                   'delivery': {'project_id': 9, 'recipient': '12025550142', 'thread_id': '12025550142'},
                    'workflow': {'run_id': run.id, 'workflow_id': workflow.id,
                                 'chat_id': chat.id, 'turn_id': turn.id}}
         db.commit()

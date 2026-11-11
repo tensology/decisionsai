@@ -24,7 +24,7 @@ def test_known_mail_alias_preserves_exact_mailbox(alias):
     assert target.contact == 'client@example.com'
 
 
-@pytest.mark.parametrize('contact', ['Paul', 'Paul Smith', 'a@', 'bad@@example.com',
+@pytest.mark.parametrize('contact', ['Example contact', 'Paul Smith', 'a@', 'bad@@example.com',
     'a@example.com,b@example.com', 'a@example.com, Name <b@example.com>',
     'a@example.com junk', 'mailto:a@example.com',
     'a@example.com\r\nBcc: other@example.com', 'Name <a@example.com> trailing'])
@@ -40,8 +40,8 @@ def test_mail_sender_label_or_malformed_destination_is_not_sendable(provider, co
     {'whatsapp_message_wa_id': '3EB0A_PROVIDER_MESSAGE_ID'},
     {'source_external_id': '3EB0A_PROVIDER_MESSAGE_ID'},
     {'external_id': '3EB0A_PROVIDER_MESSAGE_ID'},
-    {'source_url': 'https://wa.me/27634103646'},
-    {'source_contact': 'Paul'},
+    {'source_url': 'https://wa.me/12025550142'},
+    {'source_contact': 'Example contact'},
     {'source_thread_id': '   ', 'whatsapp_message_wa_id': '3EB0A_PROVIDER_MESSAGE_ID'},
 ])
 def test_whatsapp_message_identity_or_display_metadata_cannot_replace_conversation(origin):
@@ -51,7 +51,7 @@ def test_whatsapp_message_identity_or_display_metadata_cannot_replace_conversati
 
 
 @pytest.mark.parametrize('provider', ['whatsapp', 'whats_app', 'wa'])
-@pytest.mark.parametrize('thread', ['27634103646', '27634103646@s.whatsapp.net',
+@pytest.mark.parametrize('thread', ['12025550142', '12025550142@s.whatsapp.net',
     '120363000000@g.us', '123456789@lid'])
 def test_canonical_whatsapp_conversation_wins_over_message_id(provider, thread):
     target = resolve_reply_target(dict(source_provider=provider, source_thread_id=thread,

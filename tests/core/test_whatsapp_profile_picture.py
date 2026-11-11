@@ -60,8 +60,8 @@ async def test_cache_avoids_second_relay_fetch(tmp_path):
         return httpx.Response(200, content=b'\xff\xd8\xffcached', headers={'content-type': 'image/jpeg'})
     client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
     with patch('httpx.AsyncClient', return_value=client):
-        first = await endpoint('27820000000@s.whatsapp.net')
-        second = await endpoint('27820000000@s.whatsapp.net')
+        first = await endpoint('12025550143@s.whatsapp.net')
+        second = await endpoint('12025550143@s.whatsapp.net')
     assert first.status_code == 200
     assert second.body == b'\xff\xd8\xffcached'
     assert len(calls) == 1
@@ -73,7 +73,7 @@ async def test_bad_jid_does_not_fetch():
     register_whatsapp_routes(router, lambda _: {}, lambda: {})
     endpoint = next(r.endpoint for r in router.routes if r.path.endswith('/profile-picture'))
     with patch('httpx.AsyncClient') as client:
-        assert (await endpoint('Mariam')).status_code == 400
+        assert (await endpoint('Example contact')).status_code == 400
         client.assert_not_called()
 
 

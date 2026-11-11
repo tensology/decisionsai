@@ -35,7 +35,7 @@ def test_whatsapp_refresh_starts_pairing_then_shows_connected(page: Page):
         else:
             payload = {
                 "status": "connected",
-                "phone": {"jid": "27820000000@s.whatsapp.net", "name": "Paul"},
+                "phone": {"jid": "12025550143@s.whatsapp.net", "name": "Example contact"},
             }
         route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
 
@@ -54,7 +54,7 @@ def test_whatsapp_refresh_starts_pairing_then_shows_connected(page: Page):
 
     expect(page.get_by_text("test-pairing-code", exact=True)).to_be_visible()
     expect(page.get_by_text("WhatsApp connected successfully.", exact=True)).to_be_visible(timeout=7_000)
-    expect(page.get_by_text("Paul", exact=True)).to_be_visible()
+    expect(page.get_by_text("Example contact", exact=True)).to_be_visible()
     assert state["connect_calls"] == 1
     assert state["status_calls"] >= 2
     assert state["save_calls"] == 1

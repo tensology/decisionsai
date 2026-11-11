@@ -42,7 +42,7 @@ def _ticket(factory, *, title="Fix the checkout button", **overrides) -> int:
             "lane_id": lane.id,
             "title": title,
             "source_provider": "whatsapp",
-            "source_thread_id": "27634103646",
+            "source_thread_id": "12025550142",
         }
         values.update(overrides)
         ticket = KanbanTicket(**values)
@@ -114,7 +114,7 @@ def test_short_reply_on_a_normal_ticket_is_sent(db_factory, sent):
 
     assert result["delivered"] is True
     assert result["channel"] == "whatsapp"
-    assert sent and sent[0]["target"] == "27634103646"
+    assert sent and sent[0]["target"] == "12025550142"
 
 
 def test_the_same_reply_is_never_sent_twice(db_factory, sent):
@@ -279,9 +279,9 @@ def test_email_reaches_the_address_not_the_thread_id(db_factory, sent):
 
 
 def test_whatsapp_still_uses_the_thread_jid(db_factory, sent):
-    ticket_id = _ticket(db_factory, source_provider="whatsapp", source_thread_id="27634103646")
+    ticket_id = _ticket(db_factory, source_provider="whatsapp", source_thread_id="12025550142")
 
     result = reply_delivery.deliver_ticket_reply(ticket_id, "The fix is in.")
 
     assert result["delivered"] is True
-    assert sent and sent[0]["target"] == "27634103646"
+    assert sent and sent[0]["target"] == "12025550142"

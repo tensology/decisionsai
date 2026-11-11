@@ -671,8 +671,8 @@ class WhatsAppPhoneLink(Base):
 
     id = Column(Integer, primary_key=True)
     board_id = Column(Integer, nullable=False)  # References kanban_boards.id (no FK to avoid circular import)
-    phone_jid = Column(String, nullable=False)  # e.g. '27634103646@s.whatsapp.net'
-    phone_number = Column(String)  # e.g. '27634103646'
+    phone_jid = Column(String, nullable=False)  # e.g. '12025550142@s.whatsapp.net'
+    phone_number = Column(String)  # e.g. '12025550142'
     contact_name = Column(String)  # display name from WhatsApp contacts
     auto_snapshot = Column(Boolean, default=False)  # auto-create ticket on new message?
     created_date = Column(DateTime, default=utc_now_naive)
@@ -704,7 +704,7 @@ class WhatsAppMessage(Base):
 
     # WhatsApp message identifiers
     message_id = Column(String, nullable=False, unique=True)  # WhatsApp's message ID (e.g. '3EB0...')
-    jid = Column(String, nullable=False)  # Chat JID (e.g. '27634103646@s.whatsapp.net' or group JID)
+    jid = Column(String, nullable=False)  # Chat JID (e.g. '12025550142@s.whatsapp.net' or group JID)
     jid_phone = Column(String)  # Phone number extracted from JID
     chat_type = Column(String)  # 'private', 'group'
 

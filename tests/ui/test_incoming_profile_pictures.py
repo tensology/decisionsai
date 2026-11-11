@@ -17,7 +17,7 @@ def test_contact_group_photo_and_private_fallback(page, width):
     for x in range(40):
         for y in range(40): image.putpixel((x, y), (36, 133, 124))
     data = io.BytesIO(); image.save(data, format='PNG')
-    jids = ['27820000000@s.whatsapp.net', '120363000000@g.us', '27820000001@s.whatsapp.net']
+    jids = ['12025550143@s.whatsapp.net', '120363000000@g.us', '12025550144@s.whatsapp.net']
     labels = ['Contact photo test', 'Group photo test', 'Private photo test']
     page.route('**/api/workflows/studio/incoming?*', lambda r: r.fulfill(json={'items': [
         {'source': 'whatsapp', 'source_thread_id': jid, 'key': f'whatsapp:{jid}',

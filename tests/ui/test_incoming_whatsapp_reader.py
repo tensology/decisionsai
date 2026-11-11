@@ -16,7 +16,7 @@ pytestmark = pytest.mark.e2e_playwright
 def test_whatsapp_reader_history_linking_and_text_replies(page, fixture_base, tmp_path, width):
     _install_api(page, [])
     group = "menu@g.us"
-    contact = "27820000000@s.whatsapp.net"
+    contact = "12025550143@s.whatsapp.net"
     sent = []
     links = []
     history = []

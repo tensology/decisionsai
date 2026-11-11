@@ -23,7 +23,7 @@ def test_channel_aliases_map_to_profiles():
 
 
 def test_whatsapp_target_is_sendable_with_a_thread():
-    ticket = {"source_provider": "whatsapp", "source_thread_id": "27634103646"}
+    ticket = {"source_provider": "whatsapp", "source_thread_id": "12025550142"}
     target = resolve_reply_target(ticket)
 
     assert target.channel == "whatsapp"

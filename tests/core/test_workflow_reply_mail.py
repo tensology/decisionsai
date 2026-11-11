@@ -170,7 +170,7 @@ def test_approved_helper_sends_exact_reviewed_body_without_shape_or_second_send(
     monkeypatch.setitem(delivery.ADAPTERS, 'whatsapp', transport)
     assert delivery.execute_approved_workflow_reply(details)['delivered']
     assert delivery.execute_approved_workflow_reply(details)['duplicate']
-    transport.assert_called_once_with(target='27634103646', body=details['body'], subject='')
+    transport.assert_called_once_with(target='12025550142', body=details['body'], subject='')
 
 
 def test_approved_workflow_requires_review_again_when_own_alias_becomes_external(store, monkeypatch):
