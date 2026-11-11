@@ -13,6 +13,16 @@
                     <label>Title<input id="kanban-ticket-title" type="text" autocomplete="off" required></label>
                     <label id="kanban-ticket-complexity-field">Complexity<select id="kanban-ticket-complexity"><option value="trivial">Trivial</option><option value="simple">Simple</option><option value="moderate">Moderate</option><option value="complex">Complex</option><option value="very_complex">Very complex</option></select></label>
                     <label>Description<textarea id="kanban-ticket-description" rows="7"></textarea></label>
+                    <details id="kanban-ticket-workflow-draft" class="kanban-ticket-workflow-draft" hidden>
+                        <summary>Workflow draft</summary>
+                        <p id="kanban-ticket-workflow-draft-status" role="status"></p>
+                        <div id="kanban-ticket-workflow-draft-steps"></div>
+                        <div class="kanban-ticket-workflow-draft-actions">
+                            <button type="button" class="secondary-button hidden" id="kanban-ticket-workflow-draft-retry">Refresh draft</button>
+                            <button type="button" class="primary-button hidden" id="kanban-ticket-workflow-draft-approve">Approve and launch</button>
+                            <a class="secondary-button hidden" id="kanban-ticket-workflow-draft-thread">Open Development thread</a>
+                        </div>
+                    </details>
                     <select class="hidden" id="kanban-ticket-lane" aria-hidden="true" tabindex="-1"></select>
                     <select class="hidden" id="kanban-ticket-priority" aria-hidden="true" tabindex="-1"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select>
                 </section>
@@ -34,6 +44,6 @@
                     <div class="kanban-ticket-inline-form kanban-ticket-todo-form"><input id="kanban-ticket-todo-input" type="text" placeholder="Add a to-do item" aria-label="New to-do item"><button type="button" class="secondary-button" id="kanban-ticket-add-todo">Add</button></div>
                 </section>
             </div>
-            <menu><button type="button" class="danger-button hidden" id="kanban-ticket-delete">Delete</button><a class="secondary-button hidden" id="kanban-ticket-source-link" href="#" target="_blank" rel="noopener">Open source</a><button type="button" class="secondary-button hidden" id="kanban-ticket-run-agent">Run with Codex</button><span class="menu-spacer"></span><button type="button" class="primary-button" id="kanban-ticket-create-thread">Start Thread</button><button type="submit" value="default" class="primary-button" id="kanban-ticket-save">Save ticket</button></menu>
+            <div class="kanban-ticket-actions"><p class="kanban-ticket-action-status hidden" id="kanban-ticket-action-status" role="status" aria-live="polite"></p><menu><button type="button" class="danger-button hidden" id="kanban-ticket-delete">Delete</button><a class="secondary-button hidden" id="kanban-ticket-source-link" href="#" target="_blank" rel="noopener">Open source</a><button type="button" class="secondary-button hidden" id="kanban-ticket-run-agent">Run with Codex</button><span class="menu-spacer"></span><button type="button" class="primary-button" id="kanban-ticket-create-thread">Start Thread</button><button type="submit" value="default" class="primary-button" id="kanban-ticket-save">Save ticket</button></menu></div>
         </form>
     </dialog>

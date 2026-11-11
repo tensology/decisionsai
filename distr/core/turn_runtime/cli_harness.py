@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from distr.core.turn_runtime.verification import tool_exit_code
 
 from distr.core.turn_runtime.contracts import (
     CancellationToken,
@@ -199,7 +200,10 @@ class CliHarnessTurnRuntime:
                     failed = str(item.get("status") or "").lower() in {
                         "failed",
                         "error",
-                    } or bool(item.get("error"))
+                    } or bool(item.get("error")) or tool_exit_code(item) not in (None, 0)
+                    code = tool_exit_code(item)
+                    if code is not None:
+                        details['exit_code'] = code
                     details.update(
                         {
                             "title": title,
@@ -316,7 +320,8 @@ class CliHarnessTurnRuntime:
                 result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
                 output = "\n".join(str(part.get("text") or "") for part in result.get("content", [])
                                    if isinstance(part, dict) and part.get("type") == "text")
-                failed = bool(raw.get("isError")) or bool(result.get("isError"))
+                code = tool_exit_code(result)
+                failed = bool(raw.get("isError")) or bool(result.get("isError")) or code not in (None, 0)
                 if on_event:
                     on_event(
                         TurnEvent(
@@ -335,6 +340,9 @@ class CliHarnessTurnRuntime:
                                 "title": title,
                                 "status": "running" if started else "error" if failed else "success",
                                 "backend": str(request.route.backend_id or ""),
+                                **({'exit_code': code} if code is not None else {}),
+                                **({'pipefail': True} if (result.get('details') or {}).get('pipefail') is True else {}),
+                                **({'errexit': True} if (result.get('details') or {}).get('errexit') is True else {}),
                                 **({"command": str(args["command"])[:8000]} if args.get("command") else {}),
                                 **({"output": output[:8000]} if output else {}),
                             },

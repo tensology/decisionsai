@@ -15,12 +15,13 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
+from distr.core.integrations.whatsapp import RELAY_MEDIA_CHUNK_BYTES
 from distr.core.integrations.whatsapp.paths import (
     media_path_for_database,
     resolve_whatsapp_media_disk_path,
@@ -28,7 +29,7 @@ from distr.core.integrations.whatsapp.paths import (
 from distr.core.kanban.ticket_policy import infer_ticket_complexity
 from distr.core.db import get_session, WhatsAppMessage
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, KanbanTicketFile
-from distr.gui.web.security import is_allowed_local_origin
+from distr.gui.web.security import is_allowed_local_origin, require_internal_token_dependency
 
 logger = logging.getLogger(__name__)
 
@@ -260,21 +261,35 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             return block + "\n\n" + "\n".join(out).strip()
         return block if not out else block + "\n" + "\n".join(out).strip()
 
-    """Attach WhatsApp-centric routes to the provided router."""
-    async def _get_media_auth(base_url: str, *, photo_jid: str = "") -> tuple[dict, dict]:
-        """Return (headers, params) for relay media fetch auth.
+    incoming_media_auth_lock = asyncio.Lock()
+    incoming_media_token: tuple[str, str, float] | None = None
 
-        Priority:
-        1) internal/HMAC headers when configured
-        2) device-auth ws_token as query param (no shared secret required)
-        """
+    async def _get_media_auth(
+        base_url: str, *, photo_jid: str = "", reuse_device_token: bool = False,
+        rejected_token: str | None = None,
+    ) -> tuple[dict, dict]:
+        """Return auth for relay media reads, sharing unscoped tokens across attachment ranges."""
+        nonlocal incoming_media_token
         headers = relay_auth_headers("")
         if headers:
             return headers, {}
+        if not reuse_device_token or photo_jid:
+            token, _ = await _request_media_device_token(base_url, photo_jid)
+            return {}, {"ws_token": token} if token else {}
+
+        async with incoming_media_auth_lock:
+            if incoming_media_token:
+                cached_base, cached_token, expires_at = incoming_media_token
+                if cached_base == base_url and cached_token != rejected_token and time.monotonic() < expires_at:
+                    return {}, {"ws_token": cached_token}
+            token, expires_at = await _request_media_device_token(base_url, "")
+            incoming_media_token = (base_url, token, expires_at) if token else None
+            return {}, {"ws_token": token} if token else {}
+
+    async def _request_media_device_token(base_url: str, photo_jid: str) -> tuple[str, float]:
         try:
             import httpx
 
-            relay_payload = {"app_user_id": "local-ui", "subscribe_phones": [photo_jid] if photo_jid else []}
             ident = load_or_create_device_identity()
             priv_raw = base64.b64decode(str(ident.get("private_key") or "").encode())
             priv = Ed25519PrivateKey.from_private_bytes(priv_raw)
@@ -289,25 +304,29 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 )
                 ch_obj = ch.json()
                 if ch.status_code != 200 or not ch_obj.get("success"):
-                    return {}, {}
+                    return "", 0.0
                 msg = str(ch_obj.get("challenge_message") or "")
                 sig = priv.sign(msg.encode())
+                issued_at = time.monotonic()
                 resp = await client.post(
                     f"{base_url}/device/ws-auth",
                     json={
                         "device_id": ident.get("device_id"),
                         "challenge_id": ch_obj.get("challenge_id"),
                         "signature": base64.b64encode(sig).decode(),
-                        "subscribe_phones": relay_payload.get("subscribe_phones") or [],
+                        "subscribe_phones": [photo_jid] if photo_jid else [],
                     },
                 )
                 obj = resp.json()
                 ws_token = str(obj.get("ws_token") or "").strip()
                 if resp.status_code == 200 and obj.get("success") and ws_token:
-                    return {}, {"ws_token": ws_token}
+                    lifetime = obj.get("expires_in_seconds")
+                    if not isinstance(lifetime, (int, float)) or not 0 < lifetime < float("inf"):
+                        lifetime = 30
+                    return ws_token, issued_at + lifetime - min(5, lifetime / 10)
         except Exception:
-            return {}, {}
-        return {}, {}
+            pass
+        return "", 0.0
 
     @router.get("/tickets/whatsapp/relay/messages")
     async def get_relay_whatsapp_messages(jid_phone: str = "", limit: int = 500, offset: int = 0, unprocessed_only: bool = False):
@@ -756,10 +775,77 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 }
             )
 
+    @router.get(
+        "/tickets/whatsapp/incoming-media/{message_id}",
+        dependencies=[Depends(require_internal_token_dependency)],
+    )
+    async def incoming_whatsapp_media(message_id: int, request: Request):
+        """Read a range of the source attachment without changing its intake state."""
+        import httpx
+
+        byte_range = request.headers.get("range", "")
+        match = re.fullmatch(r"bytes=([0-9]{1,16})-([0-9]{1,16})", byte_range)
+        if not match:
+            raise HTTPException(400, "A bounded attachment range is required.")
+        start, end = map(int, match.groups())
+        if end < start or end - start + 1 > RELAY_MEDIA_CHUNK_BYTES:
+            raise HTTPException(400, "A bounded attachment range is required.")
+        with get_session() as session:
+            message = session.get(WhatsAppMessage, message_id)
+            source_id = (message.message_id or "").strip() if message else ""
+            if not source_id or source_id in {".", ".."} or not (message.media_type or message.media_mime_type):
+                raise HTTPException(404, "This WhatsApp attachment has no source media.")
+
+        relay_base = _whatsapp_relay_base_url()
+        rejected_token = None
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                for attempt in range(2):
+                    auth_headers, params = await _get_media_auth(
+                        relay_base, reuse_device_token=True, rejected_token=rejected_token,
+                    )
+                    if not auth_headers and not params:
+                        raise HTTPException(503, "The desktop could not connect to the WhatsApp relay. Try again.")
+                    headers = {**auth_headers, "Range": byte_range, "Accept-Encoding": "identity"}
+                    async with client.stream(
+                        "GET", f"{relay_base}/media/{quote(source_id, safe='')}",
+                        headers=headers, params=params,
+                    ) as upstream:
+                        if upstream.status_code == 401 and attempt == 0 and params.get("ws_token"):
+                            rejected_token = params["ws_token"]
+                            continue
+                        if upstream.status_code == 404:
+                            raise HTTPException(404, "This attachment is unavailable on the desktop and WhatsApp relay.")
+                        if upstream.status_code == 416:
+                            raise HTTPException(409, "The attachment changed during download. Try again.")
+                        if upstream.status_code != 206 and (start != 0 or upstream.status_code != 200):
+                            raise HTTPException(502, "The WhatsApp relay could not return the attachment. Try again.")
+                        if upstream.status_code == 206 and not (
+                            upstream.headers.get("content-range") and upstream.headers.get("etag")
+                        ):
+                            raise HTTPException(502, "The WhatsApp relay returned an incomplete attachment range.")
+                        data = bytearray()
+                        async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
+                            data.extend(chunk)
+                            if len(data) > end - start + 1:
+                                raise HTTPException(502, "The WhatsApp relay did not return a bounded attachment range.")
+                        return Response(
+                            bytes(data), status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type", "application/octet-stream"),
+                            headers={
+                                "Content-Disposition": "attachment",
+                                "Cache-Control": "no-store",
+                                **{key: upstream.headers[key] for key in ("content-range", "etag") if key in upstream.headers},
+                            },
+                        )
+        except httpx.RequestError:
+            raise HTTPException(502, "The WhatsApp relay could not return the attachment. Try again.") from None
+
     @router.get("/tickets/whatsapp/relay-media/{message_id}")
     async def relay_whatsapp_media(
         message_id: int,
         format: str = "",
+        cached_only: bool = False,
         wa_key: str = Query("", description="Optional WhatsApp message key if the DB column is empty/stale"),
     ):
         """Proxy media from relay server and cache locally.
@@ -769,8 +855,6 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
           wa_key: optional WhatsApp message_id string (same as Baileys key id) for relay fetch
         """
         import requests as req_lib
-
-        relay_base = _whatsapp_relay_base_url()
 
         def _hints_from_raw(msg_row: WhatsAppMessage) -> tuple[str, str]:
             """Return (whatsapp_message_id, relay_media_path) from row + raw_data JSON."""
@@ -810,8 +894,24 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             msg_media_mime_type = msg.media_mime_type
             msg_message_id = (msg.message_id or "").strip()
             msg_media_type = msg.media_type
+            msg_media_filename = msg.media_filename
             raw_wa_id, relay_path_hint = _hints_from_raw(msg)
             effective_wa_id = (wa_key or "").strip() or msg_message_id or raw_wa_id
+
+        # Remote previews may read an existing original without provider, transcription,
+        # acknowledgement, or database writes. Never accept a caller-supplied disk path.
+        if cached_only:
+            if message_id <= 0 or (wa_key and msg_message_id and wa_key.strip() != msg_message_id):
+                raise HTTPException(404, "WhatsApp media is unavailable")
+            media_dir = os.path.realpath(os.path.join(DB_DIR, "whatsapp_media"))
+            full_path = os.path.realpath(resolve_whatsapp_media_disk_path(msg_media_local_path or "") or media_dir)
+            if os.path.commonpath([media_dir, full_path]) != media_dir or not os.path.isfile(full_path):
+                raise HTTPException(404, "Media is not cached on this device. Open it in the desktop app first.")
+            filename = os.path.basename(str(msg_media_filename or full_path).replace("\\", "/"))
+            return FileResponse(full_path, media_type=msg_media_mime_type or "application/octet-stream",
+                                filename=filename, content_disposition_type="attachment")
+
+        relay_base = _whatsapp_relay_base_url()
 
         # ── M4A format request (Safari/iOS) ──────────────────────────────
         if format == "m4a" and msg_media_local_path:

@@ -536,7 +536,7 @@ def register_routes(router, templates):
         try:
             from distr.core.workflow.service import apply_run_harness_steer
 
-            result = apply_run_harness_steer(run_id, message)
+            result = apply_run_harness_steer(run_id, message, expected_workflow_id=workflow_id)
             if result.get("error"):
                 return JSONResponse(
                     {"detail": result["error"]},

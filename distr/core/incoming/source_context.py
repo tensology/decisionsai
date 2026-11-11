@@ -15,6 +15,44 @@ import subprocess
 import sys
 
 
+def scope_whatsapp_proposal(proposal: dict) -> dict:
+    """Project the marked WhatsApp request for viewing and handoff."""
+    conversation = proposal.get('source_conversation') or {}
+    source = proposal.get('source') or conversation.get('channel') or ''
+    if str(source).lower() != 'whatsapp':
+        return proposal
+
+    ids = {str(value) for value in (proposal.get('message_ids') or proposal.get('source_message_ids') or []) if value}
+    context_ids = {str(value) for value in proposal.get('source_context_message_ids') or []}
+    evidence = [row for row in proposal.get('evidence') or [] if isinstance(row, dict)]
+    if ids:
+        evidence.extend(row for row in proposal.get('context_evidence') or [] if isinstance(row, dict))
+        by_id = {}
+        for row in evidence:
+            message_id = str(row.get('id') or '')
+            if message_id in ids:
+                by_id.setdefault(message_id, row)
+        evidence = list(by_id.values())
+    else:
+        evidence = [row for row in evidence if not row.get('context_only') and str(row.get('id') or '') not in context_ids]
+        ids = {str(row['id']) for row in evidence if row.get('id')}
+    attachments = [
+        row for row in proposal.get('attachments') or [] if isinstance(row, dict)
+        and (not row.get('source_message_id') or str(row['source_message_id']) in ids)
+    ]
+    return {
+        **proposal,
+        'evidence': evidence,
+        'context_evidence': [],
+        'source_context_message_ids': [],
+        'attachments': attachments,
+        **({'source_scope': [
+            {**ref, 'source_context_message_ids': []} if (ref.get('source') or ref.get('channel')) == 'whatsapp' else ref
+            for ref in proposal['source_scope'] if isinstance(ref, dict)
+        ]} if proposal.get('source_scope') else {}),
+    }
+
+
 def proposal_source_context(proposal: dict) -> dict:
     if str(proposal.get("source") or "").lower() != "whatsapp":
         return {}
@@ -28,6 +66,7 @@ def proposal_source_context(proposal: dict) -> dict:
 
 def proposal_evidence_prompt(proposal: dict) -> str:
     """Render the retained proposal pack without truncating source text or secrets."""
+    proposal = scope_whatsapp_proposal(proposal)
     rows = []
     seen = set()
     context_ids = set(map(str, proposal.get('source_context_message_ids') or []))
@@ -85,18 +124,26 @@ def register_source_context(chat_id: int, proposal: dict) -> None:
     if not context:
         register_reply_context(chat_id, proposal)
         return
-    with get_session() as db:
-        chat = db.get(Chat, chat_id)
-        if chat is None or chat.project_id != int(proposal["project_id"]):
-            raise ValueError("Source context does not belong to this project thread.")
-        params = _chat_params(chat.params)
-        prior = params.get("incoming_source_context") or {}
-        if prior and (prior.get("source_thread_id") != context["source_thread_id"]):
-            raise ValueError("Source context belongs to another conversation.")
-        context["message_ids"] = list(dict.fromkeys([*(prior.get("message_ids") or []), *context["message_ids"]]))
-        params["incoming_source_context"] = context
-        chat.params = json.dumps(params)
-        db.commit()
+    for _ in range(5):
+        with get_session() as db:
+            chat = db.get(Chat, chat_id)
+            if chat is None or chat.project_id != int(proposal["project_id"]):
+                raise ValueError("Source context does not belong to this project thread.")
+            original = chat.params
+            params = _chat_params(original)
+            prior = params.get("incoming_source_context") or {}
+            if prior and (prior.get("source_thread_id") != context["source_thread_id"]):
+                raise ValueError("Source context belongs to another conversation.")
+            context["message_ids"] = list(dict.fromkeys([*(prior.get("message_ids") or []), *context["message_ids"]]))
+            params["incoming_source_context"] = context
+            changed = db.query(Chat).filter(Chat.id == chat_id, Chat.project_id == int(proposal["project_id"]),
+                                            Chat.params == original).update(
+                {Chat.params: json.dumps(params)}, synchronize_session=False)
+            if changed:
+                db.commit()
+                break
+    else:
+        raise ValueError("The thread changed while saving its source context. Refresh and retry.")
     register_reply_context(chat_id, proposal)
     sync_ticket_source_context(chat_id)
 

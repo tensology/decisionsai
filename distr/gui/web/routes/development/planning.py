@@ -20,6 +20,19 @@ async def _plan_call(function, *args, **kwargs):
         return JSONResponse({"detail": "The planning operation failed. Your saved artifacts are retained. Check the selected model and retry."}, status_code=500)
 
 
+def _read_scoped_plan(reader, workspace_id, board_id, project_id, *args):
+    from distr.core.planning.service import validate_board_plan_read
+
+    if board_id is not None or project_id is not None:
+        validate_board_plan_read(workspace_id, board_id, project_id)
+    result = reader(workspace_id, *args)
+    if result is None:
+        raise LookupError("Plan workspace not found.")
+    if board_id is not None or project_id is not None:
+        validate_board_plan_read(workspace_id, board_id, project_id)
+    return result
+
+
 def register_routes(router, templates):
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/attachments/{asset_id}/preview-info")
     async def plan_pdf_info(workspace_id: int, asset_id: int):
@@ -38,9 +51,10 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/conversation")
-    async def plan_conversation(workspace_id: int, chat_id: int | None = None):
+    async def plan_conversation(workspace_id: int, chat_id: int | None = None,
+                                board_id: int | None = None, project_id: int | None = None):
         from distr.core.planning.conversation import get_conversation
-        return await _plan_call(get_conversation, workspace_id, chat_id)
+        return await _plan_call(_read_scoped_plan, get_conversation, workspace_id, board_id, project_id, chat_id)
 
     # Multi-chat (N3 Option A). Delete is a soft archive; stale expected_revision -> 409.
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/chats")
@@ -179,9 +193,9 @@ def register_routes(router, templates):
 
     @router.post("/workflows/studio/plan-workspaces")
     async def workflow_studio_ensure_plan_workspace(data: PlanWorkspaceEnsureRequest):
-        try:
-            from distr.core.planning.service import open_project_plan
+        from distr.core.planning.service import PlanWorkspaceProjectConflict, open_project_plan
 
+        try:
             return JSONResponse(await asyncio.to_thread(
                 open_project_plan,
                 board_key=data.board_key,
@@ -190,18 +204,18 @@ def register_routes(router, templates):
                 project_id=data.project_id,
                 defer_scan=True,
             ))
+        except PlanWorkspaceProjectConflict as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=400)
 
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}")
-    async def workflow_studio_plan_workspace(workspace_id: int):
+    async def workflow_studio_plan_workspace(workspace_id: int, board_id: int | None = None,
+                                             project_id: int | None = None):
         from distr.core.planning.service import get_workspace
 
-        workspace = await asyncio.to_thread(get_workspace, workspace_id)
-        if workspace is None:
-            return JSONResponse({"detail": "Plan workspace not found."}, status_code=404)
-        return JSONResponse(workspace)
+        return await _plan_call(_read_scoped_plan, get_workspace, workspace_id, board_id, project_id)
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/scan-status")
     async def workflow_studio_plan_scan_status(workspace_id: int):

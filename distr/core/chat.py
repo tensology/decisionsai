@@ -141,6 +141,22 @@ def _chat_audit_preview(message: str, *, max_len: int = 1000) -> str:
     return clean[: max_len - 3].rstrip() + "..."
 
 
+def _assistant_notice_row(root: Chat, cleaned: str, *, hidden: bool = False) -> Chat:
+    return Chat(
+        parent_id=root.id,
+        title=None,
+        input=None,
+        response=cleaned,
+        provider=root.provider,
+        model_name=root.model_name,
+        voice_provider=root.voice_provider,
+        voice_model=root.voice_model,
+        is_hidden=hidden,
+        created_date=datetime.now(timezone.utc),
+        modified_date=datetime.now(timezone.utc),
+    )
+
+
 def record_chat_audit_event(
     *,
     chat_id: int,
@@ -565,6 +581,28 @@ def resolve_usable_voice_selection(
     return "kokoro", resolve_voice_model_from_global_settings("kokoro", settings) or ""
 
 
+def _append_user_turn(session, root: Chat, params: dict, message: str, metadata: dict | None = None) -> int:
+    """Add a prompt and update the active turn inside the caller's transaction."""
+    now = datetime.now(timezone.utc)
+    child = Chat(
+        parent_id=root.id,
+        title=message.split("\n")[0][:50],
+        input=message,
+        params=json.dumps({"development_turn": metadata}, ensure_ascii=False, default=str) if metadata else None,
+        provider=root.provider,
+        model_name=root.model_name,
+        voice_provider=root.voice_provider,
+        voice_model=root.voice_model,
+        created_date=now,
+        modified_date=now,
+    )
+    session.add(child)
+    session.flush()
+    turn_id = int(child.id)
+    params["active_turn_chat_row_id"] = turn_id
+    return turn_id
+
+
 class ChatService:
     """Central service for chat DB and settings. Used by web routes and ChatManager. No Qt/signals."""
 
@@ -761,12 +799,14 @@ class ChatService:
             return messages
 
     @staticmethod
-    def add_user_message(chat_id: int, message: str, *, metadata: Optional[dict[str, Any]] = None) -> None:
+    def add_user_message(chat_id: int, message: str, *, metadata: Optional[dict[str, Any]] = None) -> int | None:
         """Append a user message to the chat thread in the DB."""
         cleaned = (message or "").strip()
         if not cleaned:
             return
         with get_session() as session:
+            if session.get_bind().dialect.name == "sqlite":
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             chat = session.get(Chat, chat_id)
             if not chat:
                 logger.warning(
@@ -787,38 +827,23 @@ class ChatService:
             root = session.get(Chat, root_id)
             if not root:
                 return
-            child = Chat(
-                parent_id=root_id,
-                title=cleaned.split("\n")[0][:50] if cleaned else None,
-                input=cleaned,
-                response=None,
-                params=json.dumps({"development_turn": metadata}, ensure_ascii=False, default=str) if metadata else None,
-                provider=root.provider,
-                model_name=root.model_name,
-                voice_provider=root.voice_provider,
-                voice_model=root.voice_model,
-                created_date=datetime.now(timezone.utc),
-                modified_date=datetime.now(timezone.utc),
-            )
-            session.add(child)
-            session.commit()
-            session.refresh(child)
             params = _chat_params(root.params)
-            params["active_turn_chat_row_id"] = int(child.id)
+            turn_id = _append_user_turn(session, root, params, cleaned, metadata)
             root.params = json.dumps(params)
             session.commit()
             try:
                 from distr.core.chat_turns import ensure_turn_started
 
-                ensure_turn_started(int(root_id), int(child.id))
+                ensure_turn_started(int(root_id), turn_id)
             except Exception:
                 logger.debug("Could not initialize durable chat turn", exc_info=True)
             record_chat_audit_event(
                 chat_id=int(root_id),
-                chat_row_id=int(child.id) if child.id is not None else None,
+                chat_row_id=turn_id,
                 role="user",
                 content=cleaned,
             )
+            return turn_id
 
     @staticmethod
     def append_assistant_notice(chat_id: int, message: str, *, hidden: bool = False) -> Optional[int]:
@@ -847,19 +872,7 @@ class ChatService:
             root = session.get(Chat, root_id)
             if not root:
                 return None
-            child = Chat(
-                parent_id=root_id,
-                title=None,
-                input=None,
-                response=cleaned,
-                provider=root.provider,
-                model_name=root.model_name,
-                voice_provider=root.voice_provider,
-                voice_model=root.voice_model,
-                is_hidden=hidden,
-                created_date=datetime.now(timezone.utc),
-                modified_date=datetime.now(timezone.utc),
-            )
+            child = _assistant_notice_row(root, cleaned, hidden=hidden)
             session.add(child)
             root.modified_date = datetime.now(timezone.utc)
             session.commit()

@@ -88,6 +88,29 @@ def test_planning_contract_covers_feature_impacts_and_real_project_assets(store,
     assert "do not copy the example domain" in instruction
 
 
+def test_planning_prompt_wireframe_example_can_be_saved_by_itself(store, monkeypatch):
+    calls = respond(monkeypatch, {"reply": "Ready to sketch.", "edits": []})
+    assert send()["status"] == "complete"
+    instruction = calls[0][2][0]["content"]
+    example = instruction.split("Example source:\n", 1)[1].split("Attached images are labelled", 1)[0]
+
+    respond(monkeypatch, {"reply": "Drafted the screen.", "edits": [
+        {"item_type": "wireframe", "title": "Example", "content_format": "wire", "content": example},
+    ]})
+    result = send()
+    assert result["status"] == "complete", result["messages"][-1]["content"]
+    assert any(item["content"] == example for item in service.get_workspace(1)["items"])
+
+
+def test_planning_prompt_distinguishes_wire_and_mermaid_metadata(store, monkeypatch):
+    calls = respond(monkeypatch, {"reply": "Ready to sketch.", "edits": []})
+    assert send()["status"] == "complete"
+    instruction = calls[0][2][0]["content"]
+    assert 'Wire nodes may use "shape", "image", "note", and "links".' in instruction
+    assert 'Mermaid nodes may use "image", "note", and "links".' in instruction
+    assert 'Omit metadata on new artifacts unless requested.' in instruction
+
+
 def test_build_uses_plain_conversation_copy(monkeypatch):
     observed = {}
     def turn(workspace_id, **kwargs):
@@ -223,6 +246,29 @@ def test_artifact_syntax_gets_one_atomic_repair(store, monkeypatch, kind, fmt, i
         assert 'Invalid' in result['messages'][-1]['content']
 
 
+def test_repair_timeout_preserves_the_original_artifact_diagnostic(store, monkeypatch):
+    calls = []
+
+    def stream(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 2:
+            raise c.runtime.PlanningRuntimeError(c.runtime._failure_message("timeout"))
+        yield json.dumps({"reply": "Created", "edits": [
+            {"item_type": "wireframe", "title": "Customers", "content_format": "wire",
+             "content": "screen Customers\n  input Name bind=Customer.name"},
+        ]})
+
+    monkeypatch.setattr(c.runtime, "create_stream", stream)
+    result = send()
+    assert result["status"] == "error"
+    reply = result["messages"][-1]["content"]
+    assert "unresolved bind=Customer.name" in reply
+    assert "timed out" in reply
+    assert c.get_conversation(1)["messages"][-1]["content"] == reply
+    items = service.get_workspace(1)["items"]
+    assert [(item["content"], item["revision_count"]) for item in items] == [("Old", 1)]
+
+
 @pytest.mark.parametrize("page_id, valid", [("customers", True), ("removed-page", False)])
 def test_selected_wireframe_page_is_validated_and_passed_to_model(store, monkeypatch, page_id, valid):
     with store[0]() as db:
@@ -292,6 +338,41 @@ def test_provider_error_and_recovery_reuse_identity(store, monkeypatch):
         assert db.query(Chat).count() == 3
 
 
+def test_message_request_replay_is_read_only_while_running_and_after_completion(store, monkeypatch):
+    calls = []
+
+    def stream(*args):
+        calls.append(args)
+        running = send(request_id="browser-request")
+        assert running["status"] == "running"
+        assert running["messages"][-1]["request_id"] == "browser-request"
+        yield '{"reply":"Saved once","edits":[]}'
+
+    monkeypatch.setattr(c.llm_factory, "create_stream", stream)
+    first = send(request_id="browser-request")
+    assert first["messages"][0]["status"] == "complete"
+    replay = send(request_id="browser-request", chat_id=first["chat_id"])
+    assert replay["messages"] == first["messages"]
+    with pytest.raises(ValueError, match="different submission"):
+        send(request_id="browser-request", tab="requirements")
+    assert len(calls) == 1
+    with store[0]() as db:
+        assert db.query(Chat).count() == 2
+
+
+def test_confirmed_failure_can_retry_with_a_new_message_request(store, monkeypatch):
+    monkeypatch.setattr(c.llm_factory, "create_stream", lambda *args: iter(["bad result"]))
+    failed = send(request_id="failed-attempt")
+    assert failed["messages"][0]["status"] == "error"
+    calls = respond(monkeypatch, {"reply": "Recovered", "edits": []})
+    assert send(request_id="failed-attempt")["status"] == "error"
+    assert not calls
+    retry = send(request_id="explicit-retry", chat_id=failed["chat_id"])
+    assert retry["status"] == "complete"
+    assert retry["messages"][-2]["request_id"] == "explicit-retry"
+    assert len(calls) == 1
+
+
 def test_concurrent_claim_rejected(store, monkeypatch):
     def stream(*args):
         with pytest.raises(ValueError, match="already running"):
@@ -337,8 +418,9 @@ def test_build_contract_and_persisted_trace(store, monkeypatch):
             "depends_on": [], "source_item_ids": [1], "acceptance_criteria": ["Works"],
             "skills": [], "complexity": "low", "role": "implementation"}
     respond(monkeypatch, {"reply": "Build ready", "edits": [], "tasks": [task]})
-    def build_tasks(wid, *, tasks, expected_revisions):
+    def build_tasks(wid, *, tasks, expected_revisions, source_chat_id):
         assert wid == 1 and tasks == [task] and expected_revisions == {"1": 1}
+        assert type(source_chat_id) is int and source_chat_id > 0
         return {"created": 1, "reused": 0}
     monkeypatch.setattr(build, "build_tasks", build_tasks)
     assert c.generate_build(1, provider="openai", model_name="chosen") == {"created": 1, "reused": 0}
@@ -514,6 +596,19 @@ def test_build_questions_persist_without_creating_tasks(store, monkeypatch):
         assert "Sign-in required" in db.get(PlanItem, 1).content
 
 
+def test_build_prompt_requests_tasks_without_artifact_editing_contract(store, monkeypatch):
+    calls = respond(monkeypatch, {"reply": "One decision remains.", "edits": [], "tasks": [],
+                                "questions": ["Who can access the form?"]})
+    assert c.generate_build(1, provider="openai", model_name="chosen")["status"] == "needs_input"
+    messages = calls[0][2]
+    instruction = messages[0]["content"]
+    assert '"edits":[]' in instruction
+    assert '"tasks":[]' not in instruction
+    assert "create_interface" not in instruction
+    assert "acceptance_criteria" in instruction
+    assert "Requirements" in messages[-1]["content"]
+
+
 @pytest.mark.parametrize("questions", [[""], ["A?"] * 4, "A?", [42]])
 def test_invalid_planning_questions_rejected(store, monkeypatch, questions):
     respond(monkeypatch, {"reply": "Question", "edits": [], "tasks": [], "questions": questions})
@@ -560,7 +655,12 @@ def test_real_local_model_creates_linked_plan_in_isolated_database(store, monkey
                  "This is a single-user local Django/PostgreSQL application, server-rendered HTML, no integrations, "
                  "no login and no deployment work. These choices are decided. Create the three linked artifacts now, "
                  "not tasks. Keep each document under 20 lines."))
-    assert result["status"] == "complete", (result["messages"][-1]["content"], observed)
+    with store[0]() as db:
+        turn = db.get(Chat, result["messages"][-1]["id"])
+        repair = json.loads(turn.params).get("proposal_repair")
+    if repair:
+        print("Automatic repair diagnostic:", repair["reason"])
+    assert result["status"] == "complete", (result["messages"][-1]["content"], observed, repair)
     workspace = service.get_workspace(1)
     kinds = {item["item_type"] for item in workspace["items"]}
     assert {"wireframe", "erd", "prd"} <= kinds

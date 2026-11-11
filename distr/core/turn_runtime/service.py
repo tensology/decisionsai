@@ -11,6 +11,7 @@ from pathlib import Path
 from distr.core.turn_runtime.cli_harness import CliHarnessTurnRuntime
 from distr.core.turn_runtime.contracts import (
     CancellationToken,
+    POTENTIALLY_MUTATING_PROJECT_TOOLS,
     SteeringChannel,
     TurnEventSink,
     TurnEvent,
@@ -56,10 +57,10 @@ def _create_native_execution_session(request: TurnRequest) -> int | None:
                 "chat_id": request.scope.chat_id,
                 "turn_id": request.scope.turn_id,
                 "board_id": request.scope.board_id,
-                "prompt": request.prompt,
                 "project_folder": request.scope.project_folder,
                 "autonomy_level": request.autonomy_level,
                 "required_capabilities": list(request.required_capabilities),
+                "recovery_version": 1,
             },
         )
     except Exception:
@@ -136,6 +137,7 @@ def get_turn_runtime(runtime_id: str = "", *, request: TurnRequest | None = None
                 provider=request.route.provider,
                 model=request.route.model,
                 settings=load_settings_from_db(),
+                reasoning_effort=str(request.route.adapter_options.get("reasoning_effort") or ""),
             ),
             tools=ProjectToolExecutor(
                 request.scope.project_folder,
@@ -212,6 +214,7 @@ async def execute_turn(
         _active_turns[chat_id] = active
     execution_session_id: int | None = None
     native_mutation_started = False
+    native_output_started = False
     try:
         try:
             runtime = get_turn_runtime(selected, request=request)
@@ -223,16 +226,29 @@ async def execute_turn(
             runtime = get_turn_runtime(selected, request=request)
         active.runtime = runtime
         if selected == "native":
+            from distr.core.turn_runtime.recovery import RecoveryJournal
+
+            resume_session_id = request.metadata.get("resume_session_id")
+            completed = RecoveryJournal.load(
+                resume_session_id, scope=request.scope, turn_id=request.metadata.get("resume_turn_id"),
+            ) if resume_session_id else {}
             execution_session_id = _create_native_execution_session(request)
+            if resume_session_id and not execution_session_id:
+                raise RuntimeError("Could not persist a new execution session for the resumed turn.")
+            if execution_session_id:
+                journal = RecoveryJournal(execution_session_id, request.scope.project_folder, completed)
+                journal.seed()
+                request = replace(request, metadata={**request.metadata, "recovery_journal": journal})
+        elif request.metadata.get("resume_session_id"):
+            raise ValueError("The interrupted turn requires a native Development route to resume safely.")
 
         def relay(event):
-            nonlocal native_mutation_started
-            if event.kind == TurnEventKind.TOOL_STARTED and event.tool_name in {
-                "replace_text",
-                "write_file",
-                "run_command",
-            }:
-                native_mutation_started = True
+            nonlocal native_mutation_started, native_output_started
+            if selected == "native":
+                if event.kind == TurnEventKind.TOOL_STARTED and event.tool_name in POTENTIALLY_MUTATING_PROJECT_TOOLS:
+                    native_mutation_started = True
+                if event.kind == TurnEventKind.OUTPUT_DELTA and event.output_delta:
+                    native_output_started = True
             projected = replace(event, execution_session_id=execution_session_id) if execution_session_id else event
             if execution_session_id and event.kind.value != "output_delta":
                 try:
@@ -267,7 +283,7 @@ async def execute_turn(
             raise
         except Exception as native_exc:
             should_fallback = False
-            if selected == "native" and not native_mutation_started:
+            if selected == "native" and not (native_mutation_started or native_output_started or request.metadata.get("resume_session_id")):
                 try:
                     from distr.core.project_cli_backends.policy_manager import _counts_as_model_health_failure
 
@@ -316,7 +332,10 @@ async def execute_turn(
                 cancellation=token,
                 steering=steering,
             )
-        if not result.success and not native_mutation_started:
+        stopped_by_provider = selected == "native" and "finish_reason" in result.evidence
+        if not result.success and not (
+            native_mutation_started or native_output_started or stopped_by_provider or request.metadata.get("resume_session_id")
+        ):
             try:
                 from distr.core.project_cli_backends.policy_manager import _counts_as_model_health_failure
 
@@ -462,15 +481,17 @@ def active_turn_registered(chat_id: int) -> bool:
         return int(chat_id) in _active_turns
 
 
-def steer_active_turn(chat_id: int, guidance: str) -> dict[str, object]:
+def steer_active_turn(chat_id: int, guidance: str, *, expected_turn_id: int | None = None) -> dict[str, object]:
     """Steer a native direct turn. Other runtimes leave guidance queued."""
     clean = str(guidance or "").strip()
     if not clean:
         raise ValueError("Steering guidance is required.")
     with _active_lock:
         active = _active_turns.get(int(chat_id))
-    if active is None or active.runtime_id != "native":
+    if active is None or active.runtime_id != "native" or active.token.cancelled:
         return {"accepted": False, "reason": "no_active_native_turn"}
+    if expected_turn_id is not None and active.turn_id != expected_turn_id:
+        return {"accepted": False, "reason": "active_turn_changed"}
 
     event_id = ""
     if active.turn_id is not None:
@@ -478,10 +499,13 @@ def steer_active_turn(chat_id: int, guidance: str) -> dict[str, object]:
 
         event = steer_turn(int(chat_id), int(active.turn_id), clean)
         event_id = str((event or {}).get("event_id") or "")
-    active.steering.put(clean, event_id=event_id)
-    return {
-        "accepted": True,
-        "method": "native_turn_steering",
-        "runtime_id": "native",
-        "event_id": event_id,
-    }
+    with _active_lock:
+        if _active_turns.get(int(chat_id)) is active and active.runtime_id == "native" and not active.token.cancelled:
+            active.steering.put(clean, event_id=event_id)
+            return {"accepted": True, "method": "native_turn_steering", "runtime_id": "native", "event_id": event_id}
+    if event_id:
+        from distr.core.chat_turns import update_event
+
+        update_event(event_id, status="cancelled", title="Guidance not applied",
+                     summary="The worker ended before accepting this instruction.", metadata={"discarded": True})
+    return {"accepted": False, "reason": "active_turn_changed"}

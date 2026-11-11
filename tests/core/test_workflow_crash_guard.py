@@ -1,8 +1,8 @@
 from contextlib import contextmanager
 from datetime import datetime
-from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -37,32 +37,6 @@ def test_executor_shutdown_error_is_only_suppressed_during_interpreter_teardown(
     assert _is_interpreter_shutdown_error(error) is True
 
 
-class _Query:
-    def __init__(self, model):
-        self.model = model
-
-    def filter(self, *args, **kwargs):
-        return self
-
-    def first(self):
-        if self.model is AutoWorkflowRun:
-            return SimpleNamespace(status="running", current_step_id=None)
-        return None
-
-
-class _Session:
-    def query(self, *args, **kwargs):
-        return _Query(args[0] if args else None)
-
-    def commit(self):
-        return None
-
-
-@contextmanager
-def _session():
-    yield _Session()
-
-
 def _factory():
     engine = create_engine(
         "sqlite://",
@@ -84,6 +58,27 @@ def _real_session(factory):
         raise
     finally:
         session.close()
+
+
+@pytest.fixture
+def dispatch_run(monkeypatch):
+    factory = _factory()
+    monkeypatch.setattr("distr.core.workflow.dispatcher.get_session", lambda: _real_session(factory))
+
+    def seed(status):
+        with _real_session(factory) as session:
+            workflow = AutoWorkflow(name="Dispatch guard")
+            session.add(workflow)
+            session.flush()
+            step = AutoWorkflowStep(workflow_id=workflow.id, name="Worker")
+            session.add(step)
+            session.flush()
+            run = AutoWorkflowRun(workflow_id=workflow.id, current_step_id=step.id, status=status)
+            session.add(run)
+            session.flush()
+            return workflow.id, step.id, run.id
+
+    return seed
 
 
 def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monkeypatch):
@@ -212,7 +207,8 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
         assert stale_terminal_ticket.workflow_status == "completed"
 
 
-def test_startup_recovery_preserves_run_with_durable_current_step(monkeypatch):
+@pytest.mark.parametrize("worker_started", [False, True])
+def test_startup_recovery_preserves_run_with_durable_current_step(monkeypatch, worker_started):
     factory = _factory()
     with _real_session(factory) as session:
         workflow = AutoWorkflow(name="Recoverable workflow")
@@ -248,10 +244,13 @@ def test_startup_recovery_preserves_run_with_durable_current_step(monkeypatch):
             project_id=7,
             workflow_id=workflow.id,
             run_id=run.id,
+            step_id=step.id,
             status="running",
         )
         session.add(execution)
         session.flush()
+        if worker_started:
+            session.add(ProjectExecutionEvent(session_id=execution.id, event_type="executor_start"))
         ids = {"run": run.id, "ticket": ticket.id, "execution": execution.id}
 
     monkeypatch.setattr(
@@ -267,6 +266,7 @@ def test_startup_recovery_preserves_run_with_durable_current_step(monkeypatch):
         event = (
             session.query(ProjectExecutionEvent)
             .filter(ProjectExecutionEvent.session_id == ids["execution"])
+            .filter(ProjectExecutionEvent.event_type == "restart_recovery_available")
             .one()
         )
         run_data = __import__("json").loads(run.run_data)
@@ -285,6 +285,14 @@ def test_startup_recovery_preserves_run_with_durable_current_step(monkeypatch):
     monkeypatch.setattr("distr.core.workflow.dispatcher.record_workflow_chat_event", lambda *_args, **_kwargs: None)
 
     resumed = continue_waiting_step(ids["run"], "continue")
+
+    if worker_started:
+        assert resumed["status_code"] == 409
+        assert "Inspect its effects" in resumed["error"]
+        dispatch.assert_not_called()
+        with _real_session(factory) as session:
+            assert session.get(AutoWorkflowRun, ids["run"]).status == "waiting"
+        return
 
     assert resumed["success"] is True
     assert resumed["action"] == "retry_step"
@@ -362,53 +370,39 @@ def test_controlled_restart_fault_targets_only_explicit_qualification_run(monkey
         ]
 
 
-def test_unexpected_backend_exception_becomes_failed_step_result(monkeypatch):
-    monkeypatch.setattr("distr.core.workflow.dispatcher.get_session", _session)
+def test_unexpected_backend_exception_becomes_failed_step_result(monkeypatch, dispatch_run):
+    workflow_id, step_id, run_id = dispatch_run("running")
     monkeypatch.setattr("distr.core.workflow.dispatcher.build_step_preflight", lambda *_args, **_kwargs: {"ok": True, "summary": "ready"})
     monkeypatch.setattr("distr.core.workflow.dispatcher.record_workflow_chat_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("distr.core.workflow.dispatcher.emit_step_activity", lambda *_args, **_kwargs: None)
 
     dispatcher = StepDispatcher()
-    dispatcher._load_step = Mock(return_value={"id": 7, "name": "Worker", "workflow_id": 3, "position": 0})
+    dispatcher._load_step = Mock(return_value={"id": step_id, "name": "Worker", "workflow_id": workflow_id, "position": 0})
     dispatcher._set_run_phase = Mock()
     dispatcher._validate_before_dispatch = Mock(return_value=[])
     dispatcher._set_status = Mock()
     dispatcher._execute = Mock(side_effect=RuntimeError("adapter exploded"))
     dispatcher._record_result_and_route = Mock()
 
-    result = dispatcher.run_in_workflow(7, 11)
+    result = dispatcher.run_in_workflow(step_id, run_id)
 
     assert result["status"] == "failed"
     assert "adapter exploded" in result["error"]
     dispatcher._record_result_and_route.assert_called_once_with(
-        7,
-        run_id=11,
+        step_id,
+        run_id=run_id,
         result_text="Step execution failed unexpectedly: adapter exploded",
         passed=False,
         skip_wait=True,
     )
 
 
-def test_cancelled_run_cannot_dispatch_a_late_provider_step(monkeypatch):
-    class CancelledQuery(_Query):
-        def first(self):
-            if self.model is AutoWorkflowRun:
-                return SimpleNamespace(status="cancelled", current_step_id=7)
-            return None
-
-    class CancelledSession(_Session):
-        def query(self, *args, **kwargs):
-            return CancelledQuery(args[0] if args else None)
-
-    @contextmanager
-    def cancelled_session():
-        yield CancelledSession()
-
-    monkeypatch.setattr("distr.core.workflow.dispatcher.get_session", cancelled_session)
+def test_cancelled_run_cannot_dispatch_a_late_provider_step(dispatch_run):
+    _, step_id, run_id = dispatch_run("cancelled")
     dispatcher = StepDispatcher()
     dispatcher._execute = Mock()
 
-    result = dispatcher.run_in_workflow(7, 11)
+    result = dispatcher.run_in_workflow(step_id, run_id)
 
     assert result["cancelled"] is True
     assert result["status"] == "cancelled"

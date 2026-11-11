@@ -354,7 +354,10 @@ class TelegramWebSocketManager(
         # Buffer incoming private-chat messages for a short window so the agent
         # receives a single combined message instead of responding to each one
         # individually.  After BATCH_DELAY_MS of silence the buffer is flushed.
-        self._telegram_batch_buffer: list = []  # list of (text, is_media, image_path, input_type)
+        self._telegram_batch_buffer: list = []
+        self._pending_telegram_files: list = []
+        self._telegram_file_downloads: set = set()
+        self._telegram_file_wait_deadline: float | None = None
         self._current_input_type: str = "text"  # last flushed input type ("text" or "voice")
         self._telegram_batch_thread_id: int | None = None  # Telegram chat id for R15 bus mapping
 
@@ -1169,6 +1172,10 @@ class TelegramWebSocketManager(
                 )
                 client_message_id = str(data.get("client_message_id") or "").strip()
                 if client_message_id:
+                    if client_message_id.startswith('proposal-update:'):
+                        from distr.core.incoming.telegram_updates import record_delivery
+                        record_delivery(client_message_id, telegram_message_id=data.get('telegram_message_id'),
+                                        telegram_chat_id=data.get('chat_id'))
                     try:
                         from distr.core.workflow.interactions import record_telegram_delivery
 
@@ -1176,7 +1183,7 @@ class TelegramWebSocketManager(
                             token=client_message_id,
                             telegram_chat_id=data.get("chat_id"),
                             telegram_message_id=data.get("telegram_message_id"),
-                            reply_markup_sent=bool(data.get("reply_markup_sent")),
+                            reply_markup_sent=data.get("reply_markup_sent") is True,
                         )
                     except Exception:
                         logger.warning("Could not persist Telegram workflow delivery acknowledgment", exc_info=True)
@@ -1184,6 +1191,12 @@ class TelegramWebSocketManager(
                 logger.error(f"[Telegram WebSocket] ❌ Server returned ERROR: {data}")
                 client_message_id = str(data.get("client_message_id") or "").strip()
                 if client_message_id:
+                    if client_message_id.startswith('proposal-update:'):
+                        from distr.core.incoming.telegram_updates import defer_rate_limited_delivery, record_delivery
+                        if data.get('reason') == 'relay_rate_limited':
+                            defer_rate_limited_delivery(client_message_id)
+                        else:
+                            record_delivery(client_message_id, error=str(data.get('message') or 'Telegram delivery failed'))
                     try:
                         from distr.core.workflow.interactions import record_telegram_delivery_error
 
@@ -1320,10 +1333,18 @@ class TelegramWebSocketManager(
             import threading
 
             payload = json.dumps(message)
+            durable_proposal = str(message.get('client_message_id') or '').startswith('proposal-update:')
 
             if threading.current_thread() is threading.main_thread():
-                self.socket.sendTextMessage(payload)
+                written = self.socket.sendTextMessage(payload)
+                if durable_proposal and written != len(payload.encode('utf-8')):
+                    # Qt can write a frame header before reporting zero payload bytes.
+                    # The queue retains this outcome for reconciliation rather than replaying it.
+                    raise OSError('Telegram WebSocket did not accept the full proposal update.')
             else:
+                if durable_proposal:
+                    # The main-thread queue needs the actual write result, which a signal cannot return.
+                    return False
                 self._send_ws_text_signal.emit(payload)
             return True
         return False

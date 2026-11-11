@@ -94,12 +94,10 @@ def list_proposal_attachment_manifest(proposal: dict[str, Any]) -> list[dict[str
         return [item for item in (proposal.get('attachments') or []) if isinstance(item, dict)]
     thread_id = str(proposal.get('source_thread_id') or '')
     ids = [str(value) for value in proposal.get('message_ids') or []]
-    if not thread_id:
+    if not thread_id or not ids:
         return []
     with get_session() as db:
-        query = db.query(WhatsAppMessage).filter(WhatsAppMessage.jid == thread_id)
-        if ids:
-            query = query.filter(WhatsAppMessage.message_id.in_(ids))
+        query = db.query(WhatsAppMessage).filter(WhatsAppMessage.jid == thread_id, WhatsAppMessage.message_id.in_(ids))
         rows = query.order_by(WhatsAppMessage.whatsapp_timestamp.desc()).limit(250).all()
         media = []
         for row in rows:
@@ -137,6 +135,9 @@ def ensure_proposal_attachments(
     Failures are always listed so the UI can show an error row instead of a silent 502.
     Dedupes by attachment id when registering onto ``chat_id``.
     """
+    from distr.core.incoming.source_context import scope_whatsapp_proposal
+
+    proposal = scope_whatsapp_proposal(proposal)
     reference = str(proposal.get('id') or proposal.get('dedupe_key') or '')
     root = _root(project_id, reference)
     attachments: list[dict[str, Any]] = []
@@ -252,8 +253,7 @@ def ensure_proposal_attachments(
         rows = query.order_by(WhatsAppMessage.whatsapp_timestamp.desc()).limit(250).all()
         found = {str(row.message_id) for row in rows}
         if ids and set(ids) - found:
-            _fail('whatsapp', 'Some source WhatsApp messages are unavailable. Resync Incoming before pushing this proposal.')
-            return {'attachments': attachments, 'failures': failures}
+            _fail('whatsapp', 'Some source WhatsApp messages are unavailable. Resync Incoming to recover their attachments.')
         media = [{'id': row.id, 'message_id': row.message_id, 'name': row.media_filename or '',
                   'mime': row.media_mime_type or '', 'kind': row.media_type or '',
                   'duration': int(row.media_duration) if row.media_duration not in (None, '') else None,
@@ -363,7 +363,9 @@ def cached_tensology_attachment_bytes(api_path: str, *, client=None) -> tuple[by
     return path.read_bytes(), mime
 
 
-def public_managed_attachments(records: list[dict[str, Any]], *, proposal_id: str = '', chat_id: int | None = None) -> list[dict[str, Any]]:
+def public_managed_attachments(
+    records: list[dict[str, Any]], *, proposal_id: str = '', review_key: str = '', chat_id: int | None = None,
+) -> list[dict[str, Any]]:
     """Strip local paths and attach preview/download URLs for proposal or thread files."""
     out = []
     for item in records:
@@ -375,10 +377,11 @@ def public_managed_attachments(records: list[dict[str, Any]], *, proposal_id: st
             row['url'] = ''
         elif chat_id is not None and item.get('id'):
             row['url'] = f"/api/workflows/studio/tasks/{int(chat_id)}/attachments/{item['id']}"
-        elif proposal_id and item.get('id'):
+        elif (review_key or proposal_id) and item.get('id'):
+            query = {'review_key': review_key} if review_key else {'proposal_id': proposal_id}
             row['url'] = (
                 f"/api/workflows/studio/incoming/proposals/files/{item['id']}"
-                f"?proposal_id={urllib.parse.quote(str(proposal_id), safe='')}"
+                f"?{urllib.parse.urlencode(query, quote_via=urllib.parse.quote)}"
             )
         elif item.get('api_path'):
             row['url'] = (
@@ -426,6 +429,8 @@ def thread_attachments(chat_id: int) -> list[dict[str, Any]]:
 
 
 def register_thread_attachments(chat_id: int, attachments: list[dict[str, Any]]) -> None:
+    from distr.core.chat import _chat_params
+
     if not attachments:
         return
     normalized = []
@@ -439,16 +444,23 @@ def register_thread_attachments(chat_id: int, attachments: list[dict[str, Any]])
         normalized.append(item if item.get('sha256') and item.get('id') else
                           _record(path, str(item.get('name') or path.name), str(item.get('mime_type') or ''), str(path),
                                   **({'transcript': str(item['transcript'])} if item.get('transcript') else {})))
-    with get_session() as db:
-        chat = db.get(Chat, int(chat_id))
-        if chat is None:
-            raise ValueError('The created Development thread was not found.')
-        params = json.loads(chat.params or '{}')
-        merged = {item['id']: item for item in params.get('incoming_attachments') or []}
-        merged.update({item['id']: item for item in normalized})
-        params['incoming_attachments'] = list(merged.values())
-        chat.params = json.dumps(params)
-        db.commit()
+    for _ in range(5):
+        with get_session() as db:
+            chat = db.get(Chat, int(chat_id))
+            if chat is None:
+                raise ValueError('The created Development thread was not found.')
+            original = chat.params
+            params = _chat_params(original)
+            merged = {item['id']: item for item in params.get('incoming_attachments') or []}
+            merged.update({item['id']: item for item in normalized})
+            params['incoming_attachments'] = list(merged.values())
+            changed = db.query(Chat).filter(Chat.id == int(chat_id), Chat.params == original).update(
+                {Chat.params: json.dumps(params)}, synchronize_session=False)
+            if changed:
+                db.commit()
+                break
+    else:
+        raise ValueError('The thread changed while registering its files. Refresh and retry.')
     # Thread files also belong in the linked ticket's Files tab (best effort).
     return sync_thread_files_to_tickets(int(chat_id))
 

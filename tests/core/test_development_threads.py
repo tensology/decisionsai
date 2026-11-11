@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import pytest
+from contextlib import contextmanager
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from distr.core.chat import ChatService
-from distr.core.db import Chat, Settings, get_session
+from distr.core.db import Base, Chat, Settings, get_session
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.db.projects import Project
 from distr.core.db.workflow import DevelopmentWorkItem
@@ -18,8 +21,27 @@ from distr.core.workflow.development_threads import (
 )
 
 
-def test_integrity_repair_removes_orphans_detaches_links_and_backfills_legacy_rows():
-    with get_session() as db:
+@pytest.fixture
+def integrity_session(tmp_path):
+    """Global repair counts must describe this test's deliberately orphaned rows."""
+    engine = create_engine(f"sqlite:///{tmp_path/'integrity.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    @contextmanager
+    def session():
+        db = factory()
+        try:
+            yield db
+        finally:
+            db.close()
+    try:
+        yield session
+    finally:
+        engine.dispose()
+
+
+def test_integrity_repair_removes_orphans_detaches_links_and_backfills_legacy_rows(integrity_session):
+    with integrity_session() as db:
         board = KanbanBoard(name="Repair board", source="local")
         db.add(board)
         db.flush()
@@ -39,12 +61,12 @@ def test_integrity_repair_removes_orphans_detaches_links_and_backfills_legacy_ro
         ticket_id = ticket.id
         legacy_id = legacy.id
 
-    result = repair_development_ownership_integrity()
+    result = repair_development_ownership_integrity(_session_provider=integrity_session)
 
     assert result["orphan_work_items_removed"] == 1
     assert result["ticket_links_detached"] == 1
     assert result["work_items_backfilled"] >= 1
-    with get_session() as db:
+    with integrity_session() as db:
         assert db.get(KanbanTicket, ticket_id).source_chat_id is None
         assert db.query(DevelopmentWorkItem).filter_by(chat_id=999992).first() is None
         assert db.query(DevelopmentWorkItem).filter_by(chat_id=legacy_id).one()

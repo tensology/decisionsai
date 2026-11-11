@@ -8,9 +8,28 @@ from typing import Any
 from distr.core.db import get_session
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.db.projects import Project
+from distr.core.kanban.lifecycle import DELIVERY_DONE_LANE
 from distr.core.kanban.ticket_policy import normalize_ticket_complexity
 
 logger = logging.getLogger(__name__)
+
+IMPLICIT_QUEUE_TERMINAL = ("completed", "completed_noop", "cancelled", "canceled")
+
+
+def implicit_queue_ticket_error(ticket: KanbanTicket | None, workflow_id: int,
+                                board_id: int | None, project_id: int | str | None) -> str | None:
+    if ticket is None or ticket.linked_workflow_id != workflow_id:
+        return "The queued ticket is no longer linked to this workflow."
+    lane = ticket.lane
+    if board_id is None or lane is None or lane.board_id != board_id:
+        return "The queued ticket is no longer on this board."
+    current_project = ticket.linked_project_id or (lane.board.default_project_id if lane.board else None)
+    if str(current_project or "") != str(project_id or ""):
+        return "The queued ticket's project assignment changed."
+    status = str(ticket.workflow_status or "").strip().lower()
+    if status in IMPLICIT_QUEUE_TERMINAL or str(lane.name or "").strip().lower() == DELIVERY_DONE_LANE.lower():
+        return "The queued ticket has already finished or been cancelled."
+    return None
 
 
 def compact_ticket_run_ref(item: dict[str, Any]) -> dict[str, Any]:

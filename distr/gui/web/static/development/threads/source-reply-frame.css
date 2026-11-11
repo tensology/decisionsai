@@ -1,0 +1,12 @@
+.source-reply-dialog header button {
+    min-width: 36px;
+    padding: 0;
+    border: 1px solid var(--studio-line);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--studio-text);
+}
+
+@media (max-width: 768px) {
+    .source-reply-dialog header button { min-width: 44px; }
+}

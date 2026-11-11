@@ -1,9 +1,56 @@
+from contextvars import copy_context
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from distr.core.agent import command_handler
+
+
+@pytest.mark.parametrize(
+    ("current_chat", "stream_chat", "task_turn", "active_turn", "stopped"),
+    [
+        (7, 7, (7, 41), None, True),
+        (7, None, (7, 41), None, True),
+        (7, 7, None, None, True),
+        (8, 8, (8, 41), None, False),
+        (7, 8, (7, 41), None, False),
+        (7, None, (8, 41), None, False),
+        (7, 7, (7, 42), None, False),
+        (7, None, None, None, False),
+        (7, 7, (7, 41), 42, False),
+    ],
+)
+def test_chat_cancel_checks_pipeline_ownership(
+    monkeypatch, current_chat, stream_chat, task_turn, active_turn, stopped
+):
+    from distr.core import chat_turns
+    from distr.core.chat_manager import bind_active_chat_turn
+
+    interrupt = MagicMock()
+    monkeypatch.setattr(command_handler, "_cmd_interrupt_tts", interrupt)
+    monkeypatch.setattr(chat_turns, "latest_active_turn_id", lambda chat_id: active_turn)
+    context = copy_context()
+    if task_turn:
+        context.run(bind_active_chat_turn, *task_turn)
+    session = SimpleNamespace(
+        chat_manager=SimpleNamespace(get_current_chat=lambda: current_chat),
+        llm_service=SimpleNamespace(
+            _active_chat_stream_id=stream_chat,
+            _active_chat_stream_turn_id=41 if stream_chat else None,
+            _generation_task=SimpleNamespace(
+                done=lambda: task_turn is None,
+                get_context=lambda: context,
+            ),
+        ),
+    )
+
+    assert command_handler.dispatch(session, "cancel_chat_turn", {"chat_id": 7, "turn_id": 41})
+
+    if stopped:
+        interrupt.assert_called_once_with(session, {})
+    else:
+        interrupt.assert_not_called()
 
 
 def test_delayed_ptt_resume_is_ignored_after_key_release(monkeypatch):

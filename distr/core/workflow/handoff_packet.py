@@ -84,7 +84,7 @@ def extract_source_urls(value: Any, *, limit: int = 12) -> list[str]:
     return _unique_text(urls, limit=limit)
 
 
-def extract_ticket_contract(value: Any, *, max_chars: int = 2_200) -> str:
+def extract_ticket_contract(value: Any) -> str:
     """Preserve contract sections that must survive objective compaction.
 
     Ticket descriptions are often longer than the objective budget. Keeping a
@@ -108,7 +108,7 @@ def extract_ticket_contract(value: Any, *, max_chars: int = 2_200) -> str:
         if active:
             selected.append(line)
     contract = "\n".join(selected).strip()
-    return _bounded(contract, max_chars) if contract else ""
+    return contract
 
 
 def extract_required_handoff_fields(
@@ -215,6 +215,8 @@ class StepHandoffPacket:
     identity: dict[str, Any]
     objective: str
     current_step: dict[str, Any]
+    current_request: str = ""
+    context_rules: str = ""
     ticket_contract: str = ""
     required_context: str = ""
     workflow_map: str = ""
@@ -235,6 +237,8 @@ class StepHandoffPacket:
             "ticket_contract": self.ticket_contract,
             "required_context": self.required_context,
             "current_step": dict(self.current_step),
+            "current_request": self.current_request,
+            "context_rules": self.context_rules,
             "workflow_map": self.workflow_map,
             "constraints": list(self.constraints),
             "prior_outcomes": list(self.prior_outcomes),
@@ -260,12 +264,16 @@ class StepHandoffPacket:
         # Keep the current instruction immediately after identity in both the
         # normal and compacted packet layouts.
         step_title = _clean(self.current_step.get("title") or "Current step")
-        step_instruction = _bounded(self.current_step.get("instruction"), 2_200)
+        step_instruction = str(self.current_step.get("instruction") or "")
         sections.append(("current_step", f"## Current step: {step_title}\n{step_instruction}"))
+        if self.current_request:
+            sections.append(("current_request", "## Current workflow request\n" + self.current_request))
+        if self.context_rules:
+            sections.append(("context_rules", "## Workflow rules\n" + self.context_rules))
 
         sections.append(("objective", "## Objective and ticket context\n" + _bounded(self.objective, 3_200)))
         if _clean(self.ticket_contract):
-            sections.append(("ticket_contract", "## Non-negotiable ticket contract\n" + _bounded(self.ticket_contract, 2_200)))
+            sections.append(("ticket_contract", "## Non-negotiable ticket contract\n" + self.ticket_contract))
         if _clean(self.required_context):
             sections.append(("required_context", "## Required upstream context\n" + _bounded(self.required_context, 2_400)))
 
@@ -292,15 +300,14 @@ class StepHandoffPacket:
         if facts:
             sections.append(("memory_facts", "## Relevant memory facts\n" + "\n".join(f"- {item}" for item in facts)))
         if _clean(self.continuation):
-            sections.append(("human_steering", "## Latest human steering\n" + _bounded(self.continuation, 1_000)))
+            sections.append(("human_steering", "## Latest human steering\n" + self.continuation))
         if _clean(self.return_contract):
-            sections.append(("return_contract", "## Return contract\n" + _bounded(self.return_contract, 1_500)))
+            sections.append(("return_contract", "## Return contract\n" + self.return_contract))
 
         deduped: list[tuple[str, str]] = []
         seen: set[str] = set()
         duplicates: list[str] = []
         for name, value in sections:
-            value = _clean(value)
             fingerprint = _fingerprint(value)
             if fingerprint in seen:
                 duplicates.append(name)
@@ -311,17 +318,16 @@ class StepHandoffPacket:
         prompt = "\n\n".join(value for _name, value in deduped)
         raw_total_chars = len(prompt)
         if len(prompt) > max_chars:
-            # Preserve identity, current instruction, and return contract as
-            # atomic sections. Spend the remaining budget on objective/history.
-            # Reference paths are high leverage for cheaper models: preserving
-            # them prevents repeated directory discovery calls.
+            # The budget applies to supporting context. Required instructions
+            # may exceed it and must reach the worker intact.
             critical_names = {
                 "identity",
                 "ticket_contract",
                 "required_context",
                 "current_step",
+                "current_request",
+                "context_rules",
                 "human_steering",
-                "references",
                 "return_contract",
             }
             critical = [(name, value) for name, value in deduped if name in critical_names]
@@ -330,7 +336,7 @@ class StepHandoffPacket:
             critical_chars = sum(len(value) for _name, value in critical) + max(0, len(critical) - 1) * 2
             available = max(0, max_chars - critical_chars - len(marker) - 8)
             optional_text = "\n\n".join(value for _name, value in optional)
-            optional_text = _bounded(optional_text, available) if available else ""
+            optional_text = _bounded(optional_text, available) if available >= 64 else ""
             critical_map = dict(critical)
             # Put the actual ticket objective ahead of supporting file paths.
             # Cheaper models otherwise tend to exhaust their inspection budget
@@ -338,6 +344,8 @@ class StepHandoffPacket:
             ordered = [
                 critical_map.get("identity", ""),
                 critical_map.get("current_step", ""),
+                critical_map.get("current_request", ""),
+                critical_map.get("context_rules", ""),
             ]
             if optional_text:
                 ordered.extend([marker, optional_text])
@@ -347,12 +355,8 @@ class StepHandoffPacket:
                 ordered.append(critical_map["required_context"])
             if critical_map.get("human_steering"):
                 ordered.append(critical_map["human_steering"])
-            if critical_map.get("references"):
-                ordered.append(critical_map["references"])
             ordered.append(critical_map.get("return_contract", ""))
             prompt = "\n\n".join(value for value in ordered if value)
-            if len(prompt) > max_chars:
-                prompt = prompt[:max_chars]
 
         telemetry = {
             "packet_version": self.version,

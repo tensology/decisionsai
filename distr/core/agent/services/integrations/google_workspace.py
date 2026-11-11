@@ -25,6 +25,21 @@ import re
 logger = logging.getLogger(__name__)
 
 _REFRESH_FAILURE_BACKOFF = timedelta(minutes=15)
+GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+
+
+class GmailReplyPreparationError(ValueError):
+    """A Gmail reply could not be constructed before any send request."""
+
+
+def gmail_send_confirmed(result: Any, *, thread_id: str | None = None) -> bool:
+    if not isinstance(result, dict):
+        return False
+    message_id = result.get("id")
+    return (
+        isinstance(message_id, str) and bool(message_id.strip())
+        and (thread_id is None or result.get("threadId") == thread_id)
+    )
 
 
 def _calendar_datetime(value: datetime, time_zone: Optional[str] = None) -> datetime:
@@ -315,9 +330,16 @@ class GoogleWorkspaceConnector:
         headers = kwargs.get('headers', {})
         headers['Authorization'] = f'Bearer {self.access_token}'
         kwargs['headers'] = headers
+        gmail_send = method.upper() == "POST" and url == GMAIL_SEND_URL
+        if gmail_send:
+            kwargs["allow_redirects"] = False
         
         try:
             response = requests.request(method, url, **kwargs)
+            if gmail_send and not 200 <= response.status_code < 300:
+                self.last_error = f"Gmail send was not confirmed (HTTP {response.status_code})."
+                logger.error("%s", self.last_error)
+                return None
             response.raise_for_status()
             self.last_error = None
             return response.json() if response.content else {}
@@ -397,6 +419,10 @@ class GoogleWorkspaceConnector:
             logger.error(f"{error_msg}, Response: {response_text if response_text else 'N/A'}")
             return None
         except Exception as e:
+            if gmail_send:
+                self.last_error = "Gmail send was not confirmed."
+                logger.error("%s (%s)", self.last_error, type(e).__name__)
+                return None
             self.last_error = f"Google Workspace request failed: {e}"
             logger.error(f"API request error: {e}", exc_info=True)
             return None
@@ -432,11 +458,30 @@ class GoogleWorkspaceConnector:
         
         logger.info(f"get_email called with message_id={message_id!r}")
         url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}"
-        result = self._make_request('GET', url, params={'format': 'full'})
+        result = self._make_request('GET', url, params={'format': 'full'}, timeout=30)
         
+        return self._parse_email(result, message_id) if result else None
+
+    def get_email_thread(self, thread_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Read one Gmail thread, including archived messages."""
+        from urllib.parse import quote
+
+        if not thread_id or not self._ensure_valid_token():
+            return None
+        url = f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{quote(thread_id, safe='')}"
+        result = self._make_request('GET', url, params={'format': 'full'}, timeout=20)
         if not result:
             return None
-        
+        if result.get('id') != thread_id:
+            return []
+        return [
+            self._parse_email(row, row['id'])
+            for row in result.get('messages') or []
+            if isinstance(row, dict) and row.get('id') and row.get('threadId') == thread_id
+        ]
+
+    @staticmethod
+    def _parse_email(result: Dict[str, Any], message_id: str) -> Dict[str, Any]:
         # Parse email data
         headers = {h['name']: h['value'] for h in result.get('payload', {}).get('headers', [])}
         reply_headers = {key.lower(): value for key, value in headers.items()}
@@ -630,11 +675,10 @@ class GoogleWorkspaceConnector:
             
             raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
             
-            url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
             data = {'raw': raw_message}
-            result = self._make_request('POST', url, json=data)
+            result = self._make_request('POST', GMAIL_SEND_URL, json=data)
             
-            return result is not None
+            return gmail_send_confirmed(result)
             
         except Exception as e:
             logger.error(f"Failed to send email: {e}", exc_info=True)
@@ -764,32 +808,45 @@ class GoogleWorkspaceConnector:
         
         return messages
     
-    def reply_to_email(self, message_id: str, body: str, body_type: str = 'plain') -> bool:
-        """Reply to an email"""
-        if not self._ensure_valid_token():
-            return False
-        
-        # Get original message
+    def prepare_email_reply(self, message_id: str, body: str, body_type: str = 'plain', *,
+                            to: Optional[str] = None, subject: Optional[str] = None,
+                            require_reference: bool = False) -> dict[str, str]:
+        """Build the exact Gmail reply payload before attempting delivery."""
         original = self.get_email(message_id)
         if not original:
-            return False
-        
-        # Create reply
+            raise GmailReplyPreparationError("The original Gmail message could not be loaded. Refresh Incoming and try again.")
+        thread_id = str(original.get('threadId') or '').strip()
+        if not thread_id:
+            raise GmailReplyPreparationError("The original Gmail thread could not be verified. Refresh Incoming and try again.")
+        rfc_id = str(original.get('message_id_header') or '').strip()
+        if require_reference and not rfc_id:
+            raise GmailReplyPreparationError("The original Gmail reply reference is missing. Your text is retained.")
         try:
             message = MIMEText(body, body_type)
-            message['to'] = original['from']
-            message['subject'] = f"Re: {original['subject']}"
-            message['In-Reply-To'] = message_id
-            message['References'] = message_id
-            
-            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
-            
-            url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
-            data = {'raw': raw_message, 'threadId': original.get('threadId')}
-            result = self._make_request('POST', url, json=data)
-            
-            return result is not None
-            
+            message['to'] = to if to is not None else original.get('reply_to') or original['from']
+            original_subject = str(original.get('subject') or '')
+            message['subject'] = subject if subject is not None else (
+                original_subject if original_subject.lower().startswith('re:') else f'Re: {original_subject}')
+            if rfc_id:
+                message['In-Reply-To'] = rfc_id
+                references = original.get('references') or ''
+                if isinstance(references, list):
+                    references = ' '.join(references)
+                message['References'] = ' '.join(dict.fromkeys((str(references) + ' ' + rfc_id).split()))
+            return {
+                'raw': base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8'),
+                'threadId': thread_id,
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GmailReplyPreparationError("The Gmail reply headers or text could not be prepared. Check your draft.") from exc
+
+    def reply_to_email(self, message_id: str, body: str, body_type: str = 'plain', *,
+                       to: Optional[str] = None, subject: Optional[str] = None) -> bool:
+        """Reply to an email."""
+        try:
+            data = self.prepare_email_reply(message_id, body, body_type, to=to, subject=subject)
+            result = self._make_request('POST', GMAIL_SEND_URL, json=data)
+            return gmail_send_confirmed(result, thread_id=data['threadId'])
         except Exception as e:
             logger.error(f"Failed to reply to email: {e}", exc_info=True)
             return False

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import expect
 
 from tests.ui.test_development_harness_playwright import _install_api
 from tests.ui.test_plan_inline_edit_playwright import Backend, PLAN_URL
@@ -87,11 +88,46 @@ def _labels(page):
     return page.locator('[role="tablist"][aria-label="Documents"] [role="tab"]').evaluate_all("(ns) => ns.map((n) => n.childNodes[0].textContent)")
 
 
+@pytest.mark.parametrize("w,h", SIZES + [(1280, 900)])
+def test_raw_document_keeps_edits_made_during_save(page, w, h):
+    backend, errors = _open(page, w, h)
+    page.locator('.plan-doc-modes [data-doc-mode="raw"]').click()
+    raw = page.locator('textarea.plan-inline-raw')
+    editor = page.locator('.plan-inline-edit')
+    save = editor.get_by_role('button', name='Save', exact=True)
+    first = FRAC + '\nUse a one-time code.\n'
+    second = first + '\nProvide a way to request another code.\n'
+    held = []
+    page.route('**/api/workflows/studio/plan-items/25', lambda route: held.append(route))
+
+    raw.fill(first)
+    save.click()
+    expect(editor.get_by_role('status')).to_have_attribute('data-state', 'saving')
+    raw.fill(second)
+    expect(save).to_be_disabled()
+    backend.route(held[0])
+    page.unroute('**/api/workflows/studio/plan-items/25')
+
+    expect(raw).to_have_value(second)
+    expect(editor.get_by_role('status')).to_have_text('Unsaved changes')
+    expect(editor.locator('.plan-inline-tick')).to_be_hidden()
+    expect(page.get_by_role('tab', name='FRAC (unsaved)', exact=True)).to_be_visible()
+    assert backend.saves[-1]['content'] == first
+    OUT.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(OUT / f'documents-edit-during-save-{w}.png'))
+    save.click()
+    expect(editor.get_by_role('status')).to_have_text('Saved')
+    expect(raw).to_have_value(second)
+    assert backend.saves[-1] == {'content': second, 'expected_revision': 2}
+    page.screenshot(path=str(OUT / f'documents-edit-follow-up-saved-{w}.png'))
+    assert not errors, errors
+
+
 def _rect(page, sel):
     return page.evaluate("(s) => { const r = document.querySelector(s).getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height }; }", sel)
 
 
-@pytest.mark.parametrize("w,h", SIZES)
+@pytest.mark.parametrize("w,h", SIZES + [(1280, 900)])
 def test_documents_tab_bar_frac_default_and_keyboard(page, w, h):
     _, errors = _open(page, w, h)
     assert page.get_by_role("button", name="Requirements", exact=True).count() == 0
@@ -101,6 +137,9 @@ def test_documents_tab_bar_frac_default_and_keyboard(page, w, h):
     assert sel.inner_text().strip() == 'FRAC' and sel.get_attribute('tabindex') == '0'
     assert page.locator('.plan-doc-tab[aria-selected="true"]').count() == 1
     assert page.locator('.plan-inline-text').get_attribute('aria-label') == 'Functional requirements'
+    assert page.locator('.plan-inline-text .md-e-item').evaluate_all(
+        "items => items.map(item => JSON.parse(getComputedStyle(item, '::before').content).trim())"
+    ) == ['1.', '2.']
     assert page.locator('#plan-context-hint').inner_text() == 'Context: FRAC'
     assert page.locator('#plan-doc-add').count() == 1                      # flag on by default: Add document
     art, tabs, acts = _rect(page, '#plan-artifacts'), _rect(page, '.plan-doc-tabs'), _rect(page, '.plan-docs-actions')
@@ -115,7 +154,7 @@ def test_documents_tab_bar_frac_default_and_keyboard(page, w, h):
     assert page.evaluate("() => document.documentElement.scrollWidth") <= w
     if w != 390:
         assert abs(tabs['t'] - acts['t']) < 12                                                  # same row on wide screens
-    page.screenshot(path=str(OUT / f'documents-{w}.png'))
+    page.screenshot(path=str(OUT / f'documents-numbered-{w}.png'))
     # keyboard: arrows / Home / End move selection and focus (automatic activation)
     sel.focus()
     page.keyboard.press('ArrowRight')
@@ -149,6 +188,7 @@ def test_modes_share_drafts_and_save_rules(page, w, h):
     page.keyboard.press('End' if False else 'Control+End')
     page.keyboard.type(' Inline edit.')
     assert page.locator('.plan-doc-tab[aria-selected="true"]').get_attribute('data-unsaved') == 'true'
+    expect(page.get_by_role("tab", name="FRAC (unsaved)", exact=True)).to_be_visible()
     modes.locator('[data-doc-mode="raw"]').click()
     raw = page.locator('textarea.plan-inline-raw')
     raw.wait_for()
@@ -174,6 +214,7 @@ def test_modes_share_drafts_and_save_rules(page, w, h):
     assert saved["expected_revision"] == 1 and 'Raw **added**.' in saved["content"] and 'Inline edit.' in saved["content"]
     assert page.locator('.plan-inline-state').inner_text() == 'Saved'
     assert page.locator('.plan-doc-tab[aria-selected="true"]').get_attribute('data-unsaved') is None
+    expect(page.get_by_role("tab", name="FRAC", exact=True)).to_be_visible()
     # mode is remembered for the session
     modes.locator('[data-doc-mode="raw"]').click()
     page.reload()
@@ -201,11 +242,18 @@ def test_raw_save_applies_the_same_allowlist_and_conflict_rules(page):
     assert page.locator('.plan-inline-save').is_disabled()
 
 
-def test_enter_in_numbered_list_continues_numbering(page):
-    backend, _ = _open(page, 1440, 900)
+@pytest.mark.parametrize("w,h", SIZES + [(1280, 900)])
+def test_enter_in_numbered_list_continues_numbering(page, w, h):
+    backend, _ = _open(page, w, h)
     page.evaluate("""() => { const t = document.querySelector('.plan-inline-text'); const w = document.createTreeWalker(t, NodeFilter.SHOW_TEXT); let n;
         while ((n = w.nextNode())) { const i = n.nodeValue.indexOf('gets a code'); if (i >= 0) { const r = document.createRange(); r.setStart(n, i + 11); r.collapse(true); const s = getSelection(); s.removeAllRanges(); s.addRange(r); t.focus(); return; } } }""")
     page.keyboard.press('Enter'); page.keyboard.type('User signs in')
+    assert page.locator('.plan-inline-text .md-e-item').evaluate_all(
+        "items => items.map(item => item.dataset.orderedMarker)"
+    ) == ['1.', '2.', '3.']
+    last = page.locator('.plan-inline-text .md-e-item').last
+    last.scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT / f'documents-numbered-draft-{w}.png'))
     page.locator('.plan-inline-save').click()
     page.locator('.plan-inline-tick:not([hidden])').wait_for(timeout=4000)
     lines = backend.saves[-1]["content"].splitlines()
@@ -232,7 +280,13 @@ def test_print_pdf_uses_print_only_container(page, w, h):
     for sel in ('.plan-docs-bar', '.plan-conversation', '.plan-detail-header', '.md-toolbar'):
         assert page.locator(sel).count() == 0 or not page.locator(sel).first.is_visible(), sel
     assert page.locator('#plan-print-root [contenteditable]').count() == 0
+    assert page.locator('html').evaluate("(html) => getComputedStyle(html).colorScheme") == 'light'
+    assert page.locator('body').evaluate("(body) => getComputedStyle(body).backgroundColor") == 'rgb(255, 255, 255)'
+    assert root.locator('.md-e-item').first.evaluate(
+        "(item) => getComputedStyle(item, '::before').content"
+    ) == '"1. "'
     page.screenshot(path=str(OUT / f'documents-print-{w}.png'))
+    page.pdf(path=str(OUT / f'documents-print-{w}.pdf'), print_background=True, prefer_css_page_size=True)
     page.emulate_media(media='screen')
     assert not root.is_visible()                                                    # screen: never shown
     page.evaluate("() => window.dispatchEvent(new Event('afterprint'))")

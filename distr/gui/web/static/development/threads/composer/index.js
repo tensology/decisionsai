@@ -1,7 +1,7 @@
 import { encodedVariant, displayModelName, shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 import { providerLabel as lookupProviderLabel, catalogModels as lookupCatalogModels } from '../../shared/models.js';
 import { loadInstalledHarnesses } from '../../../shared/harnesses.js?v=20261022-harnesssrc';
-import { createSubmissionQueue } from './queue.js?v=20261110-queue1';
+import { createSubmissionQueue } from './queue.js?v=20261111-proactive-queue';
 // Owns threads composer rendering, interactions, and private view state.
 export function createThreadsComposer({ context, actions, el, token }) {
     const HARNESS_OPTIONS = [
@@ -48,6 +48,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         el('studio-composer').classList.add('is-editing-queue');
         el('send-button').setAttribute('aria-label', 'Save queued item');
         el('send-button').dataset.tooltip = 'Save queued item';
+        actions.syncComposerAvailability();
         renderAttachments(); actions.resizePrompt(); el('task-prompt').focus();
     }
 
@@ -57,6 +58,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         el('studio-composer').classList.remove('is-editing-queue');
         el('send-button').setAttribute('aria-label', 'Submit instruction');
         el('send-button').dataset.tooltip = 'Send';
+        actions.syncComposerAvailability();
         if (previousDraft) {
             el('task-prompt').value = previousDraft.text;
             context.attachments = previousDraft.attachments;
@@ -450,7 +452,10 @@ export function createThreadsComposer({ context, actions, el, token }) {
         control.classList.add('hidden');
         if (!active) {
             context.guidanceRunId = null;
-            if (!context.editingCommandId) el('task-prompt').placeholder = 'Describe what you want changed';
+            if (!context.editingCommandId) {
+                const recovering = context.currentRun?.origin === 'proactive_orchestrator' && context.currentRun.status === 'blocked';
+                el('task-prompt').placeholder = recovering ? 'Draft your follow-up' : 'Describe what you want changed';
+            }
             return;
         }
         context.guidanceScope = 'thread';
@@ -466,7 +471,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
 
     async function sendPrompt(event) {
         event.preventDefault();
-        if (context.busy || !context.ready || context.routeLoading) return;
+        if (context.busy || !context.ready || context.routeLoading || el('send-button').disabled) return;
         const route = actions.developmentRoute();
         if (route.kind === 'thread' && Number(context.currentChat?.id || 0) !== Number(route.chatId)) {
             if (actions.developmentChatById && !actions.developmentChatById(route.chatId)) {
@@ -529,6 +534,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         }
         const fullPrompt = promptWithContext(prompt);
         const queuedMetadata = composerMetadata(prompt);
+        const submissionChatId = context.currentChat?.id;
         context.busy = true;
         actions.renderSidebar();
         el('send-button').disabled = true;
@@ -579,6 +585,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
         } catch (error) {
             el('task-prompt').value = prompt;
             actions.resizePrompt();
+            if (error.data?.code === 'development_execution_busy' && context.currentChat?.id === submissionChatId) {
+                await actions.refreshShell({ preserveConversation: true });
+            }
             actions.toast(error.message || 'Could not submit the task.', 'error');
         } finally {
             context.busy = false;
@@ -653,7 +662,10 @@ export function createThreadsComposer({ context, actions, el, token }) {
 
     async function stopRun() {
         if (!context.currentRun || !context.currentChat) return;
-        const direct = Boolean(context.currentRun.direct);
+        const run = context.currentRun;
+        const chatId = context.currentChat.id;
+        const workflowId = context.currentWorkflow?.id;
+        const direct = Boolean(run.direct);
         if (
             !(await actions.confirmAction({
                 title: direct ? 'Stop development agent' : 'Stop workflow run',
@@ -666,23 +678,31 @@ export function createThreadsComposer({ context, actions, el, token }) {
         )
             return;
         try {
+            let result;
             if (direct) {
-                await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/execution/stop`, { method: 'POST', body: {} });
-            } else if (context.currentWorkflow) {
-                await actions.api(`/workflows/${context.currentWorkflow.id}/cancel-run/${actions.workflowRunId(context.currentRun)}`, { method: 'POST' });
+                result = await requestDirectStop(chatId, run);
+            } else if (workflowId) {
+                await actions.api(`/workflows/${workflowId}/cancel-run/${actions.workflowRunId(run)}`, { method: 'POST' });
             }
-            actions.toast('Agent stopped.');
+            actions.toast(result?.stop_requested ? 'Stop requested.' : 'Agent stopped.');
             await actions.refreshShell({ preserveConversation: false });
         } catch (error) {
             actions.toast(error.message, 'error');
         }
     }
 
+    function requestDirectStop(chatId, run) {
+        const body = run?.origin === 'proactive_orchestrator'
+            ? { execution_session_id: run.execution_session_id }
+            : {};
+        return actions.api(`/workflows/studio/tasks/${chatId}/execution/stop`, { method: 'POST', body });
+    }
+
     async function cancelChatTurn() {
         if (!context.currentChat) return;
         try {
-            await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/execution/stop`, { method: 'POST', body: {} });
-            actions.toast('Turn stopped.');
+            const result = await requestDirectStop(context.currentChat.id, context.currentRun);
+            actions.toast(result?.stop_requested ? 'Stop requested.' : 'Turn stopped.');
             await actions.loadChat(context.currentChat.id, { quiet: true });
         } catch (error) {
             actions.toast(error.message, 'error');
@@ -1427,7 +1447,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
     function closeSkillsBrowser() {
         pendingSkills.clear();
         const dialog = el('skills-browser-dialog');
-        if (dialog?.open) dialog.close();
+        if (!dialog?.open) return;
+        dialog.close();
+        el('composer-plan-button')?.focus();
     }
 
     function renderComposerSkillMenu(query) {
@@ -1468,6 +1490,13 @@ export function createThreadsComposer({ context, actions, el, token }) {
             dialog.addEventListener('click', (event) => {
                 if (event.target === dialog || event.target.closest('[data-skills-browser-close]')) closeSkillsBrowser();
                 else if (event.target.closest('#skills-browser-add')) addPendingSkills();
+            });
+            // The search field can consume Escape before the native dialog emits cancel.
+            dialog.addEventListener('keydown', (event) => {
+                if (event.key !== 'Escape' || event.isComposing) return;
+                event.preventDefault();
+                event.stopPropagation();
+                closeSkillsBrowser();
             });
             dialog.addEventListener('cancel', (event) => {
                 event.preventDefault();

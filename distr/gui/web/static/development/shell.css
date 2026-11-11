@@ -932,9 +932,10 @@ kbd {
 
 .attachment-item span { color: var(--studio-muted); font-size: 12px; }
 
-.studio-toast { position: fixed; z-index: 30; bottom: 24px; left: 50%; max-width: min(420px, calc(100vw - 24px)); padding: 9px 12px; transform: translateX(-50%); border: 1px solid #414b55; border-radius: 8px; background: #242b32; box-shadow: 0 14px 40px rgba(0,0,0,.4); font-size: 12px; }
+.studio-toast { position: fixed; z-index: 30; bottom: max(24px, calc(var(--studio-composer-height, 0px) + 8px)); left: 50%; max-width: min(420px, calc(100vw - 24px)); padding: 9px 12px; transform: translateX(-50%); border: 1px solid #414b55; border-radius: 8px; background: #242b32; box-shadow: 0 14px 40px rgba(0,0,0,.4); font-size: 12px; overflow-wrap: anywhere; pointer-events: none; }
 
 .studio-toast.error { border-color: rgba(255,120,120,.45); color: var(--studio-danger-text, #fca5a5); }
+.studio-toast.success { border-color: var(--studio-success); background: #14532d; color: #f0fdf4; }
 
 @keyframes studio-snapshot-pending { to { background-position: -240% 0; } }
 

@@ -67,7 +67,9 @@ def apply_descriptions(blocks, *, path=None):
                 start = datetime.fromisoformat(start.replace('Z', '+00:00'))
             if review_from and (start + timedelta(hours=2)).date().isoformat() >= review_from:
                 block['recorded_title'] = block['title']
-                block['title'] = 'Review required: no reviewed work description is available for this interval.'
+                # Review state is metadata, not a replacement for recorded work.
+                # A historical review must not erase descriptions on later days.
+                block['title'] = block['title'] or 'Work description unavailable.'
                 block['description_status'] = 'needs_review'
             continue
         description = ' '.join(record['description'].split())

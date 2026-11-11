@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -61,7 +62,8 @@ def build_daily_triage(
         if candidate:
             candidates.append(candidate)
 
-    for source, messages in (scan.get("messages") or {}).items():
+    message_sources = scan.get('messages') if isinstance(scan.get('messages'), dict) else {}
+    for source, messages in message_sources.items():
         if not isinstance(messages, list) or not messages:
             continue
         candidates.extend(_candidates_from_messages(source, messages))
@@ -70,7 +72,11 @@ def build_daily_triage(
     candidates.extend(developer_candidates)
 
     candidates = _dedupe_candidates(candidates)
-    candidates.sort(key=lambda c: (float(c.get("confidence") or 0), _priority(c)), reverse=True)
+    # A decision about real work must not disappear behind IDE context merely
+    # because the latter has a more confident classifier score.
+    candidates.sort(key=lambda c: (c.get('source') != 'developer_context',
+        {'critical':4, 'blocker':4, 'high':3, 'medium':2, 'low':1}.get(str(c.get('risk_level') or '').lower(), 2),
+        _priority(c), float(c.get('confidence') or 0)), reverse=True)
     candidates = candidates[: max(1, int(max_candidates or 12))]
     buckets = _bucket_candidates(candidates)
 
@@ -91,6 +97,22 @@ def build_daily_triage(
     }
 
 
+def recommendation_provenance(value: Any) -> str | None:
+    """Keep reference-only provenance through the known action wrappers."""
+    pending = [value]
+    seen = set()
+    while pending:
+        row = pending.pop()
+        if not isinstance(row, dict) or id(row) in seen:
+            continue
+        seen.add(id(row))
+        for key in ("provenance", "source"):
+            if row.get(key) in ("project_oversight", "persisted_planning"):
+                return row[key]
+        pending.extend(row.get(key) for key in ("candidate", "action", "payload", "proposal"))
+    return None
+
+
 def enqueue_triage_candidates(
     queue: DraftQueue,
     candidates: list[dict[str, Any]],
@@ -98,6 +120,7 @@ def enqueue_triage_candidates(
     limit: int = 6,
 ) -> int:
     """Add top orchestrator triage candidates to Initiative approvals without duplicates."""
+    queue.expire_old()
     existing_ids = {
         (((entry.execute_payload or {}).get("candidate") or {}).get("id"))
         for entry in queue.get_all()
@@ -106,13 +129,15 @@ def enqueue_triage_candidates(
     now = datetime.now(timezone.utc)
     expires = now + timedelta(hours=18)
     added = 0
-    for candidate in candidates[: max(0, int(limit or 0))]:
+    for candidate in candidates:
+        if added >= max(0, int(limit or 0)):
+            break
         cid = candidate.get("id")
         if not cid or cid in existing_ids:
             continue
         queue.add(
             DraftEntry(
-                id=f"orchestrator-{cid[:18]}",
+                id=f"orchestrator-{cid}",
                 action_type="orchestrator_triage_candidate",
                 description=str(candidate.get("question") or candidate.get("title") or "Decision needs review"),
                 draft=_candidate_draft(candidate),
@@ -120,7 +145,8 @@ def enqueue_triage_candidates(
                 created_at=now.isoformat(),
                 expires_at=expires.isoformat(),
                 permission_tier=PermissionTier.APPROVE,
-                execute_payload={"kind": "orchestrator_triage_ack", "candidate": candidate},
+                execute_payload={"kind": "orchestrator_triage_ack", "candidate": candidate,
+                                 **({'provenance': recommendation_provenance(candidate)} if recommendation_provenance(candidate) else {})},
             )
         )
         existing_ids.add(cid)
@@ -197,8 +223,9 @@ def _candidate_from_proposal(proposal: dict[str, Any]) -> dict[str, Any] | None:
         title=description,
         question=question,
         evidence=[description],
-        payload={"proposal": proposal},
-        confidence=float(payload.get("confidence") or proposal.get("confidence") or 0.55),
+        payload={"proposal": proposal,
+                 **({'provenance': recommendation_provenance(proposal)} if recommendation_provenance(proposal) else {})},
+        confidence=_confidence(payload.get('confidence', proposal.get('confidence')), default=0.55),
         risk_level=str(payload.get("risk_level") or proposal.get("risk_level") or "medium"),
     )
 
@@ -207,21 +234,37 @@ def _candidates_from_messages(source: str, messages: list[dict[str, Any]]) -> li
     work_messages = [m for m in messages if isinstance(m, dict)]
     if not work_messages:
         return []
+    groups = {}
+    for index, message in enumerate(work_messages):
+        project = message.get('project_id') or message.get('linked_project_id')
+        board = message.get('linked_board_id') or message.get('board_id')
+        thread = message.get('source_thread_id') or message.get('thread_id') or message.get('jid') or message.get('chat_id')
+        # An absent conversation identity is not permission to combine people.
+        key = (project, board, str(thread) if thread is not None else f"unknown:{message.get('id', index)}")
+        groups.setdefault(key, []).append(message)
+    candidates = []
+    for (project, board, thread), rows in groups.items():
+        candidates.append(_message_group_candidate(source, rows, project, board, thread))
+    return candidates
+
+
+def _message_group_candidate(source, work_messages, project, board, thread):
     sample = work_messages[0]
     sender = sample.get("sender") or sample.get("chat_title") or sample.get("jid_phone") or source.title()
     preview = sample.get("text_preview") or sample.get("latest_preview") or ""
-    return [
-        _candidate(
+    ids = list(dict.fromkeys(next((m[key] for key in ('id', 'source_message_id', 'message_id') if m.get(key) is not None), None) for m in work_messages))
+    return _candidate(
             source=source,
             action_type="create_ticket",
             title=f"{_count_phrase(len(work_messages), f'{source} message')} may need ticketing",
             question=f"{sender} has {_count_phrase(len(work_messages), f'work-looking {source} message')}. Should I create a ticket or attach them to an existing one?",
             evidence=[_clip(preview, 240)] if preview else [],
-            payload={"message_ids": [m.get("id") for m in work_messages[:8]], "source": source},
+            payload={"message_ids": sorted([value for value in ids if value is not None], key=str), "source": source,
+                     'project_id':project, 'linked_board_id':board,
+                     'source_thread_id':None if thread.startswith('unknown:') else thread},
             confidence=0.62,
             risk_level="medium",
         )
-    ]
 
 
 def _looks_like_reply_candidate(description: str, payload: dict[str, Any]) -> bool:
@@ -279,7 +322,7 @@ def _source_health(scan: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "provider": provider,
                 "label": label,
-                "connected": bool(row.get("connected")),
+                "connected": bool(row.get("connected")) and provider not in unavailable,
                 "configured": provider in configured,
                 "reason": (unavailable.get(provider) or {}).get("reason") or "",
             }
@@ -306,7 +349,7 @@ def _candidate(
         "question": _clip(question, 320),
         "evidence": [_clip(e, 300) for e in evidence if e],
         "payload": payload,
-        "confidence": round(max(0.0, min(float(confidence), 1.0)), 2),
+        "confidence": round(_confidence(confidence), 2),
         "risk_level": risk_level or "medium",
     }
     raw = json.dumps(
@@ -404,6 +447,14 @@ def _clip(value: Any, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rsplit(" ", 1)[0].rstrip() + "…"
+
+
+def _confidence(value, *, default=0.0):
+    try:
+        number = float(value)
+        return max(0.0, min(number, 1.0)) if math.isfinite(number) else default
+    except (TypeError, ValueError):
+        return default
 
 
 def _list(value: Any) -> list[Any]:

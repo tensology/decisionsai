@@ -1272,11 +1272,21 @@ def apply_run_provider_model_selection(
     *,
     synchronous_redispatch: bool = False,
     approved_by: str = "",
+    expected_checkpoint: dict | None = None,
 ) -> Dict[str, Any]:
     """Readiness-check a chosen free model, then resume or offer the next one."""
     from distr.core.project_cli_backends.provider_preflight import probe_openrouter_model_readiness
     from distr.core.settings import load_settings_from_db
     from distr.core.workflow.run_prompts import real_approver
+    from distr.core.workflow.interactions import _checkpoint_scope
+
+    def scope_matches(db,expected):
+        try:
+            return _checkpoint_scope(db.connection(),int(run_id),require_waiting=False)==expected
+        except ValueError:
+            return False
+
+    changed={'error':'The provider checkpoint or its work scope changed. Review the current options before choosing again.','status_code':409}
 
     if not real_approver(approved_by):
         logger.error("Run %s model selection REFUSED: unknown approver (approved_by=%r)", run_id, approved_by)
@@ -1284,9 +1294,16 @@ def apply_run_provider_model_selection(
                 "status_code": 403, "refused": True}
 
     with get_session() as db:
+        if db.get_bind().dialect.name=='sqlite':db.connection().exec_driver_sql('BEGIN IMMEDIATE')
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
         if not run:
             return {"error": "Run not found", "status_code": 404}
+        try:
+            original_scope=_checkpoint_scope(db.connection(),int(run_id),require_waiting=False)
+        except ValueError:
+            return changed
+        if expected_checkpoint is not None and original_scope!=expected_checkpoint:
+            return changed
         run_data = _safe_json_loads(run.run_data) or {}
         candidates = run_data.get("provider_free_candidates") or []
         if candidate_index < 0 or candidate_index >= len(candidates):
@@ -1299,6 +1316,8 @@ def apply_run_provider_model_selection(
     readiness = probe_openrouter_model_readiness(model=model, api_key=api_key)
     if readiness.ready is True:
         with get_session() as db:
+            if db.get_bind().dialect.name=='sqlite':db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+            if not scope_matches(db,original_scope):return changed
             run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
             latest_data = _safe_json_loads(run.run_data) if run else {}
             retry_candidates = list((latest_data or {}).get("provider_free_candidates") or [])
@@ -1351,6 +1370,8 @@ def apply_run_provider_model_selection(
             "paid_fallback_route": paid_fallback,
         })
         with get_session() as db:
+            if db.get_bind().dialect.name=='sqlite':db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+            if not scope_matches(db,original_scope):return changed
             run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
             if not run:
                 return {"error": "Run not found", "status_code": 404}
@@ -1358,15 +1379,20 @@ def apply_run_provider_model_selection(
             data["pending_route_approval"] = candidate
             data["selected_provider_model_readiness"] = readiness.to_dict()
             run.run_data = json.dumps(data)
+            db.flush()
+            approved_scope=_checkpoint_scope(db.connection(),int(run_id),require_waiting=False)
             db.commit()
         return apply_run_route_approval(
             run_id,
             approved=True,
             synchronous_redispatch=synchronous_redispatch,
             approved_by=approved_by,
+            expected_checkpoint=approved_scope,
         )
 
     with get_session() as db:
+        if db.get_bind().dialect.name=='sqlite':db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+        if not scope_matches(db,original_scope):return changed
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
         if not run:
             return {"error": "Run not found", "status_code": 404}
@@ -1464,11 +1490,21 @@ def apply_run_route_approval(
     *,
     synchronous_redispatch: bool = False,
     approved_by: str = "",
+    expected_checkpoint: dict | None = None,
 ) -> Dict[str, Any]:
     """Approve or reject a pending orchestrator route override for an active run."""
     from distr.core.project_cli_backends import normalize_backend_id
 
     with get_session() as db:
+        if db.get_bind().dialect.name=='sqlite':db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+        if expected_checkpoint is not None:
+            from distr.core.workflow.interactions import _checkpoint_scope
+            try:
+                current_scope=_checkpoint_scope(db.connection(),int(run_id),require_waiting=False)
+            except ValueError:
+                current_scope=None
+            if current_scope!=expected_checkpoint:
+                return {'error':'The route approval checkpoint or its work scope changed. Review its current route.','status_code':409}
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
         if not run:
             return {"error": "Run not found", "status_code": 404}
@@ -1687,7 +1723,10 @@ def apply_run_route_approval(
             from distr.core.workflow.dispatcher import _dispatch_workflow_step
 
             if synchronous_redispatch:
-                _dispatch_workflow_step(int(run_id), int(step_id))
+                dispatched=_dispatch_workflow_step(int(run_id),int(step_id))
+                if isinstance(dispatched,dict) and (dispatched.get('error') or dispatched.get('success') is False):
+                    return {**dispatched,'success':False,'approved':approved,'redispatched':False,
+                            'error':dispatched.get('error') or dispatched.get('message') or 'The route decision was saved, but the step did not resume.'}
             else:
                 threading.Thread(
                     target=_dispatch_workflow_step,
@@ -1698,6 +1737,8 @@ def apply_run_route_approval(
             redispatched = True
         except Exception:
             logger.exception("Failed to redispatch workflow step after route approval")
+            return {'success':False,'approved':approved,'redispatched':False,'status_code':500,
+                    'error':'The route decision was saved, but the step did not resume.'}
 
     return {
         "success": True,
@@ -1709,7 +1750,9 @@ def apply_run_route_approval(
     }
 
 
-def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflow_ui") -> dict[str, Any]:
+def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflow_ui",
+                            expected_checkpoint: dict | None = None,
+                            expected_workflow_id: int | None = None) -> dict[str, Any]:
     """Steer the active harness for a workflow run without restarting the step."""
     import time
 
@@ -1718,13 +1761,20 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
         return {"error": "Steer message is required", "status_code": 400}
     steer_source = (source or "workflow_ui").strip() or "workflow_ui"
     from distr.core.workflow.control_policy import classify_steering
+    from distr.core.workflow.interactions import CheckpointScopeChanged, _checkpoint_scope, guard_workflow_checkpoint
 
     steering_decision = classify_steering(instruction)
     plan_revision: dict[str, Any] | None = None
 
     with get_session() as db:
+        if expected_checkpoint is None and db.get_bind().dialect.name=='sqlite':
+            db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+        try:
+            guard_workflow_checkpoint(db,run_id,expected_checkpoint)
+        except CheckpointScopeChanged as exc:
+            return {'error':str(exc),'status_code':409}
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-        if not run:
+        if not run or (expected_workflow_id is not None and run.workflow_id != expected_workflow_id):
             return {"error": "Run not found", "status_code": 404}
         if run.status not in ("running", "waiting"):
             return {"error": "Run is not active", "status_code": 409}
@@ -1743,19 +1793,27 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
             else None
         )
 
-        from distr.core.project_cli_backends.harness import steer_harness
+        project_folder=getattr(project,'folder_location',None) if project else None
+        try:
+            original_scope=_checkpoint_scope(db.connection(),int(run_id),require_waiting=False)
+        except ValueError as exc:
+            return {'error':str(exc),'status_code':409}
 
-        steer_result = steer_harness(
-            message=instruction,
-            backend_id=backend_id,
-            project_id=int(project_id) if project_id else None,
-            project_folder=getattr(project, "folder_location", None) if project else None,
-        )
-        if not steer_result.get("success"):
-            return {
-                "error": steer_result.get("error") or "Steer failed",
-                "status_code": 409,
-            }
+    # Deliver only to the captured worker scope, with no database lock held.
+    from distr.core.project_cli_backends.harness import steer_harness
+    steer_result=steer_harness(message=instruction,backend_id=backend_id,
+        project_id=int(project_id) if project_id else None,project_folder=project_folder,run_id=int(run_id))
+    if not steer_result.get('success'):
+        return {'error':steer_result.get('error') or 'Steer failed','status_code':409}
+
+    updated_scope=None
+    with get_session() as db:
+        try:
+            guard_workflow_checkpoint(db,run_id,original_scope)
+        except CheckpointScopeChanged:
+            return {'error':'The work scope changed during steering. Review the original worker before continuing.','status_code':409}
+        run=db.get(AutoWorkflowRun,int(run_id))
+        run_data=_safe_json_loads(run.run_data) or {}
 
         steer_entry = {
             "message": instruction[:4000],
@@ -1798,6 +1856,9 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
             }
             run_data["latest_backend_handoff"] = latest_handoff
         run.run_data = json.dumps(run_data)
+        if expected_checkpoint is not None:
+            db.flush()
+            updated_scope=_checkpoint_scope(db.connection(),int(run_id),require_waiting=False)
         db.commit()
 
         step_id = run.current_step_id
@@ -1884,6 +1945,7 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
         "steer": steer_entry,
         "steering_impact": steering_decision.impact,
         "coordination_plan_revision": plan_revision or {},
+        **({'_checkpoint_scope':updated_scope} if updated_scope is not None else {}),
     }
 
 
@@ -2660,6 +2722,17 @@ def start_workflow_run(
     dispatch_async: bool = False,
 ):
     """Service-level wrapper preserving legacy patch points for tests/callers."""
+    from distr.core.planning.prerequisites import PlanPrerequisiteError, execution_ticket_id, require_plan_prerequisites
+    metadata_scope = run_metadata if isinstance(run_metadata, dict) else {}
+    try:
+        with get_session() as db:
+            ticket_id = execution_ticket_id(ticket_id, chat_id=metadata_scope.get('chat_id'),
+                scope_ticket_ids=[metadata_scope.get('ticket_id'), getattr(run_ctx, 'ticket_id', None)], session=db)
+            board_id = board_id if board_id is not None else getattr(run_ctx, 'board_id', None)
+            require_plan_prerequisites(ticket_id if ticket_id is not None else metadata_scope.get('ticket_id'),
+                project_id=metadata_scope.get('project_id') or getattr(run_ctx, 'active_project_id', None), board_id=board_id, session=db)
+    except PlanPrerequisiteError as exc:
+        return {'success':False, 'status':'blocked', 'error':str(exc)}
     if "unittest.mock" not in str(type(_dispatch_step)):
         return _dispatcher_start_workflow_run(
             workflow_id=workflow_id,
@@ -2677,6 +2750,10 @@ def start_workflow_run(
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return {"error": "Workflow not found"}
+        from distr.core.workflow.step_validator import workflow_start_error
+        error = workflow_start_error(wf, start_step_id)
+        if error:
+            return {"error": error}
         steps = sorted(wf.steps, key=lambda s: s.position)
         if not steps:
             return {"error": "Workflow has no steps"}

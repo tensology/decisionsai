@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 import secrets
@@ -19,6 +20,22 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TTL_S = 24 * 60 * 60
 SQLITE_LOCK_RETRY_DELAYS_S = (0.05, 0.1, 0.2, 0.4)
+
+
+class CheckpointScopeChanged(ValueError):
+    status_code = 409
+
+
+def guard_workflow_checkpoint(db, run_id: int, expected_checkpoint: dict | None) -> None:
+    """Validate a scoped decision inside its short mutation transaction."""
+    if expected_checkpoint is None:return
+    if db.get_bind().dialect.name=='sqlite':db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    try:
+        current=_checkpoint_scope(db.connection(),int(run_id),require_waiting=False)
+    except ValueError:
+        current=None
+    if current!=expected_checkpoint:
+        raise CheckpointScopeChanged('The workflow checkpoint or its work scope changed. Review the current question.')
 
 
 def _with_sqlite_lock_retry(operation):
@@ -59,9 +76,16 @@ def _ensure_table() -> None:
                 response_text TEXT,
                 response_source VARCHAR,
                 resolver_id VARCHAR,
-                error TEXT
+                error TEXT,
+                scope_json TEXT
             )
         """))
+        columns = {row[1] for row in conn.exec_driver_sql('PRAGMA table_info(workflow_interactions)')}
+        if 'scope_json' not in columns:
+            try:
+                conn.exec_driver_sql('ALTER TABLE workflow_interactions ADD COLUMN scope_json TEXT')
+            except OperationalError as exc:
+                if 'duplicate column name' not in str(exc).lower(): raise
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_workflow_interactions_pending "
             "ON workflow_interactions(status, telegram_chat_id, created_at)"
@@ -74,12 +98,79 @@ def _expire_stale_interactions(conn, *, now: float) -> None:
         UPDATE workflow_interactions SET status='expired'
         WHERE status='pending' AND (
             expires_at <= :now
-            OR run_id IN (
-                SELECT id FROM auto_workflow_runs
-                WHERE LOWER(COALESCE(status, '')) != 'waiting'
+            OR scope_json IS NULL
+            OR NOT EXISTS (
+                SELECT 1 FROM auto_workflow_runs r
+                WHERE r.id=workflow_interactions.run_id AND r.workflow_id=workflow_interactions.workflow_id
+                  AND LOWER(COALESCE(r.status, ''))='waiting'
+                  AND COALESCE(r.current_step_id,-1)=COALESCE(workflow_interactions.step_id,-1)
             )
         )
     """), {"now": now})
+
+
+def _checkpoint_scope(conn, run_id: int, *, require_waiting=True) -> dict:
+    run = conn.execute(text('SELECT * FROM auto_workflow_runs WHERE id=:id'),{'id':int(run_id)}).mappings().first()
+    if not run or (require_waiting and str(run['status'] or '').lower()!='waiting'):
+        raise ValueError('The workflow checkpoint is no longer waiting.')
+    workflow = conn.execute(text('SELECT id FROM auto_workflows WHERE id=:id'),{'id':run['workflow_id']}).first()
+    if not workflow:
+        raise ValueError('The workflow checkpoint owner no longer exists.')
+    try:
+        data=json.loads(run['run_data'] or '{}')
+        if not isinstance(data,dict): raise ValueError()
+    except (TypeError,ValueError):
+        raise ValueError('The workflow checkpoint context is invalid. Review it before continuing.')
+    root_id,root_project=None,None
+    if run['chat_id'] is not None:
+        chat=conn.execute(text('SELECT id,parent_id,project_id FROM chats WHERE id=:id'),{'id':run['chat_id']}).mappings().first()
+        if chat and chat['parent_id'] is not None:
+            chat=conn.execute(text('SELECT id,parent_id,project_id FROM chats WHERE id=:id'),{'id':chat['parent_id']}).mappings().first()
+        if not chat:
+            raise ValueError('The workflow checkpoint thread no longer exists.')
+        root_id,root_project=chat['id'],chat['project_id']
+    step=None
+    if run['current_step_id'] is not None:
+        step=conn.execute(text('SELECT * FROM auto_workflow_steps WHERE id=:id'),{'id':run['current_step_id']}).mappings().first()
+        if not step or step['workflow_id']!=run['workflow_id']:
+            raise ValueError('The workflow checkpoint step no longer belongs to this workflow.')
+    def digest(value):
+        return hashlib.sha256(json.dumps(value,sort_keys=True,default=str).encode()).hexdigest()
+    kind=str(data.get('waiting_kind') or 'feedback').strip().lower()
+    owner={key:run[key] for key in ('id','workflow_id','chat_id','board_id','ticket_id')}
+    owner.update(root_id=root_id,root_project_id=root_project,
+                 context={key:data.get(key) for key in ('project_id','board_id','ticket_id','chat_id')})
+    checkpoint={'step_id':run['current_step_id'],'kind':kind,'prompt':digest(data.get('waiting_prompt'))}
+    counts=data.get('checkpoint_counts') if isinstance(data.get('checkpoint_counts'),dict) else {}
+    checkpoint['generation']=counts.get(kind)
+    owner['project_bindings']={}
+    for value in (root_project,data.get('project_id')):
+        if value is not None and str(value).isdigit():
+            project=conn.execute(text('SELECT folder_location,deleted_at FROM projects WHERE id=:id'),{'id':int(value)}).first()
+            owner['project_bindings'][str(value)]=digest(list(project)) if project else None
+    if run['ticket_id'] is not None:
+        ticket=conn.execute(text('SELECT t.linked_project_id,t.source_chat_id,l.board_id FROM kanban_tickets t '
+            'LEFT JOIN kanban_lanes l ON l.id=t.lane_id WHERE t.id=:id'),{'id':run['ticket_id']}).first()
+        owner['ticket_binding']=list(ticket) if ticket else None
+    if run['board_id'] is not None:
+        board=conn.execute(text('SELECT default_project_id,archived FROM kanban_boards WHERE id=:id'),{'id':run['board_id']}).first()
+        owner['board_binding']=list(board) if board else None
+    if step:
+        checkpoint['step_input']=digest({key:step[key] for key in
+            ('action_type','step_type','instruction','config','validation_type','validation_prompt','on_pass_step_id','on_fail_step_id') if key in step})
+    checkpoint['execution_route']=digest({key:data.get(key) for key in ('execution_route','step_routes','step_role_routes')})
+    if kind in {'provider_preflight','route_approval'}:
+        checkpoint['route']=digest({key:data.get(key) for key in ('provider_free_candidates','pending_route_approval','execution_route','provider_fallback_route')})
+    return {'owner':owner,'checkpoint':checkpoint,'status':str(run['status'] or '').lower()}
+
+
+def _scope_matches(conn,item,*,owner_only=False):
+    try:
+        saved=json.loads(item.get('scope_json') or 'null')
+        current=_checkpoint_scope(conn,int(item['run_id']),require_waiting=not owner_only)
+        return isinstance(saved,dict) and (saved.get('owner')==current['owner'] if owner_only else saved==current)
+    except (TypeError,ValueError):
+        return False
 
 
 def allowed_actions_for_kind(kind: str) -> list[str]:
@@ -111,54 +202,52 @@ def create_workflow_interaction(
     now = time.time()
     normalized_kind = (kind or "feedback").strip().lower()
     actions = allowed_actions_for_kind(normalized_kind)
-    if normalized_kind == "provider_preflight":
-        try:
-            with engine.connect() as conn:
-                run_row = conn.execute(
-                    text("SELECT run_data FROM auto_workflow_runs WHERE id=:run_id"),
-                    {"run_id": int(run_id)},
-                ).mappings().first()
-            run_data = json.loads((run_row or {}).get("run_data") or "{}")
-            candidates = run_data.get("provider_free_candidates") or []
-            available = [
-                index for index, candidate in enumerate(candidates[:3])
-                if not isinstance(candidate, dict) or not candidate.get("readiness_failed")
-            ]
-            if available:
-                actions = [f"model_{index}" for index in available] + ["stop"]
-        except Exception:
-            logger.debug("Could not load provider candidates for interaction", exc_info=True)
     def _create() -> dict[str, Any]:
         _ensure_table()
         with engine.begin() as conn:
+            if conn.dialect.name=='sqlite': conn.exec_driver_sql('BEGIN IMMEDIATE')
             _expire_stale_interactions(conn, now=now)
+            scope=_checkpoint_scope(conn,int(run_id))
+            if (scope['owner']['workflow_id']!=int(workflow_id)
+                    or scope['checkpoint']['step_id']!=step_id
+                    or scope['checkpoint']['kind']!=normalized_kind):
+                raise ValueError('The workflow checkpoint changed before its controls were created.')
+            current_actions=actions
+            if normalized_kind=='provider_preflight':
+                raw=conn.execute(text('SELECT run_data FROM auto_workflow_runs WHERE id=:id'),{'id':int(run_id)}).scalar()
+                candidates=json.loads(raw or '{}').get('provider_free_candidates') or []
+                available=[index for index,candidate in enumerate(candidates[:3])
+                           if isinstance(candidate,dict) and not candidate.get('readiness_failed')]
+                current_actions=([f'model_{index}' for index in available]+['stop']) if available else ['approve','stop']
             existing = conn.execute(text("""
                 SELECT * FROM workflow_interactions
-                WHERE status='pending' AND run_id=:run_id
+                WHERE status IN ('pending','resolving') AND run_id=:run_id
                   AND COALESCE(step_id, -1)=COALESCE(:step_id, -1) AND kind=:kind
                 ORDER BY id DESC LIMIT 1
             """), {"run_id": int(run_id), "step_id": step_id, "kind": normalized_kind}).mappings().first()
             if existing:
-                return dict(existing)
+                if _scope_matches(conn,dict(existing)):
+                    return dict(existing)
+                conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE id=:id AND status='pending'"),{'id':existing['id']})
             token = secrets.token_urlsafe(12)
             conn.execute(text("""
                 INSERT INTO workflow_interactions(
                     token, workflow_id, run_id, step_id, kind, allowed_actions,
-                    telegram_chat_id, created_at, expires_at
+                    telegram_chat_id, created_at, expires_at, scope_json
                 ) VALUES (
                     :token, :workflow_id, :run_id, :step_id, :kind, :actions,
-                    :chat_id, :created_at, :expires_at
+                    :chat_id, :created_at, :expires_at, :scope
                 )
             """), {
                 "token": token, "workflow_id": int(workflow_id), "run_id": int(run_id),
                 "step_id": step_id, "kind": normalized_kind,
-                "actions": json.dumps(actions),
+                "actions": json.dumps(current_actions), "scope":json.dumps(scope,sort_keys=True),
                 "chat_id": str(telegram_chat_id) if telegram_chat_id is not None else None,
                 "created_at": now, "expires_at": now + max(60, int(ttl_s)),
             })
         return {
             "token": token, "run_id": run_id, "step_id": step_id,
-            "kind": normalized_kind, "allowed_actions": json.dumps(actions),
+            "kind": normalized_kind, "allowed_actions": json.dumps(current_actions),
         }
 
     interaction = _with_sqlite_lock_retry(_create)
@@ -260,23 +349,30 @@ def record_telegram_delivery(
     reply_markup_sent: bool,
 ) -> bool:
     """Persist the Telegram API acknowledgment for one durable interaction."""
+    from distr.core.incoming.telegram_updates import _recipient_id
+
     clean_token = str(token or "").strip()
-    if not clean_token:
+    chat_id = _recipient_id(telegram_chat_id)
+    message_id = _recipient_id(telegram_message_id)
+    if not clean_token or chat_id is None or message_id is None:
         return False
     _ensure_table()
     with engine.begin() as conn:
         result = conn.execute(
             text(
                 "UPDATE workflow_interactions "
-                "SET telegram_chat_id=COALESCE(:chat_id, telegram_chat_id), "
+                "SET telegram_chat_id=:chat_id, "
                 "telegram_message_id=:message_id, error=:error "
                 "WHERE token=:token AND status='pending'"
+                " AND (telegram_chat_id IS NULL OR telegram_chat_id=:chat_id)"
+                " AND (:controls OR telegram_message_id IS NULL OR error IS NOT NULL)"
             ),
             {
                 "token": clean_token,
-                "chat_id": str(telegram_chat_id) if telegram_chat_id is not None else None,
-                "message_id": str(telegram_message_id) if telegram_message_id is not None else None,
-                "error": None if reply_markup_sent else "Telegram acknowledged the message without its controls",
+                "chat_id": str(chat_id),
+                "message_id": str(message_id),
+                "controls": reply_markup_sent is True,
+                "error": None if reply_markup_sent is True else "Telegram acknowledged the message without its controls",
             },
         )
     return bool(result.rowcount)
@@ -293,6 +389,7 @@ def record_telegram_delivery_error(*, token: str, error: str) -> bool:
             text(
                 "UPDATE workflow_interactions SET error=:error "
                 "WHERE token=:token AND status='pending'"
+                " AND (telegram_message_id IS NULL OR error IS NOT NULL)"
             ),
             {"token": clean_token, "error": str(error or "Telegram delivery failed")[:1000]},
         )
@@ -353,7 +450,14 @@ def pending_interactions(*, chat_id: int | str | None = None) -> list[dict[str, 
               AND (:chat_id IS NULL OR telegram_chat_id IS NULL OR telegram_chat_id=:chat_id)
             ORDER BY created_at DESC, id DESC LIMIT 20
         """), {"chat_id": str(chat_id) if chat_id is not None else None}).mappings().all()
-    return [dict(row) for row in rows]
+        pending=[]
+        for row in rows:
+            item=dict(row)
+            if _scope_matches(conn,item):
+                pending.append(item)
+            else:
+                conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE id=:id AND status='pending'"),{'id':item['id']})
+    return pending
 
 
 def resolve_interaction(
@@ -365,15 +469,22 @@ def resolve_interaction(
     _ensure_table()
     now = time.time()
     with engine.begin() as conn:
+        if conn.dialect.name=='sqlite': conn.exec_driver_sql('BEGIN IMMEDIATE')
         _expire_stale_interactions(conn, now=now)
         row = conn.execute(text("SELECT * FROM workflow_interactions WHERE token=:token"), {"token": token}).mappings().first()
         if not row:
             return {"error": "Interaction not found", "status_code": 404}
         item = dict(row)
+        bound_chat=item.get('telegram_chat_id')
+        telegram_source=str(source or '').lower().startswith('telegram')
+        if ((telegram_source and (bound_chat is None or chat_id is None))
+                or (bound_chat is not None and chat_id is not None and str(chat_id)!=str(bound_chat))):
+            return {'error':'Interaction belongs to another or unverified Telegram chat','status_code':403}
         if item["status"] != "pending":
             if (
                 item["status"] in {"resolving", "resolved"}
                 and item.get("resolved_action") == action
+                and _scope_matches(conn,item,owner_only=True)
             ):
                 return {
                     "success": True,
@@ -382,6 +493,9 @@ def resolve_interaction(
                     "idempotent": True,
                 }
             return {"error": f"Interaction already {item['status']}", "status_code": 409, "idempotent": True}
+        if not _scope_matches(conn,item):
+            conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE token=:token AND status='pending'"),{'token':token})
+            return {'error':'The workflow checkpoint or its work scope changed. Review the current question.','status_code':409}
         if float(item["expires_at"]) <= now:
             conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE token=:token AND status='pending'"), {"token": token})
             return {"error": "Interaction expired", "status_code": 410}
@@ -397,9 +511,6 @@ def resolve_interaction(
                 "error": "Send a Telegram voice note to continue this checkpoint",
                 "status_code": 400,
             }
-        bound_chat = item.get("telegram_chat_id")
-        if bound_chat and chat_id is not None and str(chat_id) != str(bound_chat):
-            return {"error": "Interaction belongs to another Telegram chat", "status_code": 403}
         claimed = conn.execute(text("""
             UPDATE workflow_interactions SET status='resolving', resolved_action=:action,
               response_text=:response, response_source=:source, resolver_id=:resolver
@@ -466,6 +577,13 @@ def _apply_claimed_interaction(
     resolver_id: str = "",
 ) -> dict[str, Any]:
     """Apply a previously claimed interaction, optionally on a worker thread."""
+    with engine.begin() as conn:
+        current=conn.execute(text('SELECT * FROM workflow_interactions WHERE token=:token'),{'token':token}).mappings().first()
+        if (not current or current['status']!='resolving' or current['resolved_action']!=action
+                or not _scope_matches(conn,dict(current))):
+            conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE token=:token AND status='resolving'"),{'token':token})
+            return {'error':'The workflow checkpoint changed before this decision was applied. Review the current question.','status_code':409}
+    failure_status=None
     try:
         if str(item.get("kind") or "").startswith("qualification_telegram_"):
             result = _advance_telegram_qualification_probe(
@@ -481,13 +599,18 @@ def _apply_claimed_interaction(
                 source=source,
                 resolver_id=resolver_id,
             )
-        if result.get("error"):
-            raise RuntimeError(str(result["error"]))
+        nested=result.get('dispatch') if isinstance(result.get('dispatch'),dict) else {}
+        failed=next((entry for entry in (result,nested) if entry.get('error') or entry.get('success') is False),None)
+        if failed is not None:
+            failure_status=failed.get('status_code')
+            raise RuntimeError(str(failed.get('error') or failed.get('message') or 'The workflow decision was not applied.'))
     except Exception as exc:
         with engine.begin() as conn:
-            conn.execute(text("UPDATE workflow_interactions SET status='pending', error=:error WHERE token=:token AND status='resolving'"), {"error": str(exc)[:2000], "token": token})
+            retryable=_scope_matches(conn,item)
+            conn.execute(text("UPDATE workflow_interactions SET status=:status, error=:error WHERE token=:token AND status='resolving'"),
+                         {'status':'pending' if retryable else 'expired',"error": str(exc)[:2000], "token": token})
         logger.exception("Workflow interaction resolution failed token=%s", token[:6])
-        return {"error": str(exc), "status_code": 500}
+        return {"error": str(exc), "status_code": getattr(exc,'status_code',failure_status or 500)}
 
     with engine.begin() as conn:
         conn.execute(text("UPDATE workflow_interactions SET status='resolved', resolved_at=:now, error=NULL WHERE token=:token AND status='resolving'"), {"now": resolved_at, "token": token})
@@ -517,6 +640,7 @@ def _apply_standard_workflow_interaction(
 ) -> dict[str, Any]:
     """Apply a normal workflow checkpoint after the durable claim succeeds."""
     approver = interaction_approver(source, resolver_id)
+    checkpoint_scope=json.loads(item['scope_json'])
     synchronous_redispatch = str(source or "").strip().lower() in {
         "cli",
         "qualification",
@@ -526,6 +650,7 @@ def _apply_standard_workflow_interaction(
         from distr.core.workflow.service import apply_run_route_approval
 
         kwargs = {"synchronous_redispatch": True} if synchronous_redispatch else {}
+        kwargs['expected_checkpoint']=checkpoint_scope
         result = apply_run_route_approval(
             int(item["run_id"]),
             approved=action == "approve",
@@ -536,6 +661,7 @@ def _apply_standard_workflow_interaction(
         from distr.core.workflow.service import apply_run_provider_model_selection
 
         kwargs = {"synchronous_redispatch": True} if synchronous_redispatch else {}
+        kwargs['expected_checkpoint']=checkpoint_scope
         result = apply_run_provider_model_selection(
             int(item["run_id"]), int(action.rsplit("_", 1)[1]), approved_by=approver, **kwargs
         )
@@ -543,6 +669,7 @@ def _apply_standard_workflow_interaction(
         from distr.core.workflow.service import apply_run_route_approval
 
         kwargs = {"synchronous_redispatch": True} if synchronous_redispatch else {}
+        kwargs['expected_checkpoint']=checkpoint_scope
         result = apply_run_route_approval(int(item["run_id"]), approved=True,
                                           approved_by=approver, **kwargs)
     elif item["kind"] == "pre_execution_approval" and action == "approve":
@@ -552,16 +679,17 @@ def _apply_standard_workflow_interaction(
             int(item["run_id"]),
             int(item["step_id"]),
             response_text=response_text,
+            expected_checkpoint=checkpoint_scope,
         )
     elif action == "stop":
         from distr.core.workflow.dispatcher import cancel_run
 
-        result = {"success": bool(cancel_run(int(item["run_id"]))), "action": "stop"}
+        result = {"success": bool(cancel_run(int(item["run_id"]),expected_checkpoint=checkpoint_scope)), "action": "stop"}
     else:
         from distr.core.workflow.dispatcher import continue_waiting_step
 
         feedback = response_text if action == "feedback" else response_text or action
-        result = continue_waiting_step(int(item["run_id"]), feedback)
+        result = continue_waiting_step(int(item["run_id"]), feedback,expected_checkpoint=checkpoint_scope)
     return result
 
 
@@ -629,16 +757,18 @@ def _advance_telegram_qualification_probe(
     """Advance only the opt-in release probe; normal workflow logic is untouched."""
     from distr.core.db import get_session
     from distr.core.db.workflow import AutoWorkflowRun
+    checkpoint_scope=json.loads(item['scope_json'])
 
     if action == "stop":
         from distr.core.workflow.dispatcher import cancel_run
 
-        return {"success": bool(cancel_run(int(item["run_id"]))), "action": "stop"}
+        return {"success": bool(cancel_run(int(item["run_id"]),expected_checkpoint=checkpoint_scope)), "action": "stop"}
     next_phase = _TELEGRAM_QUALIFICATION_PHASES.get(str(item.get("kind") or ""))
     if not next_phase:
         return {"error": "Telegram qualification phase cannot advance"}
     next_kind, prompt = next_phase
     with get_session() as db:
+        guard_workflow_checkpoint(db,int(item['run_id']),checkpoint_scope)
         run = db.get(AutoWorkflowRun, int(item["run_id"]))
         if not run:
             return {"error": "Workflow run does not exist"}
@@ -683,6 +813,10 @@ def handle_telegram_workflow_reply(
     callback = re.fullmatch(r"wf:([A-Za-z0-9_-]+):(approve|reject|continue|stop|model_[0-2])", clean)
     if callback:
         return resolve_interaction(token=callback.group(1), action=callback.group(2), response_text=callback.group(2), source=source, resolver_id=resolver_id, chat_id=chat_id, background=background)
+    if clean.startswith('wf:'):
+        return {'error':'This workflow control is invalid or no longer supported. Review the current question.','status_code':400}
+    if str(source or '').lower()=='telegram_callback':
+        return None
     pending = pending_interactions(chat_id=chat_id)
     if not pending:
         return None
@@ -732,12 +866,14 @@ def workflow_reply_message(result: dict[str, Any], *, voice: bool = False) -> st
     action = str(result.get("action") or "continue")
     run_id = result.get("run_id")
     run_label = f"run #{run_id}" if run_id else "the run"
+    if result.get('queued'):
+        return f"I've queued your decision for {run_label}."
     if re.fullmatch(r"model_[0-2]", action):
         return f"I've asked {run_label} to try free-model option {int(action[-1]) + 1}."
     phrases = {
         "approve": f"Done — I've let {run_label} carry on.",
         "continue": f"Got it — {run_label} is carrying on.",
-        "reject": f"Understood — I've stopped {run_label}.",
+        "reject": f"I've declined the route override for {run_label}.",
         "stop": f"Understood — I've stopped {run_label}.",
         "feedback": f"Thanks — I've passed that to {run_label}; it'll pick up where it paused.",
     }

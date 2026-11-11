@@ -35,6 +35,30 @@ def service():
     return OrchestratorIntakeService()
 
 
+def test_inbox_projects_saved_gmail_subject_and_source_ids(monkeypatch, service):
+    from distr.core import db, orchestrator
+    from distr.core.db.orchestrator import OrchestratorEvent
+
+    engine = create_engine("sqlite://", poolclass=StaticPool)
+    OrchestratorEvent.__table__.create(engine)
+    sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr(db, "get_session", sessions)
+    monkeypatch.setattr(orchestrator, "ensure_orchestrator_tables", lambda: None)
+    with sessions.begin() as session:
+        session.add(OrchestratorEvent(
+            event_uid="gmail-intake", event_type="work_intake_decision", source="gmail",
+            status="ticket_created", ticket_id=306,
+            payload=json.dumps({"intake": {
+                "source": "gmail", "source_message_id": "message", "source_thread_id": "thread",
+                "source_user_id": "sender@example.com", "metadata": {"subject": "Website error"},
+            }, "decision": {"action": "create_ticket", "ticket_id": 306}}),
+        ))
+    row, = service.list_inbox()
+    assert (row["subject"], row["source_message_id"], row["source_thread_id"], row["source_user_id"], row["ticket_id"]) == (
+        "Website error", "message", "thread", "sender@example.com", 306,
+    )
+
+
 @pytest.mark.parametrize(
     ("payload", "action"),
     [
@@ -560,6 +584,47 @@ def test_run_resolves_named_project_before_ambient_board_and_preserves_media(int
     ticket = session.query(KanbanTicket).filter(KanbanTicket.id == decision.ticket_id).one()
     assert "/tmp/menu.png" in ticket.description
     session.close()
+
+
+def test_telegram_media_batch_persists_all_evidence_on_the_created_ticket(intake_db, tmp_path):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.integrations.telegram.messages import TelegramMessagesMixin, _DownloadedTelegramFile
+
+    factory, ids = intake_db
+    first, second, document = tmp_path / "first.png", tmp_path / "second.png", tmp_path / "notes.pdf"
+    first.write_bytes(b"first screenshot")
+    second.write_bytes(b"second screenshot")
+    document.write_bytes(b"additional notes")
+    downloaded = _DownloadedTelegramFile("12345", "504", str(document), "document", document.name,
+                                        "application/pdf", "", 100)
+    sender = SimpleNamespace(
+        telegram_user_id=12345,
+        _telegram_batch_thread_id=12345,
+        _telegram_batch_buffer=[
+            ("Create a ticket: fix the pizza menu", False, None, "text", 501),
+            ("Before", True, str(first), "text", 502),
+            ("After", True, str(second), "text", 503),
+            ("", False, None, "text", 504, downloaded),
+        ],
+        _stop_typing_loop=Mock(),
+        send_to_telegram=Mock(),
+    )
+    with (
+        patch("distr.core.work_intake.get_work_intake_service", return_value=OrchestratorIntakeService()),
+        patch("distr.core.work_intake.service.get_session", side_effect=lambda: _session_ctx(factory)),
+        patch("distr.core.orchestrator.emit_channel_intake_event"),
+        patch("distr.core.automation_orchestrator.dispatch_matching_channel_automations", return_value=[]),
+    ):
+        TelegramMessagesMixin._flush_telegram_batch(sender)
+
+    with factory() as session:
+        ticket = session.query(KanbanTicket).one()
+        assert ticket.linked_project_id == ids["pizza_project"]
+        assert ticket.source_thread_id == "12345"
+        assert f"- image: {first}" in ticket.description
+        assert f"- image: {second}" in ticket.description
+        assert f"- document: {document} (application/pdf)" in ticket.description
+    sender.send_to_telegram.assert_called_once()
 
 
 def test_active_project_single_line_request_creates_ticket_and_starts_lightweight_worker(intake_db):

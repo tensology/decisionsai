@@ -357,11 +357,15 @@ def _oneshot_key(
 
 
 def _task_execution_id(task: ProjectTask) -> int | None:
-    value = task.run_id or task.chat_id or task.execution_session_id
+    value = task.execution_session_id if task.origin == "proactive_orchestrator" else (
+        task.run_id or task.chat_id or task.execution_session_id
+    )
     return int(value) if value is not None else None
 
 
 def _task_execution_kind(task: ProjectTask) -> str | None:
+    if task.origin == "proactive_orchestrator":
+        return "proactive"
     if task.run_id is not None:
         return "workflow"
     if task.chat_id is not None:
@@ -488,6 +492,14 @@ def terminate_backend_process(
         except Exception:
             return False
     return True
+
+
+def backend_process_registered(project_id: int, backend_id: str, *, board_id: int | None,
+                               execution_id: int, execution_kind: str) -> bool:
+    key = _oneshot_key(project_id, backend_id, board_id, execution_id, execution_kind)
+    with _ONE_SHOT_PROCESS_LOCK:
+        process = _ONE_SHOT_PROCESSES.get(key)
+        return process is not None and process.returncode is None
 
 
 def _decisions_api_base() -> str:
@@ -929,6 +941,8 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
             "Do not copy the alternatives into Status; choose one exact value. "
             "Do not omit Status, even when no files changed."
         )
+    if not task.adapter_options.get('disable_tools') and not task.adapter_options.get('read_only_expected'):
+        command.extend(['--extension', str(Path(__file__).resolve().parent / 'pi_extensions' / 'checked_bash.ts')])
     command.extend([
         "--append-system-prompt",
         system_prompt,
@@ -1531,7 +1545,9 @@ class PiBackend(ProjectCliBackend):
         from distr.core.pi_rpc import get_rpc_session
 
         project_id = context.get("project_id")
-        rpc = get_rpc_session(int(project_id)) if project_id else None
+        # Tracked runs use one-shot workers. The project RPC session
+        # belongs to interactive chat and cannot identify that workflow run.
+        rpc = get_rpc_session(int(project_id)) if project_id and context.get("run_id") is None else None
         if rpc and rpc.is_alive:
             delivered = bool(rpc.steer(message))
             return {
@@ -2744,6 +2760,11 @@ class ClaudeCodeBackend(OneShotCliBackend):
         cmd = [executable] + dev + self.command_args
         if task.model and task.model != "default":
             cmd += ["--model", task.model]
+        from distr.core.turn_runtime.anthropic_adapter import FABLE_52_PROGRESS_INSTRUCTION, fable_52_effort, is_fable_52
+
+        if is_fable_52(task.model):
+            effort = fable_52_effort(str(task.adapter_options.get("reasoning_effort") or ""))
+            cmd += ["--effort", effort, "--append-system-prompt", FABLE_52_PROGRESS_INSTRUCTION]
         return cmd + [task.instruction]
 
 
@@ -3432,6 +3453,8 @@ async def run_project_task(
     codex_service_tier_override: Optional[str] = None,
     board_id_override: Optional[int] = None,
     adapter_options: Optional[dict[str, Any]] = None,
+    proactive_candidate_id: Optional[int] = None,
+    turn_id: Optional[int] = None,
 ) -> BackendTaskResult:
     from distr.core.db.projects import Project
     if isinstance(project, Project) and project.deleted_at is not None:
@@ -3457,6 +3480,12 @@ async def run_project_task(
             from .codex_proposal import send_codex_proposal
             return await send_codex_proposal(task, on_event)
         return await PiBackend().send_task(task, on_event)
+    from distr.core.planning.prerequisites import PlanPrerequisiteError, require_plan_prerequisites
+    try:
+        require_plan_prerequisites(ticket_id, project_id=project.id, board_id=board_id_override,
+                                   chat_id=chat_id, run_id=run_id)
+    except PlanPrerequisiteError as exc:
+        return BackendTaskResult(False, backend_id_override or '', 'plan_prerequisites', error=str(exc))
     from distr.core.kanban.project_execution import (
         append_execution_event,
         complete_execution_session,
@@ -3561,6 +3590,8 @@ async def run_project_task(
         origin=origin,
         input_packet={
             "project_id": task.project_id,
+            **({"chat_id": task.chat_id} if task.chat_id is not None else {}),
+            **({"turn_id": turn_id} if turn_id is not None else {}),
             "project_name": task.project_name,
             "folder": task.folder,
             "ticket_id": ticket_id,
@@ -3577,6 +3608,8 @@ async def run_project_task(
             "service_tier": task.codex_service_tier,
             "complexity": ticket_complexity,
             "origin": origin,
+            **({"proactive_candidate_id": proactive_candidate_id}
+               if origin == "proactive_orchestrator" and proactive_candidate_id is not None else {}),
             "instruction": instruction,
             "git_status_before": git_status_before,
             "read_only_expected": read_only_expected,

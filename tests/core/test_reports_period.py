@@ -23,6 +23,54 @@ from distr.core.reports.service import list_reports, list_time_entries
 
 # ---------------------------------------------------------------- periods
 
+def test_scheduled_wrapper_is_recognised_but_quoted_schedule_is_not():
+    header='Automation control: auto_15. This thread owns that scheduled task.'
+    assert month.scheduled_instruction('[DECISIONS DEVELOPMENT THREAD]\n'+header+'\nCurrent user instruction:\nRefresh the local database')
+    assert not month.scheduled_instruction('Current user instruction:\nExplain this old run:\n'+header)
+    assert not month.scheduled_instruction('Conversation context since the latest checkpoint:\n'+header)
+    assert not month.scheduled_instruction('Investigate the automation schedule')
+
+
+def test_schedule_provenance_survives_a_local_idle_gap():
+    start=datetime(2026,11,10,7)
+    meta={'cwd':'/example','activity':[
+        {'role':'user','time':start,'text':'Automation control: auto_15. This thread owns that scheduled task.','workdirs':[]},
+        {'role':'assistant','time':start+timedelta(hours=1),'text':'Database refresh completed.','workdirs':[]}]}
+    matcher=month.ProjectMatcher({1:{'name':'Example','folder':'/example'}})
+    context=month.session_interval_context(meta,start+timedelta(minutes=50),start+timedelta(hours=1),matcher)
+    assert context['scheduled_automation'] is True
+    meta['activity'].append({'role':'user','time':start+timedelta(hours=2),'text':'Correct the actual customer billing screen','workdirs':[]})
+    context=month.session_interval_context(meta,start+timedelta(hours=2),start+timedelta(hours=2,minutes=5),matcher)
+    assert context['scheduled_automation'] is False
+
+
+def test_bound_automation_thread_timer_is_excluded(report_db):
+    with report_db['session']() as db:
+        chat=db.query(Chat).filter(Chat.title=='Alpha thread').one()
+        chat.params=json.dumps({'development':{'source_type':'automation','source_ref':'auto_22'}})
+        db.commit()
+    result=month.collate(month.resolve_period(start='2026-10-10',end='2026-10-10'),
+                         get_session=report_db['session'],include_local=False)
+    assert all(b['source']!='decisions_thread' for b in result['blocks'])
+
+
+def test_automation_filter_excludes_database_and_local_wrappers(monkeypatch):
+    start=datetime(2026,11,10,7)
+    rows=[month._block('pi_decisions','pi','Pi',start,start+timedelta(minutes=12),1,'Scheduled refresh','execution:979'),
+          month._block('pi_local','pi','Pi',start,start+timedelta(minutes=12),1,'Scheduled refresh','pi_local:schedule'),
+          month._block('pi_local','pi','Pi',start+timedelta(hours=1),start+timedelta(hours=1,minutes=20),1,'Corrected billing','pi_local:manual')]
+    rows[0]['scheduled_automation']=rows[1]['scheduled_automation']=True
+    monkeypatch.setattr(month,'load_projects',lambda *a:{1:{'name':'Example','folder':'/example'}})
+    monkeypatch.setattr(month,'collect_database_blocks',lambda *a:([dict(r) for r in rows],{}))
+    from distr.core.reports import projection_store
+    monkeypatch.setattr(projection_store,'manual_project_map',lambda *a:{})
+    monkeypatch.setattr(projection_store,'manual_interval_project_map',lambda *a:{})
+    period=month.resolve_period(start='2026-11-10',end='2026-11-10')
+    result=month.collate(period,get_session=lambda:None,include_local=False)
+    assert [b['ref'] for b in result['blocks']]==['pi_local:manual']
+    included=month.collate(period,get_session=lambda:None,include_local=False,include_automations=True)
+    assert len(included['blocks'])==3
+
 def test_default_period_is_sixth_of_previous_month_through_today():
     period = month.default_period(date(2026, 11, 6))
     assert (period.start, period.end, period.kind) == (date(2026, 10, 6), date(2026, 11, 6), "rolling")
@@ -492,3 +540,53 @@ def test_short_local_activity_keeps_exact_elapsed_time_and_never_pads():
     assert month.activity_intervals([start, end]) == [(start, end)]
     assert month.activity_intervals([start]) == []
     assert month.activity_intervals([start, start]) == []
+
+
+def test_duplicate_play_timers_and_multi_turn_pi_session_collapse_to_two_runs():
+    from datetime import datetime, timedelta
+    from distr.core.reports.month import combine_duplicate_runs
+
+    base = datetime(2026, 11, 11, 8)
+    at = lambda seconds: base + timedelta(seconds=seconds)
+    reply = 'A detailed completed reply about the first confirmed change. ' * 2
+    first = dict(source='pi_decisions', family='pi', ref='execution:1', project_id=2,
+                 start=at(1), end=at(300), execution_chat_id=19,
+                 instruction_hash='first', reported_output='Progress. ' + reply.strip())
+    second = {**first, 'ref': 'execution:2', 'start': at(490), 'end': at(760),
+              'instruction_hash': 'second'}
+    timers = [{**r, 'ref': 'chat:19', 'source': 'decisions_thread',
+               'timer_chat_id': 19, 'start': r['start']-timedelta(seconds=2)}
+              for r in (first, second)]
+    local = dict(source='pi_local', family='pi', ref='pi_local:fixture', project_id=2,
+                 start=at(2), end=at(759), instruction_hash='wrapped-first',
+                 local_turns=[(at(2), at(299), 'wrapped-first', reply.strip()),
+                              (at(491), at(759), 'second', '')])
+    independent = {**timers[0], 'ref': 'chat:21', 'timer_chat_id': 21}
+    result = combine_duplicate_runs([*timers, first, second, local, independent])
+    assert [r['ref'] for r in result] == ['execution:1', 'execution:2', 'chat:21']
+    assert all(r['related_refs'] == ['pi_local:fixture', 'chat:19'] for r in result[:2])
+    assert [(r['start'], r['end']) for r in result[:2]] == [
+        (first['start'], first['end']), (second['start'], second['end'])]
+
+    unmatched = {**local, 'local_turns': [*local['local_turns'][:1], (at(491), at(759), 'other', '')]}
+    assert any(r['ref'] == local['ref'] for r in combine_duplicate_runs([first, second, unmatched]))
+
+
+def test_auto_paused_thread_timer_links_to_execution_without_hiding_manual_entry(report_db):
+    with report_db['session']() as db:
+        item = db.query(DevelopmentWorkItem).filter_by(ticket_title='Build checkout').one()
+        start = datetime(2026, 10, 13, 8)
+        for source in ('auto_pause', 'manual'):
+            db.add(DevelopmentTimeEntry(work_item_id=item.id, chat_id=item.chat_id,
+                                        started_at=start, ended_at=start+timedelta(seconds=112),
+                                        seconds=112, source=source))
+        db.add(ProjectExecutionSession(project_id=item.project_id, route_backend='pi', route_type='project_cli',
+                                       origin='development', status='completed',
+                                       input_packet=json.dumps({'chat_id': item.chat_id}),
+                                       started_at=start+timedelta(seconds=1), completed_at=start+timedelta(seconds=110)))
+        db.commit()
+    result = month.collate(month.resolve_period(start='2026-10-13',end='2026-10-13'),
+                           get_session=report_db['session'], include_local=False)
+    assert sorted(b['source'] for b in result['blocks']) == ['decisions_thread', 'pi_decisions']
+    run = next(b for b in result['blocks'] if b['source'] == 'pi_decisions')
+    assert run['related_refs'] == [f'chat:{item.chat_id}'] and run['seconds'] == 109

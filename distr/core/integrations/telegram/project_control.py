@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import logging
 import re
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from distr.core.human_engagement import human_project_label
@@ -169,7 +170,7 @@ def _start_dispatch(
     project = _resolve_project(command.project_hint)
     label = _backend_label(command.backend_id)
     if not project:
-        manager.send_to_telegram("I need an active project before I can send work to Codex or Cursor.")
+        manager.send_to_telegram("Specify one exact project name or folder. The current target is missing or ambiguous.")
         return
     project_label = human_project_label(
         getattr(project, "name", ""),
@@ -180,6 +181,11 @@ def _start_dispatch(
         manager.send_to_telegram(f"{project_label} has no folder path set.")
         return
 
+    try:
+        expected_scope = _project_scope(project)
+    except ValueError as exc:
+        manager.send_to_telegram(str(exc))
+        return
     manager.send_to_telegram(f"Sending that to {label} for {project_label}.")
 
     def _runner() -> None:
@@ -206,7 +212,7 @@ def _start_dispatch(
                     message=command.instruction,
                     allow_chat_creation=False,
                 )
-                session_data = bridge.get("session") if isinstance(bridge, dict) else {}
+                session_data = (bridge.get("session") or {}) if isinstance(bridge, dict) else {}
                 ide_session_id = int(session_data.get("id")) if str(session_data.get("id") or "").isdigit() else None
                 ide_chat_id = int(bridge.get("chat_id")) if str(bridge.get("chat_id") or "").isdigit() else None
             except Exception as exc:
@@ -217,6 +223,7 @@ def _start_dispatch(
                     project.id,
                     command,
                     board_id_override=board_id_override,
+                    expected_scope=expected_scope,
                 )
             )
             try:
@@ -263,6 +270,7 @@ async def _dispatch_project_task(
     project_id: int,
     command: TelegramProjectCommand,
     board_id_override: int | None = None,
+    expected_scope: tuple | None = None,
 ):
     from distr.core.db import get_session
     from distr.core.db.projects import Project
@@ -272,13 +280,49 @@ async def _dispatch_project_task(
         project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(project_id)).first()
         if not project:
             raise ValueError(f"Project #{project_id} not found")
-        return await run_project_task(
+        selected_scope = _project_scope(project,session=session)
+        if expected_scope is not None and selected_scope != expected_scope:
+            raise ValueError('The project folder or board changed before work started. Review the target and retry.')
+        if board_id_override is not None and board_id_override != selected_scope[2]:
+            raise ValueError('The selected board no longer belongs to this project. Review the target and retry.')
+        if not Path(project.folder_location or '').expanduser().is_dir():
+            raise ValueError('The selected project folder is unavailable.')
+        session.expunge(project)
+    result = await run_project_task(
             project,
             command.instruction,
             origin="telegram",
             backend_id_override=command.backend_id,
             board_id_override=board_id_override,
         )
+    with get_session() as session:
+        current = session.query(Project).filter(Project.deleted_at.is_(None),Project.id==int(project_id)).first()
+        try:
+            current_scope=_project_scope(current,session=session) if current is not None else None
+        except ValueError:
+            current_scope=None
+        if current_scope != selected_scope:
+            raise ValueError('The project scope changed while work was running. Review the original run result before continuing.')
+    return result
+
+
+def _project_scope(project,*,session=None) -> tuple:
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanBoard
+    folder=str(getattr(project,'folder_location','') or '').strip()
+    board_id=getattr(project,'kanban_board_id',None)
+    if board_id is not None and session is None:
+        with get_session() as db:return _project_scope(project,session=db)
+    board_scope=None
+    if board_id is not None:
+        board=session.get(KanbanBoard,int(board_id))
+        if board is None or board.archived:
+            raise ValueError('The selected project board is missing or archived. Review its board link before starting work.')
+        # This is a routing default, not exclusive project ownership. Shared
+        # boards remain valid, but a later routing change invalidates old work.
+        board_scope=board.default_project_id
+    return (int(project.id),str(Path(folder).expanduser().resolve()) if folder else '',
+            board_id,board_scope)
 
 
 def _resolve_active_project():
@@ -291,25 +335,24 @@ def _resolve_active_project():
             session.query(Project).filter(Project.deleted_at.is_(None))
             .filter(Project.in_use == True)  # noqa: E712
             .order_by(Project.modified_date.desc())
-            .first()
+            .all()
         )
         if project:
-            session.expunge(project)
-            return project
+            if len(project)!=1:return None
+            session.expunge(project[0])
+            return project[0]
         board = (
             session.query(KanbanBoard)
             .filter(KanbanBoard.in_use == True, KanbanBoard.default_project_id.isnot(None))  # noqa: E712
-            .first()
+            .all()
         )
-        if board and board.default_project_id:
-            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(board.default_project_id)).first()
+        board_projects={row.default_project_id for row in board}
+        if len(board_projects)==1:
+            project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == next(iter(board_projects))).first()
             if project:
                 session.expunge(project)
                 return project
-        project = session.query(Project).filter(Project.deleted_at.is_(None), Project.folder_location != "").order_by(Project.modified_date.desc()).first()
-        if project:
-            session.expunge(project)
-        return project
+        return None
 
 
 def _resolve_project(project_hint: str = ""):
@@ -320,21 +363,16 @@ def _resolve_project(project_hint: str = ""):
     from distr.core.db import get_session
     from distr.core.db.projects import Project
 
-    def _matches(project: Any) -> bool:
-        name = (getattr(project, "name", "") or "").lower()
-        folder = (getattr(project, "folder_location", "") or "").lower()
-        return hint in name or hint in folder
-
     with get_session() as session:
         projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
-        matches = [project for project in projects if _matches(project)]
-        if matches:
-            matches.sort(
-                key=lambda project: (
-                    len(getattr(project, "name", "") or ""),
-                    len(getattr(project, "folder_location", "") or ""),
-                )
-            )
+        exact=[project for project in projects if hint==(project.name or '').strip().lower()
+               or hint==str(project.id) or hint==f'#{project.id}'
+               or hint==(project.folder_location or '').strip().lower()]
+        if len(exact)==1:
+            project=exact[0];session.expunge(project);return project
+        matches = [project for project in projects if hint in (project.name or '').lower()
+                   or hint == Path(project.folder_location or '').name.lower()]
+        if not exact and len(matches)==1:
             project = matches[0]
             session.expunge(project)
             return project
@@ -376,6 +414,8 @@ def _backend_label(backend_id: str) -> str:
 
 def _success_message(label: str, project_name: str, result: Any) -> str:
     output = (getattr(result, "output", "") or "").strip()
+    if getattr(result,'waits_for_human',False):
+        return f"{label} needs your input for {project_name}." + (f'\n\n{output[:1800]}' if output else '')
     if output:
         return f"{label} finished the run for {project_name}.\n\n{output[:1800]}"
     return f"{label} finished the run for {project_name}."

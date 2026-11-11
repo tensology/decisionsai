@@ -23,6 +23,7 @@
                                 </header>
                                 <p id="incoming-operation-status" class="incoming-proposal-sync-status hidden" role="status" aria-live="polite"></p>
                                 <p id="incoming-check-status" class="incoming-proposal-sync-status hidden" role="status" aria-live="polite"></p>
+                                <p id="incoming-proposal-review-status" class="incoming-proposal-sync-status hidden" role="status" tabindex="-1"></p>
                                 <p id="incoming-proposal-sync-status" class="incoming-proposal-sync-status hidden" role="status" aria-live="polite"></p>
                                 <div class="incoming-dismissed-panel hidden" id="incoming-dismissed-panel" aria-label="Recently dismissed proposals"></div>
                                 <div class="proposal-cards" id="incoming-proposals-list" aria-label="Incoming proposals" aria-live="polite"></div>
@@ -30,21 +31,42 @@
                             <section class="incoming-folder-panel hidden" id="incoming-panel-whatsapp" role="tabpanel" aria-labelledby="incoming-folder-whatsapp">
                                 <header class="incoming-folder-header"><button type="button" class="secondary-button incoming-back" data-incoming-back>Back to conversations</button></header>
                                 <div class="incoming-whatsapp-layout">
-                                    <div class="incoming-list" id="incoming-list" aria-label="WhatsApp conversations" aria-live="polite"></div>
+                                    <div class="incoming-list" id="incoming-list" aria-label="WhatsApp conversations">
+                                        <header class="incoming-channel-header">
+                                            <h2>Linked conversations</h2>
+                                            <button type="button" class="proposal-btn ghost incoming-resync" data-incoming-channel-resync="whatsapp" aria-label="Resync WhatsApp"><span aria-hidden="true">&#x21bb;</span><strong>Resync</strong></button>
+                                        </header>
+                                        <p class="incoming-channel-resync-status" id="incoming-whatsapp-resync-status" role="status"></p>
+                                        <div id="incoming-whatsapp-list-content" data-incoming-list-content aria-live="polite"></div>
+                                    </div>
                                     <article class="incoming-whatsapp-reader" id="incoming-whatsapp-reader" aria-live="polite"></article>
                                 </div>
                             </section>
                             <section class="incoming-folder-panel hidden" id="incoming-panel-gmail" role="tabpanel" aria-labelledby="incoming-folder-gmail">
                                 <header class="incoming-folder-header"><button type="button" class="secondary-button incoming-back" data-incoming-back>Back to conversations</button></header>
                                 <div class="incoming-gmail-layout">
-                                    <div class="incoming-gmail-list" id="incoming-gmail-list" aria-label="Gmail inbox threads" aria-live="polite"></div>
+                                    <div class="incoming-gmail-list" id="incoming-gmail-list" aria-label="Gmail inbox threads">
+                                        <header class="incoming-channel-header">
+                                            <h2>Inbox</h2>
+                                            <button type="button" class="proposal-btn ghost incoming-resync" data-incoming-channel-resync="gmail" aria-label="Resync Gmail"><span aria-hidden="true">&#x21bb;</span><strong>Resync</strong></button>
+                                        </header>
+                                        <p class="incoming-channel-resync-status" id="incoming-gmail-resync-status" role="status"></p>
+                                        <div id="incoming-gmail-list-content" data-incoming-list-content aria-live="polite"></div>
+                                    </div>
                                     <article class="incoming-gmail-reader" id="incoming-gmail-reader" aria-live="polite"></article>
                                 </div>
                             </section>
                             <section class="incoming-folder-panel hidden" id="incoming-panel-mailshot" role="tabpanel" aria-labelledby="incoming-folder-mailshot">
                                 <header class="incoming-folder-header"><button type="button" class="secondary-button incoming-back" data-incoming-back>Back to conversations</button></header>
                                 <div class="incoming-gmail-layout">
-                                    <div class="incoming-gmail-list" id="incoming-mailshot-list" aria-label="Tensology Mailshot inbox" aria-live="polite"></div>
+                                    <div class="incoming-gmail-list" id="incoming-mailshot-list" aria-label="Tensology Mailshot inbox">
+                                        <header class="incoming-channel-header">
+                                            <h2>Inbox</h2>
+                                            <button type="button" class="proposal-btn ghost incoming-resync" data-incoming-channel-resync="mailshot" aria-label="Resync Mailshot"><span aria-hidden="true">&#x21bb;</span><strong>Resync</strong></button>
+                                        </header>
+                                        <p class="incoming-channel-resync-status" id="incoming-mailshot-resync-status" role="status"></p>
+                                        <div id="incoming-mailshot-list-content" data-incoming-list-content aria-live="polite"></div>
+                                    </div>
                                     <article class="incoming-gmail-reader" id="incoming-mailshot-reader" aria-live="polite"></article>
                                 </div>
                             </section>

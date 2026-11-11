@@ -15,8 +15,7 @@ HEARTBEAT_TIMEOUT_SECONDS = HEARTBEAT_CHECK_SECONDS
 # Backends that never send heartbeats are judged on their last activity
 # instead, with a longer window so quiet long-running steps are not flagged.
 ACTIVITY_TIMEOUT_SECONDS = 600
-_HUMAN_WAIT_KEYS = ("pending_route_approval", "route_approval_pending", "provider_preflight_pending",
-                    "power_budget_pending")
+_HUMAN_WAIT_KEYS = ("pending_route_approval", "route_approval_pending", "provider_preflight_pending")
 
 
 def run_health(db, run, data, *, now=None, execution=None):

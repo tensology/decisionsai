@@ -37,6 +37,7 @@ def _resolve_scope(
     board_ticket_key: str | None,
     board_ticket_title: str | None,
     board_ticket_lane: str | None,
+    start_step_id: int | None = None,
     session_provider=None,
 ) -> dict[str, Any]:
     scope = {
@@ -53,12 +54,19 @@ def _resolve_scope(
         workflow = db.get(AutoWorkflow, int(workflow_id))
         if workflow is None:
             raise ValueError(f"Workflow #{workflow_id} was not found.")
+        from distr.core.workflow.step_validator import WorkflowStartError, workflow_start_error
+        error = workflow_start_error(workflow, start_step_id)
+        if error:
+            raise WorkflowStartError(error)
         if not scope["title"] and workflow is not None:
             scope["title"] = str(workflow.name or "").strip()
         if ticket_id is not None:
             ticket = db.get(KanbanTicket, int(ticket_id))
             if ticket is None:
                 raise ValueError(f"Ticket #{ticket_id} was not found.")
+            from distr.core.planning.prerequisites import require_plan_prerequisites
+            require_plan_prerequisites(ticket.id, project_id=scope['project_id'],
+                                       board_id=scope['board_id'], session=db)
             lane = db.get(KanbanLane, int(ticket.lane_id)) if ticket.lane_id else None
             board = db.get(KanbanBoard, int(lane.board_id)) if lane is not None else None
             provider, resolved_key = _board_scope(board)
@@ -113,20 +121,39 @@ def dispatch_work_item(
         ensure_development_thread,
         mark_development_thread,
     )
+    from distr.core.planning.prerequisites import PlanPrerequisiteError, execution_ticket_id
+    from distr.core.workflow.ticket_dispatch import implicit_queue_ticket_error
+    from distr.core.workflow.step_validator import WorkflowStartError
 
-    scope = _resolve_scope(
-        workflow_id=int(workflow_id),
-        ticket_id=int(ticket_id) if ticket_id is not None else None,
-        board_id=board_id,
-        title=title,
-        project_id=project_id,
-        board_provider=board_provider,
-        board_key=board_key,
-        board_ticket_key=board_ticket_key,
-        board_ticket_title=board_ticket_title,
-        board_ticket_lane=board_ticket_lane,
-        session_provider=_session_provider,
-    )
+    queue_metadata = run_metadata if isinstance(run_metadata, dict) else {}
+    implicit_queue = source_type == "workflow_queue" and not queue_metadata.get("ticket_group_items")
+    queued_project = queue_metadata.get("project_id")
+    try:
+        if ticket_id is not None or chat_id is not None or implicit_queue:
+            with (_session_provider or get_session)() as db:
+                ticket_id = execution_ticket_id(ticket_id, chat_id=chat_id, session=db)
+                if implicit_queue:
+                    ticket = db.get(KanbanTicket, ticket_id) if ticket_id is not None else None
+                    error = implicit_queue_ticket_error(ticket, workflow_id, board_id, queued_project)
+                    if error:
+                        return {"status": "blocked", "error": error}
+
+        scope = _resolve_scope(
+            workflow_id=int(workflow_id),
+            ticket_id=int(ticket_id) if ticket_id is not None else None,
+            board_id=board_id,
+            title=title,
+            project_id=project_id,
+            board_provider=board_provider,
+            board_key=board_key,
+            board_ticket_key=board_ticket_key,
+            board_ticket_title=board_ticket_title,
+            board_ticket_lane=board_ticket_lane,
+            start_step_id=start_step_id,
+            session_provider=_session_provider,
+        )
+    except (PlanPrerequisiteError, WorkflowStartError) as exc:
+        return {'success':False, 'status':'blocked', 'error':str(exc)}
     # Ticket-triggered paths must reuse the ticket's durable Development
     # thread.  Older callers only supplied ticket_id, which allowed each
     # retry/spawn path to create a fresh ordinary Chat containing the brief.
@@ -146,7 +173,7 @@ def dispatch_work_item(
                 if chat is None or chat.parent_id is not None:
                     raise ValueError(f"Development thread #{chat_id} was not found.")
                 existing = development_thread_metadata(chat)
-                if scope.get("project_id") is None and chat.project_id is not None:
+                if not implicit_queue and scope.get("project_id") is None and chat.project_id is not None:
                     scope["project_id"] = int(chat.project_id)
             if str(existing.get("board_provider") or "").strip().lower() not in {"", "local", "database", "decisions"}:
                 for key in ("board_provider", "board_key", "board_ticket_key", "board_ticket_title", "board_ticket_lane"):
@@ -197,12 +224,17 @@ def dispatch_work_item(
     if ticket_id is not None:
         with (_session_provider or get_session)() as db:
             ticket = db.get(KanbanTicket, int(ticket_id))
+            if implicit_queue:
+                error = implicit_queue_ticket_error(ticket, workflow_id, board_id, queued_project)
+                if error:
+                    return {"status": "blocked", "error": error}
             if ticket is None:
                 raise ValueError(f"Ticket #{ticket_id} disappeared before execution.")
             ticket.source_chat_id = int(chat_id)
-            ticket.linked_workflow_id = int(workflow_id)
-            if scope["project_id"] is not None:
-                ticket.linked_project_id = int(scope["project_id"])
+            if not implicit_queue:
+                ticket.linked_workflow_id = int(workflow_id)
+                if scope["project_id"] is not None:
+                    ticket.linked_project_id = int(scope["project_id"])
             db.commit()
         from distr.core.incoming.media import sync_thread_files_safely
         sync_thread_files_safely(int(chat_id), int(ticket_id))
@@ -295,17 +327,14 @@ def dispatch_work_item(
     )
     if not isinstance(result, dict):
         result = {"status": "running"}
-    from distr.core.workflow.development_control import resume_thread_time
+    if result.get("run_id") and not result.get("error") and result.get("success") is not False:
+        from distr.core.workflow.development_control import resume_thread_time
 
-    try:
-        resume_thread_time(int(chat_id), _session_provider=_session_provider)
-    except LookupError:
-        # Time tracking is subordinate to execution. Legacy/custom thread
-        # providers may return a valid chat before creating a work-item row.
-        logger.warning(
-            "Development run started without a timer row for chat_id=%s",
-            chat_id,
-        )
+        try:
+            resume_thread_time(int(chat_id), _session_provider=_session_provider)
+        except LookupError:
+            # Legacy/custom thread providers may create the work-item row later.
+            logger.warning("Development run started without a timer row for chat_id=%s", chat_id)
     result["chat_id"] = int(chat_id)
     result["development_url"] = f"/development/threads/{int(chat_id)}/"
     result["work_item_identity"] = identity_key

@@ -194,6 +194,40 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=500)
 
 
+    @router.get("/workflows/studio/boards/{board_id}/tickets/{ticket_id}/workflow-draft")
+    async def ticket_workflow_draft(board_id: int, ticket_id: int):
+        from distr.core.orchestrator_proactive import review_workflow_draft
+
+        try:
+            return JSONResponse(await asyncio.to_thread(review_workflow_draft, board_id=board_id, ticket_id=ticket_id))
+        except LookupError as error:
+            return JSONResponse({"detail": str(error)}, status_code=404)
+
+    @router.post("/workflows/studio/boards/{board_id}/tickets/{ticket_id}/workflow-draft/approve")
+    async def approve_ticket_workflow_draft(board_id: int, ticket_id: int, request: Request):
+        from distr.core.planning.prerequisites import PlanPrerequisiteError
+        from distr.core.workflow.development_threads import DevelopmentThreadConflict
+        from distr.core.workflow.draft_launch import approve_workflow_draft
+
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if (not isinstance(body, dict) or body.get("approved") is not True
+                or type(body.get("candidate_id")) is not int or body["candidate_id"] < 1
+                or not isinstance(body.get("revision"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", body["revision"])):
+            return JSONResponse({"detail": "Approve the displayed workflow draft before launching."}, status_code=422)
+        try:
+            return JSONResponse(await asyncio.to_thread(
+                approve_workflow_draft, board_id=board_id, ticket_id=ticket_id,
+                candidate_id=body["candidate_id"], revision=body["revision"],
+            ))
+        except LookupError as error:
+            return JSONResponse({"detail": str(error)}, status_code=404)
+        except (DevelopmentThreadConflict, PlanPrerequisiteError, ValueError) as error:
+            return JSONResponse({"detail": str(error)}, status_code=409)
+
     @router.post("/workflows/plan")
     async def workflow_plan(data: WorkflowPlanRequest):
         """Plan a workflow from a natural-language instruction."""

@@ -11,6 +11,30 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+class WorkflowStartError(ValueError):
+    """The saved workflow selection cannot be launched."""
+
+
+def workflow_start_error(workflow, start_step_id=None) -> str | None:
+    if str(workflow.status or '').strip().lower() == 'archived':
+        return 'This workflow is archived. Restore it before starting work.'
+    if start_step_id is None:
+        try:
+            position = int(getattr(workflow, 'start_step_position', None) or 0)
+        except (TypeError, ValueError):
+            position = -1
+        if position < 0 or (position > 0 and position >= len(workflow.steps)):
+            return 'The configured start step is no longer available. Refresh the workflow and select a current step.'
+        return None
+    try:
+        step_id = int(start_step_id) if type(start_step_id) in (int, str) else None
+    except ValueError:
+        step_id = None
+    if step_id is None or not any(step.id == step_id for step in workflow.steps):
+        return 'The selected start step is no longer part of this workflow. Refresh the workflow and select a current step.'
+    return None
+
+
 def build_step_config(step_data: dict) -> dict:
     """Build a config dict suitable for StepValidator from raw step data.
 

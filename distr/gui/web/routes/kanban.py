@@ -6159,6 +6159,11 @@ source: kanban_ticket_{t.id}
         from distr.core.workflow.work_dispatch import dispatch_work_item
 
         with get_session() as s:
+            from distr.core.planning.prerequisites import PlanPrerequisiteError, require_plan_prerequisites
+            try:
+                require_plan_prerequisites(ticket_id, session=s)
+            except PlanPrerequisiteError as exc:
+                return JSONResponse({'success':False, 'status':'blocked', 'error':str(exc), 'detail':str(exc)}, status_code=409)
             t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
@@ -6399,6 +6404,11 @@ source: kanban_ticket_{t.id}
         payload = payload or SendToCliRequest()
         route_backend_preview = ""
         with get_session() as s:
+            from distr.core.planning.prerequisites import PlanPrerequisiteError, require_plan_prerequisites
+            try:
+                require_plan_prerequisites(ticket_id, session=s)
+            except PlanPrerequisiteError as exc:
+                return JSONResponse({'success':False, 'status':'blocked', 'error':str(exc), 'detail':str(exc)}, status_code=409)
             ctx = _resolve_ticket_cli_context(s, ticket_id)
             title = ctx["title"]
             tid = ctx["ticket_id"]

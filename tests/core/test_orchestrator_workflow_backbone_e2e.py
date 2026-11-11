@@ -182,6 +182,7 @@ def test_ticket_workflow_uses_orchestrator_backbone(tmp_path):
     from distr.core.db.workflow import AutoWorkflowRun
     from distr.core.project_cli_backends import registry as backend_registry
     from distr.core.workflow.dispatcher import _active_runs, _runs_lock, start_workflow_run
+    from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
 
     factory = _make_factory(tmp_path)
     ids = _seed_ticket_workflow(factory, tmp_path)
@@ -218,7 +219,8 @@ def test_ticket_workflow_uses_orchestrator_backbone(tmp_path):
         patch("distr.core.workflow.router.increment_kanban_updated", MagicMock()),
         patch("distr.core.workflow.router.record_workflow_chat_event", MagicMock()),
         patch("distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()),
-        patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()),
+        patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge",
+              MagicMock(public_project_cli_result=WorkflowAgentBridge.public_project_cli_result)),
         patch("distr.core.workflow_agent.WorkflowAgent", FakeWorkflowAgent),
     ]
 

@@ -1,17 +1,21 @@
 import contextlib
+from unittest.mock import Mock
 
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.workflow import AutoWorkflow
 from distr.core.kanban import jira_intake as intake
 from distr.core.kanban import jira_work_lifecycle as jlife
 from distr.core.kanban.ticket_time_tracking import add_time_spent_seconds
 
 
-def test_start_execution_marks_lifecycle_and_skips_unlinked(monkeypatch, tmp_path):
+@pytest.mark.parametrize("dispatch_result", [None, {"success": True}, {"success": False, "error": "Run blocked"}])
+def test_start_execution_marks_lifecycle_and_skips_unlinked(monkeypatch, tmp_path, dispatch_result):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'exec.db'}",
         connect_args={"check_same_thread": False},
@@ -37,6 +41,8 @@ def test_start_execution_marks_lifecycle_and_skips_unlinked(monkeypatch, tmp_pat
     monkeypatch.setattr(intake, "engine", engine)
     monkeypatch.setattr(jlife, "engine", engine)
     jlife.ensure_tables()
+    dispatch = Mock(return_value=dispatch_result)
+    monkeypatch.setattr("distr.core.workflow.dispatcher.start_workflow_ticket_group", dispatch)
 
     with get_session() as session:
         board = KanbanBoard(name="Client", agent_source_lane="Backlog")
@@ -48,15 +54,32 @@ def test_start_execution_marks_lifecycle_and_skips_unlinked(monkeypatch, tmp_pat
         t1 = KanbanTicket(lane_id=lane.id, title="ACME-1: a", description="d", external_id="ACME-1", source_provider="jira")
         t2 = KanbanTicket(lane_id=lane.id, title="ACME-2: b", description="d", external_id="ACME-2", source_provider="jira")
         session.add_all([t1, t2])
+        if dispatch_result is not None:
+            workflow = AutoWorkflow(name="Jira workflow")
+            session.add(workflow)
+            session.flush()
+            workflow_id = workflow.id
+            t1.linked_workflow_id = workflow_id
         session.flush()
         ids = [t1.id, t2.id]
 
     result = intake.start_execution_for_tickets(ids)
     assert len(result["started"]) == 2
-    assert all(row["dispatched"] == "none" for row in result["started"])
+    assert result["started"][1]["dispatched"] == "none"
+    expected_status = "executing"
+    if dispatch_result is None:
+        dispatch.assert_not_called()
+        assert result["started"][0]["dispatched"] == "none"
+    else:
+        dispatch.assert_called_once_with(workflow_id, [{"ticket_id": ids[0]}], dispatch_async=True)
+        if dispatch_result["success"]:
+            assert result["started"][0]["dispatched"] == "workflow"
+        else:
+            assert result["started"][0]["error"] == "Run blocked"
+            expected_status = "execution_failed"
     with engine.connect() as conn:
         statuses = conn.execute(text("SELECT status FROM jira_work_lifecycles ORDER BY ticket_id")).scalars().all()
-    assert statuses == ["executing", "executing"]
+    assert statuses == [expected_status, "executing"]
 
 
 def test_local_time_amends_without_jira(monkeypatch, tmp_path):

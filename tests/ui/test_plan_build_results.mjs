@@ -26,3 +26,15 @@ test('legacy results, unsafe titles and malformed parent cycles are safe', () =>
     assert.match(html, /&lt;img/);
     assert.equal((html.match(/<li>/g) || []).length, 2);
 });
+
+test('generated task and prerequisite links open the correct local board', () => {
+    const html = buildResultsHtml({ tasks: [
+        { id: 42, title: 'Review <scope>', depends_on: [41] },
+    ] }, escape, { boardKey: 'decisions:7' });
+    assert.match(html, /href="\/development\/boards\/decisions\/7\/kanban\/\?ticket_id=42"/);
+    assert.match(html, /data-plan-ticket="41"/);
+    assert.match(html, /Review &lt;scope&gt;/);
+    for (const boardKey of ['jira:7', 'decisions:0', 'decisions:7" onclick="bad', 'https://bad']) {
+        assert.doesNotMatch(buildResultsHtml({ tasks: [{ id: 42, title: 'Task' }] }, escape, { boardKey }), /<a|href=/);
+    }
+});

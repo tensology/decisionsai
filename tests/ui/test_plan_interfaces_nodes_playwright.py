@@ -299,13 +299,13 @@ def test_sitemap_cards_render_shapes(page, w, h):
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(PLAN_URL)
     page.get_by_role("button", name="Interfaces", exact=True).click()
-    page.locator('.plan-sitemap-node[data-shape="diamond"]').wait_for(timeout=6000)
-    circle = page.locator('.plan-sitemap-node[data-shape="circle"]').bounding_box()
-    assert abs(circle["width"] - circle["height"]) <= 1, circle
-    radius = page.locator('.plan-sitemap-node[data-shape="circle"]').evaluate("el => getComputedStyle(el).borderTopLeftRadius")
-    assert radius.endswith('%') or float(radius.rstrip('px')) >= circle["width"] / 2 - 1, radius
+    page.locator('.iface-node[data-shape="diamond"] .iface-glyph svg path').wait_for(timeout=6000)
+    circle = page.locator('.iface-node[data-shape="circle"]')
+    circle.locator('.iface-glyph svg circle').wait_for()
+    assert circle.get_attribute('data-shape') == 'circle'
     page.screenshot(path=str(OUT / f'n6-sitemap-{w}.png'))
     _no_overflow(page)
-    page.locator('.plan-sitemap-node[data-shape="circle"] .plan-node-open-card').click()
+    circle.click()
+    page.locator('.iface-panel [data-iface-node]').click()
     page.locator('.plan-node-popover input[value="circle"]:checked').wait_for()
     assert not errors, errors

@@ -125,7 +125,7 @@ def _route(task, board):
     return route
 
 
-def build_tasks(workspace_id: int, *, tasks: list[dict], expected_revisions: dict[str, int]) -> dict:
+def build_tasks(workspace_id: int, *, tasks: list[dict], expected_revisions: dict[str, int], source_chat_id: int | None = None) -> dict:
     """Atomically create, reuse, or update untouched, unstarted plan tickets.
 
     Raises ValueError for invalid input, LookupError for a missing workspace,
@@ -162,9 +162,10 @@ def build_tasks(workspace_id: int, *, tasks: list[dict], expected_revisions: dic
             if workspace.board_provider != "decisions" or prefix != "decisions" or not raw_id.isdecimal():
                 raise ValueError("Workspace must reference a local Decisions board")
             board = db.get(KanbanBoard, int(raw_id), with_for_update=True)
-            if (board is None or board.source != "database" or not workspace.project_id
+            project = db.get(Project, workspace.project_id) if workspace.project_id else None
+            if (board is None or board.archived or board.source != "database" or not workspace.project_id
                     or board.default_project_id != workspace.project_id
-                    or db.get(Project, workspace.project_id) is None):
+                    or project is None or project.deleted_at is not None):
                 raise ValueError("Workspace project/board consistency failure")
             # Workspace IDs and conversation IDs are separate namespaces. Only
             # publish a chat reference when the canonical scoped root exists.
@@ -175,14 +176,24 @@ def build_tasks(workspace_id: int, *, tasks: list[dict], expected_revisions: dic
                 Chat.parent_id.is_(None), Chat.project_id == workspace.project_id,
             ).one_or_none()
             source_thread_id = str(conversation.id) if conversation else None
+            if source_chat_id is not None:
+                if type(source_chat_id) is not int or source_chat_id <= 0:
+                    raise ValueError('Invalid source planning chat')
+                from distr.core.planning.conversation import _workspace_roots
+                root = next((chat for chat in _workspace_roots(db, workspace_id)
+                             if chat.id == source_chat_id), None)
+                if root is None or root.is_archived or root.project_id != workspace.project_id:
+                    raise ValueError('Source planning chat is outside this workspace or no longer active')
+                source_thread_id = str(root.id)
             lanes = db.query(KanbanLane).filter_by(board_id=board.id).order_by(KanbanLane.position, KanbanLane.id).all()
             if not lanes:
                 raise ValueError("Board has no lane")
             lane = next((row for row in lanes if row.name.lower() == "backlog"), lanes[0])
-            current_items = db.query(PlanItem).filter_by(workspace_id=workspace_id).all()
+            current_items = db.query(PlanItem).filter(
+                PlanItem.workspace_id == workspace_id, PlanItem.status != 'archived').all()
             pending_files = db.query(PlanFileWrite.item_id).join(
                 PlanItem, PlanItem.id == PlanFileWrite.item_id
-            ).filter(PlanItem.workspace_id == workspace_id).all()
+            ).filter(PlanItem.workspace_id == workspace_id, PlanItem.status != 'archived').all()
             if pending_files:
                 raise PlanBuildConflict(
                     "Project file synchronization is pending. Review file changes before building tasks."

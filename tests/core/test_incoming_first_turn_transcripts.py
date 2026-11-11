@@ -85,6 +85,39 @@ def _handoff(store, monkeypatch, records):
     return chat_id, proposal, dispatched
 
 
+def test_whatsapp_thread_handoff_keeps_only_marked_request_evidence(store, monkeypatch):
+    from distr.core.incoming import project_links, source_context
+    from distr.core.workflow import development_threads
+
+    chat_id, proposal, _ = _handoff(store, monkeypatch, [])
+    monkeypatch.setattr(project_links, 'source_project_index', lambda **kwargs: {('whatsapp', 'first-turn'): {7}})
+    create_thread = Mock(return_value=chat_id)
+    register_source = Mock()
+    ensure_files = Mock(return_value={'attachments': [], 'failures': []})
+    monkeypatch.setattr(development_threads, 'ensure_development_thread', create_thread)
+    monkeypatch.setattr(source_context, 'register_source_context', register_source)
+    monkeypatch.setattr(media, 'ensure_proposal_attachments', ensure_files)
+    proposal.update(
+        source='whatsapp', message_ids=['request'],
+        source_context_message_ids=['request', 'old'],
+        evidence=[{'id': 'old', 'body': 'Unrelated history'}, {
+            'id': 'request', 'body': 'Review this request', 'transcript': 'Retained voice note',
+        }],
+        context_evidence=[{'id': 'other', 'body': 'Unrelated follow-up'}],
+        attachments=[{'source_message_id': 'request'}, {'source_message_id': 'old'}],
+    )
+
+    assert proposals.create_proposal_thread(proposal) == chat_id
+    prompt = create_thread.call_args.kwargs['starting_question']
+    assert 'Review this request' in prompt and 'Retained voice note' in prompt
+    assert 'Unrelated' not in prompt
+    stored = register_source.call_args.args[1]
+    assert [row['id'] for row in stored['evidence']] == ['request']
+    assert stored['context_evidence'] == stored['source_context_message_ids'] == []
+    assert ensure_files.call_args.args[0]['attachments'] == [{'source_message_id': 'request'}]
+    assert len(proposal['evidence']) == 2
+
+
 def test_first_dispatch_contains_both_originals_and_generated_and_existing_transcripts(store, tmp_path, monkeypatch):
     records = [_original(tmp_path, 1), _original(tmp_path, 2, transcript='Existing source transcript.')]
     image = tmp_path / '.decisions/workspaces/projects/7/attachments/screenshot.png'
@@ -131,7 +164,8 @@ def test_create_without_start_also_prepares_transcripts_before_returning(store, 
 
 
 def test_merge_retains_both_files_and_transcripts_in_thread_and_returned_proposal(store, tmp_path, monkeypatch):
-    _, chat_id = store
+    sessions, chat_id = store
+    monkeypatch.setattr('distr.core.db.get_session', sessions)
     records = [_original(tmp_path, 1, transcript='First source transcript.'), _original(tmp_path, 2)]
     monkeypatch.setattr(media, 'ensure_proposal_attachments', lambda proposal, *args, **kwargs: {'attachments': [records[proposal['file_index']]], 'failures': []})
     monkeypatch.setattr(media, 'sync_thread_files_to_tickets', lambda chat_id: {})
@@ -139,7 +173,11 @@ def test_merge_retains_both_files_and_transcripts_in_thread_and_returned_proposa
     monkeypatch.setattr(proposals, '_persist_proposal_dismissal', lambda proposal: proposal['id'])
     monkeypatch.setattr(proposals, 'drop_cached_proposals', lambda **kwargs: None)
     monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {})
-    monkeypatch.setattr('distr.core.chat.ChatService.create_new_chat', lambda **kwargs: (chat_id, None))
+    # Thread identity/source lifecycle is covered by edge regressions. This
+    # fixture deliberately isolates the pre-existing managed media store.
+    monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', lambda **kwargs: chat_id)
+    monkeypatch.setattr('distr.core.incoming.source_context.register_source_context', lambda *args: None)
+    monkeypatch.setattr(proposals, '_record_proposal_handoff', lambda *args, **kwargs: None)
     monkeypatch.setattr('distr.core.tensology_notify.notify_proposal_created', lambda *args: None)
     monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', lambda **kwargs: None)
     transcribe = Mock(return_value='Second generated transcript.')

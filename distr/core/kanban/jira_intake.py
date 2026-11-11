@@ -645,15 +645,15 @@ def start_execution_for_tickets(ticket_ids: Iterable[int]) -> dict[str, Any]:
                     KanbanTicketTool()._run(action="send_to_cli", ticket_id=ticket_id)
                     run_meta["dispatched"] = "cli"
                 elif ticket.linked_workflow_id:
-                    from distr.core.workflow.ticket_dispatch import build_ticket_run_item
                     from distr.core.workflow.dispatcher import start_workflow_ticket_group
 
-                    item = build_ticket_run_item(ticket_id)
-                    start_workflow_ticket_group(
+                    result = start_workflow_ticket_group(
                         int(ticket.linked_workflow_id),
-                        [item],
+                        [{"ticket_id": ticket_id}],
                         dispatch_async=True,
                     )
+                    if not result.get("success"):
+                        raise RuntimeError(str(result.get("error") or result.get("errors") or "Workflow did not start"))
                     run_meta["dispatched"] = "workflow"
                 else:
                     run_meta["dispatched"] = "none"
@@ -836,6 +836,8 @@ def fetch_mailshot_intake_messages(
     max_pages: int = 5,
     jira_only: bool = True,
     hydrate: bool = False,
+    strict: bool = False,
+    source: str = "decisionsai-jira-intake",
 ) -> list[dict[str, Any]]:
     """Read Tensology Mailshot inbox rows shaped for Jira intake classifiers.
 
@@ -844,22 +846,23 @@ def fetch_mailshot_intake_messages(
 
     When ``hydrate`` is true (Incoming reader), each compact list row is filled
     from GET mail/messages/{id} so body/html_body and attachment ids are present.
+    Strict reads propagate inbox errors so callers can report channel health.
     """
     try:
         from distr.core.tensology_client import TensologyApiError, configured_tensology_client
     except Exception:
-        return []
-
-    try:
-        client = configured_tensology_client(source="decisionsai-jira-intake")
-    except Exception:
+        if strict:
+            raise
         return []
 
     out: list[dict[str, Any]] = []
     try:
+        client = configured_tensology_client(source=source)
         for page in range(1, max(1, int(max_pages)) + 1):
             data = client.get("mail/messages", {"limit": int(limit), "page": int(page)}) or {}
             emails = data.get("emails") if isinstance(data, dict) else None
+            if strict and not isinstance(emails, list):
+                raise TensologyApiError("Mailshot response did not contain an email list.")
             if not isinstance(emails, list) or not emails:
                 break
             for raw in emails:
@@ -877,9 +880,13 @@ def fetch_mailshot_intake_messages(
             if page * int(limit) >= total:
                 break
     except TensologyApiError:
+        if strict:
+            raise
         logger.info("Mailshot unavailable for Jira intake", exc_info=True)
         return []
     except Exception:
+        if strict:
+            raise
         logger.exception("Mailshot Jira intake scan failed")
         return []
     return out

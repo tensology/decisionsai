@@ -13,7 +13,6 @@ from tests.ui.test_development_harness_playwright import _install_api
 
 pytestmark = pytest.mark.e2e_playwright
 
-PORT = 8777
 SHOTS = Path('/tmp/planning-verify')
 
 
@@ -25,9 +24,6 @@ def fixture_base():
     from fastapi.staticfiles import StaticFiles
     from fastapi.templating import Jinja2Templates
 
-    with socket.socket() as probe:
-        if probe.connect_ex(('127.0.0.1', PORT)) == 0:
-            pytest.skip(f'port {PORT} busy')
     web = Path(__file__).resolve().parents[2] / 'distr' / 'gui' / 'web'
     templates = Jinja2Templates(directory=str(web / 'templates'))
     app = FastAPI()
@@ -41,16 +37,24 @@ def fixture_base():
             'base_path': '/development', 'internal_api_token': '', 'app_version': 'test',
             'chat_js_mtime': '0', 'development_timer_menu': DEVELOPMENT_TIMER_MENU})
 
-    server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=PORT, log_level='warning'))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    for _ in range(100):
-        if server.started:
-            break
-        time.sleep(0.05)
-    yield f'http://127.0.0.1:{PORT}'
-    server.should_exit = True
-    thread.join(timeout=5)
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        url = f'http://127.0.0.1:{listener.getsockname()[1]}'
+        server = uvicorn.Server(uvicorn.Config(app, log_level='warning'))
+        thread = threading.Thread(target=server.run, kwargs={'sockets': [listener]}, daemon=True)
+        thread.start()
+        try:
+            for _ in range(100):
+                if server.started:
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail('Isolated Development fixture did not become ready')
+            yield url
+        finally:
+            server.should_exit = True
+            thread.join(timeout=5)
 
 
 def _proposal(n):

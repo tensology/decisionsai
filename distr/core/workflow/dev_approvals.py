@@ -81,9 +81,44 @@ def _http(method: str, path: str, body: Optional[dict] = None) -> tuple[int, dic
 transport: Transport = _http
 
 
+MANAGED_REPLY_SENT_SUMMARY = 'The approved closing reply was sent.'
+
+
+def confirmed_managed_reply(session, row, details):
+    from distr.core.workflow.reply_delivery import recover_sent_workflow_reply
+
+    workflow = details.get('workflow') if isinstance(details, dict) else None
+    if (row.tool != 'reply_delivery' or not isinstance(workflow, dict)
+            or row.action != details.get('channel') or row.args_hash != args_hash(details)
+            or row.chat_id != workflow.get('chat_id') or row.turn_id != workflow.get('turn_id')):
+        return None
+    receipt = recover_sent_workflow_reply(session, details)
+    return {**receipt, 'approval_request_id': row.request_id} if receipt else None
+
+
+def request_view(row: Any, *, with_secret: Optional[str] = None, receipt_session=None) -> dict[str, Any]:
+    """Full local review view shared by HTTP and authorized Chat projection."""
+    try:
+        details = json.loads(row.details_json or '{}')
+    except (TypeError, ValueError):
+        details = {}
+    out = {'request_id': row.request_id, 'chat_id': row.chat_id, 'turn_id': row.turn_id,
+           'tool': row.tool, 'action': row.action, 'summary': row.summary, 'details': details,
+           'status': row.status, 'expires_at': row.expires_at.isoformat() + 'Z'}
+    if row.status == 'sending' and receipt_session is not None:
+        receipt = confirmed_managed_reply(receipt_session, row, details)
+        if receipt:
+            out.update(status='sent', summary=MANAGED_REPLY_SENT_SUMMARY,
+                       details={**details, 'delivery_outcome': receipt})
+    if with_secret:
+        out['approval_id'] = with_secret
+    return out
+
+
 def request_approval(tool: str, action: str, args: dict[str, Any], summary: str,
-                     details: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    chat_id, turn_id = run_context()
+                     details: Optional[dict[str, Any]] = None,
+                     context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    chat_id, turn_id = run_context() if context is None else (context.get('chat_id'), context.get('turn_id'))
     status, data = transport("POST", "/api/dev-approvals/request", {
         "tool": tool, "action": action, "args_hash": args_hash(args), "chat_id": chat_id, "turn_id": turn_id,
         "summary": summary, "details": details or {}})
@@ -107,10 +142,11 @@ def wait(request_id: str, timeout_s: float) -> dict[str, Any]:
         time.sleep(POLL_S)
 
 
-def consume(approval_id: Optional[str], tool: str, action: str, args: dict[str, Any]) -> bool:
+def consume(approval_id: Optional[str], tool: str, action: str, args: dict[str, Any],
+            context: Optional[dict[str, Any]] = None) -> bool:
     if not approval_id:
         return False
-    chat_id, turn_id = run_context()
+    chat_id, turn_id = run_context() if context is None else (context.get('chat_id'), context.get('turn_id'))
     code, data = transport("POST", "/api/dev-approvals/consume", {
         "approval_id": approval_id, "tool": tool, "action": action, "args_hash": args_hash(args),
         "chat_id": chat_id, "turn_id": turn_id})
@@ -118,17 +154,25 @@ def consume(approval_id: Optional[str], tool: str, action: str, args: dict[str, 
 
 
 def gate(tool: str, action: str, args: dict[str, Any], approval_id: Optional[str], summary: str,
-         details: Optional[dict[str, Any]] = None, inline_wait_s: Optional[float] = None) -> Optional[dict[str, Any]]:
+         details: Optional[dict[str, Any]] = None, inline_wait_s: Optional[float] = None,
+         context: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
     """None => approved, go ahead. Otherwise a tool result to return to the agent."""
-    if consume(approval_id, tool, action, args):
+    if consume(approval_id, tool, action, args, context=context):
         return None
-    req = request_approval(tool, action, args, summary, details)
+    req = request_approval(tool, action, args, summary, details, context=context)
     if req.get("error"):
         return {"ok": False, "tool": tool, "summary": f"Approval unavailable: {req['error']}", "artifacts": [],
                 "needs_approval": True}
     rid = req["request_id"]
-    st = wait(rid, INLINE_WAIT_S if inline_wait_s is None else inline_wait_s)
-    if st.get("status") == "approved" and st.get("approval_id") and consume(st["approval_id"], tool, action, args):
+    managed = tool == 'reply_delivery' and isinstance((details or {}).get('workflow'), dict)
+    st = req if managed else wait(rid, INLINE_WAIT_S if inline_wait_s is None else inline_wait_s)
+    if managed and st.get('status') not in {'pending', 'approved'}:
+        outcome = (st.get('details') or {}).get('delivery_outcome')
+        if not isinstance(outcome, dict):
+            outcome = {'delivered': False, 'unconfirmed': st.get('status') in {'sending', 'unconfirmed'},
+                       'delivery_status': st.get('status'), 'reason': st.get('summary') or 'Closing reply awaits confirmation.'}
+        return {'managed_outcome': {**outcome, 'approval_request_id': rid}}
+    if st.get("status") == "approved" and st.get("approval_id") and consume(st["approval_id"], tool, action, args, context=context):
         return None
     if st.get("status") in ("denied", "expired"):
         return {"ok": False, "tool": tool, "summary": f"The user {st['status']} this {tool} {action}. Do not retry it.",

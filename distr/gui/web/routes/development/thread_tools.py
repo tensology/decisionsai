@@ -6,16 +6,29 @@ import logging
 
 logger = logging.getLogger(__name__)
 from .models import StudioArtifactCreateRequest, StudioArtifactUpdateRequest
+from .review_document import development_review_document
 
 
 def register_routes(router, templates):
     from fastapi import Request
 
+    @router.get('/workflows/studio/source-reply-surface')
+    async def source_reply_surface():
+        document = await asyncio.to_thread(
+            development_review_document, "Development source reply",
+            styles=("threads/styles.css", "threads/source-reply-frame.css"),
+            scripts=("threads/source-reply.js", "threads/source-reply-frame.js"),
+        )
+        return JSONResponse({"version": 1, "document": document}, headers={"Cache-Control": "no-store"})
+
     @router.get('/workflows/studio/tasks/{chat_id}/source-replies')
-    async def source_reply_choices(chat_id: int):
-        from distr.core.incoming.source_reply import proposal_for_thread, source_choices
+    async def source_reply_choices(chat_id: int, response_id: int | None = None):
+        from distr.core.incoming.source_reply import proposal_for_thread, source_choices, reply_drafts
         try:
-            return JSONResponse({'sources': await asyncio.to_thread(lambda: source_choices(proposal_for_thread(chat_id)))})
+            def choices():
+                return {'sources': source_choices(proposal_for_thread(chat_id)),
+                        'drafts': reply_drafts(chat_id, response_id) if response_id is not None else []}
+            return JSONResponse(await asyncio.to_thread(choices))
         except ValueError as exc:
             return JSONResponse({'detail': str(exc)}, status_code=422)
 
@@ -36,12 +49,22 @@ def register_routes(router, templates):
 
     @router.post('/workflows/studio/tasks/{chat_id}/source-replies/{draft_id}/{action}')
     async def source_reply_action(chat_id: int, draft_id: str, action: str, request: Request):
-        from distr.core.incoming.source_reply import act_on_draft
+        from distr.core.incoming.source_reply import (
+            act_on_draft, ReplyPreflightError, ReplyRewriteRequiredError, ReplySourceChangedError,
+        )
         try:
             body = await request.json()
             if action == 'approve' and body.get('approved') is not True:
                 return JSONResponse({'detail': 'Approve the displayed reply before sending.'}, status_code=409)
             return JSONResponse(await asyncio.to_thread(act_on_draft, chat_id, draft_id, action, str(body.get('text') or '')))
+        except ReplyPreflightError as exc:
+            payload = {'detail': str(exc), 'code': 'reply_not_sent',
+                       'send_attempted': False, 'draft_status': 'draft'}
+            if isinstance(exc, ReplySourceChangedError):
+                payload['reason'] = 'source_changed'
+            elif isinstance(exc, ReplyRewriteRequiredError):
+                payload['reason'] = 'rewrite_required'
+            return JSONResponse(payload, status_code=409)
         except ValueError as exc:
             return JSONResponse({'detail': str(exc)}, status_code=409)
         except Exception:

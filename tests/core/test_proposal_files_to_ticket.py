@@ -125,11 +125,13 @@ def _accept(monkeypatch, tmp_path, ensured):
         calls['strict'] = strict
         return ensured
     monkeypatch.setattr('distr.core.incoming.media.ensure_proposal_attachments', fake_ensure)
+    monkeypatch.setattr('distr.core.incoming.project_links.source_project_index',
+                        lambda **kwargs: {('gmail', str(tmp_path)): {project_id}})
     registered = []
     monkeypatch.setattr('distr.core.incoming.media.register_thread_attachments',
                         lambda cid, rows: registered.append(rows) or {'failed': []})
     proposal = {'id': f'local:files-{len(ensured["attachments"])}-{len(ensured["failures"])}', 'origin': 'local',
-                'source': 'gmail', 'project_id': project_id, 'title': 'Files proposal', 'message_ids': [str(tmp_path)]}
+                'source': 'gmail', 'source_thread_id': str(tmp_path), 'project_id': project_id, 'title': 'Files proposal', 'message_ids': [str(tmp_path)]}
     chat_id = proposals_mod.create_proposal_thread(proposal, start_work=False)
     return chat_id, calls, registered
 

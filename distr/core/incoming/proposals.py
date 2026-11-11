@@ -46,7 +46,7 @@ _NOISE_RE = re.compile(
 )
 # Our own messages (Paul), and simulated test traffic.
 _SELF_RE = re.compile(r"(^|\W)paul(\W|$)|paulvonhoesslin|paulhoft", re.I)
-_TEST_RE = re.compile(r"\bE2E\b|simulated|fake jid|test e2e", re.I)
+_TEST_RE = re.compile(r"\bsimulated\b|fake jid", re.I)
 # A conversation that only ends in "thanks"/"ok" has no work left in it.
 _ACK_RE = re.compile(
     r"^\W*(?:thanks?(?: you)?|thankyou|appreciate[ds]?|ok(?:ay)?|sure|great|perfect|"
@@ -157,6 +157,13 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
     tensology_project_name = str(project.get("name") or "").strip()
     local_project_id = project.get("decisions_project_id") or (project_map or {}).get(tensology_project_name.lower())
     source_started = proposal_source_started_at(row)
+    context_ids = {str(value) for value in row.get('source_context_message_ids') or []}
+    message_ids = [str(value) for value in row.get('source_message_ids') or [] if value]
+    if not message_ids:
+        message_ids = [
+            str(ev['id']) for ev in row.get('evidence') or [] if isinstance(ev, dict) and ev.get('id')
+            and (source != 'whatsapp' or (not ev.get('context_only') and str(ev['id']) not in context_ids))
+        ]
     return {
         "id": f"tensology:{row.get('id')}",
         "origin": "tensology",
@@ -186,7 +193,7 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
         "participant": str(row.get("participant") or conversation.get("participant_name") or ""),
         "status": str(row.get("status") or "pending"),
         "created_at": at.isoformat() if at else "",
-        "message_ids": [str(value) for value in row.get('source_message_ids') or [] if value] or [str(ev.get("id")) for ev in (row.get("evidence") or []) if isinstance(ev, dict) and ev.get("id")],
+        "message_ids": message_ids,
         "source_context_message_ids": [str(value) for value in row.get('source_context_message_ids') or []],
         "stored_status": str(row.get('stored_status') or row.get('status') or 'pending'),
         "source_started_at": source_started.isoformat() if source_started else None,
@@ -200,6 +207,7 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
                 "direction": str(ev.get("direction") or ""),
                 **({"original_source": dict(ev['original_source'])} if isinstance(ev.get('original_source'), dict) else {}),
                 **({key: str(ev[key]) for key in ('transcript', 'caption', 'media_type') if ev.get(key)}),
+                **({'context_only': True} if ev.get('context_only') or ev in (row.get('context_evidence') or []) else {}),
             }
             for ev in (row.get("evidence") or []) + (row.get('context_evidence') or [])
             if isinstance(ev, dict)
@@ -221,6 +229,8 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
         ],
         "tickets": row.get("tickets") or [],
         "source_conversation": conversation,
+        **({'source_scope': [dict(ref) for ref in row['source_scope'] if isinstance(ref, dict)]}
+           if isinstance(row.get('source_scope'), list) else {}),
         "decisions_project_id": row.get("decisions_project_id"),
         "can_push_to_thread": bool(local_project_id),
     }
@@ -337,9 +347,9 @@ def _record_local_proposals(rows: list[dict[str, Any]]) -> None:
                     saved = json.loads(existing.snapshot)
                     for field in ('needs_project', 'project_id', 'project_name', 'candidate_projects', 'can_push_to_thread'):
                         saved[field] = row.get(field)
-                    existing.snapshot = proposal_snapshot_json(saved)
+                    existing.snapshot = proposal_brief_json(saved)
                 continue
-            snapshot = proposal_snapshot_json(_with_source_dates(row))
+            snapshot = proposal_brief_json(_with_source_dates(row))
             if snapshot:
                 db.execute(insert(IncomingProposalSnapshot).values(key=key, snapshot=snapshot).on_conflict_do_nothing(index_elements=['key']))
         db.commit()
@@ -431,10 +441,10 @@ def _proposal_text(proposal: dict[str, Any]) -> str:
     parts = [proposal.get("title"), proposal.get("description"), proposal.get("summary")]
     for task in proposal.get("tasks") or []:
         parts.append(json.dumps(task, default=str) if isinstance(task, dict) else task)
-    for ev in proposal.get("evidence") or []:
+    for ev in [*(proposal.get("evidence") or []), *(proposal.get("context_evidence") or []), *(proposal.get("attachments") or [])]:
         if isinstance(ev, dict):
-            parts.append(ev.get("body"))
-    for key in ("budget", "cost", "amount", "price", "estimated_cost_usd", "risk", "risk_level", "labels", "tags"):
+            parts.extend(ev.get(field) for field in ('body', 'text', 'transcript', 'caption'))
+    for key in ("budget", "cost", "amount", "estimated_amount", "price", "estimated_cost_usd", "risk", "risk_level", "labels", "tags"):
         if proposal.get(key) not in (None, "", [], {}):
             parts.append(f"{key} {proposal.get(key)}")
     return "\n".join(str(p) for p in parts if p)
@@ -453,7 +463,7 @@ def auto_accept_skip_reason(proposal: dict[str, Any], settings: dict[str, Any]) 
     if _norm_project(proposal.get("project_name")) not in allowed:
         return f"project {proposal.get('project_name') or '?'!r} is not on the own-projects allowlist"
     text = _proposal_text(proposal)
-    for key in ("cost", "amount", "price", "estimated_cost_usd", "budget"):
+    for key in ("cost", "amount", "estimated_amount", "price", "estimated_cost_usd", "budget"):
         try:
             if float(proposal.get(key) or 0) > 0:
                 return f"spend limit: {key} is above zero"
@@ -491,15 +501,18 @@ def auto_accept_proposals(proposals: list[dict[str, Any]]) -> list[str]:
             if settings.get("incoming_proposals_auto_accept") is not True:
                 break
             key = _proposal_handoff_key(proposal)
-            if key in _accepted_proposal_keys():
-                continue
             reason = auto_accept_skip_reason(proposal, settings)
             if reason:
                 log.info("Auto-accept skipped proposal %s (%s): %s; left for review",
                          key, proposal.get("project_name") or "?", reason)
                 continue
             try:
-                chat_id = create_proposal_thread(proposal, start_work=True)
+                with _HANDOFF_LOCK:
+                    # Failed handoffs stay visible for manual retry. The
+                    # background loop only starts previously unclaimed proposals.
+                    if key in _accepted_proposal_keys(include_terminal=True):
+                        continue
+                    chat_id = create_proposal_thread(proposal, start_work=True)
                 accepted.append(key)
                 log.info("Auto-accept handed proposal %s (%s) to thread %s", key, proposal.get("project_name"), chat_id)
             except Exception:
@@ -717,7 +730,10 @@ def _worth_triaging(conversation: dict[str, Any]) -> bool:
     if _TEST_RE.search(f"{sender} {conversation.get('label') or ''} {text}"):
         return False
     latest_text = str(latest.get("text") or "").strip()
-    if (_ACK_RE.match(latest_text) and not _REQUEST_RE.search(latest_text)) or _ACK_EMOJI_RE.fullmatch(latest_text):
+    # Acknowledgements can introduce new work. Only discard the whole message
+    # when no request or imperative follows the acknowledgement.
+    imperative = re.search(r"\b(?:add|update|change|remove|build|create|implement|replace|rename|check|test|write|make|adjust)\b", latest_text, re.I)
+    if (_ACK_RE.match(latest_text) and not (_REQUEST_RE.search(latest_text) or imperative)) or _ACK_EMOJI_RE.fullmatch(latest_text):
         return False
     return True
 
@@ -1048,6 +1064,8 @@ def _combine_frac_proposals(first: dict[str, Any], second: dict[str, Any]) -> di
         "source_thread_id": first.get("source_thread_id") or second.get("source_thread_id") or "",
         "message_ids": message_ids,
         "evidence": evidence,
+        "context_evidence": _dedupe_preserve(list(first.get('context_evidence') or []) + list(second.get('context_evidence') or [])),
+        "source_context_message_ids": _dedupe_preserve(list(first.get('source_context_message_ids') or []) + list(second.get('source_context_message_ids') or [])),
         "attachments": _dedupe_preserve(list(first.get("attachments") or []) + list(second.get("attachments") or [])),
         "merged_from": [str(first.get("id") or ""), str(second.get("id") or "")],
         "source_scope": [ref for row in (first, second) for ref in (row.get("source_scope") or [{
@@ -1075,8 +1093,9 @@ def _merge_proposal_attachments(first: dict[str, Any], second: dict[str, Any], p
     from distr.core.incoming.media import ensure_proposal_attachments
     from distr.core.incoming.transcription import with_transcript
 
-    combined: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    combined = []
+    seen = set()
+    recovered = set()
     for proposal in (first, second):
         try:
             result = ensure_proposal_attachments(proposal, project_id, strict=False)
@@ -1094,181 +1113,193 @@ def _merge_proposal_attachments(first: dict[str, Any], second: dict[str, Any], p
         for item in rows:
             if not isinstance(item, dict):
                 continue
-            key = _attachment_dedupe_key(item)
-            if key in seen:
+            source = str(proposal.get('source') or '').lower()
+            thread = proposal.get('source_thread_id')
+            message = item.get('source_message_id') or item.get('message_id')
+            location = item.get('api_path')
+            name = item.get('name') or item.get('filename')
+            identities = set()
+            if location:
+                identities.add(('download', location))
+            elif source and thread and message and name:
+                identities.add(('message', source, thread, message, name))
+            if item.get('sha256'):
+                identities.add(('sha256', item['sha256']))
+            available = bool(item.get('path'))
+            if available:
+                recovered.update(identities)
+                key = (True, _attachment_dedupe_key(item))
+            else:
+                # A failure without a source identifier cannot establish that
+                # two same-name files are the same attachment.
+                key = (False, frozenset(identities)) if identities else None
+            if key is not None and key in seen:
                 continue
-            seen.add(key)
-            combined.append(with_transcript(item) if item.get('path') else item)
-    return combined
+            if key is not None:
+                seen.add(key)
+            combined.append((with_transcript(item) if available else item, identities))
+    return [item for item, identities in combined if item.get('path') or not identities & recovered]
+
+
+def _merge_receipt(key: str):
+    from distr.core.chat import _chat_params
+    from distr.core.db import Chat, get_session
+    with get_session() as db:
+        for chat in db.query(Chat).filter(Chat.parent_id.is_(None)).all():
+            receipt = _chat_params(chat.params).get('incoming_merge') or {}
+            if receipt.get('key') == key:
+                if chat.project_id != (receipt.get('merged') or {}).get('project_id'):
+                    raise ValueError('The merged thread belongs to another project. Review its project before retrying.')
+                return int(chat.id), receipt
+    return None
+
+
+def _write_merge_receipt(chat_id: int, receipt: dict) -> None:
+    from distr.core.chat import _chat_params
+    from distr.core.db import Chat, get_session
+    project_id = receipt['merged']['project_id']
+    for _ in range(5):
+        with get_session() as db:
+            chat = db.get(Chat, chat_id)
+            if chat is None:
+                raise ValueError('The merged thread could not be found. Refresh and retry.')
+            if chat.project_id != project_id:
+                raise ValueError('The merged thread belongs to another project. Review its project before retrying.')
+            original = chat.params
+            params = _chat_params(original)
+            params['incoming_merge'] = receipt
+            changed = db.query(Chat).filter(Chat.id == chat_id, Chat.project_id == project_id,
+                                            Chat.params == original).update(
+                {Chat.params: json.dumps(params)}, synchronize_session=False)
+            if changed:
+                db.commit()
+                return
+    raise ValueError('The merged thread changed while saving its receipt. Refresh and retry.')
+
+
+def _finish_merge(chat_id: int, receipt: dict) -> dict:
+    # The replacement and its source context are durable before either original
+    # disappears. A failed dismissal leaves a retryable receipt on this thread.
+    for proposal in receipt.get('pending_originals') or []:
+        proposal_id = _tensology_id(proposal.get('id'))
+        if proposal_id is not None:
+            from distr.core.tensology_client import decide_work_request
+            decide_work_request(proposal_id, 'dismiss')
+        key = _persist_proposal_dismissal(proposal)
+        drop_cached_proposals(keys={key, str(proposal.get('id') or '')},
+                              request_ids=[proposal_id] if proposal_id is not None else [])
+    receipt['pending_originals'] = []
+    _write_merge_receipt(chat_id, receipt)
+    from distr.core.incoming.media import thread_attachments
+    merged = dict(receipt['merged'])
+    attachments = thread_attachments(chat_id)
+    merged['attachments'] = attachments + _unresolved_merge_file_failures(receipt, attachments)
+    from distr.core.incoming.events import publish_incoming_change
+    publish_incoming_change(request_id=merged.get('id'), status='merged')
+    return {'chat_id': chat_id, 'merged': merged, 'tensology': receipt.get('tensology')}
 
 
 def merge_proposals(first: dict[str, Any], second: dict[str, Any], complete=None) -> dict[str, Any]:
-    """Merge two same-project Incoming FRAC proposals into one FRAC proposal + thread.
+    """Prepare one durable source-linked Development thread, without starting work.
 
-    Combines existing FRAC sections (requirements/description, acceptance tasks,
-    sources/evidence, attachments) without generating a new FRAC. Originals are
-    marked dismissed/merged so intake cannot recreate them; Tensology originals are
-    dismissed best-effort so the site can replace them with the merged work.
+    Exact source identities make retries order independent. A remote replacement
+    must exist before originals are dismissed; partial dismissal is retryable.
     """
+    with _HANDOFF_LOCK:
+        return _merge_proposals(first, second, complete=complete)
+
+
+def _merge_proposals(first: dict[str, Any], second: dict[str, Any], complete=None) -> dict[str, Any]:
     from distr.core.read_response import _default_complete
     from distr.core.settings import load_settings_from_db
     from distr.core.incoming.media import register_thread_attachments
+    from distr.core.incoming.project_links import source_project_index, proposal_in_scope
+    from distr.core.workflow.development_threads import ensure_development_thread
+    from distr.core.incoming.source_context import register_source_context, scope_whatsapp_proposal
 
     first, second = apply_project_corrections([first, second])
-    from distr.core.incoming.project_links import source_project_index, proposal_in_scope
     scope = source_project_index()
     if not all(proposal_in_scope(row, scope) for row in (first, second)):
         raise ValueError('Link both source conversations to this project before merging their proposals.')
+    identities = [_proposal_handoff_key(row) for row in (first, second)]
+    if identities[0] == identities[1]:
+        raise ValueError('Choose two different proposals to merge.')
+    ordered = sorted(zip(identities, (first, second)), key=lambda pair: pair[0])
+    merge_key = 'merge:' + hashlib.sha256(json.dumps([pair[0] for pair in ordered]).encode()).hexdigest()
     if not first.get('project_id') or first.get('project_id') != second.get('project_id'):
+        raise ValueError('Only proposals on the same project can be merged.')
+    existing = _merge_receipt(merge_key)
+    if existing:
+        return _finish_merge(*existing)
+    first, second = [pair[1] for pair in ordered]
+    # Read canonical edits and status before using browser-provided remote cards.
+    client = None
+    originals = []
+    for row in (first, second):
+        tid = _tensology_id(row.get('id'))
+        if tid is not None:
+            from distr.core.tensology_client import configured_tensology_client
+            client = client or configured_tensology_client(source='incoming-merge')
+            canonical = client.get(f'work-requests/{tid}')
+            status = str(canonical.get('stored_status') or canonical.get('status') or '').lower() if isinstance(canonical, dict) else ''
+            if not status or status not in ACTIVE_STATUSES:
+                raise ValueError('A proposal is no longer pending. Refresh Incoming before merging.')
+            row = _from_tensology(canonical, _project_map())
+            if not row or not proposal_in_scope(row, scope):
+                raise ValueError('A proposal source or project changed. Refresh Incoming before merging.')
+        originals.append(scope_whatsapp_proposal(row))
+    first, second = originals
+    if first.get('project_id') != second.get('project_id'):
         raise ValueError('Only proposals on the same project can be merged.')
     settings = load_settings_from_db()
     merged = _combine_frac_proposals(first, second)
-    # Optional title polish only — never regenerate FRAC body/tasks.
+    merged['id'] = 'local:' + merge_key
+    merged['dedupe_key'] = merge_key
     provider, model = _triage_model(settings)
-    prompt = [
-        {"role": "system", "content": _MERGE_TITLE_SYSTEM},
-        {"role": "user", "content": json.dumps({
-            "project": merged.get("project_name") or "",
-            "titles": [first.get("title"), second.get("title")],
-            "tasks": merged.get("tasks") or [],
-        })},
-    ]
+    prompt = [{'role': 'system', 'content': _MERGE_TITLE_SYSTEM},
+              {'role': 'user', 'content': json.dumps({'project': merged.get('project_name') or '',
+               'titles': [first.get('title'), second.get('title')], 'tasks': merged.get('tasks') or []})}]
     try:
-        raw = (complete or _default_complete)(provider, model, prompt, settings)
-        data = _parse_triage(raw) or {}
-        title = str(data.get("title") or "").strip()
-        if title:
-            merged["title"] = title[:200]
+        data = _parse_triage((complete or _default_complete)(provider, model, prompt, settings)) or {}
+        if str(data.get('title') or '').strip():
+            merged['title'] = str(data['title']).strip()[:200]
     except Exception:
         pass
-
-    project_id = int(merged["project_id"]) if merged.get("project_id") else None
+    project_id = int(merged['project_id'])
     attachments = _merge_proposal_attachments(first, second, project_id)
-    merged["attachments"] = [
-        {
-            "name": item.get("name"),
-            "mime_type": item.get("mime_type"),
-            "size": item.get("size"),
-            "sha256": item.get("sha256"),
-            "source_message_id": item.get("source_message_id") or item.get("message_id") or "",
-            "path": item.get("path"),
-            "id": item.get("id"),
-            "download_error": item.get("download_error") or item.get("error") or "",
-            "api_path": item.get("api_path") or "",
-            "transcript": item.get("transcript") or "",
-            "caption": item.get("caption") or "",
-            "kind": item.get("kind") or "",
-        }
-        for item in attachments
-    ]
-
-    from distr.core.chat import ChatService
-
-    provider_name = str(settings.get("conversational_llm_provider") or settings.get("agent_provider") or "ollama").strip()
-    model_name = str(settings.get("conversational_llm_model") or settings.get("agent_model") or "").strip()
-    chat_id, _ = ChatService.create_new_chat(
-        llm_provider=provider_name,
-        llm_model=model_name,
-        title=merged["title"][:120],
-        starting_question=_proposal_prompt(merged),
-        project_id=project_id,
-        route_mode="auto",
-        execution_profile="code",
-        autonomy_level="goal",
-        activate=False,
-    )
-    register_thread_attachments(int(chat_id), [item for item in attachments if item.get("path")])
-    from distr.core.incoming.transcription import prepare_thread_transcripts
-    from distr.core.incoming.media import thread_attachments
-    prepare_thread_transcripts(int(chat_id))
-    prepared = {item['id']: item for item in thread_attachments(int(chat_id))}
-    for item in merged['attachments']:
-        if item.get('id') in prepared:
-            item['transcript'] = prepared[item['id']].get('transcript') or item.get('transcript') or ''
-
-    # Clear both originals locally and on Tensology so intake never recreates them.
-    for proposal in (first, second):
-        try:
-            key = _persist_proposal_dismissal(proposal)
-        except Exception:
-            key = _proposal_handoff_key(proposal)
-        proposal_id = _tensology_id(proposal.get("id"))
-        drop_cached_proposals(
-            keys={key, str(proposal.get("id") or ""), str(proposal.get("dedupe_key") or "")},
-            request_ids=[proposal_id] if proposal_id is not None else [],
-        )
-        if proposal_id is None:
-            continue
-        try:
-            from distr.core.tensology_client import decide_work_request
-
-            decide_work_request(proposal_id, "dismiss")
-        except Exception:
-            import logging
-
-            logging.getLogger(__name__).warning("Tensology merge dismiss failed for %s", proposal_id, exc_info=True)
-
-    # Create the replacement pending proposal on Tensology so its Telegram card
-    # is delivered through the same notify path as a normal triage proposal.
+    failures = [item for item in attachments if not item.get('path')]
     tensology_merged = None
-    source_ids = []
-    for proposal in (first, second):
-        tid = _tensology_id(proposal.get("id"))
-        if tid is not None:
-            source_ids.append(tid)
+    source_ids = sorted(tid for row in originals if (tid := _tensology_id(row.get('id'))) is not None)
     if source_ids:
-        try:
-            from distr.core.tensology_client import create_merged_work_request, configured_tensology_client
-
-            # Prefer Tensology's numeric project id from either original detail.
-            tensology_project_id = None
-            for proposal in (first, second):
-                tid = _tensology_id(proposal.get("id"))
-                if tid is None:
-                    continue
-                try:
-                    detail = configured_tensology_client(source="incoming-merge").get(f"work-requests/{tid}")
-                    if isinstance(detail, dict):
-                        project = detail.get("project") if isinstance(detail.get("project"), dict) else {}
-                        tensology_project_id = project.get("id") or detail.get("project_id")
-                        if tensology_project_id:
-                            break
-                except Exception:
-                    continue
-            created = create_merged_work_request({
-                "merged_from": source_ids,
-                "project_id": tensology_project_id,
-                "title": merged.get("title"),
-                "description": merged.get("description") or "",
-                "tasks": merged.get("tasks") or [],
-                "rationale": merged.get("rationale") or "",
-                "priority": merged.get("priority") or "medium",
-                "estimated_minutes": merged.get("estimated_minutes"),
-                "source_message_ids": merged.get("message_ids") or [],
-            })
-            if isinstance(created, dict):
-                tensology_merged = created
-                new_id = created.get("id")
-                if new_id is not None:
-                    merged["id"] = f"tensology:{int(new_id)}"
-                    merged["origin"] = "tensology"
-                    merged["status"] = "pending"
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("Tensology merge create failed", exc_info=True)
-    try:
-        from distr.core.tensology_notify import notify_proposal_created
-        notify_proposal_created({
-            "request_id": (tensology_merged or {}).get("id") or merged.get("id"),
-            "title": merged.get("title"),
-            "project": merged.get("project_name"),
-        })
-    except Exception:
-        import logging
-        logging.getLogger(__name__).debug("Merged proposal notice unavailable", exc_info=True)
-    from distr.core.incoming.events import publish_incoming_change
-    publish_incoming_change(request_id=merged.get("id"), status="merged")
-    return {"chat_id": int(chat_id), "merged": merged, "tensology": tensology_merged}
+        from distr.core.tensology_client import create_merged_work_request
+        project_ids = {row.get('tensology_project_id') for row in originals if row.get('tensology_project_id')}
+        if len(project_ids) != 1:
+            raise ValueError('The canonical project mapping is unavailable. Refresh Incoming before merging.')
+        tensology_merged = create_merged_work_request({
+            'merged_from': source_ids, 'project_id': next(iter(project_ids)),
+            'title': merged['title'], 'description': merged.get('description') or '',
+            'tasks': merged.get('tasks') or [], 'rationale': merged.get('rationale') or '',
+            'priority': merged.get('priority') or 'medium', 'estimated_minutes': merged.get('estimated_minutes'),
+            'source_message_ids': merged.get('message_ids') or [],
+        }, idempotency_key=merge_key)
+        if not isinstance(tensology_merged, dict) or type(tensology_merged.get('id')) is not int:
+            raise ValueError('The replacement proposal was not confirmed. The originals were retained; retry the merge.')
+        merged.update(id=f"tensology:{tensology_merged['id']}", origin='tensology', status='pending')
+    chat_id = ensure_development_thread(
+        title=merged['title'][:120], starting_question=_proposal_prompt(merged),
+        project_id=project_id, source_type='incoming_proposal', source_ref=_proposal_handoff_key(merged))
+    register_source_context(int(chat_id), merged)
+    ticket_report = register_thread_attachments(int(chat_id), [item for item in attachments if item.get('path')]) or {}
+    from distr.core.incoming.transcription import prepare_thread_transcripts
+    prepare_thread_transcripts(int(chat_id))
+    _record_attachment_report(int(chat_id), failures, ticket_report)
+    _record_proposal_handoff(int(chat_id), merged, project_id=project_id, started=False)
+    receipt = {'key': merge_key, 'merged': json.loads(proposal_brief_json(merged)),
+               'tensology': {'id': tensology_merged['id']} if tensology_merged else None,
+               'file_failures': failures,
+               'pending_originals': [json.loads(proposal_brief_json(row)) for row in originals]}
+    _write_merge_receipt(int(chat_id), receipt)
+    return _finish_merge(int(chat_id), receipt)
 
 
 def _proposal_prompt(proposal: dict[str, Any]) -> str:
@@ -1350,12 +1381,12 @@ _SNAPSHOT_IDENTITY_KEYS = {"id", "key", "dedupe_key", "source_thread_id", "messa
                            "sender", "source", "origin", "project_id", "chat_id", "created_at", "updated_at"}
 
 
-def _sanitize_snapshot_value(value: Any, depth: int = 0, identity: bool = False) -> Any:
+def _sanitize_snapshot_value(value: Any, depth: int = 0, identity: bool = False, *, bounded: bool = True) -> Any:
     if identity and isinstance(value, (str, int, float, bool, type(None))):
-        return value if not isinstance(value, str) else value[:500]
+        return value if not isinstance(value, str) or not bounded else value[:500]
     if identity and isinstance(value, (list, tuple)):
-        return [str(v)[:500] for v in list(value)[:500] if isinstance(v, (str, int, float))]
-    if depth > 6:
+        return [str(v)[:500] if bounded else str(v) for v in (list(value)[:500] if bounded else value) if isinstance(v, (str, int, float))]
+    if depth > (6 if bounded else 30):
         return None
     if isinstance(value, dict):
         out = {}
@@ -1371,18 +1402,27 @@ def _sanitize_snapshot_value(value: Any, depth: int = 0, identity: bool = False)
                 from distr.core.incoming.source_context import safe_source_body
 
                 v = safe_source_body(v)
-            out[key] = _sanitize_snapshot_value(v, depth + 1, identity=key in _SNAPSHOT_IDENTITY_KEYS)
+            out[key] = _sanitize_snapshot_value(v, depth + 1, identity=key in _SNAPSHOT_IDENTITY_KEYS, bounded=bounded)
         return out
     if isinstance(value, (list, tuple)):
-        return [_sanitize_snapshot_value(v, depth + 1) for v in list(value)[:200]]
+        return [_sanitize_snapshot_value(v, depth + 1, bounded=bounded) for v in (list(value)[:200] if bounded else value)]
     if isinstance(value, (bytes, bytearray)):
         return None
     if isinstance(value, str):
-        text = value if len(value) <= 4000 else value[:4000] + "…"
+        text = value if not bounded or len(value) <= 4000 else value[:4000] + "…"
         return _redact_text(text)
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return _redact_text(str(value)[:500])
+
+
+def proposal_brief_json(proposal: dict[str, Any]) -> str:
+    """Full redacted durable brief, separate from the bounded display snapshot.
+
+    Source references, requirements and acceptance tasks must survive a restart.
+    Original media bytes still belong to the managed media store, never JSON.
+    """
+    return json.dumps(_sanitize_snapshot_value(proposal, bounded=False), ensure_ascii=False, default=str)
 
 
 def proposal_snapshot_json(proposal: dict[str, Any]) -> str | None:
@@ -1518,7 +1558,7 @@ def _persist_proposal_dismissal(proposal: dict[str, Any]) -> str:
                 ))
         db.commit()
         try:
-            snapshot = proposal_snapshot_json(proposal)
+            snapshot = proposal_brief_json(proposal)
             if snapshot and _dismissal_snapshot_column_exists(db):
                 from sqlalchemy import text as sa_text
                 for receipt_key in {key, tensology_key} - {None}:
@@ -1770,7 +1810,7 @@ def undismiss_proposal(key: str) -> dict[str, Any]:
                     if isinstance(candidate, dict) and _proposal_handoff_key(candidate) in removed:
                         candidates.append(candidate)
             snapshot = max(candidates, key=lambda r: (bool(_dismissal_text(r.get('title'), 200)), len(r))) if candidates else _proposal_from_legacy_dismissal(row, db)
-            snapshot_json = proposal_snapshot_json(snapshot)
+            snapshot_json = proposal_brief_json(snapshot)
             if not snapshot_json:
                 raise ValueError('The saved proposal could not be restored. Its dismissal was retained.')
             snapshot = json.loads(snapshot_json)
@@ -1937,8 +1977,8 @@ def reassign_proposal_project(proposal: dict[str, Any], project_id: int) -> dict
         if not str(proposal.get('id') or '').strip():
             raise ValueError('A proposal identity is required.')
         key = _proposal_handoff_key(proposal)
-        if key in _accepted_proposal_keys():
-            raise ValueError('This proposal already has a thread. Change the project on that thread instead.')
+        if key in _accepted_proposal_keys(include_terminal=True):
+            raise ValueError('This proposal already has a thread. Review the project on its existing thread.')
         with get_session() as db:
             if type(project_id) is not int or project_id <= 0 or db.get(Project, project_id) is None:
                 raise ValueError('Select an existing project.')
@@ -1951,42 +1991,53 @@ def reassign_proposal_project(proposal: dict[str, Any], project_id: int) -> dict
     return result
 
 
-def _record_proposal_handoff(chat_id: int, proposal: dict[str, Any], *, project_id: int, started: bool = False) -> None:
+def _record_proposal_handoff(chat_id: int, proposal: dict[str, Any], *, project_id: int, started: bool = False, start_pending: bool = False) -> None:
     from distr.core.chat import _chat_params
     from distr.core.db import Chat, get_session
 
-    with get_session() as db:
-        chat = db.get(Chat, int(chat_id))
-        if chat is None:
-            raise ValueError("The proposal thread could not be found. Refresh and retry.")
-        if chat.project_id != project_id:
-            raise ValueError("The existing proposal thread belongs to another project. Refresh and check its project link.")
-        params = _chat_params(chat.params)
-        prior = params.get("incoming_proposal_handoff") or {}
-        key = _proposal_handoff_key(proposal)
-        params["incoming_proposal_handoff"] = {"key": key, "proposal": json.loads(proposal_snapshot_json(proposal)),
-                                               "started": bool(started or (prior.get('key') == key and prior.get('started')))}
-        chat.params = json.dumps(params)
-        db.commit()
+    for _ in range(5):
+        with get_session() as db:
+            chat = db.get(Chat, int(chat_id))
+            if chat is None:
+                raise ValueError("The proposal thread could not be found. Refresh and retry.")
+            if chat.project_id != project_id:
+                raise ValueError("The existing proposal thread belongs to another project. Refresh and check its project link.")
+            original = chat.params
+            params = _chat_params(original)
+            prior = params.get("incoming_proposal_handoff") or {}
+            key = _proposal_handoff_key(proposal)
+            params["incoming_proposal_handoff"] = {"key": key, "proposal": json.loads(proposal_brief_json(proposal)),
+                                                  "started": bool(started or (prior.get('key') == key and prior.get('started')))}
+            if start_pending:
+                params["incoming_proposal_handoff"]["start_pending"] = True
+            changed = db.query(Chat).filter(Chat.id == int(chat_id), Chat.project_id == project_id,
+                                            Chat.params == original).update(
+                {Chat.params: json.dumps(params), Chat.is_archived: False}, synchronize_session=False)
+            if changed:
+                db.commit()
+                return
+    raise ValueError("The proposal thread changed while saving its handoff. Refresh and retry.")
 
 
-def _accepted_proposal_keys() -> set[str]:
+def _accepted_proposal_keys(*, include_terminal: bool = False) -> set[str]:
+    """Visibility excludes failed work; durable scope ownership never does."""
     from distr.core.chat import _chat_params
     from distr.core.db import Chat, get_session
     from distr.core.db.workflow import DevelopmentWorkItem
 
     with get_session() as db:
         rows = db.query(Chat.params).join(DevelopmentWorkItem, DevelopmentWorkItem.chat_id == Chat.id).filter(
-            DevelopmentWorkItem.source_type == "incoming_proposal"
+            Chat.parent_id.is_(None), Chat.params.contains('"incoming_proposal_handoff"')
         ).all()
         return {str(receipt["key"]) for (params,) in rows
                 if isinstance(receipt := _chat_params(params).get("incoming_proposal_handoff"), dict)
                 and receipt.get("key")
-                and ((_chat_params(params).get("development") or {}).get("execution") or {}).get("status")
-                not in {"failed", "blocked", "cancelled"}}
+                and (include_terminal or (not receipt.get("start_pending")
+                     and ((_chat_params(params).get("development") or {}).get("execution") or {}).get("status")
+                     not in {"failed", "blocked", "cancelled"}))}
 
 
-def _existing_proposal_thread(proposal: dict[str, Any], project_id: int) -> int | None:
+def _existing_proposal_thread(proposal: dict[str, Any], project_id: int, *, require_started: bool = False) -> int | None:
     """A later ticket link may change work-item identity, but not proposal ownership."""
     from distr.core.chat import _chat_params
     from distr.core.db import Chat, get_session
@@ -1999,29 +2050,89 @@ def _existing_proposal_thread(proposal: dict[str, Any], project_id: int) -> int 
             if receipt.get("key") == key:
                 if chat.project_id != project_id:
                     raise ValueError("The proposal thread belongs to another project.")
-                if chat.is_archived:
-                    chat.is_archived = False
-                    db.commit()
+                if require_started and not receipt.get("started"):
+                    return None
                 return int(chat.id)
     return None
 
 
+def resolve_proposal_review(review_key: str, *, submitted_only: bool = False) -> dict[str, Any]:
+    """Resolve a proposal snapshot to its current review or existing Development thread."""
+    from distr.core.chat import _chat_params
+    from distr.core.db import Chat, get_session
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import DevelopmentWorkItem
+    from distr.core.incoming.source_context import scope_whatsapp_proposal
+
+    matches = []
+    with get_session() as db:
+        candidates = (
+            db.query(Chat.id, Chat.project_id, Chat.params, DevelopmentWorkItem.project_id)
+            .join(DevelopmentWorkItem, DevelopmentWorkItem.chat_id == Chat.id)
+            .filter(Chat.parent_id.is_(None), Chat.params.contains('"incoming_proposal_handoff"'))
+            .yield_per(100)
+        )
+        for chat_id, project_id, params, owner_project_id in candidates:
+            receipt = _chat_params(params).get("incoming_proposal_handoff")
+            handoff_key = receipt.get("key") if isinstance(receipt, dict) else None
+            if not isinstance(handoff_key, str) or _review_key_for_handoff(handoff_key) != review_key:
+                continue
+            project = db.get(Project, project_id) if project_id is not None else None
+            if not project or project.deleted_at is not None or owner_project_id != project_id:
+                return {"status": "unavailable"}
+            if not receipt.get("start_pending"):
+                matches.append((int(chat_id), receipt.get("proposal")))
+    if len(matches) > 1:
+        return {"status": "unavailable"}
+    if matches:
+        chat_id, proposal = matches[0]
+        result = {"status": "thread", "chat_id": chat_id}
+        if submitted_only and isinstance(proposal, dict):
+            result["proposal"] = proposal
+        return result
+    if submitted_only:
+        return {"status": "unavailable"}
+
+    inbox = list_incoming_proposals(limit=150)
+    proposals = [row for row in inbox.get("proposals", []) if proposal_review_key(row) == review_key]
+    if len(proposals) == 1:
+        return {"status": "proposal", "proposal": {**scope_whatsapp_proposal(proposals[0]), "review_key": review_key}}
+    if len(proposals) > 1:
+        return {"status": "unavailable"}
+    if (inbox.get("tensology") or {}).get("error"):
+        return {"status": "unconfirmed"}
+    return {"status": "unavailable"}
+
+
+def _review_key_for_handoff(handoff_key: str) -> str:
+    return hashlib.sha256(f"proposal-review:{handoff_key}".encode()).hexdigest()
+
+
+def proposal_review_key(proposal: dict[str, Any]) -> str:
+    """Keep channel and conversation identifiers out of copied review links."""
+    return _review_key_for_handoff(_proposal_handoff_key(proposal))
+
+
 def _record_attachment_report(chat_id: int, failed: list[dict[str, Any]], ticket_report: dict[str, Any]) -> None:
     """Keep the handoff's file failures on the thread so the API and UI can show them."""
+    from distr.core.chat import _chat_params
     from distr.core.db import Chat, get_session
 
-    with get_session() as db:
-        chat = db.get(Chat, int(chat_id))
-        if chat is None:
-            return
-        try:
-            params = json.loads(chat.params or "{}")
-        except (TypeError, ValueError):
-            params = {}
-        params["incoming_attachment_failures"] = failed
-        params["incoming_ticket_file_failures"] = list(ticket_report.get("failed") or [])
-        chat.params = json.dumps(params)
-        db.commit()
+    for _ in range(5):
+        with get_session() as db:
+            chat = db.get(Chat, int(chat_id))
+            if chat is None:
+                return
+            original = chat.params
+            params = _chat_params(original)
+            params["incoming_attachment_failures"] = failed
+            params["incoming_ticket_file_failures"] = list(ticket_report.get("failed") or [])
+            changed = db.query(Chat).filter(Chat.id == int(chat_id), Chat.params == original).update(
+                {Chat.params: json.dumps(params)}, synchronize_session=False)
+            if changed:
+                db.commit()
+                return
+    raise ValueError("The proposal thread changed while saving its attachment report. Refresh and retry.")
 
 
 def proposal_thread_attachment_report(chat_id: int) -> dict[str, Any]:
@@ -2035,6 +2146,29 @@ def proposal_thread_attachment_report(chat_id: int) -> dict[str, Any]:
             params = {}
     return {"failed_attachments": params.get("incoming_attachment_failures") or [],
             "ticket_file_failures": params.get("incoming_ticket_file_failures") or []}
+
+
+def _thread_merge_receipt(chat_id: int, proposal: dict[str, Any]) -> dict | None:
+    from distr.core.chat import _chat_params
+    from distr.core.db import Chat, get_session
+
+    with get_session() as db:
+        chat = db.get(Chat, chat_id)
+        merge = _chat_params(chat.params).get('incoming_merge') if chat else None
+    merged = merge.get('merged') if isinstance(merge, dict) else None
+    if isinstance(merged, dict) and merged.get('id') == proposal.get('id'):
+        return merge
+    return None
+
+
+def _unresolved_merge_file_failures(merge: dict, attachments: list[dict]) -> list[dict]:
+    recovered_checksums = {row.get('sha256') for row in attachments if row.get('path')}
+    recovered_links = {row.get('api_path') for row in attachments if row.get('path')}
+    return [
+        row for row in merge.get('file_failures') or []
+        if (row['sha256'] not in recovered_checksums if row.get('sha256')
+            else not row.get('api_path') or row['api_path'] not in recovered_links)
+    ]
 
 
 def create_proposal_thread(proposal: dict[str, Any], *, start_work: bool = False) -> int:
@@ -2068,17 +2202,28 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
         authoritative = client.get(f"work-requests/{proposal_id}")
         if not isinstance(authoritative, dict) or 'attachments' not in authoritative:
             raise ValueError("Tensology did not supply a media manifest. Update its media handoff API before pushing this proposal.")
+        status = str(authoritative.get('stored_status') or authoritative.get('status') or '').strip().lower()
+        if status != 'sent_to_decisions' and (not status or status not in ACTIVE_STATUSES):
+            raise ValueError('This proposal is no longer pending. Refresh Incoming before starting work.')
         proposal = _from_tensology(authoritative)
-        if proposal is None:
+        if proposal is None or _tensology_id(proposal.get('id')) != proposal_id:
             raise ValueError("The source proposal is unavailable. Refresh Incoming and retry.")
         proposal = apply_project_corrections([proposal])[0]
         project = {'id': proposal['project_id']} if proposal.get('project_corrected') else _resolve_tensology_project({
-            "decisions_project_id": proposal.get("decisions_project_id"),
+            # The canonical project relationship takes precedence over stale
+            # top-level handoff metadata or a mutable display name.
+            "decisions_project_id": proposal.get("project_id") or proposal.get("decisions_project_id"),
             "project_name": proposal.get("project_name"),
         })
         if project is None:
             raise ValueError("Link the Tensology proposal to a local project before creating its thread.")
         project_id = project["id"]
+        if status == 'sent_to_decisions':
+            # Acknowledgement may have succeeded before the browser saw the response.
+            chat_id = _existing_proposal_thread(proposal, int(project_id), require_started=start_work)
+            if chat_id is None:
+                raise ValueError('This proposal is no longer pending. Refresh Incoming before starting work.')
+            return chat_id
     else:
         from distr.core.db import get_session
         from distr.core.db.projects import Project
@@ -2092,33 +2237,52 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
     project_id = proposal.get('project_id') if proposal.get('project_corrected') else project_id
     if not project_id:
         raise ValueError('Select an existing project before creating the thread.')
+    chat_id = _existing_proposal_thread(proposal, int(project_id))
+    merge = _thread_merge_receipt(chat_id, proposal) if chat_id else None
+    if merge is not None and proposal_id is not None:
+        # A replacement can flatten message IDs into one conversation. Keep
+        # the source boundaries recorded when the originals were merged.
+        retained = merge['merged']
+        source_fields = ('source', 'source_label', 'source_thread_id', 'source_conversation',
+                         'participant', 'message_ids', 'source_context_message_ids',
+                         'source_scope', 'evidence', 'context_evidence')
+        proposal = {**proposal, **{field: retained.get(field) for field in source_fields}}
     if not proposal_in_scope({**proposal, 'project_id': project_id}):
         raise ValueError('This source is no longer linked to the selected project. Refresh Incoming.')
-    from distr.core.incoming.media import ensure_proposal_attachments, register_thread_attachments
+    from distr.core.incoming.source_context import register_source_context, scope_whatsapp_proposal
+
+    proposal = scope_whatsapp_proposal(proposal)
+    from distr.core.incoming.media import ensure_proposal_attachments, register_thread_attachments, thread_attachments
+    retained_attachments = thread_attachments(chat_id) if merge is not None else []
 
     # Per Paul: a file that cannot be fetched must not block the thread. Fetch
     # leniently, keep what downloaded, log and surface the rest.
-    ensured = ensure_proposal_attachments(
-        proposal, int(project_id) if project_id else None, client=client, strict=False,
-    )
-    attachments = ensured["attachments"]
-    failed_attachments = [
-        {"name": str(row.get("name") or "file"), "error": str(row.get("download_error") or row.get("error") or "")}
-        for row in ensured.get("failures") or []
-    ]
+    if merge is not None and proposal_id is None:
+        attachments = retained_attachments
+        failed_attachments = []
+    else:
+        ensured = ensure_proposal_attachments(proposal, int(project_id), client=client, strict=False)
+        attachments = ensured["attachments"]
+        failed_attachments = [
+            {"name": str(row.get("name") or "file"), "error": str(row.get("download_error") or row.get("error") or "")}
+            for row in ensured.get("failures") or []
+        ]
+    if merge is not None:
+        failed_attachments = _dedupe_preserve([
+            *_unresolved_merge_file_failures(merge, retained_attachments + attachments), *failed_attachments,
+        ])
     for row in failed_attachments:
         import logging
         logging.getLogger(__name__).warning(
-            "Proposal %s file %r could not be fetched: %s", proposal.get("id"), row["name"], row["error"])
-    chat_id = _existing_proposal_thread(proposal, int(project_id)) or ensure_development_thread(
+            "Proposal %s file %r could not be fetched: %s", proposal.get("id"), row.get("name"),
+            row.get("download_error") or row.get("error"))
+    chat_id = chat_id or ensure_development_thread(
         title=str(proposal.get("title") or "Incoming proposal")[:120],
         starting_question=_proposal_prompt(proposal),
         project_id=int(project_id) if project_id else None,
         source_type="incoming_proposal",
         source_ref=_proposal_handoff_key(proposal),
     )
-    from distr.core.incoming.source_context import register_source_context
-
     register_source_context(int(chat_id), {**proposal, "project_id": int(project_id)})
     ticket_report = register_thread_attachments(int(chat_id), attachments) or {}
     from distr.core.incoming.transcription import prepare_thread_transcripts
@@ -2142,6 +2306,8 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool) -> in
             # An explicit retry resumes the canonical thread, never a duplicate.
             already_started = False
         if not already_started and not development_execution_active(int(chat_id)):
+            # Keep the source and thread bound even if launch preparation raises.
+            _record_proposal_handoff(int(chat_id), proposal, project_id=int(project_id), start_pending=True)
             route = automation_global_default(load_settings_from_db())
             route.pop("source", None)
             if route:

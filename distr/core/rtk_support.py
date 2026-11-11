@@ -68,11 +68,12 @@ def run_shell_command(
     return subprocess.run(
         effective,
         shell=True,
+        executable="/bin/bash",
         capture_output=True,
         text=True,
         timeout=timeout,
         cwd=cwd,
-        env=merged_env,
+        env={**merged_env, "SHELLOPTS": ":".join(filter(None, [merged_env.get("SHELLOPTS", ""), "pipefail"]))},
     )
 
 
@@ -90,11 +91,12 @@ def run_cancellable_shell_command(
     process = subprocess.Popen(
         effective,
         shell=True,
+        executable="/bin/bash",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         cwd=cwd,
-        env=merged_env,
+        env={**merged_env, "SHELLOPTS": ":".join(filter(None, [merged_env.get("SHELLOPTS", ""), "pipefail"]))},
         start_new_session=True,
     )
     started = time.monotonic()

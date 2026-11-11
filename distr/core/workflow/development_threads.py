@@ -596,6 +596,64 @@ def orchestrator_surface(text: str) -> str:
     return "unspecified"
 
 
+def bind_ticket_development_thread(db, ticket, *, project_id: int, board_id: int, lane_name: str) -> Chat:
+    """Resolve a ticket's exact thread inside the caller's write transaction."""
+    if ticket.linked_workflow_id is not None:
+        raise DevelopmentThreadConflict("Open the ticket to run it with its selected workflow.")
+    owners = db.query(DevelopmentWorkItem).filter_by(local_ticket_id=ticket.id).all()
+    chat_ids = {item.chat_id for item in owners}
+    if ticket.source_chat_id is not None:
+        chat_ids.add(ticket.source_chat_id)
+    if len(chat_ids) > 1:
+        raise DevelopmentThreadConflict("The ticket has conflicting Development thread links.")
+    if chat_ids:
+        root = db.get(Chat, next(iter(chat_ids)))
+        if root is None or root.parent_id is not None or root.project_id != project_id:
+            raise DevelopmentThreadConflict("The ticket's Development thread is outside the approved project.")
+        metadata = development_thread_metadata(root)
+        item = db.query(DevelopmentWorkItem).filter_by(chat_id=root.id).first()
+        matches_ticket = (
+            item.local_ticket_id == ticket.id and item.project_id == project_id
+            if item else metadata.get("ticket_id") == ticket.id
+        )
+        if not matches_ticket:
+            raise DevelopmentThreadConflict("The Development thread belongs to another work item.")
+        workflow_id = item.workflow_id if item else metadata.get("workflow_id")
+        if workflow_id or str(root.autonomy_level or "").strip().lower() in {"plan", "approval"}:
+            raise DevelopmentThreadConflict("Open the Development thread to run this ticket with its current workflow or approval settings.")
+        if _scope_execution_active(db, root, metadata):
+            raise DevelopmentThreadConflict("The ticket's Development thread already has active work.")
+        if item is None:
+            _upsert_work_item(
+                db, root, workflow_id=None, ticket_id=ticket.id,
+                source_type=metadata.get("source_type") or "prompt",
+                source_ref=metadata.get("source_ref"),
+                board_key=metadata.get("board_key"), board_provider=metadata.get("board_provider"),
+                board_ticket_key=metadata.get("board_ticket_key"),
+                board_ticket_title=metadata.get("board_ticket_title"), board_ticket_lane=metadata.get("board_ticket_lane"),
+            )
+    else:
+        from distr.core.chat import cleanup_chat_dependencies
+
+        root = Chat(project_id=project_id, title=ticket.title or "Development work", provider="ollama")
+        db.add(root)
+        db.flush()
+        cleanup_chat_dependencies(db, root.id, delete_owned_ticket=True, delete_owned_workflows=True)
+        _upsert_work_item(
+            db, root, workflow_id=None, ticket_id=ticket.id, source_type="proactive_orchestrator", source_ref=None,
+            board_key=f"decisions:{board_id}", board_provider="local", board_ticket_key=str(ticket.id),
+            board_ticket_title=ticket.title, board_ticket_lane=lane_name,
+        )
+    root.is_archived = False
+    if ticket.source_chat_id != root.id:
+        from sqlalchemy.orm.attributes import flag_modified
+
+        ticket.source_chat_id = root.id
+        # Linking the approved work does not revise the ticket's request.
+        flag_modified(ticket, "modified_date")
+    return root
+
+
 def ensure_development_thread(
     *,
     workflow_id: int | None = None,
@@ -744,6 +802,47 @@ def mark_development_thread(
         sync_thread_files_safely(int(chat_id), int(ticket_id))
 
 
+def development_scope_identity(project_id, metadata: dict, *, chat_id: int) -> tuple:
+    """The immutable work scope captured by a direct dispatch claim."""
+    return (
+        int(project_id) if project_id is not None else -int(chat_id),
+        _clean(metadata.get('board_key')), _provider(metadata.get('board_provider')),
+        int(metadata['ticket_id']) if metadata.get('ticket_id') is not None else None,
+        _clean(metadata.get('board_ticket_key')),
+    )
+
+
+def _scope_execution_active(db, root, metadata: dict) -> bool:
+    from distr.core.workflow.development_harness import ACTIVE_EXECUTION_STATUSES
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.db.workflow import AutoWorkflowRun, DevelopmentCommand
+    active = set(ACTIVE_EXECUTION_STATUSES) | {'pending', 'dispatching', 'paused'}
+    if metadata.get("proactive_dispatch"):
+        return True
+    execution = metadata.get('execution') or {}
+    if not isinstance(execution,dict):
+        raise ValueError('Review the invalid Development execution state before changing its project, board or ticket.')
+    if str(execution.get('status') or '').strip().lower() in active:
+        return True
+    if db.query(AutoWorkflowRun.id).filter(AutoWorkflowRun.chat_id == root.id,
+            func.lower(AutoWorkflowRun.status).in_(active)).first():
+        return True
+    if db.query(DevelopmentCommand.id).filter(DevelopmentCommand.chat_id == root.id,
+            DevelopmentCommand.status == 'dispatching').first():
+        return True
+    session_id = execution.get('execution_session_id')
+    ticket_id = metadata.get('ticket_id')
+    if session_id is not None or ticket_id is not None:
+        from sqlalchemy import or_
+        scopes = []
+        if session_id is not None: scopes.append(ProjectExecutionSession.id == int(session_id))
+        if ticket_id is not None: scopes.append(ProjectExecutionSession.ticket_id == int(ticket_id))
+        if db.query(ProjectExecutionSession.id).filter(or_(*scopes),
+                func.lower(ProjectExecutionSession.status).in_(active)).first():
+            return True
+    return False
+
+
 def rebind_development_thread(
     chat_id: int,
     *,
@@ -760,6 +859,9 @@ def rebind_development_thread(
 ) -> dict[str, Any]:
     """Atomically move a Development thread and clear stale scope fields."""
     with get_session() as db:
+        if db.get_bind().dialect.name == 'sqlite':
+            # Serialize with the dispatcher's initial scope claim, before read.
+            db.connection().exec_driver_sql('BEGIN IMMEDIATE')
         root = db.get(Chat, int(chat_id))
         if root is None or root.parent_id is not None:
             raise ValueError(f"Development thread #{chat_id} was not found.")
@@ -775,6 +877,15 @@ def rebind_development_thread(
             workflow_id = item.workflow_id
         if not metadata and item is None:
             raise ValueError("This conversation is not a Development thread.")
+        from distr.core.db.kanban import KanbanTicket
+        owned_ticket = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == root.id).first()
+        next_ticket_id = int(ticket_id) if ticket_id is not None else (owned_ticket.id if owned_ticket else None)
+        requested_scope = development_scope_identity(project_id, {
+            'board_key':board_key, 'board_provider':board_provider, 'ticket_id':next_ticket_id,
+            'board_ticket_key':board_ticket_key or (str(next_ticket_id) if next_ticket_id is not None else None),
+        }, chat_id=root.id)
+        if requested_scope != development_scope_identity(root.project_id,metadata,chat_id=root.id) and _scope_execution_active(db,root,metadata):
+            raise ValueError('Stop or finish the active Development work before changing its project, board or ticket.')
         if title is not None:
             clean_title = _clean(title)
             if not clean_title:

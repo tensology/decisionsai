@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -202,6 +203,24 @@ def test_tool_observation_contract_is_deterministic():
     assert observation.summary == "Changed one file."
     assert observation.next_actions == ("run tests",)
     assert observation.artifacts == ("app.py",)
+
+
+@pytest.mark.parametrize('protocol', ['pi', 'codex'])
+def test_shell_exit_code_overrides_a_success_label(monkeypatch, protocol):
+    events = []
+    async def dispatch(context):
+        if protocol == 'pi':
+            context.on_event({'type': 'tool_execution_end', 'toolName': 'bash', 'isError': False,
+                'args': {'command': 'npm test'}, 'result': {'structuredContent': {'exit_code': 7}}})
+        else:
+            context.on_event({'type': 'item.completed', 'item': {'type': 'command_execution',
+                'id': 'check', 'command': 'npm test', 'status': 'completed', 'exit_code': 7}})
+        return SimpleNamespace(execution_session_id=23, evidence={}, result=SimpleNamespace(
+            success=True, output='Everything passed', error='', waits_for_human=False))
+    monkeypatch.setattr('distr.core.project_cli_backends.harness.dispatch_harness', dispatch)
+    asyncio.run(CliHarnessTurnRuntime().execute(_request(), on_event=events.append))
+    assert events[0].status == TurnStatus.FAILED
+    assert events[0].details['exit_code'] == 7
 
 
 def test_native_runtime_owns_model_tool_loop_and_emits_activity():
@@ -436,7 +455,7 @@ def test_native_runtime_compacts_before_the_provider_limit(monkeypatch):
         async def execute(self, _name, _arguments):
             raise AssertionError("No tool should be called")
 
-    current = {"role": "user", "content": "Keep the active request."}
+    current = {"role": "user", "content": "Keep the active request.\n" + "Keep this criterion.\n" * 250 + "Assessment only."}
     request = replace(
         _request(),
         context_messages=(
@@ -453,7 +472,7 @@ def test_native_runtime_compacts_before_the_provider_limit(monkeypatch):
 
     assert result.success is True
     assert any(event.kind == TurnEventKind.CONTEXT_COMPACTED for event in events)
-    assert any("Keep the active request" in str(message.get("content")) for message in model.messages)
+    assert model.messages[-1] == current
     assert any("Development context checkpoint" in str(message.get("content")) for message in model.messages)
     assert result.evidence["context_compactions"] == 1
 
@@ -678,6 +697,32 @@ def test_service_delivers_guidance_to_registered_native_turn(monkeypatch):
     assert captured["delivery"]["method"] == "native_turn_steering"
     assert captured["guidance"] == "Keep the existing architecture."
     assert applied == ["cte-native-steer"]
+
+
+def test_native_steer_rejects_a_replacement_turn_during_audit_write(monkeypatch):
+    from unittest.mock import Mock
+
+    chat_id = 918
+    original = turn_service._ActiveTurn(
+        turn_service.CancellationToken(), turn_service.SteeringChannel(), "native", 44,
+    )
+    replacement = turn_service._ActiveTurn(
+        turn_service.CancellationToken(), turn_service.SteeringChannel(), "native", 45,
+    )
+    monkeypatch.setattr(turn_service, "_active_turns", {chat_id: original})
+    discard = Mock()
+
+    def replace_turn(*args):
+        turn_service._active_turns[chat_id] = replacement
+        return {"event_id": "steer-event"}
+
+    monkeypatch.setattr("distr.core.chat_turns.steer_turn", replace_turn)
+    monkeypatch.setattr("distr.core.chat_turns.update_event", discard)
+    result = turn_service.steer_active_turn(chat_id, "Keep the existing layout", expected_turn_id=44)
+    assert result == {"accepted": False, "reason": "active_turn_changed"}
+    assert not original.steering.drain() and not replacement.steering.drain()
+    assert discard.call_args.args == ("steer-event",)
+    assert discard.call_args.kwargs["status"] == "cancelled"
 
 
 def test_native_service_persists_direct_execution_identity_and_events(monkeypatch):

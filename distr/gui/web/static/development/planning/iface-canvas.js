@@ -76,6 +76,35 @@ export function createIfaceCanvas(opts) {
             return `<g class="iface-edge" data-kind="${esc(e.kind)}"><path class="erd-line" d="M${x1},${y1} L${x2},${y2}" marker-end="url(#iface-arrow)"/>${e.label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}">${esc(e.label)}</text>` : ''}</g>`;
         }).join('');
 
+    // Keep reciprocal and dense-hub captions distinct without changing navigation paths.
+    let labelsPlaced = false;
+    function placeEdgeLabels() {
+        if (labelsPlaced || !el.isConnected) return;
+        const occupied = model.nodes.map((n) => ({ x: n.x - 4, y: n.y - 4, width: n.w + 8, height: n.h + 8 }));
+        const overlaps = (a, b) => a.x < b.x + b.width + 4 && a.x + a.width + 4 > b.x && a.y < b.y + b.height + 4 && a.y + a.height + 4 > b.y;
+        for (const text of lines.querySelectorAll('.iface-edge text')) {
+            const path = text.parentElement.querySelector('path');
+            const length = path.getTotalLength();
+            const start = path.getPointAtLength(0), end = path.getPointAtLength(length);
+            const normal = { x: -(end.y - start.y) / (length || 1), y: (end.x - start.x) / (length || 1) };
+            const original = text.getBBox();
+            const dx = original.x - Number(text.getAttribute('x')), dy = original.y - Number(text.getAttribute('y'));
+            let placed = false;
+            for (const offset of [0, 16, -16, 32, -32, 48, -48, 64, -64, 80, -80]) {
+                for (const fraction of [.5, .4, .6, .3, .7, .2, .8]) {
+                    const point = path.getPointAtLength(length * fraction);
+                    const x = point.x + normal.x * offset, y = point.y + normal.y * offset - 6;
+                    const box = { x: x + dx, y: y + dy, width: original.width, height: original.height };
+                    if (occupied.some((other) => overlaps(box, other))) continue;
+                    text.setAttribute('x', String(x)); text.setAttribute('y', String(y));
+                    occupied.push(box); placed = true; break;
+                }
+                if (placed) break;
+            }
+        }
+        labelsPlaced = true;
+    }
+
     // ---- view ---------------------------------------------------------------------------
     function applyView() {
         stage.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
@@ -111,7 +140,8 @@ export function createIfaceCanvas(opts) {
     function sizeToWindow() {
         if (!el.isConnected) return;
         const top = viewport.getBoundingClientRect().top;
-        const height = Math.max(220, Math.round(availableBottom(el) - Math.max(0, top) - 16));
+        placeEdgeLabels();
+        const height = Math.max(240, Math.round(availableBottom(el) - Math.max(0, top) - 16));
         if (viewport.style.height !== `${height}px`) viewport.style.height = `${height}px`;
     }
     let frame = 0;
@@ -135,13 +165,19 @@ export function createIfaceCanvas(opts) {
         } else panel.innerHTML = '';
         opts.onSelect?.(node);
     }
-    function reveal(key) {
+    function reveal(key, { readable = false } = {}) {
         const n = model.byKey.get(key);
         if (!n) return;
-        const vw = viewport.clientWidth, vh = viewport.clientHeight;
-        const sx = n.x * view.zoom + view.x, sy = n.y * view.zoom + view.y;
-        if (sx < 0 || sy < 0 || sx + n.w * view.zoom > vw || sy + n.h * view.zoom > vh) {
-            view = { ...view, x: vw / 2 - (n.x + n.w / 2) * view.zoom, y: vh / 2 - (n.y + n.h / 2) * view.zoom };
+        const vw = viewport.clientWidth;
+        const dockHeight = Math.max(...[...el.querySelectorAll('.erd-dock')].map((dock) => dock.offsetHeight), 0);
+        const vh = Math.max(1, viewport.clientHeight - dockHeight - 20);
+        // Fit remains an overview. Keyboard navigation makes the focused page
+        // readable, while preserving a user's deliberate magnification above 100%.
+        const zoom = readable ? Math.max(1, view.zoom) : view.zoom;
+        const sx = n.x * zoom + view.x, sy = n.y * zoom + view.y;
+        if (zoom !== view.zoom || sx < 0 || sy < 0 || sx + n.w * zoom > vw || sy + n.h * zoom > vh) {
+            view = { zoom, x: vw / 2 - (n.x + n.w / 2) * zoom, y: vh / 2 - (n.y + n.h / 2) * zoom };
+            fitted = null;
             applyView();
         }
     }
@@ -181,12 +217,14 @@ export function createIfaceCanvas(opts) {
         if (e.metaKey || e.getModifierState?.('Meta')) zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
         else { view = { ...view, x: view.x - e.deltaX, y: view.y - e.deltaY }; applyView(); }
     }, { passive: false });
-    viewport.addEventListener('focusin', (e) => { const node = e.target.closest?.('[data-node]'); if (node) reveal(node.dataset.node); });
+    viewport.addEventListener('focusin', (e) => {
+        const node = e.target.closest?.('[data-node]');
+        if (node) reveal(node.dataset.node, { readable: node.matches(':focus-visible') });
+    });
     viewport.addEventListener('keydown', (e) => {
         const node = e.target.closest?.('[data-node]');
         if (node && e.key === 'Enter') { e.preventDefault(); opts.onOpen?.(model.byKey.get(node.dataset.node)); return; }
         if (node && e.key === ' ') { e.preventDefault(); select(node.dataset.node, { focus: true }); return; }
-        if (e.key === 'Escape' && selectedKey) { e.preventDefault(); select(null); return; }
         const step = e.shiftKey ? 160 : 60;
         const pan = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
         if (pan && !node) { e.preventDefault(); view = { ...view, x: view.x + pan[0], y: view.y + pan[1] }; applyView(); return; }
@@ -195,6 +233,13 @@ export function createIfaceCanvas(opts) {
         else if (e.key === '0') { e.preventDefault(); fit(); }
     });
     el.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && selectedKey && !e.defaultPrevented) {
+            e.preventDefault();
+            const key = selectedKey;
+            select(null);
+            byKeyEl.get(key)?.focus({ preventScroll: true });
+            return;
+        }
         if (e.target.matches('input, select, textarea')) return;
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); (e.shiftKey ? opts.onRedo : opts.onUndo)?.(); }
     });
@@ -233,7 +278,7 @@ export function createIfaceCanvas(opts) {
     }
 
     return {
-        el, dock, layout, fit, zoomAt, resetZoom, select, setHistory, setShot,
+        el, dock, layout, fit, zoomAt, resetZoom, reveal, select, setHistory, setShot,
         get view() { return view; },
         get selectedKey() { return selectedKey; },
         mounted() {

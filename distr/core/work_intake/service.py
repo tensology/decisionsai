@@ -1282,6 +1282,7 @@ class OrchestratorIntakeService:
                     payload = {}
             decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
             intake = payload.get("intake") if isinstance(payload.get("intake"), dict) else {}
+            metadata = intake.get("metadata") if isinstance(intake.get("metadata"), dict) else {}
             status = str(event.get("status") or decision.get("status") or "").strip().lower()
             action = str(decision.get("action") or "").strip().lower()
             needs = bool(payload.get("needs_attention")) or status in {
@@ -1302,6 +1303,10 @@ class OrchestratorIntakeService:
                 "event_id": event.get("id"),
                 "created_at": event.get("created_at"),
                 "source": intake.get("source") or event.get("source"),
+                "source_message_id": intake.get("source_message_id"),
+                "source_thread_id": intake.get("source_thread_id"),
+                "source_user_id": intake.get("source_user_id"),
+                "subject": metadata.get("subject"),
                 "text": intake.get("user_text") or intake.get("transcript") or event.get("summary") or "",
                 "action": action,
                 "status": status or "triaged",

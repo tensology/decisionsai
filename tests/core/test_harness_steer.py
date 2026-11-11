@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
 from distr.core.db import Base
+from distr.core.db.projects import Project
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
 from distr.core.project_cli_backends.harness import is_steerable_backend, steer_harness
 from distr.core.workflow.coordination_plan import render_coordination_map
@@ -53,18 +56,21 @@ def test_steer_harness_codex_queues():
     assert result["method"] == "queued"
 
 
-def test_apply_run_harness_steer_persists_queue(tmp_path, monkeypatch):
+@pytest.mark.parametrize("backend_id", ["codex", "pi"])
+def test_apply_run_harness_steer_persists_queue(tmp_path, monkeypatch, backend_id):
     factory = _factory(tmp_path)
     session = factory()
     wf = AutoWorkflow(name="Steer WF")
-    session.add(wf)
+    project = Project(name="Steer project", folder_location=str(tmp_path))
+    session.add_all([wf, project])
     session.flush()
     run = AutoWorkflowRun(
         workflow_id=wf.id,
         status="running",
         run_data=json.dumps(
             {
-                "execution_route": {"backend": "codex", "model": "auto"},
+                "execution_route": {"backend": backend_id, "model": "auto"},
+                "project_id": project.id,
                 "execution_session_id": 99,
                 "coordination_plan": {
                     "assignments": {
@@ -90,8 +96,16 @@ def test_apply_run_harness_steer_persists_queue(tmp_path, monkeypatch):
     monkeypatch.setattr("distr.core.kanban.project_execution.append_execution_event", MagicMock())
     monkeypatch.setattr("distr.core.orchestrator.emit_event", MagicMock(return_value=1))
     monkeypatch.setattr("distr.core.workflow.standards_memory.capture_feedback_as_standard", MagicMock())
+    monkeypatch.setattr("distr.core.workflow.steering_memory.record_run_steering_feedback", MagicMock())
+
+    interactive_rpc = MagicMock(is_alive=True)
+    interactive_rpc.steer.return_value = True
+    lookup = MagicMock(return_value=interactive_rpc)
+    monkeypatch.setattr("distr.core.pi_rpc.get_rpc_session", lookup)
 
     result = apply_run_harness_steer(run_id, "Stop refactoring unrelated files")
+    lookup.assert_not_called()
+    interactive_rpc.steer.assert_not_called()
     assert result["success"] is True
     assert result["delivered"] is False
     assert result["method"] == "queued"
@@ -131,3 +145,58 @@ def _session_ctx(factory):
         raise
     finally:
         session.close()
+
+
+def test_workflow_steer_route_rejects_mismatched_workflow_and_terminal_run(tmp_path, monkeypatch):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.workflow_execution import register_routes
+
+    factory = _factory(tmp_path)
+    with _session_ctx(factory) as db:
+        owner = AutoWorkflow(name='Owner')
+        other = AutoWorkflow(name='Other')
+        db.add_all([owner, other])
+        db.flush()
+        active = AutoWorkflowRun(workflow_id=owner.id, status='running', run_data='{}')
+        completed = AutoWorkflowRun(workflow_id=owner.id, status='completed', run_data='{}')
+        db.add_all([active, completed])
+        db.commit()
+        owner_id, other_id, active_id, completed_id = owner.id, other.id, active.id, completed.id
+
+    monkeypatch.setattr('distr.core.workflow.service.get_session', lambda: _session_ctx(factory))
+    steer = MagicMock(return_value={'success': False, 'error': 'Unexpected worker call'})
+    monkeypatch.setattr('distr.core.project_cli_backends.harness.steer_harness', steer)
+    app = FastAPI()
+    router = APIRouter(prefix='/api')
+    register_routes(router, None)
+    app.include_router(router)
+
+    with TestClient(app) as client:
+        mismatch = client.post(f'/api/workflows/{other_id}/runs/{active_id}/steer', json={'message': 'Check the original request'})
+        terminal = client.post(f'/api/workflows/{owner_id}/runs/{completed_id}/steer', json={'message': 'Check the original request'})
+    assert mismatch.status_code == 404
+    assert terminal.status_code == 409
+    steer.assert_not_called()
+
+
+def test_next_pi_dispatch_keeps_the_complete_queued_instruction_inside_the_prompt_limit():
+    from distr.core.workflow.step_executor import StepExecutorMixin
+
+    long_steer = 'Keep all verified files. ' * 150 + 'Final constraint: report the change without deploying it.'
+    pending = [
+        {'ts': 1, 'message': 'An instruction already delivered', 'delivered': True},
+        {'ts': 2, 'message': 'A steer already applied', 'applied_to_prompt': True},
+        {'ts': 3, 'message': long_steer},
+        {'ts': 4, 'message': 'Limit the change to the approved project.'},
+    ]
+    original = 'Project identity\n' + 'Historical context\n' * 2000 + 'Current task'
+    prompt, included = StepExecutorMixin._prepare_project_cli_dispatch_prompt(original, pending, max_chars=12000)
+
+    assert len(prompt) <= 12000
+    assert prompt.startswith('Project identity')
+    assert 'Current task' in prompt
+    assert long_steer in prompt and pending[3]['message'] in prompt
+    assert 'An instruction already delivered' not in prompt
+    assert 'A steer already applied' not in prompt
+    assert included == [(4, pending[3]['message']), (3, long_steer)]

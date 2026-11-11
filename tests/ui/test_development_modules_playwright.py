@@ -42,6 +42,8 @@ def install_plan(page, *, reject_save=False, delay_home=False):
             route.fulfill(json=workspace if request.method == "POST" else {"items": [workspace]})
         elif path.endswith("/plan-workspaces/101"):
             route.fulfill(json=workspace)
+        elif path.endswith("/plan-workspaces/101/conversation"):
+            route.fulfill(json={"chat_id": 501, "status": "idle", "messages": [], "attachments": []})
         else:
             route.fallback()
     page.route("**/api/workflows/studio/plan-**", handler)
@@ -89,28 +91,76 @@ def test_failed_optional_connector_does_not_blank_local_catalog(page: Page):
     page.route("**/api/tickets/external-boards", lambda route: route.fulfill(status=503, json={"detail": "Unavailable"}))
     page.goto(BASE + "/development/workflows/")
     expect(page.locator('[data-workflow-card="44"]')).to_be_visible()
-    expect(page.locator("#board-task-tree")).to_contain_text("Decisions delivery")
+    expect(page.locator("#pinned-board-tree")).to_contain_text("Decisions delivery")
     expect(page.locator("#studio-toast")).to_contain_text("Available data remains usable")
 
 
+@pytest.mark.parametrize("width", [390, 1440])
+def test_pin_migration_failure_preserves_catalog_and_local_pin(page: Page, tmp_path, width):
+    _install_api(page, [], terminal_session=False)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.add_init_script("""        if (!localStorage.getItem('decisions-development-pinned-boards')) {
+            localStorage.setItem('decisions-development-pinned-boards', JSON.stringify(['decisions:70']));
+        }
+    """)
+    attempted = []
+    fail = True
+
+    def pins(route):
+        if route.request.method == "PUT":
+            attempted.append(route.request.post_data_json)
+            if fail:
+                route.fulfill(status=503, json={"detail": "Pin migration unavailable"})
+            else:
+                route.fulfill(json={"board_keys": ["decisions:70"]})
+        else:
+            route.fulfill(json={"board_keys": None})
+
+    page.route("**/api/workflows/studio/sidebar/pins", pins)
+    page.goto(BASE + "/development/workflows/")
+    expect(page.locator('[data-workflow-card="44"]')).to_be_visible()
+    expect(page.locator("#studio-toast")).to_contain_text("Available data remains usable")
+    if width == 390:
+        page.locator("#sidebar-open").click()
+    pinned = page.locator("#pinned-board-tree")
+    expect(pinned.get_by_text("Decisions delivery", exact=True)).to_be_visible()
+    expect(page.locator("#board-task-tree").get_by_text("Empty delivery", exact=True)).to_be_visible()
+    assert attempted == [{"board_keys": ["decisions:70"]}]
+    page.screenshot(path=tmp_path / f"pin-migration-failed-{width}.png", animations="disabled")
+    pinned.get_by_role("button", name="Implement ticket DEV-42", exact=False).click()
+    expect(page.locator("#task-prompt")).to_be_visible()
+
+    page.screenshot(path=tmp_path / f"pin-migration-thread-{width}.png", animations="disabled")
+
+    fail = False
+    page.goto(BASE + "/development/workflows/")
+    expect(page.locator('[data-workflow-card="44"]')).to_be_visible()
+    if width == 390:
+        page.locator("#sidebar-open").click()
+    expect(pinned.get_by_text("Decisions delivery", exact=True)).to_be_visible()
+    expect(page.locator("#studio-toast")).not_to_contain_text("Available data remains usable")
+    assert attempted == [{"board_keys": ["decisions:70"]}] * 2
+    page.screenshot(path=tmp_path / f"pin-migration-recovered-{width}.png", animations="disabled")
+
+
 @pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
-def test_feature_views_are_independent_and_render_without_script_errors(page: Page, width, height):
+def test_feature_views_are_independent_and_render_without_script_errors(page: Page, tmp_path, width, height):
     install_plan(page)
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.set_viewport_size({"width": width, "height": height})
-    output = ROOT / "artifacts/development-refactor-2026-09-05"
-    output.mkdir(exist_ok=True)
     for name, route, selector in [
-        ("planning", "boards/jira/jira-1/plan/", "#plan-editor"),
+        ("planning", "boards/jira/jira-1/plan/", "#plan-language-input"),
         ("incoming", "incoming/", "#incoming-list"),
-        ("automations", "automations/", "#scheduled-prompt-input"),
+        ("automations", "automations/", "#scheduled-list"),
         ("workflows", "workflows/", '[data-workflow-card="44"]'),
         ("terminals", "terminals/", '[data-terminal-project="7"]'),
         ("reports", "reports/", "#reports-workspace"),
         ("threads", "threads/17/", "#task-prompt"),
     ]:
         page.goto(BASE + "/development/" + route)
+        if name == "incoming":
+            page.get_by_role("tab", name="WhatsApp", exact=False).click()
         expect(page.locator(selector)).to_be_visible()
         if name == "incoming":
             expect(page.locator("#incoming-list")).to_contain_text("Menu Project client")
@@ -121,7 +171,7 @@ def test_feature_views_are_independent_and_render_without_script_errors(page: Pa
             page.locator("#sidebar-open").click()
             expect(page.locator("#studio-sidebar")).to_have_class(re.compile(r"\bopen\b"))
             page.locator("#sidebar-close").click()
-        page.screenshot(path=str(output / f"{name}-{width}.png"), full_page=True, animations="disabled")
+        page.screenshot(path=str(tmp_path / f"{name}-{width}.png"), full_page=True, animations="disabled")
         if width < 680:
             assert page.locator("#studio-sidebar").evaluate("node => node.getBoundingClientRect().right <= 0")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), name
@@ -186,37 +236,94 @@ def test_reports_tabs_switch_and_survive_run_outage(page: Page, width, height):
 
 
 @pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
-def test_file_review_and_reports_have_independent_actions(page: Page, width, height):
-    workspace, requests = install_plan(page)
+def test_plan_document_imports_reviewed_file(page: Page, tmp_path, width, height):
+    workspace, _ = install_plan(page)
     workspace["items"][0]["file_path"] = "/tmp/fixture/planning/brief.md"
+    workspace["items"][0]["file_sync_error"] = "The project file changed since the last save."
     imports = []
     def file_review(route):
         if route.request.method == "POST":
             imports.append(route.request.post_data_json)
-            workspace["items"][0].update(content="Externally edited brief", revision_count=2)
+            workspace["items"][0].update(content="Externally edited brief", revision_count=2, file_sync_error=None)
             route.fulfill(json=workspace["items"][0])
         else:
             route.fulfill(json={"item_id": 201, "saved_content": "Original brief", "file_content": "Externally edited brief", "file_hash": "reviewed-hash", "expected_revision": 1})
     page.route("**/api/workflows/studio/plan-items/201/file-review", file_review)
     page.set_viewport_size({"width": width, "height": height})
-    open_plan(page)
-    page.locator("#plan-review-file").click()
+    page.goto(BASE + "/development/boards/jira/jira-1/plan/")
+    expect(page.locator("#plan-language-input")).to_be_editable()
+    page.get_by_role("button", name="Documents", exact=True).click()
+    expect(page.locator(".plan-inline-text")).to_contain_text("Original brief")
+    page.get_by_role("button", name="Review file changes").click()
     expect(page.locator(".plan-file-dialog")).to_be_visible()
     expect(page.locator(".plan-file-dialog")).to_contain_text("Original brief")
     expect(page.locator(".plan-file-dialog")).to_contain_text("Externally edited brief")
-    output = ROOT / "artifacts/development-refactor-2026-09-05"
-    page.screenshot(path=str(output / f"file-review-{width}.png"), full_page=True, animations="disabled")
+    page.screenshot(path=str(tmp_path / f"file-review-{width}.png"), full_page=True, animations="disabled")
     page.get_by_role("button", name="Import reviewed file").click()
-    expect(page.locator("#plan-editor")).to_have_value("Externally edited brief")
+    expect(page.locator(".plan-inline-text")).to_contain_text("Externally edited brief")
+    expect(page.get_by_role("button", name="Review file changes")).to_have_count(0)
     assert imports == [{"expected_revision": 1, "file_hash": "reviewed-hash", "action": "import"}]
 
 
-def test_empty_workflow_cannot_be_started_from_the_library(page: Page):
-    _install_api(page, [])
-    page.route("**/api/workflows?*", lambda route: route.fulfill(json=[{"id": 44, "name": "Empty workflow", "steps": [], "step_count": 0}]))
+def test_empty_workflow_can_be_opened_for_editing(page: Page):
+    requests = []
+    _install_api(page, requests)
+    workflow = {"id": 44, "name": "Empty workflow", "steps": [], "step_count": 0}
+    page.route("**/api/workflows?*", lambda route: route.fulfill(json=[workflow]))
+    page.route("**/api/workflows/44", lambda route: route.fulfill(json=workflow))
     page.goto(BASE + "/development/workflows/")
-    expect(page.get_by_role("button", name="Start Empty workflow")).to_be_disabled()
-    expect(page.locator('[data-workflow-card="44"]')).to_contain_text("Add a step before running")
+    card = page.locator('[data-workflow-card="44"]')
+    expect(card).to_contain_text("Add a step before running")
+    expect(card.get_by_role("button", name="Start", exact=False)).to_have_count(0)
+    card.get_by_role("button", name="Edit Empty workflow", exact=True).click()
+    expect(page.get_by_role("button", name="Add step", exact=True)).to_be_visible()
+    assert ("POST", "/api/workflows/44/run") not in requests
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_workflow_preview_outage_waits_for_explicit_retry(page: Page, tmp_path, width):
+    _install_api(page, [])
+    page.set_viewport_size({"width": width, "height": 900})
+    workflow = {"id": 44, "name": "Delivery workflow", "step_count": 1}
+    page.route("**/api/workflows?*", lambda route: route.fulfill(json=[workflow]))
+    page.add_init_script("""        const originalFetch = window.fetch.bind(window);
+        window.fetch = async (url, ...args) => {
+            if (new URL(url, location.href).pathname === '/api/workflows/44' && !window.releasePreview) {
+                await new Promise(resolve => { window.releasePreview = resolve; });
+            }
+            return originalFetch(url, ...args);
+        };
+    """)
+    attempts = []
+
+    def detail(route):
+        attempts.append(route.request.url)
+        if len(attempts) == 1:
+            route.fulfill(status=503, json={"detail": "Preview unavailable"})
+        else:
+            route.fulfill(json={**workflow, "steps": [{"id": 1, "name": "Verify delivery", "instruction": "Review the result."}]})
+
+    page.route("**/api/workflows/44", detail)
+    page.goto(BASE + "/development/workflows/")
+    card = page.locator('[data-workflow-card="44"]')
+    expect(card).to_contain_text("Loading steps")
+    expect(card).not_to_contain_text("Ready")
+    page.screenshot(path=tmp_path / f"workflow-preview-loading-{width}.png")
+    page.wait_for_function("typeof window.releasePreview === 'function'")
+    page.evaluate("window.releasePreview()")
+    expect(card).to_contain_text("Step preview unavailable")
+    assert len(attempts) == 1
+    page.screenshot(path=tmp_path / f"workflow-preview-unavailable-{width}.png")
+    card.get_by_role("button", name="Edit Delivery workflow", exact=True).click()
+    page.get_by_role("button", name="Loop", exact=True).click()
+    expect(page.locator(".workflow-loop-node")).to_contain_text("Verify delivery")
+    assert len(attempts) == 2
+    page.screenshot(path=tmp_path / f"workflow-preview-recovered-{width}.png")
+    page.get_by_role("button", name="Back to workflows", exact=True).click()
+    expect(card).to_contain_text("Verify delivery")
+    expect(card).to_contain_text("Ready")
+    assert len(attempts) == 2
+    page.screenshot(path=tmp_path / f"workflow-preview-ready-{width}.png")
 
 
 @STALE_PLAN_EDITOR

@@ -1,11 +1,48 @@
 from contextlib import contextmanager
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base, WhatsAppMessage, WhatsAppPhoneLink
 from distr.core.db.kanban import KanbanBoard
 from distr.core.incoming import service as development_incoming
+from distr.core.kanban import jira_intake
+from distr.core import tensology_client
+
+
+@pytest.mark.parametrize(
+    ("response", "expected_error"),
+    [
+        ({"emails": [], "total": 0}, ""),
+        ({"messages": []}, "Mailshot could not be refreshed. Try again."),
+        (tensology_client.TensologyApiError("unavailable", status=503), "Mailshot could not be refreshed. Try again."),
+        (tensology_client.TensologyApiError("expired", status=401), "Reconnect Tensology in Settings to load Mailshot."),
+        (tensology_client.TensologyApiError("missing", code="not_configured"), "Connect Tensology in Settings to load Mailshot."),
+    ],
+)
+def test_mailshot_health_distinguishes_empty_inbox_from_failures(monkeypatch, response, expected_error):
+    class Client:
+        def get(self, path, query):
+            assert path == "mail/messages"
+            assert query == {"limit": 30, "page": 1}
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    def configure(*, source):
+        if isinstance(response, tensology_client.TensologyApiError) and response.code == "not_configured":
+            raise response
+        return Client()
+
+    monkeypatch.setattr(tensology_client, "configured_tensology_client", configure)
+    rows, health = development_incoming._load_mailshot_inbox(max_results=100)
+    assert rows == []
+    assert health["connected"] is (not expected_error)
+    assert health["error"] == expected_error
+    if expected_error:
+        assert health["error_code"] == ("connection_required" if "Settings" in expected_error else "refresh_failed")
+    assert jira_intake.fetch_mailshot_intake_messages(limit=30) == []
 
 
 def test_development_incoming_returns_whatsapp_and_readable_gmail_threads(monkeypatch):
@@ -31,6 +68,7 @@ def test_development_incoming_returns_whatsapp_and_readable_gmail_threads(monkey
             "threadId": "gmail-thread-1",
             "subject": "Menu launch review",
             "from": "Client <client@example.com>",
+            "reply_to": "Support <support@example.com>",
             "to": "Paul <paul@example.com>",
             "date": "Tue, 25 Aug 2026 11:00:00 +0000",
             "snippet": "Please review the launch copy",
@@ -57,7 +95,13 @@ def test_development_incoming_returns_whatsapp_and_readable_gmail_threads(monkey
     )
     monkeypatch.setattr(
         "distr.core.work_intake.get_work_intake_service",
-        lambda: type("Intake", (), {"list_inbox": lambda self, limit: [{"event_id": 9, "source": "gmail", "text": "Approve the revised menu copy", "created_at": "2026-08-25T09:00:00Z", "needs_attention": True}]})(),
+        lambda: type("Intake", (), {"list_inbox": lambda self, limit: [
+            {"event_id": 9, "source": "gmail", "text": "Approve the revised menu copy",
+             "created_at": "2026-08-25T09:00:00Z", "source_message_id": "gmail-trashed",
+             "source_thread_id": "gmail-thread-trashed", "subject": "Website error",
+             "ticket_id": 306, "needs_attention": True},
+            {"event_id": 10, "source": "gmail", "source_message_id": "gmail-1", "ticket_id": 307},
+        ]})(),
     )
 
     with session_scope() as session:
@@ -92,12 +136,27 @@ def test_development_incoming_returns_whatsapp_and_readable_gmail_threads(monkey
     assert gmail["conversation_label"] == "Menu launch review"
     assert gmail["text"] == "Please review the launch copy."
     assert gmail["unread"] is True
+    assert gmail['reply_to'] == 'Support <support@example.com>'
+    assert gmail['from_me'] is False
+    assert gmail["ticket_id"] == 307
+    fallback = next(item for item in result["items"] if item["key"] == "intake:9")
+    assert (fallback["subject"], fallback["source_thread_id"], fallback["source_message_id"], fallback["ticket_id"]) == (
+        "Website error", "gmail-thread-trashed", "gmail-trashed", 306,
+    )
     assert result["channels"]["gmail"] == {"connected": True, "error": ""}
     mailshot = next(item for item in result["items"] if item["key"] == "mailshot:mailshot-1")
     assert mailshot["conversation_label"] == "Tensology deployment"
     assert mailshot["attachments"] == [{"filename": "report.pdf", "message_id": "mailshot-1", "provider": "mailshot"}]
     assert result["channels"]["mailshot"] == {"connected": True, "error": ""}
     assert result["links"][0]["label"] == "Menu client"
+
+    first = development_incoming.list_whatsapp_history("menu@g.us", limit=1)
+    assert first["has_older"]
+    assert first["items"][0]["source_message_id"] == "wa-1"
+    second = development_incoming.list_whatsapp_history("menu@g.us", before_id=first["items"][0]["database_id"], limit=1)
+    assert not second["has_older"]
+    assert [row["source_message_id"] for row in second["items"]] == ["wa-out"]
+    assert second["items"][0]["media_type"] == "audio"
 
 
 def test_mail_list_snippet_strips_html_for_gmail_and_mailshot():

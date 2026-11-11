@@ -3205,6 +3205,11 @@ class KanbanTicketTool(BaseTool):
                     f"Ticket #{ticket_id} not found.",
                 )
 
+            from distr.core.planning.prerequisites import PlanPrerequisiteError, require_plan_prerequisites
+            try:
+                require_plan_prerequisites(t.id, session=s)
+            except PlanPrerequisiteError as exc:
+                return voice_then_reference('That Plan task cannot start until its prerequisites are accepted.', str(exc))
             title = t.title
             description = t.description or ""
             ticket_id_val = t.id

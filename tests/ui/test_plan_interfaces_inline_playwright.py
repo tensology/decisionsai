@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import expect
 
 from tests.ui.test_development_harness_playwright import _install_api
 from tests.ui.test_plan_inline_edit_playwright import Backend, PLAN_URL
@@ -51,7 +52,7 @@ def _open(page, w=1440, h=900, **kw):
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(PLAN_URL)
     page.get_by_role("button", name="Interfaces", exact=True).click()
-    page.locator('#plan-preview.plan-canvas-surface').wait_for()
+    page.locator('#plan-preview.plan-canvas-surface, #plan-preview .iface-canvas').first.wait_for()
     page.wait_for_timeout(700)
     return b, errors
 
@@ -120,6 +121,91 @@ def test_description_edit_markdown_mode_and_toolbar(page):
     assert not errors, errors
 
 
+@pytest.mark.parametrize('w,h', SIZES + [(1280, 900)])
+def test_description_keeps_edits_made_during_save(page, w, h):
+    backend, errors = _open(page, w, h)
+    section = page.locator('.plan-page-description')
+    section.locator('[data-desc-mode="raw"]').click()
+    raw = section.locator('textarea.plan-inline-raw')
+    save = section.get_by_role('button', name='Save', exact=True)
+    status = section.locator('.plan-inline-state')
+    first = 'Lists every **customer**.'
+    submitted = first + '\n\n- Paged by 50'
+    follow_up = submitted + '\n- Sorted by name'
+    endpoint = '**/api/workflows/studio/plan-items/13'
+    held = []
+    page.route(endpoint, lambda route: held.append(route))
+
+    raw.fill(submitted)
+    save.click()
+    expect(status).to_have_attribute('data-state', 'saving')
+    raw.fill(follow_up)
+    backend.route(held[0])
+    page.unroute(endpoint)
+    expect(raw).to_have_value(follow_up)
+    expect(status).to_have_text('Unsaved changes')
+    expect(section.locator('.plan-inline-tick')).to_be_hidden()
+    assert 'Sorted by name' not in backend.saves[-1]['content']
+    page.locator('#plan-preview').evaluate('node => { node.scrollTop = node.scrollHeight; }')
+    assert status.evaluate('''node => {
+        const dock = document.querySelector('.plan-pinned-dock').getBoundingClientRect();
+        return node.getBoundingClientRect().bottom <= dock.top - 4;
+    }'''), 'The save status must scroll clear of the pinned edit dock'
+    OUT.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(OUT / f'description-edit-during-save-{w}.png'))
+
+    save.click()
+    expect(status).to_have_text('Saved')
+    assert backend.saves[-1]['expected_revision'] == 2
+    assert backend.saves[-1]['content'] == PAGE.replace(
+        '  #| Lists every **customer**.',
+        '  #| Lists every **customer**.\n  #|\n  #| - Paged by 50\n  #| - Sorted by name',
+    )
+    expect(raw).to_have_value(follow_up)
+    page.screenshot(path=str(OUT / f'description-edit-follow-up-saved-{w}.png'))
+    assert not errors, errors
+
+
+@pytest.mark.parametrize('w,h', SIZES + [(1280, 900)])
+def test_description_reads_and_saves_the_selected_page(page, w, h):
+    orders = 'screen "Orders" id=orders route=/orders\n  #| Lists recent orders.\n  heading "Orders"\n'
+    backend, errors = _open(page, w, h, content=PAGE + orders)
+
+    def open_page(name):
+        node = page.locator('.iface-node', has_text=name)
+        node.focus()
+        node.press('Enter')
+        page.get_by_role('button', name='Planning', exact=True).click()
+
+    open_page('Customers')
+    page.locator('[data-desc-mode="raw"]').click()
+    raw = page.locator('.plan-page-description textarea.plan-inline-raw')
+    raw.fill('Customers draft.')
+    page.get_by_role('button', name='Back to all pages').click()
+    open_page('Orders')
+    page.locator('[data-desc-mode="raw"]').click()
+    expect(raw).to_have_value('Lists recent orders.')
+    raw.fill('Lists recent orders.\n\n- Show the newest orders first.')
+    save = page.locator('.plan-page-description .plan-inline-save')
+    save.click()
+    expect(page.locator('.plan-page-description .plan-inline-state')).to_have_text('Saved')
+    assert backend.saves[-1]['content'] == PAGE + orders.replace(
+        '  #| Lists recent orders.', '  #| Lists recent orders.\n  #|\n  #| - Show the newest orders first.',
+    )
+    page.locator('#plan-preview').evaluate('node => { node.scrollTop = node.scrollHeight; }')
+    page.screenshot(path=str(OUT / f'description-selected-page-saved-{w}.png'))
+    page.get_by_role('button', name='Back to all pages').click()
+    open_page('Customers')
+    expect(raw).to_have_value('Customers draft.')
+    save.click()
+    expect(page.locator('.plan-page-description .plan-inline-state')).to_have_text('Saved')
+    assert backend.saves[-1]['expected_revision'] == 2
+    assert backend.saves[-1]['content'] == backend.saves[-2]['content'].replace(
+        '  #| Lists every **customer**.', '  #| Customers draft.',
+    )
+    assert not errors, errors
+
+
 def test_description_stale_revision_shows_conflict_banner(page):
     backend, _ = _open(page)
     _desc(page).wait_for()
@@ -163,7 +249,7 @@ def _drawer_geometry(page):
 def test_advanced_drawer_cancel_and_apply(page, w, h):
     backend, errors = _open(page, w, h)
     page.locator('.plan-advanced-open').click()
-    page.wait_for_function("() => document.querySelector('.plan-drawer-backdrop.open') && Math.abs(document.querySelector('.plan-drawer').getBoundingClientRect().right - innerWidth) < 1", timeout=3000)
+    page.wait_for_function("() => document.querySelector('.plan-drawer-backdrop.open') && Math.abs(document.querySelector('.plan-drawer').getBoundingClientRect().right - innerWidth) < 0.1", timeout=3000)
     g = _drawer_geometry(page)
     assert 0 <= g["d"][0] and abs(g["d"][2] - g["iw"]) < 1 and g["d"][1] == 0 and abs(g["d"][3] - g["ih"]) < 1, g
     assert abs(g["t"][1] - g["head"]) <= 1 and abs(g["t"][3] - g["foot"]) <= 1, g         # text box fills the body

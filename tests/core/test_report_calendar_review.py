@@ -77,6 +77,24 @@ def test_exact_time_union_does_not_add_overlaps_gaps_or_rounding():
     assert abs(union_seconds(spans)-900.1)<0.000001
 
 
+def test_calendar_only_project_and_review_hold_remain_visible_without_new_coding_project(tmp_path):
+    data,path,snapshot=fixture(tmp_path)
+    data['project_map']['1000183']=183
+    data['calendar'][0]['project_id']=183
+    data['calendar'][0]['billable']=False
+    data['evidence']['1'].update(project_name='Crystal Logic',timing_basis='Confirmed meeting attendance.',
+                                description_status='needs_review',invoice_reason='Implementation remains under review.')
+    path.write_text(json.dumps(data))
+    result=apply_review(snapshot,path=path)
+    block=next(b for b in result['blocks'] if b.get('calendar_event_id')==1)
+    assert block['project_id']==1000183
+    assert block['project_name']=='Crystal Logic'
+    assert block['description_status']==block['invoice_status']=='needs_review'
+    assert block['invoice_reason']=='Implementation remains under review.'
+    assert block['timing_basis']=='Confirmed meeting attendance.'
+    assert {'id':1000183,'name':'Crystal Logic'} in result['projects']
+
+
 def test_synchronized_calendar_scope_does_not_mix_internal_or_unreviewed_raw_time(tmp_path):
     data,path,snapshot=fixture(tmp_path)
     data['scope']='synchronized_calendar';path.write_text(json.dumps(data))

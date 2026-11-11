@@ -84,6 +84,36 @@ def test_future_manual_project_choice_wins_and_invalidates_invoice_readiness(tmp
     assert result['project_id'] == 22 and result['invoice_status'] == 'needs_review'
 
 
+def test_evidenced_gap_is_omitted_and_mixed_project_work_stays_on_billing_hold(tmp_path):
+    from distr.core.reports.entry_reviews import apply_billing_policy
+    from distr.core.reports.month import invoice_eligible
+
+    original = block()
+    segments = [
+        {'start': '2026-10-23T12:00:00Z', 'end': '2026-10-23T12:04:00Z'},
+        {'start': '2026-10-23T12:04:00Z', 'end': '2026-10-23T12:07:00Z',
+         'exclude': True, 'reason': 'Gap between completed source turns.',
+         'evidence': [{'id': 'pi_local:reused#L12', 'quote': 'End of first turn'}]},
+        {'start': '2026-10-23T12:07:00Z', 'end': '2026-10-23T12:10:00Z', 'project_id': 22},
+    ]
+    path = store(tmp_path, original, review(
+        segments=segments, invoice_status='needs_review', billing_review_hold=True, description_verified=True))
+    payload = json.loads(path.read_text())
+    payload['project_billing'] = {'22': {'mode': 'non_billable', 'checked_at': '2026-11-09',
+                                         'basis': 'Project standing billing setting.'}}
+    path.write_text(json.dumps(payload))
+    rows = apply_invoice_reviews([original], {21: {}, 22: {}}, path=path)
+    assert [r['project_id'] for r in rows] == [21, 22]
+    assert sum((r['end'] - r['start']).total_seconds() for r in rows) == 420
+    assert all(r['invoice_status'] == 'needs_review' and not invoice_eligible(r)
+               for r in apply_billing_policy(rows, path=path))
+
+    segments[1].pop('evidence')
+    path = store(tmp_path, original, review(segments=segments, invoice_status='needs_review'))
+    rows = apply_invoice_reviews([original], {21: {}, 22: {}}, path=path)
+    assert len(rows) == 1 and rows[0]['end'] == original['end']
+
+
 def test_missing_project_or_missing_evidence_cannot_be_made_invoice_ready(tmp_path):
     original = block()
     for row in [review(project_id=999), review(project_id=0), review(evidence=[]), review(reviewed_at='')]:

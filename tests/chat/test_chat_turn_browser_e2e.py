@@ -183,7 +183,7 @@ def test_turn_panel_realtime_steer_refresh_and_terminal_recovery(page: Page, vie
         expect(panel).to_contain_text("I’m working through that now.")
         expect(panel).to_contain_text("Inspect project files")
         expect(page.locator("#messageInput")).to_be_enabled()
-        expect(page.locator("#messageInput")).to_have_attribute("placeholder", "Steer the active work…")
+        expect(page.locator("#messageInput")).to_have_attribute("placeholder", "Steer…")
         expect(page.locator("#turnStopButton")).to_be_visible()
         expect(page.locator("#sendButton")).not_to_have_attribute("title", "Stop")
         expect(panel.locator(".turn-panel-phase")).to_have_text("Inspect project files")

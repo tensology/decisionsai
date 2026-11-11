@@ -220,7 +220,7 @@ def test_failed_media_handoff_keeps_proposal_pending(monkeypatch):
     proposal = {'id': 'tensology:89', 'title': 'Attachment handoff',
                 'project': {'name': 'Project'}, 'attachments': []}
     client = Mock()
-    client.get.return_value = {**proposal, 'id': 89}
+    client.get.return_value = {**proposal, 'id': 89, 'status':'pending'}
     monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **k: client)
     monkeypatch.setattr('distr.core.tensology_client._resolve_tensology_project', lambda p: {'id': 7})
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', lambda **k: 123)
@@ -357,7 +357,10 @@ def test_proposal_thread_preserves_project_prompt_and_actions_upstream(monkeypat
     calls = []
     writes = []
     receipts = []
+    source_contexts = []
     monkeypatch.setattr(proposals_mod, '_record_proposal_handoff', lambda cid, proposal, **kwargs: receipts.append(cid))
+    monkeypatch.setattr('distr.core.incoming.source_context.register_source_context',
+                        lambda cid, proposal: source_contexts.append((cid, proposal['project_id'])))
     monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {
         'conversational_llm_provider': 'ollama', 'conversational_llm_model': 'local-test'})
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', lambda **kwargs: (calls.append(kwargs) or 123))
@@ -366,7 +369,7 @@ def test_proposal_thread_preserves_project_prompt_and_actions_upstream(monkeypat
                 'tasks': ['Check spelling'], 'project_id': 7, 'source': 'gmail', 'participant': 'Client'}
     from unittest.mock import Mock
     client = Mock()
-    client.get.return_value = {**proposal, 'id': 45, 'project': {'id': 70, 'name': 'Merrypak'}, 'attachments': []}
+    client.get.return_value = {**proposal, 'id': 45, 'status':'pending', 'project': {'id': 70, 'name': 'Merrypak'}, 'attachments': []}
     monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: client)
     monkeypatch.setattr('distr.core.tensology_client._resolve_tensology_project', lambda payload: {'id': 7})
     assert proposals_mod.create_proposal_thread(proposal) == 123
@@ -379,6 +382,7 @@ def test_proposal_thread_preserves_project_prompt_and_actions_upstream(monkeypat
     assert writes == []
     assert client.post.call_args.args[:2] == ('work-requests/45/action', {'action': 'acknowledge_thread', 'thread_id': 123})
     assert receipts == [123]
+    assert source_contexts == [(123, 7)]
 
 
 def test_missing_authoritative_evidence_stops_before_thread_or_source_action(monkeypatch):
@@ -399,8 +403,13 @@ def test_missing_authoritative_evidence_stops_before_thread_or_source_action(mon
 
 
 def test_merge_rebuilds_two_proposals_into_one(monkeypatch):
+    from unittest.mock import Mock
     created = {}
-    monkeypatch.setattr("distr.core.chat.ChatService.create_new_chat", lambda **kwargs: (created.setdefault("kwargs", kwargs) and 0) or (501, None))
+    monkeypatch.setattr("distr.core.workflow.development_threads.ensure_development_thread", lambda **kwargs: created.setdefault('kwargs', kwargs) and 501)
+    monkeypatch.setattr('distr.core.incoming.source_context.register_source_context', lambda *args: None)
+    monkeypatch.setattr(proposals_mod, '_record_proposal_handoff', lambda *args, **kwargs: None)
+    monkeypatch.setattr(proposals_mod, '_write_merge_receipt', lambda *args: None)
+    monkeypatch.setattr(proposals_mod, '_merge_receipt', lambda *args: None)
     monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
     monkeypatch.setattr("distr.core.incoming.media.register_thread_attachments", lambda *a, **k: None)
     monkeypatch.setattr(proposals_mod, "_merge_proposal_attachments", lambda *a, **k: [])
@@ -419,6 +428,18 @@ def test_merge_rebuilds_two_proposals_into_one(monkeypatch):
         "description": "Req B", "tasks": ["shared", "b"], "rationale": "Why B", "message_ids": ["m2"],
         "evidence": [{"id": "m2", "body": "there"}],
     }
+    canonical = {}
+    for row in (first, second):
+        pid = int(row['id'].split(':')[1])
+        canonical[f'work-requests/{pid}'] = {**row, 'id':pid, 'status':'pending',
+            'source':'gmail', 'source_conversation':{'thread_id':str(pid)},
+            'project':{'id':80, 'decisions_project_id':2, 'name':'Merrypak'},
+            'source_message_ids':row['message_ids'], 'attachments':[]}
+    client = Mock()
+    client.get.side_effect = canonical.__getitem__
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs:client)
+    replacement = Mock(return_value={'id':47})
+    monkeypatch.setattr('distr.core.tensology_client.create_merged_work_request', replacement)
 
     def fake_complete(provider, model, messages, settings):
         # Title polish only — body/tasks come from combined FRAC sections.
@@ -434,12 +455,17 @@ def test_merge_rebuilds_two_proposals_into_one(monkeypatch):
     assert merged["message_ids"] == ["m1", "m2"]
     assert created["kwargs"]["project_id"] == 2
     assert dismissed == [(45, "dismiss"), (46, "dismiss")]
-    assert notices and notices[0].get("title") == "Fix shipping cost calculation"
+    assert replacement.call_args.args[0]['title'] == 'Fix shipping cost calculation'
 
 
 def test_merge_dedupes_duplicate_attachments_via_shared_storage_path(monkeypatch):
+    from unittest.mock import Mock
     created = {}
-    monkeypatch.setattr("distr.core.chat.ChatService.create_new_chat", lambda **kwargs: (created.setdefault("kwargs", kwargs) and 0) or (777, None))
+    monkeypatch.setattr("distr.core.workflow.development_threads.ensure_development_thread", lambda **kwargs: created.setdefault('kwargs', kwargs) and 777)
+    monkeypatch.setattr('distr.core.incoming.source_context.register_source_context', lambda *args: None)
+    monkeypatch.setattr(proposals_mod, '_record_proposal_handoff', lambda *args, **kwargs: None)
+    monkeypatch.setattr(proposals_mod, '_write_merge_receipt', lambda *args: None)
+    monkeypatch.setattr(proposals_mod, '_merge_receipt', lambda *args: None)
     monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
     registered = []
     monkeypatch.setattr("distr.core.incoming.media.register_thread_attachments", lambda chat_id, rows: registered.append((chat_id, rows)))
@@ -462,9 +488,16 @@ def test_merge_dedupes_duplicate_attachments_via_shared_storage_path(monkeypatch
         return {"attachments": [duplicate], "failures": []}  # duplicate content hash
 
     monkeypatch.setattr("distr.core.incoming.media.ensure_proposal_attachments", fake_ensure)
+    monkeypatch.setattr('distr.core.incoming.media.thread_attachments', lambda chat_id:[shared, other])
 
     first = {"id": "tensology:1", "title": "A", "project_id": 2, "project_name": "Merrypak", "tasks": ["t1"]}
     second = {"id": "tensology:2", "title": "B", "project_id": 2, "project_name": "Merrypak", "tasks": ["t2"]}
+    client = Mock()
+    client.get.side_effect = lambda path:{'id':int(path.split('/')[-1]), 'title':'A' if path.endswith('/1') else 'B',
+        'tasks':['t1'] if path.endswith('/1') else ['t2'], 'status':'pending', 'source':'gmail',
+        'source_conversation':{'thread_id':path}, 'project':{'id':80, 'decisions_project_id':2, 'name':'Merrypak'}, 'attachments':[]}
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs:client)
+    monkeypatch.setattr('distr.core.tensology_client.create_merged_work_request', lambda payload, **kwargs:{'id':3})
     result = proposals_mod.merge_proposals(first, second, complete=lambda *a, **k: '{"title": "A + B"}')
     names = [row["name"] for row in result["merged"]["attachments"]]
     assert names == ["invoice.pdf", "photo.jpg"]

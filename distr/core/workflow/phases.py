@@ -359,8 +359,10 @@ def compose_instruction(
         # Delivery is deterministic and reads this exact field. A missing field
         # means nothing is sent, so the contract must name it.
         contract.append(
-            "Return the message for the person who raised this as a `reply_text:` field, "
-            "written for their channel. Keep internal detail, file paths and logs out of it."
+            "Return the message for the person who raised this using reply_text: ```text "
+            "on its own line, then the message on the following lines, then a line containing "
+            "only three backticks. Write for their channel and keep internal details, file "
+            "paths and logs outside the reply block."
         )
     if needs_human_gate:
         contract.append(

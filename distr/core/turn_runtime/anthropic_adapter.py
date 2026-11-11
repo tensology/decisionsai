@@ -3,26 +3,52 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from typing import Any, Callable
 
 from distr.core.turn_runtime.contracts import ModelResponse, ModelToolCall
 
 
+FABLE_52_PROGRESS_INSTRUCTION = (
+    "Before each batch of tool calls, send a brief user-facing progress update in ordinary response text. "
+    "After the final tool result, follow the requested response format."
+)
+
+
+def is_fable_52(model: str) -> bool:
+    return bool(re.fullmatch(r"(?:anthropic/)?claude-fable-5[-.]2(?:-\d{8})?", str(model).strip().lower()))
+
+
+def fable_52_effort(value: str = "") -> str:
+    return value if value in {"low", "medium", "high", "xhigh", "max"} else "medium"
+
+
 class AnthropicModelAdapter:
     adapter_id = "anthropic"
 
-    def __init__(self, *, model: str, settings: dict[str, Any], client: Any | None = None) -> None:
+    def __init__(
+        self, *, model: str, settings: dict[str, Any], client: Any | None = None,
+        provider: str = "anthropic", reasoning_effort: str = "",
+    ) -> None:
         self.model = str(model or "").strip()
         if not self.model or self.model == "auto":
             raise ValueError("Native Anthropic execution requires a concrete model.")
-        api_key = str(settings.get("anthropic_key") or "").strip()
+        self.fable_52 = is_fable_52(self.model)
+        self.effort = fable_52_effort(reasoning_effort)
+        self.openrouter = provider == "openrouter"
+        key_setting = "openrouter_key" if self.openrouter else "anthropic_key"
+        key_env = "OPENROUTER_API_KEY" if self.openrouter else "ANTHROPIC_API_KEY"
+        api_key = str(settings.get(key_setting) or os.getenv(key_env) or "").strip()
         if not api_key:
-            raise ValueError("No API key is configured for anthropic.")
+            raise ValueError(f"No API key is configured for {provider}.")
         if client is None:
             from anthropic import Anthropic
 
-            client = Anthropic(api_key=api_key)
+            if self.openrouter:
+                client = Anthropic(auth_token=api_key, base_url="https://openrouter.ai/api", max_retries=0)
+            else:
+                client = Anthropic(api_key=api_key)
         self._client = client
 
     @staticmethod
@@ -58,7 +84,9 @@ class AnthropicModelAdapter:
             if role == "system":
                 system_parts.append(str(message.get("content") or ""))
                 continue
-            if role == "assistant" and message.get("tool_calls"):
+            if role == "assistant" and message.get("anthropic_content"):
+                normalized.append({"role": "assistant", "content": list(message["anthropic_content"])})
+            elif role == "assistant" and message.get("tool_calls"):
                 blocks: list[dict[str, Any]] = []
                 if message.get("content"):
                     blocks.append({"type": "text", "text": str(message["content"])})
@@ -73,18 +101,17 @@ class AnthropicModelAdapter:
                 )
                 normalized.append({"role": "assistant", "content": blocks})
             elif role == "tool":
-                normalized.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": str(message.get("tool_call_id") or ""),
-                                "content": str(message.get("content") or ""),
-                            }
-                        ],
-                    }
-                )
+                result = {
+                    "type": "tool_result",
+                    "tool_use_id": str(message.get("tool_call_id") or ""),
+                    "content": str(message.get("content") or ""),
+                }
+                previous = normalized[-1] if normalized else {}
+                blocks = previous.get("content")
+                if previous.get("role") == "user" and isinstance(blocks, list) and blocks and blocks[-1]["type"] == "tool_result":
+                    blocks.append(result)
+                else:
+                    normalized.append({"role": "user", "content": [result]})
             else:
                 normalized.append(
                     {
@@ -115,8 +142,15 @@ class AnthropicModelAdapter:
         on_delta: Callable[[str], None] | None,
     ) -> ModelResponse:
         system, normalized = self._payload(messages)
+        model = self.model
+        if self.openrouter:
+            model = "anthropic/claude-fable-5.2"
+            if match := re.search(r"-\d{8}$", self.model):
+                model += match.group()
+        elif self.fable_52:
+            model = model.removeprefix("anthropic/").replace("5.2", "5-2")
         kwargs: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "max_tokens": 8192,
             "messages": normalized,
         }
@@ -124,6 +158,13 @@ class AnthropicModelAdapter:
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = self._tools(tools)
+        if self.fable_52:
+            extra_body: dict[str, Any] = {"output_config": {"effort": self.effort}}
+            if self.openrouter:
+                extra_body["provider"] = {"only": ["Anthropic"], "allow_fallbacks": False, "require_parameters": True}
+            kwargs["extra_body"] = extra_body
+            if tools:
+                kwargs["system"] = "\n\n".join(filter(None, (system, FABLE_52_PROGRESS_INSTRUCTION)))
         with self._client.messages.stream(**kwargs) as stream:
             text_parts: list[str] = []
             for delta in stream.text_stream:
@@ -145,8 +186,12 @@ class AnthropicModelAdapter:
         return ModelResponse(
             text="".join(text_parts),
             tool_calls=calls,
-            finish_reason=str(getattr(final, "stop_reason", "stop") or "stop"),
+            finish_reason=str(getattr(final, "stop_reason", None) or "stream_incomplete"),
             usage=dict(usage or {}),
+            anthropic_content=tuple(
+                block.model_dump(mode="json", exclude_unset=True)
+                for block in final.content
+            ) if self.fable_52 and calls else (),
         )
 
     async def complete(

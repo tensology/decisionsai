@@ -95,6 +95,15 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
 .kanban-ticket-tabs button span { color: var(--studio-dim); font-size: var(--studio-tab-count-size); }
 .kanban-ticket-panels { min-height: 0; overflow: hidden; }
 .kanban-ticket-panel { height: 100%; min-height: 0; overflow-y: auto; padding-bottom: 14px; scrollbar-width: thin; }
+.kanban-ticket-workflow-draft { margin: 12px var(--ticket-modal-pane-pad); padding: 0 12px; border: 1px solid var(--studio-line); border-radius: 8px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.kanban-ticket-workflow-draft[open] { padding-bottom: 12px; }
+.kanban-ticket-workflow-draft summary { padding-block: 11px; cursor: pointer; font-weight: 600; }
+.kanban-ticket-workflow-draft p { margin: 8px 0; }
+.kanban-ticket-workflow-draft ol { margin: 8px 0; padding-inline-start: 1.5em; list-style: decimal outside; }
+.kanban-ticket-workflow-draft li + li { margin-top: 8px; }
+.kanban-ticket-workflow-draft-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kanban-ticket-workflow-draft-actions a:not(.hidden) { display: inline-flex; align-items: center; text-decoration: none; }
+.kanban-ticket-workflow-draft button[aria-disabled="true"] { opacity: .65; }
 .kanban-ticket-panel[hidden] { display: none; }
 .kanban-ticket-panel > label { margin: 10px var(--ticket-modal-pane-pad) 0; font-size: var(--ticket-modal-label-size); }
 .kanban-ticket-dialog #kanban-ticket-title, .kanban-ticket-dialog #kanban-ticket-description { font-size: var(--ticket-modal-text-size); }
@@ -103,9 +112,12 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
    footer stays right under the content instead of leaving a gap. */
 #kanban-ticket-details-panel:not([hidden]) { display: flex; flex-direction: column; }
 #kanban-ticket-details-panel > label:has(> #kanban-ticket-description) { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
+#kanban-ticket-details-panel:has(> .kanban-ticket-workflow-draft:not([hidden])) > label:has(> #kanban-ticket-description) { min-height: 145px; }
 .kanban-ticket-dialog #kanban-ticket-description { height: 100%; flex: 1 1 auto; resize: none; }
 .kanban-ticket-attachments-panel { overflow-y: auto; }
 .kanban-ticket-dialog menu { min-width: 0; }
+.kanban-ticket-action-status { max-height: 96px; margin: 8px var(--ticket-modal-pane-pad) 0; overflow: auto; overflow-wrap: anywhere; color: var(--studio-muted); font-size: 12px; line-height: 1.4; }
+.kanban-ticket-action-status.error { color: #ff938a; }
 .kanban-ticket-dialog #kanban-ticket-delete { margin-right: auto; }
 .kanban-ticket-dialog menu .primary-button, .kanban-ticket-dialog menu .secondary-button, .kanban-ticket-dialog menu .danger-button { min-width: 0; padding: 0 0.75rem; font-size: 0.82rem; white-space: nowrap; }
 .kanban-ticket-dialog input:not(:disabled), .kanban-ticket-dialog select:not(:disabled), .kanban-ticket-dialog textarea:not(:disabled) { color: #f8fafc; }

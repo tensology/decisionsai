@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from distr.core.initiative.context import ContextBundle
 from distr.core.initiative import planners
 
@@ -276,6 +278,114 @@ def test_fallback_day_plan_is_outcome_driven_and_tts_clean():
     assert "lane(s)" not in md
     assert "ticket(s)" not in md
     assert "(s)" not in spoken
+
+
+@pytest.mark.parametrize("scope", ["morning", "day", "week", "month"])
+def test_provider_failure_keeps_project_attention_and_workflow_reference(scope, monkeypatch):
+    monkeypatch.setattr(planners, "_llm_candidates", lambda _settings: [("ollama", "fixture")])
+    provider = MagicMock()
+    provider.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    provider.completion.side_effect = RuntimeError("provider unavailable")
+    bundle = ContextBundle(project_oversight={
+        "omitted_threads": 3,
+        "truncated": True,
+        "projects": [
+            {"project_id": 1, "project_name": "Shop project", "threads": [
+                {"project_id": 1, "chat_id": 31, "title": "Checkout rollout",
+                 "url": "/development/threads/31/", "status": "waiting",
+                 "assigned_workflow_id": 44,
+                 "attention": [{"kind": "needs_input", "recommendation": "Review the thread question before recommending a next step.",
+                                "question": "Can checkout deploy after 18:00?"},
+                               {"kind": "delivery_unconfirmed", "recommendation": "Reconcile the original Telegram delivery before retrying."}]},
+            ]},
+            {"project_id": 2, "project_name": "Portal project", "threads": [
+                {"project_id": 2, "chat_id": 42, "title": "Dashboard refresh",
+                 "url": "/development/threads/42/", "status": "running", "attention": []},
+            ]},
+        ],
+    })
+    with patch.dict(sys.modules, {"litellm": provider}):
+        markdown, _ = planners.generate_planner_markdown(scope, {}, bundle, "Review project attention.")
+    assert "Shop project" in markdown
+    assert "[Checkout rollout](/development/threads/31/)" in markdown
+    assert markdown.index("Reconcile the original Telegram delivery") < markdown.index("Review the thread question")
+    assert "Review the thread question" in markdown
+    assert "Can checkout deploy after 18:00?" in markdown
+    assert "Assigned workflow 44" in markdown
+    assert "3 other threads" in markdown
+    assert "No stuck tickets" not in markdown
+    assert "Dashboard refresh" not in markdown
+    from distr.core.initiative.service import _planner_telegram_excerpt
+    excerpt = _planner_telegram_excerpt(markdown)
+    assert "Checkout rollout" in excerpt
+    assert "Reconcile the original Telegram delivery" in excerpt
+    assert "/development/threads/" not in excerpt
+
+
+def test_fallback_reports_other_attention_threads_and_keeps_distinct_same_title_links():
+    rows = [
+        {"chat_id": 31 + index, "project_id": 1, "title": "Checkout release readiness review for the new regional storefront",
+         "attention": [{"kind": "needs_input", "recommendation": "Review the release question.", "question": f"Slot {index}?"}]}
+        for index in range(6)
+    ]
+    bundle = ContextBundle(
+        project_oversight={
+            "omitted_threads": 2, "skipped_scope_mismatches": 1, "projects": [
+                {"project_id": 1, "project_name": "Shop project", "threads": rows},
+            ],
+        },
+        stuck_tasks=[{"title": f"Shop project · [{rows[0]['title']}](/development/threads/99/). Review the rollout."}],
+    )
+    markdown = planners._fallback_planner_markdown("day", {}, bundle, "", "")
+
+    for chat_id in range(31, 35):
+        assert markdown.count(f"(/development/threads/{chat_id}/)") == 1
+    assert "(/development/threads/99/)" in markdown
+    assert "2 other threads fell outside the saved project snapshot" in markdown
+    assert "2 more threads with saved issues were left out of this brief" in markdown
+    assert "1 thread needs its project link checked before review" in markdown
+
+
+def test_fallback_reports_unavailable_oversight():
+    markdown = planners._fallback_planner_markdown("morning", {}, ContextBundle(), "", "")
+    assert "Development oversight was unavailable for this brief" in markdown
+
+
+def test_morning_telegram_keeps_development_issue_when_triage_has_approvals(monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from distr.core.initiative.service import InitiativeService
+    from distr.core.initiative.tiers import PermissionTier
+
+    bundle = ContextBundle(
+        work_scan={"orchestrator_triage": {"summary": "One candidate", "candidates": [{"title": "Review invoice"}]}},
+        project_oversight={"projects": [{"project_id": 1, "project_name": "Shop project", "threads": [{
+            "chat_id": 31, "title": "Checkout rollout", "attention": [{
+                "kind": "delivery_unconfirmed", "recommendation": "Reconcile the original Telegram delivery.",
+            }],
+        }]}]},
+    )
+    service = SimpleNamespace(
+        _context_assembler=SimpleNamespace(build=lambda _settings: bundle),
+        _draft_queue=MagicMock(), _log_planner_to_chat=MagicMock(), _send_telegram_if_allowed=MagicMock(),
+    )
+    monkeypatch.setattr("distr.core.db.get_session", lambda: nullcontext(None))
+    monkeypatch.setattr("distr.core.db.planner_output.save_planner_row", MagicMock())
+    monkeypatch.setattr("distr.core.orchestrator.emit_event", MagicMock())
+    monkeypatch.setattr("distr.core.orchestrator_daily_triage.enqueue_triage_candidates", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("distr.core.orchestrator_daily_triage.format_triage_markdown",
+                        lambda *args, **kwargs: "## Morning Work Triage\n1. Review invoice")
+    monkeypatch.setattr(planners, "generate_planner_markdown", lambda *args: ("## Morning Check-in\nCheckout rollout.", {}))
+
+    InitiativeService._run_planner_proactive_task(
+        service, scope="morning", task_name="Morning brief", task_id=7, instruction="",
+        settings={"chat_voice_enabled": False}, tier=PermissionTier.NOTIFY,
+    )
+
+    body = service._send_telegram_if_allowed.call_args.args[0]
+    assert body.index("Reconcile the original Telegram delivery.") < body.index("1. Review invoice")
+    assert "Reply approve 1, reject 1" in body
+    assert "/development/threads/" not in body
 
 
 def test_fallback_day_plan_prioritizes_current_before_backlog_for_telegram():

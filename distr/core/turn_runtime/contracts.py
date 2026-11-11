@@ -9,6 +9,11 @@ from threading import Event, Lock
 from typing import Any, Awaitable, Callable, Protocol
 
 
+POTENTIALLY_MUTATING_PROJECT_TOOLS = frozenset({
+    "replace_text", "write_file", "run_command", "automation_control",
+})
+
+
 class TurnStatus(str, Enum):
     INITIALIZING = "initializing"
     QUEUED = "queued"
@@ -26,6 +31,7 @@ class TurnEventKind(str, Enum):
     MODEL = "model"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
+    PROGRESS = "progress"
     OUTPUT_DELTA = "output_delta"
     STEERED = "steered"
     CONTEXT_COMPACTED = "context_compacted"
@@ -100,6 +106,7 @@ class ToolObservation:
     artifacts: tuple[str, ...] = ()
     output: Any = None
     error: str = ""
+    exit_code: int | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +122,7 @@ class ModelResponse:
     tool_calls: tuple[ModelToolCall, ...] = ()
     finish_reason: str = "stop"
     usage: dict[str, Any] = field(default_factory=dict)
+    anthropic_content: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)

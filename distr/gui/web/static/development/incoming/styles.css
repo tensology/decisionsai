@@ -15,8 +15,14 @@
 .incoming-list { max-height: min(68vh, 700px); overflow: auto; border-right: 1px solid var(--studio-line); }
 .incoming-channel-section { display: grid; gap: 8px; }
 .incoming-channel-section.other { margin-top: 2px; border-top: 1px solid var(--studio-line); }
-.incoming-channel-section > header { display: flex; align-items: baseline; justify-content: space-between; padding: 10px 11px 4px; }
-.incoming-channel-section > header h2 { margin: 0; color: var(--studio-muted); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+.incoming-channel-header, .incoming-channel-section > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 11px; }
+.incoming-channel-header h2, .incoming-channel-section > header h2 { margin: 0; color: var(--studio-muted); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+.incoming-channel-header .incoming-resync { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.incoming-channel-header .incoming-resync strong { font-weight: 500; }
+.incoming-channel-header .incoming-resync:disabled { cursor: progress; }
+.incoming-channel-resync-status { margin: 0; color: var(--studio-muted); font-size: 12px; }
+.incoming-channel-resync-status:not(:empty) { padding: 0 11px 8px; }
+.incoming-channel-resync-status.error { color: var(--studio-danger-text); }
 .incoming-channel-section > header small { color: var(--studio-muted); font-size: 11px; }
 .incoming-channel-section > div { display: grid; }
 .incoming-conversation-row { display: grid; width: 100%; min-width: 0; min-height: 66px; grid-template-columns: 34px minmax(0, 1fr) 24px; align-items: center; gap: 8px; padding: 8px 7px 8px 10px; border: 0; border-bottom: 1px solid rgba(124,142,188,.12); background: transparent; color: var(--studio-text); text-align: left; cursor: pointer; }
@@ -30,10 +36,10 @@
 .incoming-row-title strong { font-size: 13px; }
 .incoming-row-title time { flex: 0 0 auto; color: var(--studio-dim); font-size: 10px; }
 .incoming-row-preview { color: #c4cce5; font-size: 12px; }
-.incoming-row-meta { display: flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; }
+.incoming-row-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px; }
 .incoming-row-meta b { margin-left: auto; color: #7ee5a6; font-size: 10px; white-space: nowrap; }
 .incoming-row-more { color: var(--studio-dim); font-size: 10px; text-align: center; }
-.incoming-board-pill { display: inline-block; max-width: 110px; overflow: hidden; padding: 2px 5px; border-radius: 999px; background: rgba(45,201,113,.12); color: #85dca6; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.incoming-board-pill { display: inline-block; min-width: 0; max-width: 100%; padding: 2px 5px; border-radius: 999px; background: rgba(45,201,113,.12); color: #85dca6; font-size: 10px; white-space: normal; overflow-wrap: anywhere; }
 .incoming-whatsapp-reader { display: flex; min-width: 0; min-height: 540px; flex-direction: column; }
 .incoming-whatsapp-reader-header { display: grid; grid-template-columns: 40px minmax(0, 1fr) 34px; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--studio-line); }
 .incoming-whatsapp-reader-header h3 { margin: 0; font-size: 16px; }
@@ -42,17 +48,24 @@
 .incoming-reader-links { display: flex; gap: 4px; margin-top: 5px; }
 .incoming-whatsapp-messages { display: flex; max-height: min(59vh, 610px); flex: 1; flex-direction: column; gap: 6px; overflow: auto; padding: 12px; }
 .incoming-message-bubble { width: fit-content; max-width: 78%; padding: 7px 9px 5px; border-radius: 9px 9px 9px 2px; background: #172153; }
-.incoming-message-bubble.outgoing { align-self: flex-end; border-radius: 9px 9px 2px 9px; background: #24377c; }
+.incoming-message-bubble.outgoing { align-self: flex-end; border-radius: 9px 9px 2px 9px; background: #17483e; }
 .incoming-message-bubble small { display: block; margin-bottom: 3px; color: #90a5df; font-size: 11px; }
 .incoming-message-bubble p { margin: 0; color: #edf1ff; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .incoming-message-bubble time { display: block; margin-top: 3px; color: #8994b6; font-size: 10px; text-align: right; }
 .incoming-media-image, .incoming-media-video { display: block; max-width: min(320px, 100%); max-height: 280px; margin-bottom: 5px; border-radius: 6px; object-fit: contain; }
 .incoming-media-audio { display: block; width: min(300px, 100%); margin-bottom: 5px; }
 .incoming-media-file { display: block; margin-bottom: 5px; color: #9fc3ff; font-size: 10px; }
-.incoming-whatsapp-reader > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--studio-line); }
-.incoming-whatsapp-reader > footer small { color: var(--studio-muted); font-size: 11px; }
-.incoming-whatsapp-reader > footer span { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.incoming-whatsapp-reader > footer button { min-height: 30px; padding: 0 9px; border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-raised); color: var(--studio-text); font-size: 11px; }
+.incoming-whatsapp-history { align-self: center; text-align: center; }
+.incoming-whatsapp-history:empty { display: none; }
+.incoming-whatsapp-compose { flex: 0 0 auto; padding: 9px 12px; border-top: 1px solid var(--studio-line); }
+.incoming-whatsapp-compose-controls { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: end; gap: 8px; }
+.incoming-whatsapp-compose textarea { box-sizing: border-box; width: 100%; min-height: 44px; max-height: 120px; field-sizing: content; resize: none; padding: 10px 15px; border: 1px solid var(--studio-line); border-radius: 18px; background: var(--studio-raised); color: var(--studio-text); font: inherit; }
+.incoming-whatsapp-compose textarea::placeholder { color: var(--studio-muted); }
+.incoming-whatsapp-compose button { display: grid; min-height: 44px; place-items: center; border: 0; border-radius: 50%; background: var(--studio-green); color: #06210f; cursor: pointer; }
+.incoming-whatsapp-compose button:disabled { background: var(--studio-raised); color: var(--studio-muted); cursor: default; }
+.incoming-whatsapp-compose p, .incoming-whatsapp-history p { margin: 5px 0 0; color: var(--studio-muted); font-size: 12px; }
+.incoming-whatsapp-compose p:empty { display: none; }
+.incoming-whatsapp-compose p.error, .incoming-whatsapp-history p.error { color: var(--studio-danger-text); }
 .incoming-source { display: inline-flex; align-items: center; width: fit-content; padding: 3px 7px; border-radius: 999px; background: rgba(124,142,188,.16); color: #cdd8ff; font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .incoming-source.whatsapp { background: rgba(45,201,113,.14); color: #75e7a3; }
 .incoming-source.telegram { background: rgba(63,158,222,.15); color: #8ed1ff; }
@@ -133,9 +146,6 @@
     .incoming-whatsapp-layout { grid-template-columns: 1fr; }
     .incoming-list { max-height: 260px; border-right: 0; border-bottom: 1px solid var(--studio-line); }
     .incoming-whatsapp-reader { min-height: 390px; }
-    .incoming-whatsapp-reader > footer { align-items: stretch; flex-direction: column; }
-    .incoming-whatsapp-reader > footer span { justify-content: stretch; }
-    .incoming-whatsapp-reader > footer button { flex: 1; }
     .incoming-gmail-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--studio-line); }
     .incoming-conversation > footer { align-items: stretch; flex-direction: column; }
     .incoming-link-controls { align-items: stretch; flex-direction: column; }
@@ -198,9 +208,6 @@
     #incoming-workspace > .scheduled-workspace-inner { height: 100%; overflow: hidden; }
     .incoming-whatsapp-reader-header { grid-template-columns: 40px minmax(0, 1fr) 44px; }
     .incoming-whatsapp-reader-header h3 { overflow-wrap: anywhere; }
-    .incoming-whatsapp-reader > footer { align-items: stretch; flex-direction: column; }
-    .incoming-whatsapp-reader > footer span { justify-content: stretch; }
-    .incoming-whatsapp-reader > footer button { flex: 1; min-height: 44px; }
 }
 .incoming-folder-tabs button.incoming-resync.loading > span { display: inline-block; animation: incoming-resync-spin .8s linear infinite; }
 @keyframes incoming-resync-spin { to { transform: rotate(360deg); } }
@@ -345,7 +352,6 @@
 /* Readable mail body styles are defined later (white card). */
 .incoming-gmail-messages { max-height: none; }
 .incoming-gmail-reader > footer button, .incoming-gmail-reader > footer select,
-.incoming-whatsapp-reader > footer button { min-height: 36px; font-size: 12px; }
 .incoming-link-controls { flex-wrap: wrap; }
 .incoming-link-controls select { flex: 0 1 240px; min-width: 0; }
 .incoming-reader-empty { min-height: 0; flex: 1; }
@@ -384,7 +390,7 @@
 .proposal-card:focus-visible { outline: 2px solid var(--studio-accent-light); outline-offset: 2px; }
 
 .proposal-modal-overlay { position: fixed; inset: 0; z-index: 100300; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(2,6,23,.6); }
-.proposal-modal { display: flex; flex-direction: column; width: var(--ticket-modal-width); height: var(--ticket-modal-height); min-height: var(--ticket-modal-height); max-height: calc(100vh - 2rem); overflow: hidden; border: 1px solid var(--studio-line); border-radius: var(--ticket-modal-radius); background: var(--studio-panel); color: var(--studio-text); font: inherit; }
+.proposal-modal { display: flex; flex-direction: column; width: var(--ticket-modal-width); height: var(--ticket-modal-height); max-height: calc(100dvh - 2rem); overflow: hidden; border: 1px solid var(--studio-line); border-radius: var(--ticket-modal-radius); background: var(--studio-panel); color: var(--studio-text); font: inherit; }
 .proposal-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: var(--ticket-modal-header-pad); border-bottom: 1px solid var(--studio-line); }
 .proposal-modal-title { min-width: 0; }
 .proposal-modal-title h3 { margin: 8px 0 0; font-size: var(--ticket-modal-title-size); font-weight: 700; }
@@ -619,7 +625,11 @@
 .proposal-message header time { color: var(--studio-dim); }
 .proposal-message p { margin: 6px 0 0; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .proposal-message p.muted, .proposal-empty { margin: 0; color: var(--studio-dim); font-size: 14px; font-style: italic; }
-.proposal-modal > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--studio-line); }
+.proposal-modal > footer { display: flex; flex: none; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--studio-line); }
+.proposal-modal > footer:has(.proposal-copy-review) { flex-wrap: wrap; }
+.proposal-copy-review { margin-inline-end: auto; }
+.proposal-review-copy-status { flex-basis: 100%; margin: 0; color: var(--studio-text); font-size: 13px; line-height: 1.45; }
+#incoming-proposal-review-status { padding: 8px 10px; border: 1px solid var(--studio-line); border-radius: 6px; color: var(--studio-text); font-size: 13px; line-height: 1.45; }
 
 /* Merge-by-drag affordances. */
 .proposal-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
@@ -891,9 +901,22 @@ button.proposal-media, button.proposal-file, button.proposal-file-card { cursor:
     background: rgba(255,255,255,.03);
 }
 .incoming-quick-reply.hidden { display: none; }
+.incoming-gmail-reader > .incoming-quick-reply {
+    flex: 0 0 auto;
+    max-height: calc(100% - 64px);
+    grid-template-rows: minmax(0, 1fr) auto auto;
+    overflow: hidden;
+}
 .incoming-quick-reply-fields {
     display: grid;
     gap: 8px;
+    min-height: 0;
+    overflow: auto;
+}
+.incoming-quick-reply [data-quick-reply-status] { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.incoming-quick-reply [data-quick-reply-status]:empty { display: none; }
+@media (max-width: 760px) {
+    .incoming-quick-reply-fields input, .incoming-quick-reply-fields textarea { font-size: 16px; }
 }
 .incoming-quick-reply-fields label {
     display: grid;
@@ -921,6 +944,12 @@ button.proposal-media, button.proposal-file, button.proposal-file-card { cursor:
     justify-content: flex-end;
     gap: 8px;
 }
+.incoming-quick-reply [data-quick-reply-send]:disabled {
+    background: var(--studio-line);
+    color: var(--studio-muted);
+    cursor: not-allowed;
+    filter: none;
+}
 
 /* Keep file preview overlays auto-sized (not forced to proposal modal height). */
 .file-preview-modal {
@@ -938,6 +967,24 @@ button.proposal-media, button.proposal-file, button.proposal-file-card { cursor:
 }
 .proposal-source-summary strong { font-weight: 650; }
 .proposal-source-jump { margin: 0 0 14px; }
+.proposal-source-choice { display: grid; gap: 6px; max-width: 360px; margin-bottom: 8px; }
+.proposal-source-choice.hidden { display: none; }
+.proposal-source-choice select {
+    width: 100%; min-width: 0; min-height: 40px; padding: 6px 8px; border-radius: 8px;
+    color: var(--studio-text); background: var(--bg-input, #1b203c); border: 1px solid rgba(255,255,255,0.2); font: inherit;
+    appearance: auto; color-scheme: dark;
+}
+.proposal-source-status { margin: 8px 0 0; color: var(--studio-text); font-size: 14px; line-height: 1.5; }
+.proposal-source-reader-header { display: grid; justify-items: start; gap: 12px; margin-bottom: 14px; }
+.proposal-source-reader-header h4 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.proposal-message-original { border-color: var(--studio-accent, #ff7900); }
+.proposal-original-label { display: block; margin-bottom: 6px; font-size: 13px; }
+[data-proposal-source-reader] .proposal-message header { flex-wrap: wrap; overflow-wrap: anywhere; }
+.studio-dialog.submitted-proposal-source-dialog { width: min(620px, calc(100vw - 24px)); }
+.thread-header-menu:has(#thread-menu-original-source:not(.hidden)) { width: min(224px, calc(100vw - 24px)); }
+.submitted-proposal-source-body { max-height: min(60dvh, 520px); overflow: auto; padding: 16px; }
+.submitted-proposal-source-body .proposal-source-jump { margin-bottom: 0; }
+.submitted-proposal-source-body :focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
 
 
 .incoming-gmail-reader {

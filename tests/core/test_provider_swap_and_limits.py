@@ -136,10 +136,28 @@ def test_model_selection_without_approver_is_refused_before_probe(monkeypatch, n
     probe.assert_not_called()
 
 
-def test_runtime_provider_fallback_is_disabled():
-    from distr.core.workflow.step_executor import StepExecutorMixin
-    assert StepExecutorMixin._runtime_provider_fallback_route({}, {}) == {}
-    assert StepExecutorMixin._ready_route_or_fallback({}, project=None, board=None) == {}
+def test_failed_provider_choice_keeps_run_waiting_without_dispatching_fallback(monkeypatch,no_side_effects):
+    from types import SimpleNamespace
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher
+    from distr.core.workflow.service import apply_run_provider_model_selection
+    rid=_waiting_preflight_run(provider_free_candidates=[{'backend':'pi','model':'fixture-free','model_provider':'openrouter'}],
+                              provider_fallback_route={'backend':'codex','model':'auto'})
+    def readiness(*,model,api_key):
+        assert model=='fixture-free'
+        return SimpleNamespace(ready=False,message='Fixture provider unavailable',http_status=503,
+                               to_dict=lambda:{'ready':False,'message':'Fixture provider unavailable','http_status':503})
+    monkeypatch.setattr('distr.core.project_cli_backends.provider_preflight.probe_openrouter_model_readiness',readiness)
+    monkeypatch.setattr('distr.core.kanban.ticket_workflow_engagement.notify_ticket_workflow_progress',Mock())
+    result=apply_run_provider_model_selection(rid,0,approved_by='telegram user 42 via telegram_callback')
+    assert result['status']=='waiting' and result['readiness']['ready'] is False
+    dispatcher._dispatch_workflow_step.assert_not_called()
+    with get_session() as db:
+        run=db.get(AutoWorkflowRun,rid);data=json.loads(run.run_data)
+        assert run.status=='waiting' and data['waiting_kind']=='provider_preflight'
+        assert data['execution_route']['backend']=='pi'
+        assert data['pending_route_approval']['backend']=='codex'
+        assert data['provider_free_candidates'][0]['readiness_failed'] is True
 
 
 # ------------------------------------------------------------- auto-accept trigger
@@ -247,8 +265,16 @@ def test_backend_without_heartbeats_uses_last_activity():
 
 
 @pytest.mark.parametrize('flag', [{'waiting_kind': 'provider_preflight'}, {'pending_route_approval': {'backend': 'codex'}},
-                                  {'power_budget_pending': True}, {'human_intervention_state': 'needs_human_input'}])
+                                  {'human_intervention_state': 'needs_human_input'}])
 def test_runs_waiting_on_humans_are_never_stalled(flag):
     _, rid, sid = seed()
     _session(rid, sid, heartbeat_age=600)
     assert not _health(rid, {'project_name': 'JackCat', **flag})['stalled']
+
+
+def test_legacy_budget_meter_does_not_hide_stalled_worker():
+    _, run_id, step_id = seed()
+    _session(run_id, step_id, heartbeat_age=600)
+    health = _health(run_id, {'project_name': 'JackCat', 'power_budget_pending': True})
+    assert health['stalled']
+    assert 'heartbeat missing' in health['status_summary']

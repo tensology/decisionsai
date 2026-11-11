@@ -6,6 +6,9 @@ export const SCANNING_HINT = 'Scanning project…';
 export function scanHint(scan) {
     if (scan?.state === 'scanning') return { text: SCANNING_HINT, kind: 'scanning' };
     if (scan?.state === 'error') return { text: `Project scan failed: ${scan.error || 'unknown error'}`, kind: 'error' };
+    if (scan?.state === 'unconfirmed') return { text: 'Project scan status was not confirmed. Reopen Plan to check again.', kind: 'warning' };
+    if (scan?.state === 'done' && scan.coverage === 'none') return { text: 'Project scan could not map this application. Review the saved plan before building tickets.', kind: 'warning' };
+    if (scan?.state === 'done' && scan.coverage === 'partial') return { text: 'Project map is partial. Review it before building tickets.', kind: 'warning' };
     return null;
 }
 
@@ -23,5 +26,6 @@ export async function watchPlanScan({ api, workspaceId, isCurrent, onSettled, in
         onSettled(status || { state: 'idle' }, workspace);
         return status?.state || 'idle';
     }
+    if (isCurrent()) onSettled({ state: 'unconfirmed' }, null);
     return 'timeout';
 }

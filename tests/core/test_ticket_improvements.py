@@ -43,8 +43,9 @@ def seed(action='send_to_project_cli', **data):
         return wf.id, run.id, step.id
 
 
-def test_restart_automatically_dispatches_saved_step_once(monkeypatch):
-    _, rid, sid = seed()
+@pytest.mark.parametrize('meter', [{}, {'power_budget': {'max_turns': 1, 'turns_used': 1}}])
+def test_restart_automatically_dispatches_saved_step_once(monkeypatch, meter):
+    _, rid, sid = seed(**meter)
     dispatch = Mock(return_value={'success': True})
     monkeypatch.setattr(dispatcher, '_dispatch_workflow_step', dispatch)
     monkeypatch.setattr(dispatcher, 'record_workflow_chat_event', Mock())
@@ -63,7 +64,6 @@ def test_restart_automatically_dispatches_saved_step_once(monkeypatch):
 @pytest.mark.parametrize('action,extra,reason', [
     ('http_request', {}, 'side effects'),
     ('send_to_project_cli', {'pending_route_approval': {'backend': 'codex'}}, 'approval'),
-    ('send_to_project_cli', {'power_budget': {'max_turns': 1, 'turns_used': 1}}, 'Budget exhausted'),
 ])
 def test_blocked_recovery_is_listed_with_reason(monkeypatch, action, extra, reason):
     wid, rid, _ = seed(action, **extra)
@@ -128,14 +128,14 @@ def test_all_three_prompts_name_project_ticket_and_actual_action():
     from distr.core.workflow.run_prompts import run_label, restart_prompt
     data = {'project_name': 'JackCat', 'ticket_title': 'Find part IDs', 'ticket_id': 179}
     restart = restart_prompt(run_label(data))
-    budget = _effective_wait_prompt({**data, 'waiting_kind': 'control_interrupt', 'power_budget_pending': True,
-        'power_budget': {'turns_used': 80, 'max_turns': 80, 'estimated_cost_usd': 1.2}}, default_prompt='', result='')
+    interrupt = _effective_wait_prompt({**data, 'waiting_kind': 'control_interrupt',
+        'interrupt_context': {'question': 'Confirm the updated scope?'}}, default_prompt='', result='')
     question = _effective_wait_prompt({**data, 'waiting_kind': 'worker_needs_input', 'worker_question': 'Which supplier?'}, default_prompt='', result='')
-    for text in (restart, budget, question):
+    for text in (restart, interrupt, question):
         assert 'JackCat #179 Find part IDs' in text and 'Safe default if you do nothing' in text
     assert 'Continue re-runs' in restart
-    assert budget.startswith('Run used 80 of 80 turns and about $1.20')
-    assert 'Continue raises' in budget
+    assert 'Confirm the updated scope?' in interrupt
+    assert 'Continue sends your answer' in interrupt
     assert 'Which supplier?' in question and 'Continue sends your answer' in question
 
 
@@ -229,7 +229,7 @@ def test_auto_accept_enforces_own_project_spend_and_risk_limits(monkeypatch):
     settings = {'incoming_proposals_auto_accept': False}
     monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: settings)
     monkeypatch.setattr(proposals, '_undismissed_proposals', lambda rows: rows)
-    monkeypatch.setattr(proposals, '_accepted_proposal_keys', lambda: set())
+    monkeypatch.setattr(proposals, '_accepted_proposal_keys', lambda **kwargs: set())
     monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', Mock())
     handoff = Mock(return_value=100)
     monkeypatch.setattr(proposals, 'create_proposal_thread', handoff)
@@ -253,7 +253,7 @@ def test_auto_accept_failure_keeps_proposal_eligible(monkeypatch):
     from distr.core.incoming import proposals
     monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {'incoming_proposals_auto_accept': True})
     monkeypatch.setattr(proposals, '_undismissed_proposals', lambda rows: rows)
-    monkeypatch.setattr(proposals, '_accepted_proposal_keys', lambda: set())
+    monkeypatch.setattr(proposals, '_accepted_proposal_keys', lambda **kwargs: set())
     handoff = Mock(side_effect=RuntimeError('dispatch rejected'))
     monkeypatch.setattr(proposals, 'create_proposal_thread', handoff)
     assert proposals.auto_accept_proposals([{'id': 'x', 'origin': 'local', 'project_id': 7,

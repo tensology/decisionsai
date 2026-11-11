@@ -1,4 +1,4 @@
-import { createPlanConversation } from './conversation.js?v=20261103-rows1';
+import { createPlanConversation } from './conversation.js?v=20261111-buildjump';
 import { scanHint, watchPlanScan } from './scan-watch.js?v=20261102-plan-scan-bg';
 import { createLoadGuard, isAbort } from './load-guard.js?v=20261102-verify';
 
@@ -87,8 +87,8 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         });
     }
 
-    function retryHtml(message, action) {
-        return `<div class="plan-empty error" role="alert"><strong>${escapeHtml(message)}</strong><button type="button" class="plan-retry" data-plan-retry="${action}">Retry plans</button></div>`;
+    function retryHtml(message, action, label = 'Retry plans') {
+        return `<div class="plan-empty error" role="alert"><strong>${escapeHtml(message)}</strong><button type="button" class="plan-retry" data-plan-retry="${action}">${label}</button></div>`;
     }
 
     async function openHome(boards, projects) {
@@ -120,7 +120,8 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         const navigation = ++state.navigation;
         state.view = 'board';
         state.projects = Array.isArray(projects) ? projects : state.projects;
-        if (!projectFor(board)) {
+        const project = projectFor(board);
+        if (!project) {
             host.toast('Link this board to a project before opening Plan.', 'error');
             host.openHome();
             return false;
@@ -128,7 +129,8 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         // Reopening a board plan shows the cached plan at once and refreshes it in the
         // background; only the first open waits on the (project-scanning) POST.
         const load = loads.begin();
-        const cached = state.details.get(board.key);
+        const previous = state.details.get(board.key);
+        const cached = Number(previous?.project_id) === Number(project.id) ? previous : null;
         if (cached) conversation.open(cached);
         else root.innerHTML = '<div class="plan-loading" role="status" aria-label="Loading plan"><span></span><span></span><span></span></div>';
         try {
@@ -139,7 +141,7 @@ export function createPlanning(host, root = document.getElementById('plan-root')
                     board_key: board.key,
                     board_provider: board.provider,
                     board_name: board.name || 'Untitled board',
-                    project_id: board.project_id || board.default_project_id || null
+                    project_id: project.id
                 }
             });
             if (navigation !== state.navigation || !load.isCurrent()) return false;
@@ -164,6 +166,13 @@ export function createPlanning(host, root = document.getElementById('plan-root')
             return true;
         } catch (error) {
             if (isAbort(error) || !load.isCurrent()) return false;
+            if (error.status === 409 && navigation === state.navigation) {
+                conversation.leave();
+                state.details.delete(board.key);
+                root.innerHTML = retryHtml(error.message, 'home', 'Back to Plans');
+                root.querySelector('[data-plan-retry="home"]')?.addEventListener('click', () => openHome(state.boards, state.projects));
+                return false;
+            }
             if (cached) return true;
             if (navigation === state.navigation) {
                 root.innerHTML = retryHtml(error.message || 'Could not open this plan.', 'board');

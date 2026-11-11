@@ -19,7 +19,7 @@ SIZES = [(1440, 900), (768, 1024), (390, 844)]
 ONE_PAGE = 'screen "Customers" id=customers route=/customers\n  heading "Customers"\n  button "Save" variant=primary\n'
 
 
-def _open(page, w, h, content):
+def _open(page, w, h, content, surface):
     b = Backend()
     b.items = [i for i in b.items if i["item_type"] not in ("wireframe", "flows")]
     if content:
@@ -29,18 +29,19 @@ def _open(page, w, h, content):
     page.set_viewport_size({"width": w, "height": h})
     page.goto(PLAN_URL)
     page.get_by_role("button", name="Interfaces", exact=True).click()
-    page.locator('#plan-preview.plan-canvas-surface').wait_for()
+    surface.wait_for()
     page.wait_for_timeout(900)                     # let every async wire render finish replacing the contents
 
 
 def _check(page):
     g = page.evaluate("""() => {
-        const s = document.querySelector('#plan-preview.plan-canvas-surface'), c = s.querySelector(':scope > .plan-canvas-callout');
+        const s = document.querySelector('#plan-preview'), c = s.querySelector('.plan-canvas-callout');
+        const grid = s.querySelector('.iface-viewport') || s;
         const rs = s.getBoundingClientRect(), rc = c ? c.getBoundingClientRect() : null;
         const top = rc ? document.elementFromPoint(rc.left + rc.width / 2, rc.top + rc.height / 2) : null;
         const pane = document.querySelector('#plan-artifacts').getBoundingClientRect();
         return { surface: [rs.left, rs.top, rs.width, rs.height], callout: rc && [rc.left, rc.top, rc.width, rc.height],
-                 uncovered: Boolean(top && c.contains(top)), grid: getComputedStyle(s).backgroundImage, paneBottom: pane.bottom, surfaceBottom: rs.bottom };
+                 uncovered: Boolean(top && c.contains(top)), grid: getComputedStyle(grid).backgroundImage, paneBottom: pane.bottom, surfaceBottom: rs.bottom };
     }""")
     s, c = g["surface"], g["callout"]
     assert c and c[2] > 0 and c[3] > 0, g
@@ -54,9 +55,12 @@ def _check(page):
 @pytest.mark.parametrize("w,h", SIZES)
 @pytest.mark.parametrize("kind", ["populated", "single", "empty"])
 def test_interfaces_surface_and_callout_visible(page, w, h, kind):
-    _open(page, w, h, {"populated": WIRE, "single": ONE_PAGE, "empty": ""}[kind])
+    surface = page.locator('#plan-preview .iface-viewport' if kind == 'populated' else '#plan-preview.plan-canvas-surface')
+    _open(page, w, h, {"populated": WIRE, "single": ONE_PAGE, "empty": ""}[kind], surface)
     if kind == "empty":
         assert page.locator('#plan-preview .plan-canvas-empty').is_visible()
+    elif kind == 'populated':
+        assert page.locator('#plan-preview .iface-node').count() >= 2
     else:
         kids = page.evaluate("() => [...document.querySelector('#plan-preview').children].map((n) => n.className || n.tagName)")
         assert len(kids) >= 2 and kids[0] == 'plan-canvas-callout' or 'plan-canvas-callout' in kids[0], kids
@@ -73,4 +77,4 @@ def test_interfaces_surface_and_callout_visible(page, w, h, kind):
     page.get_by_role("button", name="Data", exact=True).click(); page.wait_for_timeout(300)
     page.get_by_role("button", name="Interfaces", exact=True).click(); page.wait_for_timeout(600)
     assert page.locator('.plan-canvas-callout').count() == 1 and page.locator('.plan-canvas-callout').is_hidden()   # stays dismissed this session
-    assert page.locator('#plan-preview.plan-canvas-surface').is_visible()
+    assert surface.is_visible()

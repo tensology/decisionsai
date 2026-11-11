@@ -37,7 +37,131 @@ def plan_workspace_db(tmp_path, monkeypatch):
         project = Project(name="Compact Plan", folder_location=str(project_folder))
         db.add(project)
         db.commit()
-        return {"project_id": project.id, "folder": project_folder}
+        return {"project_id": project.id, "folder": project_folder, "session": get_session}
+
+
+def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_workspace_db, monkeypatch):
+    import json
+    import socket
+    import threading
+    import time
+    from types import SimpleNamespace
+    from urllib.parse import urlencode
+
+    import uvicorn
+    from fastapi import APIRouter, FastAPI
+    from distr.core.db import Chat
+    from distr.core.db.workflow import PlanWorkspace
+    from distr.core.integrations.telegram.remote_control import TelegramRemoteControlMixin
+    from distr.core.planning import assets, conversation
+    from distr.gui.web.routes.development.planning import register_routes
+
+    project_id = plan_workspace_db["project_id"]
+    with plan_workspace_db["session"]() as db:
+        board = KanbanBoard(name="Scoped plan", default_project_id=project_id)
+        db.add(board)
+        db.commit()
+        board_id = board.id
+    workspace = planning_workspace.ensure_workspace(
+        board_key=f"decisions:{board_id}", board_provider="decisions",
+        board_name="Scoped plan", project_id=project_id,
+    )
+    with plan_workspace_db["session"]() as db:
+        root_chat = Chat(title="Scoped conversation", autonomy_level="plan",
+                         params=json.dumps({"plan_workspace_id": workspace["id"]}))
+        db.add(root_chat)
+        db.flush()
+        db.add(Chat(parent_id=root_chat.id, input="Scoped evidence"))
+        db.commit()
+    monkeypatch.setattr(conversation, "get_session", plan_workspace_db["session"])
+    monkeypatch.setattr(assets, "get_session", plan_workspace_db["session"])
+    router = APIRouter(prefix="/api")
+    register_routes(router, None)
+    app = FastAPI()
+    app.include_router(router)
+    root = f"/api/workflows/studio/plan-workspaces/{workspace['id']}"
+    scope = urlencode({"board_id": board_id, "project_id": project_id})
+    responses = []
+    relay = SimpleNamespace(_send_websocket_message=responses.append)
+
+    def read(path):
+        TelegramRemoteControlMixin._dispatch_api_relay(relay, {
+            "request_id": path, "data": {"method": "GET", "path": f"{path}?{scope}"},
+        })
+        frame = responses.pop()
+        assert frame["request_id"] == path
+        assert "error" not in frame
+        return frame["data"]
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        base_url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        monkeypatch.setattr("distr.gui.web.server.get_unified_server",
+                            lambda: SimpleNamespace(is_running=True, get_url=lambda: base_url))
+        monkeypatch.setattr("distr.gui.web.security.get_internal_api_token", lambda: "fixture-token")
+        server = uvicorn.Server(uvicorn.Config(app, log_level="warning", ws="none"))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 5
+            while not server.started and thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert server.started, "The isolated Planning API did not start."
+            detail = read(root)
+            assert detail["status"] == 200
+            assert detail["response"]["id"] == workspace["id"]
+            chat = read(root + "/conversation")
+            assert chat["status"] == 200, chat["response"]
+            assert chat["response"]["messages"][0]["content"] == "Scoped evidence"
+            with plan_workspace_db["session"]() as db:
+                db.get(PlanWorkspace, workspace["id"]).project_id = None
+                db.commit()
+            for path in (root, root + "/conversation"):
+                assert read(path) == {"status": 409, "response": {
+                    "detail": "The board or project changed. Go back to Plans and refresh the list.",
+                }}
+            with plan_workspace_db["session"]() as db:
+                db.get(PlanWorkspace, workspace["id"]).project_id = project_id
+                replacement = Project(name="New board owner")
+                db.add(replacement)
+                db.flush()
+                db.get(KanbanBoard, board_id).default_project_id = replacement.id
+                db.commit()
+            for path in (root, root + "/conversation"):
+                result = read(path)
+                assert result["status"] == 409
+                assert set(result["response"]) == {"detail"}
+            with plan_workspace_db["session"]() as db:
+                db.delete(db.get(PlanWorkspace, workspace["id"]))
+                db.commit()
+            for path in (root, root + "/conversation"):
+                assert read(path) == {"status": 404, "response": {"detail": "Plan workspace not found."}}
+        finally:
+            server.should_exit = True
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+
+def test_open_plan_does_not_move_saved_artifacts_to_another_project(plan_workspace_db):
+    original = plan_workspace_db["project_id"]
+    with plan_workspace_db["session"]() as db:
+        replacement = Project(name="Replacement", folder_location=str(plan_workspace_db["folder"] / "other"))
+        db.add(replacement)
+        db.commit()
+        replacement_id = replacement.id
+    fields = {"board_key": "decisions:11", "board_provider": "decisions", "board_name": "Original"}
+    plan = planning_workspace.ensure_workspace(**fields, project_id=original)
+    item = planning_workspace.create_item(workspace_id=plan["id"], item_type="document", content="Original plan")
+
+    with pytest.raises(ValueError, match="belongs to a different project"):
+        planning_workspace.open_project_plan(**fields, project_id=replacement_id, defer_scan=True)
+
+    saved = planning_workspace.get_workspace(plan["id"])
+    assert saved["project_id"] == original
+    assert saved["root_path"] == plan["root_path"]
+    assert [row["id"] for row in saved["items"]] == [item["id"]]
+    assert Path(item["file_path"]).read_text() == "Original plan"
 
 
 def test_board_plan_language_flow_persists_versions_and_project_file(plan_workspace_db):
@@ -256,11 +380,11 @@ class Lot(models.Model):
     soft = planning_workspace.materialize_project_scan(int(opened["id"]), force=False)
     assert "prd" in soft["skipped"]
     force = planning_workspace.materialize_project_scan(int(opened["id"]), force=True, instruction="Scan project")
-    assert "prd" in force["updated"]
+    assert "prd" in force["skipped"]
+    assert "prd" not in force["updated"]
     refreshed = planning_workspace.get_workspace(int(opened["id"]))
     prd = next(item for item in refreshed["items"] if item["item_type"] == "prd")
-    assert "/auctions" in prd["content"]
-    assert "Keep this." not in prd["content"]
+    assert prd["content"] == "# Curated PRD\n\nKeep this.\n"
 
 
 def test_file_structure_scaffold_is_bounded_and_visual(plan_workspace_db):

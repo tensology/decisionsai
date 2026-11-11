@@ -4,7 +4,7 @@
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-responsive20261028">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-playback20261111">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -29,38 +29,6 @@
         </section>
         <div class="sidebar-content" id="chatList">
             <!-- Chat list will be populated here -->
-        </div>
-        <!-- TTS Player card at bottom of chat list -->
-        <div class="tts-player-card" id="ttsPlayerCard" style="display: none;">
-            <div class="tts-player-header">
-                <span class="tts-player-title">TTS playback</span>
-                <button type="button" class="tts-player-close" id="ttsPlayerClose" title="Close">×</button>
-            </div>
-            <div class="tts-player-body">
-                <div class="tts-player-progress">
-                    <input type="range" class="tts-player-seek" id="ttsPlayerSeek" min="0" max="100" value="0" title="Seek">
-                    <div class="tts-player-time" id="ttsPlayerTime">0:00 / 0:00</div>
-                </div>
-                <div class="tts-player-controls">
-                    <button type="button" class="tts-player-btn tts-player-play" id="ttsPlayerPlay" title="Play"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
-                    <button type="button" class="tts-player-btn tts-player-pause" id="ttsPlayerPause" title="Pause" style="display: none;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></button>
-                    <button type="button" class="tts-player-btn tts-player-stop" id="ttsPlayerStop" title="Stop"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg></button>
-                    <div class="tts-player-speed-wrap">
-                        <label for="ttsPlayerSpeed" class="tts-player-speed-label">Speed</label>
-                        <select class="tts-player-speed" id="ttsPlayerSpeed" title="Playback speed">
-                            <option value="0.5">0.5×</option>
-                            <option value="0.75">0.75×</option>
-                            <option value="1" selected>1×</option>
-                            <option value="1.25">1.25×</option>
-                            <option value="1.5">1.5×</option>
-                            <option value="1.75">1.75×</option>
-                            <option value="2">2×</option>
-                        </select>
-                    </div>
-                    <button type="button" class="tts-player-btn tts-player-download" id="ttsPlayerDownload" title="Download"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></button>
-                </div>
-            </div>
-            <audio id="ttsPlayerAudio" preload="metadata"></audio>
         </div>
     </aside>
 
@@ -130,6 +98,38 @@
         <!-- Chat Messages -->
         <div class="chat-messages" id="chatMessages" style="display: none;">
             <!-- Messages will be populated here -->
+        </div>
+
+        <div class="tts-player-card" id="ttsPlayerCard" role="group" aria-labelledby="ttsPlayerTitle" tabindex="-1" hidden>
+            <div class="tts-player-header">
+                <span class="tts-player-title" id="ttsPlayerTitle">Read aloud</span>
+                <button type="button" class="tts-player-close" id="ttsPlayerClose" aria-label="Close playback" title="Close playback">×</button>
+            </div>
+            <div class="tts-player-body">
+                <div class="tts-player-progress">
+                    <input type="range" class="tts-player-seek" id="ttsPlayerSeek" min="0" max="100" value="0" title="Seek">
+                    <div class="tts-player-time" id="ttsPlayerTime">0:00 / 0:00</div>
+                </div>
+                <div class="tts-player-controls">
+                    <button type="button" class="tts-player-btn tts-player-play" id="ttsPlayerPlay" title="Play"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+                    <button type="button" class="tts-player-btn tts-player-pause" id="ttsPlayerPause" title="Pause" style="display: none;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></button>
+                    <button type="button" class="tts-player-btn tts-player-stop" id="ttsPlayerStop" aria-label="Stop playback" title="Stop playback"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg></button>
+                    <div class="tts-player-speed-wrap">
+                        <label for="ttsPlayerSpeed" class="tts-player-speed-label">Speed</label>
+                        <select class="tts-player-speed" id="ttsPlayerSpeed" title="Playback speed">
+                            <option value="0.5">0.5×</option>
+                            <option value="0.75">0.75×</option>
+                            <option value="1" selected>1×</option>
+                            <option value="1.25">1.25×</option>
+                            <option value="1.5">1.5×</option>
+                            <option value="1.75">1.75×</option>
+                            <option value="2">2×</option>
+                        </select>
+                    </div>
+                    <button type="button" class="tts-player-btn tts-player-download" id="ttsPlayerDownload" title="Download"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></button>
+                </div>
+            </div>
+            <audio id="ttsPlayerAudio" preload="metadata"></audio>
         </div>
 
         <!-- Input Area -->

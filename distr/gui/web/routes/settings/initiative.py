@@ -125,12 +125,12 @@ def register_routes(router, templates):
             removed = approve_draft_in_queue(queue, draft_id)
             if removed:
                 return JSONResponse({"success": True, "message": "Draft approved and removed"})
-            still_there = queue.get_by_id(draft_id) is not None
-            if still_there:
+            retained = queue.get_by_id(draft_id)
+            if retained is not None:
                 return JSONResponse(
                     {
                         "success": False,
-                        "error": "Approval failed — install step did not complete (draft left in queue).",
+                        "error": retained.reason or "Approval did not complete. The draft is retained for review.",
                     },
                     status_code=400,
                 )

@@ -76,15 +76,13 @@ def test_public_worker_result_survives_packet_review_and_final_chat(monkeypatch)
     assert "TELEGRAM_PROPOSAL_E2E_OK" in packet["summary"]
     assert "Project CLI backend:" not in packet["summary"]
     run_result = {"success": True, "result_packet": packet, "steps_summary": []}
-    complete, append = Mock(), Mock()
-    monkeypatch.setattr("distr.core.chat_turns.latest_active_turn_id", lambda chat_id: 352)
+    complete = Mock()
     monkeypatch.setattr("distr.core.chat_turns.complete_turn", complete)
-    monkeypatch.setattr("distr.core.chat.ChatService.append_assistant_notice", append)
-    _finalize_development_chat_turn(349, "completed", run_result)
-    saved_text = append.call_args.args[1]
+    _finalize_development_chat_turn(349, "completed", run_result, turn_id=352)
+    saved_text = complete.call_args.kwargs["transcript_notice"]
     assert saved_text == packet["human_summary"]
     assert "TELEGRAM_PROPOSAL_E2E_OK" in saved_text
-    complete.assert_called_once_with(349, turn_id=352, display_text=saved_text)
+    complete.assert_called_once_with(349, turn_id=352, display_text=saved_text, transcript_notice=saved_text)
 
 
 def test_final_worker_answer_keeps_its_conclusion_when_bounded():

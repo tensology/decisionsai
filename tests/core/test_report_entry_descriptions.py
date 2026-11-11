@@ -59,7 +59,22 @@ def test_missing_or_conflicting_evidence_is_never_silently_marked_invoice_ready(
     path=tmp_path/'descriptions.json'
     path.write_text(json.dumps({'schema':1,'entries':{entry_key(original):{'description':'Updated the catalogue cache failure handling.','status':'ready','start':'2026-10-23'},'companion':{'description':'Review required: completion evidence conflicts.','status':'needs_review','start':'2026-10-23'}}}))
     rows=apply_descriptions([original,block(ref='execution:missing')],path=path)
-    assert all(row['description_status']=='needs_review' and row['title'].startswith('Review required:') for row in rows)
+    assert all(row['description_status']=='needs_review' for row in rows)
+    assert rows[0]['title'].startswith('Review required:')
+    assert rows[1]['title']=='Done and committed'
+
+
+def test_old_review_keeps_new_work_description_without_approving_it(tmp_path):
+    path=tmp_path/'descriptions.json'
+    path.write_text(json.dumps({'schema':1,'entries':{'old':{
+        'start':'2026-10-23','description':'Corrected registration validation.','status':'ready'}}}))
+    original=block(start=datetime(2026,11,10,12))
+    original['title']='Added per-byte billing support to the device settings.'
+    result=apply_descriptions([dict(original)],path=path)[0]
+    assert result['title']==original['title']
+    assert result['recorded_title']==original['title']
+    assert result['description_status']=='needs_review'
+    assert result['start']==original['start'] and result['end']==original['end']
 
 
 def test_cache_key_is_stable_across_serialisation_and_timezone_formatting():

@@ -4,7 +4,7 @@
 
 {% block head_styles %}
 {{ super() }}
-<link rel="stylesheet" href="/static/development/styles.css?v=20261110-layout1">
+<link rel="stylesheet" href="/static/development/styles.css?v=20261111-submitted-proposal-source">
 <link rel="stylesheet" href="/static/vendor/xterm/xterm.min.css">
 {% endblock %}
 
@@ -33,7 +33,12 @@
                 <button type="button" class="terminal-project-action start thread-terminal-button hidden" id="thread-terminal-button" aria-haspopup="menu" aria-controls="thread-terminal-menu" aria-expanded="false" data-running="false" aria-label="Start terminal" title="Start terminal"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 5.5v9l7-4.5z"></path></svg></button>
                 <div class="board-context-menu thread-terminal-menu hidden" id="thread-terminal-menu" role="menu" aria-label="Project terminal"><button type="button" id="thread-menu-terminal" role="menuitem"><span class="context-menu-label">Go to terminals</span></button><div class="context-menu-divider" role="separator"></div><button type="button" id="thread-menu-startup-terminals" class="thread-menu-check" role="menuitemcheckbox" aria-checked="true" title="When on, opening Development and pressing play (header or sidebar) take you to that project's terminals"><span class="thread-menu-check-box" aria-hidden="true"></span><span class="context-menu-label">On startup, go to terminals.</span></button></div>
                 <button class="icon-button thread-more-button" id="thread-more-button" aria-label="Thread menu" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                <div class="board-context-menu thread-header-menu hidden" id="thread-header-menu" role="menu"><button type="button" id="thread-menu-details" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l1.8 1.2"/></svg><span class="context-menu-label">Activity</span></button><button type="button" id="thread-menu-clear-context" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 5.5h8M6.5 5.5V4h3v1.5M5.5 5.5 6 13h4l.5-7.5"/></svg><span class="context-menu-label">Clear Context</span></button><button type="button" id="thread-menu-edit-time" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l2 1"/></svg><span class="context-menu-label">Edit Time</span></button></div>
+                <div class="board-context-menu thread-header-menu hidden" id="thread-header-menu" role="menu">
+                    <button type="button" id="thread-menu-details" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l1.8 1.2"/></svg><span class="context-menu-label">Activity</span></button>
+                    <button type="button" id="thread-menu-original-source" class="hidden" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M6 4H4v8h8v-2M8 4h4v4m0-4L7 9"/></svg><span class="context-menu-label">View original conversation</span></button>
+                    <button type="button" id="thread-menu-clear-context" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 5.5h8M6.5 5.5V4h3v1.5M5.5 5.5 6 13h4l.5-7.5"/></svg><span class="context-menu-label">Clear Context</span></button>
+                    <button type="button" id="thread-menu-edit-time" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l2 1"/></svg><span class="context-menu-label">Edit Time</span></button>
+                </div>
                 <span class="board-view-switch hidden" data-board-view-switch role="group" aria-label="Board view"></span>
             </header>
 
@@ -110,5 +115,5 @@
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/shared/js/assistant_identity.js?v={{ app_version or 'dev' }}-20261027d"></script>
 <script src="/static/shared/js/notification_sound.js?v=20261030-crossroads"></script>
-<script type="module" src="/static/development/app.js?v=20261110-reply2"></script>
+<script type="module" src="/static/development/app.js?v=20261111-submitted-proposal-source"></script>
 {% endblock %}

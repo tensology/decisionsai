@@ -2,6 +2,8 @@
 
 __all__ = ["WhatsAppWebSocketManager"]
 
+RELAY_MEDIA_CHUNK_BYTES = 1024 * 1024
+
 
 def __getattr__(name: str):
     if name == "WhatsAppWebSocketManager":

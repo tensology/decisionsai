@@ -30,6 +30,8 @@ def _open(page, fixture_base, *, sync=None, fail_save=False, local=False):
     def handler(route):
         request = route.request
         path = urlparse(request.url).path
+        if path.endswith('/incoming/check'):
+            return route.fulfill(json={'success': True})
         if path.endswith('/proposals/details'):
             body = request.post_data_json
             state['writes'].append(body)
@@ -45,7 +47,7 @@ def _open(page, fixture_base, *, sync=None, fail_save=False, local=False):
             return route.fulfill(json={'attachments': [], 'failures': []})
         route.fallback()
 
-    page.route('**/api/workflows/studio/incoming/proposals**', handler)
+    page.route('**/api/workflows/studio/incoming/**', handler)
     page.add_init_script("""localStorage.setItem('incoming.proposal.tasks.done:tensology:94', '[0]');
         const originalFetch = window.fetch.bind(window);
         window.fetch = async (...args) => {
@@ -61,7 +63,7 @@ def _open(page, fixture_base, *, sync=None, fail_save=False, local=False):
 def test_task_completion_waits_for_server_and_survives_reopen(page, fixture_base, width):
     page.set_viewport_size({'width': width, 'height': 900})
     state = _open(page, fixture_base)
-    expect(page.locator('#incoming-proposal-sync-status')).to_have_text('Synchronized with Tensology.')
+    expect(page.locator('#incoming-proposal-sync-status')).to_be_hidden()
     page.locator('.proposal-title').click()
     page.locator('[data-proposal-tab="tasks"]').click()
     toggles = page.locator('[data-proposal-task-toggle]')
@@ -125,7 +127,7 @@ def test_resync_displays_incomplete_without_hiding_proposals(page, fixture_base,
     expect(status).to_have_text('Checking proposal synchronization...')
     page.wait_for_timeout(200)  # Allow the existing error-color transition to settle.
     page.screenshot(path=str(SHOTS / f'sync-pending-{width}.png'))
-    expect(status).to_have_text('Synchronized with Tensology.')
+    expect(status).to_have_text('1 proposal sent to Tensology. 1 proposal updated in Tensology.')
     page.screenshot(path=str(SHOTS / f'sync-complete-{width}.png'))
 
 
@@ -164,7 +166,7 @@ def test_sync_completion_push_reads_cache_without_restarting_triage(page, fixtur
         const socket = window.proposalSockets.find(item => item.sent.some(message => message.subscribe_topic === 'incoming'));
         socket.onmessage({data: JSON.stringify({type: 'proposal_changed', status})});
     }""", status)
-    expect(page.locator('#incoming-proposal-sync-status')).to_have_text('Synchronized with Tensology.')
+    expect(page.locator('#incoming-proposal-sync-status')).to_be_hidden()
     assert state['list_requests'], 'The completion event must refresh the displayed cached result.'
     assert not any('refresh=1' in url for url in state['list_requests']), 'Completion must not restart triage.'
     expect(page.locator('#incoming-resync')).to_be_enabled()

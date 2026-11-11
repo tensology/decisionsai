@@ -1,11 +1,13 @@
 import json
+import contextlib
+import sys
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine,text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from distr.core.db import engine
+from distr.core.db import Base,engine
 from distr.core.workflow.interactions import (
     classify_reply,
     create_workflow_interaction,
@@ -20,7 +22,17 @@ from distr.core.workflow.interactions import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_interactions():
+def _clear_interactions(tmp_path,monkeypatch):
+    from distr.core.workflow import interactions,dispatcher,service
+    from distr.core import db as db_module
+    test_engine=create_engine(f"sqlite:///{tmp_path/'interactions.db'}")
+    Base.metadata.create_all(test_engine)
+    @contextlib.contextmanager
+    def session():
+        with Session(test_engine) as db: yield db
+    monkeypatch.setattr(sys.modules[__name__],'engine',test_engine)
+    monkeypatch.setattr(interactions,'engine',test_engine)
+    for module in (db_module,dispatcher,service):monkeypatch.setattr(module,'get_session',session)
     # Force table creation before cleaning it.
     pending_interactions()
     with engine.begin() as conn:
@@ -28,9 +40,24 @@ def _clear_interactions():
     yield
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM workflow_interactions"))
+    test_engine.dispose()
+
+
+def _seed(workflow_id=10,run_id=20,step_id=30,kind='approval'):
+    from distr.core.db.workflow import AutoWorkflow,AutoWorkflowRun,AutoWorkflowStep
+    with Session(engine) as db:
+        if db.get(AutoWorkflow,workflow_id) is None:db.add(AutoWorkflow(id=workflow_id,name='Explicit checkpoint fixture'))
+        if db.get(AutoWorkflowStep,step_id) is None:db.add(AutoWorkflowStep(id=step_id,workflow_id=workflow_id,name='Checkpoint',status='waiting'))
+        run=db.get(AutoWorkflowRun,run_id)
+        if run is None:
+            run=AutoWorkflowRun(id=run_id,workflow_id=workflow_id);db.add(run)
+        run.status='waiting';run.current_step_id=step_id
+        run.run_data=json.dumps({'waiting_kind':kind})
+        db.commit()
 
 
 def _create(kind="approval", chat_id=123):
+    _seed(kind=kind)
     return create_workflow_interaction(
         workflow_id=10,
         run_id=20,
@@ -109,6 +136,50 @@ def test_telegram_delivery_failure_is_visible_on_pending_interaction():
     assert pending_interactions(chat_id=123)[0]["error"] == "Telegram returned 429"
 
 
+@pytest.mark.parametrize("bad_chat, bad_message", [(None, 988), (123, None), (123, True), (0, 988)])
+def test_incomplete_telegram_receipt_cannot_replace_confirmed_controls(bad_chat, bad_message):
+    token = _create()["token"]
+    assert record_telegram_delivery(token=token, telegram_chat_id=123, telegram_message_id=987, reply_markup_sent=True)
+    assert not record_telegram_delivery(token=token, telegram_chat_id=bad_chat, telegram_message_id=bad_message,
+                                        reply_markup_sent=True)
+    row = pending_interactions(chat_id=123)[0]
+    assert row["telegram_message_id"] == "987"
+    assert row["error"] is None
+
+
+def test_checkpoint_delivery_errors_cannot_downgrade_confirmed_controls():
+    token = _create()["token"]
+    assert record_telegram_delivery(token=token, telegram_chat_id="123", telegram_message_id="987", reply_markup_sent=False)
+    assert pending_interactions(chat_id=123)[0]["error"] == "Telegram acknowledged the message without its controls"
+    assert record_telegram_delivery(token=token, telegram_chat_id=123, telegram_message_id=988, reply_markup_sent=True)
+    assert not record_telegram_delivery_error(token=token, error="Late relay failure")
+    assert not record_telegram_delivery(token=token, telegram_chat_id=123, telegram_message_id=987, reply_markup_sent=False)
+    row = pending_interactions(chat_id=123)[0]
+    assert row["telegram_message_id"] == "988"
+    assert row["error"] is None
+
+
+def test_relay_checkpoint_receipt_requires_a_boolean_controls_confirmation():
+    from types import SimpleNamespace
+    from distr.core.integrations.telegram.manager import TelegramWebSocketManager
+
+    token = _create()["token"]
+    receiver = SimpleNamespace(_mark_socket_heartbeat_seen=lambda: None)
+    packet = {"type": "message_sent", "client_message_id": token, "chat_id": 123,
+              "telegram_message_id": 987, "reply_markup_sent": "false"}
+    TelegramWebSocketManager._on_message(receiver, json.dumps(packet))
+    assert pending_interactions(chat_id=123)[0]["error"] == "Telegram acknowledged the message without its controls"
+
+    packet.update(telegram_message_id=988, reply_markup_sent=True)
+    TelegramWebSocketManager._on_message(receiver, json.dumps(packet))
+    TelegramWebSocketManager._on_message(receiver, json.dumps({
+        "type": "error", "client_message_id": token, "message": "Late relay error",
+    }))
+    row = pending_interactions(chat_id=123)[0]
+    assert row["telegram_message_id"] == "988"
+    assert row["error"] is None
+
+
 def test_reissue_preserves_pending_checkpoint_and_resends_exact_question(monkeypatch):
     from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
 
@@ -168,7 +239,7 @@ def test_pending_interaction_expires_when_run_is_no_longer_waiting():
         workflow = AutoWorkflow(name="interaction lifecycle test")
         db.add(workflow)
         db.flush()
-        run = AutoWorkflowRun(workflow_id=workflow.id, status="waiting")
+        run = AutoWorkflowRun(workflow_id=workflow.id, status="waiting",run_data=json.dumps({'waiting_kind':'approval'}))
         db.add(run)
         db.commit()
         run_id = int(run.id)
@@ -219,6 +290,7 @@ def test_create_retries_transient_sqlite_lock_without_duplicate(monkeypatch):
 
 def test_multiple_pending_short_reply_is_ambiguous():
     _create()
+    _seed(11,21,31)
     create_workflow_interaction(
         workflow_id=11, run_id=21, step_id=31, kind="approval", telegram_chat_id=123
     )
@@ -229,13 +301,14 @@ def test_multiple_pending_short_reply_is_ambiguous():
 
 def test_multiple_pending_can_target_explicit_run(monkeypatch):
     _create()
+    _seed(11,21,31)
     second = create_workflow_interaction(
         workflow_id=11, run_id=21, step_id=31, kind="approval", telegram_chat_id=123
     )
     captured = []
     monkeypatch.setattr(
         "distr.core.workflow.dispatcher.continue_waiting_step",
-        lambda run_id, feedback: captured.append((run_id, feedback)) or {"success": True},
+        lambda run_id, feedback, **kwargs: captured.append((run_id, feedback)) or {"success": True},
     )
     result = handle_telegram_workflow_reply("approve run #21", chat_id=123)
     assert result["success"] is True
@@ -264,7 +337,7 @@ def test_telegram_resolution_queues_slow_work_off_ui_thread(monkeypatch):
     )
     monkeypatch.setattr(
         "distr.core.workflow.dispatcher.continue_waiting_step",
-        lambda run_id, feedback: captured.append((run_id, feedback)) or {"success": True},
+        lambda run_id, feedback, **kwargs: captured.append((run_id, feedback)) or {"success": True},
     )
 
     result = handle_telegram_workflow_reply(
@@ -305,7 +378,7 @@ def test_failed_resolution_remains_retryable(monkeypatch):
     interaction = _create()
     calls = {"count": 0}
 
-    def _continue(_run_id, _feedback):
+    def _continue(_run_id, _feedback, **kwargs):
         calls["count"] += 1
         if calls["count"] == 1:
             return {"error": "temporary failure"}
@@ -323,7 +396,7 @@ def test_resolved_interaction_is_idempotent(monkeypatch):
     interaction = _create()
     monkeypatch.setattr(
         "distr.core.workflow.dispatcher.continue_waiting_step",
-        lambda *_args: {"success": True},
+        lambda *_args, **kwargs: {"success": True},
     )
     assert resolve_interaction(token=interaction["token"], action="approve", chat_id=123)["success"]
     duplicate = resolve_interaction(token=interaction["token"], action="approve", chat_id=123)

@@ -18,11 +18,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from distr.core.chat import ChatService, _chat_params
+from distr.core.chat import ChatService, _append_user_turn, _chat_params, record_chat_audit_event
 from distr.core.db import Chat, get_session
 from distr.core.db.projects import Project
 from distr.core.db.time import utc_now_naive
-from distr.core.workflow.development_threads import development_thread_metadata
+from distr.core.workflow.development_threads import development_scope_identity, development_thread_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -309,10 +309,10 @@ def _prompt_expects_project_change(prompt: str, *, autonomy_level: str) -> bool:
     """
     if str(autonomy_level or "").strip().lower() == "plan":
         return False
-    clean = re.sub(r"\s+", " ", str(prompt or "")).strip().lower()
-    if not clean:
+    clean = re.sub(r"\s+", " ", str(prompt or "").split('\n\nRetained proposal conversation evidence', 1)[0]).strip().lower()
+    if not clean or _audit_only_request(clean):
         return False
-    if re.match(r"^(?:what|why|how|where|when|who|explain|describe|tell me|review|audit|inspect)\b", clean):
+    if re.match(r"^(?:what|why|how|where|when|who|explain|describe|tell me)\b", clean):
         return False
     return bool(
         re.search(
@@ -320,6 +320,20 @@ def _prompt_expects_project_change(prompt: str, *, autonomy_level: str) -> bool:
             clean,
         )
     )
+
+
+def _audit_only_request(prompt: str) -> bool:
+    """Scope the current instruction, never an old request in source/history."""
+    text = re.sub(r"\s+", " ", str(prompt or "").split('\n\nRetained proposal conversation evidence', 1)[0]).strip().lower()
+    if re.search(r'\b(?:audit[ -]only|review[ -]only|strictly read[ -]only)\b', text):
+        return True
+    if re.match(r"^(?:(?:please|can you|could you|ok)[, ]+)*(?:fix|implement|build|add|change|deploy)\b", text):
+        return False
+    if re.search(r"\b(?:audit[ -]only|review[ -]only|read[ -]only|do not (?:make fixes|edit|modify|change)|don't (?:make fixes|edit|modify|change))\b", text):
+        return True
+    if re.search(r"\b(?:and|then)\s+(?:fix|implement|change|deploy|publish)\b", text):
+        return False
+    return bool(re.match(r"^(?:(?:please|can you|could you|ok)[, ]+)*(?:audit|review|inspect|assess|check whether|check if)\b", text))
 
 
 def _git_project_root(folder: str) -> Path | None:
@@ -390,6 +404,24 @@ def _git_untracked_fingerprints(folder: str, status: dict[str, str] | None = Non
     return fingerprints
 
 
+def _git_dirty_fingerprints(folder: str, status: dict[str, str]) -> dict[str, str]:
+    root = _git_project_root(folder)
+    if root is None:
+        return {}
+    fingerprints = {}
+    for relative in status:
+        candidate = (root / relative).resolve()
+        if candidate.is_relative_to(root):
+            fingerprints[relative] = _file_fingerprint(candidate)
+    return fingerprints
+
+
+def _git_head(folder: str) -> str:
+    result = subprocess.run(['git', '-C', folder, 'rev-parse', '--verify', 'HEAD'],
+                            capture_output=True, text=True, check=False, timeout=10)
+    return result.stdout.strip() if result.returncode == 0 else ''
+
+
 def _file_fingerprint(path: Path) -> str:
     if not path.exists():
         return "missing"
@@ -407,17 +439,29 @@ def _turn_change_manifest(
     before: dict[str, str],
     *,
     before_untracked: dict[str, str] | None = None,
+    before_fingerprints: dict[str, str] | None = None,
+    before_head: str = '',
 ) -> dict[str, Any]:
     root = _git_project_root(folder)
     if root is None:
         return {"files": [], "additions": 0, "deletions": 0, "reversible": False}
     after = _git_status_snapshot(str(root))
+    committed = set()
+    if before_head and before_head != _git_head(str(root)):
+        result = subprocess.run(['git', '-C', str(root), 'diff', '--name-only', '-z', before_head, 'HEAD'],
+                                capture_output=True, text=True, check=True, timeout=20)
+        committed.update(filter(None, result.stdout.split('\0')))
     before_fps = {
         str(path): str(digest)
         for path, digest in dict(before_untracked or {}).items()
         if path and digest
     }
     after_fps = _git_untracked_fingerprints(str(root), after)
+
+    def content_changed(path: str) -> bool:
+        previous = (before_fingerprints or {}).get(path)
+        candidate = (root / path).resolve()
+        return bool(previous and candidate.is_relative_to(root) and previous != _file_fingerprint(candidate))
 
     def _untracked_content_changed(path: str) -> bool:
         return (
@@ -429,8 +473,8 @@ def _turn_change_manifest(
 
     paths = sorted(
         path
-        for path in after
-        if before.get(path) != after.get(path) or _untracked_content_changed(path)
+        for path in set(before) | set(after) | committed
+        if path in committed or before.get(path) != after.get(path) or _untracked_content_changed(path) or content_changed(path)
     )
     files: list[dict[str, Any]] = []
     total_additions = 0
@@ -441,7 +485,7 @@ def _turn_change_manifest(
             candidate.relative_to(root)
         except ValueError:
             continue
-        status = after[relative]
+        status = after.get(relative) or ('committed' if relative in committed else " D" if not candidate.exists() else " M")
         additions = deletions = 0
         if status == "??" and candidate.is_file():
             try:
@@ -454,7 +498,7 @@ def _turn_change_manifest(
                 additions = 1
         else:
             result = subprocess.run(
-                ["git", "-C", str(root), "diff", "--numstat", "HEAD", "--", relative],
+                ["git", "-C", str(root), "diff", "--numstat", before_head if relative in committed else "HEAD", "--", relative],
                 capture_output=True,
                 text=True,
                 timeout=20,
@@ -465,6 +509,10 @@ def _turn_change_manifest(
                 if len(columns) >= 2:
                     additions = int(columns[0]) if columns[0].isdigit() else 0
                     deletions = int(columns[1]) if columns[1].isdigit() else 0
+        if relative in before and before_fingerprints:
+            # HEAD includes the user's pre-existing edits. Do not present
+            # those line totals as changes made by this turn.
+            additions = deletions = 0
         total_additions += additions
         total_deletions += deletions
         files.append(
@@ -474,7 +522,8 @@ def _turn_change_manifest(
                 "additions": additions,
                 "deletions": deletions,
                 "after_fingerprint": _file_fingerprint(candidate),
-                "reversible": relative not in before and status in {"??", " M", "M ", "MM", " D", "D "},
+                "line_counts_available": not (relative in before and bool(before_fingerprints)),
+                "reversible": relative not in committed and relative not in before and status in {"??", " M", "M ", "MM", " D", "D "},
             }
         )
     return {
@@ -685,19 +734,15 @@ def _turn_route_entry(receipt: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _remember_turn_route(db, chat_id: int, development: dict[str, Any], receipt: Any) -> None:
-    """Store the route on development.turn_routes keyed by the latest user row (child Chat with input).
+def _remember_turn_route(db, chat_id: int, development: dict[str, Any], receipt: Any, *, turn_id: int | None = None) -> None:
+    """Store the route on development.turn_routes keyed by its user row.
 
     Display-only: routing never reads this. Called inside an open session before commit.
     """
     if not isinstance(receipt, dict) or not isinstance(receipt.get("selected"), dict):
         return
-    user_row = (
-        db.query(Chat)
-        .filter(Chat.parent_id == int(chat_id), Chat.input.isnot(None))
-        .order_by(Chat.id.desc())
-        .first()
-    )
+    query = db.query(Chat).filter(Chat.parent_id == int(chat_id), Chat.input.isnot(None))
+    user_row = query.filter(Chat.id == turn_id).first() if turn_id is not None else query.order_by(Chat.id.desc()).first()
     if user_row is None:
         return
     routes = dict(development.get("turn_routes") or {})
@@ -731,14 +776,58 @@ def record_turn_route(chat_id: int, receipt: dict[str, Any]) -> None:
         logger.debug("Could not record the per-turn route for chat %s", chat_id, exc_info=True)
 
 
-def _update_execution(chat_id: int, *, job_id: str | None = None, **changes: Any) -> dict[str, Any]:
+class DevelopmentExecutionBusy(ValueError):
+    """The current thread state prevents the direct run from starting."""
+
+
+def require_direct_execution_available(execution: dict[str, Any]) -> None:
+    status = str(execution.get("status") or "").lower()
+    # A finished turn may be waiting for a human reply.
+    completed_wait = status == "waiting" and execution.get("completed_at")
+    if status in ACTIVE_EXECUTION_STATUSES and not completed_wait:
+        raise DevelopmentExecutionBusy("Work is already running in this Development thread.")
+
+
+def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope: tuple | None = None,
+                      reconcile_from: tuple | None = None,
+                      resume_job_id: str | None = None,
+                      new_prompt: str | None = None, new_prompt_metadata: dict | None = None,
+                      expected_autonomy: str | None = None,
+                      queued_followup: dict | None = None,
+                      **changes: Any) -> dict[str, Any]:
     with get_session() as db:
+        if (expected_scope is not None or reconcile_from is not None) and db.get_bind().dialect.name == 'sqlite':
+            db.connection().exec_driver_sql('BEGIN IMMEDIATE')
         root = db.get(Chat, int(chat_id))
         if root is None or root.parent_id is not None:
             raise LookupError("Development thread not found.")
+        if expected_scope is not None:
+            if development_scope_identity(root.project_id,development_thread_metadata(root),chat_id=root.id) != expected_scope:
+                raise ValueError('The Development project, board or ticket changed before work started. Review its scope and retry.')
         params = _chat_params(root.params)
         development = dict(params.get("development") or {})
         execution = dict(development.get("execution") or {})
+        if expected_scope is not None:
+            if development.get("proactive_dispatch"):
+                raise DevelopmentExecutionBusy("Approved proactive work is already running in this Development thread.")
+            require_direct_execution_available(execution)
+            if resume_job_id and (execution.get("job_id") != resume_job_id or not execution.get("interrupted")):
+                raise DevelopmentExecutionBusy("The interrupted turn changed before it could be resumed.")
+            if new_prompt is not None:
+                autonomy = str(root.autonomy_level or "full").strip().lower()
+                if (autonomy != expected_autonomy or autonomy == "approval" or development.get("workflow_id")
+                        or str(development.get("source_type") or "").lower() == "automation"):
+                    raise DevelopmentExecutionBusy(
+                        "The Development thread settings changed. Review the thread before sending again."
+                    )
+                if queued_followup is not None:
+                    command_id = _accept_proactive_followup(db, root, development, queued_followup)
+                    new_prompt_metadata = {**(new_prompt_metadata or {}), "queued_command_id": command_id}
+                changes["turn_id"] = _append_user_turn(db, root, params, new_prompt, new_prompt_metadata)
+        if reconcile_from is not None:
+            scope, saved_execution = reconcile_from
+            if execution != saved_execution or _development_execution_scope(db, root, development) != scope:
+                return execution
         existing_job_id = execution.get("job_id")
         starts_new_turn = bool(
             job_id
@@ -748,14 +837,14 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, **changes: Any
         )
         if job_id and existing_job_id not in {None, job_id} and not starts_new_turn:
             return execution
-        if starts_new_turn:
+        if starts_new_turn or expected_scope is not None:
             execution = {}
         execution.update({key: value for key, value in changes.items() if value is not None})
         if job_id:
             execution["job_id"] = job_id
         if changes.get("route_receipt") is not None:
             try:
-                _remember_turn_route(db, int(chat_id), development, changes.get("route_receipt"))
+                _remember_turn_route(db, int(chat_id), development, changes.get("route_receipt"), turn_id=execution.get("turn_id"))
             except Exception:
                 logger.debug("Could not record the per-turn route for chat %s", chat_id, exc_info=True)
         development["execution"] = execution
@@ -802,21 +891,93 @@ def _append_streamed_output(chat_id: int, *, job_id: str, delta: str) -> str:
     return output
 
 
+def _execution_record_id(value: Any) -> int | None:
+    if type(value) is int:
+        return value if 0 < value < 2**63 else None
+    if isinstance(value, str) and 0 < len(value) <= 19 and value.isascii() and value.isdecimal():
+        number = int(value)
+        if 0 < number < 2**63 and str(number) == value:
+            return number
+    return None
+
+
+def _development_execution_scope(db, root, metadata):
+    from distr.core.db.workflow import DevelopmentWorkItem
+
+    item = db.query(DevelopmentWorkItem).filter_by(chat_id=root.id).first()
+    if (item is not None and item.project_id != root.project_id) or (item is None and not metadata):
+        return None
+    ticket = item.local_ticket_id if item is not None else metadata.get("ticket_id")
+    ticket_id = _execution_record_id(ticket)
+    if ticket is not None and ticket_id is None:
+        return None
+    return root.project_id if root.project_id is not None else -root.id, ticket_id
+
+
+def _session_matches_development(row, scope, *, chat_id, turn_id):
+    if row is None or scope is None or (row.project_id, row.ticket_id) != scope:
+        return False
+    try:
+        packet = json.loads(row.input_packet or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(packet, dict):
+        return False
+    if packet.get("chat_id") is not None and _execution_record_id(packet["chat_id"]) != chat_id:
+        return False
+    if packet.get("turn_id") is not None and turn_id is not None:
+        expected = _execution_record_id(turn_id)
+        return expected is not None and _execution_record_id(packet["turn_id"]) == expected
+    return True
+
+
+def _scoped_development_runs(db, chat_id, scope):
+    from sqlalchemy import and_, case, cast, func, or_, String
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    query = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.chat_id == chat_id)
+    if scope is None:
+        return query.filter(False)
+    project_id, ticket_id = scope
+    data = case((func.json_valid(AutoWorkflowRun.run_data) == 1, AutoWorkflowRun.run_data), else_="{}")
+    run_project = func.json_extract(data, "$.project_id")
+    return query.filter(
+        AutoWorkflowRun.ticket_id.is_not_distinct_from(ticket_id),
+        or_(run_project.is_(None), and_(
+            func.json_type(data, "$.project_id").in_(["integer", "text"]),
+            cast(run_project, String) == str(project_id),
+        )),
+    )
+
+
 def development_execution_state(chat_id: int) -> dict[str, Any]:
     terminal_reconciliation: dict[str, Any] | None = None
     workflow_execution: dict[str, Any] | None = None
+    session_rejected = False
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
         if root is None or root.parent_id is not None:
             raise LookupError("Development thread not found.")
-        execution = dict(development_thread_metadata(root).get("execution") or {})
-        turn_routes = dict(development_thread_metadata(root).get("turn_routes") or {})
+        metadata = development_thread_metadata(root)
+        execution = dict(metadata.get("execution") or {})
+        saved_execution = dict(execution)
+        turn_routes = dict(metadata.get("turn_routes") or {})
+        scope = _development_execution_scope(db, root, metadata)
+        if metadata.get("proactive_dispatch"):
+            from distr.core.orchestrator_proactive import proactive_development_execution
+
+            proactive = proactive_development_execution(db, root, scope, metadata["proactive_dispatch"])
+            if proactive is None:
+                proactive = {
+                    "origin": "proactive_orchestrator", "direct": True, "status": "blocked", "can_stop": False,
+                    "summary": "The previous approval no longer matches this thread. Review its outcome before continuing.",
+                }
+            return {**proactive, "turn_routes": turn_routes}
         if not execution:
             from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
 
             run = (
-                db.query(AutoWorkflowRun)
-                .filter(AutoWorkflowRun.chat_id == int(chat_id))
+                _scoped_development_runs(db, int(chat_id), scope)
                 .order_by(AutoWorkflowRun.id.desc())
                 .first()
             )
@@ -853,19 +1014,26 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                     "route_receipt": route_receipt,
                 }
         persisted_status = str(execution.get("status") or "").lower()
-        session_id = execution.get("execution_session_id")
-        if session_id:
+        if execution.get("execution_session_id") is not None:
             from distr.core.db.kanban import ProjectExecutionSession
 
-            row = db.get(ProjectExecutionSession, int(session_id))
-            if row is not None and execution.get("status") != "cancelled":
+            session_id = _execution_record_id(execution["execution_session_id"])
+            row = db.get(ProjectExecutionSession, session_id) if session_id is not None else None
+            if not _session_matches_development(row, scope, chat_id=root.id, turn_id=execution.get("turn_id")):
+                session_rejected = True
+            elif execution.get("status") != "cancelled" and not execution.get("interrupted"):
                 row_status = str(row.status or "").lower()
+                interrupted = row_status == "interrupted"
+                if interrupted:
+                    row_status = "failed"
                 # Provider completion precedes saving the reply and completing
                 # the chat turn. Only the owning finalizer can publish success.
                 finalizing = row_status == "completed" and persisted_status in ACTIVE_EXECUTION_STATUSES
+                if row.route_type == "native_turn" and row_status == "queued" and persisted_status == "running":
+                    row_status = "running"
                 execution.update(
                     {
-                        "status": persisted_status if row_status == "completed" and persisted_status else row.status or execution.get("status") or "queued",
+                        "status": persisted_status if row_status == "completed" and persisted_status else row_status or execution.get("status") or "queued",
                         "backend_id": row.route_backend or execution.get("backend_id") or "",
                         "model": row.selected_model or execution.get("model") or "auto",
                         "started_at": row.started_at.isoformat() if row.started_at else execution.get("started_at"),
@@ -876,9 +1044,12 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                 output = _json(row.output_packet)
                 if output:
                     execution["output_packet"] = output
-                if row_status in {"failed", "cancelled"} and row_status != persisted_status:
+                if interrupted or (row_status in {"failed", "cancelled"} and row_status != persisted_status):
+                    if interrupted:
+                        execution["interrupted"] = True
                     terminal_reconciliation = {
                         "status": row_status,
+                        "interrupted": interrupted,
                         "backend_id": row.route_backend or execution.get("backend_id") or "",
                         "model": row.selected_model or execution.get("model") or "auto",
                         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
@@ -889,9 +1060,10 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
         workflow_execution["turn_routes"] = turn_routes
         return workflow_execution
     if terminal_reconciliation is not None:
-        execution = _update_execution(
+        _update_execution(
             int(chat_id),
             job_id=str(execution.get("job_id") or "") or None,
+            reconcile_from=(scope, saved_execution),
             **terminal_reconciliation,
         )
     if (
@@ -909,12 +1081,16 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
             execution = _update_execution(
                 int(chat_id),
                 job_id=str(execution.get("job_id") or "") or None,
+                reconcile_from=(scope, saved_execution),
                 status="failed",
+                interrupted=True,
                 completed_at=utc_now_naive().isoformat(),
                 activity_status="failed",
                 summary="The native Development turn was interrupted when DecisionsAI stopped.",
                 error="The native Development turn was interrupted when DecisionsAI stopped.",
             )
+    if session_rejected:
+        execution.pop("execution_session_id", None)
     execution["direct"] = True
     execution["id"] = execution.get("execution_session_id") or execution.get("job_id")
     execution["turn_routes"] = turn_routes
@@ -1201,6 +1377,7 @@ def _runtime_identity_text(metadata: dict[str, Any]) -> str:
 def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, autonomy_level: str) -> str:
     from distr.core.chat_agents import agent_instructions
     from distr.core.incoming.source_context import thread_source_instructions
+    from distr.core.turn_runtime.context import DEVELOPMENT_RESPONSE_GUIDANCE
 
     history = ChatService.get_chat_history(int(chat_id))
     if history and history[-1].get("role") == "user" and str(history[-1].get("content") or "").strip() == prompt.strip():
@@ -1231,6 +1408,13 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
         if autonomy_level == "plan"
         else "Work as the active IDE coding agent. Inspect, edit, run checks, and continue until this request is genuinely handled or a user decision is required."
     )
+    if _audit_only_request(prompt) or metadata.get('work_mode') == 'audit':
+        mode_instruction = (
+            "Audit-only mode. Inspect the existing work and return evidence and gaps. "
+            "Do not edit files, repair defects, commit, push, deploy, send messages or start another engine. "
+            "Older implementation or deployment requests in the history are background, not current authorization. "
+            "Stop after the audit report and wait for explicit repair authorization."
+        )
     selected_skills = [str(skill_id).strip() for skill_id in (metadata.get("turn_skill_ids") or []) if str(skill_id).strip()]
     recommendation = str(metadata.get("skill_recommendation") or "").strip()
     if selected_skills and recommendation:
@@ -1253,11 +1437,17 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
         for part in (
             "[DECISIONS DEVELOPMENT THREAD]\n"
             f"{mode_instruction}\n"
-            "Respond conversationally and use the project tools directly, as in a normal coding IDE. "
+            "Use the project tools directly, as in a normal coding IDE. "
             "This Development thread is the ticket and the current work item. Work on it directly. "
             "Do not create another ticket, issue, or ticket file unless the user explicitly asks for a separate work item. "
             "Use direct execution for compact work. When deterministic instruction analysis selects a workflow, keep this thread as the owner and run the workflow orchestrator as its sub-agent. "
             "A direct modification request is authorization to implement it. Do not finish by offering to make the requested change or asking which obvious project target to use when repository and runtime evidence identify it. When cosmetic details are omitted, make the smallest conventional implementation and report what you chose.",
+            "Completion evidence: run each required test, build, lint or browser check as a separate command. "
+            "Preserve failures (including pipelines); do not turn a failing check into success with tail or true. "
+            "A tool finishing is not verification. Report failed, missing and skipped checks explicitly. "
+            "Only claim deployed when this turn has authoritative deployment evidence. "
+            "Stay within this project's scope; another site's code or shared data requires explicit authorization.",
+            DEVELOPMENT_RESPONSE_GUIDANCE,
             _runtime_identity_text(metadata),
             agent_instructions(chat_id),
             thread_source_instructions(chat_id),
@@ -1347,43 +1537,100 @@ def _write_response(chat_id: int, turn_id: int | None, response: str) -> None:
         db.commit()
 
 
-def _start_next_queued_instruction(chat_id: int) -> None:
+def _queue_head(db, chat_id: int):
     from distr.core.db.workflow import DevelopmentCommand
 
-    with get_session() as db:
-        command = (
-            db.query(DevelopmentCommand)
-            .filter(
-                DevelopmentCommand.chat_id == int(chat_id),
-                DevelopmentCommand.status.in_(['queued', 'editing', 'dispatching']),
-            )
-            .order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc())
-            .first()
+    return (
+        db.query(DevelopmentCommand)
+        .filter(
+            DevelopmentCommand.chat_id == int(chat_id),
+            DevelopmentCommand.status.in_(['queued', 'editing', 'dispatching']),
         )
+        .order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc())
+        .first()
+    )
+
+
+def _accept_proactive_followup(db, root, development, followup) -> int:
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.workflow.development_threads import _scope_execution_active
+
+    ticket = db.get(KanbanTicket, followup["ticket_id"])
+    lane = db.get(KanbanLane, ticket.lane_id) if ticket else None
+    board = db.get(KanbanBoard, lane.board_id) if lane else None
+    if ticket is None or board is None:
+        raise DevelopmentExecutionBusy("The approved ticket is no longer available. Its follow-up remains queued.")
+    project = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
+    linked_project = db.get(Project, project) if project is not None else None
+    if (root.is_archived or root.project_id != followup["project_id"] or project != root.project_id
+            or linked_project is None or linked_project.deleted_at is not None
+            or board.archived or board.id != followup["board_id"]
+            or ticket.source_chat_id != root.id or ticket.linked_workflow_id is not None
+            or development.get("ticket_id") != ticket.id):
+        raise DevelopmentExecutionBusy("The approved ticket changed scope. Its follow-up remains queued.")
+    if _scope_execution_active(db, root, development):
+        raise DevelopmentExecutionBusy("The thread already has active work. Its follow-up remains queued.")
+    previous = db.query(Chat).filter(
+        Chat.parent_id == root.id, Chat.input.isnot(None), Chat.input != "",
+    ).order_by(Chat.id.desc()).first()
+    command = _queue_head(db, root.id)
+    if (previous is None or previous.id != followup["turn_id"] or not previous.response
+            or command is None or command.id != followup["command_id"] or command.status != "queued"
+            or command.command_type != "followup" or command.workflow_id is not None or command.run_id is not None
+            or command.modified_at != followup["modified_at"] or command.created_at > previous.modified_date
+            or command.modified_at > previous.modified_date):
+        raise DevelopmentExecutionBusy("The follow-up or its preceding turn changed. The follow-up remains queued.")
+    command.status = "delivered"
+    command.delivered_at = utc_now_naive()
+    command.result_summary = "Started after the approved work completed."
+    return command.id
+
+
+def _start_next_queued_instruction(chat_id: int, *, after_proactive: dict | None = None, _session_provider=None) -> None:
+    from distr.core.db.workflow import DevelopmentCommand
+
+    with (_session_provider or get_session)() as db:
+        command = _queue_head(db, chat_id)
         if command is None or command.status != 'queued':
             return
-        if not db.query(DevelopmentCommand).filter_by(id=command.id, status='queued').update({'status': 'dispatching'}, synchronize_session=False):
+        if after_proactive is not None and (
+            command.command_type != "followup" or command.workflow_id is not None or command.run_id is not None
+        ):
             return
         command_id = command.id
         content = str(command.content or "").strip()
-        try:
-            command_metadata = json.loads(command.metadata_json or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            command_metadata = {}
-        skill_ids = command_metadata.get("skill_ids") if isinstance(command_metadata, dict) else []
-        command.status = 'dispatching'
-        db.commit()
-    if not content:
-        return
+        if not content:
+            return
+        command_metadata = _json(command.metadata_json)
+        if after_proactive is None:
+            if not db.query(DevelopmentCommand).filter_by(id=command.id, status='queued').update(
+                {'status': 'dispatching'}, synchronize_session=False,
+            ):
+                return
+            db.commit()
+        else:
+            after_proactive = {**after_proactive, "command_id": command_id, "modified_at": command.modified_at}
+    skill_ids = command_metadata.get("skill_ids")
+    composer = command_metadata.get("composer")
+    options = {
+        "attachments": command_metadata.get("attachments") or [],
+        "skill_ids": skill_ids if isinstance(skill_ids, list) else [],
+        "use_playwright": isinstance(composer, dict) and bool(composer.get("use_playwright")),
+        "dispatch_async": True,
+    }
     from distr.core.workflow.development_control import resume_thread_time
+    if after_proactive is not None:
+        from distr.core.workflow.queued_submissions import submission_metadata
+
+        options["attachments"] = submission_metadata(chat_id, command_metadata)["attachments"]
+        dispatch_development_prompt(int(chat_id), content, save_prompt=True, queued_followup=after_proactive, **options)
+        resume_thread_time(int(chat_id))
+        return
     try:
         from distr.core.workflow.queued_submissions import record_submission_message
         record_submission_message(int(chat_id), command_id, content)
         resume_thread_time(int(chat_id))
-        dispatch_development_prompt(
-            int(chat_id), content, attachments=command_metadata.get('attachments') or [],
-            skill_ids=skill_ids if isinstance(skill_ids, list) else [],
-            use_playwright=bool((command_metadata.get('composer') or {}).get('use_playwright')), dispatch_async=True)
+        dispatch_development_prompt(int(chat_id), content, **options)
     except Exception:
         with get_session() as db:
             row = db.get(DevelopmentCommand, command_id)
@@ -1415,8 +1662,9 @@ async def _run_execution(
     use_playwright: bool,
     autonomy_level: str,
     tool_event_id: str | None,
+    recovery: dict[str, Any] | None = None,
 ) -> None:
-    from distr.core.chat_turns import complete_turn, finish_tool, start_tool, terminal_turn, update_event
+    from distr.core.chat_turns import complete_turn, create_event, finish_tool, start_tool, terminal_turn, update_event
     from distr.core.turn_runtime import (
         ModelRoute,
         TurnCancelled,
@@ -1446,8 +1694,14 @@ async def _run_execution(
         adapter_options["read_only_expected"] = True
     native_tool_events: dict[str, str] = {}
     worker_identity: dict[str, str] = {}
+    from distr.core.turn_runtime.verification import VerificationReceipts
+    verification_receipts = VerificationReceipts(prompt)
+    audit_only = _audit_only_request(prompt) or development_execution_state(chat_id).get('work_mode') == 'audit'
+    metadata = {**metadata, 'work_mode': 'audit' if audit_only else 'implementation'}
+    runtime_metadata['work_mode'] = 'audit' if audit_only else 'implementation'
 
     def on_event(event: TurnEvent) -> None:
+        verification_receipts.observe(event)
         summary = str(event.summary or "Working")[:1000]
         call_id = str(event.details.get("call_id") or "")
         merged_worker = (
@@ -1516,6 +1770,12 @@ async def _run_execution(
                     detail=str(event.details.get("output") or ""),
                     metadata=event.details,
                 )
+        elif event.kind.value == "progress":
+            create_event(
+                int(chat_id), "tool_completed", turn_id=turn_id, status="completed",
+                title="Progress update", summary=summary,
+                metadata={"source": "native_development", "tool_name": "model_progress", **event.details},
+            )
         elif event.kind.value == "context_compacted":
             native_event_id, _, _ = start_tool(
                 int(chat_id),
@@ -1531,6 +1791,9 @@ async def _run_execution(
             update_event(tool_event_id, status="running", summary=summary)
 
     try:
+        if autonomy_level != 'plan':
+            from distr.core.planning.prerequisites import require_plan_prerequisites
+            require_plan_prerequisites(ticket_id, chat_id=chat_id, project_id=project.id, board_id=board_id)
         request = TurnRequest(
             instruction=_agent_instruction(chat_id, prompt, runtime_metadata, autonomy_level=autonomy_level),
             project=project,
@@ -1572,11 +1835,17 @@ async def _run_execution(
                 "untrusted_external_input": assessment.get("operational_state") == "external_untrusted",
                 "use_playwright": bool(use_playwright),
                 "change_expected": _prompt_expects_project_change(prompt, autonomy_level=autonomy_level),
+                **(recovery or {}),
             },
+        )
+        from distr.core.turn_runtime.anthropic_adapter import is_fable_52
+
+        fable_messages_route = (
+            backend == "pi" and is_fable_52(model) and request.route.provider in {"anthropic", "openrouter"}
         )
         runtime_id = select_turn_runtime_id(
             request,
-            runtime_id="cli_harness" if backend in {"pi", "cursor", "codex", "claude_code"} else "",
+            runtime_id="cli_harness" if backend in {"pi", "cursor", "codex", "claude_code"} and not fable_messages_route else "",
         )
         runtime_metadata = _metadata_with_runtime_identity(
             metadata,
@@ -1663,7 +1932,7 @@ async def _run_execution(
                     finish_tool(tool_event_id, success=False, summary=message[:1000], detail=message)
                 terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=message)
                 return
-        if backend in CLI_BACKENDS:
+        if runtime_id == "cli_harness" and backend in CLI_BACKENDS:
             from distr.core.project_cli_backends.catalog_probe import probe_cli_backend
 
             probe = probe_cli_backend(backend)
@@ -1722,6 +1991,8 @@ async def _run_execution(
                 for path, digest in dict(current.get("git_untracked_before") or {}).items()
                 if path and digest
             },
+            before_fingerprints=dict(current.get("git_fingerprints_before") or {}),
+            before_head=str(current.get('git_head_before') or ''),
         )
         git_change_count = len(changes.get("files") or [])
         change_expected = bool(request.metadata.get("change_expected"))
@@ -1737,6 +2008,17 @@ async def _run_execution(
         )
         if noop:
             status = "completed_noop"
+        verification = verification_receipts.report()
+        if success and not waiting and change_expected and verification['status'] != 'passed':
+            status = 'blocked'
+            success = False
+            error = 'Required verification has not passed. Inspect the recorded checks and rerun them.'
+            response = 'Verification incomplete: ' + error + '\n\nAgent report (not independently verified):\n' + response
+        if audit_only and git_change_count:
+            status = 'failed'
+            success = False
+            error = 'Audit-only scope was violated: project files changed. Review the changes before proceeding.'
+            response = error + '\n\nAgent report:\n' + response
         outcome = _turn_outcome(
             backend_id=str(result.backend_id or backend),
             runtime_id=str(result.runtime_id or runtime_id),
@@ -1746,6 +2028,13 @@ async def _run_execution(
             summary=response,
             noop=noop,
         )
+        outcome.update(verification=verification, work_mode='audit' if audit_only else 'implementation',
+                       implementation_status='changed' if git_change_count else 'unchanged',
+                       deployment_status='not_verified')
+        if not waiting and result.execution_session_id:
+            from distr.core.kanban.project_execution import complete_execution_session
+            complete_execution_session(result.execution_session_id, success=success, status=status,
+                error=error, output_packet={'completion_review': outcome}, merge_output_packet=True)
         actual_provider = str(adapter_options.get("model_provider") or "").strip().lower()
         if (
             str(result.backend_id or "").strip().lower() == str(adapter_options.get("fallback_backend") or "").strip().lower()
@@ -1815,7 +2104,7 @@ async def _run_execution(
             and str((adapter_options or {}).get("model_provider") or "").lower() == "ollama"
         ):
             _unload_ollama_model(model)
-        if not waiting:
+        if not waiting and success and not audit_only:
             _start_next_queued_instruction(chat_id)
     except TurnCancelled:
         return
@@ -2052,6 +2341,8 @@ def dispatch_development_prompt(
     use_playwright: bool = False,
     autonomy_override: str | None = None,
     dispatch_async: bool = True,
+    save_prompt: bool = False,
+    queued_followup: dict | None = None,
 ) -> dict[str, Any]:
     clean = str(prompt or "").strip()
     if not clean:
@@ -2077,19 +2368,60 @@ def dispatch_development_prompt(
         # Goal threads (Tensology approvals, composer "Goal") dispatch exactly
         # like full autonomy; goal tracking lives in development_control.
         autonomy_level = "full"
+    previous = development_execution_state(chat_id)
+    previous_mode = previous.get('work_mode')
+    recovery = None
+    original_request = clean
+    if previous.get("interrupted") and clean.lower().rstrip(".!") in {"resume", "continue", "resume interrupted work"}:
+        from distr.core.turn_runtime.contracts import TurnScope
+        from distr.core.turn_runtime.recovery import RecoveryJournal
+
+        previous_turn_id = _execution_record_id(previous.get("turn_id"))
+        previous_session_id = _execution_record_id(previous.get("execution_session_id"))
+        if not previous_turn_id or not previous_session_id or not previous.get("job_id"):
+            raise ValueError("The interrupted turn has no durable recovery checkpoint.")
+        with get_session() as db:
+            original_turn_id = _execution_record_id(previous.get("recovery_original_turn_id")) or previous_turn_id
+            previous_turn = db.get(Chat, original_turn_id)
+            if previous_turn is None or previous_turn.parent_id != chat_id or not previous_turn.input:
+                raise ValueError("The original request is unavailable in this Development thread.")
+            clean = previous_turn.input
+        RecoveryJournal.load(
+            previous_session_id,
+            scope=TurnScope(
+                chat_id=int(chat_id), project_id=int(project.id), board_id=board_id,
+                ticket_id=ticket_id, project_folder=str(project.folder_location or ""),
+            ),
+            turn_id=previous_turn_id,
+        )
+        recovery = {
+            "resume_session_id": previous_session_id,
+            "resume_turn_id": previous_turn_id,
+            "untrusted_external_input": bool(previous.get("recovery_untrusted_input")),
+        }
+        if previous.get("autonomy_level") == "plan":
+            autonomy_level = "plan"
+        attachments = [*(attachments or []), *(previous.get("recovery_attachments") or [])]
+        use_playwright = use_playwright or bool(previous.get("recovery_use_playwright"))
+    audit_only = _audit_only_request(clean) or (
+        previous_mode == 'audit' and clean.strip().lower().rstrip('.!') in {'continue', 'carry on', 'go on', 'yes', 'ok'}
+    )
+    if audit_only:
+        autonomy_level = 'plan'
+    if autonomy_level != 'plan':
+        from distr.core.planning.prerequisites import require_plan_prerequisites
+        require_plan_prerequisites(ticket_id, chat_id=chat_id, project_id=project.id, board_id=board_id)
     from distr.core.chat_turns import latest_active_turn_id, start_tool
 
-    turn_id = latest_active_turn_id(int(chat_id))
+    turn_id = None if save_prompt else latest_active_turn_id(int(chat_id))
     job_id = uuid.uuid4().hex
     assessment = dict(routing_assessment or {})
-    control_result = _handle_owned_automation_control(
-        int(chat_id),
-        clean,
-        metadata,
-        assessment=assessment,
-    )
-    if control_result is not None:
-        return control_result
+    if recovery:
+        recovery["untrusted_external_input"] |= assessment.get("operational_state") == "external_untrusted"
+    if not save_prompt:
+        control_result = _handle_owned_automation_control(int(chat_id), clean, metadata, assessment=assessment)
+        if control_result is not None:
+            return control_result
     from distr.core.workflow.execution_mode import choose_development_execution_mode
 
     # Workflows only run when the caller already chose a named workflow_id
@@ -2136,14 +2468,18 @@ def dispatch_development_prompt(
         turn_skill_ids = list(explicit_skill_ids)
         skill_recommendation = ""
     backend, model, adapter_options, complexity = _route(project, metadata, assessment)
-    git_status_before = _git_status_snapshot(str(project.folder_location or ""))
-    git_untracked_before = _git_untracked_fingerprints(
-        str(project.folder_location or ""),
-        git_status_before,
-    )
+    folder = str(project.folder_location or "")
+    git_status_before = previous.get("git_status_before") if recovery else _git_status_snapshot(folder)
+    git_untracked_before = previous.get("git_untracked_before") if recovery else _git_untracked_fingerprints(folder, git_status_before)
     execution = _update_execution(
         int(chat_id),
         job_id=job_id,
+        expected_scope=development_scope_identity(project.id,metadata,chat_id=int(chat_id)),
+        resume_job_id=str(previous["job_id"]) if recovery else None,
+        new_prompt=original_request if save_prompt else None,
+        new_prompt_metadata={"skill_ids": explicit_skill_ids} if save_prompt and explicit_skill_ids else None,
+        expected_autonomy=str(raw_autonomy).strip().lower() if save_prompt else None,
+        queued_followup=queued_followup,
         status="initializing",
         backend_id=backend,
         model=model,
@@ -2159,6 +2495,16 @@ def dispatch_development_prompt(
         runtime_id="cli_harness",
         git_status_before=git_status_before,
         git_untracked_before=git_untracked_before,
+        git_fingerprints_before=previous.get("git_fingerprints_before") if recovery else _git_dirty_fingerprints(folder, git_status_before),
+        git_head_before=previous.get("git_head_before") if recovery else _git_head(folder),
+        autonomy_level=autonomy_level,
+        recovery_attachments=turn_attachments,
+        recovery_use_playwright=bool(use_playwright),
+        recovery_untrusted_input=(
+            recovery["untrusted_external_input"] if recovery else assessment.get("operational_state") == "external_untrusted"
+        ),
+        recovery_original_turn_id=original_turn_id if recovery else None,
+        work_mode='audit' if audit_only else 'implementation',
         route_receipt={
             **_route_receipt(
                 metadata,
@@ -2172,6 +2518,9 @@ def dispatch_development_prompt(
             "turn_skills_auto": not explicit_skill_ids,
         },
     )
+    if save_prompt:
+        turn_id = execution["turn_id"]
+        record_chat_audit_event(chat_id=int(chat_id), chat_row_id=turn_id, role="user", content=original_request)
     tool_event_id, _, _ = start_tool(
         int(chat_id),
         "development_agent",
@@ -2197,6 +2546,8 @@ def dispatch_development_prompt(
         "autonomy_level": autonomy_level,
         "tool_event_id": tool_event_id,
     }
+    if recovery:
+        kwargs["recovery"] = recovery
     if dispatch_async:
         threading.Thread(
             target=lambda: asyncio.run(_run_execution(**kwargs)),
@@ -2209,20 +2560,53 @@ def dispatch_development_prompt(
     return {**execution, "direct": True, "id": execution.get("execution_session_id") or job_id}
 
 
-def stop_development_execution(chat_id: int) -> dict[str, Any]:
+def _record_proactive_stop(chat_id: int, expected_session_id: int, turn_id: int) -> bool:
+    from distr.core.orchestrator_proactive import proactive_development_execution
+
+    with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        root = db.get(Chat, chat_id)
+        if root is None or root.parent_id is not None:
+            return False
+        metadata = development_thread_metadata(root)
+        scope = _development_execution_scope(db, root, metadata)
+        state = proactive_development_execution(db, root, scope, metadata.get("proactive_dispatch"))
+        if (not state or not state.get("can_stop") or state.get("turn_id") != turn_id
+                or state.get("execution_session_id") != expected_session_id):
+            return False
+        params = _chat_params(root.params)
+        params["development"]["proactive_stop_turn_id"] = turn_id
+        root.params = json.dumps(params, ensure_ascii=False, default=str)
+        db.commit()
+        return True
+
+
+def stop_development_execution(chat_id: int, *, expected_session_id: int | None = None) -> dict[str, Any]:
     state = development_execution_state(int(chat_id))
+    if state.get("origin") == "proactive_orchestrator" or expected_session_id is not None:
+        from distr.core.project_cli_backends.registry import terminate_backend_process
+
+        requested = False
+        if (state.get("origin") == "proactive_orchestrator" and state.get("can_stop")
+                and expected_session_id == state.get("execution_session_id")
+                and _record_proactive_stop(int(chat_id), expected_session_id, state["turn_id"])):
+            requested = terminate_backend_process(
+                state["project_id"], state["backend_id"], board_id=state["board_id"],
+                execution_id=expected_session_id, execution_kind="proactive",
+            )
+        return {**state, "stop_requested": requested, "stopped": False}
     cancelled_workflow = False
     try:
         from distr.core.db.workflow import AutoWorkflowRun
         from distr.core.workflow.dispatcher import cancel_run
 
         with get_session() as db:
+            root = db.get(Chat, int(chat_id))
+            scope = _development_execution_scope(db, root, development_thread_metadata(root)) if root else None
             active_runs = (
-                db.query(AutoWorkflowRun)
-                .filter(
-                    AutoWorkflowRun.chat_id == int(chat_id),
-                    AutoWorkflowRun.status.in_(["running", "waiting"]),
-                )
+                _scoped_development_runs(db, int(chat_id), scope)
+                .filter(AutoWorkflowRun.status.in_(["running", "waiting"]))
                 .order_by(AutoWorkflowRun.id.desc())
                 .all()
             )
@@ -2274,6 +2658,8 @@ def stop_development_execution(chat_id: int) -> dict[str, Any]:
         completed_at=utc_now_naive().isoformat(),
         summary="Stopped by the user.",
     )
+    if not session_id:
+        updated.pop("execution_session_id", None)
     terminal_turn(
         int(chat_id),
         "turn_cancelled",

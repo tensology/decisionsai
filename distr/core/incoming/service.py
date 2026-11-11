@@ -54,6 +54,118 @@ def _whatsapp_conversation_label(row: WhatsAppMessage, links: list[WhatsAppPhone
     return str(row.sender_push_name or row.sender_phone or row.jid_phone or row.jid or "WhatsApp contact")
 
 
+def _whatsapp_incoming_item(row: WhatsAppMessage, row_links: list[WhatsAppPhoneLink], boards: dict[int, str]) -> dict[str, Any]:
+    link = row_links[0] if row_links else None
+    serialized_links = [{
+        "id": int(candidate.id),
+        "board_id": int(candidate.board_id),
+        "board_name": boards.get(int(candidate.board_id), "Unknown board"),
+        "auto_snapshot": bool(candidate.auto_snapshot),
+    } for candidate in row_links]
+    text = str(row.text or row.caption or "").strip()
+    if not text and row.media_type:
+        text = f"{str(row.media_type).replace('_', ' ').title()} attachment"
+    return {
+        "key": f"whatsapp:{int(row.id)}",
+        "source": "whatsapp",
+        "source_label": "WhatsApp",
+        "database_id": int(row.id),
+        "source_sequence": _whatsapp_source_sequence(row),
+        "source_message_id": row.message_id or str(row.id),
+        "source_thread_id": row.jid or row.jid_phone or "",
+        "conversation_label": _whatsapp_conversation_label(row, row_links),
+        "chat_type": "group" if str(row.chat_type or "").lower() == "group" or str(row.jid or "").endswith("@g.us") else "private",
+        "sender": row.sender_push_name or row.sender_phone or row.jid_phone or "WhatsApp",
+        "text": text,
+        "created_at": _iso_from_epoch(row.whatsapp_timestamp) or (row.created_date.isoformat() if row.created_date else ""),
+        "source_sent_at": _iso_from_epoch(row.whatsapp_timestamp),
+        "processed": bool(row.processed),
+        "snapshotted": bool(row.snapshot_group),
+        "media_type": row.media_type or "",
+        "media_mime_type": row.media_mime_type or "",
+        "media_filename": row.media_filename or "",
+        "media_duration": row.media_duration,
+        "from_me": bool(row.from_me),
+        "direction": "outbound" if row.from_me else "inbound",
+        "links": serialized_links,
+        "board_id": int(link.board_id) if link else None,
+        "board_name": boards.get(int(link.board_id), "") if link else "",
+        "link_id": int(link.id) if link else None,
+        "auto_snapshot": bool(link.auto_snapshot) if link else False,
+        "can_snapshot": bool(link and not row.processed),
+    }
+
+
+def list_whatsapp_history(thread_id: str, before_id: int = 0, limit: int = 40) -> dict[str, Any]:
+    """Read a page for the same conversation identity used by Incoming."""
+    from sqlalchemy import and_, func, or_
+
+    timestamp = func.coalesce(WhatsAppMessage.whatsapp_timestamp, 0)
+    with get_session() as session:
+        rows = session.query(WhatsAppMessage).filter(or_(
+            WhatsAppMessage.jid == thread_id,
+            and_(or_(WhatsAppMessage.jid.is_(None), WhatsAppMessage.jid == ""),
+                 WhatsAppMessage.jid_phone == thread_id),
+        ))
+        if before_id:
+            anchor = rows.filter(WhatsAppMessage.id == before_id).first()
+            if anchor is None:
+                raise LookupError("This WhatsApp history cursor is no longer available.")
+            sent_at = anchor.whatsapp_timestamp or 0
+            rows = rows.filter(or_(timestamp < sent_at, and_(timestamp == sent_at, WhatsAppMessage.id < before_id)))
+        page = rows.order_by(timestamp.desc(), WhatsAppMessage.id.desc()).limit(limit + 1).all()
+        return {
+            "items": [_whatsapp_incoming_item(row, [], {}) for row in page[:limit]],
+            "has_older": len(page) > limit,
+        }
+
+
+def telegram_incoming_item(row: TelegramGroupMessage) -> dict[str, Any]:
+    sender = ""
+    try:
+        payload = json.loads(row.sender_data or "{}")
+        if isinstance(payload, dict):
+            sender = (
+                str(payload.get("username") or "").strip()
+                or " ".join(
+                    part for part in (
+                        str(payload.get("first_name") or "").strip(),
+                        str(payload.get("last_name") or "").strip(),
+                    ) if part
+                ).strip()
+                or str(payload.get("id") or "")
+            )
+    except Exception:
+        sender = ""
+    body = str(row.text or row.caption or "").strip()
+    if not body and row.media_type:
+        body = f"[{row.media_type} message]"
+    return {
+        "key": f"telegram:{row.id}",
+        "source": "telegram",
+        "source_label": "Telegram",
+        "source_message_id": str(row.telegram_message_id or row.id),
+        "source_thread_id": str(row.chat_id or ""),
+        "conversation_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
+        "thread_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
+        "chat_type": str(row.chat_type or "group"),
+        "sender": sender or "Unknown sender",
+        "text": body,
+        "snippet": body[:240],
+        "created_at": (
+            row.created_date.isoformat()
+            if getattr(row, "created_date", None) is not None
+            else _iso_from_epoch(row.telegram_date)
+        ),
+        "processed": bool(getattr(row, "processed", False)),
+        "unread": not bool(getattr(row, "processed", False)),
+        "board_id": None,
+        "board_name": "",
+        "can_snapshot": False,
+        "database_id": int(row.id),
+    }
+
+
 class _EmailTextParser(HTMLParser):
     """Small, dependency-free HTML email to readable text converter."""
 
@@ -251,20 +363,32 @@ def ingest_gmail_as_work(
 
 def _load_mailshot_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Read Tensology Mailshot using the existing connected account."""
-    try:
-        from distr.core.kanban.jira_intake import fetch_mailshot_intake_messages
-        from distr.core.tensology_client import configured_tensology_client
+    from distr.core.kanban.jira_intake import fetch_mailshot_intake_messages
+    from distr.core.tensology_client import TensologyApiError
 
-        configured_tensology_client(source="decisionsai-development-incoming")
+    error = "Mailshot could not be refreshed. Try again."
+    error_code = "refresh_failed"
+    try:
         rows = fetch_mailshot_intake_messages(
             limit=max(1, min(int(max_results), 30)),
             max_pages=1,
             jira_only=False,
             hydrate=True,
+            strict=True,
+            source="decisionsai-development-incoming",
         )
-        return [row for row in rows if isinstance(row, dict)], {"connected": True, "error": ""}
+    except TensologyApiError as exc:
+        if exc.code == "not_configured":
+            error = "Connect Tensology in Settings to load Mailshot."
+            error_code = "connection_required"
+        elif exc.status in (401, 403):
+            error = "Reconnect Tensology in Settings to load Mailshot."
+            error_code = "connection_required"
     except Exception:
-        return [], {"connected": False, "error": "Connect Tensology in Settings to load Mailshot."}
+        pass
+    else:
+        return rows, {"connected": True, "error": ""}
+    return [], {"connected": False, "error": error, "error_code": error_code}
 
 
 def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict[str, Any]:
@@ -340,47 +464,9 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                 or link_by_key.get(str(row.jid_phone or ""))
                 or []
             )
-            link = row_links[0] if row_links else None
-            serialized_links = [{
-                "id": int(candidate.id),
-                "board_id": int(candidate.board_id),
-                "board_name": boards.get(int(candidate.board_id), "Unknown board"),
-                "auto_snapshot": bool(candidate.auto_snapshot),
-            } for candidate in row_links]
-            text = str(row.text or row.caption or "").strip()
-            if not text and row.media_type:
-                text = f"{str(row.media_type).replace('_', ' ').title()} attachment"
-            items.append({
-                "key": f"whatsapp:{int(row.id)}",
-                "source": "whatsapp",
-                "source_label": "WhatsApp",
-                "database_id": int(row.id),
-                "source_sequence": _whatsapp_source_sequence(row),
-                "source_message_id": row.message_id or str(row.id),
-                "source_thread_id": row.jid or row.jid_phone or "",
-                "conversation_label": _whatsapp_conversation_label(row, row_links),
-                "chat_type": "group" if str(row.chat_type or "").lower() == "group" or str(row.jid or "").endswith("@g.us") else "private",
-                "sender": row.sender_push_name or row.sender_phone or row.jid_phone or "WhatsApp",
-                "text": text,
-                "created_at": _iso_from_epoch(row.whatsapp_timestamp) or (row.created_date.isoformat() if row.created_date else ""),
-                "source_sent_at": _iso_from_epoch(row.whatsapp_timestamp),
-                "processed": bool(row.processed),
-                "snapshotted": bool(row.snapshot_group),
-                "media_type": row.media_type or "",
-                "media_mime_type": row.media_mime_type or "",
-                "media_filename": row.media_filename or "",
-                "media_duration": row.media_duration,
-                "from_me": bool(row.from_me),
-                "direction": "outbound" if row.from_me else "inbound",
-                "links": serialized_links,
-                "board_id": int(link.board_id) if link else None,
-                "board_name": boards.get(int(link.board_id), "") if link else "",
-                "link_id": int(link.id) if link else None,
-                "auto_snapshot": bool(link.auto_snapshot) if link else False,
-                "can_snapshot": bool(link and not row.processed),
-            })
+            items.append(_whatsapp_incoming_item(row, row_links, boards))
 
-    gmail_message_ids: set[str] = set()
+    gmail_items_by_id: dict[str, dict[str, Any]] = {}
     gmail_rows, gmail_status = _load_gmail_inbox(max_results=requested) if network else ([], {"connected": False, "error": "skipped"})
     for row in gmail_rows:
         message_id = str(row.get("id") or "").strip()
@@ -389,9 +475,7 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
         sender = str(row.get("from") or "").strip() or "Unknown sender"
         text_body, html_body, snippet = _mail_plain_and_html(row)
         labels = [str(label) for label in (row.get("labels") or [])]
-        if message_id:
-            gmail_message_ids.add(message_id)
-        items.append({
+        gmail_item = {
             "key": f"gmail:{message_id or thread_id}",
             "source": "gmail",
             "source_label": "Gmail",
@@ -401,6 +485,8 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
             "thread_label": subject,
             "chat_type": "thread",
             "sender": sender,
+            "reply_to": str(row.get('reply_to') or '').strip(),
+            "from_me": 'SENT' in labels,
             "recipient": str(row.get("to") or "").strip(),
             "subject": subject,
             "text": text_body,
@@ -414,7 +500,10 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
             "board_id": None,
             "board_name": "",
             "can_snapshot": False,
-        })
+        }
+        items.append(gmail_item)
+        if message_id:
+            gmail_items_by_id[message_id] = gmail_item
 
     mailshot_rows, mailshot_status = _load_mailshot_inbox(max_results=requested) if network else ([], {"connected": False, "error": "skipped"})
     for row in mailshot_rows:
@@ -461,14 +550,20 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
             source = str(row.get("source") or "unknown").lower()
             if source != "gmail":
                 continue
-            if str(row.get("source_message_id") or "") in gmail_message_ids:
+            message_id = str(row.get("source_message_id") or "")
+            if message_id and message_id in gmail_items_by_id:
+                existing = gmail_items_by_id[message_id]
+                if row.get("ticket_id") and not existing.get("ticket_id"):
+                    existing["ticket_id"] = row["ticket_id"]
+                    existing["board_id"] = row.get("board_id")
                 continue
-            items.append({
+            intake_item = {
                 "key": f"intake:{row.get('event_id')}",
                 "event_id": row.get("event_id"),
                 "source": source,
                 "source_label": "Gmail",
                 "sender": row.get("source_contact") or row.get("source_user_id") or "",
+                "source_message_id": message_id,
                 "source_thread_id": row.get("source_thread_id") or row.get("source_user_id") or row.get("source_contact") or str(row.get("event_id") or ""),
                 "conversation_label": row.get("subject") or row.get("source_contact") or row.get("source_user_id") or "(No subject)",
                 "subject": row.get("subject") or "(No subject)",
@@ -485,7 +580,10 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                 "project_id": row.get("project_id"),
                 "needs_attention": bool(row.get("needs_attention")),
                 "can_snapshot": False,
-            })
+            }
+            items.append(intake_item)
+            if message_id:
+                gmail_items_by_id[message_id] = intake_item
     except Exception:
         pass
 
@@ -499,50 +597,7 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                 .limit(requested)
                 .all()
             )
-            for row in telegram_rows:
-                sender = ""
-                try:
-                    payload = json.loads(row.sender_data or "{}")
-                    if isinstance(payload, dict):
-                        sender = (
-                            str(payload.get("username") or "").strip()
-                            or " ".join(
-                                part for part in (
-                                    str(payload.get("first_name") or "").strip(),
-                                    str(payload.get("last_name") or "").strip(),
-                                ) if part
-                            ).strip()
-                            or str(payload.get("id") or "")
-                        )
-                except Exception:
-                    sender = ""
-                body = str(row.text or row.caption or "").strip()
-                if not body and row.media_type:
-                    body = f"[{row.media_type} message]"
-                items.append({
-                    "key": f"telegram:{row.id}",
-                    "source": "telegram",
-                    "source_label": "Telegram",
-                    "source_message_id": str(row.telegram_message_id or row.id),
-                    "source_thread_id": str(row.chat_id or ""),
-                    "conversation_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
-                    "thread_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
-                    "chat_type": str(row.chat_type or "group"),
-                    "sender": sender or "Unknown sender",
-                    "text": body,
-                    "snippet": body[:240],
-                    "created_at": (
-                        row.created_date.isoformat()
-                        if getattr(row, "created_date", None) is not None
-                        else _iso_from_epoch(row.telegram_date)
-                    ),
-                    "processed": bool(getattr(row, "processed", False)),
-                    "unread": not bool(getattr(row, "processed", False)),
-                    "board_id": None,
-                    "board_name": "",
-                    "can_snapshot": False,
-                    "database_id": int(row.id),
-                })
+            items.extend(telegram_incoming_item(row) for row in telegram_rows)
             telegram_status = {"connected": True, "error": "", "count": len(telegram_rows)}
     except Exception as exc:
         telegram_status = {"connected": False, "error": str(exc) or "Telegram inbox unavailable."}

@@ -181,6 +181,8 @@ def default_settings_patch() -> dict[str, Any]:
 
 def workflow_patch_stack(factory, tmp_path):
     """Return list of patch objects for a full workflow run spine."""
+    from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
+
     get_session = get_session_factory(factory)
     settings = default_settings_patch()
     return [
@@ -209,7 +211,8 @@ def workflow_patch_stack(factory, tmp_path):
         patch("distr.core.workflow.router.StepRouter._emit_waiting_for_feedback", MagicMock()),
         patch("distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()),
         patch("distr.gui.web.workflow_events.increment_workflow_updated", MagicMock()),
-        patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()),
+        patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge",
+              MagicMock(public_project_cli_result=WorkflowAgentBridge.public_project_cli_result)),
         patch("distr.core.workflow_agent.WorkflowAgent", MatrixFakeWorkflowAgent),
         patch("distr.core.orchestrator.is_orchestrator_enabled", lambda: True),
         patch("distr.core.kanban.project_execution.append_execution_event", MagicMock()),

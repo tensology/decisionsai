@@ -288,12 +288,12 @@ def decide_work_request(proposal_id: int, action: str, *, source: str = "") -> d
     )
 
 
-def create_merged_work_request(payload: dict[str, Any]) -> dict[str, Any]:
+def create_merged_work_request(payload: dict[str, Any], *, idempotency_key: str | None = None) -> dict[str, Any]:
     """Create a pending Tensology work proposal for a Decisions Incoming merge."""
     client = configured_tensology_client(source="incoming-merge")
     body = dict(payload or {})
     merged_from = body.get("merged_from") or []
-    idem = "merge-" + "-".join(str(item) for item in merged_from[:8])
+    idem = idempotency_key or "merge-" + "-".join(str(item) for item in merged_from[:8])
     return client.post("work-requests", body, idempotency_key=idem[:120])
 
 

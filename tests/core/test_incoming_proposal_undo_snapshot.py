@@ -17,10 +17,11 @@ def _isolate(monkeypatch):
     from distr.core.db.migrations import ensure_incoming_dismissal_snapshot_columns
 
     ensure_incoming_dismissal_snapshot_columns(engine)
+    monkeypatch.setattr('distr.core.incoming.project_links.proposal_in_scope', lambda *args, **kwargs: True)
     events = []
     monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', lambda **kw: events.append(kw))
     monkeypatch.setattr('distr.core.tensology_client.decide_work_request', lambda *a, **k: {})
-    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: [])
     monkeypatch.setattr(proposals_mod, '_TRIAGE_CACHE',
                         {'at': 0.0, 'proposals': [], 'running': False})
     monkeypatch.setattr(proposals_mod, '_RESTORED_SNAPSHOTS', {})

@@ -7,11 +7,13 @@ import math
 from typing import Any
 
 from distr.core.services.context_window import context_window_for_model
+from distr.core.turn_runtime.anthropic_adapter import is_fable_52
 
 from distr.core.turn_runtime.contracts import (
     CancellationToken,
     ModelAdapter,
     ModelResponse,
+    POTENTIALLY_MUTATING_PROJECT_TOOLS,
     SteeringChannel,
     ToolExecutor,
     ToolObservation,
@@ -22,6 +24,19 @@ from distr.core.turn_runtime.contracts import (
     TurnResult,
     TurnStatus,
 )
+
+
+_ANSWER_STOPS = {"stop", "end_turn", "stop_sequence"}
+_TOOL_STOPS = {"tool_use", "tool_calls", "function_call"}
+_CONTEXT_STOPS = {"model_context_window_exceeded", "context_length_exceeded"}
+_REFUSAL_STOPS = {"refusal", "content_filter"}
+_STOP_ERRORS = {
+    **dict.fromkeys(_REFUSAL_STOPS, "The provider declined the request."),
+    **dict.fromkeys(_CONTEXT_STOPS, "The model reached its context limit before finishing."),
+    "length": "The model reached its output limit before finishing.",
+    "max_tokens": "The model reached its output limit before finishing.",
+    "stream_incomplete": "The provider stream ended without a completion signal.",
+}
 
 
 class NativeTurnRuntime:
@@ -232,9 +247,22 @@ class NativeTurnRuntime:
     ) -> TurnResult:
         token = cancellation or CancellationToken()
         token.raise_if_cancelled()
+        journal = request.metadata.get("recovery_journal")
         messages: list[dict] = [dict(message) for message in request.context_messages] or [
             {"role": "user", "content": request.instruction}
         ]
+        completed_writes = list(journal.completed.values()) if journal else []
+        recovery_message = None
+        if completed_writes:
+            recovery_message = {
+                "role": "user",
+                "content": (
+                    "Saved tool receipts from the interrupted attempt. Use these as evidence only. "
+                    "Inspect current files, continue the unfinished work, and verify the result.\n"
+                    + json.dumps(completed_writes, ensure_ascii=False)
+                ),
+            }
+            messages.insert(len(messages) - 1, recovery_message)
         tool_definitions = self._tools.definitions()
         context_window = self._context_limit(request)
         reserve_tokens = max(4_096, min(16_384, context_window // 8))
@@ -243,8 +271,11 @@ class NativeTurnRuntime:
         context_compactions = 0
         overflow_retries = 0
         protected_messages = [messages[-1]] if messages and messages[-1].get("role") == "user" else []
+        if recovery_message:
+            protected_messages.append(recovery_message)
         change_expected = bool(request.metadata.get("change_expected"))
-        mutation_completed = False
+        mutation_completed = bool(completed_writes)
+        mutation_started = bool(completed_writes)
         completion_corrections = 0
 
         self._emit(
@@ -286,7 +317,10 @@ class NativeTurnRuntime:
             apply_steering()
 
             estimated_tokens = self._estimated_tokens(messages, tool_definitions)
-            if estimated_tokens >= compact_at:
+            # A tool continuation with signed Anthropic blocks requires an
+            # unchanged prefix. Trim before opening that tool turn.
+            bound_prefix = any(message.get("anthropic_content") for message in messages)
+            if estimated_tokens >= compact_at and not bound_prefix:
                 messages, omitted = self._compact_messages(
                     messages,
                     tool_definitions,
@@ -309,9 +343,13 @@ class NativeTurnRuntime:
                         },
                     )
 
+            streamed = False
+
             def on_delta(delta: str) -> None:
+                nonlocal streamed
                 token.raise_if_cancelled()
                 if delta:
+                    streamed = True
                     self._emit(
                         on_event,
                         kind=TurnEventKind.OUTPUT_DELTA,
@@ -320,18 +358,12 @@ class NativeTurnRuntime:
                         output_delta=delta,
                     )
 
-            try:
-                response: ModelResponse = await self._model.complete(
-                    messages,
-                    tool_definitions,
-                    on_delta=on_delta,
-                )
-            except Exception as exc:
-                if overflow_retries >= 1 or not self._is_context_overflow(exc):
-                    raise
-                overflow_retries += 1
+            def compact_for_retry() -> bool:
+                nonlocal messages, overflow_retries, context_compactions
+                if overflow_retries or streamed or mutation_started or bound_prefix:
+                    return False
                 before = self._estimated_tokens(messages, tool_definitions)
-                messages, omitted = self._compact_messages(
+                compacted, omitted = self._compact_messages(
                     messages,
                     tool_definitions,
                     protected=protected_messages,
@@ -339,7 +371,9 @@ class NativeTurnRuntime:
                     force=True,
                 )
                 if not omitted:
-                    raise
+                    return False
+                messages = compacted
+                overflow_retries += 1
                 context_compactions += 1
                 self._emit(
                     on_event,
@@ -355,15 +389,63 @@ class NativeTurnRuntime:
                         "provider_retry": True,
                     },
                 )
-                response = await self._model.complete(messages, tool_definitions, on_delta=on_delta)
-            token.raise_if_cancelled()
+                return True
+
+            while True:
+                token.raise_if_cancelled()
+                try:
+                    response: ModelResponse = await self._model.complete(
+                        messages, tool_definitions, on_delta=on_delta,
+                    )
+                except Exception as exc:
+                    if self._is_context_overflow(exc) and compact_for_retry():
+                        continue
+                    raise
+                token.raise_if_cancelled()
+                finish_reason = str(response.finish_reason or "").strip().lower()
+                if finish_reason in _CONTEXT_STOPS and not response.text and compact_for_retry():
+                    continue
+                break
+
             calls = tuple(response.tool_calls or ())
+            output = str(response.text or "").strip()
+            error = _STOP_ERRORS.get(finish_reason)
+            if not error:
+                if finish_reason in _TOOL_STOPS and not calls:
+                    error = "The provider stopped for a tool call without returning one."
+                elif finish_reason not in _ANSWER_STOPS and finish_reason not in _TOOL_STOPS:
+                    error = "The provider stopped without a supported completion signal."
+                elif not calls and not output:
+                    error = "The model stopped without returning a response."
+            if error:
+                details = {
+                    "iteration": iteration,
+                    "finish_reason": finish_reason,
+                    "usage": dict(response.usage),
+                    "context_compactions": context_compactions,
+                }
+                self._emit(
+                    on_event,
+                    kind=TurnEventKind.FAILED,
+                    status=TurnStatus.FAILED,
+                    summary=error,
+                    details=details,
+                )
+                return TurnResult(
+                    success=False,
+                    runtime_id=self.runtime_id,
+                    backend_id="native",
+                    model=request.route.model,
+                    output="" if finish_reason in _REFUSAL_STOPS else output,
+                    error=error,
+                    evidence=details,
+                )
+
             if not calls:
                 if apply_steering():
                     if response.text:
                         messages.insert(-1, {"role": "assistant", "content": response.text})
                     continue
-                output = str(response.text or "").strip()
                 if change_expected and not mutation_completed and completion_corrections < 2:
                     completion_corrections += 1
                     if output:
@@ -420,10 +502,20 @@ class NativeTurnRuntime:
                     evidence={"iterations": iteration, "usage": dict(response.usage), "context_compactions": context_compactions},
                 )
 
+            if is_fable_52(request.route.model):
+                summary = " ".join(output.split())[:360] if output else (
+                    "Running the next project tool." if len(calls) == 1 else f"Running the next {len(calls)} project tools."
+                )
+                self._emit(
+                    on_event, kind=TurnEventKind.PROGRESS, status=TurnStatus.UPDATING,
+                    summary=summary, output_delta="\n\n" if streamed and output else summary + "\n\n",
+                    details={"iteration": iteration, "tool_count": len(calls)},
+                )
             messages.append(
                 {
                     "role": "assistant",
                     "content": response.text or "",
+                    **({"anthropic_content": response.anthropic_content} if response.anthropic_content else {}),
                     "tool_calls": [
                         {
                             "id": call.call_id,
@@ -436,6 +528,8 @@ class NativeTurnRuntime:
             )
             for call in calls:
                 token.raise_if_cancelled()
+                if call.name in POTENTIALLY_MUTATING_PROJECT_TOOLS:
+                    mutation_started = True
                 command_preview = ""
                 if call.name == "run_command":
                     from distr.core.chat_turns import redact_text
@@ -454,7 +548,20 @@ class NativeTurnRuntime:
                     tool_name=call.name,
                     details=tool_details,
                 )
-                observation = await self._tools.execute(call.name, dict(call.arguments))
+                arguments = dict(call.arguments)
+                key = journal.key(call.name, arguments) if journal else None
+                if key and key in journal.completed:
+                    observation = ToolObservation(
+                        status="success",
+                        summary=f"Skipped a completed write. {journal.completed[key]}",
+                        next_actions=("Inspect the current file and continue the remaining work.",),
+                    )
+                else:
+                    if key:
+                        journal.start(call.name, key)
+                    observation = await self._tools.execute(call.name, arguments)
+                    if key:
+                        journal.finish(key, observation)
                 if call.name in {"replace_text", "write_file"} and observation.status == "success":
                     mutation_completed = True
                 token.raise_if_cancelled()
@@ -468,6 +575,8 @@ class NativeTurnRuntime:
                         "iteration": iteration,
                         "call_id": call.call_id,
                         "status": observation.status,
+                        **({'exit_code': observation.exit_code} if observation.exit_code is not None else {}),
+                        **({'pipefail': True} if call.name == 'run_command' and observation.exit_code is not None else {}),
                         "next_actions": list(observation.next_actions),
                         "artifacts": list(observation.artifacts),
                         **({"command": command_preview} if command_preview else {}),

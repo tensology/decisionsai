@@ -107,6 +107,62 @@ def test_command_stays_queued_when_no_native_turn_is_active(development_db, monk
     assert control.list_commands(development_db["chat_id"], include_terminal=False)[0]["id"] == command["id"]
 
 
+def test_concurrent_steer_delivers_the_same_instruction_once(development_db, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    command = control.enqueue_command(development_db["chat_id"], "Keep the selected layout")
+    entered, release = Event(), Event()
+    delivered = []
+
+    def steer(chat_id, message, **kwargs):
+        delivered.append((chat_id, message))
+        entered.set()
+        assert release.wait(6)
+        return {"accepted": True}
+
+    monkeypatch.setattr("distr.core.turn_runtime.steer_active_turn", steer)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        original = pool.submit(control.dispatch_command, command["id"])
+        assert entered.wait(5)
+        try:
+            contender = pool.submit(control.dispatch_command, command["id"])
+            assert contender.result(timeout=3)["dispatched"] is False
+        finally:
+            release.set()
+        assert original.result(timeout=5)["dispatched"] is True
+    assert delivered == [(development_db["chat_id"], command["content"])]
+
+
+def test_stale_steering_stays_queued_without_starving_the_new_turn(development_db, monkeypatch):
+    chat_id = development_db["chat_id"]
+
+    def select_turn(turn_id):
+        with development_db["session"]() as db:
+            root = db.get(Chat, chat_id)
+            params = json.loads(root.params)
+            params["development"]["execution"] = {"turn_id": turn_id}
+            root.params = json.dumps(params)
+            db.commit()
+
+    calls = []
+
+    def steer(_, message, *, expected_turn_id):
+        calls.append((message, expected_turn_id))
+        return {"accepted": expected_turn_id == 12}
+
+    monkeypatch.setattr("distr.core.turn_runtime.steer_active_turn", steer)
+    select_turn(11)
+    original = control.enqueue_command(chat_id, "Guidance for the original turn")
+    assert not control.dispatch_command(original["id"])["dispatched"]
+    select_turn(12)
+    next_command = control.enqueue_command(chat_id, "Guidance for the next turn")
+    assert control.dispatch_command(original["id"])["reason"] == "active_turn_changed"
+    assert control.dispatch_pending(chat_id)["artifacts"][0]["id"] == next_command["id"]
+    assert control.list_commands_for_id(original["id"])["status"] == "queued"
+    assert calls == [(original["content"], 11), (next_command["content"], 12)]
+
+
 def test_thread_controls_archive_export_and_redacted_snapshot(development_db):
     with development_db["session"]() as db:
         workflow = AutoWorkflow(name="Implementation audit", workflow_type="manual")

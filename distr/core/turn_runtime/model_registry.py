@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from distr.core.turn_runtime.anthropic_adapter import AnthropicModelAdapter
+from distr.core.turn_runtime.anthropic_adapter import AnthropicModelAdapter, is_fable_52
 from distr.core.turn_runtime.contracts import ModelAdapter
 from distr.core.turn_runtime.openai_compatible import (
     OpenAICompatibleModelAdapter,
@@ -67,10 +67,14 @@ def create_native_model_adapter(
     model: str,
     settings: dict[str, Any],
     client: Any | None = None,
+    reasoning_effort: str = "",
 ) -> ModelAdapter:
     normalized = normalize_native_provider(provider)
-    if normalized == "anthropic":
-        return RetryingModelAdapter(AnthropicModelAdapter(model=model, settings=settings, client=client))
+    if normalized == "anthropic" or (normalized == "openrouter" and is_fable_52(model)):
+        return RetryingModelAdapter(AnthropicModelAdapter(
+            model=model, settings=settings, client=client, provider=normalized,
+            reasoning_effort=reasoning_effort,
+        ))
     if supports_openai_compatible_provider(normalized):
         return RetryingModelAdapter(
             OpenAICompatibleModelAdapter(

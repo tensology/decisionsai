@@ -13,6 +13,7 @@ import { fillToWindow, createCallout, advancedButton, pinDock, openDrawer } from
 import { readSidecar, nodeIds, writeSidecar, slugId } from './flow-meta.js?v=20261103-ifaces3';
 import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261103-ifaceradial1';
 import { createIfaceCanvas } from './iface-canvas.js?v=20261103-ifaceradial1';
+import { mountPagePicker } from './page-picker.js';
 import { decorateNode, nodeButton, openNodePopover, openNodePicker, closeNodePopover, warningsNotice } from './flow-nodes.js?v=20261103-ifaces3';
 import { rememberedRoute, rememberRoute, routeStore } from './route-memory.js?v=20261102-verify';
 import { chatHeaderHtml, chatStore, rememberChat, rememberedChat, pickActiveChat, validateImageFiles, rejectionMessage, isImageAsset, imageLabel } from './chat-header.js?v=20261103-chat2';
@@ -22,6 +23,8 @@ import { toolCardsHtml, draftsPayload, memoryPanelHtml } from './chat-tools.js?v
 let planningProviders = null;
 
 const BASE = '/workflows/studio/plan-workspaces';
+const workspaceScope = (workspace) => JSON.stringify([workspace.id, workspace.project_id, workspace.board_key]);
+const draftKey = (session, chatId) => `decisions.plan.draft.${session.scope}.${chatId || 'new'}`;
 const TABS = {
     wireframes: { label: 'Interfaces', help: 'Page outlines, sitemap, and how screens fit together', types: ['wireframe', 'flows'] },
     erd: { label: 'Data', help: 'Entities and relationships (ERD / architecture)', types: ['erd', 'architecture', 'diagram'] },
@@ -39,12 +42,16 @@ export function createPlanConversation(host, root) {
     let diagramId = 0;
     const path = (session, suffix = '') => `${BASE}/${encodeURIComponent(session.id)}${suffix}`;
     // The conversation of the session's active chat (N3 multi-chat); no chat id = the server's newest live chat.
-    const conversationPath = (session) => path(session, '/conversation') + (session.chatId ? `?chat_id=${encodeURIComponent(session.chatId)}` : '');
+    const conversationPath = (session, chatId = session.chatId) => path(session, '/conversation') + (chatId ? `?chat_id=${encodeURIComponent(chatId)}` : '');
     const current = (session) => active === session && Boolean(root.querySelector('.plan-detail'));
+    const tabStore = () => { try { return window.sessionStorage; } catch { return null; } };
     const items = (session) => (session.tab === 'requirements' ? orderDocuments(session.workspace.items) : (session.workspace.items || []).filter((item) => TABS[session.tab].types.includes(item.item_type)));
     const selected = (session) => (session.tab === 'requirements' ? openDocument(items(session), session.selection.requirements)
         : items(session).find((item) => String(item.id) === String(session.selection[session.tab])) || items(session)[0] || null);
     const blocked = (session) => !session.loaded || Boolean(session.pending) || ['running', 'pending', 'processing'].includes(session.conversation.status);
+    const savedMessageStatuses = ['complete', 'needs_input', 'sync_pending'];
+    const messageReceipt = (conversation, request) => request && conversation.messages?.find(message =>
+        message.role === 'user' && message.request_id === request.id);
     const modelAvailable = (session) => (session.models || []).some(model => (typeof model === 'string' ? model : model.id || model.name) === session.model);
     const allStarters = (session) => {
         const rows = session.workspace.items || [];
@@ -66,6 +73,7 @@ export function createPlanConversation(host, root) {
                 }
                 const changed = JSON.stringify(session.conversation) !== JSON.stringify(conversation);
                 session.conversation = conversation;
+                reconcileMessage(session);
                 session.pollError = '';
                 if (changed || !running) refresh(session);
                 else controls(session);
@@ -198,7 +206,7 @@ export function createPlanConversation(host, root) {
         const tabs = docs.length ? docs.map((doc) => {
             const on = String(doc.id) === String(open?.id);
             const unsaved = Boolean(session.inlineDrafts?.[doc.id]);
-            return `<button type="button" role="tab" class="plan-doc-tab" id="plan-doc-tab-${esc(doc.id)}" data-doc="${esc(doc.id)}" aria-selected="${on}" aria-controls="plan-preview" tabindex="${on ? 0 : -1}"${isUserDocument(doc) ? ' data-user-doc="true"' : ''}${unsaved ? ' data-unsaved="true"' : ''} title="${esc(doc.title || '')}">${esc(documentLabel(doc, docs))}<span class="plan-doc-dot" aria-hidden="true"></span>${unsaved ? '<span class="visually-hidden"> (unsaved)</span>' : ''}</button>`;
+            return `<button type="button" role="tab" class="plan-doc-tab" id="plan-doc-tab-${esc(doc.id)}" data-doc="${esc(doc.id)}" aria-selected="${on}" aria-controls="plan-preview" tabindex="${on ? 0 : -1}"${isUserDocument(doc) ? ' data-user-doc="true"' : ''}${unsaved ? ' data-unsaved="true"' : ''} title="${esc(doc.title || '')}">${esc(documentLabel(doc, docs))}<span class="plan-doc-dot" aria-hidden="true"></span><span class="visually-hidden plan-doc-draft-label">${unsaved ? ' (unsaved)' : ''}</span></button>`;
         }).join('') : '<button type="button" role="tab" class="plan-doc-tab" aria-selected="true" tabindex="0" aria-controls="plan-preview" disabled>FRAC</button>';
         const userActions = userDocs ? `<button type="button" class="plan-doc-add" id="plan-doc-add" aria-label="Add document" title="Add document">+</button>${open && isUserDocument(open) ? `<button type="button" class="plan-doc-rename" id="plan-doc-rename" aria-label="Rename ${esc(open.title || 'document')}" title="Rename">Rename</button><button type="button" class="plan-doc-delete" id="plan-doc-delete" aria-label="Delete ${esc(open.title || 'document')}" title="Delete">Delete</button>` : ''}` : '';
         return `<div class="plan-docs-bar">
@@ -216,6 +224,8 @@ export function createPlanConversation(host, root) {
         root.querySelectorAll('.plan-doc-tab[data-doc]').forEach((tab) => {
             const unsaved = Boolean(session.inlineDrafts?.[tab.dataset.doc]);
             if (unsaved) tab.dataset.unsaved = 'true'; else delete tab.dataset.unsaved;
+            const label = tab.querySelector('.plan-doc-draft-label');
+            if (label) label.textContent = unsaved ? ' (unsaved)' : '';
         });
     }
     function wireDocumentsBar(session, panel, docs, open) {
@@ -350,7 +360,7 @@ export function createPlanConversation(host, root) {
                         <div class="plan-context-hint" id="plan-context-hint" hidden></div>
                         <form class="studio-composer plan-language" id="plan-language">
                             <div id="plan-draft-assets" class="composer-context"></div>
-                            <textarea id="plan-language-input" rows="2" placeholder="Talk through the flow: screens first, then FRAC / data, then what to build…" aria-label="Message"></textarea>
+                            <textarea id="plan-language-input" rows="2" placeholder="Ask about pages, data, or what to build." aria-label="Message"></textarea>
                             <div class="composer-toolbar">
                                 <button type="button" class="add-button" id="plan-attach" aria-label="Attach files"><span aria-hidden="true">+</span></button>
                                 <input type="file" id="plan-attachment" hidden multiple>
@@ -417,6 +427,7 @@ export function createPlanConversation(host, root) {
                 session.tab = button.dataset.planTab;
                 session.viewedAsset = null;
                 planBar().querySelectorAll('[data-plan-tab]').forEach((tab) => tab.setAttribute('aria-pressed', String(tab === button)));
+                button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                 renderArtifacts(session);
             };
         });
@@ -432,6 +443,8 @@ export function createPlanConversation(host, root) {
 
     function controls(session) {
         if (!current(session)) return;
+        if (session.loaded) saveDraft(session);
+        if (!Object.keys(session.inlineDrafts || {}).length && !erdIsDirty(session)) session.planSaveWarning = '';
         const busy = blocked(session);
         root.querySelector('#plan-send').disabled = busy || !modelAvailable(session) || !session.draft.trim();
         const buildButton = planBar().querySelector('#plan-build');
@@ -448,11 +461,18 @@ export function createPlanConversation(host, root) {
         });
         const status = root.querySelector('#plan-operation-status');
         status.replaceChildren();
-        if (session.error) {
+        if (session.scanHint && session.scanHint.kind !== 'scanning') {
+            const hint = document.createElement('p');
+            hint.className = 'plan-scan-hint';
+            hint.dataset.kind = session.scanHint.kind;
+            hint.textContent = session.scanHint.text;
+            status.append(hint);
+        }
+        if (session.error || session.planSaveWarning) {
             const error = document.createElement('p');
             error.className = 'plan-error';
             error.setAttribute('role', 'alert');
-            error.textContent = session.error;
+            error.textContent = session.error || session.planSaveWarning;
             status.append(error);
         }
         const persistedStatus = ['running', 'pending', 'processing'].includes(session.conversation.status) ? 'Assistant is working...' : '';
@@ -461,6 +481,20 @@ export function createPlanConversation(host, root) {
             const text = document.createElement('p');
             text.textContent = String(note);
             status.append(text);
+        }
+        const log = root.querySelector('#plan-messages');
+        const latestBuild = Array.from(log.querySelectorAll('.plan-build-results')).at(-1);
+        const firstTicket = latestBuild?.querySelector('[data-plan-ticket]');
+        if (firstTicket && !session.pending) {
+            const jump = document.createElement('button');
+            jump.type = 'button';
+            jump.className = 'plan-ticket-jump';
+            jump.textContent = 'View generated tickets';
+            jump.onclick = () => {
+                firstTicket.focus({ preventScroll: true });
+                firstTicket.scrollIntoView({ block: 'center', inline: 'nearest' });
+            };
+            status.append(jump);
         }
         if (session.undoClear && !session.pending) {
             const undo = document.createElement('button');
@@ -500,13 +534,36 @@ export function createPlanConversation(host, root) {
             return `${divider}<article class="plan-message${message.role === 'user' ? ' plan-message-user' : ''}${message.compacted ? ' plan-message-compacted' : ''}">${author}<div class="plan-message-content">${esc(message.content)}</div>${thumbs}${(message.artifacts || []).map((id) => {
             const item = (session.workspace.items || []).find((item) => String(item.id) === String(id));
             return item ? `<button type="button" data-message-artifact="${esc(item.id)}">${esc(item.title)}</button>` : '';
-        }).join('')}${isAssistant ? toolCardsHtml(message, session.workspace.items, esc, session.dismissedCards || new Set()) : ''}${isAssistant && message.memory_used ? `<p class="plan-memory-hint">Used ${esc(message.memory_used)} note${message.memory_used === 1 ? '' : 's'} from earlier chats</p>` : ''}${isAssistant ? buildResultsHtml(message.build_result, esc) : ''}</article>`;
+        }).join('')}${isAssistant ? toolCardsHtml(message, session.workspace.items, esc, session.dismissedCards || new Set()) : ''}${isAssistant && message.memory_used ? `<p class="plan-memory-hint">Used ${esc(message.memory_used)} note${message.memory_used === 1 ? '' : 's'} from earlier chats</p>` : ''}${isAssistant ? buildResultsHtml(message.build_result, esc, { boardKey: session.workspace.board_key }) : ''}</article>`;
         }).join('') || (session.loaded
             ? `<div class="plan-conversation-empty">${allStarters(session)
                 ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Read the sitemap in Public, Account, and Signed in</li><li>Tighten requirements, then ask for build tickets</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
                 : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Start with the pages, then define requirements and data before building tasks.</p>`}</div>`
             : '');
         wireToolCards(session, log);
+        if (host.openPlanTicket) log.querySelectorAll('[data-plan-ticket]').forEach((link) => {
+            link.onclick = async (event) => {
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                if (link.getAttribute('aria-busy') === 'true') return;
+                const status = document.createElement('span');
+                status.className = 'plan-task-link-status';
+                status.setAttribute('role', 'status');
+                link.parentElement.querySelector('.plan-task-link-status')?.remove();
+                link.after(status);
+                status.textContent = 'Opening task...';
+                status.scrollIntoView({ block: 'nearest' });
+                link.setAttribute('aria-busy', 'true');
+                try {
+                    await host.openPlanTicket(session.workspace.board_key, Number(link.dataset.planTicket));
+                    status.remove();
+                } catch (error) {
+                    status.setAttribute('role', 'alert');
+                    status.textContent = error.message || 'Could not open this task. Try again.';
+                    if (status.isConnected) status.scrollIntoView({ block: 'nearest' });
+                } finally { link.removeAttribute('aria-busy'); }
+            };
+        });
         log.querySelectorAll('[data-message-artifact]').forEach((button) => {
             button.onclick = () => {
                 const item = session.workspace.items.find((item) => String(item.id) === button.dataset.messageArtifact);
@@ -947,9 +1004,13 @@ export function createPlanConversation(host, root) {
             panel.append(ifaceTools);
         }
         if (session.tab === 'wireframes') {
-            let pages = 0;
-            try { pages = item.content_format === 'wire' ? (parseWireframe(item.content).screens || []).length : 0; } catch { pages = 0; }
-            const stats = pages ? `${pages} ${pages === 1 ? 'page' : 'pages'}, ${choices.length} ${choices.length === 1 ? 'document' : 'documents'}` : `${choices.length} ${choices.length === 1 ? 'document' : 'documents'}`;
+            let pages = 0, guidance = 0;
+            try {
+                const screens = item.content_format === 'wire' ? (parseWireframe(item.content).screens || []) : [];
+                guidance = screens.filter(screen => String(screen.attrs.layer || '').toLowerCase() === 'guidance').length;
+                pages = screens.length - guidance;
+            } catch { pages = 0; }
+            const stats = `${pages} ${pages === 1 ? 'page' : 'pages'}${guidance ? ` · ${guidance} guidance ${guidance === 1 ? 'item' : 'items'}` : ''}, ${choices.length} ${choices.length === 1 ? 'document' : 'documents'}`;
             const opened = Boolean(session.openPage?.[item.id]);
             const surfaceCleanup = interfacesSurface(preview, stats, opened ? 'Switch perspective with Preview / Planning / Development, or go back with All pages.' : 'Switch perspective with Preview / Planning / Development above the page.');
             const dockCleanup = ifaceTools ? pinDock(ifaceTools, preview) : null;
@@ -993,7 +1054,11 @@ export function createPlanConversation(host, root) {
                         if (pageMeta.note) { const note = document.createElement('p'); note.className = 'plan-node-strip-note'; note.textContent = pageMeta.note; strip.append(note); }
                         panel.insertBefore(strip, preview);
                     }
-                    toolbar.querySelector('[data-iface-back]')?.addEventListener('click', () => { delete session.openPage[item.id]; renderArtifacts(session); });
+                    toolbar.querySelector('[data-iface-back]')?.addEventListener('click', () => {
+                        delete session.openPage[item.id];
+                        renderArtifacts(session);
+                        panel.querySelector('.plan-find-page')?.focus({ preventScroll: true });
+                    });
                     toolbar.querySelectorAll('[data-layer]').forEach(button => {
                         button.onclick = () => { session.pageLayers[item.id] = button.dataset.layer; renderArtifacts(session); };
                     });
@@ -1044,7 +1109,7 @@ export function createPlanConversation(host, root) {
                         <section><h4>Linked plan notes</h4>
                           <ul>
                             <li>Requirements mentions: ${ann.requirements.length ? esc([...new Set(ann.requirements)].join(', ')) : 'none on this page yet'}</li>
-                            <li>Data binds: ${ann.binds.length ? esc([...new Set(ann.binds)].join(', ')) : 'none on this page yet'}</li>
+                            <li>Planned data bindings: ${ann.binds.length ? esc([...new Set(ann.binds)].join(', ')) : 'none on this page yet'}</li>
                           </ul>
                           <div class="plan-hub-actions">
                             <button type="button" data-hub-tab="requirements">Open Documents</button>
@@ -1055,7 +1120,7 @@ export function createPlanConversation(host, root) {
                     preview.querySelectorAll('[data-hub-tab]').forEach(btn => {
                         btn.onclick = () => planBar().querySelector(`[data-plan-tab="${btn.dataset.hubTab}"]`)?.click();
                     });
-                    mountPageDescription(session, item, preview);
+                    mountPageDescription(session, item, page, screens.indexOf(page), preview);
                     return;
                 }
 
@@ -1071,6 +1136,7 @@ export function createPlanConversation(host, root) {
                           <ul><li>Route${routes.length === 1 ? '' : 's'}: ${routes.length ? routes.map(r => `<code>${esc(r)}</code>`).join(', ') : '<em>not set</em>'}</li>
                           <li>Screen id: <code>${esc(page.attrs.id || page.id)}</code></li></ul></section>
                         <section><h4>Model</h4>
+                          ${binds.length ? '<p class="plan-empty-hint">These bindings are plan annotations. Confirm name-based matches against the implementation.</p>' : ''}
                           <ul>${binds.length ? binds.map(b => `<li><code>${esc(b)}</code></li>`).join('') : '<li>No bind= annotations on this page yet. Add bind=Entity.field in the outline.</li>'}</ul>
                           <button type="button" data-hub-tab="erd">Jump to Data (ERD)</button></section>
                         <section><h4>Business logic / acceptance</h4>
@@ -1093,7 +1159,7 @@ export function createPlanConversation(host, root) {
                     frame.srcdoc = result.html;
                     preview.querySelector('.plan-wireframe-preview').replaceWith(frame);
                 }
-                if (page) mountPageDescription(session, item, preview);
+                if (page) mountPageDescription(session, item, page, screens.indexOf(page), preview);
             } catch (error) {
                 preview.innerHTML = `<div class="plan-canvas-empty"><p><strong>Could not show this page outline</strong></p><p class="plan-empty-hint">${esc(error.message || 'Try Sitemap or ask Plan to regenerate the wireframes.')}</p></div>`;
             }
@@ -1164,7 +1230,11 @@ export function createPlanConversation(host, root) {
         if (!ifaceActions) return;
         if (session.tab !== 'wireframes' || !preview?.isConnected) { ifaceActions.remove(); return; }
         const anchor = preview.querySelector('.erd-body') || preview;
-        anchor.append(ifaceActions);
+        if (anchor === preview) {
+            const callout = preview.querySelector(':scope > .plan-canvas-callout');
+            if (callout) callout.after(ifaceActions);
+            else preview.prepend(ifaceActions);
+        } else anchor.append(ifaceActions);
         syncRebuildButton(session);
     }
 
@@ -1180,12 +1250,14 @@ export function createPlanConversation(host, root) {
         session.inlineDrafts ||= {};
         const stored = session.inlineDrafts[item.id] ?? null;
         const baseRevision = stored ? stored.baseRevision : revisionOf(item);
-        return createInlineEditor({
+        let editor;
+        editor = createInlineEditor({
             value: item.content || '', format, label,
             initialDraft: stored?.draft ?? null,
             conflict: Boolean(stored) && stored.baseRevision !== revisionOf(item),
             onReloadLatest: (mine) => reloadLatest(session, item, mine),
             onDraft: (draft) => {
+                if (editor && !editor.el.isConnected) return;
                 if (draft === null) delete session.inlineDrafts[item.id];
                 else session.inlineDrafts[item.id] = { draft, baseRevision: session.inlineDrafts[item.id]?.baseRevision ?? baseRevision };
             },
@@ -1196,11 +1268,20 @@ export function createPlanConversation(host, root) {
                     method: 'PATCH', body: { content, expected_revision: base },
                 });
                 Object.assign(item, updated);
-                delete session.inlineDrafts[item.id];
+                const remaining = session.inlineDrafts[item.id];
+                if (remaining?.draft === content) delete session.inlineDrafts[item.id];
+                else if (remaining) remaining.baseRevision = revisionOf(updated);
                 return updated;
             },
-            onSaved,
+            onSaved: (content) => {
+                onSaved(content);
+                // A save may finish while another tab owns the preview. Mount
+                // against its new revision when the editor has been replaced.
+                if (!editor.el.isConnected && current(session)) renderArtifacts(session);
+                controls(session);
+            },
         });
+        return editor;
     }
 
     // ---- Interfaces: per-page description + editable Advanced source -------------------------------------
@@ -1208,31 +1289,31 @@ export function createPlanConversation(host, root) {
     // `screen` line (comments are ignored by the wire parser, renderer and server validator), so it travels
     // with the page and saves through the same PATCH + expected_revision path as every other edit.
     const DESC_PREFIX = /^(\s*)#\| ?(.*)$/;
-    function pageDescription(content) {
-        const lines = String(content || '').split('\n');
-        const at = lines.findIndex((line) => /^\s*screen\b/.test(line));
-        if (at < 0) return '';
+    function pageDescription(content, at) {
+        const lines = String(content || '').split(/\r?\n/);
         const out = [];
         for (let i = at + 1; i < lines.length; i += 1) { const m = DESC_PREFIX.exec(lines[i]); if (!m) break; out.push(m[2]); }
         return out.join('\n');
     }
-    function withPageDescription(content, markdown) {
+    function withPageDescription(content, at, markdown) {
         const lines = String(content || '').split('\n');
-        const at = lines.findIndex((line) => /^\s*screen\b/.test(line));
-        if (at < 0) throw new Error('This page outline has no screen to describe.');
+        if (!/^\s*screen\b/.test(lines[at] || '')) throw new Error('This page outline has no screen to describe.');
         let end = at + 1;
-        while (end < lines.length && DESC_PREFIX.test(lines[end])) end += 1;
+        while (end < lines.length && DESC_PREFIX.test(lines[end].replace(/\r$/, ''))) end += 1;
         const indent = `${/^\s*/.exec(lines[at])[0]}  `;
         const body = String(markdown || '').replace(/\s+$/, '');
-        const desc = body ? body.split('\n').map((line) => (line ? `${indent}#| ${line}` : `${indent}#|`)) : [];
+        const cr = lines[at].endsWith('\r') ? '\r' : '';
+        const desc = body ? body.split(/\r?\n/).map((line) => `${indent}#|${line ? ` ${line}` : ''}${cr}`) : [];
         return [...lines.slice(0, at + 1), ...desc, ...lines.slice(end)].join('\n');
     }
-    const descKey = (item) => `${item.id}#description`;
-    function mountPageDescription(session, item, preview) {
+    function mountPageDescription(session, item, page, pageIndex, preview) {
+        if (!page.line) return;
         session.inlineDrafts ||= {};
         session.descModes ||= {};
-        const key = descKey(item);
-        const mode = session.descModes[item.id] === 'raw' ? 'raw' : 'inline';
+        const prefix = `${item.id}#description/`;
+        const key = `${prefix}${page.attrs.id ? `id:${page.attrs.id}` : `index:${pageIndex}`}`;
+        const mode = session.descModes[key] === 'raw' ? 'raw' : 'inline';
+        const sourceIndex = page.line - 1;
         const stored = session.inlineDrafts[key] ?? null;
         const baseRevision = stored ? stored.baseRevision : revisionOf(item);
         const section = document.createElement('section');
@@ -1242,31 +1323,46 @@ export function createPlanConversation(host, root) {
             <span class="plan-doc-modes" role="group" aria-label="Description editor mode">
                 <button type="button" data-desc-mode="raw" aria-pressed="${mode === 'raw'}">Edit markdown</button>
                 <button type="button" data-desc-mode="inline" aria-pressed="${mode === 'inline'}">Inline editor</button></span></div>`;
-        const editor = createInlineEditor({
-            value: pageDescription(item.content), format: mode === 'raw' ? 'markdown-raw' : 'markdown', label: `${item.title || 'Page'} description`,
+        let editor;
+        editor = createInlineEditor({
+            value: pageDescription(item.content, sourceIndex), format: mode === 'raw' ? 'markdown-raw' : 'markdown', label: `${page.label || item.title || 'Page'} description`,
             initialDraft: stored?.draft ?? null,
             conflict: Boolean(stored) && stored.baseRevision !== revisionOf(item),
-            onReloadLatest: (mine) => reloadLatest(session, item, mine),
+            onReloadLatest: (mine) => reloadLatest(session, item, mine, key),
             onDraft: (draft) => {
+                if (editor && !editor.el.isConnected) return;
                 if (draft === null) delete session.inlineDrafts[key];
                 else session.inlineDrafts[key] = { draft, baseRevision: session.inlineDrafts[key]?.baseRevision ?? baseRevision };
             },
             toast: (message, type) => host.toast?.(message, type),
             save: async (markdown) => {
                 const base = session.inlineDrafts[key]?.baseRevision ?? baseRevision;
+                const content = withPageDescription(item.content, sourceIndex, markdown);
                 const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, {
-                    method: 'PATCH', body: { content: withPageDescription(item.content, markdown), expected_revision: base },
+                    method: 'PATCH', body: { content, expected_revision: base },
                 });
                 Object.assign(item, updated);
-                delete session.inlineDrafts[key];
+                const remaining = session.inlineDrafts[key];
+                if (remaining?.draft === markdown) delete session.inlineDrafts[key];
+                // This patch changes only the selected description. Drafts based on the same
+                // revision can still save against the new revision.
+                if (updated.content === content) {
+                    for (const [draftKey, draft] of Object.entries(session.inlineDrafts)) {
+                        if (draftKey.startsWith(prefix) && draft.baseRevision === base) draft.baseRevision = revisionOf(updated);
+                    }
+                }
                 return updated;
+            },
+            onSaved: () => {
+                if (!editor.el.isConnected && current(session)) renderArtifacts(session);
+                controls(session);
             },
         });
         section.append(editor.el);
         section.querySelectorAll('[data-desc-mode]').forEach((button) => {
             button.onclick = () => {
                 if (button.getAttribute('aria-pressed') === 'true') return;
-                session.descModes[item.id] = button.dataset.descMode;
+                session.descModes[key] = button.dataset.descMode;
                 editor.destroy();
                 renderArtifacts(session);
                 root.querySelector(`[data-desc-mode="${button.dataset.descMode}"]`)?.focus();
@@ -1407,6 +1503,7 @@ export function createPlanConversation(host, root) {
         if (screens.length === 1 || (openId && screens.some((s) => String(s.id) === String(openId)))) return false;
         const model = buildIfaceModel({ sitemap: session.workspace?.sitemap, screens, captures: pageCaptureFor(session.workspace), meta: readSidecar(item.content, 'wire').nodes, source: item.content || '' });
         if (!model.nodes.length) return false;
+        (session.pages ||= {})[item.id] = null;
         const h = ifaceHistory(session, item);
         session.ifaceView ||= {}; session.ifaceSel ||= {};
         const width = Math.max(320, (preview.clientWidth || 900) - 24);
@@ -1438,10 +1535,21 @@ export function createPlanConversation(host, root) {
         const panelSource = advancedButton({ title: 'Advanced · page source', text: () => item.content || '', onApply: (text) => applyPageSource(session, item, text) });
         dock.append(panelSource);
         const docs = choices.length;
+        const guidance = model.nodes.filter(node => node.lane === 'guidance').length;
+        const pages = model.nodes.length - guidance;
         const callout = createCallout({ key: 'interfaces', label: 'Interfaces summary',
-            stats: `${model.nodes.length} ${model.nodes.length === 1 ? 'page' : 'pages'} · ${model.outlined} with outlines · ${docs} ${docs === 1 ? 'document' : 'documents'}`,
+            stats: `${pages} ${pages === 1 ? 'page' : 'pages'}${guidance ? ` · ${guidance} guidance ${guidance === 1 ? 'item' : 'items'}` : ''} · ${model.outlined} with outlines · ${docs} ${docs === 1 ? 'document' : 'documents'}`,
             hint: 'Click a page for its details. Double-click or Enter opens a page outline with Preview / Planning / Development. Drag to pan. Hold Command and scroll to zoom.' });
-        canvas.el.querySelector('.erd-body').append(callout);
+        const body = canvas.el.querySelector('.erd-body');
+        body.append(callout);
+        mountPagePicker(body, model.nodes, (node) => {
+            if (openIfacePage(session, item, node)) {
+                panel.querySelector('[data-iface-back]')?.focus({ preventScroll: true });
+            } else {
+                canvas.reveal(node.key, { readable: true });
+                canvas.select(node.key, { focus: true });
+            }
+        });
         preview.classList.add('plan-erd', 'plan-iface');
         const hostEl = document.createElement('div');
         hostEl.className = 'erd-host';
@@ -1467,13 +1575,12 @@ export function createPlanConversation(host, root) {
         renderArtifacts(session);
     }
 
-    async function reloadLatest(session, item, mine) {
+    async function reloadLatest(session, item, mine, key = item.id) {
         session.conflictCopies ||= {};
-        session.conflictCopies[item.id] = mine;
+        session.conflictCopies[key] = mine;
         let copied = false;
         try { await navigator.clipboard?.writeText(mine); copied = Boolean(navigator.clipboard); } catch { copied = false; }
-        delete session.inlineDrafts?.[item.id];
-        if (session.inlineDrafts) delete session.inlineDrafts[descKey(item)];
+        delete session.inlineDrafts?.[key];
         const entry = session.erdEditors?.[item.id];
         if (entry) { entry.editor.destroy(); delete session.erdEditors[item.id]; }
         try { await reload(session); } catch (error) { host.toast?.(`Could not load the latest version: ${error?.message || 'unknown error'}`, 'error'); return; }
@@ -1533,6 +1640,63 @@ export function createPlanConversation(host, root) {
         session.workspace = await api(path(session));
     }
 
+    function rememberPlanChat(session) {
+        rememberChat(tabStore(), session.scope, session.chatId);
+        rememberChat(chatStore(), session.id, session.chatId);
+    }
+
+    function saveDraft(session) {
+        const key = draftKey(session, session.chatId);
+        try {
+            const store = tabStore();
+            if (!store) return false;
+            if (!session.draft && !session.attachments.length && !session.messageRequest) {
+                store.removeItem(key);
+                return true;
+            }
+            const item = selected(session);
+            store.setItem(key, JSON.stringify({
+                draft: session.draft, draftVersion: session.draftVersion, messageRequest: session.messageRequest,
+                attachmentIds: session.attachments.map(asset => asset.id), viewedAsset: session.viewedAsset,
+                provider: session.provider, model: session.model, tab: session.tab, itemId: item?.id,
+                pageId: session.pages?.[item?.id],
+            }));
+            return true;
+        } catch { return false; }
+    }
+
+    function moveFirstDraft(session) {
+        if (!saveDraft(session)) return;
+        try { tabStore()?.removeItem(draftKey(session, null)); } catch { /* tab storage unavailable */ }
+    }
+
+    function readDraft(session, chatId) {
+        try {
+            const saved = JSON.parse(tabStore()?.getItem(draftKey(session, chatId)) || 'null');
+            if (typeof saved?.draft !== 'string' || !Array.isArray(saved.attachmentIds)) return null;
+            const assets = new Map((session.conversation.attachments || []).map(asset => [String(asset.id), asset]));
+            saved.attachments = saved.attachmentIds.map(id => assets.get(String(id))).filter(Boolean);
+            if (!assets.has(String(saved.viewedAsset))) saved.viewedAsset = null;
+            return saved;
+        } catch { return null; }
+    }
+
+    function applyDraft(session, saved) {
+        session.draft = saved?.draft || '';
+        session.draftVersion = saved?.draftVersion || 0;
+        session.messageRequest = saved?.messageRequest || null;
+        session.attachments = [...(saved?.attachments || [])];
+        session.viewedAsset = saved?.viewedAsset || null;
+        if (current(session)) root.querySelector('#plan-language-input').value = session.draft;
+        if (!Object.hasOwn(TABS, saved?.tab)) return;
+        session.tab = saved.tab;
+        session.selection[saved.tab] = saved.itemId;
+        if (saved.itemId && saved.tab === 'wireframes') {
+            (session.pages ||= {})[saved.itemId] = saved.pageId || null;
+            (session.openPage ||= {})[saved.itemId] = saved.pageId || null;
+        }
+    }
+
     async function load(session) {
         if (session.pending) return;
         session.polling?.stop();
@@ -1543,17 +1707,42 @@ export function createPlanConversation(host, root) {
         try {
             // Conversation and provider list load in parallel (was a sequential waterfall).
             planningProviders ||= api('/llms/available-providers?type=planning').then((data) => data.providers || []).catch((error) => { planningProviders = null; throw error; });
-            if (!session.chatId) session.chatId = rememberedChat(chatStore(), session.id);
-            let [conversation] = await Promise.all([api(conversationPath(session)).catch((error) => {
-                if (error?.status !== 404 || !session.chatId) throw error;
-                session.chatId = null;                       // remembered chat no longer exists
-                return api(conversationPath(session));
+            const previousChat = session.chatId || null;
+            let requestedChat = previousChat || rememberedChat(tabStore(), session.scope) || rememberedChat(chatStore(), session.id);
+            let [conversation] = await Promise.all([api(conversationPath(session, requestedChat)).catch((error) => {
+                if (error?.status !== 404 || !requestedChat) throw error;
+                requestedChat = null;                       // remembered chat no longer exists
+                return api(conversationPath(session, null));
             }), planningProviders]);
-            const active = pickActiveChat(conversation.chats, session.chatId, conversation.chat_id);
-            if (active && active !== conversation.chat_id) { session.chatId = active; conversation = await api(conversationPath(session)); }
-            session.conversation = conversation;
-            session.chatId = conversation.chat_id || null;
-            rememberChat(chatStore(), session.id, session.chatId);
+            const active = pickActiveChat(conversation.chats, requestedChat, conversation.chat_id);
+            if (active && active !== conversation.chat_id) conversation = await api(conversationPath(session, active));
+            const receivedChat = conversation.chat_id || null;
+            const currentFirstReceipt = !previousChat && messageReceipt(conversation, session.messageRequest);
+            if (session.loaded && previousChat !== receivedChat && !currentFirstReceipt) {
+                activateChatConversation(session, conversation);
+            } else {
+                session.conversation = conversation;
+                if (!currentFirstReceipt) session.chatId = receivedChat;
+            }
+            let firstDraft = false;
+            if (!session.loaded && !session.draftVersion) {
+                let saved = readDraft(session, session.chatId);
+                if (!saved && session.chatId) {
+                    const provisional = readDraft(session, null);
+                    if (messageReceipt(conversation, provisional?.messageRequest)) {
+                        saved = provisional;
+                        firstDraft = true;
+                    }
+                }
+                if (saved) {
+                    applyDraft(session, saved);
+                    session.provider = saved.provider;
+                    session.model = saved.model;
+                }
+            }
+            reconcileMessage(session);
+            rememberPlanChat(session);
+            if (firstDraft) moveFirstDraft(session);
             const remembered = rememberedRoute(routeStore(), session.id);
             // Server default route (settings) only fills a chat that has no route of its own.
             const fallback = conversation.default_route || {};
@@ -1572,12 +1761,52 @@ export function createPlanConversation(host, root) {
         finally { session.pending = ''; session.pollError = ''; refresh(session); monitor(session); }
     }
 
+    function acknowledgeMessage(session, request) {
+        if (session.draftVersion === request.version) {
+            session.draft = '';
+            if (current(session)) root.querySelector('#plan-language-input').value = '';
+        }
+        session.attachments = session.attachments.filter((asset) => !request.attachments.includes(asset.id));
+        session.messageRequest = null;
+        session.error = '';
+        saveDraft(session);
+    }
+
+    function reconcileMessage(session) {
+        const request = session.messageRequest;
+        if (!request) return null;
+        const receipt = messageReceipt(session.conversation, request);
+        if (!receipt) return null;
+        const firstChat = !session.chatId && session.conversation.chat_id;
+        session.chatId = session.conversation.chat_id || session.chatId;
+        rememberPlanChat(session);
+        if (savedMessageStatuses.includes(receipt.status)) {
+            acknowledgeMessage(session, request);
+        } else if (receipt.status === 'error' || receipt.status === 'interrupted') {
+            session.messageRequest = null;
+            session.error = receipt.status === 'interrupted'
+                ? 'The planning turn was interrupted. Your draft is preserved.'
+                : 'The assistant could not complete this request. Your draft is preserved.';
+        } else {
+            session.error = '';
+        }
+        if (firstChat) moveFirstDraft(session);
+        return receipt.status;
+    }
+
     async function send(session) {
         if (blocked(session) || !session.draft.trim() || !modelAvailable(session)) return;
-        const version = session.draftVersion;
         const attachments = [...new Set([...session.attachments.map((asset) => asset.id), ...(session.viewedAsset ? [Number(session.viewedAsset)] : [])])];
         const selectedItem = session.viewedAsset ? null : selected(session);
         const body = { message: session.draft.trim(), provider: session.provider, model_name: session.model, tab: session.tab, item_id: selectedItem?.id ?? null, page_id: selectedItem?.content_format === 'wire' ? session.pages?.[selectedItem.id] ?? null : null, attachments, chat_id: session.chatId || null, drafts: draftsPayload(session.inlineDrafts) };
+        const payload = JSON.stringify(body);
+        const previous = session.messageRequest;
+        const request = {
+            id: previous?.payload === payload ? previous.id
+                : (crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-')),
+            payload, version: session.draftVersion, attachments,
+        };
+        session.messageRequest = request;
         session.undoClear = null;
         session.pending = 'Waiting for assistant...';
         session.error = '';
@@ -1585,24 +1814,41 @@ export function createPlanConversation(host, root) {
         controls(session);
         followSubmittedTurn(session);
         try {
-            session.conversation = await api(path(session, '/messages'), { method: 'POST', body });
-            if (session.conversation.chat_id) { session.chatId = session.conversation.chat_id; rememberChat(chatStore(), session.id, session.chatId); }
-            if (session.conversation.status === 'error') {
-                session.error = 'The assistant could not complete this request. Your draft is preserved.';
-                return;
+            let recovered = false;
+            try {
+                session.conversation = await api(path(session, '/messages'), { method: 'POST', body: { ...body, request_id: request.id } });
+            } catch (error) {
+                session.error = error.message || 'Message failed. Your draft is preserved.';
+                recovered = true;
+                try {
+                    const conversation = await api(conversationPath(session));
+                    const sameChat = (conversation.chat_id || null) === (session.chatId || null);
+                    if (!sameChat && !messageReceipt(conversation, request)) return;
+                    session.conversation = conversation;
+                }
+                catch { return; }
             }
-            // Only clear exactly the submitted draft. A user can compose the next message while waiting.
-            if (session.draftVersion === version) {
-                session.draft = '';
-                if (current(session)) root.querySelector('#plan-language-input').value = '';
+            const status = reconcileMessage(session);
+            if (status) {
+                if (!savedMessageStatuses.includes(status)) return;
+            } else {
+                if (recovered) return;
+                const firstChat = !session.chatId && session.conversation.chat_id;
+                if (session.conversation.chat_id) {
+                    session.chatId = session.conversation.chat_id;
+                    rememberPlanChat(session);
+                }
+                if (session.conversation.status === 'error') {
+                    session.messageRequest = null;
+                    session.error = 'The assistant could not complete this request. Your draft is preserved.';
+                    if (firstChat) moveFirstDraft(session);
+                    return;
+                }
+                acknowledgeMessage(session, request);
+                if (firstChat) moveFirstDraft(session);
             }
-            session.attachments = session.attachments.filter((asset) => !attachments.includes(asset.id));
             try { await reload(session); }
             catch (error) { session.error = `Response received, but artifacts could not refresh: ${error.message}`; }
-        } catch (error) {
-            session.error = error.message || 'Message failed. Your draft is preserved.';
-            // The server may have persisted an assistant error even when the HTTP request failed.
-            try { session.conversation = await api(conversationPath(session)); } catch { /* Keep last persisted messages and the draft. */ }
         } finally { session.pending = ''; refresh(session); monitor(session); }
     }
 
@@ -1680,8 +1926,17 @@ export function createPlanConversation(host, root) {
             toggle.setAttribute('aria-expanded', String(opening));
             if (opening) {
                 const rect = toggle.getBoundingClientRect();
-                menu.style.left = `${Math.max(8, Math.min(Math.round(rect.left), window.innerWidth - menu.offsetWidth - 8))}px`;
-                menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+                const viewportPadding = 8;
+                const gap = 4;
+                const below = window.innerHeight - rect.bottom - gap - viewportPadding;
+                const above = rect.top - gap - viewportPadding;
+                menu.style.maxHeight = '';
+                menu.style.maxWidth = 'calc(100vw - 16px)';
+                const openAbove = menu.offsetHeight > below && above > below;
+                const available = Math.max(0, openAbove ? above : below);
+                menu.style.maxHeight = `min(420px, 70vh, ${Math.floor(available)}px)`;
+                menu.style.left = `${Math.max(viewportPadding, Math.min(Math.round(rect.left), window.innerWidth - menu.offsetWidth - viewportPadding))}px`;
+                menu.style.top = `${openAbove ? Math.floor(rect.top - gap - menu.offsetHeight) : Math.ceil(rect.bottom + gap)}px`;
                 menu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
             }
         };
@@ -1712,19 +1967,52 @@ export function createPlanConversation(host, root) {
         if (!chatId || chatId === session.chatId) return;
         const result = await chatRequest(session, 'Opening chat...', async () => {
             const conversation = await api(`${path(session, '/conversation')}?chat_id=${encodeURIComponent(chatId)}`);
-            session.conversation = conversation;
-            session.chatId = conversation.chat_id;
+            activateChatConversation(session, conversation);
+            await loadModels(session);
             session.undoClear = null;
-            rememberChat(chatStore(), session.id, session.chatId);
+            rememberPlanChat(session);
             return conversation;
         });
         refresh(session);
         if (result) { monitor(session); root.querySelector('#plan-language-input')?.focus(); }
     }
+    function activateChatConversation(session, conversation) {
+        const changed = (conversation.chat_id || null) !== (session.chatId || null);
+        if (changed) {
+            saveDraft(session);
+            session.chatStates ||= new Map();
+            session.chatStates.set(String(session.chatId || 'new'), {
+                draft: session.draft, draftVersion: session.draftVersion, messageRequest: session.messageRequest,
+                attachments: [...session.attachments], viewedAsset: session.viewedAsset || null,
+                provider: session.provider, model: session.model,
+            });
+        }
+        session.conversation = conversation;
+        session.chatId = conversation.chat_id || null;
+        if (!changed) return;
+        const saved = session.chatStates.get(String(session.chatId || 'new')) || readDraft(session, session.chatId);
+        session.chatStates.delete(String(session.chatId || 'new'));
+        const fallback = conversation.default_route || {};
+        const remembered = rememberedRoute(routeStore(), session.id);
+        applyDraft(session, saved);
+        session.provider = saved?.provider || conversation.provider || fallback.provider || remembered?.provider || '';
+        session.model = saved?.model || conversation.model_name ||
+            (fallback.provider === session.provider ? fallback.model_name : '') ||
+            (remembered?.provider === session.provider ? remembered.model : '') || '';
+        session.models = [];
+        if (current(session)) {
+            root.querySelector('#plan-provider').innerHTML = providerOptions(session);
+            root.querySelector('#plan-model').innerHTML = modelOptions(session);
+            renderArtifacts(session);
+        }
+        reconcileMessage(session);
+    }
     async function openChat(session, chatId) {
-        session.conversation = await api(chatId ? `${path(session, '/conversation')}?chat_id=${encodeURIComponent(chatId)}` : path(session, '/conversation'));
-        session.chatId = session.conversation.chat_id || null;
-        rememberChat(chatStore(), session.id, session.chatId);
+        const conversation = await api(chatId ? `${path(session, '/conversation')}?chat_id=${encodeURIComponent(chatId)}` : path(session, '/conversation'));
+        const changed = (conversation.chat_id || null) !== (session.chatId || null);
+        activateChatConversation(session, conversation);
+        if (changed) await loadModels(session);
+        rememberPlanChat(session);
     }
     async function newChat(session) {
         await chatRequest(session, 'Starting a new chat...', async () => {
@@ -1990,8 +2278,21 @@ export function createPlanConversation(host, root) {
         }
     }
 
+    function requireSavedPlan(session, action) {
+        const ids = Object.keys(session.inlineDrafts || {}).map((key) => String(key).split('#')[0]);
+        const names = [...new Set((session.workspace.items || []).filter((item) => ids.includes(String(item.id))).map((item) => item.title || 'Document'))];
+        if (erdIsDirty(session)) names.push('Data');
+        if (!ids.length && !names.length) return true;
+        session.planSaveWarning = `Save your changes${names.length ? ` in ${names.join(', ')}` : ''} before ${action}.`;
+        session.outcome = '';
+        controls(session);
+        root.querySelector('#plan-operation-status')?.scrollIntoView({ block: 'nearest' });
+        return false;
+    }
+
     async function rebuildSitemap(session) {
         if (blocked(session) || session.rebuildingInterfaces || !modelAvailable(session)) return;
+        if (!requireSavedPlan(session, 'rebuilding interfaces')) return;
         closePlanMenu();
         session.rebuildingInterfaces = true;
         session.rebuildPercent = 4;
@@ -2026,6 +2327,7 @@ export function createPlanConversation(host, root) {
 
     async function build(session) {
         if (blocked(session) || !modelAvailable(session)) return;
+        if (!requireSavedPlan(session, 'building tickets')) return;
         session.pending = 'Checking plan...';
         session.error = '';
         session.outcome = '';
@@ -2086,10 +2388,11 @@ export function createPlanConversation(host, root) {
 
     function open(workspace) {
         const id = String(workspace.id);
-        let session = sessions.get(id);
+        const scope = workspaceScope(workspace);
+        let session = sessions.get(scope);
         if (!session) {
-            session = { id, workspace, conversation: { messages: [], attachments: [] }, models: null, loaded: false, draft: '', draftVersion: 0, attachments: [], provider: '', model: '', tab: 'wireframes', selection: {}, pending: '', error: '', outcome: '' };
-            sessions.set(id, session);
+            session = { id, scope, workspace, conversation: { messages: [], attachments: [] }, models: null, loaded: false, draft: '', draftVersion: 0, attachments: [], provider: '', model: '', tab: 'wireframes', selection: {}, pending: '', error: '', outcome: '' };
+            sessions.set(scope, session);
         } else if (!session.pending) session.workspace = workspace;
         active?.polling?.stop();
         active = session;
@@ -2103,7 +2406,13 @@ export function createPlanConversation(host, root) {
     function setScanHint(hint) {
         const bar = planBar().querySelector('.plan-detail-header') || planBar();
         let node = bar.querySelector?.('.plan-scan-hint');
-        if (!hint) { node?.remove(); return; }
+        if (active) active.scanHint = hint;
+        if (hint?.kind !== 'scanning') {
+            node?.remove();
+            if (active) controls(active);
+            return;
+        }
+        if (active) controls(active);
         if (!node) {
             node = document.createElement('span');
             node.className = 'plan-scan-hint';
@@ -2114,7 +2423,7 @@ export function createPlanConversation(host, root) {
         node.textContent = hint.text;
     }
     function refreshWorkspace(workspace) {
-        const session = sessions.get(String(workspace.id));
+        const session = sessions.get(workspaceScope(workspace));
         if (!session || session.pending) return;
         session.workspace = workspace;
         if (current(session)) renderArtifacts(session);
@@ -2128,6 +2437,7 @@ export function createPlanConversation(host, root) {
     }
     // Unsaved = chat draft/attachments/pending turn, a stored inline draft, or a dirty ERD canvas.
     const hasDraft = () => [...sessions.values()].some((session) => Boolean(session.draft || session.attachments.length || session.pending
+        || [...(session.chatStates?.values() || [])].some(chat => chat.draft || chat.attachments.length)
         || Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
     addUnsavedCheck(() => [...sessions.values()].some((session) => Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
     return { open, refreshWorkspace, setScanHint, leave, hasDraft };

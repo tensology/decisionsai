@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import json
 import threading
 import time
@@ -17,6 +18,76 @@ from distr.core.turn_runtime import (
     TurnScope,
     select_turn_runtime_id,
 )
+
+
+def test_fable_52_messages_route_defaults_to_medium_and_replays_signed_blocks():
+    from distr.core.turn_runtime import NativeTurnRuntime, ToolObservation, TurnEventKind
+    from distr.core.turn_runtime.model_registry import create_native_model_adapter
+
+    calls = []
+    signed = {"type": "thinking", "thinking": "", "signature": "provider-signature"}
+    tool = {"type": "tool_use", "id": "inspect", "name": "read_file", "input": {"path": "a.txt"}}
+    second_tool = {**tool, "id": "inspect-second", "input": {"path": "b.txt"}}
+
+    def block(**values):
+        return SimpleNamespace(**values, model_dump=lambda **kwargs: values)
+
+    def stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            final = SimpleNamespace(content=[block(**signed), block(**tool), block(**second_tool)], stop_reason="tool_use")
+            deltas = ["   "]
+        else:
+            final = SimpleNamespace(content=[block(type="text", text="Verified.")], stop_reason="end_turn")
+            deltas = ["Verified."]
+        return nullcontext(SimpleNamespace(text_stream=iter(deltas), get_final_message=lambda: final))
+
+    class Tools:
+        def definitions(self):
+            return [{"function": {"name": "read_file", "parameters": {"type": "object"}}}]
+
+        async def execute(self, name, arguments):
+            assert name == "read_file" and arguments["path"] in {"a.txt", "b.txt"}
+            return ToolObservation(status="success", summary=f"Read {arguments['path']}.")
+
+    adapter = create_native_model_adapter(
+        provider="openrouter", model="anthropic/claude-fable-5.2",
+        settings={"openrouter_key": "configured"},
+        client=SimpleNamespace(messages=SimpleNamespace(stream=stream)),
+    )
+    request = TurnRequest(
+        instruction="Inspect the file.", project=None,
+        route=ModelRoute(provider="openrouter", model="anthropic/claude-fable-5.2"),
+        scope=TurnScope(chat_id=1, project_id=1),
+    )
+    events = []
+    result = asyncio.run(NativeTurnRuntime(model=adapter, tools=Tools()).execute(request, on_event=events.append))
+
+    assert result.success and result.output == "Verified."
+    assert all(call["extra_body"]["output_config"] == {"effort": "medium"} for call in calls)
+    assert calls[0]["extra_body"]["provider"]["only"] == ["Anthropic"]
+    assert all("Before each batch" in call["system"] for call in calls)
+    assert calls[1]["messages"][1]["content"] == [signed, tool, second_tool]
+    assert [block["tool_use_id"] for block in calls[1]["messages"][2]["content"]] == ["inspect", "inspect-second"]
+    assert len(calls[1]["messages"]) == 3
+    progress = next(event for event in events if event.kind == TurnEventKind.PROGRESS)
+    tool_start = next(event for event in events if event.kind == TurnEventKind.TOOL_STARTED)
+    assert events.index(progress) < events.index(tool_start)
+    assert progress.output_delta.strip() == "Running the next 2 project tools."
+
+
+def test_claude_code_fable_effort_default_and_explicit_override(tmp_path):
+    from distr.core.project_cli_backends.base import ProjectTask
+    from distr.core.project_cli_backends.registry import ClaudeCodeBackend
+
+    task = ProjectTask(1, "Demo", str(tmp_path), "Inspect the project.", model="claude-fable-5-2")
+    backend = ClaudeCodeBackend()
+    default = backend._build_command("claude", task)
+    assert default[default.index("--effort") + 1] == "medium"
+    assert "Before each batch" in default[default.index("--append-system-prompt") + 1]
+    task.adapter_options["reasoning_effort"] = "xhigh"
+    overridden = backend._build_command("claude", task)
+    assert overridden[overridden.index("--effort") + 1] == "xhigh"
 
 
 def _chunk(*, content="", tool_calls=(), finish_reason=None, usage=None):

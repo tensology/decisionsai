@@ -136,11 +136,12 @@ def steer_harness(
     backend_id: str,
     project_id: int | None = None,
     project_folder: str | None = None,
+    run_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Steer an in-flight harness without restarting the workflow step.
 
-    Pi: sends RPC steer when a live session exists.
+    Interactive Pi: sends RPC steer when a live session exists.
     Other CLIs: returns queued=True for persistence on the run record.
     """
     from distr.core.project_cli_backends import get_backend, normalize_backend_id
@@ -162,6 +163,7 @@ def steer_harness(
         instruction,
         project_id=project_id,
         project_folder=project_folder,
+        run_id=run_id,
     )
 
 

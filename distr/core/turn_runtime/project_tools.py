@@ -683,6 +683,7 @@ class ProjectToolExecutor:
             artifacts=(),
             output=output,
             error="" if success else output[-2000:],
+            exit_code=process.returncode,
         )
 
     def cancel_active(self) -> None:

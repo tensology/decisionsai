@@ -163,20 +163,33 @@ def test_callout_dismisses_for_the_session_and_canvas_stays_interactive(page, ba
     page.locator('.erd-tick').wait_for(state='hidden', timeout=4000)
 
 
-@pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}")
+@pytest.mark.parametrize("size", [*SIZES, (320, 900)], ids=lambda s: f"{s[0]}")
 def test_interfaces_surface_fills_window_with_callout(page, backend, size):
-    _open(page, "Interfaces", '#plan-preview.plan-canvas-surface', size)
-    surface = box(page, '#plan-preview.plan-canvas-surface')
-    callout = box(page, '.plan-canvas-callout')
-    assert inside(callout, surface) and abs(callout['width'] - (surface['width'] - 2)) <= 4, (callout, surface)
-    assert callout['y'] + callout['height'] <= surface['y'] + surface['height']
+    _open(page, "Interfaces", '.iface-viewport', size)
+    surface = box(page, '.iface-viewport')
+    body = box(page, '.iface-canvas .erd-body')
+    callout = box(page, '.iface-canvas .plan-canvas-callout')
+    assert abs(callout['x'] - body['x']) <= 2 and abs(callout['width'] - body['width']) <= 2, (callout, body)
+    assert callout['y'] + callout['height'] <= surface['y'] + 1
     pane = box(page, '#plan-artifacts')
     assert -1 <= pane['y'] + pane['height'] - (surface['y'] + surface['height']) <= 24, (surface, pane)
-    assert page.locator('#plan-preview iframe, #plan-preview .plan-wireframe-preview, #plan-preview .plan-preview-toolbar, #plan-preview .plan-canvas-empty').count() >= 1   # content still there
-    page.screenshot(path=str(OUT / f'interfaces-chrome-{size[0]}.png'))
+    edit = box(page, '.iface-canvas .erd-dock-left')
+    zoom = box(page, '.iface-canvas .erd-dock-right')
+    assert inside(edit, surface, pad=4) and inside(zoom, surface, pad=4) and disjoint(edit, zoom)
+    pages = page.get_by_role('list', name='Pages', exact=True).get_by_role('listitem')
+    assert pages.count() == 2
+    assert any('Customers' in name for name in pages.all_text_contents())
+    page.screenshot(path=str(OUT / f'interfaces-chrome-{size[0]}.png'), animations='disabled')
     record(f'interfaces-{size[0]}', {"surface": surface, "callout": callout})
     page.get_by_label("Dismiss interfaces summary").click()
-    assert page.locator('.plan-canvas-callout').is_hidden()
+    assert page.locator('.iface-canvas .plan-canvas-callout').is_hidden()
+    assert pages.count() == 2
+    page.wait_for_function("""() => {
+        const pane = document.querySelector('#plan-artifacts').getBoundingClientRect();
+        const canvas = document.querySelector('.iface-viewport').getBoundingClientRect();
+        return pane.bottom - canvas.bottom >= -1 && pane.bottom - canvas.bottom <= 24;
+    }""")
+    page.screenshot(path=str(OUT / f'interfaces-dismissed-{size[0]}.png'), animations='disabled')
 
 
 def test_resize_refills_and_repacks_unsaved_layout(page, backend):
@@ -195,3 +208,23 @@ def test_resize_refills_and_repacks_unsaved_layout(page, backend):
     record('resize-zoom', zooms)
     (OUT / 'chrome-measurements.json').write_text(json.dumps(MEASURE, indent=1))
     print('CHROMEMEASURE', json.dumps(MEASURE))
+
+
+def test_data_docks_are_separate_on_a_320px_screen(page, backend):
+    _open(page, "Data", '.erd-table', (320, 900))
+    canvas = box(page, '.erd-viewport')
+    edit = box(page, '.erd-dock-left')
+    zoom = box(page, '.erd-dock-right')
+    assert inside(edit, canvas, pad=4) and inside(zoom, canvas, pad=4)
+    assert disjoint(edit, zoom)
+    level = page.locator('.erd-zoom')
+    initial = level.inner_text()
+    page.get_by_label('Zoom in', exact=True).click()
+    assert level.inner_text() != initial
+    page.get_by_label('Zoom out', exact=True).click()
+    page.screenshot(path=str(OUT / 'data-chrome-320.png'), animations='disabled')
+    tables = page.locator('.erd-table')
+    count = tables.count()
+    page.get_by_label('Add table', exact=True).click()
+    assert tables.count() == count + 1
+    page.screenshot(path=str(OUT / 'data-edit-320.png'), animations='disabled')

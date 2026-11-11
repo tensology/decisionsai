@@ -144,10 +144,10 @@ def test_proposal_thread_toast_lists_files_that_could_not_be_fetched():
     _node(r'''
 import assert from 'node:assert/strict';
 const {proposalThreadToast} = await import(SOURCE);
-assert.equal(proposalThreadToast({chat_id:1}), 'Thread created.');
-assert.equal(proposalThreadToast({chat_id:1, failed_attachments:[]}), 'Thread created.');
+assert.equal(proposalThreadToast({chat_id:1}), 'Development thread opened.');
+assert.equal(proposalThreadToast({chat_id:1, failed_attachments:[]}), 'Development thread opened.');
 assert.equal(proposalThreadToast({chat_id:1, failed_attachments:[{name:'a.pdf'},{name:'voice.ogg'}]}),
-  'Thread created. 2 files could not be fetched: a.pdf, voice.ogg');
+  'Development thread opened. 2 files could not be fetched: a.pdf, voice.ogg');
 ''')
     text = (STATIC / 'incoming/index.js').read_text()
     assert 'proposalThreadToast(result)' in text

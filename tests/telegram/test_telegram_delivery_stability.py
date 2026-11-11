@@ -5,6 +5,8 @@ import queue
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from distr.app.events import EventHandlerMixin
 from distr.core.integrations.bus import IntegrationMessageBus
 from distr.core.integrations.telegram.messages import (
@@ -633,22 +635,43 @@ def test_voice_transcription_failure_notifies_telegram():
 
 
 def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch):
+    import json
     from sqlalchemy import text
+    from sqlalchemy.orm import Session
 
     from distr.core.db import engine
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun
     from distr.core.workflow.interactions import create_workflow_interaction, pending_interactions
 
     pending_interactions()
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM workflow_interactions"))
+    # A checkpoint must belong to a real current waiting run, rather than
+    # relying on historical orphan IDs that cannot be safely resumed.
+    with Session(engine) as db:
+        db.merge(AutoWorkflow(id=10, name='Scoped voice approval'))
+        db.merge(AutoWorkflowStep(id=30, workflow_id=10, name='Approve', status='waiting'))
+        db.merge(AutoWorkflowRun(id=20, workflow_id=10, current_step_id=30, status='waiting',
+                                 run_data=json.dumps({'waiting_kind': 'approval'})))
+        db.commit()
     create_workflow_interaction(
         workflow_id=10, run_id=20, step_id=30, kind="approval", telegram_chat_id=123
     )
     resumed = []
-    monkeypatch.setattr(
-        "distr.core.workflow.dispatcher.continue_waiting_step",
-        lambda run_id, feedback: resumed.append((run_id, feedback)) or {"success": True},
-    )
+    # The voice boundary deliberately applies checkpoints in the background.
+    # Make only this test's worker deterministic before asserting its outcome.
+    class ImmediateWorkflowThread:
+        def __init__(self, target, kwargs=None, **_options):
+            self.target, self.kwargs = target, kwargs or {}
+        def start(self):
+            self.target(**self.kwargs)
+    monkeypatch.setattr('distr.core.workflow.interactions.threading.Thread', ImmediateWorkflowThread)
+    def resume_fixture(run_id, feedback, *, expected_checkpoint):
+        assert expected_checkpoint['owner']['id'] == run_id
+        assert expected_checkpoint['checkpoint']['step_id'] == 30
+        resumed.append((run_id, feedback))
+        return {'success': True}
+    monkeypatch.setattr('distr.core.workflow.dispatcher.continue_waiting_step', resume_fixture)
     manager = DummyTelegramManager(connected=True)
     manager.telegram_user_id = 123
     app = DummyApp(manager)
@@ -662,7 +685,7 @@ def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch):
 
     assert resumed == [(20, "yes, approve it")]
     assert any(
-        "carry on" in (kwargs.get("text") or (args[0] if args else ""))
+        "queued your decision for run #20" in (kwargs.get("text") or (args[0] if args else ""))
         for args, kwargs in manager.sent
     )
     assert pending_interactions(chat_id=123) == []
@@ -735,8 +758,13 @@ class DummyTelegramMessages(TelegramMessagesMixin):
         self.source_message_ids = []
         self.files = []
         self.sent = []
-        self._pending_telegram_media_context = None
+        self._pending_telegram_files = []
+        self._telegram_file_downloads = set()
+        self._telegram_file_wait_deadline = None
         self._telegram_batch_buffer = []
+        self._telegram_batch_thread_id = None
+        self._telegram_batch_timer = SimpleNamespace(start=lambda _delay: None)
+        self._TELEGRAM_BATCH_DELAY_MS = 3000
         self.message_received = type("Signal", (), {"emit": lambda _self, data: None})()
 
     def _get_chat_id(self):
@@ -749,6 +777,9 @@ class DummyTelegramMessages(TelegramMessagesMixin):
     def _stop_typing_loop(self):
         pass
 
+    def _start_typing_loop(self, _action):
+        pass
+
     def _update_stored_connection_data(self, **kwargs):
         pass
 
@@ -759,11 +790,9 @@ class DummyTelegramMessages(TelegramMessagesMixin):
         self.marked_read.append(message_id)
 
     def _enqueue_telegram_batch(
-        self, text, image_path=None, input_type="text", source_message_id=None
+        self, text, image_path=None, input_type="text", source_message_id=None, downloaded_file=None
     ):
-        self._telegram_batch_buffer.append(
-            (text, bool(image_path), image_path, input_type, source_message_id)
-        )
+        super()._enqueue_telegram_batch(text, image_path, input_type, source_message_id, downloaded_file)
         self.enqueued.append((text, image_path, input_type))
         self.source_message_ids.append(source_message_id)
 
@@ -928,7 +957,8 @@ def test_relay_transcribed_voice_does_not_start_duplicate_local_transcription():
     assert manager.source_message_ids == [107]
 
 
-def test_private_document_is_marked_read_even_when_media_path_returns_early():
+@pytest.mark.parametrize("relay_text", [None, "Create a ticket: fix checkout"])
+def test_private_document_routes_once_even_when_relay_puts_caption_in_text(relay_text):
     manager = DummyTelegramMessages()
     media = {
         "type": "document",
@@ -941,44 +971,63 @@ def test_private_document_is_marked_read_even_when_media_path_returns_early():
         "chat_id": 12345,
         "chat": {"type": "private"},
         "media": media,
+        "text": relay_text,
     }})
 
     assert manager.marked_read == [103]
-    assert manager.files == [(media, None)]
+    assert manager.files == [(media, relay_text)]
     assert manager.source_message_ids == [103]
+    assert not manager.enqueued
 
 
-def test_private_text_attaches_recent_silent_media_context():
+def test_group_photo_is_stored_without_entering_private_intake(monkeypatch):
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+
     manager = DummyTelegramMessages()
-    manager._pending_telegram_media_context = {
-        "text": "[Telegram image saved to /tmp/example.jpg]",
-        "image_path": "/tmp/example.jpg",
-        "created_at": 1_000_000.0,
-    }
+    manager.telegram_user_id = 12345
+    manager._group_message_queue = queue.Queue()
+    manager._group_messages_storage = []
+    manager._max_stored_group_messages = 10
+    database = Mock()
+    database.query.return_value.filter_by.return_value.first.return_value = None
+    monkeypatch.setattr("distr.core.db.get_session", lambda: nullcontext(database))
+    media = {"type": "photo", "download_url": "https://example.invalid/photo"}
 
-    import distr.core.integrations.telegram.messages as telegram_messages
-    original_time = telegram_messages.time.time
-    telegram_messages.time.time = lambda: 1_000_030.0
-    try:
-        manager._handle_telegram_message({"data": {
-            "message_id": 104,
-            "chat_id": 12345,
-            "chat": {"type": "private"},
-            "text": "what is this?",
-        }})
-    finally:
-        telegram_messages.time.time = original_time
+    manager._handle_telegram_message({"data": {
+        "message_id": 103, "chat_id": -12345, "chat": {"type": "group"},
+        "media": media, "text": "Photo from the project group",
+    }})
+
+    assert manager._group_message_queue.get_nowait()["media"] == media
+    database.add.assert_called_once()
+    assert not manager.files
+    assert not manager.enqueued
+    assert manager.telegram_user_id == 12345
+
+
+def test_private_text_attaches_recent_silent_media_context(monkeypatch):
+    from distr.core.integrations.telegram.messages import _DownloadedTelegramFile
+
+    manager = DummyTelegramMessages()
+    manager.telegram_user_id = 12345
+    monkeypatch.setattr(time, "monotonic", lambda: 1_000_030.0)
+    manager._pending_telegram_files = [
+        _DownloadedTelegramFile("12345", "101", "/tmp/example.jpg", "image", "example.jpg", "image/jpeg", "", 1_000_000.0),
+        _DownloadedTelegramFile("12345", "102", "/tmp/expired.jpg", "image", "expired.jpg", "image/jpeg", "", 999_900.0),
+    ]
+
+    manager._handle_telegram_message({"data": {
+        "message_id": 104,
+        "chat_id": 12345,
+        "chat": {"type": "private"},
+        "text": "what is this?",
+    }})
 
     assert manager.marked_read == [104]
-    assert manager.enqueued == [(
-        "[Telegram image saved to /tmp/example.jpg]\nwhat is this?",
-        "/tmp/example.jpg",
-        "text",
-    )]
-    assert manager._pending_telegram_media_context is None
-    assert manager.source_message_ids == [
-        _canonical_batch_source_message_id([None, 104])
-    ]
+    assert manager.enqueued == [("", "/tmp/example.jpg", "text"), ("what is this?", None, "text")]
+    assert not manager._pending_telegram_files
+    assert manager.source_message_ids == ["101", 104]
 
 
 def test_batch_source_message_id_is_stable_for_single_and_multi_message_bursts():
@@ -995,7 +1044,9 @@ def test_flushed_ticket_request_preserves_durable_telegram_source_identity(monke
     manager._telegram_batch_thread_id = 12345
     manager._telegram_batch_buffer = [
         ("Create a ticket: fix checkout", False, None, "text", 201),
-        ("It fails on mobile", False, None, "text", 202),
+        ("It fails on mobile", True, "/tmp/mobile.jpg", "text", 202),
+        ("Here is the error", True, "/tmp/error.jpg", "text", 203),
+        ("Same screenshot again", True, "/tmp/mobile.jpg", "text", 204),
     ]
     captured = {}
 
@@ -1011,10 +1062,190 @@ def test_flushed_ticket_request_preserves_durable_telegram_source_identity(monke
     manager._flush_telegram_batch()
 
     intake = captured["intake"]
-    assert intake.source_message_id == _canonical_batch_source_message_id([201, 202])
-    assert intake.metadata["source_message_ids"] == ["201", "202"]
+    assert intake.source_message_id == _canonical_batch_source_message_id([201, 202, 203, 204])
+    assert intake.metadata["source_message_ids"] == ["201", "202", "203", "204"]
+    assert [(attachment.kind, attachment.path) for attachment in intake.attachments] == [
+        ("image", "/tmp/mobile.jpg"),
+        ("image", "/tmp/error.jpg"),
+    ]
     assert intake.source_thread_id == "12345"
     assert manager.sent == ["Ticket created"]
+
+
+def _qt_telegram_messages():
+    from PyQt6.QtCore import QCoreApplication, QObject
+
+    class QtMessages(DummyTelegramMessages, QObject):
+        def __init__(self):
+            QObject.__init__(self)
+            DummyTelegramMessages.__init__(self)
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    manager = QtMessages()
+    manager.telegram_user_id = 12345
+    return app, manager
+
+
+def _download_test_file(manager, media, message_id, received_at):
+    from distr.core.integrations.telegram.messages import _DownloadedTelegramFile
+
+    file = _DownloadedTelegramFile(
+        str(manager.telegram_user_id), str(message_id), "",
+        "image" if media["type"] == "photo" else media["type"], media["file_name"], "", "", received_at,
+    )
+    manager._telegram_file_downloads.add(file)
+    return media, file
+
+
+def test_same_second_downloads_keep_each_original_file(monkeypatch, tmp_path):
+    from datetime import datetime
+    from distr.core.integrations.telegram import messages
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 11, 12, 30, 0, tzinfo=tz)
+
+    responses = iter([b"first attachment", b"second attachment"])
+    monkeypatch.setattr(messages, "datetime", FrozenDatetime)
+    monkeypatch.setattr(messages.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(
+        messages.requests, "get",
+        lambda *args, **kwargs: SimpleNamespace(status_code=200, content=next(responses)),
+    )
+    app, manager = _qt_telegram_messages()
+    for message_id in (601, 602):
+        media = {"download_url": "https://example.invalid/file", "type": "photo",
+                 "file_name": "checkout.jpg", "mime_type": "image/jpeg"}
+        manager._download_and_forward_file(*_download_test_file(manager, media, message_id, time.monotonic()))
+    app.processEvents()
+    paths = [Path(file.path) for file in manager._pending_telegram_files]
+
+    assert len(paths) == 2
+    assert paths[0] != paths[1]
+    assert [path.read_bytes() for path in paths] == [b"first attachment", b"second attachment"]
+
+
+@pytest.mark.parametrize("followup_while_downloading", [False, True])
+def test_uncaptioned_photo_and_document_reach_one_followup(monkeypatch, tmp_path, followup_while_downloading):
+    from concurrent.futures import ThreadPoolExecutor
+    from distr.core.integrations.telegram import messages
+
+    app, manager = _qt_telegram_messages()
+    monkeypatch.setattr(messages.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(messages.requests, "get", lambda *args, **kwargs:
+                        SimpleNamespace(status_code=200, content=b"test attachment"))
+    ingested = []
+    monkeypatch.setattr("distr.core.work_intake.get_work_intake_service",
+                        lambda: SimpleNamespace(ingest=lambda intake: ingested.append(intake) or
+                                                SimpleNamespace(handled=True, response_text="Ticket created")))
+
+    def follow_up():
+        app.processEvents()
+        assert not manager.enqueued
+        manager._handle_telegram_message({"data": {
+            "message_id": 603, "chat_id": 12345, "chat": {"type": "private"},
+            "text": "Create a ticket: fix checkout",
+        }})
+
+    received_at = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        for msg_id, kind, name in [(601, "photo", "checkout.jpg"), (602, "document", "steps.pdf")]:
+            if msg_id == 602 and followup_while_downloading:
+                follow_up()
+            media = {"download_url": "https://example.invalid/file", "type": kind, "file_name": name}
+            args = _download_test_file(manager, media, msg_id, received_at)
+            worker.submit(manager._download_and_forward_file, *args).result(timeout=5)
+    if not followup_while_downloading:
+        follow_up()
+    app.processEvents()
+    manager._flush_telegram_batch()
+
+    assert len(ingested) == 1
+    intake = ingested[0]
+    assert [attachment.kind for attachment in intake.attachments] == ["image", "document"]
+    assert [Path(attachment.path).suffix for attachment in intake.attachments] == [".jpg", ".pdf"]
+    assert sorted(intake.metadata["source_message_ids"]) == ["601", "602", "603"]
+    assert intake.source_message_id == _canonical_batch_source_message_id(intake.metadata["source_message_ids"])
+    assert intake.source_thread_id == "12345"
+    assert intake.text == "Create a ticket: fix checkout"
+
+
+def test_local_voice_followup_consumes_pending_attachment(monkeypatch):
+    from distr.core.integrations.telegram.messages import _DownloadedTelegramFile
+
+    manager = DummyTelegramMessages()
+    manager.telegram_user_id = 12345
+    manager._pending_telegram_files = [
+        _DownloadedTelegramFile("12345", "601", "/tmp/steps.pdf", "document", "steps.pdf",
+                                "application/pdf", "", time.monotonic()),
+    ]
+    monkeypatch.setattr("distr.core.workflow.interactions.handle_telegram_workflow_reply", lambda *args, **kwargs: None)
+    monkeypatch.setattr("distr.core.kanban.whatsapp_intake_approval.handle_telegram_reply", lambda *args, **kwargs: None)
+    monkeypatch.setattr("distr.core.kanban.whatsapp_work_lifecycle.handle_telegram_reply", lambda *args, **kwargs: None)
+    ingested = []
+    monkeypatch.setattr("distr.core.work_intake.get_work_intake_service",
+                        lambda: SimpleNamespace(ingest=lambda intake: ingested.append(intake) or
+                                                SimpleNamespace(handled=True, response_text="Ticket created")))
+    handler = SimpleNamespace(telegram_manager=manager)
+    EventHandlerMixin._evt_telegram_transcription(handler, {
+        "request_id": "local-voice", "success": True, "transcript": "Create a ticket: fix checkout",
+        "source_message_id": "602", "input_type": "voice",
+    })
+
+    assert manager.source_message_ids == ["601", "602"]
+    assert manager.enqueued[-1] == ("Create a ticket: fix checkout", None, "voice")
+    assert not manager._pending_telegram_files
+    manager._flush_telegram_batch()
+    assert len(ingested) == 1
+    assert ingested[0].transcript == "Create a ticket: fix checkout"
+    assert [attachment.name for attachment in ingested[0].attachments] == ["steps.pdf"]
+
+
+@pytest.mark.parametrize("outcome", ["ready", "http_error", "timer_first", "completion_first"])
+def test_request_waits_for_download_and_does_not_reassign_late_file(monkeypatch, tmp_path, outcome):
+    from distr.core.integrations.telegram import messages
+
+    app, manager = _qt_telegram_messages()
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(messages.Path, "home", lambda: tmp_path)
+    status_code = 503 if outcome == "http_error" else 200
+    monkeypatch.setattr(messages.requests, "get", lambda *args, **kwargs:
+                        SimpleNamespace(status_code=status_code, content=b"test attachment"))
+    downloads = []
+    monkeypatch.setattr(messages, "threading", SimpleNamespace(Thread=lambda target, args, **kwargs:
+                        SimpleNamespace(start=lambda: downloads.append(lambda: target(*args)))))
+    ingested = []
+    monkeypatch.setattr("distr.core.work_intake.get_work_intake_service",
+                        lambda: SimpleNamespace(ingest=lambda intake: ingested.append(intake) or
+                                                SimpleNamespace(handled=True, response_text="Ticket created")))
+    TelegramMessagesMixin._handle_file_message(
+        manager, {"type": "document", "file_name": "steps.pdf", "download_url": "https://example.invalid/file"},
+        message_id=601,
+    )
+    manager._enqueue_telegram_batch("Create a ticket: fix checkout", source_message_id="602")
+    clock[0] = 103.0
+    manager._flush_telegram_batch()
+    assert not ingested
+
+    if outcome in {"timer_first", "completion_first"}:
+        clock[0] = 120.0
+    if outcome == "timer_first":
+        manager._flush_telegram_batch()
+        assert len(ingested) == 1
+    downloads[0]()
+    app.processEvents()
+    assert len(ingested) == 1
+    assert not manager._pending_telegram_files
+    assert not manager._telegram_file_downloads
+    assert set(ingested[0].metadata["source_message_ids"]) == {"601", "602"}
+    if outcome == "ready":
+        assert [attachment.name for attachment in ingested[0].attachments] == ["steps.pdf"]
+        assert manager.sent == ["Ticket created"]
+    else:
+        assert not ingested[0].attachments
+        assert "steps.pdf" in manager.sent[0]
 
 
 def test_failed_batch_handoff_notifies_user_instead_of_logging_false_success(monkeypatch):

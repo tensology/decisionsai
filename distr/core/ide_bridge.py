@@ -55,20 +55,22 @@ def find_project_for_folder(cwd: str, project_id: int | None = None) -> dict[str
             project = session.query(Project).filter(Project.id == int(project_id)).first()
             return _project_dict(project) if project else None
 
-        folder = _canonical_folder(cwd)
-        if not folder:
-            return None
-        candidates: list[tuple[int, Project]] = []
-        for project in session.query(Project).all():
-            project_folder = _canonical_folder(project.folder_location or "")
-            if not project_folder:
-                continue
-            if folder == project_folder or folder.startswith(project_folder.rstrip("/") + "/"):
-                candidates.append((len(project_folder), project))
-        if not candidates:
-            return None
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return _project_dict(candidates[0][1])
+        return _project_dict(project_for_cwd(cwd, session.query(Project).all()))
+
+
+def project_for_cwd(cwd, projects):
+    """Select the registered project with the most specific matching root."""
+    folder = _canonical_folder(cwd)
+    if not folder:
+        return None
+    best = None
+    best_length = 0
+    for project in projects:
+        root = _canonical_folder(project.folder_location or "")
+        if len(root) > best_length and (folder == root or folder.startswith(root.rstrip("/") + "/")):
+            best = project
+            best_length = len(root)
+    return best
 
 
 def _project_dict(project: Project | None) -> dict[str, Any] | None:

@@ -7,6 +7,7 @@ export function createWorkflows({ context, actions, el }) {
         workflowRuns: {},
         workflowBusy: {},
         workflowDetailsLoading: new Set(),
+        workflowPreviewUnavailable: new WeakSet(),
         workflowMemory: {},
         inlineStepId: 0,
         selectedStepIndex: -1,
@@ -141,10 +142,11 @@ export function createWorkflows({ context, actions, el }) {
                       : '<li class="workflow-card-step-next workflow-card-last"><span class="workflow-card-index">✓</span><span class="workflow-card-step"><small>Next</small><strong>Last step</strong></span></li>'
               }</ol>`
             : stepCount
-              ? '<p class="workflow-card-pending">Loading steps</p>'
+              ? `<p class="workflow-card-pending">${state.workflowPreviewUnavailable.has(workflow) ? 'Step preview unavailable' : 'Loading steps'}</p>`
               : '<p class="workflow-card-pending">No steps yet</p>';
         const classLabel = WORKFLOW_CLASS_LABEL[workflowClassKey(workflow)] || '';
-        const summary = `${classLabel ? `${classLabel} · ` : ''}${stepCount} step${stepCount === 1 ? '' : 's'} · ${run ? actions.statusLabel(status) : issue || 'Ready'}`;
+        const readiness = run ? actions.statusLabel(status) : issue || (steps.length ? 'Ready' : '');
+        const summary = [classLabel, `${stepCount} step${stepCount === 1 ? '' : 's'}`, readiness].filter(Boolean).join(' · ');
         // Managed policies explain themselves: what they are for, not just their name.
         const what = classLabel ? String(workflow.description || '').trim() : '';
         const stateClass = status === 'waiting' || status === 'paused' ? 'waiting' : status === 'failed' ? 'failed' : active ? 'running' : '';
@@ -207,21 +209,23 @@ export function createWorkflows({ context, actions, el }) {
 
     function hydrateWorkflowCards(workflows) {
         workflows
-            .filter((workflow) => !Array.isArray(workflow.steps) && !state.workflowDetailsLoading.has(Number(workflow.id)))
+            .filter((workflow) => !Array.isArray(workflow.steps)
+                && !state.workflowPreviewUnavailable.has(workflow)
+                && !state.workflowDetailsLoading.has(Number(workflow.id)))
             .slice(0, 40)
             .forEach((workflow) => {
                 state.workflowDetailsLoading.add(Number(workflow.id));
                 actions
                     .api(`/workflows/${Number(workflow.id)}`)
                     .then((detail) => {
-                        const index = context.workflows.findIndex((item) => Number(item.id) === Number(workflow.id));
-                        if (index >= 0)
-                            context.workflows[index] = {
-                                ...context.workflows[index],
-                                ...detail
-                            };
+                        if (!Array.isArray(detail?.steps)) {
+                            state.workflowPreviewUnavailable.add(workflow);
+                            return;
+                        }
+                        const index = context.workflows.indexOf(workflow);
+                        if (index >= 0) context.workflows[index] = { ...workflow, ...detail };
                     })
-                    .catch(() => null)
+                    .catch(() => state.workflowPreviewUnavailable.add(workflow))
                     .finally(() => {
                         state.workflowDetailsLoading.delete(Number(workflow.id));
                         if (context.workspaceMode === 'workflows' && !state.selectedWorkflowId) renderWorkflowWorkspace();

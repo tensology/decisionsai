@@ -1,15 +1,31 @@
 """Incoming HTTP boundary. Existing URLs remain compatible."""
-from fastapi import Request
+from fastapi import Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 import asyncio
+import re
 from pathlib import Path
 import logging
+
+from .review_document import development_review_document
 
 logger = logging.getLogger(__name__)
 PROPOSAL_READ_TIMEOUT_SECONDS = 60
 
 
+def proposal_review_document() -> str:
+    """Assemble the same checked-in Development UI for an opaque-origin frame."""
+    return development_review_document(
+        "Development proposal review", styles=("incoming/styles.css",),
+        scripts=("shared/ticket-modal.js", "incoming/index.js", "incoming/review-frame.js"), media=True,
+    )
+
+
 def register_routes(router, templates):
+    @router.get("/workflows/studio/incoming/proposals/review-surface")
+    async def workflow_studio_proposal_review_surface():
+        return JSONResponse({"version": 1, "document": await asyncio.to_thread(proposal_review_document)},
+                            headers={"Cache-Control": "no-store"})
+
     @router.put("/workflows/studio/incoming/proposals/auto-accept")
     async def set_proposal_auto_accept(request: Request):
         try:
@@ -64,14 +80,69 @@ def register_routes(router, templates):
         Cached in-process; pass refresh=1 (Resync) to rebuild from Tensology/local sources.
         """
         try:
-            from distr.core.incoming.proposals import list_incoming_proposals
+            from distr.core.incoming.proposals import list_incoming_proposals, proposal_review_key
+            from distr.core.incoming.source_context import scope_whatsapp_proposal
 
-            return JSONResponse(await asyncio.to_thread(
+            payload = await asyncio.to_thread(
                 list_incoming_proposals, limit=limit, force=bool(refresh),
-            ))
+            )
+            return JSONResponse({
+                **payload,
+                "proposals": [{**scope_whatsapp_proposal(row), "review_key": proposal_review_key(row)}
+                              for row in payload.get("proposals") or []],
+            })
         except Exception as e:
             logger.error("Incoming proposals load failed: %s", e, exc_info=True)
             return JSONResponse({"proposals": [], "counts": {}, "error": str(e)}, status_code=500)
+
+    @router.get("/workflows/studio/incoming/proposals/review")
+    async def workflow_studio_proposal_review(review_key: str = Query(pattern=r"^[a-f0-9]{64}$")):
+        from distr.core.incoming.proposals import resolve_proposal_review
+
+        return JSONResponse(await asyncio.to_thread(resolve_proposal_review, review_key))
+
+    @router.get("/workflows/studio/incoming/proposals/source")
+    async def workflow_studio_proposal_source(
+        review_key: str = Query(pattern=r"^[a-f0-9]{64}$"),
+        chat_id: int | None = Query(default=None, gt=0),
+        source_key: str | None = Query(default=None, pattern=r"^[a-f0-9]{32}$"),
+    ):
+        from distr.core.incoming.proposals import resolve_proposal_review
+        from distr.core.incoming.proposal_conversation import read_proposal_conversation
+
+        def read():
+            if chat_id is not None:
+                resolved = resolve_proposal_review(review_key, submitted_only=True)
+                if resolved.get("status") == "thread" and resolved.get("chat_id") == chat_id and resolved.get("proposal"):
+                    return read_proposal_conversation(resolved["proposal"], source_key)
+                raise LookupError("The original proposal source is no longer linked to this thread.")
+            resolved = resolve_proposal_review(review_key)
+            if resolved["status"] == "unconfirmed":
+                raise RuntimeError("The proposal could not be checked.")
+            if resolved["status"] != "proposal":
+                raise LookupError("The linked proposal is no longer available. Reopen it before viewing its source.")
+            return read_proposal_conversation(resolved["proposal"], source_key)
+
+        try:
+            return JSONResponse(await asyncio.to_thread(read), headers={"Cache-Control": "no-store"})
+        except LookupError as error:
+            return JSONResponse({"detail": str(error)}, status_code=404)
+        except Exception:
+            logger.exception("Could not read the proposal conversation")
+            return JSONResponse({"detail": "The original conversation could not be checked. Try again."}, status_code=503)
+
+    @router.get("/workflows/studio/incoming/whatsapp/history")
+    async def incoming_whatsapp_history(
+        thread_id: str = Query(min_length=1, max_length=255),
+        before_id: int = Query(default=0, ge=0),
+        limit: int = Query(default=40, ge=1, le=100),
+    ):
+        from distr.core.incoming.service import list_whatsapp_history
+
+        try:
+            return await asyncio.to_thread(list_whatsapp_history, thread_id, before_id, limit)
+        except LookupError as error:
+            return JSONResponse({"error": str(error)}, status_code=404)
 
 
     @router.api_route('/workflows/studio/incoming/check', methods=['GET', 'POST'])
@@ -116,7 +187,19 @@ def register_routes(router, templates):
             body = await request.json()
         except ValueError:
             return JSONResponse({"success": False, "error": "A proposal is required."}, status_code=422)
-        proposal = (body or {}).get("proposal") if isinstance(body, dict) else None
+        body = body if isinstance(body, dict) else {}
+        proposal = body.get("proposal")
+        review_key = body.get("review_key")
+        if review_key is not None:
+            if not isinstance(review_key, str) or not re.fullmatch(r"[a-f0-9]{64}", review_key):
+                return JSONResponse({"error": "The proposal link is invalid."}, status_code=422)
+            from distr.core.incoming.proposals import resolve_proposal_review
+
+            resolved = await asyncio.to_thread(resolve_proposal_review, review_key)
+            if resolved["status"] != "proposal":
+                status = 503 if resolved["status"] == "unconfirmed" else 409
+                return JSONResponse({"error": "The linked proposal could not be confirmed. Reopen it before preparing attachments."}, status_code=status)
+            proposal = resolved["proposal"]
         if not isinstance(proposal, dict):
             return JSONResponse({"success": False, "error": "A proposal is required."}, status_code=422)
         try:
@@ -129,9 +212,9 @@ def register_routes(router, templates):
                     int(project_id) if project_id else None,
                     strict=False,
                 )
-                proposal_id = str(proposal.get("id") or "")
-                public = public_managed_attachments(result["attachments"], proposal_id=proposal_id)
-                failures = public_managed_attachments(result["failures"], proposal_id=proposal_id)
+                scope = {"proposal_id": str(proposal.get("id") or ""), "review_key": review_key or ""}
+                public = public_managed_attachments(result["attachments"], **scope)
+                failures = public_managed_attachments(result["failures"], **scope)
                 return {"attachments": public, "failures": failures}
 
             payload = await asyncio.to_thread(_run)
@@ -141,14 +224,28 @@ def register_routes(router, templates):
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     @router.get("/workflows/studio/incoming/proposals/files/{attachment_id}")
-    async def workflow_studio_proposal_managed_file(attachment_id: str, proposal_id: str = ""):
+    async def workflow_studio_proposal_managed_file(
+        attachment_id: str, proposal_id: str = "", review_key: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$"),
+    ):
         """Serve a previously ensured managed proposal attachment by id."""
         # Prefer proposal from list cache; fall back to query body is not available on GET.
         try:
             from distr.core.incoming.media import resolve_proposal_managed_attachment
-            from distr.core.incoming.proposals import list_incoming_proposals
+            from distr.core.incoming.proposals import list_incoming_proposals, resolve_proposal_review
+
+            if review_key is not None:
+                resolved = await asyncio.to_thread(resolve_proposal_review, review_key)
+                if resolved["status"] != "proposal":
+                    status = 503 if resolved["status"] == "unconfirmed" else 404
+                    return JSONResponse({"error": "The linked proposal could not be confirmed. Reopen it before viewing attachments."}, status_code=status)
+                current = resolved["proposal"]
+            else:
+                current = None
 
             def _run():
+                if current is not None:
+                    project_id = current.get("project_id")
+                    return resolve_proposal_managed_attachment(current, attachment_id, int(project_id) if project_id else None)
                 listing = list_incoming_proposals(refresh_local=False)
                 proposal = next((row for row in listing.get("proposals") or [] if str(row.get("id")) == str(proposal_id)), None)
                 if proposal is None and str(proposal_id).startswith("tensology:"):
@@ -173,12 +270,17 @@ def register_routes(router, templates):
             media_type = mime.split(";", 1)[0].strip() or "application/octet-stream"
             if media_type == "audio/ogg" and "codecs=" in mime.lower():
                 media_type = "audio/ogg"
-            filename = Path(str(record.get("name") or path.name)).name.replace('"', "")
+            filename = Path(str(record.get("name") or path.name)).name
             headers = {
-                "Cache-Control": "private, max-age=600",
-                "Content-Disposition": f'inline; filename="{filename}"',
+                "Cache-Control": "private, no-store" if review_key else "private, max-age=600",
+                "X-Content-Type-Options": "nosniff",
             }
-            return FileResponse(path, media_type=media_type, headers=headers)
+            if record.get("sha256"):
+                headers["ETag"] = f'"{record["sha256"]}"'
+            return FileResponse(
+                path, media_type=media_type, headers=headers, filename=filename,
+                content_disposition_type="attachment" if media_type == "application/octet-stream" else "inline",
+            )
         except FileNotFoundError as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=404)
         except Exception as e:
@@ -264,7 +366,7 @@ def register_routes(router, templates):
             body = await request.json()
             if not isinstance(body, dict) or not isinstance(body.get('proposal_id'), str) or not isinstance(body.get('message_ids'), list):
                 raise ValueError('A proposal and exact source messages are required.')
-            from distr.core.incoming.proposals import list_incoming_proposals
+            from distr.core.incoming.proposals import list_incoming_proposals, proposal_review_key
             from distr.core.incoming.proposal_sync import update_proposal
             listing = await asyncio.to_thread(list_incoming_proposals, refresh_local=False)
             proposal = next((row for row in listing['proposals'] if row['id'] == body['proposal_id']), None)
@@ -274,7 +376,7 @@ def register_routes(router, templates):
                 return JSONResponse({'error': 'The source snapshot changed. Reload Incoming.'}, status_code=409)
             changes = {key: value for key, value in body.items() if key not in {'proposal_id', 'message_ids', 'expected_updated_at'}}
             updated = await asyncio.to_thread(update_proposal, proposal, changes, expected_updated_at=body.get('expected_updated_at'))
-            return JSONResponse({'success': True, 'proposal': updated})
+            return JSONResponse({'success': True, 'proposal': {**updated, 'review_key': proposal_review_key(updated)}})
         except ValueError as exc:
             return JSONResponse({'error': str(exc)}, status_code=409)
         except Exception as exc:
@@ -292,7 +394,7 @@ def register_routes(router, templates):
                 or type(body.get('project_id')) is not int
                 or not isinstance(body.get('message_ids'), list)):
             return JSONResponse({'error': 'A proposal and project are required.'}, status_code=422)
-        from distr.core.incoming.proposals import list_incoming_proposals, reassign_proposal_project
+        from distr.core.incoming.proposals import list_incoming_proposals, proposal_review_key, reassign_proposal_project
 
         listing = await asyncio.to_thread(list_incoming_proposals, refresh_local=False)
         proposal = next((row for row in listing['proposals'] if row['id'] == body['proposal_id']), None)
@@ -306,7 +408,7 @@ def register_routes(router, templates):
             updated = await asyncio.to_thread(reassign_proposal_project, proposal, body['project_id'])
         except ValueError as exc:
             return JSONResponse({'error': str(exc)}, status_code=422)
-        return JSONResponse({'success': True, 'proposal': updated})
+        return JSONResponse({'success': True, 'proposal': {**updated, 'review_key': proposal_review_key(updated)}})
 
 
     @router.post("/workflows/studio/incoming/proposals/merge")
@@ -346,9 +448,24 @@ def register_routes(router, templates):
         if not isinstance(proposal, dict) or not str(proposal.get("title") or "").strip():
             return JSONResponse({"success": False, "error": "A proposal with a title is required."}, status_code=422)
         try:
-            from distr.core.incoming.proposals import create_proposal_thread
+            from distr.core.incoming.proposals import create_proposal_thread, proposal_thread_attachment_report, resolve_proposal_review
 
-            from distr.core.incoming.proposals import proposal_thread_attachment_report
+            review_key = body.get("review_key")
+            if review_key is not None:
+                if not isinstance(review_key, str) or not re.fullmatch(r"[a-f0-9]{64}", review_key):
+                    return JSONResponse({"error": "The proposal link is invalid."}, status_code=422)
+                resolved = await asyncio.to_thread(resolve_proposal_review, review_key)
+                if resolved["status"] == "thread":
+                    report = await asyncio.to_thread(proposal_thread_attachment_report, resolved["chat_id"])
+                    return JSONResponse({"success": True, "chat_id": resolved["chat_id"], **report})
+                if resolved["status"] != "proposal":
+                    status = 503 if resolved["status"] == "unconfirmed" else 409
+                    return JSONResponse({"error": "The linked proposal could not be confirmed. Reopen the link before starting work."}, status_code=status)
+                current = resolved["proposal"]
+                if any(proposal.get(field) != current.get(field)
+                       for field in ("project_id", "updated_at", "title", "description")):
+                    return JSONResponse({"error": "The linked proposal changed. Reopen the link before starting work."}, status_code=409)
+                proposal = current
 
             chat_id = await asyncio.to_thread(create_proposal_thread, proposal, start_work=True)
             # Files that could not be fetched never block the thread; report them.
@@ -576,6 +693,13 @@ def register_routes(router, templates):
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+    @router.get("/workflows/studio/incoming/mail/reply/status")
+    async def workflow_studio_incoming_mail_reply_status(idempotency_key: str = Query(min_length=1, max_length=200)):
+        from distr.core.incoming.mail_reply import incoming_mail_reply_status
+
+        status = await asyncio.to_thread(incoming_mail_reply_status, idempotency_key)
+        return JSONResponse({"receipt_status": status}, headers={"Cache-Control": "no-store"})
+
     @router.post("/workflows/studio/incoming/mail/reply")
     async def workflow_studio_incoming_mail_reply(request: Request):
         """Quick Reply from Incoming Gmail/Mailshot readers. dry_run never sends."""
@@ -586,7 +710,7 @@ def register_routes(router, templates):
         if not isinstance(body, dict):
             return JSONResponse({"success": False, "error": "A JSON body is required."}, status_code=422)
         try:
-            from distr.core.incoming.mail_reply import send_incoming_mail_reply
+            from distr.core.incoming.mail_reply import MailReplyPreflightError, MailReplyUnconfirmed, send_incoming_mail_reply
 
             result = await asyncio.to_thread(
                 send_incoming_mail_reply,
@@ -596,8 +720,13 @@ def register_routes(router, templates):
                 body=str(body.get("body") or ""),
                 message_id=str(body.get("message_id") or body.get("source_message_id") or ""),
                 dry_run=bool(body.get("dry_run")),
+                idempotency_key=str(body.get("idempotency_key") or ""),
             )
             return JSONResponse(result)
+        except MailReplyUnconfirmed as e:
+            return JSONResponse({'success': False, 'error': str(e), 'receipt_status': e.receipt_status}, status_code=409)
+        except MailReplyPreflightError as e:
+            return JSONResponse({'success': False, 'error': str(e), 'send_attempted': False}, status_code=422)
         except ValueError as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=422)
         except Exception as e:

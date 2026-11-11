@@ -115,23 +115,51 @@ def test_incoming_resync_busy_error_and_recovery(page: Page, width):
     page.route('**/api/workflows/studio/incoming/proposals*', lambda route: route.fulfill(json={'proposals': []}))
     page.goto(BASE + '/development/incoming/')
     resync = page.locator('#incoming-resync')
+    channels = {
+        'whatsapp': '#incoming-list [data-incoming-conversation]',
+        'gmail': '#incoming-gmail-list [data-incoming-gmail-thread]',
+        'mailshot': '#incoming-mailshot-list [data-incoming-mailshot-thread]',
+    }
     expect(resync).to_be_enabled()
-    page.locator('#incoming-folder-gmail').click()
+    for channel, selector in channels.items():
+        page.locator(f'#incoming-folder-{channel}').click()
+        expect(page.locator(selector).first).to_be_visible()
+    page.locator('#incoming-folder-proposals').click()
+    page.route('**/api/workflows/studio/incoming/check', lambda route: route.fulfill(json={'checks': {}}))
     page.route('**/api/workflows/studio/incoming?*', lambda route: route.fulfill(status=503, json={'detail': 'Temporary inbox outage'}))
     resync.click()
     expect(resync).to_be_disabled()
     expect(resync).to_have_attribute('aria-busy', 'true')
     capture(page, 'incoming-resync-busy', width)
-    expect(page.locator('#incoming-gmail-list')).to_contain_text('Incoming is temporarily unavailable')
     expect(resync).to_be_enabled()
-    capture(page, 'incoming-error', width)
+    for channel, selector in channels.items():
+        page.locator(f'#incoming-folder-{channel}').click()
+        panel = page.locator(f'#incoming-panel-{channel}')
+        expect(panel.get_by_role('status')).to_contain_text('Could not refresh conversations')
+        expect(page.locator(selector).first).to_be_visible()
+        capture(page, f'incoming-{channel}-refresh-error', width)
     page.unroute('**/api/workflows/studio/incoming?*')
-    resync.click()
-    expect(page.locator('#incoming-gmail-list .incoming-gmail-thread')).to_have_count(1)
-    expect(resync).to_be_enabled()
     page.locator('#incoming-folder-proposals').click()
-    expect(page.locator('#incoming-proposals-list')).to_contain_text('No proposals right now.')
-    capture(page, 'incoming-proposals-empty', width)
+    resync.click()
+    expect(resync).to_be_enabled()
+    for channel, selector in channels.items():
+        page.locator(f'#incoming-folder-{channel}').click()
+        expect(page.locator(f'#incoming-panel-{channel}').get_by_role('status')).to_have_count(0)
+        expect(page.locator(selector).first).to_be_visible()
+        capture(page, f'incoming-{channel}-refresh-recovered', width)
+
+    page.route('**/api/workflows/studio/incoming?*', lambda route: route.fulfill(status=503, json={'detail': 'Temporary inbox outage'}))
+    page.reload()
+    for channel, selector in channels.items():
+        page.locator(f'#incoming-folder-{channel}').click()
+        panel = page.locator(f'#incoming-panel-{channel}')
+        warning = panel.get_by_role('status')
+        expect(warning).to_contain_text('Could not refresh conversations')
+        expect(warning).not_to_contain_text('previously loaded')
+        expect(page.locator(selector)).to_have_count(0)
+        expect(panel.locator('.development-empty')).to_have_count(0)
+        capture(page, f'incoming-{channel}-initial-error', width)
+
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
@@ -139,6 +167,7 @@ def test_proposal_status_centered_loading_and_refresh(page: Page, width):
     install_responsive_api(page)
     page.set_viewport_size({'width': width, 'height': 900})
     response = {'proposals': []}
+    page.route('**/api/workflows/studio/incoming/check', lambda route: route.fulfill(json={'checks': {}}))
     page.route('**/api/workflows/studio/incoming/proposals*', lambda route: route.fulfill(json=response))
     page.add_init_script('''
         window.holdProposals = true;
@@ -157,7 +186,7 @@ def test_proposal_status_centered_loading_and_refresh(page: Page, width):
     def centered():
         assert status.evaluate('''node => {
             const text = node.getBoundingClientRect();
-            const panel = node.closest('.incoming-folder-panel').getBoundingClientRect();
+            const panel = node.closest('.proposal-cards').getBoundingClientRect();
             return Math.abs(text.x + text.width / 2 - panel.x - panel.width / 2) < 2
                 && Math.abs(text.y + text.height / 2 - panel.y - panel.height / 2) < 2;
         }''')
@@ -202,7 +231,7 @@ def test_proposal_status_centered_loading_and_refresh(page: Page, width):
     page.evaluate('window.holdProposals = true')
     resync.click()
     expect(status.locator('.proposal-loading-spinner')).to_be_visible()
-    assert status.locator('.proposal-loading-spinner').evaluate('node => getComputedStyle(node).animationName') == 'none'
+    expect(status.locator('.proposal-loading-spinner')).to_have_css('animation-name', 'none')
     release()
 
 

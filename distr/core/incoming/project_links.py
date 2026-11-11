@@ -108,9 +108,16 @@ def proposal_in_scope(proposal, index=None, *, allow_review=False):
         thread = proposal['dedupe_key'][len(source) + 1:]
     if not source or not thread:
         return False
-    refs = proposal.get('source_scope') or [item['original_source'] for item in proposal.get('evidence') or []
-                                           if isinstance(item, dict) and isinstance(item.get('original_source'), dict)]
-    refs = [{'source': source, 'source_thread_id': thread}, *refs]
+    refs = [*(proposal.get('source_scope') or []), *[item['original_source'] for item in proposal.get('evidence') or []
+                                                  if isinstance(item, dict) and isinstance(item.get('original_source'), dict)]]
+    # A merged conversation is a synthetic container, never a source that can
+    # grant project access. Authorize every retained original independently.
+    if thread.startswith('merged:'):
+        refs = [ref for ref in refs if not isinstance(ref, dict) or not str(ref.get('source_thread_id') or '').startswith('merged:')]
+        if not refs:
+            return False
+    else:
+        refs = [{'source': source, 'source_thread_id': thread}, *refs]
     selected = proposal.get('project_id')
     if allow_review and selected is None and proposal.get('needs_project') is True:
         return all(isinstance(ref, dict) and bool(index.get((

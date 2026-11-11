@@ -87,6 +87,9 @@ def run_submission(command_id, *, new_thread=False):
         project_id = root.project_id
         preferences = {key: getattr(root, key) for key in ('route_mode', 'execution_profile', 'autonomy_level', 'provider', 'model_name')}
         source_settings = control._json(root.params, {}).get('development') or {}
+        if not new_thread and source_settings.get("proactive_dispatch"):
+            db.rollback()
+            raise ValueError("This item stays queued while the approved work is unresolved.")
         inherited_settings = {key: source_settings[key] for key in ('model_route', 'permission_profile') if key in source_settings}
         active_workflow = db.query(AutoWorkflowRun.id).filter(AutoWorkflowRun.chat_id == chat_id, AutoWorkflowRun.status.in_(['running', 'waiting'])).first() is not None
         db.commit()
@@ -113,7 +116,10 @@ def run_submission(command_id, *, new_thread=False):
                 if time.monotonic() >= deadline:
                     raise ValueError('The worker is still stopping. Your item remains queued; try Steer again shortly.')
                 time.sleep(.05)
-        if not harness.development_execution_active(target):
+        active = harness.development_execution_active(target)
+        if active and not new_thread:
+            raise ValueError('The worker is still running. Your item remains queued.')
+        if not active:
             if not new_thread:
                 record_submission_message(target, command_id, content)
             harness.dispatch_development_prompt(target, content, attachments=metadata['attachments'],

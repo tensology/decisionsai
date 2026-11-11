@@ -33,16 +33,12 @@ sys.modules.setdefault("PyQt6.QtCore", MagicMock())
 sys.modules.setdefault("PyQt6", MagicMock())
 
 
-def _make_engine():
-    # StaticPool forces all connections (including background threads) to share
-    # one underlying connection, so the in-memory schema is visible everywhere.
-    from sqlalchemy.pool import StaticPool
-    engine = create_engine(
-        "sqlite:///:memory:",
+def _make_engine(path):
+    # Workflow workers and assertions run concurrently and need separate SQLite connections.
+    return create_engine(
+        f"sqlite:///{path}",
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
     )
-    return engine
 
 
 @contextlib.contextmanager
@@ -129,16 +125,49 @@ def _wait_for_run_terminal(factory, run_id: int, timeout: float = 20.0) -> str:
 class TestWorkflowDispatchIntegration:
     """Full-stack integration test for the ticket → workflow → step → result pipeline."""
 
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def isolated_database(self, tmp_path):
         from distr.core.db import Base
         from distr.core.workflow.dispatcher import _active_runs, _initializing_runs, _runs_lock
-        self.engine = _make_engine()
+        self.engine = _make_engine(tmp_path / "workflow-dispatch.sqlite3")
         Base.metadata.create_all(self.engine)
         self.factory = sessionmaker(bind=self.engine)
         # Clean up any live RunContexts from previous tests to prevent cross-test bleed.
         with _runs_lock:
             _active_runs.clear()
             _initializing_runs.clear()
+        yield
+        self._finish_workers()
+
+    def _finish_workers(self):
+        """Finish this fixture's workers before global providers point at another DB.
+
+        Merely clearing _active_runs leaves late callbacks alive. Every test's
+        isolated database starts run IDs at one, so such a callback can otherwise
+        mutate the next test's unrelated run while get_session is patched there.
+        """
+        from distr.core.db.workflow import AutoWorkflowRun
+        from distr.core.workflow import dispatcher
+        with self._patched_get_session() as db:
+            owned = {row.id for row in db.query(AutoWorkflowRun).all()}
+        with dispatcher._runs_lock:
+            contexts = [ctx for ident, ctx in dispatcher._active_runs.items() if ident in owned]
+        workers = {ctx.thread for ctx in contexts if ctx.thread is not None}
+        workers.update(worker for worker in threading.enumerate()
+                       if worker.name in {f'workflow-initialize-{ident}' for ident in owned})
+        with patch('distr.core.workflow.dispatcher.get_session', self._patched_get_session), \
+             patch('distr.core.workflow.router.get_session', self._patched_get_session), \
+             patch('distr.core.workflow.post_execution.get_session', self._patched_get_session), \
+             patch('distr.core.workflow.step_executor.get_session', self._patched_get_session):
+            for ident in owned:
+                dispatcher.cancel_run(ident)
+                dispatcher._cleanup_run(ident)
+            deadline = time.monotonic() + 5
+            for worker in workers:
+                if worker is not threading.current_thread():
+                    worker.join(timeout=max(0, deadline-time.monotonic()))
+            assert not [worker.name for worker in workers if worker.is_alive()], 'Test-owned workflow workers did not stop'
+        self.engine.dispose()
 
     def _patched_get_session(self):
         return _session_ctx(self.factory)

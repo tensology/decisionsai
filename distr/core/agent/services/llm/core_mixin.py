@@ -1557,7 +1557,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
     def _mark_chat_stream_started(self, chat_id) -> None:
         """Mark one logical chat stream active for idempotent termination."""
+        from distr.core.chat_manager import current_bound_chat_turn
+
         self._active_chat_stream_id = int(chat_id) if chat_id else None
+        self._active_chat_stream_turn_id = current_bound_chat_turn(chat_id) if chat_id else None
         self._chat_stream_terminal_emitted = False
 
     def _emit_chat_stream_finished(self, response_text="", *, status="completed") -> bool:

@@ -1,11 +1,11 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261110-queue1';
-import { createReports } from './reports/index.js?v=20261109-calendar-today5';
+import { createReports } from './reports/index.js?v=20261111-client-message';
 import { createThreadLiveUpdates } from './threads/live.js?v=20261110-proposal-sounds1';
 import { createThreadSession } from './threads/session.js?v=20261110-queue1';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261103-rows1';
+import { createPlanning } from './planning/index.js?v=20261111-buildjump';
 import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261102-verify';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261107-nav68';
@@ -14,18 +14,19 @@ import { createSidebar } from './sidebar/index.js?v=20261110-startup-only1';
 
 import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
 
-import { createIncoming } from './incoming/index.js?v=20261110-confirm-project1';
+import { createIncoming } from './incoming/index.js?v=20261111-submitted-proposal-source';
+import { fileDropZoneHtml, proposalThreadToast } from './shared/ticket-modal.js?v=20261111-thread-recovery';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
-import { createBoards } from './boards/index.js?v=20261102-verify';
+import { createBoards } from './boards/index.js?v=20261111-ticketlookup';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261110-reply2';
-import { openSourceReply } from './threads/source-reply.js?v=20261110-reply1';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261111-client-message';
+import { openSourceReply } from './threads/source-reply.js?v=20261111-client-message';
 
-import { createThreadsComposer } from './threads/composer/index.js?v=20261110-queue1';
+import { createThreadsComposer } from './threads/composer/index.js?v=20261111-proactive-queue';
 
 import { createThreadCliMode } from './threads/cli-mode.js?v=20261106-cli-clean1';
 
@@ -41,6 +42,7 @@ const state = {
     boardTickets: {},
     boardDetails: {},
     boardTicketLoads: {},
+    boardLoadErrors: new Set(),
     chats: [],
     archivedChats: [],
     workflows: [],
@@ -202,6 +204,11 @@ function developmentRoute() {
               : parts[1] === 'terminals'
                 ? 'terminals_home'
                 : parts[1];
+    if (mode === 'incoming' && query.has('proposal_key')) {
+        const proposalKey = query.get('proposal_key');
+        const path = `/development/incoming/?${new URLSearchParams({ proposal_key: proposalKey })}`;
+        return { kind: 'workspace', mode, proposalKey, path };
+    }
     return developmentModePaths[mode] ? { kind: 'workspace', mode, path: developmentModePaths[mode] } : { kind: 'home', path: '/development/' };
 }
 
@@ -264,7 +271,7 @@ async function api(path, options) {
         }
     }
     if (!response.ok) {
-        const error = new Error(apiErrorText(data.detail) || apiErrorText(data.message) || `Request failed (${response.status})`);
+        const error = new Error(apiErrorText(data.detail) || apiErrorText(data.error) || apiErrorText(data.message) || `Request failed (${response.status})`);
         error.status = response.status;
         error.data = data;
         throw error;
@@ -290,7 +297,7 @@ async function terminalActionApi(path, options, timeoutMs) {
 function toast(message, type) {
     const node = el('studio-toast');
     node.textContent = message;
-    node.className = `studio-toast${type === 'error' ? ' error' : ''}`;
+    node.className = `studio-toast${type === 'error' ? ' error' : type === 'success' ? ' success' : ''}`;
     window.clearTimeout(toast.timer);
     toast.timer = window.setTimeout(() => node.classList.add('hidden'), 3200);
 }
@@ -397,8 +404,10 @@ function setTaskState(status) {
     const node = el('task-state');
     const value = String(status || 'ready').toLowerCase();
     node.className = `task-state ${value}`;
-    node.querySelector('b').textContent = statusLabel(value);
-    const stoppable = isActiveAgentRun(state.currentRun);
+    node.classList.toggle('proactive-state', state.currentRun?.origin === 'proactive_orchestrator');
+    node.querySelector('b').textContent =
+        value === 'running' && state.currentRun?.work_mode === 'audit' ? 'Assessing' : statusLabel(value);
+    const stoppable = isActiveAgentRun(state.currentRun) && state.currentRun?.can_stop !== false;
     el('stop-run-button').classList.toggle('hidden', !stoppable);
     updateElapsedTime();
 }
@@ -496,6 +505,7 @@ function syncHeader() {
     el('header-task').textContent = chat?.title || state.draft.title || 'No thread selected';
     setTaskState(['completed', 'cancelled'].includes(runStatus) ? 'ready' : runStatus);
     el('thread-more-button').classList.toggle('hidden', !chat);
+    el('thread-menu-original-source').classList.toggle('hidden', !chat?.proposal_source_review_key);
     el('task-state').classList.toggle('hidden', !chat);
     syncThreadTerminalButton();
     syncProjectSelect();
@@ -845,6 +855,7 @@ async function performBoardLoad(boardKey, options) {
     }
     if (state.boardTicketLoads[boardKey] && !options?.force) return state.boardDetails[boardKey] || null;
     state.boardTicketLoads[boardKey] = true;
+    state.boardLoadErrors.delete(boardKey);
     try {
         const externalPath = `/tickets/external-boards/${encodeURIComponent(board.provider)}/${encodeURIComponent(board.external_id || board.id)}${options?.remote ? '?force_refresh=true' : ''}`;
         const detail = board.provider === 'decisions' ? await api(`/tickets/boards/${Number(board.local_id || board.id)}`) : await api(externalPath);
@@ -865,6 +876,7 @@ async function performBoardLoad(boardKey, options) {
         state.boardTickets[boardKey] = [];
         delete state.boardDetails[boardKey];
         delete state.boardTicketLoads[boardKey];
+        state.boardLoadErrors.add(boardKey);
         if (!options?.throwOnError) toast(`Could not load ${providerName(board.provider)} tickets.`, 'error');
         if (options?.throwOnError) throw error;
     }
@@ -1172,6 +1184,7 @@ function setWorkspaceMode(mode, options) {
     if (state.workspaceMode === 'reports' && mode !== 'reports') reports.leave();
     if (state.workspaceMode === 'incoming' && mode !== 'incoming') incoming.leave();
     if (mode !== 'chat') {
+        incoming.closeSubmittedProposalSource();
         threadSession.cancel();
         disconnectLiveUpdates();
         state.chatLoadToken++;
@@ -1360,9 +1373,10 @@ async function openBoardKanban(boardKey, options) {
     rememberBoardSection(window.localStorage, board.key, 'kanban');
     setWorkspaceMode('kanban', { focus: false, updateUrl: false });
     boards.renderKanbanWorkspace();
-    await loadBoardTickets(board.key);
+    const detail = await loadBoardTickets(board.key);
     sidebar.closeBoardContextMenu();
     if (options?.updateUrl !== false) setDevelopmentLocation(developmentBoardPath(board.key, 'kanban'), options);
+    return detail;
 }
 
 async function openBoardPlan(boardKey, options) {
@@ -1471,9 +1485,6 @@ async function performShellRefresh(options) {
             skillsData,
             errors
         } = await catalogLoader.load();
-        const errorKey = errors.join(',');
-        if (errorKey && errorKey !== catalogErrors) toast('Some Development sources are unavailable. Available data remains usable.', 'error');
-        catalogErrors = errorKey;
         const autoRoute = state.routingAssessment;
         const workflowRows = Array.isArray(workflowSummaries) ? workflowSummaries : [];
         const detailedWorkflows = new Map(
@@ -1491,7 +1502,14 @@ async function performShellRefresh(options) {
         });
         state.projects = Array.isArray(projects) ? projects : projects.projects || [];
         state.boards = normalizeBoards(Array.isArray(boardRows) ? boardRows : [], externalBoards || {});
-        await sidebar.applyPinnedBoards(sidebarPins);
+        try {
+            await sidebar.applyPinnedBoards(sidebarPins);
+        } catch (_) {
+            errors.push('sidebarPins');
+        }
+        const errorKey = errors.join(',');
+        if (errorKey && errorKey !== catalogErrors) toast('Some Development sources are unavailable. Available data remains usable.', 'error');
+        catalogErrors = errorKey;
         const developmentChats = (chatsData.chats || []).filter((chat) => chat.development);
         state.chats = developmentChats.filter((chat) => !chat.archived);
         state.archivedChats = developmentChats.filter((chat) => chat.archived);
@@ -1519,11 +1537,17 @@ async function performShellRefresh(options) {
             if (!snapshot || !current()) return chatsData;
             Object.assign(state, snapshot);
             updateElapsedTime();
-            const runFinished = runWasActive && !isActiveAgentRun(state.currentRun);
-            if (preserveConversation && runFinished && Number(state.currentChat?.id) === chatId) {
-                const completedChat = await api(`/chats/${chatId}?surface=development`);
+            const runActive = isActiveAgentRun(state.currentRun);
+            const runFinished = runWasActive && !runActive;
+            const currentTurnId = Number(state.currentRun?.turn_id || 0);
+            const turnMissing = runActive && currentTurnId > 0 && !(state.currentChat.messages || []).some(
+                (message) => message.role === 'user' && Number(message.chat_row_id) === currentTurnId,
+            );
+            const reloadTranscript = preserveConversation && (runFinished || turnMissing);
+            if (reloadTranscript) {
+                const updatedChat = await api(`/chats/${chatId}?surface=development`);
                 if (!current()) return chatsData;
-                state.currentChat = completedChat;
+                state.currentChat = updatedChat;
                 state.chats = state.chats.map((chat) => (Number(chat.id) === chatId ? state.currentChat : chat));
                 threads_transcript.renderConversation(state.currentChat);
             }
@@ -1536,7 +1560,8 @@ async function performShellRefresh(options) {
                 clearAutoPauseThreadTime();
             }
             syncHeader();
-            if (preserveConversation && !runFinished) threads_transcript.syncDurableTurnActivity();
+            syncComposerAvailability();
+            if (preserveConversation && !reloadTranscript) threads_transcript.syncDurableTurnActivity();
             threads_inspector.renderInspector();
             if (!preserveConversation && state.workspaceMode === 'chat') {
                 await loadChat(state.currentChat.id, { quiet: true });
@@ -1631,9 +1656,14 @@ function bindConversationActions(list, messages) {
         })
     );
     list.querySelector('[data-fork-current]')?.addEventListener('click', forkCurrentThread);
-    list.querySelectorAll('[data-source-reply]').forEach((button) => button.addEventListener('click', () =>
-        openSourceReply({ chatId: state.currentChat.id, responseId: messages[Number(button.dataset.sourceReply)]?.chat_row_id, api, opener: button })
-    ));
+    const reply = list.querySelector('[data-source-reply]');
+    if (reply) {
+        syncMessageClientAction();
+        reply.addEventListener('click', () => openSourceReply({
+            chatId: state.currentChat.id, responseId: messages[Number(reply.dataset.sourceReply)]?.chat_row_id,
+            api, opener: reply, toast
+        }));
+    }
     list.querySelectorAll('[data-read-response]').forEach((button) =>
         button.addEventListener('click', () => readResponse(button, messages[Number(button.dataset.readResponse)], messages))
     );
@@ -1739,6 +1769,7 @@ async function readResponse(button, message) {
 async function loadChat(chatId, options) {
     if (planning.hasUnsavedChanges() && !(await planning.beforeLeave())) return;
     if (!chatId) return;
+    if (Number(chatId) !== Number(state.currentChat?.id)) incoming.closeSubmittedProposalSource();
     const loadToken = ++state.chatLoadToken;
     const stale = () => loadToken !== state.chatLoadToken;
     try {
@@ -2163,12 +2194,20 @@ function resizePrompt() {
     const input = el('task-prompt');
     input.style.height = 'auto';
     input.style.height = `${Math.min(180, Math.max(48, input.scrollHeight))}px`;
+    syncMessageClientAction();
+}
+
+function syncMessageClientAction() {
+    const reply = el('message-list')?.querySelector('[data-source-reply]');
+    if (reply) reply.hidden = Boolean(el('task-prompt').value.trim() || state.busy || isActiveAgentRun(state.currentRun));
 }
 
 function syncComposerAvailability() {
     const available = state.ready && !state.routeLoading && !state.busy;
+    const awaitingRecovery = state.currentRun?.origin === 'proactive_orchestrator' && state.currentRun.status === 'blocked';
     el('task-prompt').disabled = !available;
-    el('send-button').disabled = !available;
+    el('send-button').disabled = !available || (awaitingRecovery && !state.editingCommandId);
+    syncMessageClientAction();
 }
 
 function developmentChatById(chatId) {
@@ -2254,6 +2293,7 @@ async function restoreDevelopmentLocation(options) {
     syncComposerAvailability();
     const route = developmentRoute();
     try {
+        incoming.clearProposalReview();
         document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
         if (route.kind === 'home') {
             await restoreDevelopmentHome(options);
@@ -2281,6 +2321,7 @@ async function restoreDevelopmentLocation(options) {
             el('task-prompt').focus();
         } else if (route.kind === 'workspace') {
             setWorkspaceMode(route.mode, { focus: false, updateUrl: false });
+            if (route.proposalKey !== undefined) incoming.openProposalReview(route.proposalKey);
         } else if (route.kind === 'project_terminals') {
             await terminals.openProjectTerminals(route.projectId, {
                 updateUrl: false
@@ -2301,10 +2342,11 @@ async function restoreDevelopmentLocation(options) {
                 openBoardPlan(board.key, { updateUrl: false }).catch(() => {});
             }
             else if (route.view === 'kanban') {
-                await openBoardKanban(board.key, { updateUrl: false });
-                if (route.ticketId) {
+                const detail = await openBoardKanban(board.key, { updateUrl: false });
+                if (route.ticketId && detail && state.workspaceMode === 'kanban' && state.selectedBoardKey === board.key) {
                     const ticket = (state.boardTickets[board.key] || []).find((item) => Number(item.ticket_id || item.id) === Number(route.ticketId));
                     if (ticket) boards.openKanbanTicketDialog(ticket.key);
+                    else toast('This task is no longer on this board. Refresh the plan before opening it.', 'error');
                 }
             } else if (route.view === 'terminals') await openBoardTerminals(board.key, { updateUrl: false });
             else if (route.view === 'incoming') {
@@ -2458,6 +2500,9 @@ function bindEvents() {
     el('artifact-approve').addEventListener('click', () => threads_inspector.reviewArtifact('approved'));
     el('artifact-request-changes').addEventListener('click', () => threads_inspector.reviewArtifact('changes_requested'));
     el('stop-run-button').addEventListener('click', threads_composer.stopRun);
+    el('message-list').addEventListener('click', (event) => {
+        if (event.target.closest('[data-stop-proactive-turn]')) threads_composer.stopRun();
+    });
     el('thread-terminal-button')?.addEventListener('click', (event) => {
         event.stopPropagation();
         closeThreadTerminalMenu();
@@ -2493,6 +2538,14 @@ function bindEvents() {
     el('thread-menu-details').addEventListener('click', () => {
         closeThreadHeaderMenu();
         openInspector();
+    });
+    el('thread-menu-original-source').addEventListener('click', () => {
+        const chat = state.currentChat;
+        if (!chat?.proposal_source_review_key) return;
+        closeThreadHeaderMenu();
+        incoming.openSubmittedProposalSource({
+            chatId: chat.id, reviewKey: chat.proposal_source_review_key, opener: el('thread-more-button')
+        });
     });
     el('thread-menu-clear-context').addEventListener('click', clearThreadContext);
     el('thread-menu-edit-time').addEventListener('click', openTimeDialog);
@@ -2681,6 +2734,7 @@ const automations = createAutomations({
 });
 
 const incoming = createIncoming({
+    shared: { fileDropZoneHtml, proposalThreadToast },
     context: {
         get projects() {
             return state.projects;
@@ -2763,6 +2817,9 @@ const workflows = createWorkflows({
 
 const boards = createBoards({
     context: {
+        get boardLoadErrors() {
+            return state.boardLoadErrors;
+        },
         get archivedChats() {
             return state.archivedChats;
         },
@@ -3176,10 +3233,25 @@ const threads_inspector = createThreadsInspector({
 
 const reports = createReports({ api, root: el('reports-workspace'), escapeHtml, getPinnedProjectIds: () => sidebar.pinnedProjectIds() });
 
+let planTicketLookup = 0;
+async function openPlanTicket(boardKey, ticketId) {
+    const board = boardByKey(boardKey);
+    if (!board || board.provider !== 'decisions' || !Number.isSafeInteger(ticketId) || ticketId <= 0)
+        throw new Error('This task does not have a valid Decisions board.');
+    const planToken = state.planOpenToken;
+    const lookup = ++planTicketLookup;
+    await loadBoardTickets(board.key, { force: true, throwOnError: true });
+    if (lookup !== planTicketLookup || state.workspaceMode !== 'plan' || state.selectedBoardKey !== board.key || state.planOpenToken !== planToken) return;
+    const ticket = (state.boardTickets[board.key] || []).find((row) => Number(row.ticket_id || row.id) === ticketId);
+    if (!ticket) throw new Error('This task is no longer on this board. Refresh the plan before opening it.');
+    boards.openKanbanTicketDialog(ticket.key);
+}
+
 const planning = createPlanning({
     api,
     escapeHtml,
     openBoardPlan,
+    openPlanTicket,
     openHome: () => setWorkspaceMode('plan'),
     planControlsSlot: () => el('development-header-context'),
     setPlanCrumbs: (...rest) => {

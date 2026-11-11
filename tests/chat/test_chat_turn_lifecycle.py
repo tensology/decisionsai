@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -202,6 +204,49 @@ def test_steer_endpoint_persists_guidance_without_cancelling(monkeypatch):
     assert [item["summary"] for item in pending] == ["Keep the final answer concise."]
 
 
+def test_chat_cancel_only_dispatches_for_an_active_turn(monkeypatch):
+    from distr.core import signals
+
+    _, factory = _factory()
+    root_id, turn_id = _chat(factory)
+    idle_id, idle_turn_id = _chat(factory)
+    monkeypatch.setattr(chat_turns, "get_session", lambda: _ctx(factory))
+    monkeypatch.setattr(chat_turns, "_broadcast", lambda payload: None)
+    monkeypatch.setattr(chat_routes, "get_session", lambda: _ctx(factory))
+    chat_turns.complete_turn(idle_id, turn_id=idle_turn_id)
+    chat_turns.ensure_turn_started(root_id, turn_id)
+    scoped_interrupt = Mock()
+    global_interrupt = Mock()
+    monkeypatch.setattr(
+        signals,
+        "signal_manager",
+        SimpleNamespace(
+            chat_cancel_requested=scoped_interrupt,
+            interrupt_tts=global_interrupt,
+        ),
+    )
+
+    app = FastAPI()
+    app.include_router(chat_routes.create_routes(Path(__file__).parent), prefix="/api")
+    with TestClient(app) as client:
+        assert client.post(f"/api/chats/{idle_id}/cancel").status_code == 200
+        global_interrupt.emit.assert_not_called()
+        scoped_interrupt.emit.assert_not_called()
+        assert chat_turns.latest_active_turn_id(root_id) == turn_id
+
+        assert client.post(f"/api/chats/{root_id}/cancel?turn_id={idle_turn_id}").status_code == 200
+        assert chat_turns.latest_active_turn_id(root_id) == turn_id
+        scoped_interrupt.emit.assert_not_called()
+        assert client.post(f"/api/chats/{root_id}/cancel?turn_id={turn_id}").status_code == 200
+        assert client.post(f"/api/chats/{root_id}/cancel").status_code == 200
+        scoped_interrupt.emit.assert_called_once_with(root_id, turn_id)
+        global_interrupt.emit.assert_not_called()
+        assert chat_turns.get_turns(root_id)["turns"][-1]["status"] == "cancelled"
+
+        assert client.post("/api/tts/stop").status_code == 200
+        global_interrupt.emit.assert_called_once_with()
+
+
 def test_get_chat_turns_are_durable_not_params_json(monkeypatch):
     _, factory = _factory()
     root_id, turn_id = _chat(factory)
@@ -263,3 +308,35 @@ def test_pending_steering_is_injected_once_at_safe_boundary(monkeypatch):
     assert second == ""
     assert len(service._messages) == 1
     assert chat_turns.pending_steering(root_id, turn_id) == []
+
+
+def test_late_workflow_completion_leaves_newer_turn_active(monkeypatch):
+    import json
+    from unittest.mock import Mock
+    from distr.core.workflow.dispatcher import _finalize_development_chat_turn
+
+    engine, factory = _factory()
+    root_id, launch_turn = _chat(factory)
+    with factory.begin() as session:
+        later = Chat(parent_id=root_id, input="A separate request", response="")
+        session.add(later)
+        session.flush()
+        newer_turn = later.id
+        session.get(Chat, root_id).params = json.dumps({"active_turn_chat_row_id": newer_turn})
+    monkeypatch.setattr(chat_turns, "get_session", lambda: _ctx(factory))
+    monkeypatch.setattr(chat_turns, "_broadcast", lambda payload: None)
+    monkeypatch.setattr("distr.core.chat.record_chat_audit_event", Mock())
+    chat_turns.ensure_turn_started(root_id, launch_turn)
+    chat_turns.ensure_turn_started(root_id, newer_turn)
+
+    for _ in range(2):
+        _finalize_development_chat_turn(root_id, "completed", {"success": True}, turn_id=launch_turn)
+
+    state = chat_turns.get_turns(root_id)
+    assert state["active_turn"]["turn_id"] == newer_turn
+    assert {turn["turn_id"]: turn["status"] for turn in state["turns"]} == {
+        launch_turn: "completed", newer_turn: "running"
+    }
+    with factory() as session:
+        assert session.query(Chat).filter_by(parent_id=root_id, input=None).filter(Chat.response.is_not(None)).count() == 1
+    engine.dispose()

@@ -32,11 +32,15 @@ function inline(node) {
     return out;
 }
 
-export function serializeEditor(root, blocks, initialHtml) {
+export function serializeEditor(root, blocks, initialHtml, onListMarker) {
     const lines = [];
     for (const el of root.children) {
         const index = el.dataset.b === undefined ? -1 : Number(el.dataset.b);
-        if (index >= 0 && initialHtml[index] === el.innerHTML && blocks[index]) { lines.push(blocks[index].source); continue; }
+        if (index >= 0 && initialHtml[index] === el.innerHTML && blocks[index]) {
+            if (blocks[index].kind === 'item') onListMarker?.(el, blocks[index].marker);
+            lines.push(blocks[index].source);
+            continue;
+        }
         if (el.classList.contains('md-e-raw') || el.tagName === 'PRE') { lines.push(el.textContent.replace(/\n$/, '')); continue; }
         const text = inline(el);
         if (el.classList.contains('md-e-gap') && !text.trim()) { lines.push(''); continue; }
@@ -45,6 +49,7 @@ export function serializeEditor(root, blocks, initialHtml) {
         const num = /^(\s*)(\d+)([.)]\s+)$/.exec(marker);
         const prev = num && /^(\s*)(\d+)[.)]\s/.exec(lines[lines.length - 1] || '');
         if (num && prev && prev[1] === num[1]) marker = `${num[1]}${Number(prev[2]) + 1}${num[3]}`;
+        if (el.classList.contains('md-e-item')) onListMarker?.(el, marker);
         lines.push(...`${marker}${text}`.split('\n').map((l, i) => (i ? l : l)));
     }
     return lines.join('\n');

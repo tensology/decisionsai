@@ -126,7 +126,8 @@ class OpenAICompatibleModelAdapter:
         stream = self._client.chat.completions.create(**kwargs)
         text_parts: list[str] = []
         pending_calls: dict[int, dict[str, str]] = {}
-        finish_reason = "stop"
+        finish_reason = "stream_incomplete"
+        refused = False
         usage: dict[str, Any] = {}
 
         for chunk in stream:
@@ -145,6 +146,7 @@ class OpenAICompatibleModelAdapter:
             delta = getattr(choice, "delta", None)
             if delta is None:
                 continue
+            refused = refused or bool(getattr(delta, "refusal", None))
             content = getattr(delta, "content", None) or ""
             if content:
                 text_parts.append(str(content))
@@ -179,7 +181,7 @@ class OpenAICompatibleModelAdapter:
         return ModelResponse(
             text="".join(text_parts),
             tool_calls=tuple(tool_calls),
-            finish_reason=finish_reason,
+            finish_reason="refusal" if refused else finish_reason,
             usage=usage,
         )
 

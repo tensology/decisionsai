@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from distr.core.db.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
+_ACTIVE_TURN = object()
 
 
 def _preview(text: Optional[str], limit: int = 420) -> str:
@@ -29,23 +30,47 @@ def _load_params(raw: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
-def _resolve_chat_id(db, run) -> Optional[int]:
-    workflow = getattr(run, "workflow", None)
-    chat_id = getattr(workflow, "chat_id", None)
-    if chat_id:
-        return int(chat_id)
-    ticket_id = getattr(run, "ticket_id", None)
-    if not ticket_id:
-        return None
+def _positive_id(value: Any) -> Optional[int]:
     try:
-        from distr.core.db.kanban import KanbanTicket
+        number = int(value) if type(value) in (int, str) else 0
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
-        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == ticket_id).first()
-        if ticket and ticket.source_chat_id:
-            return int(ticket.source_chat_id)
-    except Exception:
-        logger.debug("Could not resolve workflow chat from ticket", exc_info=True)
-    return None
+
+def _resolve_chat_id(db, run, run_data: dict) -> Optional[int]:
+    from distr.core.db import Chat
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.workflow import DevelopmentWorkItem
+
+    saved_chat_id = _positive_id(run.chat_id)
+    legacy_chat_id = _positive_id(run_data.get("chat_id"))
+    if saved_chat_id and legacy_chat_id and saved_chat_id != legacy_chat_id:
+        return None
+    chat_id = saved_chat_id or legacy_chat_id
+    project_id = _positive_id(run_data.get("project_id"))
+    if chat_id is None and run.ticket_id is not None:
+        ticket = db.get(KanbanTicket, run.ticket_id)
+        if not ticket:
+            return None
+        chat_id = _positive_id(ticket.source_chat_id)
+        if project_id is None:
+            project_id = _positive_id(ticket.linked_project_id)
+            if project_id is None:
+                lane = db.get(KanbanLane, ticket.lane_id)
+                board = db.get(KanbanBoard, lane.board_id) if lane else None
+                project_id = _positive_id(board.default_project_id) if board else None
+    if chat_id is None:
+        chat_id = _positive_id(getattr(run.workflow, "chat_id", None))
+    root = db.get(Chat, chat_id) if chat_id is not None else None
+    if not root or root.parent_id is not None:
+        return None
+    if project_id is not None and root.project_id != project_id:
+        return None
+    owner = db.query(DevelopmentWorkItem).filter_by(chat_id=root.id).first()
+    if owner and run.ticket_id is not None and owner.local_ticket_id != run.ticket_id:
+        return None
+    return int(root.id)
 
 
 def record_chat_workflow_event(
@@ -62,6 +87,7 @@ def record_chat_workflow_event(
     phase: Optional[str] = None,
     agent_activity: Optional[Dict[str, Any]] = None,
     limit: int = 300,
+    turn_id: Any = _ACTIVE_TURN,
 ) -> Optional[Dict[str, Any]]:
     """Append a workflow-style action card to Chat.params and emit a live UI signal."""
     try:
@@ -88,6 +114,14 @@ def record_chat_workflow_event(
                 payload["workflow_name"] = workflow_name
             if run_id is not None:
                 payload["run_id"] = int(run_id)
+            if turn_id is not _ACTIVE_TURN and turn_id is not None:
+                from distr.core.chat_turns import _root_and_turn
+
+                _, turn_id = _root_and_turn(db, resolved_chat_id, turn_id)
+                if turn_id and turn_id != resolved_chat_id:
+                    payload["turn_id"] = turn_id
+                else:
+                    turn_id = None
             if phase:
                 payload["phase"] = phase
             if step_id is not None:
@@ -138,7 +172,8 @@ def record_chat_workflow_event(
             activity_key = f"workflow:{run_id or workflow_id or 'chat'}:{step_id or 'run'}"
             terminal_statuses = {"completed", "passed", "failed", "cancelled", "skipped"}
             normalized_status = (status or "running").lower()
-            existing_event_id = find_running_tool_event(resolved_chat_id, activity_key)
+            turn_scope = None if turn_id is _ACTIVE_TURN else turn_id
+            existing_event_id = find_running_tool_event(resolved_chat_id, activity_key, turn_id=turn_scope) if turn_id is not None else None
             title = step_name or workflow_name or "Workflow"
             metadata = {
                 "tool_name": activity_key,
@@ -149,10 +184,13 @@ def record_chat_workflow_event(
                 "phase": phase,
                 "source": "workflow",
             }
-            if existing_event_id is None and normalized_status not in terminal_statuses:
+            if turn_id is None:
+                pass  # A run launched without a turn must not attach to a later prompt.
+            elif existing_event_id is None and normalized_status not in terminal_statuses:
                 start_tool(
                     resolved_chat_id,
                     activity_key,
+                    turn_id=turn_scope,
                     title=title,
                     summary=summary or "Workflow step running…",
                     metadata=metadata,
@@ -168,6 +206,7 @@ def record_chat_workflow_event(
                 created_id, _, _ = start_tool(
                     resolved_chat_id,
                     activity_key,
+                    turn_id=turn_scope,
                     title=title,
                     summary="Workflow activity recorded.",
                     metadata=metadata,
@@ -216,15 +255,18 @@ def record_workflow_chat_event(
             if not run:
                 return None
             workflow = run.workflow
-            chat_id = _resolve_chat_id(db, run)
+            run_data = _load_params(run.run_data)
+            chat_id = _resolve_chat_id(db, run, run_data)
             if not chat_id:
                 return None
-            workflow_name = getattr(workflow, "name", None) or f"Workflow {run.workflow_id}"
+            workflow_id = int(run.workflow_id)
+            workflow_name = getattr(workflow, "name", None) or f"Workflow {workflow_id}"
+            turn_id = _positive_id(run_data["development_turn_id"]) if "development_turn_id" in run_data else _ACTIVE_TURN
         return record_chat_workflow_event(
             int(chat_id),
             event_type,
             status=status,
-            workflow_id=int(run.workflow_id),
+            workflow_id=workflow_id,
             workflow_name=workflow_name,
             run_id=int(run_id),
             step_id=step_id,
@@ -233,6 +275,7 @@ def record_workflow_chat_event(
             phase=phase,
             agent_activity=agent_activity,
             limit=limit,
+            turn_id=turn_id,
         )
     except Exception:
         logger.debug("record_workflow_chat_event failed", exc_info=True)

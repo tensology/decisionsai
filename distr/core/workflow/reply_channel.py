@@ -12,6 +12,9 @@ stays an explicit, auditable action.
 from __future__ import annotations
 
 import re
+from email.errors import HeaderParseError
+from email.headerregistry import Address
+from email.utils import getaddresses
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -208,6 +211,24 @@ def _get(source: Any, name: str, default: Any = "") -> Any:
     return getattr(source, name, default)
 
 
+def _reply_mailbox(value: str) -> str:
+    """Accept one mailbox, without guessing an address from a display label."""
+    if not value or any(char in value for char in "\r\n\x00"):
+        return ""
+    # Provider contacts may contain a display name. Only strip an explicit
+    # angle-address wrapper; permissive address-list parsers can silently repair
+    # malformed inputs or accept a recipient list where one origin is expected.
+    wrapped = re.fullmatch(r'[^<>]+<([^<>]+)>', value)
+    if wrapped and len(getaddresses([value])) != 1:
+        return ""
+    candidate = wrapped.group(1).strip() if wrapped else value
+    try:
+        address = Address(addr_spec=candidate)
+    except (ValueError, HeaderParseError):
+        return ""
+    return address.addr_spec if address.username and address.domain else ""
+
+
 def resolve_reply_target(ticket: Any) -> ReplyTarget:
     """Resolve a ticket's provenance into a sendable reply target.
 
@@ -233,10 +254,22 @@ def resolve_reply_target(ticket: Any) -> ReplyTarget:
     missing: list[str] = []
     if not provider:
         missing.append("source_provider")
-    if not thread_id and not url:
+    else:
+        raw_provider = str(provider).strip().lower().replace("-", "_")
+        if raw_provider not in CHANNEL_PROFILES and raw_provider not in _CHANNEL_ALIASES:
+            missing.append("unsupported_source_provider")
+    if profile.key == "whatsapp":
+        # The other identifiers above are provider message IDs, not chat JIDs.
+        # Canonical WhatsApp intake stores msg.jid / msg.jid_phone here.
+        thread_id = str(_get(ticket, "source_thread_id", "") or "").strip()
+        if not thread_id:
+            missing.append("source_thread_id")
+    elif not thread_id and not url:
         missing.append("source_thread_id")
-    if profile.key in {"email", "mailshot"} and not contact:
-        missing.append("source_contact")
+    if profile.key in {"email", "mailshot"}:
+        contact = _reply_mailbox(contact)
+        if not contact:
+            missing.append("source_contact")
     if profile.key == "tensology":
         # Delivered by the Tensology integration, not by an outbound adapter here.
         missing.append("handled_by_tensology_integration")
@@ -266,7 +299,7 @@ def shape_reply(text: str, channel: Any, *, contact: str = "") -> str:
         # Only greet by first name when it looks like a person, not an address.
         first = name.split("@")[0].split()[0] if name and "@" not in name else ""
         greeting = f"Hi {first}," if first else "Hi,"
-        if not body.lower().startswith(("hi ", "hello ", "hey ")):
+        if not re.match(r'^(?:hi|hello|hey)(?:[\s,!:.]|$)', body, re.IGNORECASE):
             body = f"{greeting}\n\n{body}"
 
     if profile.signoff and not re.search(r"(?i)\b(regards|thanks|cheers)\b\s*,?\s*$", body):

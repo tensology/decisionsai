@@ -1165,6 +1165,33 @@ def _cmd_dictation_hotkey_released(session, params):
 
 
 
+def _cmd_cancel_chat_turn(session, params):
+    """Only interrupt the pipeline while it is processing the requested turn."""
+    from distr.core.chat_manager import task_owns_chat_turn
+    from distr.core.chat_turns import latest_active_turn_id
+
+    chat_id = params['chat_id']
+    turn_id = params['turn_id']
+    chat_manager = session.chat_manager
+    llm = session.llm_service
+    if not chat_manager or chat_manager.get_current_chat() != chat_id or not llm:
+        return
+    stream_chat_id = getattr(llm, '_active_chat_stream_id', None)
+    if stream_chat_id is not None and stream_chat_id != chat_id:
+        return
+    generation = getattr(llm, '_generation_task', None)
+    if generation is not None and not generation.done():
+        if not task_owns_chat_turn(generation, chat_id, turn_id):
+            return
+    elif stream_chat_id != chat_id or getattr(llm, '_active_chat_stream_turn_id', None) != turn_id:
+        return
+    # The web route clears the pointer when it records cancellation. A new
+    # pointer means a replacement turn started before this command arrived.
+    active_turn = latest_active_turn_id(chat_id)
+    if active_turn is None or active_turn == turn_id:
+        _cmd_interrupt_tts(session, {})
+
+
 def _cmd_interrupt_tts(session, params):
     session.logger.info("⏹ TTS interrupted")
     # A replay of the same text right after Stop must not be swallowed by the
@@ -1974,6 +2001,7 @@ _COMMAND_MAP = {
     'ticket_dictation_hotkey_pressed': _cmd_ticket_dictation_hotkey_pressed,
     'ticket_dictation_hotkey_released': _cmd_dictation_hotkey_released,
     'interrupt_tts': _cmd_interrupt_tts,
+    'cancel_chat_turn': _cmd_cancel_chat_turn,
     'speak_text_directly': _cmd_speak_text_directly,
     # Chat
     'transcribe_file': _cmd_transcribe_file,

@@ -1,4 +1,6 @@
-import { fileDropZoneHtml, proposalThreadToast } from '../shared/ticket-modal.js?v=20261102-proposal-files';
+const QUICK_REPLY_PATH = '/workflows/studio/incoming/mail/reply';
+const QUICK_REPLY_UNKNOWN = 'Send was not confirmed. Check the original conversation before sending again.';
+const quickReplyStorageKey = key => `decisions.incoming.quick-reply.v1:${key}`;
 
 export function compareIncomingMessagesNewestFirst(left, right) {
     const time = (item) => Date.parse(item.created_at || '') || 0;
@@ -50,10 +52,12 @@ export function compareIncomingProposalsNewestFirst(left, right) {
 }
 
 // Owns incoming rendering, interactions, and private view state.
-export function createIncoming({ context, actions, el }) {
+export function createIncoming({ context, actions, el, shared: { fileDropZoneHtml, proposalThreadToast } }) {
     let dismissExpiredBusy = false;
     const proposalMutations = new Set();
     const proposalSpokenText = new Map();
+    const quickReplyDrafts = new Map();
+    const whatsappReaders = new Map();
     let proposalReadRequest = null;
     let incomingOperation = '';
     let manualCheckBusy = false;
@@ -318,7 +322,7 @@ export function createIncoming({ context, actions, el }) {
     }
 
     function whatsappMessagesWithProposalMarkers(conversation) {
-        const ordered = conversation.messages.slice().reverse().slice(-100);
+        const ordered = conversation.messages.slice().reverse();
         const proposals = proposalsForWhatsAppThread(conversation);
         const startAt = new Map();
         const endAt = new Map();
@@ -512,12 +516,165 @@ export function createIncoming({ context, actions, el }) {
         return `<a class="incoming-media-file" href="${url}" target="_blank" rel="noopener">Open ${actions.escapeHtml(item.media_filename || `${type || 'file'} attachment`)}</a>`;
     }
 
+    function whatsappReaderState(key) {
+        if (!whatsappReaders.has(key)) {
+            whatsappReaders.set(key, { text: '', items: new Map(), beforeId: null, hasOlder: true });
+        }
+        return whatsappReaders.get(key);
+    }
+
+    function whatsappReplyJid(conversation) {
+        const jid = conversation.threadId;
+        if (/^[^\s@]+@(?:g\.us|s\.whatsapp\.net|lid)$/.test(jid)) return jid;
+        return conversation.chatType === 'private' && /^\d+$/.test(jid) ? `${jid}@s.whatsapp.net` : '';
+    }
+
     function incomingWhatsAppReaderHtml(conversation) {
         if (!conversation)
             return '<div class="incoming-reader-empty"><strong>Select a conversation</strong><p>Linked conversations are kept at the top.</p></div>';
-        const messages = whatsappMessagesWithProposalMarkers(conversation);
-        const linkedNote = conversation.links.length ? '' : 'This conversation is not linked.';
-        return `<header class="incoming-whatsapp-reader-header">${incomingAvatarHtml(conversation, true)}<div><h3>${actions.escapeHtml(conversation.label)}</h3><p>${conversation.chatType === 'group' ? 'WhatsApp group' : 'WhatsApp contact'} · ${conversation.messages.length} recent messages</p></div><button type="button" data-incoming-manage aria-label="Manage ${actions.escapeHtml(conversation.label)}">•••</button></header><div class="incoming-whatsapp-messages">${messages}</div><footer>${linkedNote ? `<small>${actions.escapeHtml(linkedNote)}</small>` : '<span></span>'}<span></span></footer>`;
+        const view = whatsappReaderState(conversation.key);
+        const allMessages = new Map(view.items);
+        for (const item of conversation.messages) allMessages.set(incomingItemKey(item), item);
+        const ordered = [...allMessages.values()].sort(compareIncomingMessagesNewestFirst);
+        const messages = whatsappMessagesWithProposalMarkers({ ...conversation, messages: ordered });
+        const older = view.hasOlder ? `<button type="button" class="proposal-btn ghost" data-wa-older${view.loadingOlder ? ' disabled' : ''}>${view.loadingOlder ? 'Loading...' : 'Load older messages'}</button>` : '';
+        const reply = whatsappReplyJid(conversation) ? `
+            <form class="incoming-whatsapp-compose" data-wa-compose>
+                <div class="incoming-whatsapp-compose-controls">
+                    <textarea rows="1" aria-label="WhatsApp message" placeholder="Type a message"${view.sending ? ' readonly' : ''}>${actions.escapeHtml(view.text)}</textarea>
+                    <button type="submit" aria-label="Send WhatsApp message"${view.sending || !view.text.trim() ? ' disabled' : ''}>
+                        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 20.5 22 12 3 3.5v6.6l11 1.9-11 1.9z"/></svg>
+                    </button>
+                </div>
+                <p role="status" class="${view.sendError ? 'error' : ''}">${actions.escapeHtml(view.sending ? 'Sending...' : view.sendStatus || '')}</p>
+            </form>` : '';
+        return `<header class="incoming-whatsapp-reader-header">${incomingAvatarHtml(conversation, true)}<div><h3>${actions.escapeHtml(conversation.label)}</h3><p>${conversation.chatType === 'group' ? 'WhatsApp group' : 'WhatsApp contact'}</p></div><button type="button" data-incoming-manage aria-label="Manage ${actions.escapeHtml(conversation.label)}">•••</button></header><div class="incoming-whatsapp-messages"><div class="incoming-whatsapp-history">${older}${view.historyError ? `<p class="error" role="status">${actions.escapeHtml(view.historyError)}</p>` : ''}</div>${messages}</div>${reply}`;
+    }
+
+    function paintWhatsAppReader(conversation, scroll = 'preserve') {
+        const reader = el('incoming-whatsapp-reader');
+        const previousMessages = reader.querySelector('.incoming-whatsapp-messages');
+        const previousInput = reader.querySelector('[data-wa-compose] textarea');
+        const sameThread = conversation && reader.dataset.thread === conversation.key;
+        const keepFocus = sameThread && document.activeElement === previousInput && previousInput;
+        const top = previousMessages?.scrollTop || 0;
+        const height = previousMessages?.scrollHeight || 0;
+        const atBottom = whatsappMessagesAtBottom(previousMessages);
+        reader.dataset.thread = conversation?.key || '';
+        reader.innerHTML = incomingWhatsAppReaderHtml(conversation);
+        bindIncomingActions(reader);
+        const messages = reader.querySelector('.incoming-whatsapp-messages');
+        if (!messages) return;
+        messages.addEventListener('scroll', () => maybeClearWhatsAppUnreadFromVisibility(), { passive: true });
+        if (sameThread && scroll === 'older') messages.scrollTop = top + messages.scrollHeight - height;
+        else if (sameThread && scroll === 'preserve' && !atBottom) messages.scrollTop = top;
+        else scrollIncomingWhatsAppToLatest();
+        const form = reader.querySelector('[data-wa-compose]');
+        if (form) {
+            const input = form.querySelector('textarea');
+            const view = whatsappReaderState(conversation.key);
+            input.addEventListener('input', () => {
+                view.text = input.value;
+                form.querySelector('button').disabled = !view.text.trim() || view.sending;
+            });
+            input.addEventListener('keydown', event => {
+                if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+                event.preventDefault();
+                form.requestSubmit();
+            });
+            form.addEventListener('submit', event => {
+                event.preventDefault();
+                sendIncomingWhatsApp(conversation);
+            });
+            if (keepFocus) {
+                input.focus({ preventScroll: true });
+                input.setSelectionRange(previousInput.selectionStart, previousInput.selectionEnd);
+            }
+        }
+        reader.querySelector('[data-wa-older]')?.addEventListener('click', () => loadOlderWhatsApp(conversation));
+    }
+
+    function repaintSelectedWhatsApp(key, scroll) {
+        if (context.workspaceMode !== 'incoming' || state.incomingFilter !== 'whatsapp'
+            || state.selectedIncomingConversationKey !== key) return;
+        const selected = incomingConversations('whatsapp').find(row => row.key === key);
+        if (selected) paintWhatsAppReader(selected, scroll);
+    }
+
+    async function fetchWhatsAppHistory(conversation, beforeId = 0) {
+        const query = new URLSearchParams({ thread_id: conversation.threadId, before_id: String(beforeId) });
+        return actions.api(`/workflows/studio/incoming/whatsapp/history?${query}`, { cache: 'no-store' });
+    }
+
+    async function loadOlderWhatsApp(conversation) {
+        const view = whatsappReaderState(conversation.key);
+        if (view.loadingOlder || !view.hasOlder) return;
+        view.loadingOlder = true;
+        view.historyError = '';
+        repaintSelectedWhatsApp(conversation.key);
+        try {
+            const first = [...conversation.messages].sort((a, b) =>
+                (Date.parse(a.source_sent_at) || 0) - (Date.parse(b.source_sent_at) || 0)
+                || Number(a.database_id || 0) - Number(b.database_id || 0)).find(item => item.database_id);
+            const data = await fetchWhatsAppHistory(conversation, view.beforeId ?? first?.database_id ?? 0);
+            for (const item of data.items || []) view.items.set(incomingItemKey(item), item);
+            view.beforeId = data.items?.at(-1)?.database_id ?? view.beforeId;
+            view.hasOlder = Boolean(data.has_older);
+        } catch (error) {
+            view.historyError = error.message || 'Could not load older messages. Try again.';
+        } finally {
+            view.loadingOlder = false;
+            repaintSelectedWhatsApp(conversation.key, 'older');
+        }
+    }
+
+    async function sendIncomingWhatsApp(conversation) {
+        const view = whatsappReaderState(conversation.key);
+        const text = view.text.trim();
+        const jid = whatsappReplyJid(conversation);
+        if (!jid || !text || view.sending) return;
+        const sentAt = Math.floor(Date.now() / 1000) * 1000;
+        const known = new Set([...view.items.keys(), ...conversation.messages.map(incomingItemKey)]);
+        view.sending = true;
+        view.sendError = false;
+        view.sendStatus = '';
+        repaintSelectedWhatsApp(conversation.key);
+        try {
+            const result = await actions.api('/tickets/whatsapp/send', { method: 'POST', body: { jid, text } });
+            if (!result.success) throw new Error(result.error || 'WhatsApp did not accept the message.');
+            view.text = '';
+            view.sendStatus = 'Submitted to WhatsApp.';
+            refreshSentWhatsApp(conversation, text, sentAt, known);
+        } catch (error) {
+            view.sendError = true;
+            view.sendStatus = error.message || 'Could not send the message. Try again.';
+        } finally {
+            view.sending = false;
+            repaintSelectedWhatsApp(conversation.key);
+        }
+    }
+
+    async function refreshSentWhatsApp(conversation, text, sentAt, known) {
+        const view = whatsappReaderState(conversation.key);
+        for (const delay of [500, 1500, 3000]) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+            try {
+                const data = await fetchWhatsAppHistory(conversation);
+                const echo = (data.items || []).find(item => item.from_me && item.text === text
+                    && !known.has(incomingItemKey(item)) && Date.parse(item.created_at) >= sentAt);
+                if (!echo) continue;
+                const key = incomingItemKey(echo);
+                view.items.set(key, echo);
+                if (!state.incoming.some(item => incomingItemKey(item) === key)) {
+                    state.incoming.unshift(echo);
+                    refreshWhatsAppConversationRow(conversation.key);
+                }
+                repaintSelectedWhatsApp(conversation.key);
+                return;
+            } catch (_) {
+                // The relay accepted the request. Retrying the read cannot resend it.
+            }
+        }
     }
 
     function whatsappMessagesAtBottom(messages) {
@@ -526,7 +683,7 @@ export function createIncoming({ context, actions, el }) {
     }
 
     function refreshWhatsAppConversationRow(conversationKey) {
-        const list = el('incoming-list');
+        const list = el('incoming-whatsapp-list-content');
         if (!list || !conversationKey) return;
         const conversation = incomingConversations('whatsapp').find((row) => row.key === conversationKey);
         if (!conversation) return;
@@ -565,10 +722,6 @@ export function createIncoming({ context, actions, el }) {
             messages.scrollTop = messages.scrollHeight;
             maybeClearWhatsAppUnreadFromVisibility();
         };
-        if (!messages.dataset.incomingSeenScrollBound) {
-            messages.dataset.incomingSeenScrollBound = '1';
-            messages.addEventListener('scroll', () => maybeClearWhatsAppUnreadFromVisibility(), { passive: true });
-        }
         window.requestAnimationFrame(scroll);
         messages.querySelectorAll('img, video').forEach((media) => {
             media.addEventListener(media.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', scroll, { once: true });
@@ -648,6 +801,34 @@ export function createIncoming({ context, actions, el }) {
         return `<div class="incoming-mail-attachment-bar" aria-label="Attachments"><div class="incoming-mail-attachment-bar-track">${items}</div></div>`;
     }
 
+    function restoreQuickReply(key) {
+        if (quickReplyDrafts.has(key)) return quickReplyDrafts.get(key);
+        try {
+            const draft = JSON.parse(window.sessionStorage.getItem(quickReplyStorageKey(key)));
+            if (draft && ['idempotencyKey', 'body', 'to', 'subject', 'messageId'].every(field => typeof draft[field] === 'string')
+                && draft.idempotencyKey && typeof draft.open === 'boolean') {
+                quickReplyDrafts.set(key, draft);
+                return draft;
+            }
+        } catch { /* Storage is optional in this tab. */ }
+        return null;
+    }
+
+    function persistQuickReply(key, draft) {
+        try {
+            if (!draft?.body || draft.sent) {
+                window.sessionStorage.removeItem(quickReplyStorageKey(key));
+                return;
+            }
+            const { idempotencyKey, body, to, subject, messageId, open } = draft;
+            window.sessionStorage.setItem(quickReplyStorageKey(key), JSON.stringify({
+                idempotencyKey, body, to, subject, messageId, open,
+                receiptStatus: draft.sending ? 'unconfirmed' : draft.receiptStatus,
+                error: draft.sending ? QUICK_REPLY_UNKNOWN : draft.error,
+            }));
+        } catch { /* The current editor still holds its draft. */ }
+    }
+
     function gmailReaderHtml(conversation) {
         if (!conversation)
             return '<div class="incoming-reader-empty"><strong>Select a conversation</strong><p>Choose a conversation on the left to read it here.</p></div>';
@@ -658,15 +839,45 @@ export function createIncoming({ context, actions, el }) {
         } else {
             rightActions = `<div class="incoming-link-controls"><select data-incoming-board aria-label="Choose ticket board">${incomingBoardOptions('')}</select><button type="button" data-incoming-create-ticket data-incoming-key="${actions.escapeHtml(latest.key || '')}">Create ticket</button></div>`;
         }
-        const replyTo = actions.escapeHtml(latest.sender || '');
-        const replySubject = actions.escapeHtml(mailReplySubject(conversation));
-        const replyMessageId = actions.escapeHtml(latest.source_message_id || '');
+        const replySource = conversation.messages.find(item => !item.from_me && !(item.labels || []).includes('SENT')) || latest;
+        const draft = restoreQuickReply(conversation.key);
+        const statusButton = draft?.receiptStatus
+            ? `<button type="button" class="proposal-btn ghost" data-quick-reply-check${draft.checking ? ' disabled' : ''}>${draft.checking ? 'Checking...' : 'Check status'}</button>`
+            : '';
+        const replyTo = actions.escapeHtml(draft?.to ?? (replySource.reply_to || replySource.sender || ''));
+        const replySubject = actions.escapeHtml(draft?.subject ?? mailReplySubject(conversation));
+        const replyMessageId = actions.escapeHtml(draft?.messageId ?? replySource.source_message_id ?? '');
         const messages = conversation.messages.slice().reverse().map(mailMessageCardHtml).join('');
         const attachmentBar = mailAttachmentBarHtml(conversation);
-        return `<div class="incoming-gmail-messages">${messages}</div>${attachmentBar}<div class="incoming-quick-reply hidden" data-incoming-quick-reply><div class="incoming-quick-reply-fields"><label>To<input type="email" data-quick-reply-to value="${replyTo}" autocomplete="email"></label><label>Subject<input type="text" data-quick-reply-subject value="${replySubject}"></label><label>Message<textarea data-quick-reply-body rows="6" placeholder="Write your reply"></textarea></label><input type="hidden" data-quick-reply-message-id value="${replyMessageId}"></div><div class="incoming-quick-reply-actions"><button type="button" class="proposal-btn ghost" data-quick-reply-cancel>Cancel</button><button type="button" class="proposal-btn primary" data-quick-reply-send>Send</button></div></div><footer class="incoming-mail-footer"><button type="button" class="proposal-btn ghost" data-incoming-quick-reply-open>Quick Reply</button><div class="incoming-mail-footer-right">${rightActions}</div></footer>`;
+        return `<div class="incoming-gmail-messages">${messages}</div>${attachmentBar}<div class="incoming-quick-reply${draft?.open ? '' : ' hidden'}" data-incoming-quick-reply data-quick-reply-key="${actions.escapeHtml(conversation.key)}"><div class="incoming-quick-reply-fields"><label>To<input type="text" data-quick-reply-to value="${replyTo}" autocomplete="email"${draft?.sending ? ' disabled' : ''}></label><label>Subject<input type="text" data-quick-reply-subject value="${replySubject}"${draft?.sending ? ' disabled' : ''}></label><label>Message<textarea data-quick-reply-body rows="6" placeholder="Write your reply"${draft?.sending ? ' disabled' : ''}>${actions.escapeHtml(draft?.body || '')}</textarea></label><input type="hidden" data-quick-reply-message-id value="${replyMessageId}"></div><p role="status" data-quick-reply-status>${actions.escapeHtml(draft?.error || '')}</p><div class="incoming-quick-reply-actions"><button type="button" class="proposal-btn ghost" data-quick-reply-cancel${draft?.sending ? ' disabled' : ''}>Cancel</button>${statusButton}<button type="button" class="proposal-btn primary" data-quick-reply-send${draft?.sending || draft?.receiptStatus ? ' disabled' : ''}>${draft?.sending ? 'Sending...' : 'Send'}</button></div></div><footer class="incoming-mail-footer"><button type="button" class="proposal-btn ghost" data-incoming-quick-reply-open>Quick Reply</button><div class="incoming-mail-footer-right">${rightActions}</div></footer>`;
+    }
+
+    function rememberQuickReply(panel) {
+        const key = panel?.dataset.quickReplyKey;
+        if (!key) return null;
+        const draft = quickReplyDrafts.get(key) || { idempotencyKey: crypto.randomUUID() };
+        if (draft.sent) return draft;
+        Object.assign(draft, {
+            open: !panel.classList.contains('hidden'),
+            to: panel.querySelector('[data-quick-reply-to]')?.value || '',
+            subject: panel.querySelector('[data-quick-reply-subject]')?.value || '',
+            body: panel.querySelector('[data-quick-reply-body]')?.value || '',
+            messageId: panel.querySelector('[data-quick-reply-message-id]')?.value || '',
+        });
+        quickReplyDrafts.set(key, draft);
+        persistQuickReply(key, draft);
+        return draft;
     }
 
     function bindIncomingActions(root) {
+        root?.querySelectorAll('[data-incoming-quick-reply]').forEach(panel => {
+            panel.addEventListener('input', () => rememberQuickReply(panel));
+            if (quickReplyDrafts.get(panel.dataset.quickReplyKey)?.receiptStatus) {
+                panel.querySelectorAll('input,textarea').forEach(control => { control.readOnly = true; });
+                panel.querySelector('[data-quick-reply-send]').disabled = true;
+                panel.querySelector('[data-quick-reply-cancel]').textContent = 'Close';
+            }
+        });
         root.querySelectorAll('[data-incoming-avatar]').forEach((photo) => {
             const show = () => photo.classList.toggle('loaded', photo.naturalWidth > 0);
             photo.addEventListener('load', show, { once: true });
@@ -681,7 +892,7 @@ export function createIncoming({ context, actions, el }) {
         root.querySelectorAll('[data-incoming-manage]').forEach((button) =>
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
-                openIncomingLinkDialog(state.selectedIncomingConversationKey || button.closest('[data-incoming-conversation]')?.dataset.incomingConversation);
+                openIncomingLinkDialog(button.closest('[data-incoming-conversation]')?.dataset.incomingConversation || state.selectedIncomingConversationKey);
             })
         );
         root.querySelectorAll('[data-incoming-create-ticket]').forEach((button) => button.addEventListener('click', () => createIncomingTicket(button)));
@@ -709,6 +920,9 @@ export function createIncoming({ context, actions, el }) {
             button.addEventListener('click', () => {
                 const reader = button.closest('.incoming-gmail-reader');
                 reader?.querySelector('[data-incoming-quick-reply]')?.classList.remove('hidden');
+                const panel = reader?.querySelector('[data-incoming-quick-reply]');
+                if (quickReplyDrafts.get(panel?.dataset.quickReplyKey)?.sent) quickReplyDrafts.delete(panel.dataset.quickReplyKey);
+                rememberQuickReply(panel);
                 reader?.querySelector('[data-quick-reply-body]')?.focus();
             })
         );
@@ -717,12 +931,24 @@ export function createIncoming({ context, actions, el }) {
                 const panel = button.closest('[data-incoming-quick-reply]');
                 if (!panel) return;
                 panel.classList.add('hidden');
+                panel.closest('.incoming-gmail-reader')?.querySelector('[data-incoming-quick-reply-open]')?.focus();
+                const draft = quickReplyDrafts.get(panel.dataset.quickReplyKey);
+                if (draft?.receiptStatus) {
+                    draft.open = false;
+                    persistQuickReply(panel.dataset.quickReplyKey, draft);
+                    return;
+                }
                 const body = panel.querySelector('[data-quick-reply-body]');
                 if (body) body.value = '';
+                quickReplyDrafts.delete(panel.dataset.quickReplyKey);
+                persistQuickReply(panel.dataset.quickReplyKey, null);
             })
         );
         root.querySelectorAll('[data-quick-reply-send]').forEach((button) =>
             button.addEventListener('click', () => sendIncomingQuickReply(button))
+        );
+        root.querySelectorAll('[data-quick-reply-check]').forEach((button) =>
+            button.addEventListener('click', () => checkQuickReplyStatus(button))
         );
         bindProposalFilePreview(root);
         root.querySelectorAll('iframe.incoming-mail-html-frame').forEach((frame) => {
@@ -762,6 +988,44 @@ export function createIncoming({ context, actions, el }) {
         });
     }
 
+    function confirmQuickReply(panel, draft) {
+        Object.assign(draft, { sent: true, open: false, body: '', receiptStatus: '', error: '' });
+        persistQuickReply(panel.dataset.quickReplyKey, draft);
+        panel.classList.add('hidden');
+        const field = panel.querySelector('[data-quick-reply-body]');
+        if (field) field.value = '';
+        actions.toast('Reply sent.');
+    }
+
+    async function checkQuickReplyStatus(button) {
+        const panel = button.closest('[data-incoming-quick-reply]');
+        const key = panel?.dataset.quickReplyKey;
+        const draft = quickReplyDrafts.get(key);
+        if (!draft?.receiptStatus || draft.checking) return;
+        draft.checking = true;
+        button.disabled = true;
+        button.textContent = 'Checking...';
+        try {
+            const result = await actions.api(`${QUICK_REPLY_PATH}/status?idempotency_key=${encodeURIComponent(draft.idempotencyKey)}`);
+            if (quickReplyDrafts.get(key) !== draft) return;
+            if (result.receipt_status === 'sent') {
+                confirmQuickReply(panel, draft);
+            } else {
+                draft.error = result.receipt_status === 'missing'
+                    ? 'No send receipt was found. The outcome is still unknown. Check the original conversation.'
+                    : QUICK_REPLY_UNKNOWN;
+            }
+        } catch {
+            draft.error = 'Could not check the saved reply status. Try checking again.';
+        } finally {
+            draft.checking = false;
+            if (quickReplyDrafts.get(key) === draft) {
+                persistQuickReply(key, draft);
+                if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
+            }
+        }
+    }
+
     async function sendIncomingQuickReply(button) {
         const reader = button.closest('.incoming-gmail-reader');
         const panel = button.closest('[data-incoming-quick-reply]');
@@ -771,15 +1035,21 @@ export function createIncoming({ context, actions, el }) {
         const subject = panel.querySelector('[data-quick-reply-subject]')?.value?.trim() || '';
         const body = panel.querySelector('[data-quick-reply-body]')?.value || '';
         const messageId = panel.querySelector('[data-quick-reply-message-id]')?.value || '';
+        const draft = rememberQuickReply(panel);
+        if (draft?.sending || draft?.receiptStatus) return;
         if (!to || !body.trim()) {
             actions.toast('Add a recipient and reply text before sending.', 'error');
             return;
         }
         const original = button.textContent;
         button.disabled = true;
-        button.textContent = 'Sending…';
+        button.textContent = 'Sending...';
+        draft.sending = true;
+        draft.error = '';
+        persistQuickReply(panel.dataset.quickReplyKey, draft);
+        panel.querySelectorAll('input,textarea,[data-quick-reply-cancel]').forEach(control => { control.disabled = true; });
         try {
-            const result = await actions.api('/workflows/studio/incoming/mail/reply', {
+            const result = await actions.api(QUICK_REPLY_PATH, {
                 method: 'POST',
                 body: {
                     channel,
@@ -787,19 +1057,38 @@ export function createIncoming({ context, actions, el }) {
                     subject,
                     body,
                     message_id: messageId,
+                    idempotency_key: draft.idempotencyKey,
                     dry_run: false,
                 },
             });
             if (!result?.success) throw new Error(result?.error || 'Could not send the reply.');
-            actions.toast(result.dry_run ? 'Dry-run only — reply was not sent.' : 'Reply sent.');
-            panel.classList.add('hidden');
-            const bodyField = panel.querySelector('[data-quick-reply-body]');
-            if (bodyField) bodyField.value = '';
+            if (result.dry_run) {
+                draft.error = 'Reply was not sent. The provider returned a dry run.';
+                return;
+            }
+            confirmQuickReply(panel, draft);
         } catch (error) {
-            actions.toast(error.message || 'Could not send the reply.', 'error');
+            draft.error = error.message || 'Could not send the reply.';
+            const receiptStatus = error.data?.receipt_status || error.receipt_status;
+            if (['unconfirmed', 'sending'].includes(receiptStatus)) draft.receiptStatus = receiptStatus;
+            else if (error.data?.send_attempted !== false && error.status !== 422) {
+                draft.receiptStatus = 'unconfirmed';
+                draft.error = QUICK_REPLY_UNKNOWN;
+            }
+            const inlineVisible = context.workspaceMode === 'incoming'
+                && Array.from(document.querySelectorAll('[data-incoming-quick-reply]:not(.hidden)')).some(
+                    editor => editor.dataset.quickReplyKey === panel.dataset.quickReplyKey && editor.getClientRects().length > 0
+                );
+            if (!inlineVisible) actions.toast(draft.error, 'error');
         } finally {
+            draft.sending = false;
+            persistQuickReply(panel.dataset.quickReplyKey, draft);
             button.disabled = false;
             button.textContent = original;
+            panel.querySelectorAll('input,textarea,[data-quick-reply-cancel]').forEach(control => { control.disabled = false; });
+            // A background refresh may have replaced this exact editor while
+            // the send was pending. Render only from retained delivery state.
+            if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
         }
     }
 
@@ -813,7 +1102,7 @@ export function createIncoming({ context, actions, el }) {
     }
 
     function proposalFirstMessage(proposal) {
-        const evidence = proposal.evidence || [];
+        const evidence = proposal.source === 'whatsapp' ? proposalSourceChunk(proposal).messages : (proposal.evidence || []);
         const ev = evidence[evidence.length - 1] || evidence[0];
         if (!ev) return '';
         const who = ev.sender_name || ev.sender_address || '';
@@ -875,7 +1164,65 @@ export function createIncoming({ context, actions, el }) {
     let dragProposalId = '';
 
     function proposalById(proposalId) {
-        return (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId)) || null;
+        const modal = el('incoming-proposal-modal');
+        const requiredKey = modal?.dataset.proposalId === String(proposalId) ? modal.dataset.reviewKey : '';
+        return (state.incomingProposals || []).find(row => String(row.id) === String(proposalId)
+            && (!requiredKey || row.review_key === requiredKey)) || null;
+    }
+
+    let proposalReviewRequest = 0;
+
+    function clearProposalReview() {
+        proposalReviewRequest++;
+        closeProposalDetail();
+        const status = el('incoming-proposal-review-status');
+        status.textContent = '';
+        status.classList.add('hidden');
+    }
+
+    async function openProposalReview(reviewKey) {
+        const request = ++proposalReviewRequest;
+        const status = el('incoming-proposal-review-status');
+        const current = () => request === proposalReviewRequest && context.workspaceMode === 'incoming'
+            && new URLSearchParams(window.location.search).get('proposal_key') === reviewKey;
+        const show = (message, focus = false) => {
+            status.textContent = message;
+            status.classList.toggle('hidden', !message);
+            if (focus) status.focus();
+        };
+        state.incomingFilter = 'proposals';
+        state.incomingMobileDetail = false;
+        renderIncomingWorkspace();
+        if (!/^[a-f0-9]{64}$/.test(reviewKey)) {
+            show('This proposal link is invalid.', true);
+            return;
+        }
+        show('Opening linked proposal…');
+        try {
+            const result = await actions.api(`/workflows/studio/incoming/proposals/review?${new URLSearchParams({ review_key: reviewKey })}`);
+            if (!current() || el('incoming-proposal-modal')) return;
+            if (result.status === 'thread' && Number.isSafeInteger(result.chat_id) && result.chat_id > 0) {
+                show('');
+                await actions.loadChat(result.chat_id, { replaceUrl: true });
+                return;
+            }
+            if (result.status === 'proposal' && result.proposal?.review_key === reviewKey) {
+                // Wait for the initial list so a late response cannot replace the reviewed snapshot.
+                await refreshIncomingData();
+                if (!current() || el('incoming-proposal-modal')) return;
+                const proposal = result.proposal;
+                state.incomingProposals = [proposal, ...state.incomingProposals.filter(row => String(row.id) !== String(proposal.id))];
+                renderIncomingWorkspace();
+                show('');
+                openProposalDetail(proposal.id, { reviewKey });
+                return;
+            }
+            show(result.status === 'unconfirmed'
+                ? 'Could not confirm this proposal. Reload the link to try again.'
+                : 'This proposal link is no longer available.', true);
+        } catch (_) {
+            if (current()) show('Could not open this proposal. Reload the link to try again.', true);
+        }
     }
 
     async function copyProposal(proposalId) {
@@ -965,10 +1312,12 @@ export function createIncoming({ context, actions, el }) {
             else el('incoming-resync')?.focus({ preventScroll: true });
         };
         update(title, description);
-        closeButton.addEventListener('click', close);
-        overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+        const dismiss = () => { close(); actions.closeProposalReview?.(); };
+        if (context.embeddedProposalReview) closeButton.setAttribute('aria-label', 'Return to proposals');
+        closeButton.addEventListener('click', dismiss);
+        overlay.addEventListener('click', event => { if (event.target === overlay) dismiss(); });
         overlay.addEventListener('keydown', event => {
-            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(); }
             if (event.key === 'Tab') { event.preventDefault(); closeButton.focus(); }
         });
         document.body.style.overflow = 'hidden';
@@ -997,7 +1346,7 @@ export function createIncoming({ context, actions, el }) {
             });
             if (!result?.chat_id) throw new Error(result?.error || 'The proposals could not be merged.');
             if (result && result.chat_id) {
-                actions.toast('Merged into one ticket.', 'success');
+                actions.toast('Merged into one thread.', 'success');
                 state.incomingProposals = (state.incomingProposals || []).filter(
                     (row) => String(row.id) !== String(sourceId) && String(row.id) !== String(targetId)
                 );
@@ -1016,9 +1365,34 @@ export function createIncoming({ context, actions, el }) {
         }
     }
 
+    function proposalSourceThreadId(proposal, source) {
+        const explicit = String(proposal.source_thread_id || proposal.source_conversation?.thread_id || '').trim();
+        if (explicit) return explicit;
+        const prefix = `local:${source}:`;
+        const id = String(proposal.id || '');
+        return id.startsWith(prefix) ? id.slice(prefix.length) : '';
+    }
+
+    function findProposalConversation(proposal, source, messageIds) {
+        const conversations = incomingConversations(source);
+        const threadId = proposalSourceThreadId(proposal, source);
+        if (threadId) return conversations.find(row => row.threadId === threadId) || null;
+        if (!messageIds.length) return null;
+
+        // Legacy proposals may have message IDs without a recorded thread.
+        const wanted = new Set(messageIds);
+        const matches = conversations.filter(row => row.messages.some(item => wanted.has(String(item.source_message_id || ''))));
+        return matches.length === 1 ? matches[0] : null;
+    }
+
     function proposalSourceChunk(proposal) {
-        const evidence = Array.isArray(proposal.evidence) ? proposal.evidence.filter((ev) => ev && (ev.id || ev.body || ev.sent_at)) : [];
         const messageIds = Array.isArray(proposal.message_ids) ? proposal.message_ids.map(String).filter(Boolean) : [];
+        const wanted = new Set(messageIds);
+        const source = String(proposal.source || '').toLowerCase();
+        const whatsapp = source === 'whatsapp';
+        const contextIds = new Set((proposal.source_context_message_ids || []).map(String));
+        const evidence = (Array.isArray(proposal.evidence) ? proposal.evidence : []).filter(ev => ev && (ev.id || ev.body || ev.sent_at)
+            && (!whatsapp || (wanted.size ? wanted.has(String(ev.id)) : !ev.context_only && !contextIds.has(String(ev.id)))));
         if (evidence.length) {
             const ordered = evidence.slice().sort((a, b) => String(a.sent_at || '').localeCompare(String(b.sent_at || '')));
             return {
@@ -1029,33 +1403,10 @@ export function createIncoming({ context, actions, el }) {
                 messageIds: ordered.map((ev) => String(ev.id || '')).filter(Boolean),
             };
         }
-        const source = String(proposal.source || '').toLowerCase();
-        const threadId = String(
-            proposal.source_thread_id
-            || proposal.source_conversation?.thread_id
-            || (String(proposal.id || '').includes(':') ? String(proposal.id).split(':').slice(2).join(':') : '')
-            || ''
-        ).trim();
-        const wanted = new Set(messageIds);
-        const incoming = state.incoming || [];
-
-        // Prefer exact source_message_id hits across Incoming (do not require source match).
-        let pool = [];
-        if (wanted.size) {
-            pool = incoming.filter((item) => wanted.has(String(item.source_message_id || '')));
-        }
-        // Fallback: same source + thread when ids are missing or none of the ids are cached yet.
-        if (!pool.length && threadId) {
-            pool = incoming.filter((item) => {
-                const itemSource = String(item.source || '').toLowerCase();
-                if (source && itemSource && itemSource !== source) return false;
-                return String(item.source_thread_id || '') === threadId;
-            });
-            if (wanted.size) {
-                const filtered = pool.filter((item) => wanted.has(String(item.source_message_id || '')));
-                if (filtered.length) pool = filtered;
-            }
-        }
+        const conversation = source && !proposal.source_scope?.length && !proposal.merged_from?.length
+            ? findProposalConversation(proposal, source, messageIds) : null;
+        const pool = (conversation?.messages || []).filter(item =>
+            wanted.size ? wanted.has(String(item.source_message_id || '')) : !whatsapp);
 
         const matched = pool.map((item) => ({
             id: String(item.source_message_id || ''),
@@ -1102,7 +1453,8 @@ export function createIncoming({ context, actions, el }) {
 
     function proposalEvidenceHtml(proposal) {
         const chunk = proposalSourceChunk(proposal);
-        if (!chunk.count) {
+        const merged = Boolean(proposal.source_scope?.length || proposal.merged_from?.length);
+        if (!chunk.count && !merged) {
             return '<p class="proposal-empty">No retained source messages for this proposal.</p>';
         }
         const startLabel = chunk.start
@@ -1111,20 +1463,30 @@ export function createIncoming({ context, actions, el }) {
         const endLabel = chunk.end
             ? `${actions.formatDateTime(chunk.end.sent_at)}${chunk.end.sender_name ? `, ${chunk.end.sender_name}` : ''}`
             : 'end';
-        const summary = chunk.idsOnly
-            ? `<p class="proposal-source-summary">${chunk.count} source message id${chunk.count === 1 ? '' : 's'} recorded. Open the conversation to view them.</p>`
-            : `<p class="proposal-source-summary">From <strong>${actions.escapeHtml(startLabel)}</strong> to <strong>${actions.escapeHtml(endLabel)}</strong>, ${chunk.count} message${chunk.count === 1 ? '' : 's'}</p>`;
-        const jump = `<p class="proposal-source-jump"><button type="button" class="proposal-btn ghost" data-proposal-jump-source="${actions.escapeHtml(proposal.id || '')}">View in conversation</button></p>`;
+        const summary = !chunk.count ? '' : chunk.idsOnly
+            ? `<p class="proposal-source-summary">${chunk.count === 1 ? 'The source message text is unavailable.' : `The text of ${chunk.count} source messages is unavailable.`}</p>`
+            : chunk.count === 1 ? '' : `<p class="proposal-source-summary">From <strong>${actions.escapeHtml(startLabel)}</strong> to <strong>${actions.escapeHtml(endLabel)}</strong>, ${chunk.count} messages</p>`;
+        const jump = proposalSourceControlsHtml('proposal-source-picker', proposal.id);
         const messages = (chunk.messages || []).map((ev) => `<article class="proposal-message" data-source-message-id="${actions.escapeHtml(ev.id || '')}">
             <header><strong>${actions.escapeHtml(ev.sender_name || ev.sender_address || 'Unknown')}</strong><time>${actions.escapeHtml(actions.formatDateTime(ev.sent_at))}</time></header>
             ${ev.body ? `<p>${actions.escapeHtml(ev.body)}</p>` : '<p class="muted">(no text)</p>'}
         </article>`).join('');
-        return `${summary}${jump}${messages || '<p class="proposal-empty">Message bodies are not cached in this proposal yet.</p>'}`;
+        return `<div data-proposal-source-evidence>${summary}${jump}${messages}</div>
+            <div data-proposal-source-reader hidden></div>`;
+    }
+
+    function proposalSourceControlsHtml(pickerId, proposalId = '') {
+        return `<div class="proposal-source-jump"><div class="proposal-source-choice hidden">
+            <label for="${pickerId}">Original conversation</label>
+            <select id="${pickerId}" data-proposal-source-choice></select></div>
+            <button type="button" class="proposal-btn ghost" data-proposal-jump-source="${actions.escapeHtml(proposalId)}">${proposalId ? 'View in conversation' : 'View original conversation'}</button>
+            <p class="proposal-source-status hidden" data-proposal-source-status role="status"></p></div>`;
     }
 
     function proposalAttachmentUrl(proposal, item) {
         const token = incomingInternalToken();
         if (item.download_error || item.error) return '';
+        if (context.embeddedProposalReview) return item.url || '';
         if (item.url) {
             const join = item.url.includes('?') ? '&' : '?';
             return `${item.url}${join}internal_token=${encodeURIComponent(token)}`;
@@ -1323,11 +1685,11 @@ export function createIncoming({ context, actions, el }) {
                 files.push(`<div class="proposal-file-card proposal-file-failed" role="status"><div class="proposal-file-card-head"><span class="proposal-file-icon" aria-hidden="true">?</span><div class="proposal-file-meta"><strong title="${actions.escapeHtml(a.name || label)}">${actions.escapeHtml(label)}</strong><span>No download link yet. Open Files again after sync.</span></div></div></div>`);
                 return;
             }
-            if (isImageAttachment(a)) {
+            if (isImageAttachment(a) && !context.embeddedProposalReview) {
                 images.push(`<button type="button" class="proposal-media" data-file-preview="${payload}" title="${actions.escapeHtml(caption || label)}"><img src="${url}" alt="${actions.escapeHtml(label)}" loading="lazy" /></button>`);
                 return;
             }
-            if (isAudioAttachment(a)) {
+            if (isAudioAttachment(a) && !context.embeddedProposalReview) {
                 const fileName = String(a.name || label || 'audio').trim() || 'audio';
                 const sizeOnly = formatAttachmentBytes(a.size);
                 const transcript = proposalAttachmentTranscript(proposal, a);
@@ -1370,6 +1732,7 @@ export function createIncoming({ context, actions, el }) {
             player.load();
         });
         overlay.remove();
+        if (overlay._releaseFileUrl) overlay._releaseFileUrl();
         document.body.style.overflow = overlay._previousOverflow || '';
         document.removeEventListener('keydown', onFilePreviewKey, true);
         if (overlay._returnFocus?.isConnected) overlay._returnFocus.focus({ preventScroll: true });
@@ -1420,6 +1783,7 @@ export function createIncoming({ context, actions, el }) {
         overlay.id = 'incoming-file-preview-modal';
         overlay._previousOverflow = document.body.style.overflow;
         overlay._returnFocus = returnFocus;
+        overlay._releaseFileUrl = meta.releaseUrl;
         overlay.innerHTML = `<div class="proposal-modal file-preview-modal${playable ? ' has-transcript' : ''}" role="dialog" aria-modal="true" aria-label="${actions.escapeHtml(name)}">
             <header><div class="proposal-modal-title"><h3 title="${actions.escapeHtml(filename)}">${actions.escapeHtml(name)}</h3>${meta.caption ? `<p class="proposal-modal-desc">${actions.escapeHtml(meta.caption)}</p>` : ''}</div><button type="button" class="proposal-modal-close" aria-label="Close" data-file-preview-close>×</button></header>
             <div class="proposal-modal-body file-preview-body">${body}
@@ -1478,7 +1842,17 @@ export function createIncoming({ context, actions, el }) {
         }
         const textNode = overlay.querySelector('[data-file-preview-text]');
         if (textNode) fetch(meta.url).then(response => {
-            if (!response.ok) throw new Error('Could not load the file.');
+            if (!response.ok) {
+                const url = new URL(meta.url, window.location.href);
+                const linkedProposal = url.pathname.startsWith('/api/workflows/studio/incoming/proposals/files/')
+                    && url.searchParams.has('review_key');
+                if (linkedProposal && response.status === 404) {
+                    overlay.querySelector('footer').classList.add('hidden');
+                    textNode.setAttribute('role', 'status');
+                    return 'This attachment is no longer available on the linked proposal. Reopen the proposal to check its files.';
+                }
+                return 'Could not load the file.';
+            }
             return response.text();
         }).then(text => { textNode.textContent = text; })
             .catch(() => { textNode.textContent = 'Could not load the file.'; });
@@ -1531,13 +1905,13 @@ export function createIncoming({ context, actions, el }) {
                     if (!result?.success || !result.proposal) throw new Error(result?.error || 'Could not save task completion.');
                     state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(currentProposalId) ? result.proposal : row);
                     currentProposalId = result.proposal.id;
+                    onSaved?.(result.proposal);
                     const saved = loadProposalTaskDone(currentProposalId);
                     list.querySelectorAll('[data-proposal-task-index]').forEach((node) => {
                         const taskIndex = Number(node.getAttribute('data-proposal-task-index'));
                         apply(node, taskIndex, saved.has(taskIndex));
                     });
                     if (status) status.textContent = 'Saved';
-                    onSaved?.(result.proposal);
                 } catch (error) {
                     if (status) {
                         status.textContent = error.data?.error || error.message || 'Could not save task completion. Try again.';
@@ -1562,10 +1936,24 @@ export function createIncoming({ context, actions, el }) {
 
     function bindProposalFilePreview(root) {
         root?.querySelectorAll('[data-file-preview]').forEach((node) => {
-            node.addEventListener('click', () => {
+            node.addEventListener('click', async () => {
                 try {
-                    openFilePreview(JSON.parse(node.getAttribute('data-file-preview') || '{}'));
-                } catch (_) {}
+                    const meta = JSON.parse(node.getAttribute('data-file-preview') || '{}');
+                    if (context.embeddedProposalReview) {
+                        node.disabled = true;
+                        const file = await actions.readProposalAttachment(meta.url);
+                        if (!node.isConnected) return;
+                        node.disabled = false;
+                        node.focus({ preventScroll: true });
+                        const url = URL.createObjectURL(file);
+                        openFilePreview({ ...meta, url, releaseUrl: () => URL.revokeObjectURL(url) });
+                    } else openFilePreview(meta);
+                } catch (error) {
+                    if (context.embeddedProposalReview && node.isConnected) {
+                        node.disabled = false;
+                        actions.toast(error.message || 'Could not load the attachment.', 'error');
+                    }
+                }
             });
         });
     }
@@ -1574,7 +1962,7 @@ export function createIncoming({ context, actions, el }) {
         try {
             const result = await actions.api('/workflows/studio/incoming/proposals/files/ensure', {
                 method: 'POST',
-                body: { proposal },
+                body: proposal.review_key ? { review_key: proposal.review_key } : { proposal },
             });
             const attachments = [...(result.attachments || []), ...(result.failures || [])];
             // Keep the source manifest intact for reopening, retrying, and thread handoff.
@@ -1597,7 +1985,12 @@ export function createIncoming({ context, actions, el }) {
     }
 
     function onProposalDetailKey(event) {
-        if (event.key === 'Escape') closeProposalDetail();
+        if (event.key === 'Escape') dismissProposalDetail();
+    }
+
+    function dismissProposalDetail() {
+        closeProposalDetail();
+        actions.closeProposalReview?.();
     }
 
 
@@ -1627,49 +2020,189 @@ export function createIncoming({ context, actions, el }) {
         return chunk;
     }
 
-    function jumpProposalSource(proposalId) {
-        const proposal = proposalById(proposalId) || (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
+    function showProposalSourceReader(button, choice, result) {
+        const pane = button.closest('[data-proposal-pane="source"]');
+        const reader = pane.querySelector('[data-proposal-source-reader]');
+        const evidence = pane.querySelector('[data-proposal-source-evidence]');
+        const original = Array.isArray(result?.items)
+            ? result.items.filter(item => item?.source_message_id === result.anchor_id) : [];
+        if (!result?.source || !result?.thread_id || !result?.anchor_id || original.length !== 1
+            || (choice && (result.source_key !== choice.value || result.source !== choice.dataset.source
+                || result.thread_id !== choice.dataset.threadId))
+            || result.items.some(item => item?.source !== result.source || item?.source_thread_id !== result.thread_id)) {
+            throw new Error('The original message could not be confirmed in this conversation.');
+        }
+        const label = original[0].conversation_label || choice?.textContent || '';
+        reader.innerHTML = `<div class="proposal-source-reader-header">
+            ${choice ? `<button type="button" class="proposal-btn ghost" data-source-back>${pane.closest('dialog') ? 'Back to conversations' : 'Back to source evidence'}</button>` : ''}
+            ${label ? `<h4>${actions.escapeHtml(label)}</h4>` : ''}
+        </div>${result.items.map(item => {
+            const anchor = item === original[0];
+            const text = item.text || item.snippet || item.transcript || '';
+            const attachments = (item.attachments || []).map(file => file.filename || file.name).filter(Boolean);
+            return `<article class="proposal-message${anchor ? ' proposal-message-original' : ''}"${anchor ? ' tabindex="-1" data-original-message' : ''}>
+                ${anchor ? '<strong class="proposal-original-label">Original message</strong>' : ''}
+                <header><strong>${actions.escapeHtml(item.from_me ? 'You' : item.sender || 'Unknown sender')}</strong>
+                    ${item.created_at ? `<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time>` : ''}</header>
+                ${text ? `<p>${actions.escapeHtml(text)}</p>` : '<p class="muted">No message text</p>'}
+                ${attachments.length ? `<p>${actions.escapeHtml(attachments.join(', '))}</p>` : ''}
+            </article>`;
+        }).join('')}`;
+        const top = pane.scrollTop;
+        reader.querySelector('[data-source-back]')?.addEventListener('click', () => {
+            reader.hidden = true;
+            reader.replaceChildren();
+            evidence.hidden = false;
+            pane.scrollTop = top;
+            button.focus({ preventScroll: true });
+        });
+        evidence.hidden = true;
+        reader.hidden = false;
+        const anchor = reader.querySelector('[data-original-message]');
+        anchor.focus({ preventScroll: true });
+        anchor.scrollIntoView({ block: 'nearest' });
+    }
+
+    async function loadProposalSource(button, read, { embedded = false, active = () => true } = {}) {
+        const controls = button?.closest('.proposal-source-jump');
+        const picker = controls?.querySelector('[data-proposal-source-choice]');
+        const notice = controls?.querySelector('[data-proposal-source-status]');
+        if (!button || !picker || !notice || button.disabled) return;
+        button.disabled = true;
+        picker.disabled = true;
+        notice.classList.remove('hidden');
+        notice.textContent = 'Opening the original conversation…';
+        const isCurrent = () => button.isConnected && active();
+        try {
+            const result = await read(picker.value);
+            if (!isCurrent()) return;
+            if (!result?.choices) {
+                if (!embedded) {
+                    showProposalSourceReader(button, picker.value ? picker.selectedOptions[0] : null, result);
+                    notice.classList.add('hidden');
+                    picker.disabled = false;
+                    button.disabled = false;
+                }
+                return;
+            }
+            picker.replaceChildren(new Option('Choose a conversation', ''), ...result.choices.map(choice => {
+                const option = new Option(choice.label, choice.key);
+                option.dataset.source = choice.source || '';
+                option.dataset.threadId = choice.thread_id || '';
+                return option;
+            }));
+            picker.closest('.proposal-source-choice').classList.remove('hidden');
+            picker.disabled = false;
+            picker.onchange = () => {
+                button.disabled = !picker.value;
+                notice.classList.add('hidden');
+            };
+            notice.classList.add('hidden');
+            picker.focus();
+        } catch (error) {
+            if (!isCurrent()) return;
+            notice.textContent = error.message || 'Could not open the original conversation.';
+            button.disabled = false;
+            picker.disabled = false;
+            button.focus({ preventScroll: true });
+        }
+    }
+
+    let submittedSourceDialog;
+    function closeSubmittedProposalSource() {
+        submittedSourceDialog?.close();
+    }
+
+    function openSubmittedProposalSource({ chatId, reviewKey, opener }) {
+        closeSubmittedProposalSource();
+        const dialog = document.createElement('dialog');
+        submittedSourceDialog = dialog;
+        dialog.className = 'studio-dialog submitted-proposal-source-dialog';
+        dialog.setAttribute('aria-labelledby', 'submitted-proposal-source-title');
+        dialog.innerHTML = `<form method="dialog">
+            <header><div><h2 id="submitted-proposal-source-title">Original conversation</h2></div>
+                <button type="submit" class="proposal-btn ghost">Close</button></header>
+            <div class="submitted-proposal-source-body" data-proposal-pane="source">
+                <div data-proposal-source-evidence>${proposalSourceControlsHtml('submitted-proposal-source-picker')}</div>
+                <div data-proposal-source-reader hidden></div>
+            </div>
+        </form>`;
+        const controller = new AbortController();
+        dialog.addEventListener('close', () => {
+            controller.abort();
+            dialog.remove();
+            if (submittedSourceDialog !== dialog) return;
+            submittedSourceDialog = null;
+            if (opener?.getClientRects().length) opener.focus({ preventScroll: true });
+        }, { once: true });
+        document.body.appendChild(dialog);
+        dialog.showModal();
+        const button = dialog.querySelector('[data-proposal-jump-source]');
+        const read = () => loadProposalSource(button, sourceKey => {
+            const params = new URLSearchParams({ review_key: reviewKey, chat_id: chatId });
+            if (sourceKey) params.set('source_key', sourceKey);
+            return actions.api(`/workflows/studio/incoming/proposals/source?${params}`, { signal: controller.signal });
+        }, { active: () => dialog.open && submittedSourceDialog === dialog });
+        button.addEventListener('click', read);
+        void read();
+    }
+
+    async function jumpProposalSource(proposalId) {
+        const proposal = proposalById(proposalId);
         if (!proposal) return;
+        if (context.embeddedProposalReview || proposal.source_scope?.length || proposal.merged_from?.length) {
+            const overlay = el('incoming-proposal-modal');
+            const button = overlay?.querySelector('[data-proposal-jump-source]');
+            const read = async sourceKey => {
+                if (context.embeddedProposalReview) return actions.openProposalSource(sourceKey);
+                const reviewKey = overlay.dataset.reviewKey;
+                if (!reviewKey) throw new Error('Reopen the proposal to check its original conversations.');
+                const params = new URLSearchParams({ review_key: reviewKey });
+                if (sourceKey) params.set('source_key', sourceKey);
+                const result = await actions.api(`/workflows/studio/incoming/proposals/source?${params}`);
+                if (overlay.dataset.reviewKey !== reviewKey) {
+                    throw new Error('The proposal changed. Reopen it to check its original conversations.');
+                }
+                return result;
+            };
+            return loadProposalSource(button, read, { embedded: context.embeddedProposalReview });
+        }
         const chunk = proposalSourceChunk(proposal);
         const source = String(proposal.source || '').toLowerCase();
-        const threadId = String(proposal.source_thread_id || proposal.source_conversation?.thread_id || '');
-        closeProposalDetail();
-        state.incomingFilter = source || state.incomingFilter;
-        if (source === 'whatsapp') {
-            const key = threadId ? `whatsapp:${threadId}` : '';
-            const conversations = incomingConversations('whatsapp');
-            const match = conversations.find((row) => row.key === key) || conversations.find((row) => (chunk.messageIds || []).some((id) => row.messages?.some((m) => String(m.source_message_id) === String(id))));
-            if (match) state.selectedIncomingConversationKey = match.key;
-        } else if (source === 'gmail') {
-            state.selectedGmailThreadKey = conversationsKeyForMail('gmail', threadId, chunk.messageIds);
-        } else if (source === 'mailshot') {
-            state.selectedMailshotThreadKey = conversationsKeyForMail('mailshot', threadId, chunk.messageIds);
+        const selectionKey = source === 'whatsapp' ? 'selectedIncomingConversationKey' : MAIL_CHANNELS[source]?.stateKey;
+        const match = selectionKey && findProposalConversation(proposal, source, chunk.messageIds);
+        if (!match || state.incomingChannels[source]?.error) {
+            const notice = el('incoming-proposal-modal')?.querySelector('[data-proposal-source-status]');
+            if (notice) {
+                notice.textContent = 'The original conversation is not available in Incoming.';
+                notice.classList.remove('hidden');
+            }
+            return;
         }
-        renderIncomingWorkspace();
-        const root = el('incoming-workspace');
-        root?.classList.add('incoming-detail-open');
-        // Highlight first/last markers when present; otherwise scroll reader.
+        closeProposalDetail();
+        state.incomingFilter = source;
+        if (source === 'whatsapp') {
+            selectIncomingConversation(match.key);
+        } else {
+            state[selectionKey] = match.key;
+            state.incomingMobileDetail = true;
+            renderIncomingWorkspace();
+        }
         requestAnimationFrame(() => {
-            const firstId = (chunk.messageIds || [])[0];
-            const lastId = (chunk.messageIds || [])[(chunk.messageIds || []).length - 1];
-            const reader = el(source === 'whatsapp' ? 'incoming-whatsapp-reader' : source === 'mailshot' ? 'incoming-mailshot-reader' : 'incoming-gmail-reader');
-            const startNode = firstId ? reader?.querySelector(`[data-incoming-msg*="${CSS.escape(firstId)}"], [data-source-message-id="${CSS.escape(firstId)}"]`) : null;
-            const endNode = lastId ? reader?.querySelector(`[data-wa-proposal-end="${CSS.escape(String(proposal.id))}"], [data-incoming-msg*="${CSS.escape(lastId)}"]`) : null;
-            (startNode || endNode || reader)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            if (context.workspaceMode !== 'incoming' || state.incomingFilter !== source || state[selectionKey] !== match.key) return;
+            const reader = el(`incoming-${source}-reader`);
+            if (!reader) return;
+            const attr = source === 'whatsapp' ? 'data-wa-mid' : 'data-mail-id';
+            const exactMessage = chunk.messageIds.map(id => reader.querySelector(`[${attr}="${CSS.escape(id)}"]`)).find(Boolean);
+            const target = exactMessage || reader;
+            if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
+            target.focus({ preventScroll: true });
+            if (exactMessage) exactMessage.scrollIntoView({ block: 'center' });
         });
     }
 
-    function conversationsKeyForMail(source, threadId, messageIds) {
-        const conversations = incomingConversations(source);
-        const byThread = conversations.find((row) => row.threadId === threadId || row.key === `${source}:${threadId}`);
-        if (byThread) return byThread.key;
-        const wanted = new Set((messageIds || []).map(String));
-        const byMsg = conversations.find((row) => row.messages?.some((m) => wanted.has(String(m.source_message_id || ''))));
-        return byMsg?.key || conversations[0]?.key || '';
-    }
-
     // Tabbed detail, mirroring Tensology's ticket view (Details / Tasks / Files ...).
-    function openProposalDetail(proposalId) {
+    function openProposalDetail(proposalId, { reviewKey = '' } = {}) {
         const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
         if (!proposal) return;
         closeProposalDetail();
@@ -1678,7 +2211,6 @@ export function createIncoming({ context, actions, el }) {
         const conversation = proposal.source_conversation || {};
         const tasks = proposal.tasks || [];
         const files = proposal.attachments || [];
-        const evidence = proposal.evidence || [];
         const meta = [
             ['Participant', proposal.participant || conversation.participant_name || conversation.participant_address || ''],
             ['Channel', conversation.channel || source],
@@ -1707,6 +2239,8 @@ export function createIncoming({ context, actions, el }) {
         const overlay = document.createElement('div');
         overlay.className = 'proposal-modal-overlay';
         overlay.id = 'incoming-proposal-modal';
+        overlay.dataset.proposalId = String(proposalId);
+        overlay.dataset.reviewKey = proposal.review_key || reviewKey;
         overlay.innerHTML = `<div class="proposal-modal" role="dialog" aria-modal="true" aria-label="${actions.escapeHtml(proposal.title || 'Proposal')}">
             <header>
                 <div class="proposal-modal-title"><span class="proposal-source">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span><h3>${actions.escapeHtml(proposal.title || 'Proposal')}</h3></div>
@@ -1716,10 +2250,13 @@ export function createIncoming({ context, actions, el }) {
             <div class="proposal-modal-body">
                 ${pane('details', details, true)}
                 ${pane('tasks', tasksPane, false)}
-                ${pane('files', proposalFilesHtml(proposal), false)}
+                ${pane('files', proposal.review_key
+                    ? PROPOSAL_DROP_ZONE + '<p class="proposal-empty" role="status">Loading attachments…</p>'
+                    : proposalFilesHtml(proposal), false)}
                 ${pane('source', proposalEvidenceHtml(proposal), false)}
             </div>
             <footer>
+                ${proposal.review_key && !context.embeddedProposalReview ? '<p class="proposal-review-copy-status hidden" data-proposal-copy-status role="status"></p><button type="button" class="proposal-btn ghost proposal-copy-review" data-proposal-copy-review>Copy review link</button>' : ''}
                 <button type="button" class="proposal-btn ghost" data-proposal-close>Close</button>
                 <button type="button" class="proposal-btn primary" data-proposal-thread="${actions.escapeHtml(proposal.id || '')}"${proposalNeedsProject(proposal) ? ' disabled' : ''}>Create Thread</button>
             </footer>
@@ -1728,6 +2265,8 @@ export function createIncoming({ context, actions, el }) {
         bindProposalFilePreview(overlay);
         bindProposalTaskToggles(overlay, proposal.id, (updated) => {
             proposalId = updated.id;
+            overlay.dataset.proposalId = String(proposalId);
+            if (overlay.dataset.reviewKey && updated.review_key) overlay.dataset.reviewKey = updated.review_key;
             renderIncomingWorkspace();
             overlay._returnFocus = [...(el('incoming-proposals-list')?.querySelectorAll('.proposal-card') || [])]
                 .find((node) => node.dataset.incomingProposalOpen === String(proposalId)) || overlay._returnFocus;
@@ -1737,7 +2276,7 @@ export function createIncoming({ context, actions, el }) {
         });
         const filesPane = overlay.querySelector('[data-proposal-pane="files"]');
         const filesTab = overlay.querySelector('[data-proposal-tab="files"]');
-        if (filesPane && !(proposal.attachments || []).some((item) => item.url || item.id || item.download_error || item.error)) {
+        if (filesPane && !proposal.review_key && !(proposal.attachments || []).some((item) => item.url || item.id || item.download_error || item.error)) {
             filesPane.innerHTML = '<p class="proposal-empty">Loading attachments…</p>';
         }
         ensureProposalFilesForUi(proposal).then((attachments) => {
@@ -1749,7 +2288,7 @@ export function createIncoming({ context, actions, el }) {
                 filesTab.innerHTML = `Files${count ? `<span class="proposal-tab-count">${count}</span>` : ''}`;
             }
         });
-        ensureIncomingRowsLoaded().then(() => {
+        if (!context.embeddedProposalReview) ensureIncomingRowsLoaded().then(() => {
             if (!overlay.isConnected) return;
             refreshProposalSourcePane(overlay, proposalById(proposalId) || proposal);
         });
@@ -1778,6 +2317,8 @@ export function createIncoming({ context, actions, el }) {
                 if (!result?.success || !result.proposal) throw new Error(result?.error || 'Could not save the project.');
                 state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(proposalId) ? result.proposal : row);
                 proposalId = result.proposal.id;
+                overlay.dataset.proposalId = String(proposalId);
+                if (overlay.dataset.reviewKey && result.proposal.review_key) overlay.dataset.reviewKey = result.proposal.review_key;
                 threadButton.dataset.proposalThread = String(proposalId);
                 projectSelect.value = String(result.proposal.project_id);
                 projectStatus.textContent = 'Saved';
@@ -1806,12 +2347,32 @@ export function createIncoming({ context, actions, el }) {
         overlay._previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
         projectSelect.focus();
-        overlay.addEventListener('mousedown', (event) => { if (event.target === overlay) closeProposalDetail(); });
-        overlay.querySelectorAll('[data-proposal-close]').forEach((b) => b.addEventListener('click', closeProposalDetail));
+        overlay.addEventListener('mousedown', (event) => { if (event.target === overlay) dismissProposalDetail(); });
+        overlay.querySelectorAll('[data-proposal-close]').forEach((b) => b.addEventListener('click', dismissProposalDetail));
+        overlay.querySelector('[data-proposal-copy-review]')?.addEventListener('click', async () => {
+            const notice = overlay.querySelector('[data-proposal-copy-status]');
+            const show = (message) => {
+                notice.textContent = message;
+                notice.classList.remove('hidden');
+            };
+            const current = proposalById(proposalId);
+            if (!current?.review_key) {
+                show('The proposal changed. Reopen it to copy its review link.');
+                return;
+            }
+            const url = new URL('/development/incoming/', window.location.origin);
+            url.searchParams.set('proposal_key', current.review_key);
+            try {
+                await navigator.clipboard.writeText(url.href);
+                show('Development review link copied.');
+            } catch (_) {
+                show('Could not copy the review link. Check clipboard permissions and try again.');
+            }
+        });
         overlay.querySelectorAll('[data-proposal-tab]').forEach((button) => button.addEventListener('click', () => {
             overlay.querySelectorAll('[data-proposal-tab]').forEach((b) => { b.classList.toggle('active', b === button); b.setAttribute('aria-selected', String(b === button)); });
             overlay.querySelectorAll('[data-proposal-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.proposalPane !== button.dataset.proposalTab));
-            if (button.dataset.proposalTab === 'source') {
+            if (button.dataset.proposalTab === 'source' && !context.embeddedProposalReview) {
                 const current = proposalById(proposalId) || proposal;
                 ensureIncomingRowsLoaded().then(() => {
                     if (!overlay.isConnected) return;
@@ -1820,8 +2381,14 @@ export function createIncoming({ context, actions, el }) {
             }
         }));
         overlay.querySelectorAll('[data-proposal-thread]').forEach((b) => b.addEventListener('click', () => {
+            const reviewed = proposalById(proposalId);
+            if (!reviewed) {
+                projectStatus.textContent = 'This proposal changed. Reopen the link before starting work.';
+                projectStatus.classList.add('error');
+                return;
+            }
             closeProposalDetail();
-            pushProposalToThread(b.dataset.proposalThread, b);
+            pushProposalToThread(proposalId, b, reviewed, reviewKey ? overlay.dataset.reviewKey : '');
         }));
         document.addEventListener('keydown', onProposalDetailKey);
     }
@@ -2031,9 +2598,9 @@ export function createIncoming({ context, actions, el }) {
         if (open) loadDismissedList();
     }
 
-    async function pushProposalToThread(proposalId, button) {
+    async function pushProposalToThread(proposalId, button, reviewed = null, reviewKey = '') {
         if (button?.disabled || dismissExpiredBusy || proposalMutations.size) return;
-        const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
+        const proposal = reviewed || proposalById(proposalId);
         if (!proposal) return;
         if (proposalNeedsProject(proposal)) {
             openProposalDetail(proposalId);
@@ -2044,26 +2611,32 @@ export function createIncoming({ context, actions, el }) {
         button.disabled = true;
         button.textContent = 'Preparing...';
         const progress = showIncomingProgress('Preparing thread...', 'Preparing source files and transcribing audio or video before the first run. If transcription fails, the thread will still be submitted.');
+        let receivedResponse = false;
         try {
             const result = await actions.api('/workflows/studio/incoming/proposals/thread', {
                 method: 'POST',
-                body: { proposal }
+                body: reviewKey ? { proposal, review_key: reviewKey } : { proposal }
             });
+            receivedResponse = true;
             if (!result?.chat_id) throw new Error(result?.error || 'The proposal thread could not be created.');
             if (result && result.chat_id) {
                 ++incomingLoadSeq;
                 state.incomingLoad = null;
                 setResyncBusy(false);
-                actions.toast(proposalThreadToast(result), (result.failed_attachments || []).length ? 'error' : 'success');
                 // The proposal is actioned (and cleared on Tensology) — drop it from the list.
-                state.incomingProposals = (state.incomingProposals || []).filter((row) => String(row.id) !== String(proposalId));
+                state.incomingProposals = (state.incomingProposals || []).filter(row => String(row.id) !== String(proposalId)
+                    || (reviewKey && row.review_key !== reviewKey));
                 renderIncomingWorkspace();
-                progress.update('Opening thread...', 'The request has been submitted.');
+                progress.update('Opening thread...', 'Loading Development.');
                 await actions.loadChat(Number(result.chat_id));
+                actions.toast(proposalThreadToast(result), (result.failed_attachments || []).length ? 'error' : 'success');
                 await actions.refreshShell({ preserveConversation: true });
             }
         } catch (error) {
-            actions.toast(error.data?.error || error.message || 'Could not create the thread.', 'error');
+            const message = !receivedResponse && error instanceof TypeError
+                ? 'Connection interrupted. Retry to open the proposal thread.'
+                : error.data?.error || error.message || 'Could not open the proposal thread.';
+            actions.toast(message, 'error');
         } finally {
             proposalMutations.delete(String(proposalId));
             progress.finish();
@@ -2074,8 +2647,9 @@ export function createIncoming({ context, actions, el }) {
     }
 
     function renderIncomingWorkspace() {
+        document.querySelectorAll('[data-incoming-quick-reply]').forEach(rememberQuickReply);
         scheduleProposalExpiry();
-        const list = el('incoming-list');
+        const list = el('incoming-whatsapp-list-content');
         if (!list) return;
         const operationStatus = el('incoming-operation-status');
         if (operationStatus) { operationStatus.textContent = incomingOperation; operationStatus.classList.toggle('hidden', !incomingOperation); }
@@ -2104,13 +2678,17 @@ export function createIncoming({ context, actions, el }) {
             const sync = state.incomingProposalSync;
             const conflicts = Array.isArray(sync?.conflicts) ? sync.conflicts : [];
             const incomplete = sync?.state === 'partial' || conflicts.length > 0;
-            syncStatus.classList.toggle('hidden', !['pending', 'partial', 'complete'].includes(sync?.state));
+            const changes = sync?.state === 'complete' ? [
+                sync.uploaded > 0 ? `${sync.uploaded} proposal${sync.uploaded === 1 ? '' : 's'} sent to Tensology.` : '',
+                sync.updated > 0 ? `${sync.updated} proposal${sync.updated === 1 ? '' : 's'} updated in Tensology.` : '',
+            ].filter(Boolean).join(' ') : '';
             syncStatus.classList.toggle('error', incomplete);
             syncStatus.textContent = !sync?.state ? '' : sync.state === 'pending'
                 ? 'Checking proposal synchronization...'
                 : incomplete
                   ? ['Synchronization incomplete.', sync.error || '', conflicts.length ? `${conflicts.length} proposal${conflicts.length === 1 ? '' : 's'} could not be synchronized.` : ''].filter(Boolean).join(' ')
-                  : sync.state === 'complete' ? 'Synchronized with Tensology.' : '';
+                  : changes;
+            syncStatus.classList.toggle('hidden', !syncStatus.textContent);
         }
         const dismissExpiredButton = el('incoming-dismiss-expired');
         if (dismissExpiredButton) {
@@ -2130,7 +2708,7 @@ export function createIncoming({ context, actions, el }) {
                   ? `<div class="proposal-list-status" role="status">${actions.escapeHtml(state.incomingProposalsError)}</div>`
                   : hasProposals
                     ? [...(state.incomingProposals || [])].sort(compareIncomingProposalsNewestFirst).map(incomingProposalRowHtml).join('')
-                    : '<div class="proposal-list-status" role="status">No proposals right now.</div>';
+                    : '<div class="proposal-list-status" role="status">No proposals waiting for review.</div>';
             proposalsList.querySelectorAll('[data-incoming-proposal-thread]').forEach((button) =>
                 button.addEventListener('click', () => pushProposalToThread(button.dataset.incomingProposalThread, button))
             );
@@ -2204,11 +2782,12 @@ export function createIncoming({ context, actions, el }) {
         }
         const linkedConversations = whatsappConversations.filter((conversation) => conversation.links.length);
         const otherConversations = whatsappConversations.filter((conversation) => !conversation.links.length);
-        list.innerHTML = state.incomingError
-            ? `<div class="development-empty">${actions.escapeHtml(state.incomingError)}</div>`
-            : whatsappConversations.length
-              ? `${linkedConversations.length ? `<section class="incoming-channel-section"><header><h2>Linked conversations</h2><small>${linkedConversations.length}</small></header><div>${linkedConversations.map(incomingConversationRowHtml).join('')}</div></section>` : ''}${otherConversations.length ? `<section class="incoming-channel-section other"><header><h2>Other conversations</h2><small>${otherConversations.length}</small></header><div>${otherConversations.map(incomingConversationRowHtml).join('')}</div></section>` : ''}`
-              : '<div class="development-empty">No WhatsApp conversations are available.</div>';
+        const refreshWarning = state.incomingError
+            ? `<div class="incoming-channel-error" role="status"><p>${actions.escapeHtml(state.incomingError)}</p></div>`
+            : '';
+        list.innerHTML = refreshWarning + (whatsappConversations.length
+              ? `${linkedConversations.map(incomingConversationRowHtml).join('')}${otherConversations.length ? `<section class="incoming-channel-section other"><header><h2>Other conversations</h2><small>${otherConversations.length}</small></header><div>${otherConversations.map(incomingConversationRowHtml).join('')}</div></section>` : ''}`
+              : refreshWarning ? '' : '<div class="development-empty">No WhatsApp conversations are available.</div>');
         list.querySelectorAll('[data-incoming-conversation]').forEach((button) => {
             button.addEventListener('click', () => {
                 selectIncomingConversation(button.dataset.incomingConversation);
@@ -2220,24 +2799,20 @@ export function createIncoming({ context, actions, el }) {
         });
         bindIncomingActions(list);
         const selectedWhatsApp = whatsappConversations.find((conversation) => conversation.key === state.selectedIncomingConversationKey) || null;
-        el('incoming-whatsapp-reader').innerHTML = incomingWhatsAppReaderHtml(selectedWhatsApp);
-        bindIncomingActions(el('incoming-whatsapp-reader'));
-        scrollIncomingWhatsAppToLatest();
+        paintWhatsAppReader(selectedWhatsApp);
 
         if (!gmailConversations.some((conversation) => conversation.key === state.selectedGmailThreadKey)) {
             state.selectedGmailThreadKey = gmailConversations[0]?.key || '';
         }
-        const gmailList = el('incoming-gmail-list');
+        const gmailList = el('incoming-gmail-list-content');
         const gmailStatus = state.incomingChannels.gmail || {};
-        gmailList.innerHTML = state.incomingError
-            ? `<div class="development-empty">${actions.escapeHtml(state.incomingError)}</div>`
-            : gmailStatus.error
+        gmailList.innerHTML = refreshWarning + (gmailStatus.error
               ? `<div class="incoming-channel-error"><strong>${gmailStatus.connected ? 'Reconnect Gmail' : 'Connect Gmail'}</strong><p>${actions.escapeHtml(gmailStatus.error)}</p><button type="button" data-google-reconnect>${gmailStatus.connected ? 'Reconnect Google' : 'Connect Google'}</button></div>`
               : gmailConversations.length
                 ? gmailConversations
                       .map((conversation) => mailThreadButtonHtml(conversation, state.selectedGmailThreadKey, 'data-incoming-gmail-thread'))
                       .join('')
-                : '<div class="development-empty">No Gmail inbox threads are available.</div>';
+                : refreshWarning ? '' : '<div class="development-empty">No Gmail inbox threads are available.</div>');
         gmailList.querySelectorAll('[data-incoming-gmail-thread]').forEach((button) =>
             button.addEventListener('click', () => {
                 state.selectedGmailThreadKey = button.dataset.incomingGmailThread || '';
@@ -2258,14 +2833,16 @@ export function createIncoming({ context, actions, el }) {
         if (!mailshotConversations.some((conversation) => conversation.key === state.selectedMailshotThreadKey)) {
             state.selectedMailshotThreadKey = mailshotConversations[0]?.key || '';
         }
-        const mailshotList = el('incoming-mailshot-list');
-        mailshotList.innerHTML = mailshotStatus.error
-            ? `<div class="incoming-channel-error"><strong>Mailshot needs attention</strong><p>${actions.escapeHtml(mailshotStatus.error)}</p><a href="/settings#advanced">Open Settings</a></div>`
+        const mailshotList = el('incoming-mailshot-list-content');
+        const mailshotSettings = mailshotStatus.error_code !== 'refresh_failed'
+            ? '<a href="/settings#advanced">Open Settings</a>' : '';
+        mailshotList.innerHTML = refreshWarning + (mailshotStatus.error
+            ? `<div class="incoming-channel-error"><strong>Mailshot needs attention</strong><p>${actions.escapeHtml(mailshotStatus.error)}</p>${mailshotSettings}</div>`
             : mailshotConversations.length
               ? mailshotConversations
                     .map((conversation) => mailThreadButtonHtml(conversation, state.selectedMailshotThreadKey, 'data-incoming-mailshot-thread'))
                     .join('')
-              : '<div class="development-empty">No Tensology Mailshot messages are available.</div>';
+              : refreshWarning ? '' : '<div class="development-empty">No Tensology Mailshot messages are available.</div>');
         mailshotList.querySelectorAll('[data-incoming-mailshot-thread]').forEach((button) =>
             button.addEventListener('click', () => {
                 state.selectedMailshotThreadKey = button.dataset.incomingMailshotThread || '';
@@ -2274,11 +2851,34 @@ export function createIncoming({ context, actions, el }) {
             })
         );
         const selectedMailshotThread = mailshotConversations.find((conversation) => conversation.key === state.selectedMailshotThreadKey) || null;
-        el('incoming-mailshot-reader').innerHTML = mailshotStatus.error
-            ? '<div class="incoming-reader-empty"><strong>Mailshot is not available</strong><p>Reconnect Tensology to open and read Mailshot messages here.</p></div>'
-            : gmailReaderHtml(selectedMailshotThread);
+        el('incoming-mailshot-reader').innerHTML = selectedMailshotThread && !mailshotStatus.error
+            ? gmailReaderHtml(selectedMailshotThread) : '';
         bindIncomingActions(el('incoming-mailshot-reader'));
 
+    }
+
+    const pendingUnlinks = new Set();
+
+    function updateWhatsAppLink(linkId, replacement) {
+        channelLoadSeq++;
+        state.incomingLinks = state.incomingLinks.filter(row => row.source !== 'whatsapp' || Number(row.id) !== linkId);
+        if (replacement) state.incomingLinks.push(replacement);
+        for (const item of state.incoming) {
+            if (item.source !== 'whatsapp') continue;
+            const matches = replacement && item.source_thread_id === replacement.source_thread_id;
+            const previous = item.links ?? (item.link_id ? [{
+                id: item.link_id, board_id: item.board_id, board_name: item.board_name, auto_snapshot: item.auto_snapshot,
+            }] : []);
+            const links = previous.filter(row => Number(row.id) !== linkId);
+            if (!matches && links.length === previous.length && Number(item.link_id) !== linkId) continue;
+            if (matches) links.unshift(replacement);
+            item.links = links;
+            item.link_id = links[0]?.id || null;
+            item.board_id = links[0]?.board_id || null;
+            item.board_name = links[0]?.board_name || '';
+            item.auto_snapshot = Boolean(links[0]?.auto_snapshot);
+            item.can_snapshot = Boolean(links.length && !item.processed);
+        }
     }
 
     function openIncomingLinkDialog(conversationKey) {
@@ -2289,25 +2889,21 @@ export function createIncoming({ context, actions, el }) {
         el('incoming-link-error').classList.add('hidden');
         el('incoming-link-title').textContent = conversation.label;
         el('incoming-link-summary').textContent = conversation.links.length
-            ? 'Linked to these boards. You can add another board without removing the existing links.'
+            ? 'Choose another board to move this conversation.'
             : 'Link this person or group when the conversation belongs to active work.';
         el('incoming-current-links').innerHTML = conversation.links.length
             ? conversation.links
                   .map(
                       (link) =>
-                          `<div><span>${actions.escapeHtml(link.board_name || 'Board')}</span><label class="incoming-link-auto"><input type="checkbox" data-incoming-auto="${Number(link.id)}" data-board-id="${Number(link.board_id)}"${link.auto_snapshot ? ' checked' : ''}><span>Auto snapshot</span></label><button type="button" data-incoming-unlink="${Number(link.id)}" data-board-id="${Number(link.board_id)}" aria-label="Unlink ${actions.escapeHtml(link.board_name || 'board')}">Remove</button></div>`
+                          `<div><span>${actions.escapeHtml(link.board_name || 'Board')}</span><label class="incoming-link-auto"><input type="checkbox" data-incoming-auto="${Number(link.id)}" data-board-id="${Number(link.board_id)}"${link.auto_snapshot ? ' checked' : ''}><span>Auto snapshot</span></label><button type="button" data-incoming-unlink="${Number(link.id)}" data-board-id="${Number(link.board_id)}" aria-label="Unlink ${actions.escapeHtml(link.board_name || 'board')}"${pendingUnlinks.has(Number(link.id)) ? ' disabled' : ''}>Remove</button></div>`
                   )
                   .join('')
             : '<small>Not linked to a board.</small>';
         el('incoming-current-links')
             .querySelectorAll('[data-incoming-unlink]')
             .forEach((button) =>
-                button.addEventListener('click', async () => {
-                    const removed = await unlinkIncomingChannel(Number(button.dataset.boardId), Number(button.dataset.incomingUnlink));
-                    if (removed) {
-                        openIncomingLinkDialog(conversation.key);
-                        (el('incoming-current-links').querySelector('button') || el('incoming-link-board')).focus();
-                    }
+                button.addEventListener('click', () => {
+                    unlinkIncomingChannel(Number(button.dataset.boardId), Number(button.dataset.incomingUnlink), button);
                 })
             );
         el('incoming-current-links')
@@ -2329,24 +2925,41 @@ export function createIncoming({ context, actions, el }) {
     async function linkIncomingConversation() {
         const conversation = incomingConversations('whatsapp').find((row) => row.key === state.incomingLinkConversationKey);
         const boardId = Number(el('incoming-link-board')?.value || 0);
-        if (!conversation || !boardId) {
+        const board = context.boards.find(row => row.provider === 'decisions' && Number(row.local_id || row.id) === boardId);
+        if (!conversation || !board) {
             actions.toast('Choose a board first.', 'error');
             return;
         }
+        const submit = el('incoming-link-form').querySelector('[type="submit"]');
+        if (submit.disabled) return;
+        submit.disabled = true;
+        const autoSnapshot = el('incoming-link-auto').checked;
         try {
-            await actions.api(`/tickets/boards/${boardId}/whatsapp-links`, {
+            const result = await actions.api(`/tickets/boards/${boardId}/whatsapp-links`, {
                 method: 'POST',
                 body: {
                     phone_jid: conversation.threadId,
                     contact_name: conversation.label,
-                    auto_snapshot: el('incoming-link-auto').checked
+                    auto_snapshot: autoSnapshot
                 }
             });
+            const id = Number(result.id);
+            if (!result.success || !id) throw new Error(result.error || 'The board link could not be confirmed.');
+            updateWhatsAppLink(id, {
+                id, board_id: boardId, board_name: board.name, auto_snapshot: autoSnapshot,
+                source: 'whatsapp', source_thread_id: conversation.threadId, label: conversation.label,
+            });
             el('incoming-link-dialog').close('saved');
-            await actions.refreshShell({ preserveConversation: true });
-            actions.toast(`${conversation.label} linked to the board.`);
+            renderIncomingWorkspace();
+            el('incoming-whatsapp-list-content').querySelector(
+                `[data-incoming-conversation="${CSS.escape(conversation.key)}"]`
+            )?.focus({ preventScroll: true });
         } catch (error) {
-            actions.toast(error.message || 'Could not link the WhatsApp conversation.', 'error');
+            const status = el('incoming-link-error');
+            status.textContent = error.message || 'Could not link the WhatsApp conversation.';
+            status.classList.remove('hidden');
+        } finally {
+            submit.disabled = false;
         }
     }
 
@@ -2530,36 +3143,56 @@ export function createIncoming({ context, actions, el }) {
         }
     }
 
-    async function unlinkIncomingChannel(boardId, linkId) {
+    async function unlinkIncomingChannel(boardId, linkId, button) {
+        if (pendingUnlinks.has(linkId)) return false;
+        const key = state.incomingLinkConversationKey;
+        const dialog = el('incoming-link-dialog');
+        const isCurrentDialog = () => dialog.open && state.incomingLinkConversationKey === key;
         const errorNode = el('incoming-link-error');
         errorNode.textContent = '';
         errorNode.classList.add('hidden');
-        if (
-            !(await actions.confirmAction({
-                title: 'Unlink incoming channel',
-                message: 'Stop showing this WhatsApp person or group as linked to the board? Stored messages and existing tickets are preserved.',
-                confirmLabel: 'Unlink',
-                danger: true
-            }))
-        )
-            return false;
+        pendingUnlinks.add(linkId);
+        if (button) button.disabled = true;
         try {
-            await actions.api(`/tickets/boards/${boardId}/whatsapp-links/${linkId}`, {
+            const result = await actions.api(`/tickets/boards/${boardId}/whatsapp-links/${linkId}`, {
                 method: 'DELETE'
             });
-            await refreshIncomingData({ force: true });
-            actions.toast('Incoming channel unlinked.');
-            return true;
+            if (!result.success) throw new Error(result.error || 'The unlink could not be confirmed.');
         } catch (error) {
-            const message = error.message || 'Could not unlink the channel.';
-            if (el('incoming-link-dialog').open) {
-                errorNode.textContent = message;
-                errorNode.classList.remove('hidden');
-            } else {
-                actions.toast(message, 'error');
+            if (error.status !== 404 || error.data?.detail !== 'Link not found') {
+                const message = error.message || 'Could not unlink the channel.';
+                if (isCurrentDialog()) {
+                    errorNode.textContent = message;
+                    errorNode.classList.remove('hidden');
+                    const retry = dialog.querySelector(`[data-incoming-unlink="${linkId}"]`);
+                    if (retry) {
+                        retry.disabled = false;
+                        retry.focus();
+                    }
+                } else {
+                    actions.toast(message, 'error');
+                }
+                return false;
             }
-            return false;
+        } finally {
+            pendingUnlinks.delete(linkId);
         }
+        updateWhatsAppLink(linkId);
+        renderIncomingWorkspace();
+        if (isCurrentDialog()) {
+            const conversation = incomingConversations('whatsapp').find(row => row.key === key);
+            if (conversation?.links.length) {
+                openIncomingLinkDialog(key);
+                (el('incoming-current-links').querySelector('button:not(:disabled)') || el('incoming-link-board')).focus();
+            } else {
+                dialog.close('unlinked');
+                const row = el('incoming-whatsapp-list-content').querySelector(
+                    `[data-incoming-conversation="${CSS.escape(key)}"]`
+                );
+                (row || el('incoming-folder-whatsapp')).focus({ preventScroll: true });
+            }
+        }
+        return true;
     }
 
     // Push updates: /api/ws topic "incoming" sends {type: "incoming_message", channel, message_id}. No polling.
@@ -2584,10 +3217,6 @@ export function createIncoming({ context, actions, el }) {
         const template = document.createElement('template');
         template.innerHTML = html.trim();
         return template.content.firstElementChild;
-    }
-
-    function whatsappBubbleHtml(item, conversation) {
-        return `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${item.text ? `<p>${actions.escapeHtml(item.text)}</p>` : ''}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div>`;
     }
 
     function mailMessageHtml(item) {
@@ -2619,7 +3248,7 @@ export function createIncoming({ context, actions, el }) {
             if (firstRow) firstRow.parentElement.insertBefore(node, firstRow);
             else {
                 list.querySelectorAll('.development-empty, .incoming-reader-empty').forEach((empty) => empty.remove());
-                list.appendChild(node);
+                (list.querySelector('[data-incoming-list-content]') || list).appendChild(node);
             }
         }
         bind(node);
@@ -2649,7 +3278,7 @@ export function createIncoming({ context, actions, el }) {
                             bindIncomingActions(row);
                         });
                         if (conversation.key === state.selectedIncomingConversationKey) {
-                            appendMessagesInPlace(el('incoming-whatsapp-reader')?.querySelector('.incoming-whatsapp-messages'), oldestFirst(conversation.messages), (item) => whatsappBubbleHtml(item, conversation));
+                            appendMessagesInPlace(el('incoming-whatsapp-reader')?.querySelector('.incoming-whatsapp-messages'), oldestFirst(conversation.messages), (item) => whatsappMessageBubbleHtml(item, conversation));
                         }
                         return;
                     }
@@ -2670,7 +3299,9 @@ export function createIncoming({ context, actions, el }) {
 
     async function applyPushedIncoming() {
         try {
+            const channelSeq = channelLoadSeq;
             const data = await actions.api('/workflows/studio/incoming?limit=150');
+            if (channelSeq !== channelLoadSeq) return;
             const known = new Set((state.incoming || []).map(incomingItemKey));
             const seen = new Set();
             const fresh = (data.items || []).filter((item) => {
@@ -2784,6 +3415,58 @@ export function createIncoming({ context, actions, el }) {
 
     // 2026-10-22 resync: latest-wins loader. A forced refresh supersedes an in-flight one; stale responses are dropped.
     let incomingLoadSeq = 0;
+    let channelLoadSeq = 0;
+    let channelResyncBusy = false;
+
+    function paintIncomingChannels(data) {
+        state.incoming = data.items || [];
+        state.incomingLinks = data.links || [];
+        state.incomingChannels = data.channels || {};
+        state.incomingError = '';
+        actions.renderSidebar();
+        if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
+    }
+
+    async function resyncIncomingChannel(button) {
+        if (channelResyncBusy) return;
+        channelResyncBusy = true;
+        channelLoadSeq++;
+        const source = button.dataset.incomingChannelResync;
+        const whatsapp = source === 'whatsapp';
+        const name = whatsapp ? 'WhatsApp' : source === 'mailshot' ? 'Mailshot' : 'Gmail';
+        const label = button.querySelector('strong');
+        const status = el(`incoming-${source}-resync-status`);
+        status.textContent = '';
+        status.classList.remove('error');
+        const controls = document.querySelectorAll('[data-incoming-channel-resync]');
+        controls.forEach(control => { control.disabled = true; });
+        button.classList.add('loading');
+        button.setAttribute('aria-busy', 'true');
+        label.textContent = 'Syncing...';
+        try {
+            const sync = whatsapp ? await actions.api('/tickets/whatsapp/sync', { method: 'POST' }) : null;
+            const channelSeq = channelLoadSeq;
+            const data = await actions.api('/workflows/studio/incoming?limit=150', { cache: 'no-store' });
+            if (channelSeq !== channelLoadSeq) return;
+            if (source === 'gmail' && data.channels?.gmail?.error) throw new Error(data.channels.gmail.error);
+            paintIncomingChannels(data);
+            state.incomingLoadedAt = Date.now();
+            if (source === 'mailshot' && data.channels?.mailshot?.error) return;
+            const issue = sync?.warning || sync?.error;
+            status.classList.toggle('error', Boolean(issue));
+            status.textContent = issue || `${name} conversations refreshed.`;
+        } catch (error) {
+            status.classList.add('error');
+            status.textContent = error.data?.warning || error.message || `Could not resync ${name}. Try again.`;
+        } finally {
+            channelResyncBusy = false;
+            controls.forEach(control => { control.disabled = false; });
+            button.classList.remove('loading');
+            button.removeAttribute('aria-busy');
+            label.textContent = 'Resync';
+        }
+    }
+
     function setResyncBusy(busy) {
         state.incomingProposalsLoading = busy;
         el('incoming-proposals-list')?.setAttribute('aria-busy', busy ? 'true' : 'false');
@@ -2814,7 +3497,9 @@ export function createIncoming({ context, actions, el }) {
                 : `/workflows/studio/incoming/proposals?limit=150`;
             const channelsUrl = `/workflows/studio/incoming?limit=150`;
             const proposalsReq = actions.api(proposalsUrl, force ? { cache: 'no-store' } : undefined);
-            const channelsReq = actions.api(channelsUrl, force ? { cache: 'no-store' } : undefined);
+            const channelSeq = channelLoadSeq;
+            const channelsReq = channelResyncBusy ? Promise.resolve(null)
+                : actions.api(channelsUrl, force ? { cache: 'no-store' } : undefined);
 
             const paintProposals = proposalsReq.then((result) => {
                 if (seq !== incomingLoadSeq) return;
@@ -2834,19 +3519,11 @@ export function createIncoming({ context, actions, el }) {
             });
 
             const paintChannels = channelsReq.then((data) => {
-                if (seq !== incomingLoadSeq) return;
-                state.incoming = data.items || [];
-                state.incomingLinks = data.links || [];
-                state.incomingChannels = data.channels || {};
-                state.incomingError = '';
-                actions.renderSidebar();
-                if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
+                if (data && seq === incomingLoadSeq && channelSeq === channelLoadSeq) paintIncomingChannels(data);
             }, () => {
-                if (seq !== incomingLoadSeq) return;
-                state.incoming = [];
-                state.incomingLinks = [];
-                state.incomingChannels = {};
-                state.incomingError = 'Incoming is temporarily unavailable. Restart DecisionsAI and try again.';
+                if (seq !== incomingLoadSeq || channelSeq !== channelLoadSeq) return;
+                const retained = state.incoming.length ? ' Showing previously loaded conversations.' : '';
+                state.incomingError = `Could not refresh conversations.${retained}`;
                 actions.renderSidebar();
                 if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
             });
@@ -2891,6 +3568,9 @@ export function createIncoming({ context, actions, el }) {
             el(`incoming-panel-${state.incomingFilter}`)?.querySelector('.selected')?.focus();
         }));
         el('incoming-resync')?.addEventListener('click', checkIncoming);
+        document.querySelectorAll('[data-incoming-channel-resync]').forEach((button) =>
+            button.addEventListener('click', () => resyncIncomingChannel(button))
+        );
         el('incoming-dismissed-toggle')?.addEventListener('click', () => toggleDismissedPanel());
         el('incoming-dismiss-expired')?.addEventListener('click', dismissExpiredProposals);
         el('incoming-dismissed-panel')?.addEventListener('keydown', (event) => {
@@ -2926,10 +3606,19 @@ export function createIncoming({ context, actions, el }) {
     return {
         leave() {
             proposalReadRequest?.controller.abort();
+            clearProposalReview();
         },
         bindEvents,
         incomingConversations,
         openFilePreview,
+        clearProposalReview,
+        openProposalReview,
+        openSubmittedProposalSource,
+        closeSubmittedProposalSource,
+        mountProposalReview(proposal) {
+            state.incomingProposals = [proposal];
+            openProposalDetail(proposal.id, { reviewKey: proposal.review_key });
+        },
         refreshIncomingData,
         renderIncomingWorkspace,
         unlinkIncomingChannel

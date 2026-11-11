@@ -30,7 +30,7 @@ export function defaultShape(node = {}, shot = null) {
 export const SHAPE_KIND = { page: 'Page', rectangle: 'Form / account', circle: 'API, media or static file', oval: 'Redirect or exit', square: 'Square', diamond: 'Decision' };
 
 const routeKey = (value) => {
-    if (typeof value !== 'string' || !value.startsWith('/')) return '';
+    if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) return '';
     const path = value.split(/[?#]/)[0];
     return path === '/' ? '/' : (path.replace(/\/+$/, '') || '/');
 };
@@ -129,7 +129,7 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
     const walkLinks = (screenNode, found) => {
         if (!screenNode || typeof screenNode !== 'object') return;
         const route = routeKey(screenNode.attrs?.route || screenNode.attrs?.href || '');
-        if ((screenNode.type === 'link' || screenNode.type === 'button') && route && route !== '/') {
+        if ((screenNode.type === 'link' || screenNode.type === 'button') && route) {
             found.push({ route, label: String(screenNode.label || '') });
         }
         for (const child of screenNode.children || []) walkLinks(child, found);

@@ -43,11 +43,12 @@ def approve_draft_in_queue(queue: DraftQueue, draft_id: str) -> bool:
     if payload:
         try:
             run_execute_payload(payload)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "approve_draft_in_queue: execute_payload failed draft_id=%s",
                 draft_id,
             )
+            queue.set_failure_reason(draft_id, str(exc) if isinstance(exc, ValueError) else "An approval step did not finish. This draft is retained; review its outcome before retrying.")
             return False
     return queue.remove(draft_id)
 
@@ -64,6 +65,9 @@ def skills_registry_path() -> Path:
 
 def run_execute_payload(payload: dict[str, Any]) -> None:
     """Dispatch a persisted execute_payload dict."""
+    from distr.core.orchestrator_daily_triage import recommendation_provenance
+    if recommendation_provenance(payload):
+        raise ValueError("This item is a read-only project recommendation. Review it and explicitly choose separate work before executing it.")
     kind = payload.get("kind")
     if kind == "mcp_install":
         server = payload.get("server")
@@ -103,6 +107,8 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
 
         candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
         execution_result = _execute_orchestrator_triage_candidate(candidate)
+        if execution_result.get("status") not in {"created_ticket", "existing_ticket", "acknowledged"}:
+            raise ValueError(str(execution_result.get("reason") or "The requested work was not performed. Review this draft before approving it again."))
         emit_event(
             source="orchestrator",
             event_type="daily_triage_candidate_approved",
@@ -147,16 +153,15 @@ def _execute_orchestrator_triage_candidate(candidate: dict[str, Any]) -> dict[st
         return {"status": "noop", "reason": "candidate missing"}
     action_type = str(candidate.get("action_type") or "").strip().lower()
     source = str(candidate.get("source") or "").strip().lower()
-    proposal = (candidate.get("payload") or {}).get("proposal")
-    proposal_payload = proposal.get("payload") if isinstance(proposal, dict) and isinstance(proposal.get("payload"), dict) else {}
+    proposal_payload = _triage_source_payload(candidate)
 
     if action_type == "create_ticket" and source == "whatsapp":
         board_id = proposal_payload.get("linked_board_id")
         message_ids = proposal_payload.get("message_ids")
         if board_id and isinstance(message_ids, list) and message_ids:
             return _create_whatsapp_snapshot_ticket(
-                board_id=int(board_id),
-                message_ids=[int(mid) for mid in message_ids if str(mid).strip().isdigit()],
+                board_id=board_id,
+                message_ids=message_ids,
                 candidate=candidate,
             )
         return {
@@ -164,10 +169,25 @@ def _execute_orchestrator_triage_candidate(candidate: dict[str, Any]) -> dict[st
             "reason": "WhatsApp candidate has no linked board/message ids yet",
         }
 
-    return {
-        "status": "acknowledged",
-        "reason": f"{action_type or 'decision'} approval recorded for follow-up",
-    }
+    if action_type == "ask_paul":
+        return {"status": "acknowledged", "reason": "Informational decision acknowledged; no work was requested."}
+    return {"status": "needs_input", "reason": f"This approval cannot perform {action_type or 'the requested action'} yet. Choose a supported scoped action; no work was started and this draft is retained."}
+
+
+def _triage_source_payload(candidate: dict[str, Any]) -> dict[str, Any]:
+    payload = candidate.get("payload")
+    if not isinstance(payload, dict):
+        return {}
+    proposal = payload.get("proposal")
+    return proposal["payload"] if isinstance(proposal, dict) and isinstance(proposal.get("payload"), dict) else payload
+
+
+def _positive_id(value):
+    if type(value) is int and 0 < value < 2**63:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit() and 0 < len(value) <= 19 and not value.startswith("0"):
+        return _positive_id(int(value))
+    return None
 
 
 def _create_whatsapp_snapshot_ticket(
@@ -178,14 +198,32 @@ def _create_whatsapp_snapshot_ticket(
 ) -> dict[str, Any]:
     from distr.core.db import WhatsAppMessage, get_session
     from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.projects import Project
+    from distr.core.kanban.whatsapp_intake_rules import resolve_whatsapp_link
 
-    if not message_ids:
-        return {"status": "needs_input", "reason": "no message ids"}
+    scope = _triage_source_payload(candidate)
+    board_id = _positive_id(board_id)
+    project_values = [scope[key] for key in ("project_id", "linked_project_id") if scope.get(key) is not None]
+    project_ids = {_positive_id(value) for value in project_values}
+    project_id = next(iter(project_ids)) if len(project_ids) == 1 and None not in project_ids else None
+    thread = scope.get("source_thread_id") or scope.get("jid")
+    normalized_ids = [_positive_id(value) for value in message_ids] if isinstance(message_ids, list) else []
+    if (not board_id or not project_id or not isinstance(thread, str) or not thread.strip()
+            or not normalized_ids or len(normalized_ids) > 100 or None in normalized_ids):
+        return {"status": "needs_input", "reason": "This WhatsApp approval needs an explicit project, board, conversation and valid message IDs. Rescan the linked conversation."}
+    message_ids = sorted(set(normalized_ids))
 
     with get_session() as session:
+        # Revalidate ownership and deduplicate the source batch atomically.
+        # Canonical link resolution below is read-only while this reservation
+        # prevents another approval or relink write overtaking the check.
+        if session.get_bind().dialect.name == "sqlite":
+            from sqlalchemy import text
+            session.execute(text("BEGIN IMMEDIATE"))
         board = session.query(KanbanBoard).filter(KanbanBoard.id == board_id).first()
-        if not board:
-            return {"status": "failed", "reason": f"board {board_id} not found"}
+        project = session.get(Project, project_id)
+        if not board or board.archived or not project or project.deleted_at is not None or board.default_project_id != project_id:
+            return {"status": "needs_input", "reason": "The approved board or project is no longer active or has changed ownership. Rescan before approving."}
         lane = (
             session.query(KanbanLane)
             .filter(KanbanLane.board_id == board.id)
@@ -200,8 +238,31 @@ def _create_whatsapp_snapshot_ticket(
             .order_by(WhatsAppMessage.whatsapp_timestamp.asc(), WhatsAppMessage.id.asc())
             .all()
         )
-        if not messages:
-            return {"status": "failed", "reason": "messages not found"}
+        if len(messages) != len(message_ids) or any(message.jid != thread for message in messages):
+            return {"status": "needs_input", "reason": "The approved messages are missing or no longer match one conversation. Rescan before approving."}
+        link = resolve_whatsapp_link(thread, jid_phone=str(messages[-1].jid_phone or ""))
+        if link.board_id != board_id or link.project_id != project_id:
+            return {"status": "needs_input", "reason": "This WhatsApp conversation changed its linked board or project. Rescan before approving."}
+
+        groups = {message.snapshot_group for message in messages if message.snapshot_group}
+        if groups:
+            if len(groups) == 1 and all(message.snapshot_group in groups for message in messages):
+                group = next(iter(groups))
+                existing_id = _positive_id(str(group).split("_", 1)[0])
+                existing = session.get(KanbanTicket, existing_id) if existing_id else None
+                existing_lane = session.get(KanbanLane, existing.lane_id) if existing else None
+                if (existing and existing_lane and existing_lane.board_id == board_id
+                        and (existing.linked_project_id if existing.linked_project_id is not None else board.default_project_id) == project_id):
+                    return {"status": "existing_ticket", "ticket_id": existing.id, "board_id": board_id, "message_count": len(messages)}
+            return {"status": "needs_input", "reason": "Some approved messages already belong to another snapshot or ticket. Review existing work before creating another ticket."}
+        # Legacy snapshots may have ticket source identity but no message group.
+        from sqlalchemy import or_
+        existing_sources = session.query(KanbanTicket).filter(or_(
+            KanbanTicket.whatsapp_message_id.in_(message_ids),
+            (KanbanTicket.source_provider == "whatsapp") & KanbanTicket.source_external_id.in_([message.message_id for message in messages]),
+        )).first()
+        if existing_sources or any(message.processed for message in messages):
+            return {"status": "needs_input", "reason": "These messages were already processed or linked to existing work. Review that work before approving a new ticket."}
 
         latest = messages[-1]
         contact = (
@@ -224,12 +285,28 @@ def _create_whatsapp_snapshot_ticket(
                 or getattr(msg, "sender_phone", None)
                 or "Unknown"
             )
-            body = (
-                getattr(msg, "text", None)
-                or getattr(msg, "caption", None)
-                or f"[{getattr(msg, 'media_type', None) or 'message'}]"
-            )
-            lines.append(f"- #{getattr(msg, 'id', '')} {who}: {str(body).strip()[:500]}")
+            lines.extend([
+                "", f"### Source message #{msg.id}",
+                f"WhatsApp message ID: {msg.message_id}",
+                f"Conversation: {msg.jid}", f"Sender: {who}",
+            ])
+            # Both columns are durable source material: cached voice/video
+            # transcripts live in caption even when a separate text is present.
+            # Approval must not silently turn the first 500 characters into the
+            # task's complete scope or suppress an existing transcript.
+            text = str(msg.text or "")
+            caption = str(msg.caption or "")
+            if text.strip():
+                lines.extend(["", "Message text:", text])
+            if caption.strip() and caption != text:
+                lines.extend(["", "Saved caption / transcript:", caption])
+            if not text.strip() and not caption.strip():
+                lines.append("No saved message text or transcript is available.")
+            media_fields = [("Media type", msg.media_type), ("MIME type", msg.media_mime_type),
+                            ("Filename", msg.media_filename), ("Cached local reference", msg.media_local_path)]
+            if any(value for _, value in media_fields):
+                lines.extend(["", "Media reference (not fetched or inspected by this approval):"])
+                lines.extend(f"- {label}: {value}" for label, value in media_fields if value)
 
         max_pos = max((int(t.position or 0) for t in lane.tickets), default=-1)
         ticket = KanbanTicket(
@@ -238,6 +315,7 @@ def _create_whatsapp_snapshot_ticket(
             description="\n".join(lines),
             priority="medium",
             complexity="medium",
+            linked_project_id=project_id,
             position=max_pos + 1,
             whatsapp_message_id=getattr(latest, "id", None),
             whatsapp_message_wa_id=getattr(latest, "message_id", None),

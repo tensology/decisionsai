@@ -8,6 +8,7 @@ import re
 import tempfile
 import threading
 import time
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -22,6 +23,21 @@ from PyQt6.QtCore import pyqtSlot
 from distr.core.integrations.telegram.utils import hash_channel_id
 
 logger = logging.getLogger(__name__)
+
+_TELEGRAM_FILE_CONTEXT_SECONDS = 120
+_TELEGRAM_FILE_WAIT_SECONDS = 10
+
+
+@dataclass(frozen=True)
+class _DownloadedTelegramFile:
+    chat_id: str
+    source_message_id: str
+    path: str
+    kind: str
+    name: str
+    mime_type: str
+    caption: str
+    received_at: float
 
 
 def _is_remote_control_request(text: str) -> bool:
@@ -63,7 +79,8 @@ class TelegramMessagesMixin:
         # button. Never send its bearer-like approval token into an LLM prompt.
         if str(inner_data.get("callback_data") or "").startswith("tns:"):
             return
-        if not inner_data.get("text") and inner_data.get("callback_data"):
+        is_callback = bool(inner_data.get('callback_data'))
+        if is_callback:
             # Relay callback queries use the same deterministic interaction
             # resolver as typed replies.
             inner_data = dict(inner_data)
@@ -77,10 +94,10 @@ class TelegramMessagesMixin:
         )
 
         # 1. ID Deduplication
-        if msg_id and msg_id in self._processed_message_ids:
+        if not is_callback and msg_id and msg_id in self._processed_message_ids:
             logger.debug(f"Skipping duplicate message ID: {msg_id}")
             return
-        if msg_id:
+        if msg_id and not is_callback:
             self._processed_message_ids.add(msg_id)
             order = getattr(self, "_processed_message_id_order", None)
             if order is not None:
@@ -93,7 +110,7 @@ class TelegramMessagesMixin:
 
         # Create a hash of the critical content — include message_id to avoid
         # false deduplication of voice notes (which have no text and similar dates)
-        content_str = f"{msg_id}{inner_data.get('text')}{inner_data.get('date')}{inner_data.get('from', {}).get('id')}"
+        content_str = f"{chat_id_raw if is_callback else ''}{msg_id}{inner_data.get('text')}{inner_data.get('date')}{inner_data.get('from', {}).get('id')}"
         msg_hash = hashlib.md5(content_str.encode()).hexdigest()
 
         if msg_hash in self._processed_message_hashes:
@@ -274,6 +291,10 @@ class TelegramMessagesMixin:
             chat_id
             and isinstance(chat_id, (int, str))
             and not str(chat_id).startswith("-")
+            and self.current_chat_type == "private"
+        )
+        is_group_message = self.current_chat_type in {"group", "supergroup", "channel"} or (
+            isinstance(chat_id, (int, str)) and str(chat_id).startswith("-")
         )
         if msg_id and is_private_message:
             # Acknowledge receipt as soon as the local app accepts the message.
@@ -322,12 +343,13 @@ class TelegramMessagesMixin:
                     )
                 media_handled = True
             elif media_type in ("photo", "document", "video"):
-                self._handle_file_message(
-                    media,
-                    inner_data.get("caption") or inner_data.get("text"),
-                    message_id=msg_id,
-                )
-                media_handled = True
+                if is_private_message:
+                    self._handle_file_message(
+                        media,
+                        inner_data.get("caption") or inner_data.get("text"),
+                        message_id=msg_id,
+                    )
+                    return
             else:
                 # Unhandled media type (sticker, animation, contact, etc.)
                 # Don't silently drop — forward a description to the agent so the
@@ -355,7 +377,7 @@ class TelegramMessagesMixin:
             return  # Caption already forwarded with the file
 
         # Check for "remote control" command - send link instead of forwarding to agent
-        if text:
+        if text and not is_group_message:
             text_lower = text.lower().strip()
 
             if _is_remote_control_request(text_lower):
@@ -464,6 +486,10 @@ class TelegramMessagesMixin:
             except Exception as exc:
                 logger.error("[Telegram] Workflow interaction routing failed: %s", exc, exc_info=True)
 
+            if is_callback:
+                self.send_to_telegram('This control is no longer available. Review the current message before trying again.')
+                return
+
             if self._handle_initiative_draft_command(text_lower):
                 return
 
@@ -537,13 +563,6 @@ class TelegramMessagesMixin:
             chat_id_display,
             text if text else "(media check)",
         )
-
-        # CRITICAL: Check if message is from a group/channel (not private chat)
-        is_group_message = False
-        if chat_id and isinstance(chat_id, (int, str)) and str(chat_id).startswith("-"):
-            is_group_message = True
-        elif chat_type and chat_type.lower() in ("group", "supergroup", "channel"):
-            is_group_message = True
 
         if is_group_message:
             # Check if message has any content - skip truly empty messages
@@ -814,25 +833,7 @@ class TelegramMessagesMixin:
         # Instead of emitting each message immediately, buffer them.
         # After 3 seconds of silence the batch is flushed as one combined message.
         if text:
-            try:
-                self._telegram_batch_thread_id = int(chat_id) if chat_id is not None else None
-            except (TypeError, ValueError):
-                self._telegram_batch_thread_id = getattr(self, "telegram_user_id", None)
-            image_path = None
-            pending_media = getattr(self, "_pending_telegram_media_context", None)
-            if isinstance(pending_media, dict):
-                age_s = time.time() - float(pending_media.get("created_at") or 0)
-                if age_s <= 120:
-                    text = f"{pending_media.get('text')}\n{text}"
-                    image_path = pending_media.get("image_path") or None
-                    msg_id = _canonical_batch_source_message_id(
-                        [pending_media.get("source_message_id"), msg_id]
-                    )
-                    logger.info("[Telegram] Attached silent media context to follow-up text")
-                self._pending_telegram_media_context = None
-            self._enqueue_telegram_batch(
-                str(text), image_path, input_type, source_message_id=msg_id
-            )
+            self._enqueue_telegram_batch(str(text), input_type=input_type, source_message_id=msg_id)
             logger.info(
                 "[Telegram] 📥 Buffered message (%d in batch): '%s' (chat_id: %s)",
                 len(self._telegram_batch_buffer), text[:50], chat_id,
@@ -1131,24 +1132,57 @@ class TelegramMessagesMixin:
         if not self._telegram_batch_buffer:
             return
 
+        chat_id = str(getattr(self, "_telegram_batch_thread_id", None))
+        owner = getattr(self, "telegram_user_id", None)
+        if owner is not None and chat_id != str(owner):
+            self._telegram_batch_buffer.clear()
+            self._telegram_file_wait_deadline = None
+            return
+        now = time.monotonic()
+        downloads = getattr(self, "_telegram_file_downloads", set())
+        waiting = sorted(
+            (file for file in downloads if file.chat_id == chat_id
+             and now - file.received_at <= _TELEGRAM_FILE_CONTEXT_SECONDS),
+            key=lambda file: file.received_at,
+        )
+        deadline = getattr(self, "_telegram_file_wait_deadline", None)
+        if waiting:
+            if deadline is None:
+                deadline = self._telegram_file_wait_deadline = now + _TELEGRAM_FILE_WAIT_SECONDS
+            if now < deadline:
+                self._telegram_batch_timer.start(int((deadline - now) * 1000) + 1)
+                return
+            for file in waiting:
+                downloads.remove(file)
+                self._enqueue_telegram_file(file)
+        self._telegram_file_wait_deadline = None
+
         # Collect all buffered items
         items = list(self._telegram_batch_buffer)
         self._telegram_batch_buffer.clear()
 
         # Separate text messages and media messages
         texts = []
-        image_path = None
+        image_paths = []
+        downloaded_files = {}
+        missing_files = []
         input_type = "text"  # default; last voice item wins
         source_message_ids = []
         for item in items:
-            text, is_media, img_path = item[0], item[1], item[2]
+            text, _, img_path = item[:3]
             # Extract input_type from 4-element tuples (new format)
             item_input_type = item[3] if len(item) > 3 else "text"
             item_source_message_id = item[4] if len(item) > 4 else None
+            downloaded = item[5] if len(item) > 5 else None
             if text:
                 texts.append(text)
-            if img_path and not image_path:
-                image_path = img_path  # Use first image path for vision
+            if img_path:
+                image_paths.append(img_path)
+            if downloaded is not None:
+                if downloaded.path:
+                    downloaded_files[downloaded.path] = downloaded
+                else:
+                    missing_files.append(downloaded.name)
             if item_input_type == "voice":
                 input_type = "voice"
             if item_source_message_id:
@@ -1158,6 +1192,10 @@ class TelegramMessagesMixin:
         if not combined:
             return
         source_message_id = _canonical_batch_source_message_id(source_message_ids)
+        media_warning = ""
+        if missing_files:
+            names = ", ".join(dict.fromkeys(missing_files))
+            media_warning = f"Could not include {names}. Please resend any file the request needs."
 
         # Store input_type on the instance so downstream consumers
         # (event handlers, LLM service) can read it when building the
@@ -1224,23 +1262,32 @@ class TelegramMessagesMixin:
             # conversation continues to the agent below.
             from distr.core.work_intake import WorkIntake, WorkIntakeAttachment, get_work_intake_service
 
+            attachments = [
+                WorkIntakeAttachment(kind=file.kind, path=file.path, name=file.name, mime_type=file.mime_type)
+                for file in downloaded_files.values()
+            ]
+            attachments.extend(
+                WorkIntakeAttachment(kind="image", path=path, name=Path(path).name)
+                for path in dict.fromkeys(image_paths) if path not in downloaded_files
+            )
             intake = WorkIntake(
-                    source="telegram",
-                    user_text=combined if input_type != "voice" else "",
-                    transcript=combined if input_type == "voice" else "",
-                    source_user_id=str(getattr(self, "telegram_user_id", "") or ""),
-                    source_thread_id=str(getattr(self, "_telegram_batch_thread_id", "") or ""),
-                    source_message_id=source_message_id,
-                    attachments=([WorkIntakeAttachment(kind="image", path=image_path, name=image_path.rsplit("/", 1)[-1])] if image_path else []),
-                    metadata={
-                        "input_type": input_type,
-                        "source_message_ids": list(dict.fromkeys(source_message_ids)),
-                    },
-                )
+                source="telegram",
+                user_text=combined if input_type != "voice" else "",
+                transcript=combined if input_type == "voice" else "",
+                source_user_id=str(getattr(self, "telegram_user_id", "") or ""),
+                source_thread_id=str(getattr(self, "_telegram_batch_thread_id", "") or ""),
+                source_message_id=source_message_id,
+                attachments=attachments,
+                metadata={
+                    "input_type": input_type,
+                    "source_message_ids": list(dict.fromkeys(source_message_ids)),
+                },
+            )
             decision = get_work_intake_service().ingest(intake)
             if decision.handled:
                 self._stop_typing_loop()
-                self.send_to_telegram(decision.response_text or "Your request was routed.")
+                reply = decision.response_text or "Your request was routed."
+                self.send_to_telegram(f"{reply}\n\n{media_warning}" if media_warning else reply)
                 return
             # Correlate the normal agent's eventual final answer with the exact
             # durable answer_directly decision. The outbound event layer clears
@@ -1257,9 +1304,13 @@ class TelegramMessagesMixin:
                 "[Telegram] 📤 Flushing batch (%d messages, input_type=%s) to agent: '%s'",
                 len(items), input_type, combined[:80],
             )
+            context = "\n".join(filter(None, [
+                *(f"[Telegram {file.kind} saved to {file.path}]" for file in downloaded_files.values()),
+                media_warning,
+            ]))
             accepted = get_integration_message_bus().deliver_telegram_user_input(
-                text=combined,
-                image_path=image_path,
+                text=f"{combined}\n{context}" if context else combined,
+                image_path=image_paths[0] if image_paths else None,
                 telegram_chat_id=getattr(self, "_telegram_batch_thread_id", None),
                 speak=None,
                 input_type=input_type,
@@ -1288,31 +1339,76 @@ class TelegramMessagesMixin:
         image_path: str = None,
         input_type: str = "text",
         source_message_id=None,
+        downloaded_file: _DownloadedTelegramFile | None = None,
     ):
         """Add a message to the batch buffer and (re)start the flush timer."""
         uid = getattr(self, "telegram_user_id", None)
         if uid is not None:
             try:
-                self._telegram_batch_thread_id = int(uid)
+                thread_id = int(uid)
             except (TypeError, ValueError):
                 pass
+            else:
+                if getattr(self, "_telegram_batch_thread_id", None) != thread_id:
+                    self._telegram_batch_buffer.clear()
+                    self._telegram_file_wait_deadline = None
+                    self._telegram_batch_thread_id = thread_id
+        if text and downloaded_file is None:
+            for file in self._take_pending_telegram_files(self._telegram_batch_thread_id):
+                self._enqueue_telegram_file(file)
         action = "record_voice" if input_type == "voice" else "typing"
         self._start_typing_loop(action)  # Keep Telegram status alive while batching
         self._telegram_batch_buffer.append(
-            (text, bool(image_path), image_path, input_type, source_message_id)
+            (text, bool(image_path), image_path, input_type, source_message_id, downloaded_file)
         )
         self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)
 
-    @pyqtSlot(str, str, str)
-    def _enqueue_telegram_batch_slot(
-        self, text: str, image_path: str, source_message_id: str
-    ):
-        """Qt slot wrapper so background threads can enqueue via QMetaObject.invokeMethod."""
-        self._enqueue_telegram_batch(
-            text,
-            image_path if image_path else None,
-            source_message_id=source_message_id or None,
+    def _take_pending_telegram_files(self, chat_id) -> list[_DownloadedTelegramFile]:
+        pending = getattr(self, "_pending_telegram_files", [])
+        self._pending_telegram_files = []
+        cutoff = time.monotonic() - _TELEGRAM_FILE_CONTEXT_SECONDS
+        return sorted(
+            (file for file in pending if file.chat_id == str(chat_id) and file.received_at >= cutoff),
+            key=lambda file: file.received_at,
         )
+
+    def _enqueue_telegram_file(self, file: _DownloadedTelegramFile):
+        self._enqueue_telegram_batch(
+            file.caption,
+            file.path if file.kind == "image" else None,
+            source_message_id=file.source_message_id or None,
+            downloaded_file=file,
+        )
+
+    @pyqtSlot(object)
+    def _finish_telegram_file_download(self, result):
+        # Download threads return immutable results. The Qt thread owns the batch and pending files.
+        file, path = result
+        if file not in self._telegram_file_downloads:
+            return
+        deadline = self._telegram_file_wait_deadline
+        if (deadline is not None and time.monotonic() >= deadline
+                and str(self._telegram_batch_thread_id) == file.chat_id):
+            self._flush_telegram_batch()
+            if file not in self._telegram_file_downloads:
+                return
+        self._telegram_file_downloads.remove(file)
+        if file.chat_id != str(getattr(self, "telegram_user_id", None)):
+            return
+        file = replace(file, path=path)
+        pending = self._take_pending_telegram_files(file.chat_id)
+        active_batch = (
+            str(getattr(self, "_telegram_batch_thread_id", None)) == file.chat_id
+            and any(item[0] for item in self._telegram_batch_buffer)
+        )
+        if not file.caption and not active_batch:
+            self._pending_telegram_files = pending + [file]
+            return
+        for item in pending:
+            self._enqueue_telegram_file(item)
+        self._enqueue_telegram_file(file)
+        if self._telegram_file_wait_deadline is not None:
+            self._flush_telegram_batch()
 
     def _handle_voice_message(self, url, media_type, message_id=None):
         """Trigger background thread used for transcription (requests/STT)."""
@@ -1429,30 +1525,38 @@ class TelegramMessagesMixin:
         so it can decide what to do (analyse the image, extract text from a PDF,
         create a ticket, etc.).
         """
-        threading.Thread(
+        media_type = media.get("type") or "document"
+        file = _DownloadedTelegramFile(
+            chat_id=str(self.telegram_user_id), source_message_id=str(message_id or ""),
+            path="", kind="image" if media_type == "photo" else media_type,
+            name=str(media.get("file_name") or f"Telegram {media_type}"),
+            mime_type=str(media.get("mime_type") or ""), caption=str(caption or "").strip(),
+            received_at=time.monotonic(),
+        )
+        self._telegram_file_downloads.add(file)
+        worker = threading.Thread(
             target=self._download_and_forward_file,
-            args=(media, caption, message_id),
+            args=(media, file),
             daemon=True,
-        ).start()
+        )
+        try:
+            worker.start()
+        except RuntimeError:
+            self._finish_telegram_file_download((file, ""))
 
-    def _download_and_forward_file(
-        self, media: dict, caption: Optional[str], source_message_id=None
-    ):
+    def _download_and_forward_file(self, media: dict, file: _DownloadedTelegramFile):
         """Background thread: download file → save → forward to agent."""
-        if not requests:
-            logger.warning("[Telegram] requests library not available for file download")
-            return
+        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
 
-        media_type = media.get("type", "document")
+        path = ""
+        media_type = media.get("type") or "document"
         download_url = media.get("download_url")
         file_name = media.get("file_name")  # documents have this
-        mime_type = media.get("mime_type", "")
-
-        if not download_url:
-            logger.warning("[Telegram] No download_url for %s media", media_type)
-            return
 
         try:
+            if not requests or not download_url:
+                logger.warning("[Telegram] Download unavailable for %s", media_type)
+                return
             logger.info("[Telegram] 📥 Downloading %s from Telegram...", media_type)
             resp = requests.get(download_url, timeout=60)
             if resp.status_code != 200:
@@ -1463,12 +1567,12 @@ class TelegramMessagesMixin:
             save_dir = Path.home() / "Downloads" / "DecisionsAI"
             save_dir.mkdir(parents=True, exist_ok=True)
 
-            # Build filename
+            # Reserve a distinct path even when two downloads have the same filename.
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             if file_name:
-                # Use original filename, prefix with timestamp to avoid collisions
                 safe_name = "".join(c if c.isalnum() or c in "._- " else "_" for c in file_name)
-                dest = save_dir / f"{timestamp}_{safe_name}"
+                prefix = f"{timestamp}_"
+                suffix = f"_{safe_name}"
             else:
                 # Infer extension from mime or media type
                 ext_map = {
@@ -1477,15 +1581,23 @@ class TelegramMessagesMixin:
                     "document": ".bin",
                 }
                 ext = ext_map.get(media_type, ".bin")
-                if mime_type:
+                if file.mime_type:
                     import mimetypes as _mt
-                    guessed = _mt.guess_extension(mime_type)
+                    guessed = _mt.guess_extension(file.mime_type)
                     if guessed:
                         ext = guessed
-                dest = save_dir / f"telegram_{media_type}_{timestamp}{ext}"
+                prefix = f"telegram_{media_type}_{timestamp}_"
+                suffix = ext
 
-            with open(dest, "wb") as f:
-                f.write(resp.content)
+            dest = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=save_dir, prefix=prefix, suffix=suffix, delete=False) as output:
+                    dest = Path(output.name)
+                    output.write(resp.content)
+            except OSError:
+                if dest is not None:
+                    dest.unlink(missing_ok=True)
+                raise
 
             file_size = len(resp.content)
             logger.info(
@@ -1493,82 +1605,14 @@ class TelegramMessagesMixin:
                 media_type, file_size, dest,
             )
 
-            type_label = {"photo": "image", "document": "document", "video": "video"}.get(media_type, "file")
-            media_context = f"[Telegram {type_label} saved to {dest}]"
-            image_path_for_vision = str(dest) if media_type == "photo" else None
-
-            if not caption:
-                pending_text_batch = any(
-                    item and item[0]
-                    for item in getattr(self, "_telegram_batch_buffer", [])
-                )
-                if pending_text_batch:
-                    try:
-                        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
-
-                        QMetaObject.invokeMethod(
-                            self, "_enqueue_telegram_batch_slot",
-                            Qt.ConnectionType.QueuedConnection,
-                            Q_ARG(str, str(media_context)),
-                            Q_ARG(str, image_path_for_vision or ""),
-                            Q_ARG(str, str(source_message_id or "")),
-                        )
-                        logger.info(
-                            "[Telegram] Attached uncaptioned %s to pending text batch: %s",
-                            media_type,
-                            dest,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            "[Telegram] Failed to attach uncaptioned media to pending batch: %s",
-                            e,
-                            exc_info=True,
-                        )
-                    return
-
-                # Silent receipt: save the media and remember it briefly, but do
-                # not generate an agent turn that can echo "received image/file".
-                self._pending_telegram_media_context = {
-                    "text": media_context,
-                    "image_path": image_path_for_vision,
-                    "created_at": time.time(),
-                    "source_message_id": source_message_id,
-                }
-                logger.info(
-                    "[Telegram] Stored %s context silently for a possible follow-up: %s",
-                    media_type,
-                    dest,
-                )
-                return
-
-            agent_text = f"{caption}\n{media_context}"
-
-            # Forward to agent via signal
-            # Pass image path for photos (enables vision analysis), None for other types
-            # (documents/videos are referenced by path in the agent_text itself)
-            try:
-                logger.info(
-                    "[Telegram] 📤 Forwarding %s to agent: '%s'",
-                    media_type, agent_text[:80],
-                )
-                # Use the batch buffer so file messages are combined with any
-                # text messages the user sends in the same burst.
-                from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
-                QMetaObject.invokeMethod(
-                    self, "_enqueue_telegram_batch_slot",
-                    Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(str, str(agent_text)),
-                    Q_ARG(str, image_path_for_vision or ""),
-                    Q_ARG(str, str(source_message_id or "")),
-                )
-            except Exception as e:
-                logger.error("[Telegram] Failed to forward file to agent: %s", e, exc_info=True)
-
-            # Do not auto-ack media receipt in chat; forwarding context to the
-            # agent is enough and avoids noisy "Received image/file" messages.
-
+            path = str(dest)
         except Exception as e:
             logger.error("[Telegram] File download error: %s", e, exc_info=True)
+        finally:
+            QMetaObject.invokeMethod(
+                self, "_finish_telegram_file_download", Qt.ConnectionType.QueuedConnection,
+                Q_ARG(object, (file, path)),
+            )
 
     # =========================================================================
     # Sending Logic

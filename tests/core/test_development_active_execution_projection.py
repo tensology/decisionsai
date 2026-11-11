@@ -210,8 +210,10 @@ def test_execution_state_persists_terminal_provider_status_to_chat_and_ticket(mo
         db.add(lane)
         db.flush()
         ticket = KanbanTicket(title="Interrupted local run", lane_id=lane.id, workflow_status="running")
+        db.add(ticket)
+        db.flush()
         session = ProjectExecutionSession(
-            ticket_id=None,
+            ticket_id=ticket.id,
             project_id=7,
             route_type="project_cli",
             route_backend="pi",
@@ -219,10 +221,11 @@ def test_execution_state_persists_terminal_provider_status_to_chat_and_ticket(mo
             status="cancelled",
             error="Standalone provider session was interrupted by app restart.",
         )
-        db.add_all([ticket, session])
+        db.add(session)
         db.flush()
         chat = Chat(
             title="Interrupted local run",
+            project_id=7,
             params=json.dumps({"development": {"execution": {
                 "status": "running",
                 "job_id": "local-job",
@@ -231,10 +234,12 @@ def test_execution_state_persists_terminal_provider_status_to_chat_and_ticket(mo
         )
         db.add(chat)
         db.flush()
+        session.input_packet = json.dumps({"chat_id": chat.id})
         db.add(DevelopmentWorkItem(
             chat_id=chat.id,
             identity_key="ticket:interrupted",
             local_ticket_id=ticket.id,
+            project_id=7,
         ))
         db.commit()
         chat_id, ticket_id = chat.id, ticket.id
@@ -264,11 +269,13 @@ def test_completed_provider_does_not_publish_success_before_reply_is_saved(monke
         )
         db.add(session)
         db.flush()
-        chat = Chat(title="Finalizing", params=json.dumps({"development": {"execution": {
+        chat = Chat(title="Finalizing", project_id=7, params=json.dumps({"development": {"execution": {
             "status": "running", "job_id": "finalizing-job",
             "execution_session_id": session.id,
         }}}))
         db.add(chat)
+        db.flush()
+        session.input_packet = json.dumps({"chat_id": chat.id})
         db.commit()
         chat_id = chat.id
     state = development_harness.development_execution_state(chat_id)
@@ -295,7 +302,7 @@ def test_development_execution_state_projects_terminal_workflow_run(monkeypatch)
     monkeypatch.setattr(development_harness, "get_session", lambda: _session(factory))
     with factory() as db:
         workflow = AutoWorkflow(name="Development", workflow_type="manual")
-        chat = Chat(title="Approved work", params=json.dumps({"development": {}}))
+        chat = Chat(title="Approved work", params=json.dumps({"development": {"source_type": "prompt"}}))
         db.add_all([workflow, chat])
         db.flush()
         step = AutoWorkflowStep(workflow_id=workflow.id, position=0, name="Report")

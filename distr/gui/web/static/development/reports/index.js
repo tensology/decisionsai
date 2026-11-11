@@ -1,6 +1,6 @@
 // Owns report loading, filters and cleanup. No dependencies on other feature state.
 // Report + Stats tabs live in ./period.js; History is one work list. Costs stay here.
-import { createPeriodReport } from './period.js?v=20261109-calendar-today5';
+import { createPeriodReport } from './period.js?v=20261111-client-message';
 
 // Supported list routes accept limit only. They have no offset or cursor.
 export const HISTORY_RUNS_URL = '/workflows/studio/reports?limit=100';

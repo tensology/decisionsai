@@ -1,8 +1,25 @@
 """ORM helpers for SQLAlchemy 1.4 vs 2.0 (Query.get removed in 2.0)."""
 
-from typing import Any, Optional, Type, TypeVar
+import time
+from sqlite3 import OperationalError as SQLiteOperationalError
+from typing import Any, Callable, Optional, Type, TypeVar
+
+from sqlalchemy.exc import OperationalError
 
 _T = TypeVar("_T")
+
+
+def retry_sqlite_locked(operation: Callable[[], _T]) -> _T:
+    """Retry a local transaction that opens a fresh session on each attempt."""
+    delays = (0.05, 0.1)
+    for delay in delays:
+        try:
+            return operation()
+        except OperationalError as exc:
+            if not isinstance(exc.orig, SQLiteOperationalError) or 'locked' not in str(exc.orig).lower():
+                raise
+            time.sleep(delay)
+    return operation()
 
 
 def orm_get_by_id(session: Any, model: Type[_T], pk: Any) -> Optional[_T]:

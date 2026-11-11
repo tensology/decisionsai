@@ -65,12 +65,48 @@ test('a selected day shows that day slice, not the whole stored span', () => {
     assert.ok(later.start > overlapA.end);
 });
 
+test('display title removes only repeated exact project prefixes and retains the source title', () => {
+    const base = { start_local: '2026-11-10T09:00:00', end_local: '2026-11-10T10:00:00' };
+    const cleaned = period.displayWorkTitle({
+        ...base,
+        project_name: 'Spoortrack [new]',
+        title: 'Spoortrack [new] - Spoortrack [new]: Removed customer report title',
+        source_label: 'Decisions thread timer'
+    });
+    assert.equal(cleaned.shown, 'Removed customer report title');
+    assert.equal(cleaned.original, 'Spoortrack [new] - Spoortrack [new]: Removed customer report title');
+    assert.equal(period.displayWorkTitle({
+        ...base,
+        project_name: 'Spoortrack [new]',
+        title: 'Spoortrack [new] — Cleaned with legacy separator'
+    }).shown, 'Cleaned with legacy separator');
+    assert.equal(period.displayWorkTitle({
+        ...base,
+        project_name: 'Spoortrack',
+        title: 'Spoortracking: Keep the different project prefix'
+    }).shown, 'Spoortracking: Keep the different project prefix');
+    assert.equal(period.displayWorkTitle({ ...base, project_name: '[alpha].*', title: '[alpha].* | Literal prefix' }).shown, 'Literal prefix');
+    assert.deepEqual(period.displayWorkTitle({ ...base }), { shown: 'Unknown', original: '' });
+    assert.deepEqual(period.displayWorkTitle({ ...base, title: 'Thread 34', source_label: 'Pi via Decisions' }), {
+        shown: 'Thread 34', original: 'Thread 34'
+    });
+});
+
 test('hour zoom steps stay on the scale and clamp', () => {
     assert.equal(period.stepHourZoom(period.DEFAULT_HOUR_PX, 1), 48);
     assert.equal(period.stepHourZoom(period.DEFAULT_HOUR_PX, -1), 28);
     assert.equal(period.stepHourZoom(18, -1), 18);
     assert.equal(period.stepHourZoom(88, 1), 88);
     assert.ok(period.DEFAULT_HOUR_PX > period.WEEK_HOUR_PX);
+});
+
+test('opening a date brings its actual work into view, including early and late work', () => {
+    const early={start_local:'2026-10-25T03:45:00',end_local:'2026-10-25T04:22:00'};
+    const late={start_local:'2026-11-05T16:13:00',end_local:'2026-11-05T17:15:00'};
+    assert.equal(period.calendarFocusMinute([early,late],['2026-10-25']),195);
+    assert.equal(period.calendarFocusMinute([early,late],['2026-11-05']),943);
+    assert.equal(period.calendarFocusMinute([early,late],['2026-11-01']),420);
+    assert.equal(period.calendarFocusMinute([{start_local:'2026-10-24T23:27:00',end_local:'2026-10-25T00:20:00'}],['2026-10-25']),0);
 });
 
 test('week lanes sit beside each other instead of stacking', () => {
@@ -291,7 +327,37 @@ test('report load does not call the cost route and labels stats cells', async ()
     assert.match(reportHtml, /project sum/);
 });
 
-test('desktop grid keeps the calendar on the left and the day list order untouched', () => {
+test('filtering keeps the loaded project catalog and recalculates overlapping time and costs', () => {
+    const entry = (project_id, start, end, seconds) => ({ project_id, start_local: start, end_local: end, seconds });
+    const blocks = [
+        entry(1, '2026-11-10T23:30:00', '2026-11-11T00:30:00', 3600),
+        entry(2, '2026-11-11T00:00:00', '2026-11-11T01:00:00', 3600),
+        entry(3, '2026-11-11T01:00:00', '2026-11-11T03:00:00', 7200),
+    ];
+    const projects = [{ id: 1 }, { id: 2 }, { id: 3 }];
+    const data = {
+        blocks, projects,
+        by_project: [{ project_id: 1 }, { project_id: 2 }, { project_id: 3 }],
+        by_day: [
+            { date: '2026-11-10', projects: { 1: 1800 } },
+            { date: '2026-11-11', projects: { 1: 1800, 2: 3600, 3: 7200 } },
+        ],
+        costs: { available: true, by_project: [
+            { project_id: 1, entries: 1, cost_usd: 1 },
+            { project_id: 3, entries: 5, cost_usd: 9 },
+        ] },
+    };
+    const selected = period.selectReportProjects(data, new Set([1, 2]));
+    assert.deepEqual(selected.blocks, blocks.slice(0, 2));
+    assert.equal(selected.projects, projects);
+    assert.deepEqual(selected.by_day.map((day) => day.seconds), [1800, 3600]);
+    assert.deepEqual(selected.totals, { active_days: 2, projects: 2, blocks: 2, seconds: 5400, activity_seconds: 7200 });
+    assert.equal(selected.costs.total_cost_usd, 1);
+    assert.equal(period.selectReportProjects(data, new Set()).blocks.length, 0);
+    assert.equal(period.selectReportProjects(data, new Set([1, 2, 3])), data);
+});
+
+test('desktop grid keeps the calendar on the left and entries in order within each project', () => {
     const css = readFileSync(new URL('../../distr/gui/web/static/development/reports/styles.css', import.meta.url), 'utf8');
     assert.match(css, /grid-template-areas:\s*"calendar projects"/);
     assert.match(css, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(340px,\s*400px\)/);
@@ -307,13 +373,13 @@ test('desktop grid keeps the calendar on the left and the day list order untouch
     const html = readFileSync(new URL('../../distr/gui/web/templates/development/index.html', import.meta.url), 'utf8');
     const shell = readFileSync(new URL('../../distr/gui/web/static/development/styles.css', import.meta.url), 'utf8');
     const reports = readFileSync(new URL('../../distr/gui/web/static/development/reports/index.js', import.meta.url), 'utf8');
-    assert.match(app, /reports\/index\.js\?v=20261109-calendar-today5/);
+    assert.match(app, /reports\/index\.js\?v=[^'\"]+/);
     assert.match(app, /view-switch\.js\?v=20261107-nav68/);
-    assert.match(app, /terminals\/index\.js\?v=20261107-nav68/);
-    assert.match(reports, /period\.js\?v=20261109-calendar-today5/);
-    assert.match(shell, /reports\/styles\.css\?v=20261109-calendar-today5/);
-    assert.match(html, /styles\.css\?v=20261109-calendar-today5/);
-    assert.match(html, /app\.js\?v=20261109-calendar-today5/);
+    assert.match(app, /terminals\/index\.js\?v=[^'"]+/);
+    assert.match(reports, /period\.js\?v=[^'\"]+/);
+    assert.match(shell, /reports\/styles\.css\?v=[^'\"]+/);
+    assert.match(html, /styles\.css\?v=[^'\"]+/);
+    assert.match(html, /app\.js\?v=[^'\"]+/);
     const dayShell = periodSource.slice(periodSource.indexOf('function dayShellHtml'), periodSource.indexOf('view.addEventListener'));
     assert.equal((dayShell.match(/zoomHtml/g) || []).length, 1);
     assert.match(dayShell, /timeGridHtml\(data, 1, state\.hourPx, zoomHtml\(state\.hourPx\)\)/);

@@ -77,7 +77,7 @@ def test_redismiss_removes_durable_restore(monkeypatch):
 def test_restore_failure_retains_dismissal(monkeypatch):
     from distr.core.db import IncomingProposalDismissal, IncomingProposalRestoration, get_session
     key = legacy()
-    monkeypatch.setattr(p, 'proposal_snapshot_json', lambda proposal: None)
+    monkeypatch.setattr(p, 'proposal_brief_json', lambda proposal: None)
     with pytest.raises(ValueError, match='dismissal was retained'):
         p.undismiss_proposal(key)
     with get_session() as db:
@@ -178,7 +178,7 @@ def test_restore_uses_richer_snapshot_on_twin_receipt():
             message_ids=row.message_ids, created_at=row.created_at))
         db.commit()
     result = p.undismiss_proposal('local:whatsapp:twin')
-    assert result['proposal'] == {**original, 'source_message_at': None, 'expires_at': None, 'is_expired': False}
+    assert result['proposal'] == {**original, 'source_message_at': None, 'source_started_at': None, 'expires_at': None, 'is_expired': False}
     assert set(result['removed_keys']) == {key,'local:whatsapp:twin'}
 
 

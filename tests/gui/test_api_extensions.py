@@ -483,7 +483,13 @@ def test_development_message_returns_turn_id(db, monkeypatch):
     monkeypatch.setattr(core_chat, "is_duplicate_pending_input", lambda *a, **k: False)
     monkeypatch.setattr(core_chat, "record_chat_audit_event", lambda **k: None, raising=False)
     dispatched = []
-    monkeypatch.setattr(harness, "dispatch_development_prompt", lambda *a, **k: dispatched.append(a) or {"status": "started"})
+    def dispatch(chat_id, prompt, **kwargs):
+        assert kwargs["save_prompt"] is True
+        dispatched.append((chat_id, prompt))
+        turn_id = core_chat.ChatService.add_user_message(chat_id, prompt)
+        return {"status": "started", "turn_id": turn_id}
+
+    monkeypatch.setattr(harness, "dispatch_development_prompt", dispatch)
     monkeypatch.setattr(control, "resume_thread_time", lambda cid: None)
     monkeypatch.setattr(wev, "increment_workflow_updated", lambda: None)
     root, _ = _seed(db, responses=())

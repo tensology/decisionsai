@@ -315,6 +315,7 @@ def _chat_workflow_event_messages(chat: Chat) -> List[Dict[str, Any]]:
                 "role": "workflow",
                 "content": event.get("summary") or "",
                 "timestamp": event.get("timestamp"),
+                "turn_chat_id": event.get("turn_id") if type(event.get("turn_id")) is int else None,
                 "workflow_event": {
                     "id": event.get("id"),
                     "run_id": event.get("run_id"),
@@ -789,33 +790,23 @@ def _chat_header_stats_payload(
 def _merge_thread_rows_with_tool_and_workflow_events(
     rows: Iterable[Any], root_chat: Chat
 ) -> List[Dict[str, Any]]:
-    """Interleave tool cards with the chat row they belong to; avoid sorting all messages by timestamp."""
-    tool_msgs = _chat_tool_event_messages(root_chat)
-    tools_by_turn: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    orphan_tools: List[Dict[str, Any]] = []
-    for tm in tool_msgs:
-        tid = tm.get("turn_chat_id")
-        if tid is None:
-            orphan_tools.append(tm)
+    """Place activity with its recorded chat row, with time ordering for legacy cards."""
+    activity = _chat_tool_event_messages(root_chat) + _chat_workflow_event_messages(root_chat)
+    activity_by_turn: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    extras: List[Dict[str, Any]] = []
+    for message in activity:
+        turn_id = message.get("turn_chat_id")
+        if turn_id is None:
+            extras.append(message)
         else:
-            tools_by_turn[int(tid)].append(tm)
+            activity_by_turn[int(turn_id)].append(message)
 
     messages: List[Dict[str, Any]] = []
     for row in rows:
         _append_row_messages(messages, row)
-        for tm in tools_by_turn.pop(row.id, []):
-            messages.append(tm)
-
-    leftover: List[Dict[str, Any]] = []
-    for lst in tools_by_turn.values():
-        leftover.extend(lst)
-    orphan_tools.extend(leftover)
-    orphan_tools.sort(key=_message_sort_key)
-
-    workflow_msgs = _chat_workflow_event_messages(root_chat)
-    workflow_msgs.sort(key=_message_sort_key)
-
-    extras = orphan_tools + workflow_msgs
+        messages.extend(sorted(activity_by_turn.pop(row.id, []), key=_message_sort_key))
+    for unmatched in activity_by_turn.values():
+        extras.extend(unmatched)
     extras.sort(key=_message_sort_key)
     _insert_extra_messages(messages, extras)
 
@@ -1462,14 +1453,16 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 additional_context = _chat_additional_context(root_chat.additional_context)
                 compact_checkpoint = additional_context.get("compact_checkpoint")
                 model_route = development.get("model_route") if isinstance(development.get("model_route"), dict) else {}
-                from distr.core.chat import _chat_params
+                from distr.core.incoming.source_reply import has_reply_source
+                from distr.core.incoming.proposal_conversation import submitted_proposal_source_key
                 return JSONResponse(
                     {
                         "id": root_chat.id,
                         "title": header_payload["title"],
                         **sidebar,
                         "messages": messages,
-                        "has_reply_source": bool(_chat_params(root_chat.params).get('incoming_reply_context') or _chat_params(root_chat.params).get('incoming_proposal_handoff')),
+                        "has_reply_source": has_reply_source(root_chat),
+                        "proposal_source_review_key": submitted_proposal_source_key(root_chat),
                         "provider": provider,
                         "model_name": model_name,
                         "project_id": root_chat.project_id,
@@ -2649,35 +2642,29 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         return JSONResponse({"ok": True})
 
     @router.post("/chats/{chat_id}/cancel")
-    async def cancel_stream(chat_id: int):
-        """Tell the desktop agent to interrupt TTS/generation."""
+    async def cancel_stream(chat_id: int, turn_id: int | None = None):
+        """Cancel the active turn belonging to this conversation."""
         with get_session() as session:
             chat = session.query(Chat).filter(Chat.id == chat_id).first()
             if not chat:
                 raise HTTPException(status_code=404, detail="Chat not found")
             _reject_development_lifecycle(session, chat)
         try:
+            from distr.core.chat_turns import latest_active_turn_id, terminal_turn
             from distr.core.signals import signal_manager
 
-            signal_manager.interrupt_tts.emit()
-            logger.debug("Cancel: emitted interrupt_tts for agent")
-        except Exception as e:
-            logger.debug(
-                "Cancel: interrupt_tts emit failed (agent may not be running): %s", e
-            )
-        try:
-            from distr.core.chat_turns import latest_active_turn_id, terminal_turn
-
-            turn_id = latest_active_turn_id(chat_id)
-            if turn_id is not None:
-                terminal_turn(
+            active_turn_id = latest_active_turn_id(chat_id)
+            if active_turn_id is not None and (turn_id is None or active_turn_id == turn_id):
+                event = terminal_turn(
                     chat_id,
                     "turn_cancelled",
-                    turn_id=turn_id,
+                    turn_id=active_turn_id,
                     summary="Stopped by the user.",
                 )
+                if event and event["event_type"] == "turn_cancelled":
+                    signal_manager.chat_cancel_requested.emit(event["chat_id"], active_turn_id)
         except Exception:
-            logger.debug("Could not persist turn cancellation", exc_info=True)
+            logger.debug("Could not request chat turn cancellation", exc_info=True)
         return JSONResponse({"message": "Cancel requested"})
 
     @router.post("/chats/tts/generate")

@@ -1,5 +1,5 @@
 """Threads HTTP boundary. Existing URLs remain compatible."""
-from fastapi import File, Form, UploadFile
+from fastapi import Body, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from typing import Optional
 import os
@@ -476,6 +476,8 @@ def register_routes(router, templates):
     @router.post("/workflows/studio/tasks/{chat_id}/messages")
     async def workflow_studio_message(chat_id: int, data: StudioThreadMessageRequest, wait: bool = False, timeout: Optional[float] = None):
         """Route a Development message directly to its persistent IDE harness."""
+        from distr.core.workflow.development_harness import DevelopmentExecutionBusy, require_direct_execution_available
+
         message = str(data.message or "").strip()
         if not message:
             return JSONResponse({"detail": "A development instruction is required."}, status_code=422)
@@ -502,15 +504,21 @@ def register_routes(router, templates):
             if await asyncio.to_thread(is_duplicate_pending_input, int(chat_id), message):
                 logger.info("Studio message ignored: identical pending input for thread %s", chat_id)
                 return JSONResponse({"success": True, "duplicate": True, "started": False, "message": "Already sent; waiting for the reply."})
-            await asyncio.to_thread(
-                ChatService.add_user_message,
-                int(chat_id),
-                message,
-                metadata={"skill_ids": skill_ids} if skill_ids else None,
-            )
-            from distr.core.chat_turns import latest_active_turn_id
-
-            turn_id = await asyncio.to_thread(latest_active_turn_id, int(chat_id))
+            workflow_id = int(metadata.get("workflow_id") or 0) or None
+            direct = autonomy_level != "approval" and workflow_id is None
+            save_with_claim = direct and str(metadata.get("source_type") or "").lower() != "automation"
+            if direct:
+                existing_execution = metadata.get("execution")
+                if isinstance(existing_execution, dict):
+                    require_direct_execution_available(existing_execution)
+            turn_id = None
+            if not save_with_claim:
+                turn_id = await asyncio.to_thread(
+                    ChatService.add_user_message,
+                    int(chat_id),
+                    message,
+                    metadata={"skill_ids": skill_ids} if skill_ids else None,
+                )
             if autonomy_level == "approval":
                 return JSONResponse(
                     {
@@ -522,7 +530,6 @@ def register_routes(router, templates):
                     }
                 )
 
-            workflow_id = int(metadata.get("workflow_id") or 0) or None
             if workflow_id is not None:
                 from distr.core.workflow.relaunch_guard import relaunch_decision
                 from distr.core.workflow.work_dispatch import dispatch_work_item
@@ -577,7 +584,10 @@ def register_routes(router, templates):
                     skill_ids=skill_ids,
                     use_playwright=bool(data.use_playwright),
                     dispatch_async=True,
+                    save_prompt=save_with_claim,
                 )
+                if save_with_claim:
+                    turn_id = execution.get("turn_id")
             if isinstance(execution, dict) and execution.get("error"):
                 await asyncio.to_thread(
                     ChatService.append_assistant_notice,
@@ -607,6 +617,8 @@ def register_routes(router, templates):
                     await turn_response_fields(int(chat_id), turn_id=int(turn_id), wait=bool(wait), timeout=timeout)
                 )
             return JSONResponse(response_payload)
+        except DevelopmentExecutionBusy as exc:
+            return JSONResponse({"code": "development_execution_busy", "detail": str(exc)}, status_code=409)
         except Exception as exc:
             logger.error("Studio development message failed: %s", exc, exc_info=True)
             return JSONResponse({"detail": str(exc)}, status_code=500)
@@ -626,11 +638,17 @@ def register_routes(router, templates):
 
 
     @router.post("/workflows/studio/tasks/{chat_id}/execution/stop")
-    async def workflow_studio_stop_execution(chat_id: int):
+    async def workflow_studio_stop_execution(
+        chat_id: int, execution_session_id: Optional[int] = Body(default=None, embed=True, gt=0),
+    ):
         try:
             from distr.core.workflow.development_harness import stop_development_execution
 
-            return JSONResponse(await asyncio.to_thread(stop_development_execution, int(chat_id)))
+            options = {"expected_session_id": execution_session_id} if execution_session_id is not None else {}
+            result = await asyncio.to_thread(stop_development_execution, int(chat_id), **options)
+            if result.get("stop_requested") is False:
+                return JSONResponse({"detail": "This worker is no longer available to stop."}, status_code=409)
+            return JSONResponse(result)
         except LookupError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=404)
         except Exception as exc:

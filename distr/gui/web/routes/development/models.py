@@ -298,6 +298,7 @@ class PlanInstructionRequest(BaseModel):
 
 class PlanMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20000)
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
     provider: str = Field(min_length=1, max_length=80)
     model_name: str = Field(min_length=1, max_length=200)
     tab: str = "wireframes"

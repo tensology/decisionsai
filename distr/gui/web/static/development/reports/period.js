@@ -9,12 +9,22 @@ export const WEEK_HOUR_PX = 28;
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const STATE_WORD = { empty: 'No records', unavailable: 'Not found', not_read: 'Not read', excluded: 'Excluded', unsupported: 'No adapter' };
 
-export function sastToday(now = new Date()) {
-    const parts = new Intl.DateTimeFormat('en', {
-        timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit'
-    }).formatToParts(now);
+const sastFormatter = new Intl.DateTimeFormat('en', {
+    timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+});
+
+function sastClock(now = new Date()) {
+    const parts = sastFormatter.formatToParts(now);
     const value = (kind) => parts.find((part) => part.type === kind).value;
-    return `${value('year')}-${value('month')}-${value('day')}`;
+    return {
+        day: `${value('year')}-${value('month')}-${value('day')}`,
+        minutes: Number(value('hour')) * 60 + Number(value('minute'))
+    };
+}
+
+export function sastToday(now) {
+    return sastClock(now).day;
 }
 
 export function projectColor(id) {
@@ -257,7 +267,8 @@ export function layoutOverlapBars(items, maxLanes = 3) {
         if (current && item.start < current.end) {
             current.end = Math.max(current.end, item.end);
             current.count += 1;
-        } else clusters.push({ start: item.start, end: item.end, count: 1, projectId: item.projectId, name: item.name });
+            current.items.push(...(item.items || []));
+        } else clusters.push({ start: item.start, end: item.end, count: 1, projectId: item.projectId, name: item.name, items: [...(item.items || [])] });
     }
     for (const cluster of clusters) {
         bars.push({
@@ -267,8 +278,9 @@ export function layoutOverlapBars(items, maxLanes = 3) {
             name: cluster.count === 1 ? cluster.name : '',
             leftPct: detail * width,
             widthPct: width,
-            overflow: true,
-            overflowCount: cluster.count
+            overflow: cluster.count > 1,
+            overflowCount: cluster.count,
+            items: cluster.items
         });
     }
     return { laneCount: lanesUsed, bars };
@@ -341,11 +353,63 @@ export function daySlice(block, day) {
     };
 }
 
+function coveredSeconds(spans) {
+    let total = 0;
+    let end = -Infinity;
+    for (const [start, stop] of spans.sort((a, b) => a[0] - b[0])) {
+        total += Math.max(0, stop - Math.max(start, end));
+        end = Math.max(end, stop);
+    }
+    return total;
+}
+
+export function selectReportProjects(data, selected) {
+    if ((data.projects || []).every((project) => selected.has(Number(project.id)))) return data;
+    const includes = (row) => selected.has(Number(row.project_id));
+    const blocks = (data.blocks || []).filter(includes);
+    const byProject = (data.by_project || []).filter(includes);
+    const byDay = (data.by_day || []).flatMap((day) => {
+        const projects = Object.fromEntries(Object.entries(day.projects || {}).filter(([id]) => selected.has(Number(id))));
+        if (!Object.keys(projects).length) return [];
+        const spans = blocks.flatMap((block) => {
+            const slice = daySlice(block, day.date);
+            return slice ? [[slice.start * 60, slice.end * 60]] : [];
+        });
+        return [{ ...day, projects, seconds: coveredSeconds(spans) }];
+    });
+    const spans = blocks.flatMap((block) => {
+        const start = Date.parse(block.start_local + 'Z');
+        const end = Date.parse(block.end_local + 'Z');
+        return Number.isFinite(start) && Number.isFinite(end) ? [[start / 1000, end / 1000]] : [];
+    });
+    const costs = data.costs;
+    const projectCosts = (costs?.by_project || []).filter(includes);
+    return {
+        ...data, blocks, by_day: byDay, by_project: byProject, project_ids: [...selected],
+        totals: {
+            ...data.totals, active_days: byDay.length, projects: byProject.length, blocks: blocks.length,
+            seconds: coveredSeconds(spans), activity_seconds: blocks.reduce((sum, block) => sum + Number(block.seconds || 0), 0),
+        },
+        costs: costs?.available ? {
+            ...costs, by_project: projectCosts,
+            entries: projectCosts.reduce((sum, row) => sum + Number(row.entries || 0), 0),
+            total_cost_usd: projectCosts.reduce((sum, row) => sum + Number(row.cost_usd || 0), 0),
+        } : costs,
+    };
+}
+
 export function formatSlice(seconds) {
     if (seconds == null || !Number.isFinite(Number(seconds))) return 'Unknown';
     const value = Math.max(0, Math.round(Number(seconds)));
     if (value < 60) return `${value}s`;
     return formatHours(value);
+}
+
+export function calendarFocusMinute(blocks, days) {
+    const selected = new Set(days);
+    const starts = (blocks || []).flatMap((block) => segments(block))
+        .filter((segment) => selected.has(segment.day)).map((segment) => segment.start);
+    return starts.length ? Math.max(0, Math.min(...starts) - 30) : 7 * 60;
 }
 
 export function simplifyWorkTitle(block) {
@@ -357,11 +421,23 @@ export function simplifyWorkTitle(block) {
 export function displayWorkTitle(block) {
     const title = String(block?.title || '').trim();
     const source = String(block?.source_label || '').trim();
-    const generic = !title || title === source || /^Thread \d+$/.test(title)
-        || /DECISIONS DEVELOPMENT THREAD/i.test(title)
-        || /^Work as the active IDE coding agent/i.test(title)
-        || /^Pi via Decisions\b/i.test(title);
-    const shown = simplifyWorkTitle(block) && generic ? (source || 'Unknown') : (title || source || 'Unknown');
+    const project = String(block?.project_name || '').trim();
+    let description = title;
+    if (project) {
+        // Compare the project name literally (names may contain regexp characters),
+        // then remove only a punctuation separator after an exact leading match.
+        while (description.startsWith(project)) {
+            const rest = description.slice(project.length);
+            const separator = rest.match(/^\s*[:|·,;.!?\-–—]+\s*/u);
+            if (!separator) break;
+            description = rest.slice(separator[0].length).trim();
+        }
+    }
+    const generic = !description || description === source || /^Thread \d+$/.test(description)
+        || /DECISIONS DEVELOPMENT THREAD/i.test(description)
+        || /^Work as the active IDE coding agent/i.test(description)
+        || /^Pi via Decisions\b/i.test(description);
+    const shown = simplifyWorkTitle(block) && generic ? (source || 'Unknown') : (description || source || 'Unknown');
     return { shown, original: title || source || '' };
 }
 
@@ -410,7 +486,31 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
     };
     let selectionInitialized = false;
     let managingProjects = false;
-    let selectionNeedsLoad = false;
+    const savedBuilds = new Map();
+    const selectionKey = (projects) => [...projects].sort((a, b) => a - b).join(',');
+    const buildKey = (period, selection) => `${period?.start}/${period?.end}/${selection}`;
+    let clockTimer;
+
+    function updateCalendarClock() {
+        const { day, minutes } = sastClock();
+        const isToday = state.cursor === day;
+        todayButton.setAttribute('aria-current', isToday ? 'date' : 'false');
+        const line = view.querySelector('.reports-now-line');
+        if (line) {
+            line.hidden = !isToday;
+            line.style.top = `${minutes / 1440 * 100}%`;
+            line.title = `Current time ${clock(minutes)} SAST`;
+        }
+    }
+
+    function scheduleCalendarClock() {
+        if (typeof window === 'undefined') return;
+        clearTimeout(clockTimer);
+        clockTimer = window.setTimeout(() => {
+            updateCalendarClock();
+            scheduleCalendarClock();
+        }, 60_000 - Date.now() % 60_000);
+    }
 
     function savePrefs() {
         localStorage.setItem(PREFS_KEY, JSON.stringify({
@@ -422,10 +522,10 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         }));
     }
 
-    function query() {
+    function query(selection) {
         const params = new URLSearchParams();
         if (state.period !== 'rolling') params.set('month', state.period);
-        if (state.projects.size) params.set('projects', [...state.projects].sort((a, b) => a - b).join(','));
+        if (selection) params.set('saved_projects', selection);
         return params;
     }
 
@@ -433,17 +533,18 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         state.request?.abort();
         state.request = new AbortController();
         const current = ++state.generation;
+        const selection = selectionKey(state.projects);
         state.loading = true;
         state.error = '';
         render();
         try {
             // Do not call the cost route here. list_entries and cost_rollups run ensure_tables.
-            const data = await api(`/workflows/studio/reports/period?${query()}`, { signal: state.request.signal });
+            const data = await api(`/workflows/studio/reports/period?${query(selection)}`, { signal: state.request.signal });
             if (!state.visible || current !== state.generation) return;
             state.ledger = null;
             state.ledgerFailure = '';
             applyData(data);
-            selectionNeedsLoad = false;
+            savedBuilds.set(buildKey(data.period, selection), data.saved);
         } catch (error) {
             if (!state.visible || current !== state.generation || error.name === 'AbortError') return;
             state.error = error.status === 404 || error.status === 405
@@ -462,7 +563,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         state.options = data.period_options || state.options;
         const period = data.period || {};
         if (!state.cursor || state.cursor < period.start || state.cursor > period.end) {
-            const busiest = [...(data.by_day || [])].sort((a, b) => b.seconds - a.seconds)[0];
+            const busiest = [...(selectReportProjects(data, state.projects).by_day || [])].sort((a, b) => b.seconds - a.seconds)[0];
             state.cursor = busiest?.date || period.start;
         }
         renderPeriodSelect();
@@ -479,7 +580,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             const body = { projects: [...state.projects] };
             if (state.period !== 'rolling') body.month = state.period;
             const data = await api('/workflows/studio/reports/period/build', { method: 'POST', body });
-            applyData(data);
+            savedBuilds.set(buildKey(data.period, selectionKey(body.projects)), data.saved);
         } catch (error) {
             state.error = error.status === 404 || error.status === 405
                 ? 'Build report needs a Decisions restart to load its new backend.'
@@ -524,16 +625,19 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         return text ? `Last built ${text}` : '';
     }
 
-    function render() {
+    function render({ preserveScroll = false } = {}) {
+        const scrollSelectors = ['.reports-grid', '.reports-day-side', '.reports-timegrid-scroll', '.reports-pie-card', '#reports-project-legend'];
+        const offsets = preserveScroll ? scrollSelectors.map((selector) => view.querySelector(selector)?.scrollTop) : [];
         const focusedProject = document.activeElement?.dataset?.legendProject;
         const focusedManage = document.activeElement?.hasAttribute?.('data-manage-projects');
         closeBlockDetail();
         renderProjectsButton();
         if (!state.visible) return;
-        const data = state.data;
+        const data = state.data && selectReportProjects(state.data, state.projects);
         buildButton.disabled = state.building || state.projects.size === 0;
         const banner = state.error ? `<p class="reports-error" role="alert">${esc(state.error)}</p>` : '';
         if (!data) {
+            updateCalendarClock();
             const empty = banner + (state.loading ? '<p class="reports-muted">Loading report…</p>' : '');
             view.innerHTML = empty;
             statsView.innerHTML = empty;
@@ -543,7 +647,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         const stale = state.loading ? ' is-loading' : '';
         const built = root.querySelector('#reports-built');
         if (built) {
-            const label = builtLabel(data);
+            const label = builtLabel({ saved: savedBuilds.get(buildKey(data.period, selectionKey(state.projects))) });
             built.hidden = !label;
             built.textContent = label;
         }
@@ -553,15 +657,23 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
                 <section class="reports-card reports-pie-card" aria-label="Work per project">${pieHtml(data)}</section>
             </div>
             ${blockDetailShellHtml()}`;
+        updateCalendarClock();
         statsView.innerHTML = `${banner}${state.projects.size ? statsHtml(data, stale) : '<p class="reports-muted">No projects selected.</p>'}`;
         if (focusedProject != null) {
             (view.querySelector(`[data-legend-project="${Number(focusedProject)}"]`) || view.querySelector('[data-manage-projects]'))?.focus({ preventScroll: true });
         } else if (focusedManage) view.querySelector('[data-manage-projects]')?.focus({ preventScroll: true });
         const scroller = view.querySelector('.reports-timegrid-scroll');
         const hour = Number(view.querySelector('.reports-timegrid')?.dataset.hourPx || WEEK_HOUR_PX);
-        if (scroller) {
+        if (preserveScroll) {
+            scrollSelectors.forEach((selector, index) => {
+                const node = view.querySelector(selector);
+                if (node && offsets[index] != null) node.scrollTop = offsets[index];
+            });
+        } else if (scroller) {
             scroller.getBoundingClientRect();
-            scroller.scrollTop = 7 * hour;
+            const first = state.calView === 'week' ? mondayOf(state.cursor) : state.cursor;
+            const days = Array.from({length: state.calView === 'week' ? 7 : 1}, (_, i) => addDays(first, i));
+            scroller.scrollTop = calendarFocusMinute(data.blocks, days) / 60 * hour;
         }
         root.dataset.reportsReady = '1';
     }
@@ -602,7 +714,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             ${projectHtml(data)}
             <p class="reports-note">Each project clock already merges overlapping work inside that project. Adding those clocks gives the chart total${figures.perProjectSum ? ` (${esc(formatHours(figures.perProjectSum))})` : ''}. The global clock${figures.globalClock == null ? '' : ` (${esc(globalText)})`} counts a shared minute once, even when two projects overlap. Recorded time${recorded == null ? '' : ` (${esc(recordedText)})`} adds every block in this period, so the same minute can count more than once. These are this period only, not all-time totals.</p>
             ${costHtml(data)}
-            ${countingHtml(data)}
+            ${countingHtml(state.data)}
         </div>`;
     }
 
@@ -653,7 +765,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         const coverageTable = coverage
             ? `<h3>Harness coverage</h3><div class="reports-table-scroll"><table><thead><tr><th scope="col">Harness</th><th scope="col">Coverage</th></tr></thead><tbody>${coverage}</tbody></table></div>`
             : '';
-        return `<section class="reports-card"><h3>Report types</h3>
+        return `<section class="reports-card"><h3>Report types <small>All projects in this period</small></h3>
             <div class="reports-table-scroll"><table><thead><tr><th scope="col">Type</th><th scope="col">In this response</th></tr></thead><tbody>${typeRows}</tbody></table></div>
             <p class="reports-note">Thread timer, schedule timer, workflow, and annotation are work records. Pi, Codex, Cursor, and Claude are harness coverage, listed separately. A missing type is not shown as zero.</p>
             ${coverageTable}
@@ -678,7 +790,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             : rows;
         const legend = legendRows.map((row) => `<li><label class="reports-project-legend-row"><i style="background:${projectColor(row.project_id)}"></i><span>${esc(row.name)}</span><small>${row.seconds == null ? '' : `${esc(formatHours(row.seconds))} · ${Math.round((100 * row.seconds) / total)}%`}</small><input type="checkbox" data-legend-project="${Number(row.project_id)}" aria-label="Include ${esc(row.name)}"${state.projects.has(Number(row.project_id)) ? ' checked' : ''}></label></li>`).join('');
         const chart = rows.length ? `<svg viewBox="0 0 140 140" role="img" aria-label="Sum of per-project clock time"><g transform="rotate(-90 70 70)">${arcs}</g><text x="70" y="66" text-anchor="middle">${esc(formatHours(figures.perProjectSum))}</text><text x="70" y="82" text-anchor="middle" class="sub">project sum</text></svg>` : '<p class="reports-muted">No recorded work for this selection.</p>';
-        return `<h3>Per project <small>project sum</small></h3>
+        return `<h3>Per project</h3>
             <div class="reports-pie">${chart}
             <hr class="reports-pie-rule">
             <ul id="reports-project-legend">${legend}</ul></div>
@@ -686,13 +798,13 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
     }
 
     function calendarHtml(data) {
-        const tabs = ['day', 'week', 'month'].map((v) => `<button type="button" class="reports-seg${state.calView === v ? ' is-active' : ''}" data-cal-view="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('');
+        const tabs = ['day', 'week', 'month'].map((v) => `<button type="button" class="reports-seg${state.calView === v ? ' is-active' : ''}" data-cal-view="${v}" aria-pressed="${state.calView === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('');
         const nav = state.calView === 'month' ? '' : `<span class="reports-cal-nav"><button type="button" class="reports-icon-button" data-cal-step="-1" aria-label="Previous">‹</button><strong>${esc(cursorLabel())}</strong><button type="button" class="reports-icon-button" data-cal-step="1" aria-label="Next">›</button></span>`;
         let body;
         if (state.calView === 'month') body = monthHtml(data);
         else if (state.calView === 'week') body = timeGridHtml(data, 7, state.weekHourPx, zoomHtml(state.weekHourPx));
         else body = dayShellHtml(data);
-        return `<div class="reports-cal"><div class="reports-cal-head"><span class="reports-segs">${tabs}</span>${nav}</div>${body}</div>`;
+        return `<div class="reports-cal"><div class="reports-cal-head"><div class="reports-segs" role="group" aria-label="Calendar view">${tabs}</div>${nav}</div>${body}</div>`;
     }
 
     function blockDetailShellHtml() {
@@ -708,26 +820,58 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         </dialog>`;
     }
 
+    function calendarEditor(b) {
+        if (b.calendar_edit_lock) return `<p class="reports-detail-note">${esc(b.calendar_edit_lock)}</p>`;
+        if (!state.data?.calendar_connected) {
+            return b.calendar_draft_id ? '<p class="reports-detail-note">Connect Tensology in Settings to save this entry.</p>' : '';
+        }
+        const projects = state.data.calendar_projects || [];
+        const current = b.calendar_project_id;
+        if (current != null && !projects.some((project) => project.id === current)) {
+            return '<p class="reports-detail-note">This project is no longer available for edits in Tensology.</p>';
+        }
+        const options = [`<option value="">Unassigned</option>`, ...projects.map((project) =>
+            `<option value="${Number(project.id)}"${current === project.id ? ' selected' : ''}>${esc(project.name)}</option>`)];
+        const projectInput = `reports-calendar-project-${esc(b.id)}`;
+        return `<form class="reports-calendar-editor" data-calendar-edit="${esc(b.id)}">
+            <label>Description<textarea name="title" rows="3" maxlength="255" required>${esc(b.title)}</textarea></label>
+            <div class="reports-calendar-times">
+                <label>Start (SAST)<input type="datetime-local" name="start_at" required value="${esc(b.entry_start_local.slice(0, 16))}"></label>
+                <label>End (SAST)<input type="datetime-local" name="end_at" required value="${esc(b.entry_end_local.slice(0, 16))}"></label>
+            </div>
+            <div class="reports-calendar-project"><label for="${projectInput}">Project</label><select id="${projectInput}" name="project_id">${options.join('')}</select></div>
+            ${b.calendar_draft_id ? '<p class="reports-detail-note">Saves as non-billable time.</p>' : ''}
+            <p class="reports-calendar-error" role="alert" hidden></p>
+            <button type="submit" class="primary-button">Save to Tensology</button>
+        </form>`;
+    }
+
     function blockDetailHtml(b) {
         const fmt = (v) => (v || '').replace('T', ' ');
-        const facts = [['Start', fmt(b.start_local)], ['End', fmt(b.end_local)]];
+        const calendar = b.source === 'audited_calendar' || b.source === 'calendar_draft';
+        const editor = calendar ? calendarEditor(b) : '';
+        const editable = editor.startsWith('<form');
+        const facts = editable ? [] : [['Start', fmt(b.start_local)], ['End', fmt(b.end_local)]];
         if (b.job_start_local && b.job_start_local !== b.start_local) facts.push(['Job start', fmt(b.job_start_local)]);
         if (b.job_end_local && b.job_end_local !== b.end_local) facts.push(['Job end', fmt(b.job_end_local)]);
         if (b.ref) facts.push(['Reference', [b.ref, ...(b.related_refs || [])].join('; ')]);
         const meta = [`<span class="reports-detail-project"><i style="--c:${projectColor(b.project_id)}"></i>${esc(b.project_name || 'Unassigned')}</span>`];
-        if (b.source_label) meta.push(`<span>${esc(b.source_label)}</span>`);
+        if (b.calendar_draft_id) meta.push('<span>In progress</span>');
+        else if (b.source_label) meta.push(`<span>${esc(b.source_label)}</span>`);
         if (b.seconds != null) meta.push(`<span>${esc(formatHours(b.seconds))}</span>`);
-        if (b.description_status === 'needs_review' || b.invoice_status === 'needs_review') meta.push('<span>Needs review before invoicing</span>');
+        if (!b.calendar_draft_id && (b.description_status === 'needs_review' || b.invoice_status === 'needs_review')) meta.push('<span>Needs review before invoicing</span>');
         if (b.invoice_status === 'non_billable') facts.push(['Invoice', 'Non-billable activity']);
         else if (b.invoice_status === 'zero_rate') facts.push(['Invoice', 'Tracked at R0 (struck through)']);
         else if (b.invoice_status === 'ready') facts.push(['Invoice', 'Reviewed work']);
-        if (b.invoice_reason) facts.push(['Review', b.invoice_reason]);
+        if (b.invoice_reason && !b.calendar_draft_id) facts.push(['Review', b.invoice_reason]);
+        if (b.timing_basis) facts.push(['Timing', b.calendar_draft_id
+            ? b.timing_basis.replace(/^Draft based on /i, 'Based on ') : b.timing_basis]);
         const current = Number(b.project_id || 0);
         const projects = [...(state.data?.projects || [])].filter((p) => Number(p.id) !== 0);
         const options = [`<option value="0"${current === 0 ? ' selected' : ''}>Unassigned</option>`]
             .concat(projects.map((p) => `<option value="${Number(p.id)}"${current === Number(p.id) ? ' selected' : ''}>${esc(p.name)}</option>`))
             .join('');
-        const assign = `<label class="reports-detail-assign"><span>Project</span>
+        const assign = calendar ? '' : `<label class="reports-detail-assign"><span>Project</span>
             <select data-assign-project data-source="${esc(b.source || '')}" data-ref="${esc(b.ref || '')}" data-source-start="${esc(b.source_start || '')}" data-source-end="${esc(b.source_end || '')}">${options}</select></label>`;
         const note = (b.starts_before_period || b.ends_after_period)
             ? '<p class="reports-detail-note">Clipped to the report period.</p>' : '';
@@ -744,8 +888,10 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             : /^chat:\d+$/.test(b.ref || '')
                 ? `<a class="reports-source-link" href="/development/threads/${Number(b.ref.split(':')[1])}/">Open Development thread</a>` : '';
         return `<article class="reports-detail-block">
-            <p class="reports-detail-what">${esc(b.title || 'Unknown')}</p>
+            ${editable ? '' : `<p class="reports-detail-what">${esc(displayWorkTitle(b).shown)}</p>`}
+            ${b.reviewed_description && b.reviewed_description !== b.title ? `<p class="reports-detail-note">${esc(b.reviewed_description)}</p>` : ''}
             <p class="reports-detail-meta">${meta.join('')}</p>
+            ${editor}
             ${assign}
             <dl class="reports-detail-facts">${facts.map(([k, v]) => `<div${k === 'Reference' ? ' class="reports-detail-reference"' : ''}><dt>${esc(k)}</dt><dd${k === 'Reference' ? ' class="reports-detail-ref"' : ''}>${esc(String(v == null ? '' : v))}</dd></div>`).join('')}</dl>
             ${sourceThread}
@@ -873,11 +1019,12 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             list.sort((a, b) => a.start - b.start);
             let current = null;
             for (const seg of list) {
-                if (current && seg.start <= current.end + 5) {
+                const calendar = ['audited_calendar', 'calendar_draft'].includes(seg.block.source);
+                if (!calendar && current && !current.calendar && seg.start <= current.end + 5) {
                     current.end = Math.max(current.end, seg.end);
                     current.items.push(seg.block);
                 } else {
-                    current = { projectId, name: seg.block.project_name, start: seg.start, end: seg.end, items: [seg.block] };
+                    current = { projectId, name: seg.block.project_name, start: seg.start, end: seg.end, items: [seg.block], calendar };
                     merged.push(current);
                 }
             }
@@ -900,22 +1047,23 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         return laid.bars.map((bar) => {
             const top = (bar.start / 60) * hourPx;
             const height = Math.max(10, ((bar.end - bar.start) / 60) * hourPx);
+            const descriptions = [...new Set((bar.items || []).map((item) => displayWorkTitle(item).shown).filter(Boolean))];
             const detail = bar.overflow
                 ? `${bar.overflowCount} overlapping`
-                : [...new Set((bar.items || []).map((item) => item.title))].slice(0, 6).join('\n');
-            const tip = `${bar.name || 'Overlapping'} · ${clock(bar.start)}–${clock(bar.end)}\n${detail}`;
+                : descriptions.slice(0, 6).join('\n');
+            const inProgress = bar.items?.some((item) => item.calendar_draft_id);
+            const tip = `${bar.name || 'Overlapping'} · ${clock(bar.start)}–${clock(bar.end)}${inProgress ? ' · In progress' : ''}\n${detail}`;
             let label = '';
             if (bar.overflow) label = `+${bar.overflowCount}`;
             else if (height >= 22 && bar.name) {
                 label = `<b>${esc(bar.name)}</b>`;
-                if (!compact && height >= 36 && bar.items && bar.items.length === 1) {
-                    const title = bar.items[0].title;
-                    if (title && title !== bar.items[0].source_label) label += ` <span>${esc(title)}</span>`;
+                if (height >= 36 && descriptions.length) {
+                    label += descriptions.map((description) => `<span>${esc(description)}</span>`).join('');
                 }
             }
             const cls = bar.overflow ? 'reports-block is-overflow' : 'reports-block';
-            const ids = bar.overflow ? [] : (bar.items || []).map((item) => item.id).filter((id) => id != null);
-            const interactive = ids.length ? ` class="${cls} is-interactive" data-block-ids="${esc(ids.join(','))}" role="button" tabindex="0"` : ` class="${cls}"`;
+            const ids = (bar.items || []).map((item) => item.id).filter((id) => id != null);
+            const interactive = ids.length ? ` class="${cls} is-interactive" data-block-ids="${esc(ids.join(','))}" role="button" aria-label="${esc(tip.replaceAll('\n', ' '))}" tabindex="0"` : ` class="${cls}"`;
             return `<div${interactive} style="top:${top}px;height:${height}px;left:calc(${bar.leftPct}% + 2px);width:calc(${bar.widthPct}% - 4px);--c:${projectColor(bar.projectId)}" title="${esc(tip)}">${label}</div>`;
         }).join('');
     }
@@ -926,7 +1074,8 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         const columns = packed.list.map((day) => {
             const laid = layoutOverlapBars(mergeByProject(packed.perDay.get(day)), days === 7 ? 3 : 4);
             const outside = data.period && (day < data.period.start || day > data.period.end) ? ' is-outside' : '';
-            return `<div class="reports-col${outside}"><div class="reports-col-body" style="height:${24 * hourPx}px">${barsHtml(laid, hourPx, days === 7)}</div></div>`;
+            const nowLine = days === 1 ? '<div class="reports-now-line" aria-hidden="true" hidden></div>' : '';
+            return `<div class="reports-col${outside}"><div class="reports-col-body" style="height:${24 * hourPx}px">${barsHtml(laid, hourPx, days === 7)}${nowLine}</div></div>`;
         }).join('');
         const heads = packed.list.map((day) => {
             const info = (data.by_day || []).find((d) => d.date === day);
@@ -938,7 +1087,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
 
     function dayListHtml(segs) {
         const seen = new Set();
-        const rows = [];
+        const groups = new Map();
         for (const seg of segs || []) {
             const b = seg.block;
             if (!b || seen.has(b.id)) continue;
@@ -946,15 +1095,21 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             const slice = daySlice(b, seg.day);
             if (!slice) continue;
             const titles = displayWorkTitle(b);
-            const description = [b.project_name, titles.shown].filter(Boolean).join(' — ');
             const full = [
                 titles.original,
                 b.start_local && b.end_local ? `${b.start_local.replace('T', ' ')} – ${b.end_local.replace('T', ' ')}` : '',
                 b.seconds != null ? `Full record ${formatHours(b.seconds)}` : ''
             ].filter(Boolean).join('\n');
-            rows.push(`<li class="reports-day-item" data-block-id="${esc(b.id)}" role="button" tabindex="0"><time>${esc(slice.range)}</time><span title="${esc(full)}">${description ? esc(description) : 'Unknown'}</span><small>${esc(formatSlice(slice.seconds))}</small></li>`);
+            const name = b.project_name || 'Unassigned';
+            if (!groups.has(b.project_id)) groups.set(b.project_id, { name, rows: [] });
+            groups.get(b.project_id).rows.push(`<li><button type="button" class="reports-day-item" data-block-id="${esc(b.id)}" title="${esc(full)}">
+                <span class="reports-day-time"><time>${esc(slice.range)}</time><small>${esc(formatSlice(slice.seconds))}</small></span>
+                <span class="reports-day-copy">${esc(titles.shown || 'Unknown')}${b.calendar_draft_id ? '<small>In progress</small>' : ''}</span>
+            </button></li>`);
         }
-        return rows.length ? `<ul class="reports-day-list">${rows.join('')}</ul>` : '<p class="reports-muted">No recorded work on this day.</p>';
+        return groups.size ? [...groups.values()].map(({ name, rows }) => `<section class="reports-day-project">
+            <h3>${esc(name)}</h3><ul class="reports-day-list">${rows.join('')}</ul>
+        </section>`).join('') : '<p class="reports-muted">No reviewed work blocks on this day. Short or uncertain activity remains in History.</p>';
     }
 
     function zoomHtml(level) {
@@ -1058,7 +1213,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             return;
         }
         if (event.key === 'Tab' && panel?.open) {
-            const controls = [...panel.querySelectorAll('button:not(:disabled), select:not(:disabled)')];
+            const controls = [...panel.querySelectorAll('button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary, a[href]')];
             const first = controls[0];
             const last = controls[controls.length - 1];
             if (event.shiftKey && document.activeElement === first) {
@@ -1075,6 +1230,42 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         if (!blockEl) return;
         event.preventDefault();
         openBlockDetail(blockEl.dataset.blockIds ? blockEl.dataset.blockIds.split(',') : [blockEl.dataset.blockId], blockEl);
+    });
+    view.addEventListener('submit', async (event) => {
+        const form = event.target.closest('[data-calendar-edit]');
+        if (!form) return;
+        event.preventDefault();
+        const block = state.data?.blocks.find((item) => item.id === form.dataset.calendarEdit);
+        const button = form.querySelector('button[type="submit"]');
+        if (!block || button.disabled) return;
+        const errorLine = form.querySelector('[role="alert"]');
+        const fields = new FormData(form);
+        const time = (name, local, original) => fields.get(name) === local.slice(0, 16)
+            ? original : `${fields.get(name)}:00+02:00`;
+        button.disabled = true;
+        button.textContent = 'Saving…';
+        errorLine.hidden = true;
+        try {
+            await api('/workflows/studio/reports/calendar-entry', { method: 'POST', body: {
+                entry_id: block.calendar_event_id || null,
+                draft_id: block.calendar_draft_id || null,
+                version: block.calendar_version || null,
+                original_start: block.entry_start,
+                original_end: block.entry_end,
+                title: fields.get('title'),
+                start_at: time('start_at', block.entry_start_local, block.entry_start),
+                end_at: time('end_at', block.entry_end_local, block.entry_end),
+                project_id: fields.get('project_id') ? Number(fields.get('project_id')) : null,
+            }});
+            closeBlockDetail();
+            await load();
+        } catch (error) {
+            errorLine.textContent = error.message || 'Could not save to Tensology.';
+            errorLine.hidden = false;
+        } finally {
+            button.textContent = 'Save to Tensology';
+            button.disabled = false;
+        }
     });
     view.addEventListener('change', async (event) => {
         const project = event.target.closest('[data-legend-project]');
@@ -1119,6 +1310,11 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         } else {
             render();
         }
+        const line = view.querySelector('.reports-now-line:not([hidden])');
+        if (line && state.visible) {
+            const scroller = line.closest('.reports-timegrid-scroll');
+            scroller.scrollTop = line.offsetTop - scroller.clientHeight / 2;
+        }
     });
     for (const [id, delta] of [['#reports-period-prev', 1], ['#reports-period-next', -1]]) {
         // Options run newest first, so "previous period" moves down the list.
@@ -1146,21 +1342,18 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             projectsButton.setAttribute('aria-expanded', 'false');
         }
     });
-    let projectTimer = null;
     function updateProjectSelection(id, checked) {
-        state.request?.abort();
-        state.generation++;
-        state.loading = false;
-        selectionNeedsLoad = true;
+        const focusedOption = document.activeElement?.dataset?.project;
         if (Number.isInteger(id)) {
             if (checked) state.projects.add(id);
             else state.projects.delete(id);
         }
-        renderProjectsMenu();
+        if (!projectsMenu.hidden) {
+            renderProjectsMenu();
+            if (focusedOption) projectsMenu.querySelector(`[data-project="${focusedOption}"]`)?.focus({ preventScroll: true });
+        }
         savePrefs();
-        render();
-        clearTimeout(projectTimer);
-        projectTimer = setTimeout(load, 350);
+        render({ preserveScroll: true });
     }
     projectsMenu.addEventListener('change', (event) => {
         const input = event.target.closest('input[data-project]');
@@ -1182,12 +1375,13 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             }
             state.tab = tab;
             state.visible = true;
-            if (!state.data || state.error || selectionNeedsLoad) load();
+            scheduleCalendarClock();
+            if (!state.data || state.error) load();
             else render();
         },
         refresh: load,
         leave() {
-            clearTimeout(projectTimer);
+            clearTimeout(clockTimer);
             closeBlockDetail();
             state.visible = false;
             state.generation++;

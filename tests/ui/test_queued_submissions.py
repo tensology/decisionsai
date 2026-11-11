@@ -1,6 +1,7 @@
 """Real composer interactions with isolated, persistent queue API fixtures."""
 import base64
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -93,6 +94,62 @@ def open_queue(page, fixture_base, width=1280):
 def shot(page, name):
     SHOTS.mkdir(exist_ok=True)
     page.screenshot(path=str(SHOTS / f'{name}.png'), full_page=True)
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_stale_view_conflict_preserves_the_composer_draft(page, fixture_base, width):
+    page.set_viewport_size({'width': width, 'height': 920})
+    requests = []
+    _install_api(page, requests, direct_execution=True, current_board_linked=True)
+    submissions = []
+    queued = []
+    refreshed = []
+    rows = []
+
+    def reject_overlap(route):
+        submissions.append(route.request.post_data_json['message'])
+        route.fulfill(status=409, json={
+            'code': 'development_execution_busy',
+            'detail': 'Work is already running in this Development thread.',
+        })
+
+    def read_execution(route):
+        if not submissions:
+            return route.fallback()
+        refreshed.append(True)
+        route.fulfill(json={'id': 'original-worker', 'direct': True, 'status': 'running'})
+
+    def queue_followup(route):
+        body = route.request.post_data_json
+        queued.append(body['content'])
+        rows.append({**body, 'id': 62, 'chat_id': 17, 'status': 'queued', 'modified_at': '1'})
+        route.fulfill(json={'status': 'queued', 'summary': 'Instruction queued.', 'artifacts': rows})
+
+    page.route('**/api/workflows/studio/tasks/17/messages', reject_overlap)
+    page.route('**/api/workflows/studio/tasks/17/execution', read_execution)
+    page.route('**/api/workflows/studio/tasks/17/commands', queue_followup)
+    page.route(re.compile(r'/api/workflows/studio/control-state(?:\?|$)'), lambda route: route.fulfill(
+        json={'commands': rows, 'interactions': [], 'channels': {}, 'controls': {}},
+    ))
+    page.goto(f'{fixture_base}/development/threads/17/')
+    prompt = page.locator('#task-prompt')
+    prompt.fill('Check the remaining configuration values')
+    page.locator('#send-button').click()
+    toast = page.locator('#studio-toast')
+    expect(toast).to_contain_text('Work is already running in this Development thread.')
+    expect(prompt).to_have_value('Check the remaining configuration values')
+    expect(page.locator('#send-button')).to_be_enabled()
+    assert submissions == ['Check the remaining configuration values']
+    assert refreshed
+    assert toast.bounding_box()['y'] + toast.bounding_box()['height'] <= page.locator('#studio-composer').bounding_box()['y']
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    shot(page, f'{width}-stale-view-conflict')
+    page.locator('#send-button').click()
+    expect(toast).to_have_text('Instruction queued.')
+    expect(page.locator('[data-queued-id="62"]')).to_contain_text(submissions[0])
+    assert queued == submissions
+    assert len(submissions) == 1
+    shot(page, f'{width}-stale-view-queued')
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])

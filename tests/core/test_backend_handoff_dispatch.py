@@ -6,7 +6,8 @@ import pytest
 from distr.core.project_cli_backends.base import BackendTaskResult
 
 
-def test_run_project_task_records_backend_handoff(monkeypatch):
+@pytest.mark.parametrize("origin", ["cli", "proactive_orchestrator"])
+def test_run_project_task_records_backend_handoff(monkeypatch, origin):
     from distr.core.project_cli_backends import registry
 
     class FakeBackend:
@@ -25,12 +26,13 @@ def test_run_project_task_records_backend_handoff(monkeypatch):
     events = []
     completed = []
     handoffs = []
+    sessions = []
 
     monkeypatch.setattr(registry, "get_backend", lambda backend_id: FakeBackend())
     monkeypatch.setattr(registry, "_git_status_short", lambda folder: [" M app.py"])
     monkeypatch.setattr(
         "distr.core.kanban.project_execution.create_execution_session",
-        lambda **kwargs: 77,
+        lambda **kwargs: sessions.append(kwargs) or 77,
     )
     monkeypatch.setattr(
         "distr.core.kanban.project_execution.append_execution_event",
@@ -56,11 +58,22 @@ def test_run_project_task_records_backend_handoff(monkeypatch):
             run_id=5,
             step_id=6,
             ticket_id=7,
+            chat_id=8,
             backend_id_override="codex",
+            board_id_override=9,
+            origin=origin,
+            proactive_candidate_id=42,
+            turn_id=11,
         )
     )
 
     assert result.success is True
+    assert sessions[0]["input_packet"]["chat_id"] == 8
+    assert sessions[0]["input_packet"]["turn_id"] == 11
+    assert sessions[0]["input_packet"]["board_id"] == 9
+    assert sessions[0]["input_packet"].get("proactive_candidate_id") == (
+        42 if origin == "proactive_orchestrator" else None
+    )
     assert len(handoffs) == 2
     created = handoffs[0]
     updated = handoffs[1]

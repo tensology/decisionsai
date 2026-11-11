@@ -12,7 +12,9 @@ export function createBoards({ context, actions, el }) {
         // Loaded context note and its parsed JSON, so unedited notes are never re-sent.
         noteOriginal: '',
         noteJson: null,
-        noteMode: 'text'
+        noteMode: 'text',
+        runningTicketActions: new Set(),
+        workflowDraftRequest: null
     };
     function kanbanLanes() {
         return context.boardDetails[context.selectedBoardKey]?.lanes || [];
@@ -329,7 +331,9 @@ export function createBoards({ context, actions, el }) {
         el('development-kanban-board').textContent = board.name || 'Untitled board';
         const detail = context.boardDetails[board.key];
         if (!detail) {
-            lanesNode.innerHTML = '<div class="development-kanban-empty">Loading board...</div>';
+            lanesNode.innerHTML = context.boardLoadErrors?.has(board.key)
+                ? '<div class="development-kanban-empty" role="alert">Could not load this board. Reload to try again.</div>'
+                : '<div class="development-kanban-empty">Loading board...</div>';
             return;
         }
         const lanes = detail.lanes || [];
@@ -457,17 +461,41 @@ export function createBoards({ context, actions, el }) {
         const labels = { agent: 'Codex', project: 'project' };
         const endpoint = endpoints[action];
         if (!endpoint) return;
-        setKanbanStatus(`Sending ticket to ${labels[action]}...`);
+        const boardKey = context.selectedBoardKey;
+        const requestKey = `${boardKey}:${ticket.ticket_id}`;
+        if (state.runningTicketActions.has(requestKey)) return;
+        state.runningTicketActions.add(requestKey);
+        const inCurrentDialog = () => el('kanban-ticket-dialog').open
+            && context.selectedBoardKey === boardKey
+            && el('kanban-ticket-form').dataset.ticketKey === ticket.key;
+        const report = (message, error = false) => {
+            if (context.selectedBoardKey === boardKey) setKanbanStatus(message, error ? 'error' : '');
+            if (!inCurrentDialog()) return;
+            const status = el('kanban-ticket-action-status');
+            status.textContent = message;
+            status.classList.toggle('hidden', !message);
+            status.classList.toggle('error', error);
+            status.setAttribute('role', error ? 'alert' : 'status');
+        };
+        if (inCurrentDialog()) el('kanban-ticket-run-agent').disabled = true;
+        report(`Sending ticket to ${labels[action]}...`);
         try {
             const result = await actions.api(endpoint, {
                 method: 'POST',
                 body: action === 'agent' ? { backend_id: 'codex' } : {}
             });
-            setKanbanStatus('');
-            actions.toast(result.message || `Ticket sent to ${labels[action]}.`);
-            await actions.loadBoardTickets(context.selectedBoardKey, { force: true });
+            if (result?.success === false || ['blocked', 'failed', 'error'].includes(result?.status)) {
+                throw new Error(result.error || result.detail || `Could not send ticket to ${labels[action]}.`);
+            }
+            const message = result.message || `Ticket sent to ${labels[action]}.`;
+            report(message);
+            actions.toast(message);
+            await actions.loadBoardTickets(boardKey, { force: true });
         } catch (error) {
-            setKanbanStatus(error.message || `Could not send ticket to ${labels[action]}.`, 'error');
+            report(error.message || `Could not send ticket to ${labels[action]}.`, true);
+        } finally {
+            state.runningTicketActions.delete(requestKey);
+            if (inCurrentDialog()) el('kanban-ticket-run-agent').disabled = false;
         }
     }
 
@@ -590,6 +618,97 @@ export function createBoards({ context, actions, el }) {
         return ticket?.source_chat_id ? 'Open Thread' : 'Start Thread';
     }
 
+    async function loadTicketWorkflowDraft() {
+        const panel = el('kanban-ticket-workflow-draft');
+        const ticket = currentKanbanDialogTicket();
+        const boardKey = context.selectedBoardKey;
+        const board = actions.boardByKey(boardKey);
+        const boardId = Number(board?.local_id || board?.id);
+        const ticketId = Number(ticket?.ticket_id);
+        if (!panel.open || !el('kanban-ticket-dialog').open || board?.provider !== 'decisions' || !boardId || !ticketId) return;
+        const request = {};
+        state.workflowDraftRequest = request;
+        const status = el('kanban-ticket-workflow-draft-status');
+        const steps = el('kanban-ticket-workflow-draft-steps');
+        const retry = el('kanban-ticket-workflow-draft-retry');
+        const approve = el('kanban-ticket-workflow-draft-approve');
+        const thread = el('kanban-ticket-workflow-draft-thread');
+        const path = `/workflows/studio/boards/${boardId}/tickets/${ticketId}/workflow-draft`;
+        const stillSelected = () => state.workflowDraftRequest === request
+            && el('kanban-ticket-dialog').open && panel.open
+            && context.selectedBoardKey === boardKey && currentKanbanDialogTicket()?.key === ticket.key;
+        status.textContent = 'Loading draft…';
+        steps.replaceChildren();
+        approve.classList.add('hidden');
+        thread.classList.add('hidden');
+        retry.setAttribute('aria-disabled', 'true');
+        const showRun = (result) => {
+            const chatId = Number(result.chat_id);
+            if (result.status !== 'launched' || !Number.isSafeInteger(chatId) || chatId < 1) return false;
+            const label = result.run_status === 'running' && result.phase === 'initializing'
+                ? 'Starting' : actions.statusLabel(result.run_status || 'running');
+            status.textContent = `Workflow run #${result.run_id} · ${label}`;
+            steps.replaceChildren();
+            thread.href = `/development/threads/${chatId}/`;
+            thread.classList.remove('hidden');
+            return true;
+        };
+        try {
+            const result = await actions.api(path);
+            if (!stillSelected()) return;
+            if (showRun(result)) return;
+            if (result.status === 'awaiting_review') {
+                const draft = result.draft;
+                status.textContent = `Awaiting review for ${result.project_name}.`;
+                steps.innerHTML = `<p>${actions.escapeHtml(draft.reason)}</p><ol>${draft.steps.map(
+                    step => `<li>${actions.escapeHtml(step.instruction)}</li>`
+                ).join('')}</ol><p>Record the check and result for each step.</p>`;
+                if (draft.omitted_steps > 0) {
+                    const remaining = document.createElement('p');
+                    remaining.textContent = `${draft.omitted_steps} additional checklist items are outside this draft.`;
+                    steps.append(remaining);
+                } else if (result.candidate_id && draft.checklist_revision) {
+                    approve.classList.remove('hidden');
+                    approve.onclick = async () => {
+                        if (!stillSelected() || approve.classList.contains('hidden')) return;
+                        approve.classList.add('hidden');
+                        retry.setAttribute('aria-disabled', 'true');
+                        status.textContent = 'Launching approved workflow…';
+                        try {
+                            const launched = await actions.api(`${path}/approve`, {
+                                method: 'POST', body: { approved: true, candidate_id: result.candidate_id, revision: draft.checklist_revision }
+                            });
+                            if (stillSelected() && !showRun(launched)) status.textContent = 'Launch could not be confirmed. Refresh the draft to check its status.';
+                        } catch (error) {
+                            if (stillSelected()) {
+                                steps.replaceChildren();
+                                status.textContent = [404, 409, 422].includes(error.status)
+                                    ? error.message : 'Launch could not be confirmed. Refresh the draft to check its status.';
+                            }
+                        } finally {
+                            if (stillSelected()) retry.removeAttribute('aria-disabled');
+                        }
+                    };
+                }
+            } else if (result.status === 'unconfirmed') {
+                status.textContent = 'A workflow was approved, but its run could not be confirmed.';
+            } else if (result.status === 'stale') {
+                status.textContent = 'This draft is out of date. Ask the orchestrator to scan this board again.';
+            } else if (result.status === 'unavailable') {
+                status.textContent = 'Link this ticket to an active project to review a workflow draft.';
+            } else {
+                status.textContent = 'There is no saved workflow draft for this ticket.';
+            }
+        } catch (_) {
+            if (stillSelected()) status.textContent = 'Could not load the workflow draft. Try again.';
+        } finally {
+            if (stillSelected()) {
+                retry.classList.remove('hidden');
+                retry.removeAttribute('aria-disabled');
+            }
+        }
+    }
+
     function openKanbanTicketDialog(ticketKey, laneId) {
         const board = actions.boardByKey(context.selectedBoardKey);
         if (!board) return;
@@ -601,6 +720,9 @@ export function createBoards({ context, actions, el }) {
         const form = el('kanban-ticket-form');
         form.dataset.ticketKey = ticket?.key || '';
         form.dataset.creating = String(creating);
+        el('kanban-ticket-action-status').textContent = '';
+        el('kanban-ticket-action-status').classList.add('hidden');
+        el('kanban-ticket-run-agent').disabled = state.runningTicketActions.has(`${context.selectedBoardKey}:${ticket?.ticket_id}`);
         el('kanban-ticket-id').value = ticket?.id || '';
         el('kanban-ticket-provider').classList.add('hidden');
         el('kanban-ticket-heading').textContent = creating ? 'New ticket' : ticket.ticket_title;
@@ -642,6 +764,17 @@ export function createBoards({ context, actions, el }) {
         sourceLink.classList.toggle('hidden', !ticket?.external_url);
         sourceLink.href = ticket?.external_url || '#';
         const localExisting = Boolean(ticket && board.provider === 'decisions');
+        const workflowDraft = el('kanban-ticket-workflow-draft');
+        state.workflowDraftRequest = null;
+        workflowDraft.open = false;
+        workflowDraft.hidden = !localExisting;
+        el('kanban-ticket-workflow-draft-status').textContent = '';
+        el('kanban-ticket-workflow-draft-steps').replaceChildren();
+        el('kanban-ticket-workflow-draft-retry').classList.add('hidden');
+        el('kanban-ticket-workflow-draft-retry').removeAttribute('aria-disabled');
+        el('kanban-ticket-workflow-draft-approve').classList.add('hidden');
+        el('kanban-ticket-workflow-draft-approve').onclick = null;
+        el('kanban-ticket-workflow-draft-thread').classList.add('hidden');
         const detail = context.boardDetails[board.key] || {};
         el('kanban-ticket-run-agent').classList.toggle('hidden', !localExisting || !(raw.linked_project_id || detail.default_project_id || board.project_id));
         el('kanban-ticket-dialog').showModal();
@@ -975,6 +1108,10 @@ export function createBoards({ context, actions, el }) {
         });
         el('ticket-context-menu').addEventListener('click', runTicketContextMenuAction);
         el('kanban-ticket-form').addEventListener('submit', saveKanbanTicket);
+        el('kanban-ticket-workflow-draft').addEventListener('toggle', loadTicketWorkflowDraft);
+        el('kanban-ticket-workflow-draft-retry').addEventListener('click', (event) => {
+            if (event.currentTarget.getAttribute('aria-disabled') !== 'true') loadTicketWorkflowDraft();
+        });
         el('kanban-ticket-details-tab').addEventListener('click', () => setKanbanTicketTab('details'));
         el('kanban-ticket-notes-tab').addEventListener('click', () => setKanbanTicketTab('notes'));
         el('kanban-ticket-attachments-tab').addEventListener('click', () => setKanbanTicketTab('attachments'));

@@ -1706,43 +1706,10 @@ class StepExecutorMixin:
                     )
                     if runtime_hint:
                         final_instruction = f"{runtime_hint}\n\n{final_instruction}"
-                    if backend_id == "pi":
-                        # Pi also loads project skills and repo guidance into its
-                        # own context window. Keep the workflow packet compact so
-                        # free/local routes do not silently exhaust their usable
-                        # generation budget before reaching the current task.
-                        final_instruction = self._bound_project_cli_prompt(
-                            final_instruction,
-                            max_chars=12000,
-                        )
-                    if run_row:
-                        # One-shot workers cannot consume a live steer after
-                        # their prompt has been sent. On the next dispatch the
-                        # steering log is part of the handoff packet; record that
-                        # distinction so the UI does not imply it reached the
-                        # terminated worker in real time.
-                        latest = json.loads(run_row.run_data or "{}") or {}
-                        pending_steers = latest.get("pending_harness_steers")
-                        pending_steers = pending_steers if isinstance(pending_steers, list) else []
-                        applied = False
-                        prompt_flat = " ".join(final_instruction.split())
-                        for entry in pending_steers:
-                            if not isinstance(entry, dict) or entry.get("delivered") or entry.get("applied_to_prompt"):
-                                continue
-                            message = " ".join(str(entry.get("message") or "").split())
-                            marker = message[:160]
-                            if not marker or marker not in prompt_flat:
-                                continue
-                            entry["applied_to_prompt"] = True
-                            entry["applied_step_id"] = step_data.get("id")
-                            entry["application_method"] = "next_dispatch_prompt"
-                            applied = True
-                        if applied:
-                            latest["pending_harness_steers"] = pending_steers[-20:]
-                            latest["human_intervention_state"] = "steer_applied_to_prompt"
-                            latest["next_action"] = "worker_continue"
-                            run_row.run_data = json.dumps(latest)
-                            db.commit()
+                    pending_steers = (json.loads(run_row.run_data or "{}") or {}).get("pending_harness_steers") if run_row else None
+                    final_instruction, included_steers = self._prepare_project_cli_dispatch_prompt(
+                        final_instruction, pending_steers,
+                    )
                     from distr.core.workflow.control_policy import resolve_inspection_budget
 
                     ticket_budget_context = ""
@@ -1791,6 +1758,7 @@ class StepExecutorMixin:
                             project=project,
                             instruction=final_instruction,
                             backend_id=selected_backend,
+                            chat_id=run_row.chat_id if run_row is not None else None,
                             model=selected_model,
                             ticket_id=int(ticket_id) if ticket_id is not None else None,
                             board_id=getattr(board, "id", None) if board else None,
@@ -1908,6 +1876,25 @@ class StepExecutorMixin:
                         # Configured harness only: never propose, approve, or
                         # silently switch to another backend/model on failure.
                         return handle.result
+                    if run_row and included_steers and handle.result and handle.result.success:
+                        db.refresh(run_row)
+                        latest = json.loads(run_row.run_data or "{}") or {}
+                        entries = latest.get("pending_harness_steers")
+                        changed = False
+                        for entry in entries if isinstance(entries, list) else []:
+                            if not isinstance(entry, dict) or entry.get("delivered") or entry.get("applied_to_prompt"):
+                                continue
+                            if (entry.get("ts"), entry.get("message")) in included_steers:
+                                entry.update(applied_to_prompt=True, applied_step_id=step_data.get("id"),
+                                             application_method="next_dispatch_prompt")
+                                changed = True
+                        if changed:
+                            last_steer = latest.get("last_harness_steer") or {}
+                            if (last_steer.get("ts"), last_steer.get("message")) in included_steers:
+                                latest["human_intervention_state"] = "steer_applied_to_prompt"
+                                latest["next_action"] = "worker_continue"
+                            run_row.run_data = json.dumps(latest)
+                            db.commit()
                     if run_id and handle.execution_session_id:
                         if run_row:
                             run_data_local = json.loads(run_row.run_data or "{}") or {}
@@ -2667,6 +2654,29 @@ class StepExecutorMixin:
         tail_chars = max_chars - head_chars - len(marker)
         return value[:head_chars].rstrip() + marker + value[-tail_chars:].lstrip()
 
+    @classmethod
+    def _prepare_project_cli_dispatch_prompt(cls, prompt, pending, *, max_chars=None):
+        """Reserve room for complete queued instructions after prompt compaction."""
+        heading = "\n\n[QUEUED WORKFLOW STEERING]\n"
+        messages = []
+        included = []
+        remaining = 4400 - len(heading)
+        for entry in reversed(pending if isinstance(pending, list) else []):
+            if not isinstance(entry, dict) or entry.get("delivered") or entry.get("applied_to_prompt"):
+                continue
+            message = entry.get("message")
+            if not isinstance(message, str) or not message.strip():
+                continue
+            if messages and len(message) + 2 > remaining:
+                continue
+            messages.append(message)
+            included.append((entry.get("ts"), message))
+            remaining -= len(message) + 2
+        block = heading + "\n\n".join(reversed(messages)) if messages else ""
+        if max_chars is not None:
+            prompt = cls._bound_project_cli_prompt(prompt, max_chars=max_chars - len(block))
+        return prompt + block, included
+
     @staticmethod
     def _record_context_telemetry(run_id: Optional[int], step_id: Any, telemetry: dict[str, Any]) -> None:
         """Persist bounded prompt diagnostics so Mission Control can explain context cost."""
@@ -2713,6 +2723,7 @@ class StepExecutorMixin:
         workflow_description = ""
         context_rules = ""
         workflow_input_context = ""
+        submitted_request = ""
         prior_results: List[Dict[str, str]] = []
         total_steps = 1
         step_index = 0
@@ -2833,7 +2844,8 @@ class StepExecutorMixin:
                     if run and run.run_data:
                         run_data = json.loads(run.run_data or "{}")
                         # Prefer direct column (always set) over JSON metadata field
-                        workflow_input_context = str(run_data.get("submitted_context") or "").strip()
+                        submitted_request = str(run_data.get("submitted_context") or "")
+                        workflow_input_context = submitted_request.strip()
                         ticket_id = run.ticket_id or run_data.get("ticket_id")
                         if ticket_id:
                             try:
@@ -3083,7 +3095,6 @@ class StepExecutorMixin:
         )
         constraints = [
             "Enabled workflow skills: " + ", ".join(active_step_skills) + ". Read and apply them when relevant. Use decisions-headroom for bulky supporting context, never for instructions or acceptance criteria.",
-            context_rules,
             loop_context_summary,
             "Stay on the linked ticket and current workflow step. Use project-local rules before generic assumptions. "
             "If required files or attachments are missing, report needs_input. Keep changes minimal, evidence-backed, and reversible.",
@@ -3163,6 +3174,8 @@ class StepExecutorMixin:
             ),
             required_context=required_context,
             current_step={"title": step_title, "instruction": step_instruction},
+            current_request=submitted_request,
+            context_rules=context_rules,
             workflow_map=coordination_map,
             constraints=[item for item in constraints if str(item or "").strip()],
             prior_outcomes=prior_outcomes,
@@ -3189,8 +3202,6 @@ class StepExecutorMixin:
                     references=artifact_refs,
                     max_chars=handoff_budget_for_role(step_role),
                 )
-                if pumped.get("restart_context"):
-                    prompt = str(pumped["restart_context"])
                 note = str(
                     pumped.get("note")
                     or (

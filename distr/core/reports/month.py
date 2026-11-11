@@ -17,6 +17,7 @@ import hashlib
 import os
 import re
 import subprocess
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -50,6 +51,13 @@ _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _MD_BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 _MD_CODE_RE = re.compile(r"`([^`]+)`")
 _GREETING_RE = re.compile(r"^(?:hello|hi|hey|good (?:morning|afternoon|evening))\b", re.IGNORECASE)
+
+
+def scheduled_instruction(text):
+    """Recognise the harness's bound schedule, never a quoted old conversation."""
+    header = str(text or '').split('Conversation context since', 1)[0].split('Current user instruction:', 1)[0]
+    return bool(re.search(r'^Automation control: auto_\d+\. This thread owns that scheduled task\.',
+                          header, re.MULTILINE))
 
 
 def clean_description(text: str) -> str:
@@ -410,6 +418,28 @@ def collect_database_blocks(lo: datetime, hi: datetime, get_session=None) -> tup
     pad = timedelta(hours=24)  # records that started before the window but ran into it
     with get_session() as db:
         chat_project = {}
+        automation_chats = {ident for (ident,) in db.query(Automation.thread_chat_id).all() if ident is not None}
+
+        def scheduled_chat(chat_id):
+            seen = set()
+            while chat_id and chat_id not in seen:
+                seen.add(chat_id)
+                if chat_id in automation_chats:
+                    return True
+                row = db.get(Chat, int(chat_id))
+                if row is None:
+                    break
+                params = row.params or {}
+                if isinstance(params, str):
+                    try:
+                        params = json.loads(params)
+                    except ValueError:
+                        params = {}
+                metadata = params.get('development', {}) if isinstance(params, dict) else {}
+                if isinstance(metadata, dict) and metadata.get('source_type') == 'automation':
+                    return True
+                chat_id = row.parent_id
+            return False
 
         def project_for_chat(chat_id):
             if chat_id is None:
@@ -471,6 +501,9 @@ def collect_database_blocks(lo: datetime, hi: datetime, get_session=None) -> tup
                 chat.title if chat is not None and chat.title else f"Thread {entry.chat_id}")
             blocks.append(_block("decisions_thread", "decisions", "Decisions thread timer", entry.started_at,
                                  entry.ended_at, pid, title, f"chat:{entry.chat_id}"))
+            blocks[-1]['scheduled_automation'] = scheduled_chat(entry.chat_id)
+            if entry.source in {'play', 'auto_pause'}:
+                blocks[-1]['timer_chat_id'] = entry.chat_id
             if future_item and chat is None:
                 blocks[-1]['project_provenance'] = 'historical_metadata_conflict'
             counts["decisions_thread"] += 1
@@ -550,6 +583,16 @@ def collect_database_blocks(lo: datetime, hi: datetime, get_session=None) -> tup
             instruction = str(packet.get('instruction') or '') if isinstance(packet, dict) else ''
             if instruction:
                 block['instruction_hash'] = hashlib.sha256(' '.join(instruction.split()).encode()).hexdigest()
+            if isinstance(packet, dict):
+                block['execution_chat_id'] = packet.get('chat_id')
+            if family == 'pi':
+                try:
+                    output = json.loads(session.output_packet or '{}')
+                except ValueError:
+                    output = {}
+                if isinstance(output, dict) and isinstance(output.get('output'), str):
+                    block['reported_output'] = ' '.join(output['output'][-24000:].split())
+            block['scheduled_automation'] = scheduled_instruction(instruction)
             blocks.append(block)
             counts[source] += 1
     return blocks, dict(counts)
@@ -667,8 +710,11 @@ def session_interval_context(meta: dict, start: datetime, end: datetime, matcher
                   if (value := clean_description(raw))), '')
     instruction_hash = next((event.get('instruction_hash') for event in events
                              if event['role'] == 'user' and event.get('instruction_hash')), None)
+    latest_user = next((event for event in reversed(meta.get('activity', []))
+                        if event['role']=='user' and event['time']<=end), None)
     return {'project_id': pid, 'working_directory': cwd, 'project_provenance': provenance,
-            'title': title, 'instruction_hash': instruction_hash}
+            'title': title, 'instruction_hash': instruction_hash,
+            'scheduled_automation': bool(latest_user and scheduled_instruction(latest_user['text']))}
 
 
 def _session_activity(path: Path, *, kind: str) -> tuple[dict, list[datetime]]:
@@ -821,6 +867,22 @@ def collect_local_sessions(lo: datetime, hi: datetime, matcher: ProjectMatcher, 
                                    context['title'] or fallback_title, f"{source}:{meta['id']}")
                     block.update({key: context[key] for key in ('working_directory', 'project_provenance')})
                     block['instruction_hash'] = context['instruction_hash']
+                    block['scheduled_automation'] = context['scheduled_automation']
+                    if family == 'pi':
+                        events = [event for event in meta['activity'] if start <= event['time'] <= end]
+                        prompts = [i for i, event in enumerate(events) if event['role'] == 'user']
+                        if len(prompts) > 1:
+                            turns = []
+                            for i, next_prompt in zip(prompts, prompts[1:] + [len(events)]):
+                                prompt = events[i]
+                                boundary = events[next_prompt]['time'] if next_prompt < len(events) else None
+                                stop = bisect_left(stamps, boundary) if boundary is not None else bisect_right(stamps, end)
+                                last_stamp = stamps[stop-1]
+                                reply = next((e['text'] for e in reversed(events[i:next_prompt])
+                                              if e['role'] == 'assistant'), '')
+                                turns.append((prompt['time'], last_stamp, prompt['instruction_hash'],
+                                              ' '.join(reply.split())))
+                            block['local_turns'] = turns
                     blocks.append(block)
                     used = True
             if used:
@@ -830,13 +892,70 @@ def collect_local_sessions(lo: datetime, hi: datetime, matcher: ProjectMatcher, 
 
 # ---------------------------------------------------------------- collation
 
+def _same_run_bounds(a, b):
+    return all(abs((a[key]-b[key]).total_seconds()) <= 5 for key in ('start', 'end'))
+
+
+def _collapse_recorded_wrappers(blocks):
+    """Collapse only uniquely linked automatic timers and fully matched Pi sessions."""
+    from distr.core.reports.entry_descriptions import entry_key
+    executions = [b for b in blocks if str(b.get('ref', '')).startswith('execution:')]
+    timers = [b for b in blocks if b.get('timer_chat_id') is not None]
+    local_links = []
+    for local in blocks:
+        turns = local.get('local_turns')
+        if not turns or abs((turns[0][0]-local['start']).total_seconds()) > 5:
+            continue
+        matches = []
+        for start, end, instruction, reply in turns:
+            candidates = [run for run in executions if run['family'] == 'pi'
+                          and local['project_id'] in (None, run['project_id'])
+                          and _same_run_bounds(run, {'start': start, 'end': end})
+                          and ((instruction and instruction == run.get('instruction_hash'))
+                               or (len(reply) >= 80 and run.get('reported_output', '').endswith(reply)))]
+            if len(candidates) != 1:
+                break
+            matches.append(candidates[0])
+        if len(matches) == len(turns) and len({id(r) for r in matches}) == len(turns):
+            local_links.append((local, matches))
+    claims = defaultdict(int)
+    for _, matches in local_links:
+        for run in matches:
+            claims[id(run)] += 1
+    removed, changes = set(), {}
+    for local, matches in local_links:
+        if any(claims[id(run)] != 1 for run in matches):
+            continue
+        removed.add(id(local))
+        for run in matches:
+            changes[id(run)] = {**run, 'description_key': entry_key(run),
+                                'thread_ref': local['ref'], 'related_refs': [local['ref']]}
+    timer_links = []
+    for timer in timers:
+        candidates = [run for run in executions if run.get('execution_chat_id') == timer['timer_chat_id']
+                      and run['project_id'] == timer['project_id'] and _same_run_bounds(run, timer)]
+        if len(candidates) == 1:
+            timer_links.append((timer, candidates[0]))
+    timer_claims = defaultdict(int)
+    for _, run in timer_links:
+        timer_claims[id(run)] += 1
+    for timer, run in timer_links:
+        if timer_claims[id(run)] != 1:
+            continue
+        removed.add(id(timer))
+        replacement = changes.setdefault(id(run), {**run, 'description_key': entry_key(run)})
+        replacement['related_refs'] = [*replacement.get('related_refs', []), timer['ref']]
+    return [changes.get(id(b), b) for b in blocks if id(b) not in removed]
+
+
 def combine_duplicate_runs(blocks):
     """One run recorded by Decisions and a CLI is one work entry, with both references kept.
 
-    Matching titles or overlapping times alone never establish identity. Require the
-    exact instruction, same harness, compatible owner, near-identical bounds and one match.
+    Matching titles or overlapping times alone never establish identity. Use explicit
+    thread ownership or matching recorded content, plus compatible owners and bounds.
     """
     from distr.core.reports.entry_descriptions import entry_key
+    blocks = _collapse_recorded_wrappers(blocks)
     locals_by_instruction = defaultdict(list)
     for block in blocks:
         if block['source'] in {'pi_local', 'codex_local'} and block.get('instruction_hash'):
@@ -870,7 +989,7 @@ def combine_duplicate_runs(blocks):
         replacements[id(block)] = {**block, 'description_key': entry_key(block),
             'related_description_keys': [entry_key(local)],
             'start': min(block['start'], local['start']), 'end': max(block['end'], local['end']),
-            'related_refs': [local['ref']], 'thread_ref': local['ref'],
+            'related_refs': [*block.get('related_refs', []), local['ref']], 'thread_ref': local['ref'],
             'working_directory': local.get('working_directory'), 'project_provenance': 'linked_execution'}
     return [replacements.get(id(block), block) for block in blocks if id(block) not in claimed]
 
@@ -942,7 +1061,7 @@ def collate(period: Period, project_ids: list[int] | None = None, *, get_session
     selected = set(project_ids) if project_ids else None
     blocks = []
     for block in raw:
-        if block["source"] == "decisions_automation" and not include_automations:
+        if (block["source"] == "decisions_automation" or block.get('scheduled_automation')) and not include_automations:
             continue
         raw_pid = block["project_id"]
         pid = int(raw_pid) if raw_pid is not None and int(raw_pid) in projects else UNASSIGNED_ID
@@ -1071,6 +1190,7 @@ def collate(period: Period, project_ids: list[int] | None = None, *, get_session
              "source_start": b['job_start'].isoformat() + 'Z', "source_end": b['job_end'].isoformat() + 'Z',
              "description_status": b.get('description_status'),
              "invoice_status": b.get('invoice_status'), "invoice_reason": b.get('invoice_reason'),
+             "timing_basis": b.get('timing_basis'),
              "invoice_reviewed_at": b.get('invoice_reviewed_at'),
              "invoice_evidence": b.get('invoice_evidence', []), "review_parent_key": b.get('review_parent_key'),
              "invoice_source_missing": b.get('invoice_source_missing', False),
@@ -1502,13 +1622,13 @@ def attach_report_extras(snapshot: dict, project_ids: list[int] | None) -> dict:
     return snapshot
 
 
-def get_period_report(period: Period, project_ids: list[int] | None, **kwargs) -> dict:
+def get_period_report(period: Period, project_ids: list[int] | None, *, saved_project_ids: list[int] | None = None, **kwargs) -> dict:
     """Live collation plus the newest saved analysis for this period, projects and automation choice."""
     snapshot = collate(period, project_ids, **kwargs)
-    from distr.core.reports.calendar_review import apply_review
+    from distr.core.reports.calendar_sync import project_report
     if kwargs.get('get_session') is None:
-        snapshot = apply_review(snapshot)
-    snapshot["saved"] = latest_report(period, project_ids, kwargs.get("get_session"),
+        snapshot = project_report(snapshot, period)
+    snapshot["saved"] = latest_report(period, saved_project_ids if saved_project_ids is not None else project_ids, kwargs.get("get_session"),
                                       include_automations=kwargs.get("include_automations", False))
     snapshot["default_model"] = default_model()
     snapshot["period_options"] = period_options()
@@ -1521,10 +1641,11 @@ def get_period_report(period: Period, project_ids: list[int] | None, **kwargs) -
 
 def build_period_report(period: Period, project_ids: list[int] | None, *, provider: str | None = None,
                         model: str | None = None, include_automations: bool = False) -> dict:
-    from distr.core.reports.calendar_review import load_review, apply_review
+    from distr.core.reports.calendar_review import load_review
+    from distr.core.reports.calendar_sync import project_report
     reviewed = load_review()
     if reviewed and provider is None and model is None and period.start.isoformat() <= reviewed['period']['end'] and period.end.isoformat() >= reviewed['period']['start']:
-        snapshot = apply_review(collate(period, project_ids, include_automations=include_automations, invoice_only=True))
+        snapshot = project_report(collate(period, project_ids, include_automations=include_automations, invoice_only=True), period)
         snapshot['review_rows'] = snapshot['blocks']
         analysis = {'summary': 'Audited client work matched to the existing Tensology calendar and unbilled billing preview.',
                     'projects': [{'name': row['name'], 'hours': row['seconds']/3600,
@@ -1543,7 +1664,7 @@ def build_period_report(period: Period, project_ids: list[int] | None, *, provid
     model = verdict["selected"]["model"]
     if not provider or not model:
         raise ValueError("No default planning model is configured. Pick a provider and model for the report.")
-    snapshot = collate(period, project_ids, include_automations=include_automations, invoice_only=True)
+    snapshot = project_report(collate(period, project_ids, include_automations=include_automations, invoice_only=True), period)
     if not snapshot["blocks"]:
         analysis = {"summary": "No reviewed invoice work was found for this period and project selection.",
                     "projects": [], "notes": [s["label"] + ": no data" for s in snapshot["sources"] if s["state"] != "data"][:4]}

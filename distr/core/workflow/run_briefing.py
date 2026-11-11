@@ -238,7 +238,7 @@ def human_checkpoint_enabled(run_data: dict[str, Any] | None) -> bool:
     return bool(settings.get("human_checkpoints"))
 
 
-def enter_run_briefing_wait(run_id: int, first_step_id: int) -> str:
+def enter_run_briefing_wait(run_id: int, first_step_id: int, *, expected_checkpoint: dict | None = None) -> str:
     """Pause a new ticket run for human confirmation before step 1."""
     ctx = gather_run_briefing_context(run_id)
     if not ctx:
@@ -253,6 +253,8 @@ def enter_run_briefing_wait(run_id: int, first_step_id: int) -> str:
     decision = build_run_briefing_decision(ctx)
     voice = format_approval_decision_voice(decision)
     with get_session() as db:
+        from distr.core.workflow.interactions import guard_workflow_checkpoint
+        guard_workflow_checkpoint(db,run_id,expected_checkpoint)
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
         if not run:
             return ""

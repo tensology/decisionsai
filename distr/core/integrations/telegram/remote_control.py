@@ -3,6 +3,7 @@
 import difflib
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -19,10 +20,23 @@ except ImportError:
     requests = None
 
 from distr.core.integrations.telegram.utils import hash_channel_id, relay_internal_token
+from distr.core.integrations.whatsapp import RELAY_MEDIA_CHUNK_BYTES
 
 logger = logging.getLogger(__name__)
 
 REMOTE_STT_DIRECT_EXTS = {".wav", ".flac"}
+_CACHED_WHATSAPP_MEDIA_PATH = re.compile(r"/api/tickets/whatsapp/relay-media/[1-9]\d*\?cached_only=true")
+_INCOMING_WHATSAPP_MEDIA_PATH = re.compile(r"/api/tickets/whatsapp/incoming-media/[1-9]\d*")
+_SOURCE_REPLY_WRITE_PATH = re.compile(
+    r"/api/workflows/studio/tasks/[1-9][0-9]*/source-replies(?:/[a-f0-9]{32}/(?:approve|cancel))?"
+)
+_PROPOSAL_SOURCE_PATH = re.compile(
+    r"/api/workflows/studio/incoming/proposals/source\?review_key=[a-f0-9]{64}"
+    r"(?:&chat_id=[1-9][0-9]*)?(?:&source_key=[a-f0-9]{32})?"
+)
+_REVIEWED_PROPOSAL_MEDIA_PATH = re.compile(
+    r"/api/workflows/studio/incoming/proposals/files/[a-f0-9]{24}\?review_key=[a-f0-9]{64}"
+)
 REMOTE_STT_DIRECT_MIME_PREFIXES = (
     "audio/wav",
     "audio/x-wav",
@@ -128,7 +142,21 @@ class TelegramRemoteControlMixin:
                 "Content-Type": "application/json",
                 INTERNAL_AUTH_HEADER: get_internal_api_token(),
             }
-            timeout = 8 if api_method == "GET" else 15
+            review_media = _REVIEWED_PROPOSAL_MEDIA_PATH.fullmatch(api_path) is not None
+            media_offset = command_data.get("media_offset", 0 if review_media else None)
+            incoming_media = _INCOMING_WHATSAPP_MEDIA_PATH.fullmatch(api_path) is not None
+            ranged_media = (
+                api_method == "GET" and response_type == "base64"
+                and (media_offset is not None or review_media)
+                and (review_media or incoming_media or _CACHED_WHATSAPP_MEDIA_PATH.fullmatch(api_path))
+            )
+            if ranged_media:
+                if type(media_offset) is not int or not 0 <= media_offset < 2**53:
+                    raise ValueError("Invalid attachment byte offset")
+                headers["Range"] = f"bytes={media_offset}-{media_offset + RELAY_MEDIA_CHUNK_BYTES - 1}"
+            reply_write = api_method == "POST" and _SOURCE_REPLY_WRITE_PATH.fullmatch(api_path)
+            source_read = api_method == "GET" and _PROPOSAL_SOURCE_PATH.fullmatch(api_path)
+            timeout = 90 if reply_write else 25 if incoming_media or source_read else (8 if api_method == "GET" else 15)
             if api_method == "GET":
                 resp = _req.get(url, headers=headers, timeout=timeout)
             elif api_method == "POST":
@@ -141,14 +169,19 @@ class TelegramRemoteControlMixin:
                 resp = _req.delete(url, headers=headers, timeout=timeout)
             else:
                 resp = _req.request(api_method, url, json=api_body, headers=headers, timeout=timeout)
-            if response_type == "base64":
+            if response_type == "base64" and not ((incoming_media or review_media) and resp.status_code >= 400):
                 import base64 as _base64
 
+                if ranged_media and resp.status_code < 400 and len(resp.content) > RELAY_MEDIA_CHUNK_BYTES:
+                    raise ValueError("The desktop did not return a bounded attachment chunk.")
                 resp_data = {
                     "body_base64": _base64.b64encode(resp.content).decode("ascii"),
                     "content_type": resp.headers.get("content-type", ""),
                     "size_bytes": len(resp.content),
                 }
+                if ranged_media and resp.status_code == 206:
+                    resp_data["content_range"] = resp.headers.get("content-range", "")
+                    resp_data["etag"] = resp.headers.get("etag", "")
             else:
                 try:
                     resp_data = resp.json()

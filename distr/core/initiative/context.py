@@ -26,6 +26,7 @@ class ContextBundle:
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
     situational: dict = field(default_factory=dict)
+    project_oversight: dict = field(default_factory=dict)
     # R8 memory files — trimmed for LLM (not full AGENT/USER/MEMORY bodies)
     memory_agent: str = ""
     memory_user: str = ""
@@ -183,6 +184,13 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to build situational spine", exc_info=True)
 
+        project_oversight = {}
+        try:
+            from distr.core.project_oversight import build_project_oversight
+            project_oversight = build_project_oversight()
+        except Exception:
+            logger.warning('ContextAssembler: project oversight unavailable', exc_info=True)
+
         return ContextBundle(
             chat_history=chat_history,
             scheduled_sessions=scheduled_sessions,
@@ -201,6 +209,7 @@ class ContextAssembler:
             initiative_settings=settings,
             current_datetime=now.isoformat(),
             situational=situational,
+            project_oversight=project_oversight,
             memory_agent=memory_agent,
             memory_user=memory_user,
             memory_long_term=memory_long_term,

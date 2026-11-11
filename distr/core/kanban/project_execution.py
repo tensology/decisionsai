@@ -187,6 +187,7 @@ def complete_execution_session(
     output_packet: dict[str, Any] | None = None,
     error: str = "",
     status: str | None = None,
+    merge_output_packet: bool = False,
 ) -> None:
     if not session_id:
         return
@@ -204,6 +205,9 @@ def complete_execution_session(
         if not row:
             return
         row.status = clean_status
+        if merge_output_packet:
+            original = json.loads(row.output_packet or '{}')
+            safe_output_packet = {**(original if isinstance(original, dict) else {}), **safe_output_packet}
         row.output_packet = _json_dumps(safe_output_packet)
         row.error = safe_error
         row.completed_at = now

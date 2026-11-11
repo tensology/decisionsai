@@ -2,15 +2,17 @@
 
 import base64
 import hashlib
+import io
 import json
 import logging
 import mimetypes
 import os
 import queue
 import re
-import tempfile
 import time
 from typing import Any, Dict, List, Optional
+
+from sqlalchemy.exc import OperationalError
 
 try:
     import requests
@@ -64,6 +66,20 @@ def _usable_outbound_file(path: Optional[str]) -> bool:
         return os.path.getsize(path) > 0
     except OSError:
         return False
+
+
+def _outbound_destination(sender):
+    from distr.core.incoming.telegram_updates import _recipient_id
+    owner = getattr(sender, 'telegram_user_id', None)
+    chat = getattr(sender, 'chat_id', None)
+    if owner is not None:
+        identity = _recipient_id(owner)
+        return {'chat_id': identity} if identity else None
+    if chat is not None:
+        identity = _recipient_id(chat)
+        return {'chat_id': identity} if identity else None
+    app_user = getattr(sender, 'app_user_id', None)
+    return {'app_user_id': app_user} if isinstance(app_user, str) and app_user.strip() else None
 
 
 class TelegramSenderMixin:
@@ -152,27 +168,22 @@ class TelegramSenderMixin:
                 )
 
         # CRITICAL: Block any disconnect/reconnect messages from being sent
-        if text:
+        durable_proposal = str(interaction_token or '').startswith('proposal-update:')
+        if text and not durable_proposal:
             text = _audit_outbound_telegram_text(text)
-            if not text and not any((audio_file_path, screenshot_path, document_path, video_path)):
-                return False
             try:
                 from distr.core.human_engagement import is_low_value_status_text
 
-                if is_low_value_status_text(text):
+                if text and is_low_value_status_text(text):
                     logger.debug("[Telegram] Suppressed low-value status message: %s", text[:100])
-                    return False
+                    text = None
             except Exception:
                 pass
-            text_lower = (text or "").lower()
-            # Block disconnect/reconnect messages (except "has shut down" which is only on manual disconnect)
-            if (
-                "disconnect" in text_lower or "reconnect" in text_lower
-            ) and "has shut down" not in text_lower:
-                logger.warning(
-                    f"[Telegram] 🚫 BLOCKED disconnect/reconnect message: '{text[:100]}...'"
-                )
+            if not text and not any((audio_file_path, screenshot_path, document_path, video_path)):
                 return False
+            text_lower = (text or "").lower()
+            # Low-value connection notices are filtered above. A work result may
+            # legitimately describe a disconnect/reconnect defect.
 
             # Log what we're sending (especially for connection messages)
             # Log connection-related messages more prominently
@@ -180,7 +191,7 @@ class TelegramSenderMixin:
                 logger.info(
                     f"[Telegram] 📤 Queuing message to Telegram: '{text[:100]}...'"
                 )
-            else:
+            elif text:
                 logger.debug(f"[Telegram] Queuing message: '{text[:50]}...'")
 
         # Rate limiting should delay real user-facing messages, not drop them.
@@ -195,10 +206,20 @@ class TelegramSenderMixin:
 
         # Outgoing Deduplication
 
-        message_content = f"{text or ''}|{audio_file_path or ''}|{screenshot_path or ''}|{document_path or ''}|{video_path or ''}"
+        destination = _outbound_destination(self)
+        if destination is None:
+            logger.error('No valid private Telegram destination; message retained by its durable caller.')
+            return False
+        message_content = json.dumps([
+            text or '', audio_file_path or '', screenshot_path or '',
+            document_path or '', video_path or '', interaction_token or '',
+            reply_markup or {}, destination,
+        ], sort_keys=True, default=str)
         message_hash = hashlib.md5(message_content.encode()).hexdigest()
 
-        if message_hash in self._recent_messages:
+        # Proposal receipts claim transport durably. The in-memory window
+        # would suppress a safe requeue after a pre-transport owner change.
+        if not durable_proposal and message_hash in self._recent_messages:
             last_sent = self._recent_messages[message_hash]
             if now - last_sent < self._dedup_window:
                 logger.debug(
@@ -215,8 +236,6 @@ class TelegramSenderMixin:
         for h in expired:
             del self._recent_messages[h]
 
-        self._recent_messages[message_hash] = now
-
         # Build Message Payload
         msg = {"type": "send_message"}
         if interaction_token:
@@ -232,63 +251,8 @@ class TelegramSenderMixin:
         if reply_markup:
             msg["reply_markup"] = reply_markup
 
-        # CRITICAL: ALWAYS send to private chat (telegram_user_id), NEVER to groups
-        # Helper to get valid chat id - ALWAYS prioritize telegram_user_id (private chat)
-        # Never use self.chat_id if it's a group/channel (negative ID)
-        effective_chat_id = None
-
-        # First priority: telegram_user_id (private chat, always positive)
-        if self.telegram_user_id:
-            effective_chat_id = self.telegram_user_id
-            logger.info(
-                f"[Telegram] 📤 Using telegram_user_id (private chat): {effective_chat_id}"
-            )
-
-        # Second priority: self.chat_id ONLY if it's a private chat (positive) AND telegram_user_id is not set
-        elif (
-            self.chat_id
-            and isinstance(self.chat_id, (int, str))
-            and not str(self.chat_id).startswith("-")
-        ):
-            effective_chat_id = (
-                int(self.chat_id) if isinstance(self.chat_id, str) else self.chat_id
-            )
-            logger.info(
-                f"[Telegram] 📤 Using chat_id (private chat, fallback): {effective_chat_id}"
-            )
-
-        # CRITICAL: Block sending to groups/channels
-        elif (
-            self.chat_id
-            and isinstance(self.chat_id, (int, str))
-            and str(self.chat_id).startswith("-")
-        ):
-            logger.error(
-                f"[Telegram] 🚫 BLOCKED: Attempted to send to group/channel (chat_id: {self.chat_id}). Only private chats allowed!"
-            )
-            # Try to load telegram_user_id from settings as last resort
-            if not self.telegram_user_id:
-                logger.warning(
-                    f"[Telegram] ⚠️ telegram_user_id is None, cannot send to group. Message blocked."
-                )
-                return False
-
-        # Log what chat_id we're using for sending
-        logger.info(
-            f"[Telegram] 📤 Preparing to send - chat_id: {self.chat_id}, telegram_user_id: {self.telegram_user_id}, effective_chat_id: {effective_chat_id}"
-        )
-
-        if effective_chat_id:
-            msg["chat_id"] = effective_chat_id
-            logger.info(f"[Telegram] ✅ Using chat_id: {effective_chat_id} for sending")
-        elif self.app_user_id:
-            msg["app_user_id"] = self.app_user_id
-            logger.info(
-                f"[Telegram] ✅ Using app_user_id: {self.app_user_id} for sending"
-            )
-        else:
-            logger.error("No destination (chat_id/user_id) for message")
-            return False
+        # Destination is captured once and checked again immediately before transport.
+        msg.update(destination)
 
         # Add Audio/Screenshot encoding (simplified adapt from original)
         if audio_file_path and _usable_outbound_file(audio_file_path):
@@ -364,17 +328,9 @@ class TelegramSenderMixin:
                 else:
                     img = img.convert("RGB")
 
-                # Save to temporary WebP file (quality 70 = smaller payload, still good for screenshots)
-                with tempfile.NamedTemporaryFile(
-                    suffix=".webp", delete=False
-                ) as tmp_file:
-                    tmp_webp_path = tmp_file.name
-
-                img.save(tmp_webp_path, "WEBP", quality=70, method=2)
-
-                # Read the WebP file
-                with open(tmp_webp_path, "rb") as webp_file:
-                    image_data = webp_file.read()
+                with io.BytesIO() as webp_file:
+                    img.save(webp_file, "WEBP", quality=70, method=2)
+                    image_data = webp_file.getvalue()
 
                 # Format file size for human readability
                 webp_size = len(image_data)
@@ -386,12 +342,6 @@ class TelegramSenderMixin:
                     size_str = f"{webp_size / (1024 * 1024):.1f} MB"
 
                 logger.info("[Telegram] Uploading WebP screenshot: %s", size_str)
-
-                # Clean up temp file
-                try:
-                    os.unlink(tmp_webp_path)
-                except OSError:
-                    pass
 
                 b64 = base64.b64encode(image_data).decode("utf-8")
                 # Generate WebP filename
@@ -410,28 +360,18 @@ class TelegramSenderMixin:
                     f"Failed to convert screenshot to WebP, using original: {e}"
                 )
                 # Fallback to original image
-                with open(screenshot_path, "rb") as f:
-                    image_data = f.read()
-                    b64 = base64.b64encode(image_data).decode("utf-8")
-                    # Determine MIME type from file extension
+                try:
+                    with open(screenshot_path, "rb") as f:
+                        image_data = f.read()
+                except OSError:
+                    logger.warning("Could not read the original Telegram screenshot", exc_info=True)
+                    image_data = b""
+                if image_data:
                     mime_type, _ = mimetypes.guess_type(screenshot_path)
                     if not mime_type or not mime_type.startswith("image/"):
                         mime_type = "image/png"
-
-                    # Format file size for human readability
-                    orig_size = len(image_data)
-                    if orig_size < 1024:
-                        size_str = f"{orig_size} B"
-                    elif orig_size < 1024 * 1024:
-                        size_str = f"{orig_size / 1024:.1f} KB"
-                    else:
-                        size_str = f"{orig_size / (1024 * 1024):.1f} MB"
-
-                    logger.info(
-                        "[Telegram] Uploading %s screenshot: %s", mime_type, size_str
-                    )
                     msg["screenshot"] = {
-                        "data": b64,
+                        "data": base64.b64encode(image_data).decode("utf-8"),
                         "filename": os.path.basename(screenshot_path),
                         "mime_type": mime_type,
                     }
@@ -550,9 +490,13 @@ class TelegramSenderMixin:
         # CRITICAL: For media messages, map 'text' to 'caption' if 'caption' is not explicitly provided
         # This ensures the text appears attached to the media, and helps with server-side handling
         # (Telegram requires 'caption' for media, 'text' is for plain messages)
-        has_media = (
-            "video" in msg or "audio" in msg or "document" in msg or "screenshot" in msg
-        )
+        media_fields = ("video", "audio", "document", "screenshot")
+        for field in media_fields:
+            if field in msg and not msg[field]["data"]:
+                del msg[field]
+        has_media = any(field in msg for field in media_fields)
+        if not text and not has_media:
+            return False
         if has_media and text and "caption" not in msg:
             msg["caption"] = text
             # We can request to remove 'text' to avoid duplicate messages or confusion,
@@ -572,6 +516,8 @@ class TelegramSenderMixin:
                 "[Telegram] Outbound queue is full; rejected message instead of exhausting memory"
             )
             return False
+        if not durable_proposal:
+            self._recent_messages[message_hash] = now
         # Update last message time when sending (connection is active)
         self._last_message_time = time.time()
         return True
@@ -589,12 +535,14 @@ class TelegramSenderMixin:
                     self._outbound_retry_message = None
                 else:
                     msg = self._message_queue.get_nowait()
-                not_before = float(msg.get("_not_before") or 0)
+                not_before = max(float(msg.get("_not_before") or 0),
+                                 self._last_send_time + self._min_send_interval)
                 now = time.time()
                 if not_before and now < not_before:
                     self._outbound_retry_message = msg
                     break
                 msg.pop("_not_before", None)
+                release_pending = msg.pop("_proposal_release_pending", False)
                 json_str = json.dumps(msg)
 
                 # Log what we're sending and to which chat_id
@@ -670,8 +618,54 @@ class TelegramSenderMixin:
                                 f"[Telegram] ❌ ERROR: Document base64 is INVALID: {e}"
                             )
 
-                sent = self._send_websocket_message(msg)
+                token = str(msg.get('client_message_id') or '')
+                queue_id = getattr(self, '_proposal_delivery_queue_id', None)
+                durable_proposal = token.startswith('proposal-update:')
+                queued_destination = {key: msg[key] for key in ('chat_id', 'app_user_id') if key in msg}
+                try:
+                    if release_pending:
+                        from distr.core.incoming.telegram_updates import mark_delivery_not_sent
+                        if not mark_delivery_not_sent(token, queue_id=queue_id):
+                            continue
+                        release_pending = False
+                    if queued_destination != _outbound_destination(self):
+                        if durable_proposal:
+                            from distr.core.incoming.telegram_updates import mark_delivery_recipient_changed
+                            mark_delivery_recipient_changed(token, queue_id=queue_id)
+                        logger.warning('Telegram recipient changed before transport; blocked queued payload for the previous owner.')
+                        continue
+                    if durable_proposal:
+                        from distr.core.incoming.telegram_updates import mark_delivery_attempt
+                        if not mark_delivery_attempt(token, queue_id=queue_id,
+                                                     recipient_id=queued_destination.get('chat_id')):
+                            continue  # Never send without the matching durable claim.
+                except OperationalError:
+                    if release_pending:
+                        msg['_proposal_release_pending'] = True
+                    self._outbound_retry_message = msg
+                    logger.warning('Could not update the Telegram delivery receipt before transport; retained the queued message.')
+                    break
+                try:
+                    sent = self._send_websocket_message(msg)
+                except Exception as exc:
+                    # Transport may have accepted the payload before raising.
+                    # Keep the durable receipt unconfirmed, never blind-retry.
+                    if durable_proposal:
+                        from distr.core.incoming.telegram_updates import record_delivery
+                        record_delivery(token, error=str(exc) or 'Telegram transport outcome was not confirmed.')
+                    logger.exception('Telegram transport outcome was not confirmed; automatic resend suppressed.')
+                    continue
                 if not sent:
+                    if durable_proposal:
+                        from distr.core.incoming.telegram_updates import mark_delivery_not_sent
+                        try:
+                            if not mark_delivery_not_sent(token, queue_id=queue_id):
+                                # A relay response may have resolved the claim during the socket write.
+                                break
+                        except OperationalError:
+                            # The socket refused the payload. Restore its durable
+                            # queued state before any later transport attempt.
+                            msg['_proposal_release_pending'] = True
                     # The socket can disconnect after the loop-level connection
                     # check. Retain the exact payload at the front of the logical
                     # queue so reconnect processing cannot silently lose or reorder it.

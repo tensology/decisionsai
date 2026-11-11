@@ -65,6 +65,16 @@ class DraftQueue:
                     return True
             return False
 
+    def set_failure_reason(self, entry_id: str, message: str) -> bool:
+        """Retain a failed approval with its bounded, reviewable explanation."""
+        with self._lock:
+            for entry in self._entries:
+                if entry.id == entry_id:
+                    entry.reason = str(message or "Approval did not complete. Review this draft.")[:1000]
+                    self._save()
+                    return True
+            return False
+
     def clear(self) -> int:
         """Remove all pending draft entries and return how many were removed."""
         with self._lock:

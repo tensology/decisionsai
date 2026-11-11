@@ -147,6 +147,7 @@ class DeveloperWorkContext:
     active_thread: dict[str, Any] = field(default_factory=dict)
     ide_thread_locks: dict[str, Any] = field(default_factory=dict)
     active_plan: DeveloperPlanContext | None = None
+    planning_snapshot: dict[str, Any] = field(default_factory=dict)
     active_tickets: list[DeveloperTicketContext] = field(default_factory=list)
     active_workflows: list[DeveloperWorkflowContext] = field(default_factory=list)
     active_executions: list[DeveloperExecutionContext] = field(default_factory=list)
@@ -163,6 +164,14 @@ class DeveloperWorkContext:
 
     def to_prompt_text(self, max_chars: int = 4000) -> str:
         """Render compact, stable context for agent prompts."""
+        if self.planning_snapshot and max_chars >= 1200:
+            from dataclasses import replace
+            from distr.core.planning.context import planning_prompt_text
+            # Reserve room rather than letting later context clipping silently
+            # discard the artifact coverage or the no-authority contract.
+            planning = planning_prompt_text(self.planning_snapshot, max_chars=min(1500, max_chars - 700))
+            prefix = replace(self, planning_snapshot={}).to_prompt_text(max_chars=max(100, max_chars - len(planning) - 30))
+            return prefix + "\nPersisted planning reference:\n" + planning
         lines: list[str] = ["Developer workflow context:"]
         if self.runtime.captured_at:
             lines.append(f"- now: {self.runtime.captured_at}")
@@ -387,6 +396,9 @@ class DeveloperContextAssembler:
         active_plan = _safe_call(
             "active plan", warnings, self._fetch_active_plan, active_board, active_project
         )
+        planning_snapshot = _safe_call(
+            "persisted planning reference", warnings, self._fetch_planning_snapshot, active_project, active_thread
+        ) or {}
         active_tickets = _safe_call("active tickets", warnings, self._fetch_active_tickets, active_board, current_chat_id) or []
         active_workflows = _safe_call("active workflows", warnings, self._fetch_active_workflows, active_board, active_tickets) or []
         active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
@@ -430,6 +442,7 @@ class DeveloperContextAssembler:
             active_thread=active_thread,
             ide_thread_locks=ide_thread_locks,
             active_plan=active_plan,
+            planning_snapshot=planning_snapshot,
             active_tickets=active_tickets,
             active_workflows=active_workflows,
             active_executions=active_executions,
@@ -441,6 +454,17 @@ class DeveloperContextAssembler:
             ecosystem=ecosystem,
             warnings=warnings,
         )
+
+    def _fetch_planning_snapshot(self, active_project: DeveloperProjectContext | None, scope: dict[str, Any] | None = None) -> dict[str, Any]:
+        if active_project is None:
+            return {}
+        from distr.core.planning.context import _id, planning_snapshot
+        # Failed resolution of an explicit thread project must not import the
+        # globally active project's plan as a fallback.
+        declared_project = (scope or {}).get("project_id")
+        if declared_project is not None and _id(declared_project) != active_project.id:
+            return {}
+        return planning_snapshot(active_project.id)
 
     def _fetch_ide_thread_locks(self, chat_id: int | None) -> dict[str, Any]:
         """Cursor/Codex locks for follow-ups. Never the Development harness thread."""
@@ -557,14 +581,17 @@ class DeveloperContextAssembler:
         active_board: DeveloperBoardContext | None,
         active_project: DeveloperProjectContext | None,
     ) -> DeveloperPlanContext | None:
-        if not active_board:
+        if not active_board and not active_project:
             return None
         from distr.core.db import get_session
         from distr.core.db.workflow import PlanItem, PlanWorkspace
 
-        board_key = f"decisions:{active_board.id}" if active_board.source in {"database", "local", "decisions"} else active_board.external_board_id
+        board_key = (f"decisions:{active_board.id}" if active_board.source in {"database", "local", "decisions"} else active_board.external_board_id) if active_board else ""
         with get_session() as session:
-            workspace = session.query(PlanWorkspace).filter(PlanWorkspace.board_key == board_key).first()
+            query = session.query(PlanWorkspace)
+            if active_project:
+                query = query.filter(PlanWorkspace.project_id == active_project.id)
+            workspace = query.filter(PlanWorkspace.board_key == board_key).first() if board_key else None
             if workspace is None and active_project:
                 workspace = session.query(PlanWorkspace).filter(PlanWorkspace.project_id == active_project.id).order_by(PlanWorkspace.modified_at.desc()).first()
             if workspace is None:
@@ -572,7 +599,7 @@ class DeveloperContextAssembler:
             items = session.query(PlanItem).filter(PlanItem.workspace_id == workspace.id, PlanItem.status != "archived").order_by(PlanItem.sort_order, PlanItem.id).all()
             return DeveloperPlanContext(
                 id=int(workspace.id), board_key=workspace.board_key or board_key,
-                board_name=workspace.board_name or active_board.name,
+                board_name=workspace.board_name or (active_board.name if active_board else ""),
                 project_id=workspace.project_id, root_path=workspace.root_path or "",
                 status=workspace.status or "draft", item_count=len(items),
                 artifact_types=[item.item_type for item in items if item.item_type],

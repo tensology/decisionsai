@@ -134,11 +134,45 @@ def redact_metadata(value: Any, *, depth: int = 0) -> Any:
     return redact_text(value, limit=1000)
 
 
-def _event_payload(event: ChatTurnEvent) -> dict[str, Any]:
+def _managed_review_id(metadata):
+    request = metadata.get('approval_request') if isinstance(metadata, dict) else None
+    details = request.get('details') if isinstance(request, dict) else None
+    if (isinstance(details, dict) and isinstance(details.get('workflow'), dict)
+            and request.get('tool') == 'reply_delivery'):
+        return request.get('request_id')
+    return None
+
+
+def _project_managed_review(event, metadata, requests=None):
+    """Approval content comes from its full review row, never a redacted log."""
+    request_id = _managed_review_id(metadata)
+    if not request_id:
+        return metadata
+    from distr.core.db import DevApprovalRequest
+    from distr.core.workflow.dev_approvals import request_view
+    from sqlalchemy.orm import object_session
+    row = None
+    if requests is not None:
+        row = requests.get(request_id)
+    else:
+        session = object_session(event)
+        if session is not None:
+            row = session.query(DevApprovalRequest).filter_by(request_id=request_id).first()
+    if (row is not None and row.tool == 'reply_delivery'
+            and row.chat_id == event.chat_id and row.turn_id == event.turn_id):
+        view = request_view(row, receipt_session=object_session(row))
+        if _managed_review_id({'approval_request': view}) == request_id:
+            return {**metadata, 'approval_request': view}
+    # Never enable an approval based on truncated, missing or another chat's data.
+    return {**metadata, 'approval_request': {**metadata['approval_request'], 'review_unavailable': True}}
+
+
+def _event_payload(event: ChatTurnEvent, *, approval_requests=None) -> dict[str, Any]:
     try:
         metadata = json.loads(event.metadata_json or "{}")
     except (TypeError, json.JSONDecodeError):
         metadata = {}
+    metadata = _project_managed_review(event, metadata, approval_requests)
     created = event.created_date.isoformat() if event.created_date else None
     modified = event.modified_date.isoformat() if event.modified_date else created
     completed = event.completed_date.isoformat() if event.completed_date else None
@@ -183,15 +217,31 @@ def create_event(
     metadata: Optional[dict[str, Any]] = None,
     event_id: Optional[str] = None,
     broadcast: bool = True,
+    transcript_notice: str = "",
 ) -> Optional[dict[str, Any]]:
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Unsupported chat turn event type: {event_type}")
+    is_terminal = event_type in TERMINAL_TURN_TYPES
+    if transcript_notice and not is_terminal:
+        raise ValueError("A transcript notice requires a terminal turn event")
     for attempt in range(5):
         try:
+            notice_id = None
             with get_session() as session:
+                if is_terminal and session.get_bind().dialect.name == "sqlite":
+                    session.connection().exec_driver_sql("BEGIN IMMEDIATE")
                 root_id, resolved_turn_id = _root_and_turn(session, int(chat_id), turn_id)
                 if resolved_turn_id is None:
                     return None
+                if is_terminal:
+                    existing = session.query(ChatTurnEvent).filter(
+                        ChatTurnEvent.chat_id == root_id,
+                        ChatTurnEvent.turn_id == resolved_turn_id,
+                        ChatTurnEvent.event_type.in_(TERMINAL_TURN_TYPES),
+                    ).first()
+                    if existing:
+                        return _event_payload(existing)
+                    event_id = f"cte_terminal_{root_id}_{resolved_turn_id}"
                 if event_id:
                     existing = (
                         session.query(ChatTurnEvent)
@@ -227,9 +277,28 @@ def create_event(
                     completed_date=now if status in TERMINAL_STATUSES else None,
                 )
                 session.add(row)
+                if is_terminal:
+                    root = session.get(Chat, root_id)
+                    if root is not None:
+                        _clear_active_pointer(root, resolved_turn_id)
+                        if transcript_notice.strip():
+                            from distr.core.chat import _assistant_notice_row
+
+                            notice = _assistant_notice_row(root, transcript_notice.strip())
+                            session.add(notice)
+                            root.modified_date = notice.modified_date
+                            session.flush()
+                            notice_id = notice.id
                 session.commit()
                 session.refresh(row)
                 payload = _event_payload(row)
+            if notice_id is not None:
+                from distr.core.chat import record_chat_audit_event
+
+                record_chat_audit_event(
+                    chat_id=root_id, chat_row_id=notice_id, role="assistant",
+                    content=transcript_notice.strip(),
+                )
             if broadcast:
                 _broadcast(payload)
             return payload
@@ -502,83 +571,46 @@ def complete_turn(
     turn_id: Optional[int] = None,
     display_text: str = "",
     speech_text: str = "",
+    transcript_notice: str = "",
 ) -> Optional[dict[str, Any]]:
-    with get_session() as session:
-        root_id, resolved = _root_and_turn(session, chat_id, turn_id)
-        if resolved is None:
-            return None
-        existing = (
-            session.query(ChatTurnEvent)
-            .filter(
-                ChatTurnEvent.chat_id == root_id,
-                ChatTurnEvent.turn_id == resolved,
-                ChatTurnEvent.event_type.in_(tuple(TERMINAL_TURN_TYPES)),
-            )
-            .first()
-        )
-        if existing:
-            return _event_payload(existing)
-    payload = create_event(
-        root_id,
+    return create_event(
+        chat_id,
         "turn_completed",
-        turn_id=resolved,
+        turn_id=turn_id,
         status="completed",
         title="Answer ready",
         summary=display_text,
         metadata={"display_text": display_text, "speech_text": speech_text or display_text, "speak": True},
+        transcript_notice=transcript_notice,
     )
-    if payload:
-        _clear_active_pointer(root_id, resolved)
-    return payload
 
 
-def _clear_active_pointer(root_id: int, turn_id: int) -> None:
+def _clear_active_pointer(root: Chat, turn_id: int) -> None:
     try:
-        with get_session() as session:
-            root = session.get(Chat, int(root_id))
-            if not root:
-                return
-            try:
-                params = json.loads(root.params or "{}")
-            except (TypeError, json.JSONDecodeError):
-                params = {}
-            if isinstance(params, dict) and int(params.get("active_turn_chat_row_id") or 0) == int(turn_id):
-                params.pop("active_turn_chat_row_id", None)
-                root.params = json.dumps(params)
-                session.commit()
-    except Exception:
-        logger.debug("Could not clear terminal chat turn pointer", exc_info=True)
+        params = json.loads(root.params or "{}")
+        active = int(params.get("active_turn_chat_row_id") or 0) if isinstance(params, dict) else None
+    except (TypeError, ValueError):
+        return
+    if active == turn_id:
+        params.pop("active_turn_chat_row_id", None)
+        root.params = json.dumps(params)
 
 
-def terminal_turn(chat_id: int, event_type: str, *, turn_id: Optional[int] = None, summary: str = "") -> Optional[dict[str, Any]]:
+def terminal_turn(
+    chat_id: int, event_type: str, *, turn_id: Optional[int] = None,
+    summary: str = "", transcript_notice: str = "",
+) -> Optional[dict[str, Any]]:
     if event_type not in {"turn_failed", "turn_cancelled"}:
         raise ValueError("terminal_turn requires turn_failed or turn_cancelled")
-    with get_session() as session:
-        root_id, resolved = _root_and_turn(session, chat_id, turn_id)
-        if resolved is None:
-            return None
-        existing = (
-            session.query(ChatTurnEvent)
-            .filter(
-                ChatTurnEvent.chat_id == root_id,
-                ChatTurnEvent.turn_id == resolved,
-                ChatTurnEvent.event_type.in_(tuple(TERMINAL_TURN_TYPES)),
-            )
-            .first()
-        )
-        if existing:
-            return _event_payload(existing)
-    payload = create_event(
-        root_id,
+    return create_event(
+        chat_id,
         event_type,
-        turn_id=resolved,
+        turn_id=turn_id,
         status="failed" if event_type == "turn_failed" else "cancelled",
         title="Request failed" if event_type == "turn_failed" else "Request stopped",
         summary=summary,
+        transcript_notice=transcript_notice,
     )
-    if payload:
-        _clear_active_pointer(root_id, resolved)
-    return payload
 
 
 def steer_turn(chat_id: int, turn_id: int, guidance: str) -> Optional[dict[str, Any]]:
@@ -608,6 +640,7 @@ def pending_steering(chat_id: int, turn_id: int) -> list[dict[str, Any]]:
                 ChatTurnEvent.chat_id == root_id,
                 ChatTurnEvent.turn_id == resolved,
                 ChatTurnEvent.event_type == "turn_steered",
+                ChatTurnEvent.status != "cancelled",
             )
             .order_by(ChatTurnEvent.sequence.asc())
             .all()
@@ -665,8 +698,22 @@ def get_turns(chat_id: int) -> dict[str, Any]:
             .all()
         )
         grouped: dict[int, list[dict[str, Any]]] = {}
+        request_ids = set()
         for row in rows:
-            grouped.setdefault(int(row.turn_id), []).append(_event_payload(row))
+            try:
+                request_id = _managed_review_id(json.loads(row.metadata_json or '{}'))
+                if isinstance(request_id, str) and request_id:
+                    request_ids.add(request_id)
+            except (TypeError, ValueError):
+                continue
+        requests = {}
+        if request_ids:
+            from distr.core.db import DevApprovalRequest
+            requests = {row.request_id: row for row in session.query(DevApprovalRequest).filter(
+                DevApprovalRequest.request_id.in_(request_ids), DevApprovalRequest.chat_id == root_id,
+                DevApprovalRequest.tool == 'reply_delivery').all()}
+        for row in rows:
+            grouped.setdefault(int(row.turn_id), []).append(_event_payload(row, approval_requests=requests))
     turns: list[dict[str, Any]] = []
     active: Optional[dict[str, Any]] = None
     for turn, events in grouped.items():

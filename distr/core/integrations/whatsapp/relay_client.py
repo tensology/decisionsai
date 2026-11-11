@@ -297,6 +297,11 @@ def sync_messages_from_relay(*, mark_processed: bool = True) -> dict[str, Any]:
 
 
 def send_message_via_relay(*, jid: str, text: str, caption: str = "") -> dict[str, Any]:
+    """Submit text and require an explicit relay acceptance, not just HTTP 200.
+
+    The relay acknowledges the Baileys handoff, not delivery to the recipient.
+    Keep any receipt fields returned by the relay instead of discarding them.
+    """
     if whatsapp_send_dry_run_enabled():
         logger.info(
             "WhatsApp dry-run send jid=%s text_len=%s caption_len=%s",
@@ -317,10 +322,13 @@ def send_message_via_relay(*, jid: str, text: str, caption: str = "") -> dict[st
         try:
             data = resp.json()
         except Exception:
-            data = {"raw": (resp.text or "")[:300]}
-        if resp.status_code == 200 and data.get("success", True):
-            return {"success": True, "jid": jid}
-        return {"success": False, "error": data.get("error") or data, "status_code": resp.status_code}
+            data = None
+        if (resp.status_code == 200 and isinstance(data, dict)
+                and data.get("success") is True and not data.get("error")):
+            return {"jid": jid, **data}
+        error = data.get("error") if isinstance(data, dict) else None
+        return {"success": False, "error": error or "WhatsApp relay did not acknowledge the send. Check the original conversation before retrying.",
+                "status_code": resp.status_code}
     except Exception as exc:
         logger.error("WhatsApp relay send failed: %s", exc, exc_info=True)
         return {"success": False, "error": str(exc)}

@@ -96,7 +96,10 @@ def read_source_thread(ref, *, before=None, limit=50, pi_root=None, codex_root=N
             candidate_id = path.stem if kind == 'cursor_local' else str(candidate_meta.get('id') or path.stem)
             variant = session_variant(path) if kind == 'codex_local' else None
             explicit_variant = variant == ident and ident.split('_', 1)[0] == candidate_id
-            if candidate_id == ident or explicit_variant:
+            # A retained fork may repeat its parent's metadata UUID. The plain
+            # reference belongs to the canonical file; forks require their full
+            # recorded variant, so the two conversations cannot be confused.
+            if (candidate_id == ident and variant is None) or explicit_variant:
                 if found is not None:
                     raise RuntimeError('Multiple source files claim this IDE thread ID.')
                 found, meta = path, candidate_meta

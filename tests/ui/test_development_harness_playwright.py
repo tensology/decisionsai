@@ -88,6 +88,8 @@ def _install_api(
     automations: list[dict] = []
     imported_sources: set[str] = set()
     queued_commands: list[dict] = []
+    forked_chats: dict[int, dict] = {}
+    development_settings = {'dev_play_opens_terminals': True, 'dev_play_opens_terminals_set': True}
     deleted_chat_ids: set[int] = set()
     discovered_sessions = ([{"process_id": "discovered:202", "pid": 202, "ppid": discovered_terminal_parent_pid, "command": "python3 -m http.server 43117", "cwd": "/tmp/decisions", "purpose": "discovered"}] if discovered_terminal_session else [])
     startup_sessions = ([{"process_id": "term-1", "pid": 101, "command": terminal_command, "cwd": "/tmp/decisions", "purpose": "startup", "memory_bytes": 134217728}] if terminal_session else [])
@@ -317,6 +319,11 @@ def _install_api(
         payload = None
         if path == "/api/harnesses/installed":
             payload = {"harnesses": [{"id": "pi", "installed": True}, {"id": "cursor", "installed": True}], "source": "binary_detection"}
+        elif path == '/api/dev-tools/settings' and request.method in {'GET', 'POST'}:
+            if request.method == 'POST':
+                development_settings.update(json.loads(request.post_data or '{}'))
+                development_settings['dev_play_opens_terminals_set'] = True
+            payload = development_settings
         elif path == "/api/workflows/studio/sidebar/pins":
             payload = {"board_keys": ["decisions:70"]}
         elif path == "/api/projects/cli-backends":
@@ -381,6 +388,8 @@ def _install_api(
             }
         elif path == "/api/threads/17/terminal/status":
             payload = {"thread_id": 17, "project_id": 7, "running": bool(startup_sessions)}
+        elif path in {"/api/projects/7/pi-cli-terminal/status", "/api/projects/8/pi-cli-terminal/status"} and request.method == "GET":
+            payload = {"sessions": []}
         elif path == "/api/threads/17/terminal/start" and request.method == "POST":
             startup_sessions[:] = [{"process_id": "term-1", "pid": 101, "command": "npm run dev", "cwd": "/tmp/decisions", "purpose": "startup"}]
             payload = {"success": True, "thread_id": 17, "project_id": 7, "running": True}
@@ -447,6 +456,7 @@ def _install_api(
                     *([{**{key: value for key, value in chat.items() if key != "messages"}, "development": True}] if 17 not in deleted_chat_ids else []),
                     *recent,
                     *recent_projects,
+                    *forked_chats.values(),
                 ],
             }
         elif path == "/api/tickets/boards/70" and request.method == "PUT":
@@ -509,6 +519,15 @@ def _install_api(
             payload = {"success": True}
         elif path == "/api/chats/17" and request.method == "GET":
             payload = chat
+        elif path == '/api/chats/88' and request.method == 'GET' and 88 in forked_chats:
+            payload = forked_chats[88]
+        elif path in {f'/api/workflows/studio/tasks/88/{suffix}' for suffix in ('execution', 'time', 'artifacts', 'plans')} and 88 in forked_chats:
+            if path.endswith('/execution'):
+                payload = {'id': 'new-88', 'chat_id': 88, 'direct': True, 'status': 'running'}
+            elif path.endswith('/time'):
+                payload = {**thread_time, 'chat_id': 88}
+            else:
+                payload = {'items': []}
         elif path == "/api/workflows/studio/tasks/17/time":
             if request.method == "PATCH":
                 body = json.loads(request.post_data or "{}")
@@ -800,9 +819,10 @@ def _install_api(
             body = json.loads(request.post_data or "{}")
             payload = {"id": 21, "status": body.get("status"), "revision": 1}
         elif path == "/api/workflows/studio/control-state":
+            control_chat_id = int(parse_qs(urlparse(request.url).query).get('chat_id', ['17'])[0])
             payload = {
                 "channels": {"telegram": {"configured": True, "connected": True}},
-                "commands": queued_commands,
+                "commands": [row for row in queued_commands if row.get('chat_id') == control_chat_id],
                 "controls": {"pinned": chat["pinned"], "permission_profile": chat["permission_profile"], "remote_continuation": chat["remote_continuation"]},
                 "interactions": ([{
                     "token": "abc123",
@@ -810,11 +830,14 @@ def _install_api(
                     "kind": "provider_preflight" if provider_preflight_interaction else "control_interrupt" if budget_exhausted_interaction else "approval",
                     "allowed_actions": ["continue", "stop", "feedback"] if budget_exhausted_interaction else ["model_0", "stop"] if provider_preflight_interaction else ["approve", "stop", "feedback"],
                     "telegram_linked": True,
-                }] if pending_interaction else []),
+                }] if pending_interaction and control_chat_id == 17 else []),
             }
         elif path == "/api/workflows/studio/tasks/17/commands" and request.method == "POST":
             body = json.loads(request.post_data or "{}")
-            command = {"id": 61, "source": body.get("source", "web"), "content": body.get("content"), "status": "queued"}
+            command = {"id": 61, "chat_id": 17, "workflow_id": 44,
+                       "source": body.get("source", "web"), "content": body.get("content"), "status": "queued",
+                       "command_type": body.get('command_type', 'followup'), 'metadata': body.get('metadata', {}),
+                       'modified_at': '2026-11-10T12:00:00'}
             queued_commands[:] = [command]
             payload = {"status": "queued", "summary": "Instruction queued safely until a worker can accept it.", "artifacts": [command]}
         elif path == "/api/workflows/studio/tasks" and request.method == "POST":
@@ -827,8 +850,24 @@ def _install_api(
                 queued_commands.clear()
                 payload = {"id": 61, "status": "cancelled"}
             else:
-                queued_commands[0]["content"] = body.get("content")
+                if body.get('expected_modified_at') not in (None, queued_commands[0]['modified_at']):
+                    route.fulfill(status=409, json={'detail': 'Queued item changed elsewhere.'})
+                    return
+                if 'content' in body:
+                    queued_commands[0]['content'] = body['content']
+                if 'metadata' in body:
+                    queued_commands[0]['metadata'] = body['metadata']
+                queued_commands[0]['status'] = 'editing' if body.get('editing') else 'queued'
+                queued_commands[0]['modified_at'] = f'2026-11-10T12:00:{requests.count(("PATCH", path)):02d}'
                 payload = queued_commands[0]
+        elif path == '/api/workflows/studio/commands/61/run' and request.method == 'POST':
+            body = json.loads(request.post_data or '{}')
+            queued_commands[0]['status'] = 'delivered'
+            if body.get('new_thread'):
+                forked_chats[88] = {**chat, 'id': 88, 'title': 'Queued request', 'development_workflow_id': None,
+                                    'development_ticket_id': None, 'messages': [{'role': 'user', 'content': queued_commands[0]['content']}],
+                                    'active_turn': None, 'development_execution': {'direct': True, 'status': 'running', 'chat_id': 88}}
+            payload = {'chat_id': 88 if body.get('new_thread') else 17, 'started': True}
         elif path == "/api/workflows/studio/tasks/17/controls":
             body = json.loads(request.post_data or "{}")
             if "pinned" in body:
@@ -1285,7 +1324,8 @@ def test_development_navigation_uses_clean_urls_and_restores_history(page: Page)
     expect(page.locator("#incoming-workspace h1")).to_have_count(0)
     page.locator("#sidebar-rules-toggle").click()
     expect(page).to_have_url(TEST_BASE_URL + "/development/automations/")
-    expect(page.locator("#scheduled-workspace h1")).to_have_text("Scheduled tasks")
+    expect(page.locator("#scheduled-workspace h1")).to_have_count(0)
+    expect(page.locator('#scheduled-view-toggle')).to_be_visible()
     page.locator("#sidebar-workflows-toggle").click()
     expect(page).to_have_url(TEST_BASE_URL + "/development/workflows/")
     expect(page.locator("#workflow-workspace h1")).to_have_count(0)
@@ -1309,7 +1349,7 @@ def test_development_navigation_uses_clean_urls_and_restores_history(page: Page)
     expect(page.get_by_role("button", name="Start terminals for Empty project")).to_be_visible()
     assert page.locator("#terminal-project-grid").evaluate(
         "node => getComputedStyle(node).gridTemplateColumns.split(' ').length"
-    ) == 3
+    ) == 4
     assert float(page.locator('[data-terminal-project="7"] .terminal-project-footer').evaluate(
         "node => parseFloat(getComputedStyle(node).fontSize)"
     )) >= 12
@@ -1320,7 +1360,10 @@ def test_development_navigation_uses_clean_urls_and_restores_history(page: Page)
     expect(page.locator("#reports-workspace h1, #reports-workspace h2")).to_have_count(0)
     page.screenshot(path="/private/tmp/development-harness-placeholder-desktop.png", full_page=True)
 
-    page.locator('[data-board-select="decisions:70"]').click()
+    # Board clicks restore the last section. Choose the explicit Kanban action
+    # when testing Kanban history rather than relying on the prior section.
+    page.locator('[data-board-select="decisions:70"]').click(button="right")
+    page.locator('#board-context-kanban').click()
     expect(page).to_have_url(TEST_BASE_URL + "/development/boards/decisions/70/kanban/")
     expect(page.locator("#kanban-workspace")).to_be_visible()
     expect(page.locator('[data-board-group="decisions:70"] .project-row')).to_have_class(re.compile(r"\bactive\b"))
@@ -1699,9 +1742,25 @@ def test_sidebar_hover_highlights_the_complete_row_without_boxing_the_add_action
     page.screenshot(path="/private/tmp/development-sidebar-full-row-hover.png", full_page=True)
 
 
-def test_project_context_pin_keeps_projects_first_and_collapse_persists(page: Page):
+@pytest.fixture
+def unpinned_board_preferences(page: Page):
+    def install():
+        keys = []
+
+        def pins(route):
+            if route.request.method == "PUT":
+                keys[:] = route.request.post_data_json["board_keys"]
+            route.fulfill(json={"board_keys": keys})
+
+        page.route("**/api/workflows/studio/sidebar/pins", pins)
+
+    return install
+
+
+def test_project_context_pin_keeps_projects_first_and_collapse_persists(page: Page, unpinned_board_preferences):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
+    unpinned_board_preferences()
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(URL)
 
@@ -1727,9 +1786,10 @@ def test_project_context_pin_keeps_projects_first_and_collapse_persists(page: Pa
     page.evaluate("window.localStorage.removeItem('decisions-development-pinned-boards')")
 
 
-def test_boards_section_only_collapses_when_a_board_is_pinned(page: Page):
+def test_boards_section_only_collapses_when_a_board_is_pinned(page: Page, unpinned_board_preferences):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
+    unpinned_board_preferences()
     page.goto(URL)
 
     expect(page.locator("#boards-toggle")).to_be_hidden()
@@ -1749,7 +1809,8 @@ def test_boards_section_only_collapses_when_a_board_is_pinned(page: Page):
     expect(page.locator("#boards-content")).to_be_hidden()
     expect(page.locator("#boards-toggle")).to_have_attribute("aria-expanded", "false")
 
-    page.evaluate("window.localStorage.removeItem('decisions-development-pinned-boards')")
+    page.locator('#pinned-board-tree [data-board-select="decisions:70"]').click(button="right")
+    page.get_by_role("menuitem", name="Unpin Board", exact=True).click()
     page.reload()
     expect(page.locator("#boards-toggle")).to_be_hidden()
     expect(page.locator("#boards-content")).to_be_visible()
@@ -2388,7 +2449,8 @@ def test_scheduled_import_is_polished_and_duplicate_safe(page: Page):
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(TEST_BASE_URL + "/development/automations/")
 
-    expect(page.get_by_role("heading", name="Scheduled tasks", exact=True)).to_be_visible()
+    expect(page.locator('#scheduled-workspace')).to_be_visible()
+    expect(page.locator('#scheduled-workspace h1')).to_have_count(0)
     page.locator("#scheduled-import-open").click()
     expect(page.locator("#automation-import-dialog")).to_be_hidden()
     expect(page.locator("#scheduled-import-menu")).to_be_visible()
@@ -2529,7 +2591,7 @@ def test_direct_development_agent_is_not_misrepresented_as_a_workflow(page: Page
     expect(page.locator("#decisions-confirm-modal")).to_be_visible()
     page.get_by_role("button", name="Stop agent", exact=True).click()
     assert ("POST", "/api/workflows/studio/tasks/17/execution/stop") in requests
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_workflow_route_receipt_shows_decision_selection_and_actual_runtime(page: Page):
@@ -2602,7 +2664,7 @@ def test_completed_direct_thread_message_dispatches_without_a_workflow(page: Pag
     assert control_state_urls
     assert all("run_id=" not in url for url in control_state_urls)
     expect(page.locator("body")).not_to_contain_text("Development run started")
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_direct_thread_with_stale_workflow_never_sends_uuid_as_run_id(page: Page):
@@ -2629,7 +2691,7 @@ def test_direct_thread_with_stale_workflow_never_sends_uuid_as_run_id(page: Page
     assert control_state_urls
     assert all("run_id=" not in url for url in control_state_urls), control_state_urls
     expect(page.locator("#studio-toast")).not_to_contain_text("run_id")
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_structured_submission_error_is_readable(page: Page):
@@ -2679,7 +2741,7 @@ def test_initializing_direct_turn_immediately_shows_thinking_status(page: Page):
     expect(page.locator(".active-turn .loading-message")).to_have_class(re.compile(r"\bthinking\b"))
     expect(page.locator(".active-turn .loading-message > span")).to_have_css("animation-name", "studio-text-shimmer")
     expect(page.locator(".active-turn .loading-message i")).to_have_count(0)
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_native_stream_renders_partial_response_and_runtime_activity(page: Page):
@@ -2690,7 +2752,48 @@ def test_native_stream_renders_partial_response_and_runtime_activity(page: Page)
     expect(page.locator(".active-turn-draft strong")).to_have_text("Draft response")
     expect(page.locator(".loading-message.updating")).to_be_visible()
     expect(page.locator(".loading-message.updating")).to_contain_text("Running commands")
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
+
+
+@pytest.mark.parametrize("width,height", [(390, 844), (768, 1024), (1280, 900), (1440, 900)])
+def test_development_status_stays_running_with_an_unrelated_failed_session(page, tmp_path, monkeypatch, width, height):
+    from distr.core.db import Chat
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.workflow import development_harness as harness
+    from tests.core.test_development_harness import _database
+
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    with get_session() as db:
+        session = ProjectExecutionSession(project_id=1, status="failed", error="Unrelated worker failure",
+                                          input_packet=json.dumps({"chat_id": chat_id + 1}))
+        db.add(session)
+        db.flush()
+        root = db.get(Chat, chat_id)
+        params = json.loads(root.params)
+        params["development"]["execution"] = {
+            "job_id": "own-active-job", "status": "running", "backend_id": "codex",
+            "execution_session_id": session.id, "activity": "Checking the selected ticket.",
+        }
+        root.params = json.dumps(params)
+        db.commit()
+
+    _install_api(page, [], direct_execution=True, live_activity=True)
+    projected = []
+
+    def read_execution(route):
+        result = harness.development_execution_state(chat_id)
+        projected.append(result)
+        route.fulfill(json=result)
+
+    page.route("**/workflows/studio/tasks/17/execution", read_execution)
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(URL)
+    expect(page.locator(".active-turn-summary")).to_contain_text(re.compile(r"Working|Updating|Running"))
+    expect(page.locator("#stop-run-button")).not_to_have_class(re.compile(r"\bhidden\b"))
+    expect(page.get_by_text("Unrelated worker failure", exact=True)).to_have_count(0)
+    assert projected and all(result["status"] == "running" and "execution_session_id" not in result for result in projected)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=f"/tmp/development-scoped-execution-{width}.png")
 
 
 def test_board_thread_alignment_and_hover_states_are_compact(page: Page):
@@ -2787,54 +2890,55 @@ def test_active_run_keeps_internal_diagnostics_out_and_supports_durable_guidance
     page.screenshot(path="/private/tmp/development-harness-control-plane.png", full_page=True)
 
     page.locator("#inspector-close").click()
-    expect(page.locator("#composer-guidance-target")).to_be_visible()
-    expect(page.locator("#composer-guidance-scope")).to_have_value("workflow")
-    page.locator("#task-prompt").fill("Limit the workflow change to navigation")
-    page.locator("#send-button").click()
-    expect(page.get_by_text("Workflow guidance queued for the next step.", exact=True)).to_be_visible()
-    assert ("POST", "/api/workflows/44/runs/99/steer") in requests
-
-    page.locator("#composer-guidance-scope").select_option("thread")
+    expect(page.locator("#composer-guidance-target")).to_be_hidden()
+    expect(page.locator("#task-prompt")).to_have_attribute('placeholder', 'Queue the next instruction')
     page.locator("#task-prompt").fill("Keep the existing navigation and retest mobile")
     page.locator("#send-button").click()
-    _open_details(page)
-    expect(page.get_by_text("Queued guidance", exact=False)).to_be_visible()
-    expect(page.get_by_text("Keep the existing navigation and retest mobile", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Edit queued request", exact=True).click()
+    queue = page.locator('#thread-command-queue')
+    expect(queue).to_contain_text("Keep the existing navigation and retest mobile")
+    assert ("POST", "/api/workflows/studio/tasks/17/commands") in requests
+    assert ("POST", "/api/workflows/44/runs/99/steer") not in requests
+    queue.get_by_role("button", name="Edit queued item", exact=True).click()
     expect(page.locator("#task-prompt")).to_have_value("Keep the existing navigation and retest mobile")
     page.locator("#task-prompt").fill("Keep navigation, retest mobile and tablet")
     page.locator("#send-button").click()
     assert ("POST", "/api/workflows/studio/tasks/17/commands") in requests
     assert ("PATCH", "/api/workflows/studio/commands/61") in requests
 
-    _open_details(page)
-    page.get_by_role("button", name="Steer queued request into active workflow").click()
-    expect(page.get_by_text("Queued request moved into the active workflow.", exact=True)).to_be_visible()
-    assert requests.count(("POST", "/api/workflows/44/runs/99/steer")) == 2
+    expect(queue).to_contain_text('Keep navigation, retest mobile and tablet')
+    queue.get_by_role("button", name="Steer current thread", exact=True).click()
+    expect(queue.locator('[data-queued-id="61"]')).to_have_count(0)
+    assert ("POST", "/api/workflows/studio/commands/61/run") in requests
+    assert requests.count(("POST", "/api/workflows/44/runs/99/steer")) == 0
     assert requests.count(("PATCH", "/api/workflows/studio/commands/61")) == 2
 
 
-def test_queued_request_can_start_as_new_thread_and_local_ticket(page: Page):
+def test_queued_request_can_start_as_new_thread(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, live_activity=True, current_board_linked=True)
     page.goto(URL)
 
-    page.locator("#composer-guidance-scope").select_option("thread")
     page.locator("#task-prompt").fill("Handle this as a separate ticket")
     page.locator("#send-button").click()
-    _open_details(page)
-    action = page.get_by_role("button", name="Start queued request in a new thread and ticket")
+    action = page.get_by_role("button", name="Start in a new thread", exact=True)
     expect(action).to_be_visible()
+    toast = page.locator('#studio-toast')
+    expect(toast).to_contain_text('Instruction queued safely')
+    assert toast.evaluate("node => node.getBoundingClientRect().bottom <= document.querySelector('#thread-command-queue').getBoundingClientRect().top")
     page.screenshot(path="/private/tmp/development-queue-actions-desktop.png", full_page=False)
     page.set_viewport_size({"width": 390, "height": 844})
+    expect(page.locator('#studio-sidebar')).not_to_be_in_viewport()
     expect(action).to_be_visible()
+    expect(toast).to_be_visible()
+    assert toast.evaluate("node => node.getBoundingClientRect().bottom <= document.querySelector('#thread-command-queue').getBoundingClientRect().top")
     assert page.locator("#task-inspector").evaluate("node => node.scrollWidth <= node.clientWidth")
     page.screenshot(path="/private/tmp/development-queue-actions-mobile.png", full_page=False)
     action.click()
 
-    expect(page.get_by_text("Queued request started in a new thread and ticket.", exact=True)).to_be_visible()
-    assert ("POST", "/api/workflows/studio/tasks") in requests
-    assert ("PATCH", "/api/workflows/studio/commands/61") in requests
+    expect(page).to_have_url(TEST_BASE_URL + '/development/threads/88/')
+    expect(page.locator('#task-prompt')).to_be_enabled()
+    assert ("POST", "/api/workflows/studio/commands/61/run") in requests
+    assert ("POST", "/api/workflows/studio/tasks") not in requests
 
 
 def test_checkpoint_disables_workflow_steering_but_keeps_thread_queue_available(page: Page):
@@ -2842,27 +2946,66 @@ def test_checkpoint_disables_workflow_steering_but_keeps_thread_queue_available(
     _install_api(page, requests, pending_interaction=True)
     page.goto(URL)
 
-    expect(page.locator("#composer-guidance-target")).to_be_visible()
-    expect(page.locator('#composer-guidance-scope option[value="workflow"]')).to_have_attribute("disabled", "")
-    expect(page.locator("#composer-guidance-scope")).to_have_value("thread")
+    expect(page.locator("#composer-guidance-target")).to_be_hidden()
     page.locator("#task-prompt").fill("After approval, keep this change within the current ticket")
     page.locator("#send-button").click()
 
     assert ("POST", "/api/workflows/studio/tasks/17/commands") in requests
     assert ("POST", "/api/workflows/44/runs/99/steer") not in requests
+    assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") not in requests
+    _open_details(page)
+    expect(page.get_by_role('button', name='Approve', exact=True)).to_be_visible()
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280, 1440])
-def test_active_workflow_guidance_selector_is_responsive(page: Page, width: int):
+def test_active_workflow_submission_queue_is_responsive(page: Page, width: int):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, live_activity=True)
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(URL)
 
-    expect(page.locator("#composer-guidance-target")).to_be_visible()
-    expect(page.locator("#composer-guidance-scope")).to_have_value("workflow")
+    expect(page.locator("#composer-guidance-target")).to_be_hidden()
+    page.locator('#task-prompt').fill('Retest this navigation at mobile and desktop widths.')
+    page.locator('#send-button').click()
+    expect(page.locator('#thread-command-queue')).to_contain_text('Retest this navigation at mobile and desktop widths.')
+    expect(page.get_by_role('button', name='Steer current thread', exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(path=f"/private/tmp/development-steering-{width}.png", full_page=True)
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_escape_from_skill_search_discards_pending_selection(page: Page, tmp_path, width):
+    _install_api(page, [])
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(URL)
+    prompt = page.locator("#task-prompt")
+    prompt.fill("Review the work")
+    opener = page.locator("#composer-plan-button")
+    dialog = page.get_by_role("dialog", name="Skills")
+    search = dialog.get_by_role("searchbox")
+    skill = dialog.get_by_role("checkbox", name="Accessibility", exact=True)
+
+    opener.click()
+    page.locator('[data-composer-action="skills"]').click()
+    expect(search).to_be_focused()
+    search.fill("access")
+    skill.click()
+    expect(skill).to_be_checked()
+    search.focus()
+    page.screenshot(path=tmp_path / f"skills-before-escape-{width}.png", animations="disabled")
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
+    expect(prompt).to_have_value("Review the work")
+    page.screenshot(path=tmp_path / f"skills-after-escape-{width}.png", animations="disabled")
+
+    opener.click()
+    page.locator('[data-composer-action="skills"]').click()
+    search.fill("access")
+    expect(skill).not_to_be_checked()
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
+    expect(dialog).to_be_hidden()
+    expect(opener).to_be_focused()
 
 
 def test_compact_actions_workflows_provider_groups_and_board_linking(page: Page):
@@ -3149,9 +3292,11 @@ def test_workflow_cards_and_editor_are_responsive(page: Page):
     expect(page.locator(".workflow-step-section")).to_be_visible()
     page.get_by_role("button", name="Loop", exact=True).click()
     expect(page.locator(".workflow-loop-map")).to_be_visible()
-    expect(page.locator(".workflow-loop-node")).to_contain_text("A scoped implementation plan")
+    # The committed loop card shows the step instruction. Expected output is
+    # verified separately in the actual step editor below.
+    expect(page.locator(".workflow-loop-node")).to_contain_text("Inspect the ticket")
     expect(page.locator(".workflow-settings-form")).to_be_hidden()
-    expect(page.get_by_label("What should work differently?")).to_be_visible()
+    expect(page.get_by_label("What should work differently?")).to_have_count(0)
     page.screenshot(path="/private/tmp/decisions-workflow-editor-loop-desktop.png", full_page=True)
 
     page.get_by_role("button", name="List").click()
@@ -3159,19 +3304,15 @@ def test_workflow_cards_and_editor_are_responsive(page: Page):
     expect(page.get_by_role("button", name="Edit step").first).to_be_visible()
     page.screenshot(path="/private/tmp/decisions-workflow-editor-list-desktop.png", full_page=True)
 
-    page.get_by_label("What should work differently?").fill("Add a security review after implementation")
-    page.get_by_role("button", name="Update workflow").click()
-    expect(page.locator("#workflow-detail")).to_contain_text("Security review")
-    assert ("POST", "/api/workflows/44/generate-steps") in requests
-
     page.get_by_role("button", name="Edit step").first.click()
-    expect(page.locator("#workflow-step-outcome")).to_have_value("A scoped implementation plan")
-    expect(page.locator("#workflow-step-skills")).to_be_visible()
-    expect(page.locator(".workflow-step-advanced")).not_to_have_attribute("open", "")
+    editor = page.locator('[data-workflow-inline-step="1"]')
+    expect(editor.locator('[data-inline-outcome]')).to_have_value("A scoped implementation plan")
+    expect(editor.locator('.workflow-option-grid')).to_be_visible()
     page.screenshot(path="/private/tmp/decisions-workflow-step-editor-desktop.png", full_page=True)
-    page.locator("#workflow-step-outcome").fill("A verified implementation plan")
-    page.locator("#workflow-step-form").get_by_role("button", name="Save step").click()
-    expect(page.locator("#workflow-detail")).to_contain_text("A verified implementation plan")
+    editor.locator('[data-inline-outcome]').fill("A verified implementation plan")
+    with page.expect_request(lambda request: request.method == "PATCH" and urlparse(request.url).path == "/api/workflows/44/steps/1") as saved:
+        editor.get_by_role("button", name="Save step").click()
+    assert saved.value.post_data_json['config']['expected_outputs'] == ["A verified implementation plan"]
 
     page.get_by_role("button", name="Loop", exact=True).click()
 
@@ -3180,11 +3321,12 @@ def test_workflow_cards_and_editor_are_responsive(page: Page):
     page.locator("#drawer-backdrop").evaluate("node => node.classList.add('hidden')")
     page.wait_for_timeout(250)
     expect(page.locator(".workflow-editor-header")).to_be_visible()
-    expect(page.get_by_role("button", name="Edit step").first).to_be_visible()
+    expect(page.locator('.workflow-loop-map [data-wf-step]').first).to_be_visible()
     assert page.locator("#workflow-workspace").evaluate("node => node.scrollWidth <= node.clientWidth")
     page.screenshot(path="/private/tmp/decisions-workflow-editor-loop-mobile.png", full_page=True)
-    page.get_by_role("button", name="Edit step").first.click()
-    expect(page.locator("#workflow-step-dialog")).to_be_visible()
+    page.locator('.workflow-loop-map [data-wf-step]').first.click()
+    expect(editor).to_be_visible()
+    expect(editor.locator('[data-inline-outcome]')).to_have_value("A verified implementation plan")
     page.screenshot(path="/private/tmp/decisions-workflow-step-editor-mobile.png", full_page=True)
 
 
@@ -3804,8 +3946,10 @@ def test_playwright_is_a_per_prompt_browser_flag_not_an_injected_skill(page: Pag
     page.goto(URL)
 
     page.locator("#model-button").click()
-    expect(page.locator(".prompt-mode-options button").last).to_have_attribute("id", "prompt-playwright-toggle")
-    page.locator("#prompt-playwright-toggle").click()
+    browser_toggle = page.locator("#model-dialog").get_by_role("button", name="Browser", exact=True)
+    expect(browser_toggle).to_have_attribute("aria-pressed", "false")
+    browser_toggle.click()
+    expect(browser_toggle).to_have_attribute("aria-pressed", "true")
     page.keyboard.press("Escape")
     page.locator("#task-prompt").fill("Check the local preview")
     page.locator("#send-button").click()
@@ -3937,7 +4081,7 @@ def test_thread_context_lifecycle_and_task_details_stay_operable(page: Page):
     assert ("PATCH", "/api/workflows/studio/tasks/17/controls") in requests
     assert ("GET", "/api/workflows/studio/projects/7/doctor") not in requests
     assert requests.count(("POST", "/api/workflows/studio/tasks/17/archive")) == 2
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_artifact_review_is_operable(page: Page):
@@ -3980,7 +4124,7 @@ def test_plan_goal_views_and_thread_context_menu_are_operable(page: Page):
     expect(page.locator("#thread-context-menu")).to_be_visible()
     page.get_by_role("menuitem", name="Pin thread").click()
     assert ("PATCH", "/api/workflows/studio/tasks/17/controls") in requests
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_goal_tab_only_appears_for_goal_mode(page: Page):
@@ -4011,7 +4155,7 @@ def test_thread_destructive_controls_are_guarded_and_operable(page: Page):
     page.get_by_role("button", name="Delete", exact=True).click()
     expect(page.locator("#studio-empty")).to_be_visible()
     assert ("DELETE", "/api/workflows/studio/tasks/17") in requests
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 @pytest.mark.parametrize(
@@ -4139,7 +4283,7 @@ def test_ticket_lane_notices_render_as_compact_status_events(page: Page):
     expect(notice).to_have_css("font-size", "9px")
     page.screenshot(path="/private/tmp/development-thread-lane-status.png", full_page=True)
     page.screenshot(path="/private/tmp/development-response-formatting.png", full_page=True)
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_missing_turn_duration_does_not_render_fake_zero_time(page: Page):
@@ -4240,7 +4384,7 @@ def test_compact_response_actions_and_change_review_are_operable(page: Page):
     expect(card).to_have_count(0)
     assert ("POST", "/api/workflows/studio/tasks/17/execution/changes/undo") in requests
     assert console_errors == [], console_errors
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 @pytest.mark.parametrize("width,height,label", [(375, 812, "compact"), (768, 900, "tablet"), (1440, 900, "desktop")])
@@ -4270,7 +4414,7 @@ def test_responsive_layout_has_no_overflow_or_unnamed_controls(page: Page, width
     page.keyboard.press("Tab")
     focused = page.evaluate("document.activeElement && document.activeElement.tagName")
     assert focused in {"A", "BUTTON", "INPUT", "SELECT", "TEXTAREA"}
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_file_drop_is_scoped_to_composer_and_renders_image_preview(page: Page):
@@ -4310,7 +4454,7 @@ def test_file_drop_is_scoped_to_composer_and_renders_image_preview(page: Page):
     expect(page.locator("#composer-drop-overlay")).to_be_hidden()
     page.screenshot(path="/private/tmp/development-composer-image-preview.png", full_page=True)
     assert ("POST", "/api/workflows/studio/attachments") in requests
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_folder_drop_on_sidebar_registers_board_and_project(page: Page):
@@ -4352,7 +4496,7 @@ def test_folder_drop_on_sidebar_registers_board_and_project(page: Page):
     page.wait_for_timeout(250)
     assert ("POST", "/api/tickets/boards") in requests
     expect(page.locator("#sidebar-drop-overlay")).to_be_hidden()
-    assert not any(method == "UNMOCKED" for method, _ in requests), requests
+    assert [path for method, path in requests if method == "UNMOCKED"] == []
 
 
 def test_image_drop_turns_red_for_a_model_without_vision(page: Page):

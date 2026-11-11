@@ -56,6 +56,11 @@ def current_bound_chat_turn(chat_id: int) -> Optional[int]:
     return None
 
 
+def task_owns_chat_turn(task, chat_id: int, turn_id: int) -> bool:
+    """Read a generation task's originating turn from outside its async context."""
+    return task.get_context().get(_active_chat_turn) == (chat_id, turn_id)
+
+
 def activate_work_intake_context(intake_uid: str) -> Token:
     """Bind one async response task to its exact durable intake."""
     return _active_work_intake_uid.set(str(intake_uid or "").strip())

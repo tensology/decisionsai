@@ -173,6 +173,6 @@ export function bindFileDropZone(zone, onFiles, input) {
 // Toast after accepting a proposal: lists files that could not be fetched.
 export function proposalThreadToast(result) {
     const failed = (result?.failed_attachments || []).map((row) => row?.name || 'file');
-    if (!failed.length) return 'Thread created.';
-    return `Thread created. ${failed.length} file${failed.length === 1 ? '' : 's'} could not be fetched: ${failed.join(', ')}`;
+    if (!failed.length) return 'Development thread opened.';
+    return `Development thread opened. ${failed.length} file${failed.length === 1 ? '' : 's'} could not be fetched: ${failed.join(', ')}`;
 }

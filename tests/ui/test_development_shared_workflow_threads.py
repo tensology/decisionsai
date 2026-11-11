@@ -1,11 +1,141 @@
 from pathlib import Path
+from datetime import datetime, timezone
+import json
+import re
+from types import SimpleNamespace
 
 import pytest
 from playwright.sync_api import expect
 
 from tests.ui.test_development_harness_playwright import _install_api, URL
+from tests.ui.test_incoming_dismiss_undo import fixture_base
 
 pytestmark = pytest.mark.e2e_playwright
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_approved_proactive_turn_displays_its_reply_in_development(page, fixture_base, width):
+    _install_api(page, [], current_board_linked=True, direct_execution=True)
+    request = "Approved proactive project work. Inspect checkout validation."
+    reply = "Checkout validation is fixed. The checkout regression tests passed."
+    chat = {
+        "id": 17, "title": "Implement ticket DEV-42", "project_id": 7,
+        "development": True, "development_source_type": "proactive_orchestrator",
+        "development_ticket_id": 42, "development_board_key": "decisions:70",
+        "messages": [
+            {"role": "user", "content": request, "chat_row_id": 19},
+            {"role": "assistant", "content": reply, "chat_row_id": 19},
+        ],
+    }
+    page.route("**/api/chats/17?**", lambda route: route.fulfill(json=chat))
+    page.route("**/api/workflows/studio/tasks/17/execution", lambda route: route.fulfill(json={"direct": True}))
+    page.set_viewport_size({"width": width, "height": 920})
+    page.goto(f"{fixture_base}/development/threads/17/")
+    page.locator("#studio-sidebar").evaluate("node => node.classList.remove('open')")
+    expect(page.locator(".studio-message.user").get_by_text(request, exact=True)).to_be_visible()
+    expect(page.locator(".studio-message.assistant").get_by_text(reply, exact=True)).to_be_in_viewport()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    folder = Path("/tmp/decisions-proactive-handoff-verify")
+    folder.mkdir(exist_ok=True)
+    page.screenshot(path=str(folder / f"completed-{width}.png"))
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_active_proactive_progress_and_stop(page, fixture_base, width):
+    _install_api(page, [], direct_execution=True, current_board_linked=True)
+    state = {"id": "proactive-6", "origin": "proactive_orchestrator", "direct": True, "turn_id": 19,
+             "status": "initializing", "can_stop": False, "summary": "Starting approved work."}
+    stops = []
+
+    def stop_worker(route):
+        stops.append(route.request.post_data_json)
+        state["can_stop"] = False
+        route.fulfill(json={"stop_requested": True, "stopped": False})
+
+    page.route("**/api/workflows/studio/tasks/17/execution", lambda route: route.fulfill(json=state))
+    page.route("**/api/workflows/studio/tasks/17/execution/stop", stop_worker)
+    page.set_viewport_size({"width": width, "height": 920})
+    page.goto(f"{fixture_base}/development/threads/17/")
+    stop = page.get_by_role("button", name="Stop", exact=True)
+    activity = page.locator(".studio-message.active-turn")
+    folder = Path("/tmp/decisions-proactive-activity-verify")
+    folder.mkdir(exist_ok=True)
+
+    expect(activity).to_contain_text("Starting approved work.")
+    expect(stop).to_be_hidden()
+    page.screenshot(path=str(folder / f"starting-{width}.png"))
+
+    state.update(status="running", execution_session_id=91, can_stop=True, summary="Checking project files.")
+    page.reload()
+    expect(activity).to_contain_text("Checking project files.")
+    expect(stop).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(folder / f"running-{width}.png"))
+    stop.click()
+    page.get_by_role("button", name="Stop agent", exact=True).click()
+    expect(page.locator("#studio-toast")).to_have_text("Stop requested.")
+    expect(stop).to_be_hidden()
+    expect(activity).to_contain_text("Checking project files.")
+    assert stops == [{"execution_session_id": 91}]
+    page.screenshot(path=str(folder / f"stop-requested-{width}.png"))
+
+    state.update(status="blocked", summary="Review the previous approval to recover its outcome.")
+    page.reload()
+    expect(activity).to_contain_text("Review the previous approval to recover its outcome.")
+    expect(stop).to_be_hidden()
+    expect(page.locator("#send-button")).to_be_disabled()
+    expect(page.locator("#task-prompt")).to_be_editable()
+    page.screenshot(path=str(folder / f"unconfirmed-{width}.png"))
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_proactive_handoff_refreshes_transcript_for_active_followup(page, fixture_base, width):
+    requests = []
+    _install_api(page, requests, current_board_linked=True, direct_execution=True)
+    page.add_init_script("""
+        const originalInterval = window.setInterval.bind(window);
+        window.setInterval = (callback, delay, ...args) =>
+            originalInterval(callback, delay === 6000 ? 200 : delay, ...args);
+    """)
+    prompt = {"role": "user", "content": "Approved checkout validation.", "chat_row_id": 19}
+    reply = {"role": "assistant", "content": "Checkout validation passed.", "chat_row_id": 19}
+    followup = {"role": "user", "content": "Check the configuration too.", "chat_row_id": 20}
+    chat = {"id": 17, "title": "Implement ticket DEV-42", "project_id": 7,
+            "development": True, "development_ticket_id": 42, "development_board_key": "decisions:70",
+            "messages": [prompt]}
+    execution = {"id": 91, "direct": True, "status": "running", "turn_id": 19,
+                 "origin": "proactive_orchestrator", "summary": "Checking the checkout.", "can_stop": False}
+    commands = [{"id": 62, "chat_id": 17, "status": "queued", "command_type": "followup", "content": followup["content"]}]
+    page.route("**/api/chats/17?**", lambda route: route.fulfill(json=chat))
+    page.route("**/api/workflows/studio/tasks/17/execution", lambda route: route.fulfill(json=execution))
+    page.route(re.compile(r"/api/workflows/studio/control-state(?:\?|$)"), lambda route: route.fulfill(
+        json={"commands": commands, "interactions": [], "channels": {}, "controls": {}},
+    ))
+    page.set_viewport_size({"width": width, "height": 920})
+    page.goto(f"{fixture_base}/development/threads/17/")
+    draft = page.locator("#task-prompt")
+    expect(page.locator('[data-queued-id="62"]')).to_contain_text(followup["content"])
+    expect(page.locator("#thread-command-queue")).to_contain_text("Follow-ups wait for the approved run.")
+    expect(page.get_by_role("button", name="Steer current thread")).to_have_count(0)
+    expect(page.get_by_role("button", name="Start in a new thread")).to_be_enabled()
+    draft.fill("My next unsent draft")
+    folder = Path("/tmp/decisions-proactive-queue-verify")
+    folder.mkdir(exist_ok=True)
+    page.screenshot(path=str(folder / f"queued-{width}.png"))
+
+    chat["messages"] = [prompt, reply, followup]
+    execution.update(id=92, turn_id=20, origin="development", summary="")
+    execution.pop("can_stop")
+    commands.clear()
+    expect(page.locator(".studio-message.assistant").get_by_text(reply["content"], exact=True)).to_be_visible()
+    expect(page.locator(".studio-message.user").get_by_text(followup["content"], exact=True)).to_have_count(1)
+    expect(page.locator('[data-queued-id="62"]')).to_have_count(0)
+    expect(draft).to_have_value("My next unsent draft")
+    if width > 680:
+        expect(page.locator("#stop-run-button")).to_be_visible()
+    assert not any(method == "POST" and path.endswith("/messages") for method, path in requests)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(folder / f"started-{width}.png"))
 
 
 def install_shared_workflow(page, *, waiting=False, workflow_message=True):
@@ -29,6 +159,47 @@ def install_shared_workflow(page, *, waiting=False, workflow_message=True):
     page.route('**/api/chats/17?**', lambda route: route.fulfill(json=chat))
     page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json=execution))
     page.route('**/api/workflows/active-runs**', lambda route: route.fulfill(json=[other, own] if waiting else [other]))
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_workflow_completion_stays_above_a_newer_prompt(page, fixture_base, width):
+    from distr.gui.web.routes.chat import _merge_thread_rows_with_tool_and_workflow_events
+
+    install_shared_workflow(page)
+    root = SimpleNamespace(params=json.dumps({'workflow_events': [{
+        'id': 'late-completion', 'run_id': 99, 'workflow_id': 44, 'workflow_name': 'Checkout workflow',
+        'type': 'completed', 'status': 'completed', 'turn_id': 19,
+        'summary': 'Checkout workflow finished.', 'timestamp': '2026-11-11T12:05:00+00:00',
+    }]}))
+    original = 'Run the approved checkout workflow.'
+    newer = 'Check the pricing screen next.'
+    rows = [SimpleNamespace(id=turn_id, input=text, response=None, created_date=datetime(2026, 11, 11, 12, minute, tzinfo=timezone.utc))
+            for turn_id, text, minute in [(19, original, 0), (20, newer, 3)]]
+    chat = {
+        'id': 17, 'title': 'Checkout follow-up', 'project_id': 7,
+        'development': True, 'development_workflow_id': 44,
+        'messages': _merge_thread_rows_with_tool_and_workflow_events(rows, root),
+    }
+    page.route('**/api/chats/17?**', lambda route: route.fulfill(json=chat))
+    page.set_viewport_size({'width': width, 'height': 920})
+    page.goto(f'{fixture_base}/development/threads/17/')
+    disclosure = page.locator('details.turn-activity-disclosure > summary').filter(has_text='View workflow')
+    expect(disclosure).to_have_count(1)
+    expect(page.locator('.studio-message.user').get_by_text(newer, exact=True)).to_be_visible()
+    ordering = page.evaluate("""() => {
+        const prompts = document.querySelectorAll('.studio-message.user');
+        const workflow = document.querySelector('details.turn-activity-disclosure');
+        return Boolean(prompts[0].compareDocumentPosition(workflow) & Node.DOCUMENT_POSITION_FOLLOWING)
+            && Boolean(workflow.compareDocumentPosition(prompts[1]) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }""")
+    assert ordering
+    folder = Path('/tmp/decisions-workflow-turn-trace')
+    folder.mkdir(exist_ok=True)
+    page.screenshot(path=folder / f'{width}-collapsed.png', animations='disabled')
+    disclosure.click()
+    expect(page.locator('[data-workflow-runner="done"]')).to_be_visible()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.screenshot(path=folder / f'{width}.png', animations='disabled')
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])

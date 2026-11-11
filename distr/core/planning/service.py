@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import case, func, text
 
 from distr.core.db import get_session
 from distr.core.db.projects import Project
@@ -131,6 +131,8 @@ def ticket_preview(workspace_id: int) -> dict[str, Any]:
 def build_approved_tickets(workspace_id: int) -> dict[str, Any]:
     """Create approved plan tickets once, keyed by the plan item's stable identity."""
     with get_session() as db:
+        if db.get_bind().dialect.name == 'sqlite':
+            db.execute(text('BEGIN IMMEDIATE'))
         workspace = db.get(PlanWorkspace, int(workspace_id))
         if workspace is None:
             raise LookupError("Plan workspace not found.")
@@ -141,13 +143,23 @@ def build_approved_tickets(workspace_id: int) -> dict[str, Any]:
         except (IndexError, ValueError) as exc:
             raise ValueError("Plan is not linked to a local Decisions board.") from exc
         board = db.get(KanbanBoard, board_id)
-        if board is None:
+        if board is None or board.archived:
             raise LookupError("Linked ticket board not found.")
+        project = db.get(Project, workspace.project_id) if workspace.project_id else None
+        if project is None or project.deleted_at is not None or board.default_project_id != project.id:
+            raise ValueError('Workspace project/board consistency failure')
         lane = next((row for row in board.lanes if row.name.lower() == "backlog"), None) or next(iter(board.lanes), None)
         if lane is None:
             raise ValueError("Linked ticket board has no lane.")
         items = db.query(PlanItem).filter(PlanItem.workspace_id == workspace.id, PlanItem.status == "approved").order_by(PlanItem.sort_order, PlanItem.id).all()
-        existing = {ticket.source_external_id: ticket for ticket in lane.tickets if ticket.source_provider == "plan"}
+        # Tickets retain their identity when a person moves them out of Backlog.
+        existing = {}
+        identities = {_hash(f'plan:{workspace.id}:item:{item.id}')[:16] for item in items}
+        for ticket in db.query(KanbanTicket).filter(KanbanTicket.source_provider == 'plan',
+                                                   KanbanTicket.source_external_id.in_(identities)):
+            if ticket.source_external_id in existing:
+                raise ValueError('Duplicate plan ticket identity. Review existing tickets before building.')
+            existing[ticket.source_external_id] = ticket
         created, reused = [], []
         for item in items:
             stable_key = _hash(f"plan:{workspace.id}:item:{item.id}")[:16]
@@ -169,6 +181,8 @@ def build_approved_tickets(workspace_id: int) -> dict[str, Any]:
                 db.add(ticket)
                 created.append(item.title)
             else:
+                if ticket.linked_project_id != project.id or ticket.lane.board_id != board.id:
+                    raise ValueError('An existing plan ticket moved to another project or board. Review it before building.')
                 reused.append(item.title)
         db.commit()
         return {"workspace_id": int(workspace.id), "board_name": workspace.board_name, "created": created, "reused": reused, "idempotent": True}
@@ -202,6 +216,10 @@ def list_workspaces() -> list[dict[str, Any]]:
         return [_workspace_payload(row, counts.get(row.id, 0)) for row in rows]
 
 
+class PlanWorkspaceProjectConflict(ValueError):
+    """The saved plan is already bound to another project."""
+
+
 def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, project_id: int | None = None) -> dict[str, Any]:
     clean_key = str(board_key or "").strip()
     if ":" not in clean_key:
@@ -220,6 +238,10 @@ def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, pr
             )
             db.add(row)
         else:
+            if project_id and row.project_id is not None and row.project_id != int(project_id):
+                raise PlanWorkspaceProjectConflict(
+                    "This saved plan belongs to a different project. Review the board's project link before reopening it."
+                )
             row.board_name = str(board_name or row.board_name).strip()
             row.project_id = int(project_id) if project_id else row.project_id
             row.root_path = root_path or row.root_path
@@ -273,16 +295,28 @@ def plan_scan_status(workspace_id: int) -> dict[str, Any]:
 
 def _run_background_scan(workspace_id: int, project_id: int) -> None:
     state, error = "done", ""
+    coverage = {}
     try:
         # Own sessions: materialize_project_scan opens get_session() itself, never the request's.
-        materialize_project_scan(workspace_id, force=False)
+        result = materialize_project_scan(workspace_id, force=False)
+        summary = result.get('summary') if isinstance(result, dict) else None
+        if isinstance(summary, dict):
+            if summary.get('coverage') in {'none', 'partial', 'complete'}:
+                coverage['coverage'] = summary['coverage']
+            if isinstance(summary.get('limitations'), list):
+                coverage['limitations'] = [value for value in summary['limitations'] if isinstance(value, str)]
+            for key in ('route_count', 'model_count'):
+                if type(summary.get(key)) is int:
+                    coverage[key] = summary[key]
+            if type(summary.get('adequate')) is bool:
+                coverage['adequate'] = summary['adequate']
     except Exception as exc:  # recorded for the UI; the plan stays usable
         state, error = "error", str(exc) or exc.__class__.__name__
         logger.warning("Background plan scan failed (workspace %s, project %s): %s", workspace_id, project_id, error)
     finally:
         with _SCAN_LOCK:
             _SCANS_IN_FLIGHT.discard(project_id)
-            _SCAN_STATUS[workspace_id] = {"state": state, "error": error, "finished_at": time.time()}
+            _SCAN_STATUS[workspace_id] = {"state": state, "error": error, "finished_at": time.time(), **coverage}
 
 
 def start_background_scan(workspace_id: int, project_id: int) -> bool:
@@ -310,6 +344,10 @@ def _default_scaffold_content(item_type: str) -> str:
 
 
 def _item_is_replaceable(item: dict[str, Any], *, force: bool) -> bool:
+    # Content length or revision number cannot establish ownership. A concise
+    # first revision may already contain the user's complete intent.
+    if not item.get("_scan_owned"):
+        return False
     if force:
         return True
     # Interface items with "#|" page descriptions or a decisions-flow sidecar are hand-made (N6).
@@ -323,23 +361,35 @@ def _item_is_replaceable(item: dict[str, Any], *, force: bool) -> bool:
     default = _default_scaffold_content(item_type).strip()
     if default and content == default:
         return True
-    # First revision shells that are still near-empty can be filled once.
-    # After any real edit (revision_count > 1), soft scan leaves them alone.
-    if (
-        int(item.get("revision_count") or 0) <= 1
-        and len(content) < 80
-        and item_type in {"brief", "prd", "frac", "architecture", "flows"}
-    ):
-        return True
     return False
+
+
+def _scan_owned_item_ids(workspace_id: int) -> set[int]:
+    """Require a complete scanner-only lineage and an unchanged current row."""
+    with get_session() as db:
+        lineage = db.query(
+            PlanItemRevision.item_id.label("item_id"),
+            func.max(PlanItemRevision.revision).label("latest"),
+            func.min(PlanItemRevision.revision).label("first"),
+            func.count(PlanItemRevision.id).label("count"),
+            func.sum(case((PlanItemRevision.source.in_(("scaffold", "discovery")), 0), else_=1)).label("human"),
+        ).join(PlanItem, PlanItem.id == PlanItemRevision.item_id).filter(
+            PlanItem.workspace_id == int(workspace_id)).group_by(PlanItemRevision.item_id).subquery()
+        rows = db.query(PlanItem.id).join(lineage, lineage.c.item_id == PlanItem.id).join(
+            PlanItemRevision, (PlanItemRevision.item_id == PlanItem.id) & (PlanItemRevision.revision == lineage.c.latest)).filter(
+                lineage.c.human == 0, lineage.c.first == 1, lineage.c.count == lineage.c.latest,
+                PlanItem.content == PlanItemRevision.content,
+                PlanItem.title == PlanItemRevision.title,
+                PlanItem.status == PlanItemRevision.status).all()
+        return {row[0] for row in rows}
 
 
 def materialize_project_scan(workspace_id: int, *, force: bool = False, instruction: str = "") -> dict[str, Any]:
     """Fill plan sections from a deterministic project inspection.
 
     Same path for every linked project. Never invents project-specific hacks.
-    By default only replaces starter / empty scaffold content. ``force=True``
-    (Scan project) refreshes the derived sections even if previously filled.
+    By default only replaces untouched scanner scaffolds. ``force=True``
+    refreshes proven scanner-owned sections; human-owned content is preserved.
     """
     from distr.core.planning.project_scan import rebuild_sitemap_cache, scan_project
 
@@ -372,6 +422,9 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
     updated: list[dict[str, Any]] = []
     skipped: list[str] = []
     by_type = {str(item.get("item_type")): item for item in detail.get("items") or []}
+    owned_ids = _scan_owned_item_ids(workspace_id)
+    for item in by_type.values():
+        item["_scan_owned"] = int(item["id"]) in owned_ids
     note = instruction or "Project scan"
     from distr.core.planning.interface_rebuild import summary_text as rebuild_summary_text
     interfaces_summary: dict[str, Any] | None = None
@@ -386,7 +439,16 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
                 interfaces_summary = {"regenerated": 0, "added": content.count("# @generated"), "kept": 0, "stale": 0, "first_rebuild": True}
             else:
                 previous = str(item.get("content") or "")
-                content, interfaces_summary = overlay(previous, content, revision=int(item.get("revision_count") or 1))
+                # Legacy unmarked first-revision scan output is replaceable
+                # only with recorded scanner provenance, never by its age alone.
+                revision = int(item.get("revision_count") or 1)
+                if not item.get("_scan_owned"):
+                    revision = max(2, revision)
+                    from distr.core.planning.interface_conventions import screens
+                    if not screens(previous):
+                        skipped.append(item_type)
+                        continue
+                content, interfaces_summary = overlay(previous, content, revision=revision)
                 carry_warnings: list[str] = []
                 from distr.core.planning.interface_conventions import carry_annotations, has_annotations
                 if has_annotations(previous, "wire"):   # safety net + orphan-key warnings (ids, #|, sidecar)
@@ -445,7 +507,7 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
                 instruction=note,
             )
         )
-    elif _item_is_replaceable(tree, force=force) or force:
+    elif _item_is_replaceable(tree, force=force):
         refreshed = update_item(
             int(tree["id"]),
             content=tree_content,
@@ -456,6 +518,8 @@ def materialize_project_scan(workspace_id: int, *, force: bool = False, instruct
         )
         if refreshed:
             updated.append(refreshed)
+    elif "file_structure" not in skipped:
+        skipped.append("file_structure")
 
     if force:
         rebuild_sitemap_cache(project_root)
@@ -500,6 +564,22 @@ def workspace_exists(workspace_id: int) -> bool:
     """Cheap read-only existence check (no sitemap / file work)."""
     with get_session() as db:
         return db.get(PlanWorkspace, int(workspace_id)) is not None
+
+
+def validate_board_plan_read(workspace_id: int, board_id: int | None, project_id: int | None) -> None:
+    """Validate the board and project selected by a remote Planning reader."""
+    from distr.core.workflow.development_sidebar import board_key_for
+
+    with get_session() as db:
+        workspace = db.get(PlanWorkspace, workspace_id)
+        if workspace is None:
+            raise LookupError('Plan workspace not found.')
+        board = db.get(KanbanBoard, board_id) if board_id is not None else None
+        project = db.get(Project, project_id) if project_id is not None else None
+        if (board is None or board.archived or project is None or project.deleted_at is not None
+                or workspace.board_key != board_key_for(board)
+                or workspace.project_id != project.id or board.default_project_id != project.id):
+            raise ValueError('The board or project changed. Go back to Plans and refresh the list.')
 
 
 def get_workspace(workspace_id: int) -> dict[str, Any] | None:

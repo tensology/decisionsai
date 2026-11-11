@@ -313,7 +313,7 @@ let _headerUsageCacheKey = null;
 let _headerUsageFetchedAt = 0;
 let _llmUsageTooltip = '';
 
-// TTS Player (bottom of sidebar)
+// Read-aloud player
 const ttsPlayerCard = document.getElementById('ttsPlayerCard');
 const ttsPlayerClose = document.getElementById('ttsPlayerClose');
 const ttsPlayerAudio = document.getElementById('ttsPlayerAudio');
@@ -326,6 +326,8 @@ const ttsPlayerSpeed = document.getElementById('ttsPlayerSpeed');
 const ttsPlayerDownload = document.getElementById('ttsPlayerDownload');
 let ttsPlayerBlob = null;
 let ttsPlayerObjectURL = null;
+let ttsPlaybackRequest = null;
+let ttsPlaybackButton = null;
 /** Filename for download: tts_<timestamp>.mp3, set when loading blob */
 let ttsPlayerDownloadFilename = 'tts.wav';
 
@@ -2493,6 +2495,7 @@ function createChatItem(chat) {
     div.addEventListener('click', (e) => {
         // Lock immediately, before the single-vs-double-click delay, so a typed
         // message cannot submit against the previously selected chat.
+        if (currentChatId !== chat.id) closeTTSPlayer();
         currentChatId = chat.id;
         showChatView(false);
         updateLoadButtonVisibility();
@@ -2632,6 +2635,7 @@ async function createNewChat() {
 // Called on single click. Use loadChat() to also hot-swap the agent.
 async function selectChat(chatId) {
     const seq = ++_selectSeq;
+    if (currentChatId !== chatId) closeTTSPlayer();
     currentChatId = chatId;
     // Lock the composer during the async chat fetch. Until the selected chat's
     // messages arrive, it is not safe to submit against the previous chat.
@@ -2698,9 +2702,7 @@ async function loadChat(chatId, options = {}) {
     if (staleActivity) staleActivity.remove();
     _renderedMessageCount = 0;
     updateActiveChat();
-    // Close TTS player when switching chats — agent TTS is interrupted server-side, player should clear too
-    if (ttsPlayerCard) { ttsPlayerCard.style.display = 'none'; }
-    if (ttsPlayerAudio) { ttsPlayerAudio.pause(); ttsPlayerAudio.removeAttribute('src'); }
+    closeTTSPlayer();
     // Lock sidebar so user can't click another chat while this one is loading into agent
     chatList.classList.add('chat-list--locked');
     try {
@@ -2863,6 +2865,7 @@ function updateLoadButtonVisibility() {
 function setViewOnlyChrome(isViewOnly) {
     if (chatSettingsHeader) chatSettingsHeader.classList.toggle('view-only', Boolean(isViewOnly));
     if (inputContainer) inputContainer.classList.toggle('view-only', Boolean(isViewOnly));
+    updateTurnStopVisibility(isViewOnly);
     const headerControls = [
         configureChatButton,
         contextRing
@@ -2877,6 +2880,7 @@ function setViewOnlyChrome(isViewOnly) {
 
 function showEmptyState() {
     viewedChatSkin = null;
+    closeTTSPlayer();
     stopChatWebSocket();
     document.body.classList.remove('chat-has-active-thread');
     emptyState.style.display = 'flex';
@@ -3580,6 +3584,16 @@ function turnHasActiveWork(turn) {
     return Boolean(turn && !turnIsTerminal(turn) && turnHasWorkActivity(turn));
 }
 
+function canStopActiveWork() {
+    return loadedChatId != null && loadedChatId === currentChatId && !chatActivationInFlight
+        && currentActiveTurn?.turn_id != null && turnHasActiveWork(currentActiveTurn);
+}
+
+function updateTurnStopVisibility(isViewOnly = false) {
+    const stop = document.getElementById('turnStopButton');
+    if (stop) stop.hidden = isViewOnly || !canStopActiveWork();
+}
+
 const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 'shell_command', 'run_terminal_cmd', 'terminal', 'exec', 'exec_command', 'run_command', 'command']);
 /** Display-only: routine shell/bash tool steps are hidden from the turn readout (failures shown as one collapsed line). */
 function isRoutineShellStep(event) {
@@ -3731,12 +3745,11 @@ function upsertTurnPanel(turn) {
 
 function updateTurnComposerState() {
     const active = turnHasActiveWork(currentActiveTurn);
-    const stop = document.getElementById('turnStopButton');
-    if (stop) stop.hidden = !active;
+    updateTurnStopVisibility();
     if (messageInput && loadedChatId === currentChatId && !chatActivationInFlight) {
         messageInput.disabled = false;
         const agentName = currentChatSettings?.agent_name || document.querySelector(`.chat-item[data-chat-id="${currentChatId}"]`)?.dataset.agentName;
-        messageInput.placeholder = active ? 'Steer the active work…' : (agentName ? `Message ${agentName}` : 'Send message…');
+        messageInput.placeholder = active ? 'Steer…' : (agentName ? `Message ${agentName}` : 'Send message…');
     } else if (messageInput && chatActivationInFlight) {
         messageInput.disabled = true;
         messageInput.placeholder = 'Loading chat into agent…';
@@ -3865,6 +3878,8 @@ function initTTSPlayer() {
         if (ttsPlayerSeek) ttsPlayerSeek.max = 100;
     });
     audio.addEventListener('timeupdate', updateTimeDisplay);
+    audio.addEventListener('play', () => showPlayPause(!audio.paused));
+    audio.addEventListener('pause', () => showPlayPause(!audio.paused));
     audio.addEventListener('ended', () => {
         showPlayPause(false);
         audio.currentTime = 0;
@@ -3877,7 +3892,6 @@ function initTTSPlayer() {
             if (!audio.src) return;
             audio.playbackRate = ttsPlayerSpeed ? parseFloat(ttsPlayerSpeed.value) : 1;
             audio.play().catch(() => {});
-            showPlayPause(true);
         });
     }
     if (ttsPlayerPause) {
@@ -3888,14 +3902,11 @@ function initTTSPlayer() {
     }
     if (ttsPlayerStop) {
         ttsPlayerStop.addEventListener('click', () => {
+            ttsPlaybackRequest?.abort();
             audio.pause();
             audio.currentTime = 0;
             showPlayPause(false);
             updateTimeDisplay();
-            // Also interrupt agent TTS (PTT/welcome message playback)
-            if (loadedChatId) {
-                fetch(`${API_BASE}/chats/${loadedChatId}/cancel`, { method: 'POST' }).catch(() => {});
-            }
         });
     }
     if (ttsPlayerSeek) {
@@ -3920,17 +3931,11 @@ function initTTSPlayer() {
             URL.revokeObjectURL(a.href);
         });
     }
-    if (ttsPlayerClose && ttsPlayerCard) {
+    if (ttsPlayerClose) {
         ttsPlayerClose.addEventListener('click', () => {
-            if (ttsPlayerAudio) {
-                ttsPlayerAudio.pause();
-                ttsPlayerAudio.currentTime = 0;
-            }
-            ttsPlayerCard.style.display = 'none';
-            // Also interrupt agent TTS
-            if (loadedChatId) {
-                fetch(`${API_BASE}/chats/${loadedChatId}/cancel`, { method: 'POST' }).catch(() => {});
-            }
+            const trigger = ttsPlaybackButton;
+            closeTTSPlayer();
+            if (trigger?.isConnected) trigger.focus({ preventScroll: true });
         });
     }
 }
@@ -3946,15 +3951,27 @@ function getTTSDownloadFilename() {
     return `tts_${y}${m}${d}${h}${min}${s}.mp3`;
 }
 
-/** Load TTS blob into the sidebar player; show and focus the player, then auto-play when ready. */
+function closeTTSPlayer() {
+    ttsPlaybackRequest?.abort();
+    ttsPlaybackRequest = null;
+    ttsPlaybackButton = null;
+    if (ttsPlayerCard) ttsPlayerCard.hidden = true;
+    if (ttsPlayerAudio?.hasAttribute('src')) {
+        ttsPlayerAudio.pause();
+        ttsPlayerAudio.removeAttribute('src');
+        ttsPlayerAudio.load();
+    }
+    if (ttsPlayerObjectURL) URL.revokeObjectURL(ttsPlayerObjectURL);
+    ttsPlayerObjectURL = null;
+    ttsPlayerBlob = null;
+}
+
+/** Show the audio player and start playback. */
 function loadTTSIntoPlayer(blob) {
     if (!ttsPlayerCard || !ttsPlayerAudio) return;
     if (ttsPlayerObjectURL) {
         ttsPlayerAudio.pause();
-        ttsPlayerAudio.removeAttribute('src');
-        ttsPlayerAudio.load();
         URL.revokeObjectURL(ttsPlayerObjectURL);
-        ttsPlayerObjectURL = null;
     }
     ttsPlayerBlob = blob;
     ttsPlayerDownloadFilename = getTTSDownloadFilename();
@@ -3965,48 +3982,47 @@ function loadTTSIntoPlayer(blob) {
     if (ttsPlayerPause) ttsPlayerPause.style.display = 'none';
     ttsPlayerTime.textContent = '0:00 / 0:00';
     ttsPlayerSeek.value = '0';
-    ttsPlayerCard.style.display = 'block';
-    ttsPlayerCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    ttsPlayerCard.setAttribute('tabindex', '-1');
-    ttsPlayerCard.focus();
-    function onReady() {
-        ttsPlayerAudio.removeEventListener('canplaythrough', onReady);
-        ttsPlayerAudio.play().then(() => {
-            if (ttsPlayerPlay) ttsPlayerPlay.style.display = 'none';
-            if (ttsPlayerPause) ttsPlayerPause.style.display = 'flex';
-        }).catch(() => {});
-    }
-    ttsPlayerAudio.addEventListener('canplaythrough', onReady);
-    ttsPlayerAudio.load();
+    ttsPlayerCard.hidden = false;
+    ttsPlayerCard.focus({ preventScroll: true });
+    ttsPlayerAudio.play().catch(() => {});
 }
 
-/** Fetch TTS for text and load into sidebar player; then bring player into focus (no auto-play). */
+/** Generate browser playback for the selected message. */
 async function playTTS(button) {
     const messageEl = button.closest('.message');
     const textEl = messageEl ? messageEl.querySelector('.message-text') : null;
     const text = textEl ? textEl.textContent.trim() : '';
     if (!text) return;
+    ttsPlaybackRequest?.abort();
+    const request = new AbortController();
+    ttsPlaybackRequest = request;
+    const chatId = currentChatId;
     const originalLabel = button.textContent;
     button.textContent = '…';
     button.disabled = true;
     try {
         const payload = { text, speed: 1.0, format: 'mp3' };
-        if (currentChatId != null) payload.chat_id = currentChatId;
+        if (chatId != null) payload.chat_id = chatId;
         const response = await fetch(`${API_BASE}/chats/tts/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: request.signal
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.detail || err.error || response.statusText);
         }
         const blob = await response.blob();
+        if (request.signal.aborted || currentChatId !== chatId) return;
+        ttsPlaybackButton = button;
         loadTTSIntoPlayer(blob);
     } catch (e) {
+        if (request.signal.aborted || currentChatId !== chatId) return;
         console.error('TTS error:', e);
         alert('Could not generate TTS: ' + (e.message || 'Please try again.'));
     } finally {
+        if (ttsPlaybackRequest === request) ttsPlaybackRequest = null;
         button.textContent = originalLabel;
         button.disabled = false;
     }
@@ -5001,13 +5017,9 @@ async function sendToAgentAndPoll(message, abortSignal) {
 }
 
 function cancelStream() {
-    // Stop must always silence the agent. It used to return early when no chat
-    // was loaded, so Stop did nothing while the About copy was being read aloud.
-    if (loadedChatId) {
-        fetch(`${API_BASE}/chats/${loadedChatId}/cancel`, { method: 'POST' }).catch(() => {});
-    } else {
-        fetch(`${API_BASE}/tts/stop`, { method: 'POST' }).catch(() => {});
-    }
+    if (!canStopActiveWork()) return;
+    const turnId = encodeURIComponent(currentActiveTurn.turn_id);
+    fetch(`${API_BASE}/chats/${loadedChatId}/cancel?turn_id=${turnId}`, { method: 'POST' }).catch(() => {});
     if (streamAbortController) {
         streamAbortController.abort();
     }
@@ -5018,8 +5030,7 @@ function setSendButtonStreaming(streaming) {
     // The composer remains available for steering. Stop is an explicit,
     // separate action rather than replacing Send.
     if (modalCreate) modalCreate.disabled = streaming;
-    const stop = document.getElementById('turnStopButton');
-    if (stop) stop.hidden = !turnHasActiveWork(currentActiveTurn);
+    updateTurnStopVisibility();
     if (messageInput && loadedChatId === currentChatId) {
         messageInput.disabled = chatActivationInFlight;
     }

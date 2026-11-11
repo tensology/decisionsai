@@ -46,6 +46,7 @@ class SignalManager(QObject):
 
     # Interrupt TTS signal (GUI -> Agent request)
     interrupt_tts = pyqtSignal()
+    chat_cancel_requested = pyqtSignal(int, int)
 
     # A deliberate read-aloud (About "Read about") finished playing. The player
     # signals are not emitted for direct speech, so the button never reset.

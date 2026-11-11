@@ -19,6 +19,9 @@ const m = await import(SOURCE);
 assert.deepEqual(m.scanHint({state: 'scanning'}), {text: 'Scanning project…', kind: 'scanning'});
 assert.deepEqual(m.scanHint({state: 'error', error: 'folder gone'}), {text: 'Project scan failed: folder gone', kind: 'error'});
 assert.equal(m.scanHint({state: 'done'}), null);
+assert.match(m.scanHint({state: 'done', coverage: 'none'}).text, /could not map.*Review/);
+assert.match(m.scanHint({state: 'done', coverage: 'partial'}).text, /partial/);
+assert.match(m.scanHint({state: 'unconfirmed'}).text, /not confirmed/);
 assert.equal(m.scanHint(undefined), null);
 ''')
 
@@ -60,3 +63,17 @@ def test_index_wires_hint_and_refresh_and_models_parallel():
     assert 'conversation.refreshWorkspace(workspace);' in index
     assert 'await Promise.all([refreshWorkspace ? reload(session) : null, loadModels(session)]);' in conv
     assert re.search(r"\./planning/index\.js\?v=[0-9]{8}-[\w-]+'", (STATIC / 'app.js').read_text())
+
+
+def test_timeout_replaces_the_scanning_hint_without_claiming_a_failed_scan():
+    _node(r'''
+import assert from 'node:assert/strict';
+const m = await import(SOURCE);
+for (const api of [async () => ({state: 'scanning'}), async () => { throw Error('offline'); }]) {
+  let settled;
+  const result = await m.watchPlanScan({api, workspaceId: 7, maxPolls: 2,
+    isCurrent: () => true, sleep: async () => {}, onSettled: (s, w) => { settled = [s, w]; }});
+  assert.equal(result, 'timeout');
+  assert.deepEqual(settled, [{state: 'unconfirmed'}, null]);
+}
+''')

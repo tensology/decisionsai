@@ -162,6 +162,193 @@ def test_chat_actions_new_switch_rename_clear_undo_compact(page, backend):
     assert ('archive', backend.chats[-1]["id"]) in backend.calls                        # empty fresh chat folded away
 
 
+@pytest.mark.parametrize("size", [*SIZES, (1280, 900)], ids=lambda s: f"{s[0]}")
+def test_plan_composer_keeps_prompt_and_wrapped_draft_readable(page, backend, size):
+    _open(page, size)
+    composer = page.locator('#plan-language')
+    message = composer.get_by_role('textbox', name='Message')
+    send = composer.locator('#plan-send')
+    composer.scroll_into_view_if_needed()
+    idle_height = message.evaluate('field => field.clientHeight')
+    fits = 'field => field.scrollHeight <= field.clientHeight + 1'
+    assert message.evaluate(fits), 'The empty prompt should fit within the message field'
+    page.screenshot(path=str(OUT / f'plan-composer-empty-{size[0]}.png'))
+
+    draft = '\n'.join([
+        'Review the checkout page and its order summary.',
+        'Keep the delivery address visible.',
+        'Show the next step after checkout.',
+    ])
+    message.fill(draft)
+    assert message.evaluate(fits), 'A short multiline draft should grow the field'
+    assert message.evaluate('field => field.clientHeight') > idle_height
+    assert message.input_value() == draft
+    send.click(trial=True)
+    page.screenshot(path=str(OUT / f'plan-composer-draft-{size[0]}.png'))
+
+    long_draft = '\n'.join([draft] * 8 + ['Final acceptance criterion.'])
+    message.fill(long_draft)
+    assert message.evaluate('field => field.scrollHeight > field.clientHeight')
+    message.press('ControlOrMeta+End')
+    assert message.input_value() == long_draft
+    assert message.evaluate('field => field.scrollTop > 0')
+    composer.scroll_into_view_if_needed()
+    send.click(trial=True)
+    page.screenshot(path=str(OUT / f'plan-composer-long-{size[0]}.png'))
+
+    message.fill('')
+    assert message.evaluate('field => field.clientHeight') == idle_height
+    assert send.is_disabled()
+
+
+@pytest.mark.parametrize("size", [*SIZES, (1280, 900)], ids=lambda s: f"{s[0]}")
+def test_plan_send_recovers_the_saved_reply_after_response_is_lost(page, backend, size):
+    requests = []
+
+    def lost_response(route):
+        body = route.request.post_data_json
+        requests.append(body)
+        backend.messages[3].extend([
+            {"id": 41, "role": "user", "content": body["message"],
+             "request_id": body.get("request_id"), "status": "complete"},
+            {"id": 41, "role": "assistant", "content": "The delivery address stays visible."},
+        ])
+        route.abort()
+
+    page.route("**/plan-workspaces/5/messages", lost_response)
+    _open(page, size)
+    message = page.get_by_role("textbox", name="Message")
+    message.fill("Review the delivery address.")
+    page.locator("#plan-send").click()
+    reply = page.get_by_text("The delivery address stays visible.", exact=True)
+    reply.wait_for()
+    assert message.input_value() == ""
+    assert page.locator("#plan-send").is_disabled()
+    assert page.locator("#plan-operation-status .plan-error").count() == 0
+    assert len(requests) == 1 and requests[0].get("request_id")
+    page.locator("#plan-language").scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT / f"plan-send-recovered-{size[0]}.png"))
+
+
+def test_plan_send_retries_confirmed_failure_with_a_new_request(page, backend):
+    requests = []
+
+    def respond(route):
+        body = route.request.post_data_json
+        requests.append(body)
+        attempt = len(requests)
+        status, reply = ("error", "Model unavailable.") if attempt == 1 else ("complete", "Plan reviewed.")
+        backend.messages[3].extend([
+            {"id": 40 + attempt, "role": "user", "content": body["message"],
+             "request_id": body["request_id"], "status": status},
+            {"id": 40 + attempt, "role": "assistant", "content": reply},
+        ])
+        route.fulfill(json={**backend.conversation(3), "status": status})
+
+    page.route("**/plan-workspaces/5/messages", respond)
+    _open(page, (1280, 900))
+    field = page.get_by_role("textbox", name="Message")
+    send = page.locator("#plan-send")
+    field.fill("Review the plan.")
+    send.click()
+    page.get_by_text("Your draft is preserved.", exact=False).wait_for()
+    assert field.input_value() == "Review the plan."
+    page.screenshot(path=str(OUT / "plan-send-failure-1280.png"))
+    send.click()
+    page.get_by_text("Plan reviewed.", exact=True).wait_for()
+    assert field.input_value() == ""
+    assert requests[0]["request_id"] != requests[1]["request_id"]
+
+
+def test_plan_polling_keeps_a_followup_draft_when_the_lost_request_completes(page, backend):
+    requests = []
+    complete = False
+    read = backend.conversation
+
+    def conversation(chat_id):
+        result = read(chat_id)
+        if requests:
+            result["status"] = "complete" if complete else "running"
+        return result
+
+    def lose_response(route):
+        body = route.request.post_data_json
+        requests.append(body)
+        backend.messages[3].append({"id": 41, "role": "user", "content": body["message"],
+                                    "request_id": body["request_id"], "status": "running"})
+        route.abort()
+
+    backend.conversation = conversation
+    page.route("**/plan-workspaces/5/messages", lose_response)
+    _open(page, (1280, 900))
+    field = page.get_by_role("textbox", name="Message")
+    field.fill("Review the checkout.")
+    page.locator("#plan-send").click()
+    page.get_by_text("Review the checkout.", exact=True).wait_for()
+    field.fill("Also review the order summary.")
+    assert page.locator("#plan-send").is_disabled()
+    complete = True
+    backend.messages[3][-1]["status"] = "complete"
+    backend.messages[3].append({"id": 41, "role": "assistant", "content": "Checkout reviewed."})
+    page.get_by_text("Checkout reviewed.", exact=True).wait_for()
+    assert field.input_value() == "Also review the order summary."
+    assert page.locator("#plan-send").is_enabled()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("size", [*SIZES, (1280, 900)], ids=lambda s: f"{s[0]}")
+def test_plan_reload_restores_only_the_selected_chats_draft(page, backend, size):
+    requests = []
+
+    def unexpected_send(route):
+        requests.append(route.request.post_data_json)
+        route.abort()
+
+    page.route("**/plan-workspaces/5/messages", unexpected_send)
+    _open(page, size)
+    field = page.get_by_role("textbox", name="Message")
+    field.fill("Checkout draft for Merrypak")
+    page.locator("#plan-chat-new").click()
+    page.wait_for_function("() => document.querySelector('.plan-chat-title')?.textContent === 'Chat 2'")
+    assert field.input_value() == ""
+    field.fill("A separate draft for Chat 2")
+    page.reload()
+    page.wait_for_function("() => document.querySelector('.plan-chat-title')?.textContent === 'Chat 2'")
+    assert field.input_value() == "A separate draft for Chat 2"
+    page.locator("#plan-language").scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT / f"plan-draft-reloaded-{size[0]}.png"))
+    page.locator("#plan-chat-switch").click()
+    page.locator('[data-chat-switch="3"]').click()
+    page.wait_for_function("() => document.querySelector('.plan-chat-title')?.textContent === 'Plan: Merrypak'")
+    assert field.input_value() == "Checkout draft for Merrypak"
+    assert not requests
+    assert page.evaluate("!Object.keys(localStorage).some(key => key.startsWith('decisions.plan.draft.'))")
+
+
+def test_plan_tab_keeps_its_chat_selection_when_another_tab_changes_it(page, backend):
+    _open(page, (1280, 900))
+    field = page.get_by_role("textbox", name="Message")
+    page.locator("#plan-chat-new").click()
+    page.wait_for_function("() => document.querySelector('.plan-chat-title')?.textContent === 'Chat 2'")
+    field.fill("Draft belongs to the first tab")
+
+    other = page.context.new_page()
+    try:
+        _install_api(other, [])
+        other.route("**/api/**", backend.route)
+        other.goto(PLAN_URL)
+        other.wait_for_function("() => document.querySelector('.plan-chat-title')?.textContent === 'Chat 2'")
+        assert other.get_by_role("textbox", name="Message").input_value() == ""
+        other.locator("#plan-chat-switch").click()
+        other.locator('[data-chat-switch="3"]').click()
+        other.wait_for_function("() => document.querySelector('.plan-chat-title')?.textContent === 'Plan: Merrypak'")
+        page.reload()
+        page.wait_for_function("() => document.querySelector('.plan-chat-title')?.textContent === 'Chat 2'")
+        assert field.input_value() == "Draft belongs to the first tab"
+    finally:
+        other.close()
+
+
 def _drop(page, mime, name):
     page.evaluate("""([mime, name, b64]) => {
         const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -191,3 +378,19 @@ def test_image_drop_paste_and_rejection(page, backend):
     assert chips['x'] >= composer['x'] - 0.5 and chips['x'] + chips['width'] <= composer['x'] + composer['width'] + 0.5
     page.screenshot(path=str(OUT / 'chat1-images-768.png'))
     assert len([c for c in backend.calls if c[0] == 'upload']) == 2
+
+
+@pytest.mark.parametrize('width', [320, 390, 768, 1440])
+def test_plan_section_tabs_fit_and_switch(page, backend, width):
+    _open(page, (width, 900))
+    nav = page.get_by_role('navigation', name='Plan sections')
+    assert nav.evaluate('node => node.scrollWidth <= node.clientWidth + 1')
+    for label in ('Data', 'Documents', 'Interfaces'):
+        tab = nav.get_by_role('button', name=label, exact=True)
+        tab.click()
+        assert tab.get_attribute('aria-pressed') == 'true'
+        if width < 620 and label != 'Interfaces':
+            page.screenshot(path=str(OUT / f'plan-section-{label.lower()}-{width}.png'), animations='disabled')
+    assert page.get_by_role('button', name='Build tickets', exact=True).is_visible()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.screenshot(path=str(OUT / f'plan-section-tabs-{width}.png'), animations='disabled')

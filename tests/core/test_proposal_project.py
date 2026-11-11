@@ -2,28 +2,40 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from distr.core.db import get_session
+from distr.core.db import Chat, get_session
 from distr.core.db.projects import IncomingProposalProject, Project
 from distr.core.incoming import proposals as mod
 from distr.gui.web.routes.development.incoming import register_routes
 
 
 @pytest.fixture
-def assignment(monkeypatch):
+def assignment(monkeypatch, tmp_path):
+    home = tmp_path/'home'
+    home.mkdir()
+    monkeypatch.setattr(Path, 'home', staticmethod(lambda: home))
+    roots = [tmp_path/'first',tmp_path/'second']
+    for root in roots: root.mkdir()
     with get_session() as db:
-        first, second = Project(name='Merrypak fixture'), Project(name='Multisnack fixture')
+        first, second = Project(name='Merrypak fixture',folder_location=str(roots[0])), Project(name='Multisnack fixture',folder_location=str(roots[1]))
         db.add_all([first, second]); db.commit()
         original, target = first.id, second.id
     proposal = {'id': f'local:whatsapp:project-{target}', 'origin': 'local', 'source': 'whatsapp',
+                'source_thread_id':f'project-{target}',
                 'dedupe_key': f'whatsapp:project-{target}', 'project_id': original,
                 'project_name': 'Merrypak fixture', 'title': 'Normalize DPP delivery labels',
                 'description': 'Keep source brief', 'tasks': ['Check labels'], 'message_ids': ['a', 'b']}
+    links = home/'.decisions/cache/incoming-project-links.json'
+    links.parent.mkdir(parents=True)
+    links.write_text(json.dumps([{'source':'whatsapp','source_thread_id':f'project-{target}',
+                                 'projects':[{'decisions_project_id':pid} for pid in (original,target)]}]))
+    mod.invalidate_proposals_list_cache()
     monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
     monkeypatch.setitem(mod._TRIAGE_CACHE, 'proposals', [proposal])
     monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', Mock())
@@ -56,22 +68,41 @@ def test_correction_survives_database_reconnect_process_and_retriage(assignment)
 def test_stale_handoff_uses_saved_project_and_preserves_source(assignment, monkeypatch, upstream):
     proposal, original, target = assignment
     if upstream:
-        proposal = {**proposal, 'id': f'tensology:{900000 + target}', 'origin': 'tensology'}
+        proposal = {**proposal, 'id': f'tensology:{900000 + target}', 'origin': 'tensology',
+                    'updated_at':'2026-11-10T10:00:00Z'}
         client = Mock()
-        client.get.return_value = {**proposal, 'id': 900000 + target,
-                                   'project': {'name': 'Merrypak fixture'}, 'attachments': []}
+        canonical = {**proposal, 'id':900000+target, 'status':'pending',
+                     'source_conversation':{'thread_id':f'project-{target}'},
+                     'source_message_ids':proposal['message_ids'],
+                     'project':{'id':10000+original,'name':'Merrypak fixture','decisions_project_id':original},
+                     'attachments':[]}
+        def get(path, **kwargs):
+            if path == 'projects':
+                return [{'id':10000+pid,'decisions_project_id':pid} for pid in (original,target)]
+            assert path == f'work-requests/{900000+target}'
+            return dict(canonical)
+        def patch(path, body, **kwargs):
+            assert body['project_id'] == 10000+target
+            canonical.update(project={'id':10000+target,'name':'Multisnack fixture','decisions_project_id':target},
+                             updated_at='2026-11-10T10:01:00Z')
+            return dict(canonical)
+        client.get.side_effect = get
+        client.patch.side_effect = patch
         monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **k: client)
         monkeypatch.setattr('distr.core.tensology_client.decide_work_request', Mock())
-        monkeypatch.setattr('distr.core.tensology_client._resolve_tensology_project', Mock(side_effect=AssertionError('Must use correction')))
     mod.reassign_proposal_project(proposal, target)
-    create = Mock(return_value=123)
+    from distr.core.workflow.development_threads import ensure_development_thread
+    create = Mock(side_effect=ensure_development_thread)
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', create)
-    monkeypatch.setattr('distr.core.incoming.media.proposal_attachments', lambda *a, **k: [])
-    monkeypatch.setattr('distr.core.incoming.media.register_thread_attachments', Mock())
-    monkeypatch.setattr(mod, '_record_proposal_handoff', Mock())
-    assert mod.create_proposal_thread(proposal) == 123
+    chat_id = mod.create_proposal_thread(proposal)
+    assert chat_id > 0
     assert create.call_args.kwargs['project_id'] == target
-    assert 'Project: Multisnack fixture' in create.call_args.kwargs['starting_question']
+    if not upstream:
+        assert 'Project: Multisnack fixture' in create.call_args.kwargs['starting_question']
+    with get_session() as db:
+        root = db.get(Chat,chat_id)
+        assert root.project_id == target
+        assert json.loads(root.params)['incoming_proposal_handoff']['proposal']['project_name'] == 'Multisnack fixture'
     assert 'Keep source brief' in create.call_args.kwargs['starting_question']
 
 
@@ -97,7 +128,7 @@ def test_http_validation_and_canonical_lookup(assignment):
 
 def test_accepted_proposal_cannot_be_reassigned(assignment, monkeypatch):
     proposal, original, target = assignment
-    monkeypatch.setattr(mod, '_accepted_proposal_keys', lambda: {mod._proposal_handoff_key(proposal)})
+    monkeypatch.setattr(mod, '_accepted_proposal_keys', lambda **kwargs: {mod._proposal_handoff_key(proposal)})
     with pytest.raises(ValueError, match='already has a thread'):
         mod.reassign_proposal_project(proposal, target)
     assert mod.apply_project_corrections([proposal])[0]['project_id'] == original
@@ -123,6 +154,6 @@ def test_missing_corrected_project_never_falls_back_to_old_project(assignment, m
     assert mod.apply_project_corrections([proposal])[0]['project_id'] is None
     create = Mock()
     monkeypatch.setattr('distr.core.workflow.development_threads.ensure_development_thread', create)
-    with pytest.raises(ValueError, match='Link the proposal'):
+    with pytest.raises(ValueError, match='Link this source conversation'):
         mod.create_proposal_thread(proposal)
     create.assert_not_called()

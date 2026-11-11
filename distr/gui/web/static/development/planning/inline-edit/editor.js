@@ -50,15 +50,23 @@ export function createInlineEditor({ value, format = 'markdown', label = 'Docume
         } else if (raw) text.value = md;
         else text.textContent = md;
     }
-    const current = () => (rich ? serializeEditor(text, blocks, initialHtml) : raw ? text.value : text.innerText.replace(/\n$/, ''));
+    const current = (onListMarker) => (rich ? serializeEditor(text, blocks, initialHtml, onListMarker) : raw ? text.value : text.innerText.replace(/\n$/, ''));
     const baseline = () => (rich || raw ? saved : saved.replace(/\n$/, ''));
     function refresh() {
-        const dirty = !saving && current() !== baseline();
+        const draft = current((item, marker) => {
+            const number = /^\s*(\d+[.)])/.exec(marker)?.[1];
+            if (number) item.dataset.orderedMarker = number;
+            else delete item.dataset.orderedMarker;
+        });
+        const dirty = !saving && draft !== baseline();
         api.dirty = dirty || saving;
         state.dataset.state = saving ? 'saving' : dirty ? 'unsaved' : 'saved';
         state.textContent = saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved';
         button.disabled = saving || !dirty || conflicted;   // a stale draft never overwrites a newer revision
-        onDraft(dirty ? current() : null);
+        if (api.dirty) tick.hidden = true;
+        // A pending request is still an unsaved draft. Removing it here loses
+        // the text if the person switches tabs before the request settles.
+        onDraft(draft !== baseline() ? draft : null);
     }
     load(initialDraft ?? saved);
     if (rich) toolbar = createFormatToolbar(text);
@@ -69,20 +77,24 @@ export function createInlineEditor({ value, format = 'markdown', label = 'Docume
     });
     button.addEventListener('click', async () => {
         if (button.disabled) return;
-        const content = rich ? current() : raw ? sanitizeMarkdownHtml(current()) : current() + (saved.endsWith('\n') ? '\n' : '');
+        const submitted = current();
+        const content = rich ? submitted : raw ? sanitizeMarkdownHtml(submitted) : submitted + (saved.endsWith('\n') ? '\n' : '');
         saving = true; refresh();
         try {
             const result = await save(content);
             saved = content;
-            if (raw && text.value !== content) text.value = content;   // show what was stored (allowlist applied)
+            if (raw && text.value === submitted && submitted !== content) text.value = content;
             saving = false;
             refresh();
             onSaved(content);
             const pendingSync = Boolean(result?.file_sync_error);
-            tick.textContent = pendingSync ? '⟳' : '✓';
-            tick.dataset.state = pendingSync ? 'sync-pending' : 'saved';
-            tick.hidden = false; clearTimeout(tickTimer); tickTimer = setTimeout(() => { tick.hidden = true; }, 2400);
-            toast(pendingSync ? 'Saved. The file sync is pending and will retry.' : 'Saved', pendingSync ? 'info' : undefined);
+            if (!api.dirty) {
+                tick.textContent = pendingSync ? '⟳' : '✓';
+                tick.dataset.state = pendingSync ? 'sync-pending' : 'saved';
+                tick.hidden = false; clearTimeout(tickTimer); tickTimer = setTimeout(() => { tick.hidden = true; }, 2400);
+            }
+            if (pendingSync) toast('Saved. The file sync is pending and will retry.', 'info');
+            else if (!api.dirty) toast('Saved');
         } catch (error) {
             saving = false;
             if (isRevisionConflict(error)) showConflict();

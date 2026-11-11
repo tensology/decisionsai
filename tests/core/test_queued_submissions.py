@@ -82,6 +82,45 @@ def test_steer_stops_existing_turn_and_delivers_files_once_failure_keeps_item(de
     stop.assert_called_once()
 
 
+def test_steer_keeps_followup_queued_when_the_worker_is_still_active(development_db, monkeypatch):
+    command = submission(development_db)
+    monkeypatch.setattr(harness, "development_execution_active", lambda _: True)
+    monkeypatch.setattr(harness, "stop_development_execution", lambda _: {"stopped": False})
+    monkeypatch.setattr("distr.core.turn_runtime.active_turn_registered", lambda _: False)
+    dispatch = Mock()
+    monkeypatch.setattr(harness, "dispatch_development_prompt", dispatch)
+
+    with pytest.raises(ValueError, match="remains queued"):
+        queue.run_submission(command["id"])
+
+    assert control.list_commands_for_id(command["id"])["status"] == "queued"
+    dispatch.assert_not_called()
+
+
+def test_proactive_marker_keeps_steering_and_followup_queued(development_db, monkeypatch):
+    from distr.core.db import Chat
+
+    chat_id = development_db["chat_id"]
+    command = submission(development_db)
+    steer = control.enqueue_command(chat_id, "Keep the existing layout")
+    with development_db["session"]() as db:
+        root = db.get(Chat, chat_id)
+        params = json.loads(root.params)
+        params["development"]["proactive_dispatch"] = {"candidate_id": 8, "turn_id": 9}
+        root.params = json.dumps(params)
+        db.commit()
+    interrupt, native = Mock(), Mock()
+    monkeypatch.setattr(harness, "stop_development_execution", interrupt)
+    monkeypatch.setattr("distr.core.turn_runtime.steer_active_turn", native)
+    assert control.dispatch_command(steer["id"])["reason"] == "followup_only"
+    with pytest.raises(ValueError, match="stays queued"):
+        queue.run_submission(command["id"])
+    assert control.list_commands_for_id(command["id"])["status"] == "queued"
+    assert control.list_commands_for_id(steer["id"])["status"] == "queued"
+    interrupt.assert_not_called()
+    native.assert_not_called()
+
+
 def test_command_endpoint_keeps_followup_queued_and_cancel_preserves_files(development_db, monkeypatch):
     from distr.gui.web.routes.development.thread_controls import register_routes
     monkeypatch.setattr('distr.core.skills.catalog.filter_known_skill_ids', lambda ids: ids)

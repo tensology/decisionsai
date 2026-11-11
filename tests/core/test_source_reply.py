@@ -60,6 +60,79 @@ def test_cancel_and_rewrite_never_send_and_invalidate_old_approval(thread):
     sender.assert_not_called()
 
 
+@pytest.mark.parametrize("change", ["response", "restored_summary", "deleted", "legacy"])
+def test_approval_requires_review_again_if_the_result_cannot_be_verified(thread, monkeypatch, change):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.thread_tools import register_routes
+
+    if change == "restored_summary":
+        with get_session() as db:
+            db.get(Chat, thread[1]).response = "pending approval automation_recommendation"
+            root = db.get(Chat, thread[0])
+            params = json.loads(root.params)
+            params["development"] = {"execution": {"summary": "The fix is ready for deployment."}}
+            root.params = json.dumps(params)
+            db.commit()
+    draft = make(thread)
+    with get_session() as db:
+        response = db.get(Chat, thread[1])
+        if change == "response":
+            response.response = "Verification failed. Deployment is on hold."
+        elif change == "restored_summary":
+            root = db.get(Chat, thread[0])
+            params = json.loads(root.params)
+            params["development"]["execution"]["summary"] = "Verification failed. Deployment is on hold."
+            root.params = json.dumps(params)
+        elif change == "deleted":
+            db.delete(response)
+        else:
+            row = db.get(SourceReplyDraft, draft["id"])
+            payload = json.loads(row.payload)
+            payload.pop("response_revision", None)
+            row.payload = json.dumps(payload)
+        db.commit()
+
+    sender = Mock()
+    monkeypatch.setattr(replies, "send_reply", sender)
+    before_approval = replies.reply_drafts(*thread)[0]
+    assert before_approval["rewrite_required"] and before_approval["rewrite_notice"]
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    result = TestClient(app).post(
+        f'/workflows/studio/tasks/{thread[0]}/source-replies/{draft["id"]}/approve',
+        json={"approved": True, "text": "Keep my exact edits."},
+    )
+    assert result.status_code == 409
+    assert result.json()["reason"] == "rewrite_required"
+    assert result.json()["send_attempted"] is False
+    sender.assert_not_called()
+    saved = replies.reply_drafts(*thread)[0]
+    assert saved["text"] == "Keep my exact edits."
+    assert saved["status"] == "draft" and saved["rewrite_required"]
+    if change != "deleted":
+        seen = []
+        rewritten = replies.create_draft(*thread, "whatsapp:fixture@g.us", previous=saved["text"],
+                                         replaces=saved["id"],
+                                         complete=lambda p, m, messages, s: (seen.extend(messages) or "A fresh reply."))
+        assert rewritten["id"] != saved["id"] and not rewritten.get("rewrite_required")
+        if change in {"response", "restored_summary"}:
+            assert "Verification failed" in json.dumps(seen)
+
+
+def test_result_change_while_drafting_rejects_stale_model_output(thread):
+    def complete(*_args):
+        with get_session() as db:
+            db.get(Chat, thread[1]).response = "The change failed verification."
+            db.commit()
+        return "The change is ready."
+
+    with pytest.raises(ValueError, match="response changed while drafting"):
+        replies.create_draft(*thread, "whatsapp:fixture@g.us", complete=complete)
+    assert replies.reply_drafts(*thread) == []
+
+
 def test_uncertain_send_cannot_be_retried_blindly(thread):
     draft = make(thread)
     sender = Mock(side_effect=TimeoutError())
@@ -72,6 +145,56 @@ def test_uncertain_send_cannot_be_retried_blindly(thread):
         stored = db.get(SourceReplyDraft, draft['id'])
         saved = {**json.loads(stored.payload), 'status': stored.status}
         assert saved['text'] == 'Approved.' and saved['status'] == 'unconfirmed'
+
+
+@pytest.mark.parametrize('state', ['sending', 'unconfirmed', 'sent'])
+def test_reopen_resumes_protected_send_and_preserves_exact_text_without_model(thread, monkeypatch, state):
+    draft = make(thread)
+    with get_session() as db:
+        row = db.get(SourceReplyDraft, draft['id'])
+        payload = json.loads(row.payload)
+        payload['text'] = 'My exact reviewed message.'
+        row.payload = json.dumps(payload)
+        row.status = state
+        db.commit()
+    model = Mock(side_effect=AssertionError('Must resume without another model call'))
+    resumed = replies.create_draft(*thread, 'whatsapp:fixture@g.us', complete=model)
+    assert resumed['id'] == draft['id']
+    assert resumed['status'] == state
+    assert resumed['text'] == 'My exact reviewed message.'
+    assert replies.reply_drafts(*thread) == [resumed]
+    assert replies.create_draft(*thread, 'whatsapp:fixture@g.us', replaces=draft['id'], complete=model)['id'] == draft['id']
+    model.assert_not_called()
+
+
+def test_two_concurrent_generations_share_one_durable_send_identity(thread, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    barrier = Barrier(2)
+    def generate(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return 'Text', {}
+    monkeypatch.setattr(replies, 'generate_draft', generate)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(replies.create_draft, *thread, 'whatsapp:fixture@g.us') for _ in range(2)]
+        drafts = [future.result(timeout=10) for future in futures]
+    assert drafts[0]['id'] == drafts[1]['id']
+    assert len(replies.reply_drafts(*thread)) == 1
+
+
+def test_legacy_duplicate_draft_cannot_hide_unconfirmed_send(thread):
+    protected = make(thread)
+    with get_session() as db:
+        db.get(SourceReplyDraft, protected['id']).status = 'unconfirmed'
+        duplicate = {**protected, 'id': 'legacy-later-draft'}
+        db.add(SourceReplyDraft(id=duplicate['id'], chat_id=thread[0], payload=json.dumps(duplicate), status='draft'))
+        db.commit()
+    assert replies.create_draft(*thread, 'whatsapp:fixture@g.us')['status'] == 'unconfirmed'
+    assert replies.reply_drafts(*thread)[0]['id'] == protected['id']
+    sender = Mock()
+    with pytest.raises(ValueError, match='already sending'):
+        replies.act_on_draft(thread[0], duplicate['id'], 'approve', 'Duplicate.', sender=sender)
+    sender.assert_not_called()
 
 
 def test_reject_foreign_response_source_and_draft(thread):
@@ -119,6 +242,19 @@ def test_canonical_merge_resolves_real_sources_not_synthetic_collection():
         ('whatsapp:group@g.us', ['voice']), ('mailshot:email-thread', ['email'])]
 
 
+def test_merged_background_conversation_is_not_offered_as_a_reply_source():
+    proposal = {
+        'source': 'gmail', 'source_thread_id': 'merged:collection',
+        'evidence': [{'original_source': {
+            'channel': 'gmail', 'source_thread_id': 'request-thread', 'source_message_id': 'request',
+        }}],
+        'context_evidence': [{'original_source': {
+            'channel': 'gmail', 'source_thread_id': 'background-thread', 'source_message_id': 'background',
+        }}],
+    }
+    assert [choice['key'] for choice in replies.source_choices(proposal)] == ['gmail:request-thread']
+
+
 def test_whatsapp_transport_uses_exact_group_and_detects_dry_run(monkeypatch):
     from distr.core.integrations.whatsapp import relay_client
     send = Mock(return_value={'success': True})
@@ -126,7 +262,7 @@ def test_whatsapp_transport_uses_exact_group_and_detects_dry_run(monkeypatch):
     replies.send_reply({'channel': 'whatsapp', 'jid': 'source-group@g.us'}, 'Exact approved text.', 'key')
     send.assert_called_once_with(jid='source-group@g.us', text='Exact approved text.')
     send.return_value = {'success': True, 'dry_run': True}
-    with pytest.raises(RuntimeError):
+    with pytest.raises(replies.ReplyPreflightError, match='dry-run mode'):
         replies.send_reply({'channel': 'whatsapp', 'jid': 'source-group@g.us'}, 'Text', 'key')
 
 
@@ -146,24 +282,57 @@ def test_mailshot_transport_reply_all_threads_without_appending_signature(monkey
     assert args[1]['inReplyTo'] == '<original@example.com>'
     assert args[1]['include_signature'] is False
     assert kwargs == {'approved': True, 'idempotency_key': 'approval-key'}
+    client.post.return_value = {'error': 'rejected'}
+    with pytest.raises(RuntimeError, match='did not confirm'):
+        replies.send_reply(target, 'Exact approved text.', 'approval-key')
 
 
 def test_gmail_preview_uses_exact_thread_and_keeps_relevant_context(monkeypatch):
     from distr.core.agent.services.integrations import google_workspace
     connector = Mock()
-    connector._make_request.return_value = {'emailAddress': 'paul@example.com'}
+    connector._make_request.return_value = {'sendAs': [
+            {'sendAsEmail': 'paul@example.com', 'isPrimary': True},
+            {'sendAsEmail': 'orders@example.com', 'treatAsAlias': True, 'verificationStatus': 'accepted'},
+            {'sendAsEmail': 'separate@example.com', 'treatAsAlias': False, 'verificationStatus': 'accepted'},
+            {'sendAsEmail': 'pending@example.com', 'treatAsAlias': True, 'verificationStatus': 'pending'},
+    ]}
     connector.get_email.side_effect = lambda mid: {'id': mid, 'threadId': 'exact-thread',
-        'from': 'client@example.com', 'to': 'paul@example.com', 'cc': 'reviewer@example.com',
+        'from': 'client@example.com', 'to': 'paul@example.com, Orders <ORDERS@example.com>',
+        'cc': 'orders@example.com, reviewer@example.com, separate@example.com, pending@example.com',
         'message_id_header': '<source@example.com>'}
     monkeypatch.setattr(google_workspace, 'GoogleWorkspaceConnector', lambda: connector)
     target = replies.resolve_target({'channel': 'gmail', 'thread_id': 'exact-thread',
         'message_ids': ['earlier', 'latest'], 'scoped_ids': True})
     assert target['source_message_ids'] == ['earlier', 'latest']
-    assert target['to'] == ['client@example.com'] and target['cc'] == ['reviewer@example.com']
+    assert target['to'] == ['client@example.com']
+    assert target['cc'] == ['reviewer@example.com', 'separate@example.com', 'pending@example.com']
+    assert 'Orders' not in target['recipient_names']
     connector.get_email.return_value = None
     connector.get_email.side_effect = lambda mid: {'threadId': 'foreign-thread'}
     with pytest.raises(ValueError, match='verified'):
         replies.resolve_target({'channel': 'gmail', 'thread_id': 'exact-thread', 'message_ids': ['foreign']})
+
+
+def test_gmail_preview_anchors_reply_all_to_request_and_keeps_background_context(monkeypatch):
+    from distr.core.agent.services.integrations import google_workspace
+
+    connector = Mock()
+    connector._make_request.return_value = {'sendAs': [{'sendAsEmail': 'paul@example.com', 'isPrimary': True}]}
+    connector.get_email.side_effect = lambda mid: {
+        'id': mid, 'threadId': 'exact-thread', 'from': f'{mid}@example.com',
+        'to': 'paul@example.com', 'message_id_header': f'<{mid}@example.com>',
+    }
+    monkeypatch.setattr(google_workspace, 'GoogleWorkspaceConnector', lambda: connector)
+    [choice] = replies.source_choices({
+        'source': 'gmail', 'source_thread_id': 'exact-thread', 'message_ids': ['request'],
+        'source_context_message_ids': ['background'],
+    })
+
+    target = replies.resolve_target(choice)
+
+    assert target['to'] == ['request@example.com']
+    assert target['source_message_ids'] == ['request', 'background']
+    connector.get_email.assert_called_once_with('request')
 
 
 def test_mailshot_preview_uses_verified_senders_and_original_email(monkeypatch):
@@ -268,15 +437,41 @@ def test_gmail_transport_keeps_approved_to_cc_and_rfc_thread_headers(monkeypatch
     from email import message_from_bytes
     from distr.core.agent.services.integrations import google_workspace
     connector = Mock()
-    connector._make_request.return_value = {'id': 'sent'}
+    connector._make_request.side_effect = [
+        {'sendAs': [{'sendAsEmail': 'paul@example.com', 'isPrimary': True}]},
+        {'id': 'sent', 'threadId': 'original-thread'},
+    ]
     monkeypatch.setattr(google_workspace, 'GoogleWorkspaceConnector', lambda: connector)
-    target = replies.mail_target('gmail', {'id': 'm', 'from': 'client@example.com', 'to': 'paul@example.com',
+    original = {'id': 'm', 'from': 'client@example.com', 'to': 'paul@example.com',
         'cc': 'reviewer@example.com', 'subject': 'Work', 'message_id_header': '<original@example.com>',
-        'threadId': 'original-thread'}, ['paul@example.com'])
+        'threadId': 'original-thread'}
+    connector.get_email.return_value = original
+    target = {**replies.mail_target('gmail', original, ['paul@example.com']), 'from': 'paul@example.com'}
     replies.send_reply(target, 'Exact approved message.', 'key')
     payload = connector._make_request.call_args.kwargs['json']
     message = message_from_bytes(base64.urlsafe_b64decode(payload['raw']))
     assert payload['threadId'] == 'original-thread'
+    assert message['From'] == 'paul@example.com'
     assert message['To'] == 'client@example.com' and message['Cc'] == 'reviewer@example.com'
     assert message['In-Reply-To'] == '<original@example.com>'
     assert message.get_payload().strip() == 'Exact approved message.'
+
+
+def test_merged_reply_choice_keeps_all_original_ids_for_the_same_conversation():
+    choices = replies.source_choices({
+        'source': 'gmail', 'source_thread_id': 'merged:collection', 'message_ids': ['synthetic'],
+        'source_scope': [
+            {'source': 'gmail', 'source_thread_id': 'one', 'message_ids': ['first'], 'participant': 'Original sender'},
+            {'source': 'gmail', 'source_thread_id': 'two', 'message_ids': ['separate']},
+            {'source': 'gmail', 'source_thread_id': 'one', 'message_ids': ['second'], 'source_context_message_ids': ['first', 'context']},
+        ],
+    })
+    assert [(source['key'], source['message_ids']) for source in choices] == [
+        ('gmail:one', ['first', 'second', 'context']), ('gmail:two', ['separate'])]
+    assert choices[0]['label'] == 'Original sender'
+    assert choices[0]['scoped_ids'] is True
+
+
+def test_synthetic_merge_without_original_provenance_is_not_a_reply_destination():
+    assert replies.source_choices({'source': 'gmail', 'source_thread_id': 'merged:unknown',
+                                   'message_ids': ['merged-message:1']}) == []

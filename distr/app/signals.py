@@ -318,6 +318,11 @@ class SignalBridgeMixin:
 
         # Interrupt TTS signal - when agent is dead, hide player locally (command won't reach agent)
         signal_manager.interrupt_tts.connect(self._on_interrupt_tts)
+        signal_manager.chat_cancel_requested.connect(
+            lambda chat_id, turn_id: self._send_command_to_agent(
+                'cancel_chat_turn', {'chat_id': chat_id, 'turn_id': turn_id}
+            )
+        )
         
         # Listening state signals
         signal_manager.voice_set_is_listening.connect(

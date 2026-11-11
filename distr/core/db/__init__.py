@@ -59,6 +59,16 @@ class SourceReplyDraft(Base):
     modified_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
 
+class IncomingMailReplyReceipt(Base):
+    """Durable approval claims for Incoming Quick Reply provider attempts."""
+    __tablename__ = 'incoming_mail_reply_receipts'
+    id = Column(String, primary_key=True)
+    fingerprint = Column(String, nullable=False, index=True)
+    payload = Column(Text, nullable=False)
+    status = Column(String, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+
+
 class Settings(Base):
     __tablename__ = 'settings'
 

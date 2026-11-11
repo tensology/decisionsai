@@ -129,6 +129,32 @@ def test_sync_open_still_scans_inline_and_status_is_idle_by_default(plan_db):
     assert service.plan_scan_status(opened["id"]) == {"state": "idle", "error": ""}
 
 
+@pytest.mark.parametrize('coverage', ['none', 'partial'])
+def test_background_status_retains_inventory_limitations_without_workspace_content(monkeypatch, coverage):
+    monkeypatch.setattr(service, '_SCAN_STATUS', {})
+    monkeypatch.setattr(service, '_SCANS_IN_FLIGHT', {42})
+    monkeypatch.setattr(service, 'materialize_project_scan', lambda *args, **kwargs: {
+        'summary': {'coverage':coverage, 'limitations':['Only supported source formats were inventoried.'],
+                    'route_count':0, 'model_count':0, 'adequate':False},
+        'workspace': {'private_content':'Not scan status'}, 'artifacts': {'private':'Not scan status'}})
+    service._run_background_scan(17, 42)
+    status = service.plan_scan_status(17)
+    assert status['state'] == 'done'
+    assert status['coverage'] == coverage
+    assert status['limitations'] == ['Only supported source formats were inventoried.']
+    assert status['route_count'] == status['model_count'] == 0
+    assert status['adequate'] is False
+    assert 'private_content' not in str(status) and 'workspace' not in status and 'artifacts' not in status
+
+
+def test_background_mock_without_inventory_summary_does_not_invent_warning(monkeypatch):
+    monkeypatch.setattr(service, '_SCAN_STATUS', {})
+    monkeypatch.setattr(service, '_SCANS_IN_FLIGHT', {42})
+    monkeypatch.setattr(service, 'materialize_project_scan', lambda *args, **kwargs: {})
+    service._run_background_scan(17, 42)
+    assert service.plan_scan_status(17) == {'state':'done', 'error':'', 'finished_at':service.plan_scan_status(17)['finished_at']}
+
+
 def test_routes_defer_scan_and_expose_status():
     from pathlib import Path
 

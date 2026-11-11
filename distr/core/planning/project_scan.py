@@ -56,6 +56,13 @@ _SKIP_DIR = {
     "venv",
     ".venv",
     "site-packages",
+    "seed-corpus-pack",
+    "reference",
+    "vendor",
+    "tests",
+    "test",
+    "fixtures",
+    "examples",
 }
 _SKIP_APPS = {"woocommerce", "translatable"}
 _MODEL_BASE = re.compile(r"\b(Model|MPTTModel|TranslatableModel)\b")
@@ -136,13 +143,25 @@ _SKIP_COMPONENT = re.compile(
 )
 
 
+def _source_files(root: Path):
+    """First-party files relative to the selected root; prune packaged corpora.
+
+    A project deliberately opened inside examples or a seed pack is still a
+    project. Only its child trees are excluded, never its ancestor path.
+    """
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = sorted(name for name in dirs if name not in _SKIP_DIR
+                         and not name.startswith('.') and not name.endswith('.app'))
+        for name in sorted(files):
+            path = Path(directory) / name
+            if not name.startswith('.') and not path.is_symlink():
+                yield path
+
+
 def _iter_files(root: Path, names: tuple[str, ...], *, limit: int = 40) -> list[Path]:
     found: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file() or path.name not in names:
-            continue
-        parts = path.relative_to(root).parts
-        if any(part in _SKIP_DIR or part.startswith(".") for part in parts):
+    for path in _source_files(root):
+        if path.name not in names:
             continue
         found.append(path)
         if len(found) >= limit:
@@ -152,11 +171,8 @@ def _iter_files(root: Path, names: tuple[str, ...], *, limit: int = 40) -> list[
 
 def _iter_suffix(root: Path, suffixes: tuple[str, ...], *, limit: int = 200) -> list[Path]:
     found: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in suffixes:
-            continue
-        parts = path.relative_to(root).parts
-        if any(part in _SKIP_DIR or part.startswith(".") for part in parts):
+    for path in _source_files(root):
+        if path.suffix.lower() not in suffixes:
             continue
         found.append(path)
         if len(found) >= limit:
@@ -328,6 +344,67 @@ def scan_django_models(project_root: Path, *, with_fields: bool = False) -> list
     return list(entities.values())
 
 
+def _model_inventory(root: Path, files: list[Path]) -> dict[str, Any]:
+    """Combine source-backed models without merging coincident class names."""
+    from collections import Counter
+    from distr.core.planning.python_models import scan_sqlalchemy_models
+
+    sqlalchemy = scan_sqlalchemy_models(root, files, with_fields=True)
+    rows = [*scan_django_models(root, with_fields=True), *sqlalchemy['models']]
+    counts = Counter(row['name'] for row in rows)
+    names, qualified, used = {}, {}, set()
+    for row in rows:
+        identity = row.get('qualified_name') or f"{row['source']}:{row['name']}"
+        name = row['name']
+        if counts[name] > 1:
+            name = re.sub(r'[^A-Za-z0-9_]', '_', identity)
+            if name in used:
+                name += '_' + hashlib.sha256(identity.encode()).hexdigest()[:10]
+        while name in used:
+            name += '_'
+        used.add(name)
+        names[id(row)] = name
+        qualified[identity] = name
+    result = []
+    for row in rows:
+        relations = []
+        for relation in row.get('relations') or []:
+            target = qualified.get(relation.get('target_qualified_name'))
+            if target is None and counts[relation['target']] == 1:
+                target = next(names[id(candidate)] for candidate in rows if candidate['name'] == relation['target'])
+            if target is not None:
+                relations.append({**relation, 'target': target})
+        result.append({**row, 'display_name': row['name'], 'name': names[id(row)], 'relations': relations})
+    return {**sqlalchemy, 'models': result, 'sqlalchemy_model_count': len(sqlalchemy['models'])}
+
+
+def _inventory_limitations(routes: dict, models: dict) -> list[str]:
+    limitations = [
+        'Source discovery covers supported React/Django routes, static FastAPI HTML handlers, and Django/SQLAlchemy models. Dynamic registration and other frameworks may be missing.',
+        'Discovered implementation is reference material, not approved product requirements or proof of live behavior.',
+        f'ERD fields are limited to {_MAX_MODEL_FIELDS} per model; use the source locations to inspect full definitions.',
+    ]
+    for label, inventory in [('Python routes', routes), ('SQLAlchemy models', models)]:
+        notes = inventory.get('limitations') or []
+        if notes:
+            grouped = {}
+            for row in notes:
+                reason = row.get('code') or row.get('reason') or 'unknown'
+                count, example = grouped.get(reason, (0, row))
+                grouped[reason] = (count + 1, example)
+            reasons = sorted(grouped, key=lambda reason: (not any(token in reason.lower() for token in ('limit', 'budget', 'dynamic')), reason))
+            examples = []
+            for reason in reasons[:4]:
+                count, row = grouped[reason]
+                examples.append(f"{count} {reason}: {row.get('source') or 'inventory'}:{row.get('line') or 0}: {row.get('message') or row.get('reason') or reason}")
+            if len(reasons) > 4:
+                examples.append(f'{len(reasons)-4} additional limitation categories omitted from this summary')
+            limitations.append(f"{label}: {len(notes)} discovery limitations. " + '; '.join(examples))
+    if len(models['models']) > 60:
+        limitations.append(f"ERD displays 60 of {len(models['models'])} discovered models; remaining models are omitted from the diagram.")
+    return limitations
+
+
 def _readme_excerpt(project_root: Path, limit: int = 2500) -> str:
     for name in ("README.md", "README", "readme.md", "AGENTS.md"):
         path = project_root / name
@@ -344,17 +421,18 @@ def _pages_roots(project_root: Path) -> list[Path]:
         project_root / "src" / "pages",
         project_root / "web" / "pages",
     ):
-        if candidate.is_dir():
+        if candidate.is_dir() and candidate.resolve().is_relative_to(project_root.resolve()) and not candidate.is_symlink():
             roots.append(candidate)
     if roots:
         return roots
-    for path in project_root.rglob("pages"):
-        if not path.is_dir():
-            continue
-        parts = path.relative_to(project_root).parts
-        if any(part in _SKIP_DIR for part in parts):
-            continue
-        roots.append(path)
+    for path in _source_files(project_root):
+        for parent in path.parents:
+            if parent == project_root:
+                break
+            if parent.name == 'pages':
+                if parent not in roots:
+                    roots.append(parent)
+                break
         if len(roots) >= 4:
             break
     return roots
@@ -491,6 +569,15 @@ def _component_file(page: Path, spec: str, project_root: Path) -> Path | None:
         candidates.extend(raw.with_suffix(ext) for ext in suffixes)
         candidates.extend(raw / f"index{ext}" for ext in suffixes)
     for candidate in candidates:
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(project_root.resolve()):
+            continue
+        relative = candidate.relative_to(project_root.resolve())
+        if (any(part in _SKIP_DIR or part.endswith('.app') or part.startswith('.') for part in relative.parts)
+                or candidate.is_symlink()
+                or any(parent.is_symlink() for parent in candidate.parents
+                       if parent != project_root.resolve() and parent.is_relative_to(project_root.resolve()))):
+            continue
         if candidate.is_file():
             return candidate
     return None
@@ -505,6 +592,10 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
     cues: dict[str, dict[str, Any]] = {}
     root = project_root.resolve()
     for row in routes:
+        if Path(row.get('source') or '').suffix.lower() not in {'.js', '.jsx', '.ts', '.tsx'}:
+            # A same-named component is not evidence that a Python HTML handler
+            # renders it. Template evidence comes from the handler/template link.
+            continue
         page = _resolve_page_file(project_root, row.get("view") or "")
         if page is None and row.get("name"):
             page = _resolve_page_file(project_root, row["name"])
@@ -512,6 +603,7 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
             continue
         source = page.read_text(encoding="utf-8", errors="replace")[:80_000]
         cue = _extract_screen_cues(source)
+        paths = [str(page.relative_to(project_root))]
         if not _cue_has_content(cue):
             used = set(_JSX_TAG.findall(source))
             followed = 0
@@ -522,7 +614,10 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
                 if child is None or child == page:
                     continue
                 child_text = child.read_text(encoding="utf-8", errors="replace")[:80_000]
-                _merge_cues(cue, _extract_screen_cues(child_text))
+                child_cue = _extract_screen_cues(child_text)
+                _merge_cues(cue, child_cue)
+                if _cue_has_content(child_cue):
+                    paths.append(str(child.relative_to(project_root)))
                 followed += 1
                 if followed >= 2 or _cue_has_content(cue):
                     break
@@ -533,6 +628,7 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
         cue["headings"] = cue["headings"][:8]
         cue["links"] = cue["links"][:4]
         cue["path"] = str(page.relative_to(project_root))
+        cue['paths'] = paths
         cues[row["url"]] = cue
     return cues
 
@@ -600,6 +696,48 @@ def _primary_routes(routes: list[dict[str, str]], *, limit: int = 14) -> list[di
     return ranked[:limit]
 
 
+def _source_cues(cues: dict[str, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    return {url: cue for url, cue in (cues or {}).items() if not cue.get('synthetic')}
+
+
+def _observed_cues(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    # Multiple source files are observations, not proof of one live rendered form.
+    observed = {}
+    for collection in (context.get('template_cues'), context.get('cues')):
+        for url, cue in _source_cues(collection).items():
+            previous = observed.get(url, {})
+            merged = {**previous, **cue}
+            for key in ('fields', 'labels', 'buttons', 'headings', 'links'):
+                values = []
+                for value in [*(previous.get(key) or []), *(cue.get(key) or [])]:
+                    if value not in values:
+                        values.append(value)
+                merged[key] = values
+            paths = list(previous.get('paths') or ([previous['path']] if previous.get('path') else []))
+            for path in cue.get('paths') or ([cue['path']] if cue.get('path') else []):
+                if path not in paths:
+                    paths.append(path)
+            merged['paths'] = paths
+            if paths:
+                merged['path'] = paths[0]
+            conflicts = list(previous.get('evidence_conflicts') or [])
+            for key in ('types', 'regions'):
+                values = dict(previous.get(key) or {})
+                for name, value in (cue.get(key) or {}).items():
+                    conflict = f'{key}:{name}'
+                    if conflict in conflicts:
+                        continue
+                    if name in values and values[name] != value:
+                        values.pop(name)
+                        conflicts.append(conflict)
+                    else:
+                        values[name] = value
+                merged[key] = values
+            merged['evidence_conflicts'] = conflicts
+            observed[url] = merged
+    return observed
+
+
 def build_brief(
     *,
     project_name: str,
@@ -608,6 +746,7 @@ def build_brief(
     models: list[dict[str, Any]],
     cues: dict[str, dict[str, Any]] | None = None,
 ) -> str:
+    cues = _source_cues(cues)
     groups: dict[str, list[str]] = {}
     for row in routes:
         groups.setdefault(row["group"], []).append(f"`{row['url']}` ({row['title']})")
@@ -652,7 +791,7 @@ def build_brief(
             [
                 "## UI surfaces inspected",
                 "",
-                f"- {len(cues)} route pages resolved to source components with form/button cues",
+                f"- {len(cues)} route {'page' if len(cues) == 1 else 'pages'} resolved to source with observed headings, controls or links",
                 "",
             ]
         )
@@ -680,9 +819,7 @@ def build_prd(*, project_name: str, routes: list[dict[str, str]], models: list[d
         "",
         "## Users",
         "",
-        "- End customer / visitor",
-        "- Authenticated account holder",
-        "- Staff / ops where admin or nested account tooling exists",
+        "- Actors and permissions are not established by a route/model scan. Confirm who uses each journey and what they may do.",
         "",
         "## Requirements",
         "",
@@ -698,7 +835,7 @@ def build_prd(*, project_name: str, routes: list[dict[str, str]], models: list[d
             if not fields:
                 continue
             required = ", ".join(f"`{field['name']}`" for field in fields[:5])
-            domain_lines.append(f"- Persist `{entity['name']}` with fields including {required}")
+            domain_lines.append(f"- Observed `{entity['name']}` fields include {required}. Confirm their intended constraints before approval.")
         if domain_lines:
             lines.extend(["", "## Domain constraints", ""])
             lines.extend(domain_lines)
@@ -785,7 +922,7 @@ def build_frac(
         )
         return "\n".join(lines)
     models = models or []
-    cues = cues or {}
+    cues = _source_cues(cues)
     for index, row in enumerate(primary, start=1):
         cue = cues.get(row["url"]) or {}
         lines.extend(
@@ -794,15 +931,23 @@ def build_frac(
                 "",
                 f"User can complete **{row['title']}** via `{row['url']}`.",
                 "",
-                f"- AC-{index:03d}.1: Given a visitor opens `{row['url']}`, when the page loads, then the {row['title']} experience is available without a server error.",
+                f"- AC-{index:03d}.1: Given the intended actor and access rules are confirmed, when `{row['url']}` is opened within those rules, then the {row['title']} experience is available without a server error.",
             ]
         )
+        paths = cue.get('paths') or ([cue['path']] if cue.get('path') else [])
+        if paths:
+            lines.extend(['Observed controls: ' + ', '.join(f'`{path}`' for path in paths), ''])
+        if cue.get('evidence_conflicts'):
+            lines.extend(['Source observations disagree on ' + ', '.join(cue['evidence_conflicts']) + '. Confirm the intended controls before approval.', ''])
+        field_count, action_count = len(cue.get('fields') or []), len(cue.get('buttons') or [])
+        if field_count > 4 or action_count > 2:
+            lines.extend([f'This draft shows {min(4, field_count)} of {field_count} recorded fields and {min(2, action_count)} of {action_count} recorded actions. Review the remaining controls in the cited sources.', ''])
         ac = 2
         for field in (cue.get("fields") or [])[:4]:
             bind = _bind_field(field, models, route_name=row["name"])
-            detail = f" bound to `{bind}`" if bind else ""
+            detail = f" (suggested binding: `{bind}`; confirm before approval)" if bind else ""
             lines.append(
-                f"- AC-{index:03d}.{ac}: Given the {row['title']} form, when the user provides `{_title(field)}`{detail}, then the value is accepted by the page."
+                f"- AC-{index:03d}.{ac}: Given the {row['title']} form, when the user provides a valid `{_title(field)}`{detail}, then the value is accepted by the page."
             )
             ac += 1
         if cue.get("fields"):
@@ -821,16 +966,6 @@ def build_frac(
                 f"- AC-{index:03d}.{ac}: Given the {row['title']} page, when the user activates `{button}`, then the expected navigation or submit action runs."
             )
             ac += 1
-        if not cue and row["group"] in {"Auction", "Commerce", "Logistics", "Sport"}:
-            token = row["name"].lower()
-            for entity in models:
-                if entity["name"].lower() in token or token in entity["name"].lower():
-                    if entity.get("fields"):
-                        field = entity["fields"][0]["name"]
-                        lines.append(
-                            f"- AC-{index:03d}.{ac}: Given `{entity['name']}` data exists, when `{row['url']}` renders, then `{entity['name']}.{field}` is represented on the page."
-                        )
-                    break
         lines.append("")
     return "\n".join(lines)
 
@@ -844,7 +979,10 @@ def build_erd(models: list[dict[str, Any]]) -> str:
             "    }\n"
         )
     lines = ["erDiagram"]
-    for entity in sorted(models, key=lambda row: (row["app"], row["name"]))[:60]:
+    displayed = sorted(models, key=lambda row: (row["app"], row["name"]))[:60]
+    if len(models) > len(displayed):
+        lines.append(f'    %% Showing {len(displayed)} of {len(models)} discovered models; the diagram is partial.')
+    for entity in displayed:
         safe = re.sub(r"[^A-Za-z0-9_]", "", entity["name"]) or "Entity"
         app = re.sub(r"[^A-Za-z0-9_]", "", entity["app"]) or "app"
         lines.append(f"    {safe} {{")
@@ -856,9 +994,9 @@ def build_erd(models: list[dict[str, Any]]) -> str:
         else:
             lines.append(f"        string app_{app}")
         lines.append("    }")
-    known = {re.sub(r"[^A-Za-z0-9_]", "", row["name"]) for row in models}
+    known = {re.sub(r"[^A-Za-z0-9_]", "", row["name"]) for row in displayed}
     edges: set[str] = set()
-    for entity in models:
+    for entity in displayed:
         owner = re.sub(r"[^A-Za-z0-9_]", "", entity["name"])
         for rel in entity["relations"]:
             target = re.sub(r"[^A-Za-z0-9_]", "", rel["target"])
@@ -970,10 +1108,10 @@ def build_flows(
     cues = cues or {}
     if not routes:
         return (
-            'screen "No routes found" device=desktop\n'
+            'screen "No routes found" device=desktop layer=guidance\n'
             "  stack\n"
             '    heading "No route table detected"\n'
-            '    text "Plan looks for routes.jsx / routes.js or Django urls.py in the linked project."\n'
+            '    text "No supported first-party page routes were discovered. Dynamic registration may need explicit planning."\n'
         )
     groups: dict[str, list[dict[str, str]]] = {}
     for row in routes:
@@ -981,7 +1119,7 @@ def build_flows(
 
     chunks: list[str] = []
     overview = [
-        f'screen "Overview · {_quote(project_name)}" device=desktop route="/"',
+        f'screen "Overview · {_quote(project_name)}" device=desktop layer=guidance',
         "  stack",
         f'    heading "{_quote(project_name)} journey map"',
         f'    text "{len(routes)} routes observed from the project route table."',
@@ -1015,13 +1153,14 @@ def build_flows(
 
 
 def render_artifacts(context: dict[str, Any]) -> dict[str, str]:
-    return {
+    cues = _observed_cues(context)
+    artifacts = {
         "brief": build_brief(
             project_name=context["project_name"],
             project_root=Path(context["project_root"]),
             routes=context["routes"],
             models=context["models"],
-            cues=context.get("cues") or {},
+            cues=cues,
         ),
         "prd": build_prd(
             project_name=context["project_name"],
@@ -1031,17 +1170,23 @@ def render_artifacts(context: dict[str, Any]) -> dict[str, str]:
         "frac": build_frac(
             routes=context["routes"],
             models=context["models"],
-            cues=context.get("cues") or {},
+            cues=cues,
         ),
         "architecture": build_erd(context["models"]),
         "flows": build_flows(
             context["routes"],
             project_name=context["project_name"],
             models=context["models"],
-            # N4 widen: Django template form cues fill routes the page scan found nothing for.
-            cues={**(context.get("template_cues") or {}), **(context.get("cues") or {})},
+            cues=cues,
         ),
     }
+    for kind in ('brief', 'prd', 'frac'):
+        heading, _, body = artifacts[kind].partition('\n')
+        artifacts[kind] = heading + '\n\n**Draft from source discovery.** These observations need product review before approval.\n' + body
+    if context.get('_model_inventory') is not None and context.get('_python_routes') is not None:
+        limitations = _inventory_limitations(context['_python_routes'], context['_model_inventory'])
+        artifacts['brief'] += '\n## Discovery coverage\n\n' + '\n'.join(f'- {value}' for value in limitations) + '\n'
+    return artifacts
 
 
 def assess_artifacts(artifacts: dict[str, str], context: dict[str, Any]) -> list[dict[str, str]]:
@@ -1049,7 +1194,7 @@ def assess_artifacts(artifacts: dict[str, str], context: dict[str, Any]) -> list
     gaps: list[dict[str, str]] = []
     models = context.get("models") or []
     routes = context.get("routes") or []
-    cues = context.get("cues") or {}
+    cues = _observed_cues(context)
     depth = int(context.get("depth") or 0)
 
     entities_with_real_fields = sum(1 for row in models if row.get("fields"))
@@ -1158,12 +1303,12 @@ def deepen_context(context: dict[str, Any], gaps: list[dict[str, str]]) -> dict[
     root = Path(context["project_root"])
     codes = {gap["code"] for gap in gaps}
     if "model_fields" in codes or "domain_constraints" in codes or "key_entities" in codes or "bindings" in codes:
-        context["models"] = scan_django_models(root, with_fields=True)
+        context["models"] = context.get('_model_inventory', {}).get('models') or _model_inventory(root, iter_sitemap_sources(root))['models']
     if "page_cues" in codes or "bindings" in codes or "rich_acs" in codes or "ui_surfaces" in codes:
         context["cues"] = scan_page_cues(root, context["routes"])
     if "domain_wireframes" in codes:
         if not any(row.get("fields") for row in context["models"]):
-            context["models"] = scan_django_models(root, with_fields=True)
+            context["models"] = context.get('_model_inventory', {}).get('models') or _model_inventory(root, iter_sitemap_sources(root))['models']
         if not context.get("cues"):
             context["cues"] = scan_page_cues(root, context["routes"])
         context["cues"] = synthesize_domain_cues(context["routes"], context["models"], context.get("cues") or {})
@@ -1179,15 +1324,25 @@ def build_plan(
     """Inventory, then iterate render → assess → deepen until adequate."""
     root = Path(project_root).expanduser().resolve()
     name = project_name or root.name
+    from distr.core.planning.python_routes import inventory_fastapi_routes
+    source_files = iter_sitemap_sources(root) if root.is_dir() else []
+    python_files = [path for path in source_files if path.suffix == '.py']
+    python_routes = inventory_fastapi_routes(root, python_files)
+    model_inventory = _model_inventory(root, python_files)
     context: dict[str, Any] = {
         "project_root": str(root),
         "project_name": name,
         "routes": scan_frontend_routes(root),
-        "models": scan_django_models(root, with_fields=False),
+        "models": [{**row, 'fields': []} for row in model_inventory['models']],
+        '_model_inventory': model_inventory,
+        '_python_routes': python_routes,
         "cues": {},
         "depth": 0,
     }
     context["widen"] = widen_routes_with_sitemap(root, context["routes"], context)
+    # Collect every supported source before judging depth. An HTML form is not
+    # evidence that the React component at the same route has been inspected.
+    context['cues'] = scan_page_cues(root, context['routes'])
     passes: list[dict[str, Any]] = []
     artifacts = render_artifacts(context)
     for pass_index in range(max_passes):
@@ -1201,7 +1356,7 @@ def build_plan(
                     "routes": len(context["routes"]),
                     "models": len(context["models"]),
                     "models_with_fields": sum(1 for row in context["models"] if row.get("fields")),
-                    "cues": len(context.get("cues") or {}),
+                    "cues": len(_observed_cues(context)),
                     "flow_forms": artifacts["flows"].count("\n    form "),
                     "flow_binds": artifacts["flows"].count(" bind="),
                     "frac_acs": artifacts["frac"].count("AC-"),
@@ -1236,12 +1391,15 @@ def build_plan(
             )
             break
     final_gaps = assess_artifacts(artifacts, {**context, "depth": 99})
+    if not context['routes'] and not context['models']:
+        final_gaps.append({'code':'unsupported_inventory',
+                          'message':'No supported first-party route or model inventory was found. This is not a complete application map.'})
     return {
         "project_root": str(root),
         "project_name": name,
         "routes": context["routes"],
         "models": context["models"],
-        "cues": context.get("cues") or {},
+        "cues": _observed_cues(context),
         "artifacts": artifacts,
         "passes": passes,
         "adequate": not final_gaps,
@@ -1251,10 +1409,16 @@ def build_plan(
             "model_count": len(context["models"]),
             "route_groups": sorted({row["group"] for row in context["routes"]}),
             "model_apps": sorted({row["app"] for row in context["models"]}),
-            "cue_count": len(context.get("cues") or {}),
+            "cue_count": len(_observed_cues(context)),
             "widen": context.get("widen") or {},
             "passes": len(passes),
             "adequate": not final_gaps,
+            "coverage": 'none' if not context['routes'] and not context['models'] else 'partial',
+            'python_http_route_count': python_routes['stats']['http_routes'],
+            'python_page_count': python_routes['stats']['html_pages'],
+            'sqlalchemy_model_count': model_inventory['sqlalchemy_model_count'],
+            'model_diagram_omitted_count': max(0, len(model_inventory['models']) - 60),
+            "limitations": _inventory_limitations(python_routes, model_inventory),
         },
     }
 
@@ -1265,10 +1429,10 @@ def build_plan(
 # The sitemap never reads React routes or JS page modules.
 # ---------------------------------------------------------------------------
 
-_SITEMAP_VERSION = 1
+_SITEMAP_VERSION = 2
 _SITEMAP_EDGE_KINDS = ("parent", "navigation", "journey", "auth", "redirect", "success", "failure")
 _SITEMAP_STATUSES = ("verified", "inferred", "incomplete", "missing")
-_MAX_SITEMAP_SOURCES = 800
+_MAX_SITEMAP_SOURCES = 2800
 _MAX_SITEMAP_NODES = 200
 _MAX_SITEMAP_EDGES = 800
 _SITEMAP_READ_LIMIT = 400_000
@@ -1317,23 +1481,15 @@ def _read_limited(path: Path) -> str:
 
 
 def iter_sitemap_sources(project_root: Path) -> list[Path]:
-    """HTML templates, view modules, and URL maps. Never JS/JSX route tables."""
+    """First-party Python and HTML sources. Never JS/JSX route tables or symlinks."""
     root = Path(project_root)
     found: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIR and not name.startswith(".")]
-        for name in filenames:
-            path = Path(dirpath) / name
-            try:
-                rel = path.relative_to(root)
-            except ValueError:
-                continue
-            in_templates = "templates" in rel.parts and name.endswith(".html")
-            view_module = name == "views.py" or (path.parent.name == "views" and name.endswith(".py"))
-            if name == "urls.py" or view_module or in_templates:
-                found.append(path)
-            if len(found) >= _MAX_SITEMAP_SOURCES:
-                return sorted(found, key=lambda item: item.relative_to(root).as_posix())
+    for path in _source_files(root):
+        rel = path.relative_to(root)
+        if path.suffix == '.py' or ('templates' in rel.parts and path.suffix == '.html'):
+            found.append(path)
+        if len(found) >= _MAX_SITEMAP_SOURCES:
+            break
     return sorted(found, key=lambda item: item.relative_to(root).as_posix())
 
 
@@ -1597,13 +1753,35 @@ def _coverage(nodes: list[dict[str, Any]], template_count: int) -> tuple[str, st
     return ("verified", "")
 
 
-def build_html_sitemap(project_root: Path | str) -> dict[str, Any]:
-    """Build a sitemap from Django HTML templates, views, and URL maps only."""
+def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None = None) -> dict[str, Any]:
+    """Build source-backed HTML pages, keeping JSON endpoints out of the sitemap."""
     root = Path(project_root).expanduser().resolve()
     files = iter_sitemap_sources(root) if root.is_dir() else []
     urls = _parse_url_maps(files, root)
     views = _parse_views(files, root)
     templates = _template_index(files, root)
+    if _python_routes is None:
+        from distr.core.planning.python_routes import inventory_fastapi_routes
+        _python_routes = inventory_fastapi_routes(root, [path for path in files if path.suffix == '.py'])
+    seen_python_pages = set()
+    for row in _python_routes['pages']:
+        route = _normalize_route(re.sub(r'\{([A-Za-z_]\w*)(?::[^}]+)?\}', r':\1', row['route']))
+        template = row.get('template') or ''
+        key = (route, template)
+        if key in seen_python_pages:
+            continue
+        seen_python_pages.add(key)
+        identity = f"fastapi:{row['source']}:{row['line']}:{row['handler']}"
+        template_path = Path(template) if template else None
+        label = template_path.stem if template_path else row['handler'].rsplit('.', 1)[-1]
+        if template_path and label == 'index':
+            label = template_path.parent.name or 'Home'
+        views[identity] = {'name': row['handler'], 'kind': 'function', 'template': template,
+                           'explicit_template': bool(template), 'auth': False, 'auth_known': False,
+                           'conditional': bool(row.get('conditional')),
+                           'source': row['source'], 'line': row['line']}
+        urls.append({'route': route, 'url_name': label, 'view': identity, 'source': row['source'],
+                     'line': row['line'], 'declared_route': row['route'], 'methods': row['methods']})
     extended_by: dict[str, int] = {}
     included_by: dict[str, int] = {}
     for item in templates.values():
@@ -1656,7 +1834,9 @@ def build_html_sitemap(project_root: Path | str) -> dict[str, Any]:
         template_key = _resolve_template_key(template_name, templates) if template_name else None
         if template_key in scaffold_templates:
             template_key = None
-        if view and template_name and template_key is None:
+        if view and view.get('conditional'):
+            status = 'incomplete'
+        elif view and template_name and template_key is None:
             status = "missing"
         elif view and template_key and not inferred:
             status = "verified"
@@ -1677,6 +1857,9 @@ def build_html_sitemap(project_root: Path | str) -> dict[str, Any]:
                 "auth": bool(view and view.get("auth")),
                 "view_meta": view or {},
                 "source": row["source"],
+                'line': row.get('line'),
+                'declared_route': row.get('declared_route', row['route']),
+                'methods': row.get('methods'),
             }
         )
 
@@ -1690,43 +1873,6 @@ def build_html_sitemap(project_root: Path | str) -> dict[str, Any]:
     template_node_ids: dict[str, str] = {}
     by_name: dict[str, str] = {}
     by_route: dict[str, str] = {}
-
-    for key, users in sorted(template_users.items()):
-        if len(users) < 2:
-            continue
-        node_id = _unique_id("template", key, used_ids)
-        template_node_ids[key] = node_id
-        nodes.append(
-            {
-                "id": node_id,
-                "kind": "page_template",
-                "label": _title(Path(key).stem),
-                "route": "",
-                "template": key,
-                "view": "",
-                "url_name": "",
-                "status": "verified",
-                "auth": False,
-            }
-        )
-    for key, item in sorted(templates.items()):
-        if key in scaffold_templates or key in template_node_ids or key in template_users:
-            continue
-        node_id = _unique_id("template", key, used_ids)
-        template_node_ids[key] = node_id
-        nodes.append(
-            {
-                "id": node_id,
-                "kind": "page_template",
-                "label": _title(Path(key).stem),
-                "route": "",
-                "template": key,
-                "view": "",
-                "url_name": "",
-                "status": "incomplete",
-                "auth": False,
-            }
-        )
 
     for index, page in enumerate(pages):
         if len(nodes) >= _MAX_SITEMAP_NODES:
@@ -1746,8 +1892,60 @@ def build_html_sitemap(project_root: Path | str) -> dict[str, Any]:
                 "url_name": page["url_name"],
                 "status": page["status"] if page["status"] in _SITEMAP_STATUSES else "incomplete",
                 "auth": page["auth"],
+                'auth_known': page['view_meta'].get('auth_known', True),
+                'source': page['source'],
+                'line': page.get('line'),
+                'declared_route': page['declared_route'],
+                'methods': page.get('methods'),
             }
         )
+
+    # Connected pages consume the budget before unconnected template stubs.
+    for key, users in sorted(template_users.items()):
+        if len(nodes) >= _MAX_SITEMAP_NODES:
+            break
+        if len(users) < 2:
+            continue
+        node_id = _unique_id("template", key, used_ids)
+        template_node_ids[key] = node_id
+        nodes.append(
+            {
+                "id": node_id,
+                "kind": "page_template",
+                "label": _title(Path(key).stem),
+                "route": "",
+                "template": key,
+                "view": "",
+                "url_name": "",
+                "status": "verified",
+                "auth": False,
+            }
+        )
+    for key, item in sorted(templates.items()):
+        if len(nodes) >= _MAX_SITEMAP_NODES:
+            break
+        if key in scaffold_templates or key in template_node_ids or key in template_users:
+            continue
+        node_id = _unique_id("template", key, used_ids)
+        template_node_ids[key] = node_id
+        nodes.append(
+            {
+                "id": node_id,
+                "kind": "page_template",
+                "label": _title(Path(key).stem),
+                "route": "",
+                "template": key,
+                "view": "",
+                "url_name": "",
+                "status": "incomplete",
+                "auth": False,
+            }
+        )
+
+    source_node_count = len(nodes)
+    template_candidates = {key for key, users in template_users.items() if len(users) > 1}
+    template_candidates.update(key for key in templates if key not in scaffold_templates and key not in template_users)
+    omitted_node_count = max(0, len(pages) + len(template_candidates) - source_node_count)
 
     def resolve_target(token: str) -> str | None:
         cleaned = str(token or "").strip()
@@ -1831,6 +2029,12 @@ def build_html_sitemap(project_root: Path | str) -> dict[str, Any]:
                 _add_edge(edges, edge_seen, login_id, source, "auth", "authentication boundary")
 
     coverage, note = _coverage(nodes, len(templates))
+    if omitted_node_count:
+        coverage = 'incomplete'
+        note = (note + f' {omitted_node_count} source-backed nodes were omitted by the {_MAX_SITEMAP_NODES}-node limit.').strip()
+    if _python_routes['limitations']:
+        coverage = 'incomplete'
+        note = (note + ' Static Python route discovery has unresolved or unsupported cases; this is not a complete application map.').strip()
     return {
         "version": _SITEMAP_VERSION,
         "source": "html-views-urls",
@@ -1839,6 +2043,9 @@ def build_html_sitemap(project_root: Path | str) -> dict[str, Any]:
         "nodes": nodes,
         "edges": edges,
         "scaffolding": scaffolding,
+        'python_route_stats': _python_routes['stats'],
+        'limitations': _python_routes['limitations'],
+        'omitted_node_count': omitted_node_count,
     }
 
 
@@ -1895,10 +2102,22 @@ def _read_sitemap_cache(path: Path, project_root: Path) -> dict[str, Any] | None
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeError):
         return None
-    if not isinstance(payload, dict) or payload.get("project_root") != str(project_root):
+    if (not isinstance(payload, dict) or payload.get("version") != _SITEMAP_VERSION
+            or payload.get("project_root") != str(project_root)):
         return None
     model = payload.get("model")
-    if not isinstance(model, dict):
+    if (not isinstance(model, dict) or model.get('version') != _SITEMAP_VERSION
+            or not isinstance(model.get('nodes'), list) or not isinstance(model.get('edges'), list)
+            or not isinstance(model.get('scaffolding'), list)
+            or model.get('coverage') not in {'missing', 'incomplete', 'inferred', 'verified'}):
+        return None
+    if any(not isinstance(node, dict) or not isinstance(node.get('id'), str)
+           or node.get('kind') not in {'page', 'page_template'} or node.get('status') not in _SITEMAP_STATUSES
+           for node in model['nodes']):
+        return None
+    if any(not isinstance(edge, dict) or not isinstance(edge.get('from'), str)
+           or not isinstance(edge.get('to'), str) or edge.get('kind') not in _SITEMAP_EDGE_KINDS
+           for edge in model['edges']):
         return None
     payload["model"] = model
     return payload
@@ -1986,7 +2205,7 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
     context.setdefault("template_cues", {})
     try:
         files = iter_sitemap_sources(root) if root.is_dir() else []
-        sitemap = build_html_sitemap(root)
+        sitemap = build_html_sitemap(root, _python_routes=context.get('_python_routes'))
         templates = _template_index(files, root)
     except Exception:  # noqa: BLE001 - widening is best effort; the plain route scan still works
         return stats
@@ -1997,7 +2216,7 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
         stats["sitemap_pages"] += 1
         norm = _normalize_route(node["route"])
         row = by_norm.get(norm)
-        if row is None and norm != "/" and stats["routes_added"] < _MAX_WIDEN_ROUTES and len(routes) < 80:
+        if row is None and stats["routes_added"] < _MAX_WIDEN_ROUTES and len(routes) < 80:
             name = str(node.get("url_name") or norm.strip("/").replace("/", "_").replace(":", "") or "home")
             row = {"url": norm, "name": name, "view": str(node.get("view") or ""), "title": str(node.get("label") or _title(name)),
                    "group": _group_for_route(norm, name), "source": "sitemap"}

@@ -10,6 +10,17 @@ import pytest
 from distr.core import rtk_support
 
 
+@pytest.mark.parametrize('cancellable', [False, True])
+def test_pipeline_does_not_hide_failed_check(tmp_path, monkeypatch, cancellable):
+    monkeypatch.setenv('DECISIONS_RTK_DISABLED', '1')
+    check = tmp_path / 'check.sh'
+    check.write_text('echo deliberate-regression-failure\nexit 7\n')
+    run = rtk_support.run_cancellable_shell_command if cancellable else rtk_support.run_shell_command
+    result = run(f'bash {check} | tail -1', cwd=str(tmp_path))
+    assert result.returncode == 7
+    assert 'deliberate-regression-failure' in result.stdout
+
+
 @pytest.fixture(autouse=True)
 def reset_rtk_cache():
     rtk_support._rtk_available = None

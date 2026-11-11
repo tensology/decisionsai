@@ -1149,9 +1149,12 @@ class StepRouter:
         step_id: int,
         run_id: int,
         feedback: str,
+        *, expected_checkpoint: dict | None = None,
     ) -> Dict[str, Any]:
         """Resume a waiting step with user/main-agent feedback."""
         with get_session() as db:
+            from distr.core.workflow.interactions import guard_workflow_checkpoint
+            guard_workflow_checkpoint(db,run_id,expected_checkpoint)
             run = db.query(AutoWorkflowRun).filter(
                 AutoWorkflowRun.id == run_id,
             ).first()
@@ -1183,23 +1186,10 @@ class StepRouter:
             # Transition back to running
             run.status = "running"
             step.status = "running"
-            try:
-                from distr.core.orchestrator import emit_event
-
-                emit_event(
-                    source="workflow",
-                    event_type="workflow_step_feedback_received",
-                    status="running",
-                    workflow_id=run.workflow_id,
-                    run_id=run_id,
-                    step_id=step_id,
-                    ticket_id=getattr(run, "ticket_id", None),
-                    board_id=getattr(run, "board_id", None),
-                    summary=f"{step.name or f'Step {step_id}'} received feedback.",
-                    payload={"feedback": feedback.strip()},
-                )
-            except Exception:
-                logger.debug("Could not emit orchestrator feedback event", exc_info=True)
+            event_payload=dict(source='workflow',event_type='workflow_step_feedback_received',status='running',
+                workflow_id=run.workflow_id,run_id=run_id,step_id=step_id,
+                ticket_id=getattr(run,'ticket_id',None),board_id=getattr(run,'board_id',None),
+                summary=f"{step.name or f'Step {step_id}'} received feedback.",payload={'feedback':feedback.strip()})
             if getattr(run, "ticket_id", None):
                 append_ticket_audit_entry(
                     db,
@@ -1213,18 +1203,15 @@ class StepRouter:
                     summary=f"{step.name or f'Step {step_id}'} resumed",
                     details=(feedback or "").strip()[:3000] or "Run resumed after waiting state.",
                 )
-                increment_kanban_updated(
-                    board_id=getattr(run, "board_id", None),
-                    event_type="ticket_workflow_status",
-                    payload={
-                        "ticket_id": int(run.ticket_id),
-                        "run_id": run_id,
-                        "status": "running",
-                        "step_id": step_id,
-                    },
-                )
             db.commit()
-
+        try:
+            from distr.core.orchestrator import emit_event
+            emit_event(**event_payload)
+        except Exception:
+            logger.debug('Could not emit orchestrator feedback event',exc_info=True)
+        if event_payload['ticket_id']:
+            increment_kanban_updated(board_id=event_payload['board_id'],event_type='ticket_workflow_status',
+                payload={'ticket_id':int(event_payload['ticket_id']),'run_id':run_id,'status':'running','step_id':step_id})
         increment_workflow_updated()
 
         # Re-route with the enriched result, skipping the wait gate

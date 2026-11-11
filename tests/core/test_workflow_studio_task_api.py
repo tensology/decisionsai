@@ -663,13 +663,14 @@ def test_existing_development_thread_message_resumes_direct_harness_not_workflow
     )
 
     assert response.status_code == 200
-    assert calls["messages"] == [(17, "Implement the ticket and verify it in the browser")]
+    assert not calls.get("messages")
     assert calls["dispatch"] == [(17, "Implement the ticket and verify it in the browser", {
         "routing_assessment": {},
         "attachments": [],
         "skill_ids": [],
         "use_playwright": False,
         "dispatch_async": True,
+        "save_prompt": True,
     })]
 
 
@@ -725,13 +726,14 @@ def test_existing_plan_only_thread_resumes_the_direct_read_only_agent(monkeypatc
     payload = response.json()
     assert payload["started"] is True
     assert payload["turn"]["direct"] is True
-    assert calls["messages"] == [(17, "Revise the architecture and produce a new implementation plan")]
+    assert not calls.get("messages")
     assert calls["dispatch"] == [(17, "Revise the architecture and produce a new implementation plan", {
         "routing_assessment": {},
         "attachments": [],
         "skill_ids": [],
         "use_playwright": False,
         "dispatch_async": True,
+        "save_prompt": True,
     })]
     assert calls["update_workflow"] == []
 

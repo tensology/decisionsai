@@ -7,6 +7,20 @@ const { buildIfaceModel, layoutIface, NODE } = await import('../../distr/gui/web
 
 const screen = (id, label, route, children = []) => ({ id, label, attrs: { id, route }, children });
 
+test('the map retains navigation back to Home and ignores protocol-relative destinations', () => {
+    const link = (label, route) => ({ type: 'link', label, attrs: { route }, children: [] });
+    const model = buildIfaceModel({ screens: [
+        screen('home', 'Home', '/', [link('Customers', '/customers')]),
+        screen('customers', 'Customers', '/customers', [link('Back to Home', '/'), link('External', '//example.com')]),
+        screen('external', 'External', '//example.com'),
+    ] });
+    assert.deepEqual(model.edges.map(({ from, to, label }) => ({ from, to, label })), [
+        { from: 'w:home', to: 'w:customers', label: 'Customers' },
+        { from: 'w:customers', to: 'w:home', label: 'Back to Home' },
+    ]);
+    assert.equal(model.nodes.find(node => node.screenKey === 'external').route, '');
+});
+
 test('pages split into backend, frontend, ajax, and guidance, and a comment is kept', () => {
     const source = [
         'screen "Orders" id=orders route=/admin/orders layer=backend',

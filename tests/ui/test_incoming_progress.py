@@ -35,6 +35,8 @@ def install(page, base, *, failure=False):
         path = urlsplit(route.request.url).path
         if path.endswith(('/proposals/merge', '/proposals/thread')):
             state['calls'].append((path, route.request.post_data_json))
+            if path.endswith('/proposals/thread') and state.pop('lose_thread_response', False):
+                return route.abort('connectionreset')
             if failure:
                 return route.fulfill(status=503, json={'error': 'Preparation failed. Try again.'})
             state['rows'] = []
@@ -89,6 +91,9 @@ def test_progress_precedes_navigation_and_check_action_stays_visible(page, fixtu
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f'{operation}-{width}.png'))
     expect(page).to_have_url(fixture_base + '/development/threads/17/')
+    if operation == 'merge':
+        expect(page.locator('#studio-toast')).to_contain_text('Merged into one thread.')
+        page.screenshot(path=str(SHOTS / f'merged-thread-{width}.png'))
     expect(modal).to_have_count(0)
     assert len(state['calls']) == 1
     assert page.evaluate('document.body.style.overflow') != 'hidden'
@@ -113,6 +118,38 @@ def test_failed_merge_keeps_both_sources_and_retry_enabled(page, fixture_base, w
     expect(page.locator('#studio-toast')).to_contain_text('Preparation failed')
     expect(page.get_by_role('dialog')).to_have_count(0)
     assert len(state['calls']) == 2
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_retry_after_lost_proposal_response_opens_existing_thread(page, fixture_base, width):
+    page.set_viewport_size({'width': width, 'height': 960})
+    state = install(page, fixture_base)
+    state['lose_thread_response'] = True
+    button = page.locator('[data-incoming-proposal-thread]').first
+    button.click()
+    expect(page.get_by_role('dialog').filter(has=page.locator('progress'))).to_be_visible()
+    expect(page.locator('#studio-toast')).to_contain_text('Connection interrupted. Retry to open the proposal thread.')
+    expect(button).to_be_enabled()
+    expect(page.locator('.proposal-card')).to_have_count(2)
+    expect(page).to_have_url(fixture_base + '/development/incoming/')
+    notice = page.locator('#studio-toast').bounding_box()
+    assert 0 <= notice['x'] and notice['x'] + notice['width'] <= width
+    assert 0 <= notice['y'] and notice['y'] + notice['height'] <= 960
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(SHOTS / f'proposal-response-lost-{width}.png'))
+
+    button.click()
+    expect(page).to_have_url(fixture_base + '/development/threads/17/')
+    toast = page.locator('#studio-toast')
+    expect(toast).to_contain_text('Development thread opened.')
+    expect(page.get_by_role('dialog').filter(has=page.locator('progress'))).to_have_count(0)
+    assert len(state['calls']) == 2 and state['calls'][0] == state['calls'][1]
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    bounds = toast.bounding_box()
+    composer = page.locator('#studio-composer').bounding_box()
+    assert 0 <= bounds['x'] and bounds['x'] + bounds['width'] <= width
+    assert bounds['y'] >= 0 and bounds['y'] + bounds['height'] <= composer['y']
+    page.screenshot(path=str(SHOTS / f'proposal-response-recovered-{width}.png'))
 
 
 def test_opening_whatsapp_acknowledges_only_current_messages(page, fixture_base):

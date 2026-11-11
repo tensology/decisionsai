@@ -209,19 +209,50 @@ def update_command(command_id: int, *, content: str | None = None, cancel: bool 
         return _command_payload(row)
 
 
+def _steering_turn_id(chat) -> int | None:
+    params = _chat_params(chat.params)
+    execution = (params.get("development") or {}).get("execution")
+    turn_id = execution.get("turn_id") if isinstance(execution, dict) else None
+    turn_id = turn_id or params.get("active_turn_chat_row_id")
+    return turn_id if type(turn_id) is int and turn_id > 0 else None
+
+
 def dispatch_command(command_id: int) -> dict[str, Any]:
     """Steer an active native Development turn, or keep guidance safely queued."""
     with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         row = db.get(DevelopmentCommand, int(command_id))
         if row is None:
             return {"error": "Command not found", "status_code": 404}
         if row.status != "queued":
             return {"command": _command_payload(row), "dispatched": row.status == "delivered"}
         chat_id = int(row.chat_id)
+        chat = _require_development_root(db, chat_id)
+        params = _chat_params(chat.params)
+        development = params.get("development") or {}
+        if development.get("proactive_dispatch") or row.command_type == "followup":
+            return {"command": _command_payload(row), "dispatched": False, "reason": "followup_only"}
+        expected_turn_id = _steering_turn_id(chat)
         content = row.content
         metadata = _json(row.metadata_json, {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        target_turn_id = metadata.get("steering_turn_id")
+        if target_turn_id is not None and target_turn_id != expected_turn_id:
+            return {"command": _command_payload(row), "dispatched": False, "reason": "active_turn_changed"}
+        if expected_turn_id is not None:
+            metadata["steering_turn_id"] = expected_turn_id
+        claimed = db.query(DevelopmentCommand).filter_by(
+            id=row.id, status="queued", modified_at=row.modified_at,
+        ).update({"status": "dispatching", "metadata_json": json.dumps(metadata, ensure_ascii=False, default=str)},
+                 synchronize_session=False)
+        if not claimed:
+            db.rollback()
+            return {"command": list_commands_for_id(command_id), "dispatched": False}
+        db.commit()
 
-    skill_ids = metadata.get("skill_ids") if isinstance(metadata, dict) else []
+    skill_ids = metadata.get("skill_ids")
     clean_skill_ids = [str(skill_id).strip() for skill_id in skill_ids if str(skill_id).strip()] if isinstance(skill_ids, list) else []
     steering_content = content
     if clean_skill_ids:
@@ -234,17 +265,26 @@ def dispatch_command(command_id: int) -> dict[str, Any]:
 
     from distr.core.turn_runtime import steer_active_turn
 
-    result = steer_active_turn(chat_id, steering_content)
-    if not result.get("accepted"):
-        return {
-            "command": list_commands_for_id(command_id),
-            "dispatched": False,
-            "reason": result.get("reason") or "no_active_native_turn",
-        }
+    options = {"expected_turn_id": expected_turn_id} if expected_turn_id is not None else {}
+    result = steer_active_turn(chat_id, steering_content, **options)
+    from distr.core.db.orm_compat import retry_sqlite_locked
+
+    return retry_sqlite_locked(lambda: _finish_command_steering(command_id, result))
+
+
+def _finish_command_steering(command_id: int, result: dict[str, Any]) -> dict[str, Any]:
     with get_session() as db:
         row = db.get(DevelopmentCommand, int(command_id))
         if row is None:
             return {"error": "Command not found", "status_code": 404}
+        if row.status != "dispatching":
+            return {"command": _command_payload(row), "dispatched": row.status == "delivered"}
+        if not result.get("accepted"):
+            row.status = "queued"
+            db.commit()
+            db.refresh(row)
+            return {"command": _command_payload(row), "dispatched": False,
+                    "reason": result.get("reason") or "no_active_native_turn"}
         row.run_id = None
         row.status = "delivered"
         row.delivered_at = utc_now_naive()
@@ -265,12 +305,20 @@ def list_commands_for_id(command_id: int) -> dict[str, Any] | None:
 
 def dispatch_pending(chat_id: int) -> dict[str, Any]:
     with get_session() as db:
-        _require_development_root(db, chat_id)
-        row = db.query(DevelopmentCommand).filter_by(chat_id=int(chat_id), status="queued").filter(DevelopmentCommand.command_type != 'followup').order_by(DevelopmentCommand.id).first()
-        pending = [_command_payload(row)] if row else []
-    if not pending:
+        chat = _require_development_root(db, chat_id)
+        turn_id = _steering_turn_id(chat)
+        pending = db.query(DevelopmentCommand).filter_by(chat_id=int(chat_id), status="queued").filter(
+            DevelopmentCommand.command_type != "followup",
+        ).order_by(DevelopmentCommand.id)
+        command_id = None
+        for row in pending:
+            metadata = _json(row.metadata_json, {})
+            if not isinstance(metadata, dict) or metadata.get("steering_turn_id") in (None, turn_id):
+                command_id = row.id
+                break
+    if command_id is None:
         return {"status": "idle", "summary": "No queued instructions.", "next_actions": [], "artifacts": []}
-    result = dispatch_command(int(pending[0]["id"]))
+    result = dispatch_command(int(command_id))
     return {
         "status": "delivered" if result.get("dispatched") else "queued",
         "summary": "Instruction delivered to the active worker." if result.get("dispatched") else "Instruction is safely queued until a worker can accept it.",

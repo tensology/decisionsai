@@ -9,7 +9,8 @@ export const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&a
 // is stacked below it (narrow layouts).
 export function availableBottom(node) {
     const pane = node.closest('.plan-artifacts');
-    const paneBottom = pane ? pane.getBoundingClientRect().bottom : Infinity;
+    const preview = node.closest('.plan-preview');
+    const paneBottom = preview ? preview.getBoundingClientRect().bottom : pane ? pane.getBoundingClientRect().bottom : Infinity;
     return Math.min(window.innerHeight || 800, paneBottom);
 }
 
@@ -44,6 +45,8 @@ export function pinDock(dock, surface, { inset: fixedInset = null } = {}) {
         dock.style.left = `${Math.round(r.left + inset)}px`;
         dock.style.top = `${Math.round(visibleBottom - inset - dock.offsetHeight)}px`;
         dock.style.maxWidth = `${Math.max(0, Math.round(r.width - inset * 2))}px`;
+        // Scrolled page content must be able to clear the floating controls.
+        surface.style.setProperty('--plan-dock-clearance', `${dock.hidden ? 0 : dock.offsetHeight + inset * 2}px`);
     };
     const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(apply); };
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
@@ -52,7 +55,7 @@ export function pinDock(dock, surface, { inset: fixedInset = null } = {}) {
     window.addEventListener('resize', schedule);
     window.addEventListener('scroll', schedule, true);
     apply();
-    return () => { observer?.disconnect(); window.removeEventListener('resize', schedule); window.removeEventListener('scroll', schedule, true); cancelAnimationFrame(frame); dock.remove(); };
+    return () => { observer?.disconnect(); window.removeEventListener('resize', schedule); window.removeEventListener('scroll', schedule, true); cancelAnimationFrame(frame); surface.style.removeProperty('--plan-dock-clearance'); dock.remove(); };
 }
 
 const closeIcon = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';

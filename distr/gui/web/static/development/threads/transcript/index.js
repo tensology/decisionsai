@@ -51,6 +51,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
                 const fileReference = /(?:^|\/)[^/\s]+\.[a-z0-9]{1,8}(?::\d+)?$/i.test(content);
                 return hold(`<code${fileReference ? ' class="file-ref"' : ''}>${content}</code>`);
             })
+            .replace(/\[([^\]]+)\]\((\/development\/threads\/[1-9][0-9]*\/)\)/g, (_match, label, url) => hold(`<a href="${url}">${label}</a>`))
             .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi, (_match, label, url) => hold(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`))
             .replace(/https?:\/\/[^\s<]+/gi, (value) => {
                 const trailing = value.match(/[),.!?:;]+$/)?.[0] || '';
@@ -257,12 +258,13 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         if (!files.length || changes.undone) return '';
         const additions = Number(changes.additions || 0);
         const deletions = Number(changes.deletions || 0);
+        const totalsAvailable = files.every((file) => file.line_counts_available !== false);
         const rows = files
             .map(
                 (file) => `<tr class="turn-change-row">
             <td title="${actions.escapeHtml(file.path || '')}">${actions.escapeHtml(file.path || 'Changed file')}</td>
-            <td><b>+${Number(file.additions || 0)}</b></td>
-            <td><i>-${Number(file.deletions || 0)}</i></td>
+            <td><b>${file.line_counts_available === false ? 'n/a' : `+${Number(file.additions || 0)}`}</b></td>
+            <td><i>${file.line_counts_available === false ? 'n/a' : `-${Number(file.deletions || 0)}`}</i></td>
         </tr>`
             )
             .join('');
@@ -271,7 +273,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             : 'Undo is unavailable because this turn overlaps changes that already existed';
         return `<section class="turn-changes" aria-label="Files changed by this turn">
             <div class="turn-changes-head">
-                <button type="button" class="turn-changes-toggle" data-turn-changes-toggle aria-expanded="true"><span class="change-disclosure">›</span><strong>Edited ${files.length} ${files.length === 1 ? 'file' : 'files'}</strong><small><b>+${additions}</b><i>-${deletions}</i></small></button>
+                <button type="button" class="turn-changes-toggle" data-turn-changes-toggle aria-expanded="true"><span class="change-disclosure">›</span><strong>Edited ${files.length} ${files.length === 1 ? 'file' : 'files'}</strong>${totalsAvailable ? `<small><b>+${additions}</b><i>-${deletions}</i></small>` : ''}</button>
                 <div class="turn-change-actions"><button type="button" data-turn-undo ${changes.reversible ? '' : 'disabled'} title="${actions.escapeHtml(undoTitle)}">Undo</button><button type="button" data-turn-review>Review</button></div>
             </div>
             <div class="turn-change-list"><table><thead><tr><th>File</th><th>Added</th><th>Removed</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -291,13 +293,13 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return `<button type="button" class="read-response-button play-spoken-button" data-play-spoken="${index}" aria-label="Play spoken version" title="Play spoken version">${playIcon}</button>`;
     }
 
-    function messageActionsHtml(message, index, latestAssistant) {
+    function messageActionsHtml(message, index, latestAssistant, canReply) {
         const copyIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5"></rect><path d="M3 10V4.5A1.5 1.5 0 0 1 4.5 3H10"></path></svg>';
         const forkIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5"></circle><circle cx="12" cy="5" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><path d="M4 4.5v3A4.5 4.5 0 0 0 8.5 12h2M5.5 5h5"></path></svg>';
-        const replyButton = latestAssistant && context.currentChat?.has_reply_source && !message.spoken
-            ? `<button type="button" class="source-reply-button" data-source-reply="${index}" title="Draft a reply to the original source for your approval"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3 2 7l4 4M2 7h7a4 4 0 0 1 4 4v2"></path></svg><span>Reply</span></button>` : '';
+        const replyButton = canReply && context.currentChat?.has_reply_source && message.chat_row_id != null
+            ? `<button type="button" class="source-reply-button" data-source-reply="${index}">Message Client</button>` : '';
         const mouthIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8c2-2.2 4-2.2 6-1.2C10 5.8 12 5.8 14 8c-1.6 2.6-3.8 3.6-6 3.6S3.6 10.6 2 8z"></path><path d="M3.5 8.2h9"></path></svg>';
         const playButton = message.spoken
@@ -464,20 +466,44 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         if (!rest.length) return '';
         return `<table class="dev-approval-diff">${rest.map(([k, v]) => `<tr><th>${actions.escapeHtml(k)}</th><td>${actions.escapeHtml(approvalValue(v))}</td></tr>`).join('')}</table>`;
     }
+    function workflowReplyDetailsHtml(req) {
+        const details = req.details || {};
+        const delivery = details.delivery || {};
+        const target = delivery.resolved_target || {};
+        const workflow = details.workflow || {};
+        const join = (value) => Array.isArray(value) ? value.join(', ') : String(value || '');
+        const destination = join(target.to || delivery.recipient || target.jid);
+        const rows = [
+            ['Workflow run', workflow.run_id], ['Ticket', details.ticket_id],
+            ['Channel', details.channel], ['From', target.from], ['To', destination],
+            ['Cc', join(target.cc)], ['Subject', target.subject || delivery.subject],
+            ['Thread', target.thread_id || target.jid || delivery.thread_id],
+        ].filter(([, value]) => value !== undefined && value !== null && value !== '');
+        const id = `closing-reply-${req.request_id}`;
+        const outcome = details.delivery_outcome;
+        return `<table class="dev-approval-diff">${rows.map(([label, value]) => `<tr><th>${actions.escapeHtml(label)}</th><td>${actions.escapeHtml(String(value))}</td></tr>`).join('')}</table>
+            <label for="${actions.escapeHtml(id)}">Reply</label>
+            <textarea id="${actions.escapeHtml(id)}" class="dev-closing-reply-body" rows="6" readonly>${actions.escapeHtml(String(details.body || ''))}</textarea>
+            ${outcome?.reason ? `<p class="dev-approval-summary" role="status">${actions.escapeHtml(outcome.reason)}</p>` : ''}`;
+    }
     function approvalCardHtml(req) {
+        const managedReply = req.tool === 'reply_delivery' && req.details?.workflow && typeof req.details.workflow === 'object';
+        const reviewUnavailable = managedReply && req.review_unavailable === true;
         const status = String(req.status || 'pending').toLowerCase();
         const expires = req.expires_at ? new Date(req.expires_at) : null;
         const expired = status === 'pending' && expires && expires.getTime() < Date.now();
         const shown = expired ? 'expired' : status;
-        const label = { pending: 'Waiting for you', approved: 'Approved', consumed: 'Approved and done', denied: 'Denied', expired: 'Expired' }[shown] || shown;
+        const labels = { pending: 'Waiting for you', approved: 'Approved', consumed: 'Approved and done', denied: 'Denied', expired: 'Expired' };
+        const label = reviewUnavailable ? 'Review unavailable' : (managedReply ? { ...labels, sending: 'Sending reply', sent: 'Reply sent', unconfirmed: 'Send not confirmed', rejected: 'Reply not sent' } : labels)[shown] || shown;
+        const title = managedReply ? `Closing reply · ${{ email: 'Email', mailshot: 'Mailshot', whatsapp: 'WhatsApp', telegram: 'Telegram' }[req.action] || req.action || ''}` : `${req.tool || 'tool'} · ${req.action || ''}`;
         const when = expires ? expires.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-        const buttons = shown === 'pending'
+        const buttons = shown === 'pending' && !reviewUnavailable
             ? `<div class="dev-approval-actions"><button type="button" class="dev-approval-approve" data-dev-approval-action="approve" data-request-id="${actions.escapeHtml(req.request_id)}">Approve</button><button type="button" class="dev-approval-deny" data-dev-approval-action="deny" data-request-id="${actions.escapeHtml(req.request_id)}">Deny</button><small>Expires ${actions.escapeHtml(when)}</small></div>`
             : '';
-        return `<div class="turn-activity-block dev-approval-card status-${actions.escapeHtml(shown)}" data-dev-approval="${actions.escapeHtml(req.request_id)}" role="group" aria-label="Approval request">
-            <div class="dev-approval-head"><strong>${actions.escapeHtml(`${req.tool || 'tool'} · ${req.action || ''}`)}</strong><span class="dev-approval-status">${actions.escapeHtml(label)}</span></div>
+        return `<div class="turn-activity-block dev-approval-card${managedReply ? ' dev-closing-reply' : ''} status-${actions.escapeHtml(shown)}" data-dev-approval="${actions.escapeHtml(req.request_id)}" role="group" aria-label="Approval request">
+            <div class="dev-approval-head"><strong>${actions.escapeHtml(title)}</strong><span class="dev-approval-status">${actions.escapeHtml(label)}</span></div>
             <p class="dev-approval-summary">${actions.escapeHtml(req.summary || '')}</p>
-            ${approvalDiffHtml(req.details)}
+            ${reviewUnavailable ? '<p class="dev-approval-summary" role="status">Complete reply review is unavailable. Refresh before approving.</p>' : managedReply ? workflowReplyDetailsHtml(req) : approvalDiffHtml(req.details)}
             ${buttons}
         </div>`;
     }
@@ -726,7 +752,8 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const latest = index === latestAssistantIndex;
         const content = workflowSafeAssistantContent(message.content || '');
         const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
-        return `<article class="studio-message assistant"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest)}</div></article>`;
+        const canReply = latest && !messages.slice(index + 1).some((item) => item.role === 'user');
+        return `<article class="studio-message assistant"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest, canReply)}</div></article>`;
     }
 
     // Spoken versions from the Read response button: quiet row, Copy only, never "final".
@@ -809,11 +836,14 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
     function currentTurnAction(latest, fallbackLabel, fallbackDetail) {
         const type = String(latest?.event_type || '').toLowerCase();
         const status = String(latest?.status || '').toLowerCase();
+        const toolName = String(latest?.metadata?.tool_name || latest?.tool_name || latest?.title || '').toLowerCase();
+        if (type === 'tool_completed' && /^(model_progress|read_file|list_files|search_files|read_attachment)$/.test(toolName)) {
+            return ['Working', 'on the response'];
+        }
         if (type !== 'tool_started' || !['running', 'queued', 'initializing'].includes(status)) {
             return [fallbackLabel, fallbackDetail];
         }
         if (isRoutineShellStep(latest)) return ['Running', 'commands…'];
-        const toolName = String(latest?.metadata?.tool_name || latest?.tool_name || latest?.title || '').toLowerCase();
         if (/agent|reviewer|subagent/.test(toolName)) {
             const agent = turnEventAgentName(latest);
             if (/cursor/i.test(agent) || /cursor/.test(toolName)) return ['Cursor is working', ''];
@@ -1096,9 +1126,15 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const active = chat.active_turn;
         const run = context.currentRun || {};
         const runStatus = String(run.status || '').toLowerCase();
+        const proactiveSummary = run.origin === 'proactive_orchestrator' ? String(run.summary || '').trim() : '';
         const runActive = ['initializing', 'queued', 'running'].includes(runStatus);
         const activeEvents = [...(Array.isArray(active?.events) ? active.events : []), ...liveLegacyActivityEvents(chat)];
-        if (!runActive) return '';
+        const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+        if (!runActive) {
+            return runStatus === 'blocked' && proactiveSummary
+                ? `<article class="studio-message active-turn"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body" role="status">${actions.escapeHtml(proactiveSummary)}</div></article>`
+                : '';
+        }
         const reportedPaths = [
             ...gitStatusEntries(run.git_status_after || run.git_status_current),
             ...gitStatusEntries((run.latest_backend_handoff || {}).git_status_after)
@@ -1136,13 +1172,18 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                           ? 'Thinking'
                           : 'Working';
         const detail = label === 'Updating' ? 'files' : label === 'Thinking' ? 'through the request' : 'on the task';
-        const [currentLabel, currentDetail, currentCommand] = currentTurnAction(latest, label, detail);
+        const [currentLabel, currentDetail, currentCommand] = proactiveSummary
+            ? [proactiveSummary, '']
+            : currentTurnAction(latest, label, detail);
         const draft = String(run.streamed_output || '').trim();
-        const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+        const stop = proactiveSummary && run.can_stop
+            ? '<button type="button" class="header-button danger proactive-turn-stop" data-stop-proactive-turn>Stop</button>'
+            : '';
         return `<article class="studio-message active-turn"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">
             ${draft ? `<div class="active-turn-draft message-markdown">${assistantMarkdown(draft)}</div>` : ''}
             ${activeEvents.filter(event => event?.metadata?.approval_request?.status === 'pending').map(event => approvalCardHtml(event.metadata.approval_request)).join('')}
-            <details class="turn-activity-disclosure live-activity" data-activity-key="${actions.escapeHtml(activityKey(`turn:${active?.turn_id || run.turn_id || 'live'}`))}"><summary class="active-turn-summary"><span class="loading-message ${label.toLowerCase()}" role="status" aria-live="polite"><span>${currentLabel} <small>${currentDetail}</small></span></span><span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="turn-event-stream">${turnEventRowsHtml(activeEvents.filter(event => !event?.metadata?.approval_request), { includeRunning: true, active: true }) || '<p class="activity-empty">Waiting for the first activity update.</p>'}${currentCommand ? `<code class="active-command">${actions.escapeHtml(currentCommand)}</code>` : ''}</div></details>
+            <details class="turn-activity-disclosure live-activity" data-activity-key="${actions.escapeHtml(activityKey(`turn:${active?.turn_id || run.turn_id || 'live'}`))}"><summary class="active-turn-summary"><span class="loading-message ${label.toLowerCase()}" role="status" aria-live="polite"><span>${actions.escapeHtml(currentLabel)} <small>${actions.escapeHtml(currentDetail)}</small></span></span><span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="turn-event-stream">${turnEventRowsHtml(activeEvents.filter(event => !event?.metadata?.approval_request), { includeRunning: true, active: true }) || '<p class="activity-empty">Waiting for the first activity update.</p>'}${currentCommand ? `<code class="active-command">${actions.escapeHtml(currentCommand)}</code>` : ''}</div></details>
+            ${stop}
         </div></article>`;
     }
 

@@ -156,6 +156,29 @@ def test_current_step_stays_before_references_when_packet_is_compacted():
     assert prompt.index("DO NOT USE TOOLS") < prompt.index("AGENTS.md")
 
 
+def test_compaction_keeps_full_current_instructions_even_over_the_history_budget():
+    request = "Request begins.\n" + "Preserve each requested item.\n" * 380 + "Assessment only."
+    instruction = "Step starts.\n" + "Keep each guardrail.\n" * 150 + "Do not edit."
+    contract = "Acceptance criteria:\n" + "- Preserve this condition.\n" * 150 + "- Provide evidence."
+    steering = "Follow this instruction.\n" * 100 + "Wait for approval."
+    packet = StepHandoffPacket(
+        identity={"step_id": 1},
+        objective="Stale historical context. " * 500,
+        current_step={"instruction": instruction},
+        current_request=request,
+        ticket_contract=extract_ticket_contract(contract),
+        continuation=steering,
+        return_contract="Report the assessment.",
+    )
+
+    prompt, telemetry = packet.render(max_chars=1500)
+
+    assert telemetry["compacted"]
+    assert "Stale historical context." not in prompt
+    for expected in (request, instruction, contract, steering, "Report the assessment."):
+        assert expected in prompt
+
+
 def test_relevant_memory_prefers_constraints_that_match_current_step():
     selected = select_relevant_memory(
         [

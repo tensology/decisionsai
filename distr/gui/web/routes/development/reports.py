@@ -4,6 +4,7 @@ The run/time/cost lists are read-only. The period report reads the same records,
 and Build stores one analysis row (work_reports) per request.
 """
 import asyncio
+from datetime import datetime
 from fastapi import Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict
@@ -27,6 +28,32 @@ class AssignProjectBody(BaseModel):
     confirm: str
     source_start: str | None = None
     source_end: str | None = None
+
+
+class CalendarEntryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entry_id: int | None = None
+    draft_id: str | None = None
+    version: str | None = None
+    original_start: datetime | None = None
+    original_end: datetime | None = None
+    title: str
+    start_at: datetime
+    end_at: datetime
+    project_id: int | None
+
+
+async def _calendar_call(operation, *args, **kwargs):
+    from fastapi import HTTPException
+    from distr.core.reports.calendar_sync import CalendarEditError
+    from distr.core.tensology_client import TensologyApiError
+
+    try:
+        return await asyncio.to_thread(operation, *args, **kwargs)
+    except CalendarEditError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except TensologyApiError as exc:
+        raise HTTPException(status_code=exc.status or 502, detail=f"Tensology calendar: {exc}") from exc
 
 
 def _period_args(month, start, end, projects):
@@ -129,19 +156,29 @@ def register_routes(router, templates):
         except ProjectionStoreError as exc:
             return JSONResponse(exc.body(), status_code=exc.status)
 
+    @router.post("/workflows/studio/reports/calendar-entry")
+    async def development_save_calendar_entry(data: CalendarEntryBody):
+        from distr.core.reports.calendar_sync import save_entry
+
+        return JSONResponse(await _calendar_call(save_entry, **data.model_dump()),
+                            headers={"Cache-Control": "no-store"})
+
     @router.get("/workflows/studio/reports/period")
     async def development_period_report(
         month: str | None = Query(None, description="YYYY-MM calendar month"),
         start: str | None = Query(None, description="YYYY-MM-DD (Africa/Johannesburg)"),
         end: str | None = Query(None, description="YYYY-MM-DD inclusive"),
         projects: str | None = Query(None, description="Comma-separated project ids; empty = all; 0 = unassigned"),
+        saved_projects: str | None = Query(None, description="Project selection for the last built report"),
         include_automations: bool = Query(False),
     ):
         from distr.core.reports.month import get_period_report
 
         period, project_ids = _period_args(month, start, end, projects)
-        return JSONResponse(await asyncio.to_thread(
-            get_period_report, period, project_ids, include_automations=include_automations))
+        _, saved_project_ids = _period_args(month, start, end, saved_projects) if saved_projects is not None else (period, None)
+        return JSONResponse(await _calendar_call(
+            get_period_report, period, project_ids, saved_project_ids=saved_project_ids, include_automations=include_automations),
+            headers={"Cache-Control": "no-store"})
 
     @router.post("/workflows/studio/reports/period/build")
     async def development_period_report_build(data: PeriodReportBuild):
@@ -150,7 +187,7 @@ def register_routes(router, templates):
 
         period, project_ids = _period_args(data.month, data.start, data.end, data.projects)
         try:
-            payload = await asyncio.to_thread(
+            payload = await _calendar_call(
                 build_period_report, period, project_ids, provider=data.provider, model=data.model,
                 include_automations=data.include_automations)
         except ValueError as exc:
@@ -169,7 +206,7 @@ def register_routes(router, templates):
         from distr.core.reports.month import get_period_report, render_pdf
 
         period, project_ids = _period_args(month, start, end, projects)
-        snapshot = await asyncio.to_thread(
+        snapshot = await _calendar_call(
             get_period_report, period, project_ids, include_automations=include_automations, invoice_only=True)
         pdf = await asyncio.to_thread(render_pdf, snapshot)
         filename = f"work-report-{period.start.isoformat()}-to-{period.end.isoformat()}.pdf"

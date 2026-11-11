@@ -90,12 +90,15 @@ def test_archived_continuation_is_selected_by_exact_variant_not_parent_uuid(tmp_
     write_session(tmp_path,f'parent-{original_id}.jsonl',rows[:1])
     archive=tmp_path/f'rollout-2026-10-27T17-09-58-{original_id}_{branch_id}.jsonl.zst'
     archive.write_bytes(zstandard.ZstdCompressor().compress('\n'.join(json.dumps(r) for r in rows).encode()))
-    with pytest.raises(RuntimeError,match='Multiple'):
-        source_thread.read_source_thread('codex_local:'+original_id,codex_root=tmp_path)
+    parent=source_thread.read_source_thread('codex_local:'+original_id,codex_root=tmp_path)
+    assert parent['messages']==[]
     result=source_thread.read_source_thread(f'codex_local:{original_id}_{branch_id}',codex_root=tmp_path)
     assert result['thread_id']==original_id
     assert result['messages'][0]['text']=='Continued billing changes.'
     assert result['source_variant']==f'{original_id}_{branch_id}'
+    (tmp_path/f'parent-{original_id}.jsonl').unlink()
+    with pytest.raises(FileNotFoundError):
+        source_thread.read_source_thread('codex_local:'+original_id,codex_root=tmp_path)
 
 
 def test_default_codex_lookup_includes_archived_sessions_without_extracting(tmp_path,monkeypatch):

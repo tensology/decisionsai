@@ -56,7 +56,10 @@ def test_stop_work_control_is_reserved_for_tool_or_workflow_activity() -> None:
     assert "function turnHasWorkActivity(turn)" in script
     assert "type.startsWith('tool_')" in script
     assert "metadata.source === 'workflow'" in script
-    assert "if (stop) stop.hidden = !turnHasActiveWork(currentActiveTurn)" in script
+    stop_guard = script.split("function canStopActiveWork() {", 1)[1].split("}", 1)[0]
+    assert "loadedChatId === currentChatId" in stop_guard
+    assert "turnHasActiveWork(currentActiveTurn)" in stop_guard
+    assert "if (stop) stop.hidden = isViewOnly || !canStopActiveWork()" in script
     assert "streaming || currentActiveTurn" not in script
     assert "refreshTurnStateAfterResponse(msg.chat_id)" in script
     assert ">Stop work</span>" in html
@@ -196,11 +199,12 @@ def test_view_only_visual_state_is_on_header_and_input_band():
 def test_input_band_stacks_above_llama_click_target():
     css = _chat_css_source()
     input_block = css.split(".input-container {", 1)[1].split("}", 1)[0]
-    llama_block = css.split(".llama-click-target {", 1)[1].split("}", 1)[0]
+    llama_block = css.split("\n.llama-click-target {", 1)[1].split("}", 1)[0]
 
     assert "position: relative;" in input_block
     assert "z-index: 10;" in input_block
     assert "z-index: 5;" in llama_block
+    assert "bottom: 100%;" in llama_block
 
 
 def test_chat_message_rows_do_not_flex_shrink_into_footer_lines():

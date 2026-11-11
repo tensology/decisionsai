@@ -10,7 +10,8 @@ On rebuild (defaults chosen, see report):
   (its `#|` description lines are kept);
 * no marker, or the body was edited -> hand-made, kept verbatim (Q1: unmarked = hand-made, EXCEPT an item
   that is still at revision <= 1, i.e. untouched scan output, which is regenerated whole);
-* route gone from the scan -> kept, label suffixed " (stale)", marker removed (Q2: flag, never delete);
+* route gone from the scan -> kept, label suffixed " (stale)", stale provenance retained (flag, never delete);
+* route returns -> clear only the proven automatic flag, retaining its body and annotations;
 * new routes -> appended; the trailing decisions-flow sidecar stays the last line.
 Applied to soft scans AND "Scan project" (force) (Q3).
 """
@@ -21,6 +22,7 @@ import re
 from typing import Any
 
 MARKER_RE = re.compile(r"^\s*#\s*@generated\s+scan:(\S+)\s+hash:([0-9a-f]{8})\s*$")
+STALE_MARKER_RE = re.compile(r"^\s*#\s*@stale\s+scan:(\S+)\s+hash:([0-9a-f]{8})\s+label:([0-9a-f]{8}|-)\s*$")
 SCREEN_RE = re.compile(r"^\s*screen\b")
 ROUTE_RE = re.compile(r'\broute="([^"]*)"|\broute=(\S+)')
 SIDECAR_RE = re.compile(r"^\s*#\s*decisions-flow:")
@@ -73,16 +75,25 @@ def _blocks(text: str) -> dict[str, Any]:
     head: list[str] = []
     blocks: list[dict[str, Any]] = []
     pending_marker = None
+    pending_stale = None
     for line in lines:
+        stale = STALE_MARKER_RE.match(line)
+        if stale:
+            pending_stale = stale
+            pending_marker = None
+            continue
         m = MARKER_RE.match(line)
         if m:
             pending_marker = m
+            pending_stale = None
             continue
         if SCREEN_RE.match(line):
             route = _route(line)
             key = "overview" if line.lstrip().startswith('screen "Overview ·') else (route or None)
-            blocks.append({"lines": [line], "marker": pending_marker, "key": pending_marker.group(1) if pending_marker else key})
+            provenance = pending_marker or pending_stale
+            blocks.append({"lines": [line], "marker": pending_marker, "stale_marker": pending_stale, "key": provenance.group(1) if provenance else key})
             pending_marker = None
+            pending_stale = None
             continue
         (blocks[-1]["lines"] if blocks else head).append(line)
     for b in blocks:
@@ -116,12 +127,17 @@ def _stale(line: str) -> str:
     return re.sub(r'^(\s*screen\s+"[^"]*)"', lambda m: f'{m.group(1)}{STALE}"', line, count=1) if '"' in line else line
 
 
+def _label_hash(line: str) -> str:
+    match = re.match(r'^\s*screen\s+("(?:\\.|[^"\\])*")', line)
+    return hashlib.sha256(match.group(1).encode()).hexdigest()[:8] if match else "-"
+
+
 def overlay(previous: str, generated: str, *, revision: int) -> tuple[str, dict[str, Any]]:
     """Merge freshly generated (unmarked) flows into the previous content. Returns (content, summary)."""
     fresh = _blocks(generated)
     gen = {b["key"]: b for b in fresh["blocks"] if b["key"]}
     prev = _blocks(previous)
-    has_markers = any(b["marker"] for b in prev["blocks"])
+    has_markers = any(b["marker"] or b["stale_marker"] for b in prev["blocks"])
     if not prev["blocks"] or (revision <= 1 and not has_markers):
         content = mark_flows(generated)
         if prev["sidecar"]:
@@ -129,13 +145,26 @@ def overlay(previous: str, generated: str, *, revision: int) -> tuple[str, dict[
         return content, {"regenerated": len(gen), "kept": 0, "stale": 0, "added": 0, "first_rebuild": True}
     out: list[list[str]] = []
     seen: set[str] = set()
-    counts = {"regenerated": 0, "kept": 0, "stale": 0, "added": 0}
+    counts = {"regenerated": 0, "kept": 0, "stale": 0, "added": 0, "restored": 0}
     kept_names: list[str] = []
     for b in prev["blocks"]:
         key = b["key"]
         untouched = bool(b["marker"]) and body_hash(b["lines"]) == b["marker"].group(2)
         if key and key in gen:
             seen.add(key)
+            if b["stale_marker"]:
+                stale = b["stale_marker"]
+                lines = list(b["lines"])
+                if stale.group(3) != "-" and _label_hash(lines[0]) == stale.group(3):
+                    lines[0] = re.sub(r' \(stale\)(?=")', '', lines[0], count=1)
+                # Only remove the automatic flag on this pass. Human body edits
+                # made while absent remain human-owned; do not bless a new hash.
+                if body_hash(lines) == stale.group(2):
+                    out.append([f"# @generated scan:{key} hash:{stale.group(2)}", *lines])
+                else:
+                    out.append(lines)
+                counts["restored"] += 1
+                continue
             if untouched:
                 new_lines = _with_descriptions(gen[key]["lines"], _descriptions(b["lines"]))
                 sid = _screen_id(b["lines"][0])
@@ -149,8 +178,15 @@ def overlay(previous: str, generated: str, *, revision: int) -> tuple[str, dict[
             kept_names.append(b["lines"][0].strip()[:80])
             continue
         if untouched:                        # generated earlier, route gone now
-            out.append([_stale(b["lines"][0]), *b["lines"][1:]])
+            flagged = _stale(b["lines"][0])
+            label_hash = _label_hash(flagged) if flagged != b["lines"][0] else "-"
+            out.append([f"# @stale scan:{key} hash:{b['marker'].group(2)} label:{label_hash}", flagged, *b["lines"][1:]])
             counts["stale"] += 1
+            continue
+        if b["stale_marker"]:
+            out.append([b["stale_marker"].group(0), *b["lines"]])
+            counts["kept"] += 1
+            kept_names.append(b["lines"][0].strip()[:80])
             continue
         out.append(b["lines"])
         counts["kept"] += 1
@@ -168,4 +204,5 @@ def overlay(previous: str, generated: str, *, revision: int) -> tuple[str, dict[
 
 
 def summary_text(s: dict[str, Any]) -> str:
-    return f"Interfaces: {s['regenerated']} regenerated, {s['added']} added, {s['kept']} kept (hand-made), {s['stale']} stale."
+    summary = f"Interfaces: {s['regenerated']} regenerated, {s['added']} added, {s['kept']} kept (hand-made), {s['stale']} stale."
+    return summary + (f" {s['restored']} returned routes reconciled." if s.get("restored") else "")

@@ -97,6 +97,8 @@ def _make_mock_workflow(workflow_id, step_names, instructions):
 
     wf = MagicMock()
     wf.id = workflow_id
+    wf.status = 'active'
+    wf.start_step_position = 0
     wf.steps = steps
     return wf
 
@@ -3372,6 +3374,8 @@ def test_kanban_ticket_context_prepended_to_first_step():
     wf = MagicMock()
     wf.id = WORKFLOW_ID
     wf.steps = [step]
+    wf.status = 'active'
+    wf.start_step_position = 0
 
     # --- Build mock DB ---
     mock_db = MagicMock()
@@ -3460,6 +3464,8 @@ def test_kanban_ticket_context_none_leaves_instruction_unmodified():
     wf = MagicMock()
     wf.id = WORKFLOW_ID
     wf.steps = [step]
+    wf.status = 'active'
+    wf.start_step_position = 0
 
     # --- Build mock DB ---
     mock_db = MagicMock()

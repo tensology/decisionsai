@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import subprocess
+import pytest
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,148 @@ from distr.core.db.projects import Project
 from distr.core.db.workflow import DevelopmentWorkItem
 from distr.core.db.time import utc_now_naive
 from distr.core.workflow import development_harness as harness
+
+
+@pytest.mark.parametrize('finish', ['edited', 'restored', 'deleted'])
+def test_existing_dirty_tracked_content_is_not_a_noop(tmp_path, finish):
+    subprocess.run(['git', 'init', '-b', 'main', str(tmp_path)], check=True, capture_output=True)
+    path = tmp_path / 'existing.txt'
+    path.write_text('committed\n')
+    subprocess.run(['git', '-C', str(tmp_path), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(tmp_path), '-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                    'commit', '-m', 'baseline'], check=True, capture_output=True)
+    path.write_text('user edit\n')
+    before = harness._git_status_snapshot(str(tmp_path))
+    fingerprints = harness._git_dirty_fingerprints(str(tmp_path), before)
+    assert harness._turn_change_manifest(str(tmp_path), before, before_fingerprints=fingerprints)['files'] == []
+    if finish == 'deleted':
+        path.unlink()
+    else:
+        path.write_text('committed\n' if finish == 'restored' else 'agent edit\n')
+    changes = harness._turn_change_manifest(str(tmp_path), before, before_fingerprints=fingerprints)
+    assert [f['path'] for f in changes['files']] == ['existing.txt']
+    assert changes['reversible'] is False
+
+
+@pytest.mark.parametrize('prompt', [
+    'Audit the work and report back. Do not make fixes or deploy.',
+    'Please review the implementation, audit only.',
+    'Can you check whether the work was done properly?',
+])
+def test_audit_only_turn_overrides_full_autonomy_and_stops_after_report(tmp_path, monkeypatch, prompt):
+    from distr.core.turn_runtime import TurnResult
+    _, chat_id, _ = _database(tmp_path, monkeypatch)
+    captured = {}
+    queued = []
+    async def execute(request, **kwargs):
+        captured['request'] = request
+        return TurnResult(success=True, backend_id='codex', model='fixture', runtime_id='cli_harness', output='Audit: verification is incomplete.')
+    monkeypatch.setattr('distr.core.turn_runtime.execute_turn', execute)
+    monkeypatch.setattr('distr.core.project_cli_backends.catalog_probe.probe_cli_backend', lambda *a, **k: {'status': {'ready': True}})
+    monkeypatch.setattr(harness, '_start_next_queued_instruction', lambda *a: queued.append(a))
+    result = harness.dispatch_development_prompt(chat_id, prompt, dispatch_async=False)
+    request = captured['request']
+    assert request.autonomy_level == 'plan'
+    assert request.route.adapter_options['read_only_expected'] is True
+    assert 'Stop after the audit report' in request.instruction
+    assert result['outcome'].get('work_mode') == 'audit', result.get('error')
+    assert queued == []
+
+
+def test_explicit_audit_and_fix_remains_authorized_implementation():
+    assert not harness._audit_only_request('Audit and fix the implementation, then run the tests.')
+    assert not harness._audit_only_request('Fix those process defects and add regression tests.')
+    assert not harness._audit_only_request("Fix Decisions. Don't change either other site.")
+    assert harness._prompt_expects_project_change('Audit and fix the implementation', autonomy_level='full')
+
+
+@pytest.mark.parametrize('codes,expected', [([], 'blocked'), ([1], 'blocked'), ([1, 0], 'completed'), ([0], 'completed')])
+def test_completion_requires_actual_passing_check_receipts(tmp_path, monkeypatch, codes, expected):
+    from distr.core.turn_runtime import TurnResult, TurnEvent, TurnEventKind, TurnStatus
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    from distr.core.db.kanban import ProjectExecutionSession
+    monkeypatch.setattr('distr.core.kanban.project_execution.get_session', get_session)
+    monkeypatch.setattr('distr.core.kanban.project_execution.ensure_project_execution_tables', lambda: None)
+    with get_session() as db:
+        row = ProjectExecutionSession(project_id=1, route_type='cli', route_backend='fixture', status='completed',
+                                      output_packet=json.dumps({'original': 'retained'}))
+        db.add(row); db.commit(); session_id = row.id
+    root = tmp_path / 'project'
+    subprocess.run(['git', 'init', '-b', 'main', str(root)], check=True, capture_output=True)
+    path = root / 'app.txt'; path.write_text('before\n')
+    subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                    'commit', '-m', 'baseline'], check=True, capture_output=True)
+    async def execute(request, *, on_event, **kwargs):
+        path.write_text('implemented\n')
+        for index, code in enumerate(codes):
+            on_event(TurnEvent(kind=TurnEventKind.TOOL_COMPLETED, status=TurnStatus.UPDATING, summary='Check finished', runtime_id='cli_harness',
+                tool_name='bash', details={'command': 'npm run test', 'exit_code': code, 'call_id': str(index)}))
+        return TurnResult(success=True, backend_id='codex', model='fixture', runtime_id='cli_harness',
+                          execution_session_id=session_id, output='Implemented and verified. Everything passed.')
+    monkeypatch.setattr('distr.core.turn_runtime.execute_turn', execute)
+    monkeypatch.setattr('distr.core.project_cli_backends.catalog_probe.probe_cli_backend', lambda *a, **k: {'status': {'ready': True}})
+    result = harness.dispatch_development_prompt(chat_id, 'Fix the implementation and verify it', dispatch_async=False)
+    assert result['status'] == expected, result.get('error')
+    assert result['outcome']['verification']['status'] == ('passed' if expected == 'completed' else 'failed' if codes else 'not_run')
+    if expected == 'blocked':
+        assert result['summary'].startswith('Verification incomplete:')
+    with get_session() as db:
+        row = db.get(ProjectExecutionSession, session_id)
+        assert row.status == expected
+        packet = json.loads(row.output_packet)
+        assert packet['original'] == 'retained'
+        assert packet['completion_review']['verification'] == result['outcome']['verification']
+
+
+def test_changes_committed_during_a_turn_are_detected_and_not_auto_undone(tmp_path):
+    subprocess.run(['git', 'init', '-b', 'main', str(tmp_path)], check=True, capture_output=True)
+    for name, value in [('user.name', 'Test'), ('user.email', 'test@example.com')]:
+        subprocess.run(['git', '-C', str(tmp_path), 'config', name, value], check=True)
+    path = tmp_path / 'app.txt'; path.write_text('before\n')
+    subprocess.run(['git', '-C', str(tmp_path), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(tmp_path), 'commit', '-m', 'before'], check=True, capture_output=True)
+    before = harness._git_status_snapshot(str(tmp_path)); head = harness._git_head(str(tmp_path))
+    path.write_text('after\n')
+    subprocess.run(['git', '-C', str(tmp_path), 'commit', '-am', 'after'], check=True, capture_output=True)
+    assert harness._git_status_snapshot(str(tmp_path)) == {}
+    result = harness._turn_change_manifest(str(tmp_path), before, before_head=head)
+    assert [row['path'] for row in result['files']] == ['app.txt']
+    assert result['additions'] == 1 and result['deletions'] == 1
+    assert result['reversible'] is False
+
+
+def test_audit_continuation_stays_read_only_until_explicit_repair(tmp_path, monkeypatch):
+    from distr.core.turn_runtime import TurnResult
+    _, chat_id, _ = _database(tmp_path, monkeypatch)
+    requests = []
+    async def execute(request, **kwargs):
+        requests.append(request)
+        return TurnResult(success=True, backend_id='codex', model='fixture', runtime_id='cli_harness', output='Report ready.')
+    monkeypatch.setattr('distr.core.turn_runtime.execute_turn', execute)
+    monkeypatch.setattr('distr.core.project_cli_backends.catalog_probe.probe_cli_backend', lambda *a, **k: {'status': {'ready': True}})
+    for prompt in ['Audit only and report', 'Continue', 'Fix the reported defects and add tests']:
+        harness.dispatch_development_prompt(chat_id, prompt, dispatch_async=False)
+    assert [r.autonomy_level for r in requests] == ['plan', 'plan', 'full']
+    assert 'Stop after the audit report' in requests[1].instruction
+
+
+def test_audit_cannot_succeed_after_a_backend_changes_existing_content(tmp_path, monkeypatch):
+    from distr.core.turn_runtime import TurnResult
+    _, chat_id, _ = _database(tmp_path, monkeypatch)
+    root = tmp_path / 'project'
+    subprocess.run(['git', 'init', '-b', 'main', str(root)], check=True, capture_output=True)
+    path = root / 'existing.txt'; path.write_text('user content\n')
+    async def execute(request, **kwargs):
+        path.write_text('unauthorized change\n')
+        return TurnResult(success=True, backend_id='codex', model='fixture', runtime_id='cli_harness', output='Audit done.')
+    monkeypatch.setattr('distr.core.turn_runtime.execute_turn', execute)
+    monkeypatch.setattr('distr.core.project_cli_backends.catalog_probe.probe_cli_backend', lambda *a, **k: {'status': {'ready': True}})
+    result = harness.dispatch_development_prompt(chat_id, 'Audit only, do not change files', dispatch_async=False)
+    assert result['status'] == 'failed'
+    assert 'Audit-only scope was violated' in result['error']
+    assert result['changes']['files'][0]['path'] == 'existing.txt'
+    assert result['changes']['reversible'] is False
 
 
 def test_automation_owned_thread_prompt_names_its_control_target(monkeypatch):
@@ -229,6 +372,8 @@ def test_direct_development_prompt_uses_ide_harness_without_workflow(tmp_path, m
 
     async def fake_dispatch(context):
         captured["context"] = context
+        context.on_event({'type': 'tool_execution_end', 'toolName': 'bash', 'args': {'command': 'npm test'},
+                          'result': {'structuredContent': {'exit_code': 0}}})
         context.on_event(
             {
                 "type": "message_update",
@@ -456,12 +601,21 @@ def test_turn_change_manifest_still_counts_brand_new_untracked_files(tmp_path):
 
 
 def test_completed_turn_can_start_a_later_turn_in_the_same_thread(tmp_path, monkeypatch):
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.kanban import project_execution
+
     get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    monkeypatch.setattr(project_execution, "get_session", get_session)
+    monkeypatch.setattr(project_execution, "ensure_project_execution_tables", lambda: None)
     dispatches = []
 
     async def fake_dispatch(context):
         dispatches.append(context)
         session_id = 90 + len(dispatches)
+        with get_session() as db:
+            db.add(ProjectExecutionSession(id=session_id, project_id=1, status="completed",
+                                           input_packet=json.dumps({"chat_id": chat_id})))
+            db.commit()
         return SimpleNamespace(
             execution_session_id=session_id,
             result=SimpleNamespace(
@@ -594,6 +748,9 @@ def test_direct_development_can_use_native_runtime_without_workflow_identity(tmp
                 )
             )
             captured["streamed_during"] = harness.development_execution_state(chat_id).get("streamed_output")
+            on_event(TurnEvent(kind=TurnEventKind.TOOL_COMPLETED, status=TurnStatus.UPDATING,
+                runtime_id='native', summary='Tests passed', tool_name='run_command',
+                details={'command': 'npm test', 'exit_code': 0}))
             return TurnResult(
                 success=True,
                 runtime_id="native",
@@ -664,6 +821,188 @@ def test_stale_native_execution_recovers_as_interrupted_after_restart(tmp_path, 
     with get_session() as db:
         persisted = json.loads(db.get(Chat, chat_id).params)["development"]["execution"]
         assert persisted["status"] == "failed"
+
+
+@pytest.mark.parametrize("receipt_saved", [True, False])
+def test_resume_interrupted_native_turn_does_not_repeat_disk_write(tmp_path, monkeypatch, receipt_saved):
+    from distr.core.turn_runtime import ModelResponse, ModelToolCall, NativeTurnRuntime, ProjectToolExecutor
+    from distr.core.turn_runtime import recovery, service
+    from distr.core.db.kanban import ProjectExecutionEvent
+    from distr.core.workflow.dispatcher import _reconcile_terminal_execution_sessions
+
+    class ProcessInterrupted(BaseException):
+        pass
+
+    get_session, chat_id, turn_id = _database(tmp_path, monkeypatch)
+    folder = tmp_path / "project"
+    original = "Write first.txt and second.txt, then run the tests."
+    with get_session() as db:
+        db.get(Chat, turn_id).input = original
+        db.commit()
+    monkeypatch.setattr(recovery, "get_session", get_session)
+    monkeypatch.setattr("distr.core.kanban.project_execution.get_session", get_session)
+    monkeypatch.setattr("distr.core.kanban.project_execution.ensure_project_execution_tables", lambda: None)
+    monkeypatch.setattr(service, "_record_native_certification", lambda *args: None)
+    monkeypatch.setattr("distr.core.turn_runtime.select_turn_runtime_id", lambda *args, **kwargs: "native")
+    monkeypatch.setattr(harness, "_route", lambda *args: ("native", "test-model", {"model_provider": "ollama"}, "medium"))
+    first = ModelToolCall("first", "write_file", {"path": "first.txt", "content": "first"})
+    repeated = ModelToolCall("new-id", "write_file", {"path": "./first.txt", "content": "first", "overwrite": True})
+    second = ModelToolCall("second", "write_file", {"path": "second.txt", "content": "second"})
+    requests = []
+    writes = []
+
+    class Model:
+        def __init__(self, resumed):
+            self.resumed = resumed
+            self.calls = 0
+
+        async def complete(self, messages, tools, *, on_delta=None):
+            requests.append(list(messages))
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(tool_calls=(repeated, second) if self.resumed else (first,))
+            if not self.resumed:
+                raise ProcessInterrupted()
+            return ModelResponse(text="Both files are present.")
+
+    class Tools(ProjectToolExecutor):
+        def _atomic_write(self, path, content):
+            writes.append(path.name)
+            super()._atomic_write(path, content)
+            if not receipt_saved:
+                raise ProcessInterrupted()
+
+    def runtime(_runtime_id, *, request):
+        return NativeTurnRuntime(model=Model(bool(request.metadata.get("resume_session_id"))), tools=Tools(str(folder)))
+
+    monkeypatch.setattr(service, "get_turn_runtime", runtime)
+    with pytest.raises(ProcessInterrupted):
+        harness.dispatch_development_prompt(chat_id, original, dispatch_async=False)
+    assert (folder / "first.txt").read_text() == "first"
+    with get_session() as db:
+        assert len(_reconcile_terminal_execution_sessions(db)) == 1
+        db.commit()
+
+    if not receipt_saved:
+        with pytest.raises(ValueError, match="no successful receipt"):
+            harness.dispatch_development_prompt(chat_id, "resume", save_prompt=True, dispatch_async=False)
+        assert writes == ["first.txt"]
+        assert not (folder / "second.txt").exists()
+        return
+
+    harness.dispatch_development_prompt(chat_id, "resume", save_prompt=True, dispatch_async=False)
+
+    assert writes == ["first.txt", "second.txt"]
+    assert (folder / "second.txt").read_text() == "second"
+    assert requests[2][-1]["content"] == original
+    assert "Skipped a completed write" in requests[3][-2]["content"]
+    with get_session() as db:
+        assert db.query(ProjectExecutionEvent).filter_by(event_type="mutation_finished").count() == 2
+
+
+@pytest.mark.parametrize("scope", ["project", "ticket", "chat", "turn", "malformed", "missing", "matching"])
+def test_development_status_only_reconciles_its_own_session(tmp_path, monkeypatch, scope):
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, ProjectExecutionSession
+
+    get_session, chat_id, turn_id = _database(tmp_path, monkeypatch)
+    with get_session() as db:
+        board = KanbanBoard(name="Test board", default_project_id=1)
+        db.add(board)
+        db.flush()
+        lane = KanbanLane(board_id=board.id, name="Doing")
+        db.add(lane)
+        db.flush()
+        ticket = KanbanTicket(lane_id=lane.id, title="Own ticket", workflow_status="running")
+        db.add(ticket)
+        db.flush()
+        ticket_id = ticket.id
+        db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).one().local_ticket_id = ticket_id
+        packet = {"chat_id": chat_id + 1 if scope == "chat" else chat_id,
+                  "turn_id": turn_id + 1 if scope == "turn" else turn_id}
+        row = ProjectExecutionSession(project_id=2 if scope == "project" else 1,
+                                      ticket_id=ticket_id + 1 if scope == "ticket" else ticket_id,
+                                      input_packet=json.dumps(packet), status="failed", error="Fixture provider failed",
+                                      output_packet=json.dumps({"result": "Fixture worker output"}))
+        db.add(row)
+        db.flush()
+        reference = {"malformed": f"{row.id}broken", "missing": row.id + 10}.get(scope, row.id)
+        root = db.get(Chat, chat_id)
+        params = json.loads(root.params)
+        params["development"]["execution"] = {
+            "status": "running", "job_id": "active-test-job", "turn_id": turn_id,
+            "execution_session_id": reference,
+        }
+        root.params = json.dumps(params)
+        db.commit()
+
+    state = harness.development_execution_state(chat_id)
+    expected = "failed" if scope == "matching" else "running"
+    assert state["status"] == expected
+    if scope != "matching":
+        assert state["id"] == "active-test-job"
+        assert "execution_session_id" not in state
+        assert "Fixture provider failed" not in json.dumps(state)
+        assert "Fixture worker output" not in json.dumps(state)
+    with get_session() as db:
+        persisted = json.loads(db.get(Chat, chat_id).params)
+        assert persisted["development"]["execution"]["status"] == expected
+        assert db.get(KanbanTicket, ticket_id).workflow_status == expected
+
+
+def test_development_stop_does_not_complete_a_different_chats_session(tmp_path, monkeypatch):
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.kanban import project_execution
+
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    monkeypatch.setattr(project_execution, "get_session", get_session)
+    monkeypatch.setattr(project_execution, "ensure_project_execution_tables", lambda: None)
+    monkeypatch.setattr("distr.core.project_cli_backends.registry.terminate_backend_process", lambda *args, **kwargs: False)
+    with get_session() as db:
+        row = ProjectExecutionSession(project_id=1, status="running",
+                                      input_packet=json.dumps({"chat_id": chat_id + 1}))
+        db.add(row)
+        db.flush()
+        session_id = row.id
+        root = db.get(Chat, chat_id)
+        params = json.loads(root.params)
+        params["development"]["execution"] = {
+            "status": "running", "job_id": "own-job", "execution_session_id": session_id,
+        }
+        root.params = json.dumps(params)
+        db.commit()
+
+    stopped = harness.stop_development_execution(chat_id)
+    assert stopped["status"] == "cancelled"
+    assert "execution_session_id" not in stopped
+    with get_session() as db:
+        assert db.get(ProjectExecutionSession, session_id).status == "running"
+
+
+def test_development_workflow_status_and_stop_use_the_same_scope(tmp_path, monkeypatch):
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    with get_session() as db:
+        own = AutoWorkflowRun(chat_id=chat_id, workflow_id=1, status="waiting",
+                              run_data=json.dumps({"project_id": "1"}))
+        db.add(own)
+        db.flush()
+        own_id = own.id
+        db.add_all([
+            AutoWorkflowRun(chat_id=chat_id, workflow_id=2, status="running",
+                            run_data=json.dumps({"project_id": 2})),
+            AutoWorkflowRun(chat_id=chat_id, workflow_id=3, status="running", ticket_id=50),
+        ])
+        db.commit()
+
+    cancelled = []
+    monkeypatch.setattr("distr.core.workflow.dispatcher.cancel_run", lambda run_id: cancelled.append(run_id) or True)
+    monkeypatch.setattr("distr.core.project_cli_backends.registry.terminate_backend_process", lambda *args, **kwargs: False)
+    state = harness.development_execution_state(chat_id)
+    assert state["id"] == own_id
+    assert state["status"] == "waiting"
+    assert harness.stop_development_execution(chat_id)["workflow_cancelled"]
+    assert cancelled == [own_id]
 
 
 def test_old_initiative_notice_does_not_hide_preserved_development_result():
