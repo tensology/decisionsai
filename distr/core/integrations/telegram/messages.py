@@ -1159,7 +1159,15 @@ class TelegramMessagesMixin:
         Multiple messages are joined with newlines so the agent sees the full thread.
         """
         if not self._telegram_batch_buffer:
-            return
+            # A caption-less attachment parked earlier: flush it on its own so the
+            # agent still engages with it instead of never responding.
+            parked = self._take_pending_telegram_files(
+                str(getattr(self, "_telegram_batch_thread_id", None))
+            )
+            if not parked:
+                return
+            for file in parked:
+                self._enqueue_telegram_file(file)
 
         chat_id = str(getattr(self, "_telegram_batch_thread_id", None))
         owner = getattr(self, "telegram_user_id", None)
@@ -1218,7 +1226,8 @@ class TelegramMessagesMixin:
                 source_message_ids.append(str(item_source_message_id))
 
         combined = "\n".join(texts) if texts else ""
-        if not combined:
+        has_media = bool(image_paths) or bool(downloaded_files)
+        if not combined and not has_media:
             return
         source_message_id = _canonical_batch_source_message_id(source_message_ids)
         media_warning = ""
@@ -1337,8 +1346,20 @@ class TelegramMessagesMixin:
                 *(f"[Telegram {file.kind} saved to {file.path}]" for file in downloaded_files.values()),
                 media_warning,
             ]))
+            if combined:
+                handoff_text = combined
+            elif image_paths:
+                handoff_text = (
+                    "The user sent an image with no caption. Look at it and tell them what you "
+                    "can see, then ask what they want done with it."
+                )
+            else:
+                handoff_text = (
+                    "The user sent a file with no caption. Tell them what you received and ask "
+                    "what they want done with it."
+                )
             accepted = get_integration_message_bus().deliver_telegram_user_input(
-                text=f"{combined}\n{context}" if context else combined,
+                text=f"{handoff_text}\n{context}" if context else handoff_text,
                 image_path=image_paths[0] if image_paths else None,
                 telegram_chat_id=getattr(self, "_telegram_batch_thread_id", None),
                 speak=None,
@@ -1431,7 +1452,15 @@ class TelegramMessagesMixin:
             and any(item[0] for item in self._telegram_batch_buffer)
         )
         if not file.caption and not active_batch:
+            # No caption yet: hold the file briefly in case a description follows,
+            # but arm the batch timer so a caption-less attachment still reaches the
+            # agent (with a placeholder) instead of being parked indefinitely.
             self._pending_telegram_files = pending + [file]
+            try:
+                self._telegram_batch_thread_id = int(file.chat_id)
+            except (TypeError, ValueError):
+                self._telegram_batch_thread_id = file.chat_id
+            self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)
             return
         for item in pending:
             self._enqueue_telegram_file(item)

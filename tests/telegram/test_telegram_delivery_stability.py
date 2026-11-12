@@ -1185,6 +1185,38 @@ def test_uncaptioned_photo_and_document_reach_one_followup(monkeypatch, tmp_path
     assert intake.text == "Create a ticket: fix checkout"
 
 
+def test_captionless_photo_still_reaches_the_agent(monkeypatch):
+    """A photo with no caption must not be parked forever: flushing with an empty
+    buffer drains it and hands the agent the image plus a prompt to engage."""
+    from distr.core.integrations.telegram.messages import _DownloadedTelegramFile
+
+    manager = DummyTelegramMessages()
+    manager.telegram_user_id = 12345
+    manager._telegram_batch_thread_id = 12345
+    manager._pending_telegram_files = [
+        _DownloadedTelegramFile("12345", "601", "/tmp/pic.jpg", "image", "pic.jpg",
+                                "image/jpeg", "", time.monotonic()),
+    ]
+    delivered = {}
+
+    class _Bus:
+        def deliver_telegram_user_input(self, **kwargs):
+            delivered.update(kwargs)
+            return True
+
+    monkeypatch.setattr("distr.core.integrations.bus.get_integration_message_bus", lambda: _Bus())
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service",
+        lambda: SimpleNamespace(ingest=lambda intake: SimpleNamespace(handled=False, response_text="")),
+    )
+
+    manager._flush_telegram_batch()
+
+    assert delivered["image_path"] == "/tmp/pic.jpg"
+    assert "image with no caption" in delivered["text"]
+    assert not manager._pending_telegram_files
+
+
 def test_local_voice_followup_consumes_pending_attachment(monkeypatch):
     from distr.core.integrations.telegram.messages import _DownloadedTelegramFile
 
