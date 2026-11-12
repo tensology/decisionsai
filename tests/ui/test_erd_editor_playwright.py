@@ -91,6 +91,7 @@ def test_add_table_field_relation_zoom_and_saved_mermaid(page, backend):
 
 def test_drag_table_moves_and_persists_position(page, backend):
     _open_data(page)
+    page.get_by_label('Fit to view', exact=True).click()
     node = page.locator('.erd-table[data-table="ORDER"]')
     box = node.locator('.erd-table-head').bounding_box()
     page.mouse.move(box['x'] + 20, box['y'] + box['height'] / 2)

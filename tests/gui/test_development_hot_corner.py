@@ -34,6 +34,7 @@ def isolated_sidebar_preferences(monkeypatch, tmp_path):
     # Never read or migrate pins in the real settings database from these tests.
     monkeypatch.setattr("distr.core.workflow.development_sidebar.load_pinned_boards", lambda: [])
     monkeypatch.setattr("distr.core.workflow.development_sidebar.save_pinned_boards", lambda keys: list(keys))
+    monkeypatch.setattr("distr.core.workflow.development_sidebar.set_board_pin", lambda key, pinned: [key] if pinned else [])
 
 
 def _app() -> QtWidgets.QApplication:
@@ -343,10 +344,11 @@ def test_desktop_uses_shared_web_board_pins_and_preserves_unrelated_keys(monkeyp
     keys = ['jira:OTHER', 'decisions:7']
     saved = []
     monkeypatch.setattr('distr.core.workflow.development_sidebar.load_pinned_boards', lambda: list(keys))
-    def save(value):
-        keys[:] = value
-        saved.append(value)
-    monkeypatch.setattr('distr.core.workflow.development_sidebar.save_pinned_boards', save)
+    def set_pin(key, pinned):
+        saved.append((key, pinned))
+        keys.remove(key)
+        return keys
+    monkeypatch.setattr('distr.core.workflow.development_sidebar.set_board_pin', set_pin)
     groups = [dict(project_id=9, board_key='decisions:7', name='Shared project', weekly_seconds=0, threads=[])]
     monkeypatch.setattr('distr.gui.development_hot_corner.load_development_groups', lambda _: groups)
     panel = DevelopmentHotCornerPanel(enabled=False)
@@ -354,7 +356,8 @@ def test_desktop_uses_shared_web_board_pins_and_preserves_unrelated_keys(monkeyp
     assert panel._pinned_project_ids == {9}
     assert _project_item(panel, 9).parent() is None
     panel._toggle_project_pin(9)
-    assert saved == [['jira:OTHER']]
+    assert saved == [('decisions:7', False)]
+    assert keys == ['jira:OTHER']
     assert panel._pinned_project_ids == set()
     keys.append('decisions:7')
     panel._sync_live_state(10.0)

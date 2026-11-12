@@ -55,7 +55,7 @@ async def project_page(request):
     capture(page,width,'interfaces')
     page.locator('.iface-node').filter(has_text='Development').first.focus()
     page.keyboard.press('Enter')
-    page.get_by_role('button',name='Planning',exact=True).click()
+    page.get_by_role('tablist', name='Page perspective').get_by_role('button', name='Planning', exact=True).click()
     planned=page.locator('.plan-page-hub li').filter(has_text='Planned data bindings:')
     expect(planned).to_contain_text('Project.title')
     planned.evaluate('n=>n.scrollIntoView({block:"center"})')

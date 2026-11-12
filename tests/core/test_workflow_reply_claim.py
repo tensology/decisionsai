@@ -10,8 +10,15 @@ from sqlalchemy.orm import sessionmaker
 from distr.core.db import Base
 from distr.core.db.kanban import KanbanTicket
 from distr.core.db.orchestrator import OrchestratorEvent
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
 from distr.core.workflow import reply_delivery as delivery, dev_approvals
 from tests.core.test_reply_delivery import _ticket
+
+@pytest.fixture(autouse=True)
+def _ask_first_off(monkeypatch):
+    """These tests cover the transport/ledger with 'Ask before messaging clients' switched off.
+    Ask-first holding is covered in tests/initiative/test_initiative_fixes_20261112.py."""
+    monkeypatch.setattr('distr.core.initiative.outcome_flow.ask_before_client_messages', lambda settings=None: False)
 
 
 @pytest.fixture
@@ -24,8 +31,20 @@ def store(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def test_concurrent_delivery_claims_before_transport(store, monkeypatch):
+@pytest.mark.parametrize('revised_workflow_reply', [False, True])
+def test_concurrent_delivery_claims_before_transport(store, monkeypatch, revised_workflow_reply):
     ticket = _ticket(store)
+    context = None
+    if revised_workflow_reply:
+        with store() as db:
+            workflow = AutoWorkflow(name='Closing reply')
+            db.add(workflow)
+            db.flush()
+            run = AutoWorkflowRun(workflow_id=workflow.id, ticket_id=ticket, status='completed')
+            db.add(run)
+            db.flush()
+            context = {'run_id': run.id, 'workflow_id': workflow.id, 'chat_id': None, 'turn_id': None}
+            db.commit()
     entered, release = Event(), Event()
     calls = []
     def send(**kwargs):
@@ -35,11 +54,14 @@ def test_concurrent_delivery_claims_before_transport(store, monkeypatch):
         return {'success': True, 'message_id': 'provider-one'}
     monkeypatch.setitem(delivery.ADAPTERS, 'whatsapp', send)
     with ThreadPoolExecutor(max_workers=1) as pool:
-        first = pool.submit(delivery.deliver_ticket_reply, ticket, 'Fixed and checked.')
+        first = pool.submit(delivery.deliver_ticket_reply, ticket, 'Fixed and checked.', approval_context=context)
         try:
             assert entered.wait(5)
-            second = delivery.deliver_ticket_reply(ticket, 'Fixed and checked.')
+            text = 'Checked the revised implementation.' if revised_workflow_reply else 'Fixed and checked.'
+            second = delivery.deliver_ticket_reply(ticket, text, approval_context=context)
             assert second.get('duplicate') is True
+            if revised_workflow_reply:
+                assert second['delivery_status'] == 'scope_conflict' and second['unconfirmed']
             assert len(calls) == 1
         finally:
             release.set()

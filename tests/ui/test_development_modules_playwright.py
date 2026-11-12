@@ -125,7 +125,7 @@ def test_pin_migration_failure_preserves_catalog_and_local_pin(page: Page, tmp_p
     pinned = page.locator("#pinned-board-tree")
     expect(pinned.get_by_text("Decisions delivery", exact=True)).to_be_visible()
     expect(page.locator("#board-task-tree").get_by_text("Empty delivery", exact=True)).to_be_visible()
-    assert attempted == [{"board_keys": ["decisions:70"]}]
+    assert attempted == [{"board_keys": ["decisions:70"], "only_if_unset": True}]
     page.screenshot(path=tmp_path / f"pin-migration-failed-{width}.png", animations="disabled")
     pinned.get_by_role("button", name="Implement ticket DEV-42", exact=False).click()
     expect(page.locator("#task-prompt")).to_be_visible()
@@ -139,7 +139,7 @@ def test_pin_migration_failure_preserves_catalog_and_local_pin(page: Page, tmp_p
         page.locator("#sidebar-open").click()
     expect(pinned.get_by_text("Decisions delivery", exact=True)).to_be_visible()
     expect(page.locator("#studio-toast")).not_to_contain_text("Available data remains usable")
-    assert attempted == [{"board_keys": ["decisions:70"]}] * 2
+    assert attempted == [{"board_keys": ["decisions:70"], "only_if_unset": True}] * 2
     page.screenshot(path=tmp_path / f"pin-migration-recovered-{width}.png", animations="disabled")
 
 

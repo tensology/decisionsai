@@ -14,7 +14,7 @@ def test_incoming_creation_failure_retry_and_double_click(page, source, width):
     failed = True
     proposal = {'id': 'local:test-action', 'origin': 'local', 'title': 'Review menu launch',
                 'description': 'Review the launch copy.', 'project_id': 7,
-                'project_name': 'DecisionsAI', 'source': 'gmail'}
+                'project_name': 'DecisionsAI', 'source': 'gmail', 'review_key': 'a' * 64}
     page.route('**/api/workflows/studio/incoming/proposals*', lambda route:
                route.fulfill(json={'proposals': [proposal]}) if route.request.method == 'GET' else route.fallback())
     endpoint = {'gmail': '/workflows/incoming/gmail/ingest',
@@ -67,6 +67,8 @@ def test_incoming_creation_failure_retry_and_double_click(page, source, width):
         assert requests[0]['source'] == 'mailshot'
         assert requests[0]['source_user_id'] == 'Ops <ops@tensology.com>'
         assert 'Tensology deployment' in requests[0]['user_text']
+    else:
+        assert requests[0] == {'proposal': proposal, 'review_key': proposal['review_key']}
     failed = False
     button.click()
     if source == 'proposal':

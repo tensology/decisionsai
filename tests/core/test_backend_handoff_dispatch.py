@@ -6,8 +6,8 @@ import pytest
 from distr.core.project_cli_backends.base import BackendTaskResult
 
 
-@pytest.mark.parametrize("origin", ["cli", "proactive_orchestrator"])
-def test_run_project_task_records_backend_handoff(monkeypatch, origin):
+@pytest.mark.parametrize(("origin", "cancelled"), [("cli", False), ("proactive_orchestrator", False), ("cli", True)])
+def test_run_project_task_records_backend_handoff(monkeypatch, origin, cancelled):
     from distr.core.project_cli_backends import registry
 
     class FakeBackend:
@@ -27,6 +27,7 @@ def test_run_project_task_records_backend_handoff(monkeypatch, origin):
     completed = []
     handoffs = []
     sessions = []
+    forwarded = []
 
     monkeypatch.setattr(registry, "get_backend", lambda backend_id: FakeBackend())
     monkeypatch.setattr(registry, "_git_status_short", lambda folder: [" M app.py"])
@@ -36,12 +37,14 @@ def test_run_project_task_records_backend_handoff(monkeypatch, origin):
     )
     monkeypatch.setattr(
         "distr.core.kanban.project_execution.append_execution_event",
-        lambda *args, **kwargs: events.append((args, kwargs)),
+        lambda *args, **kwargs: False if cancelled and args[1] == "message_end" else events.append((args, kwargs)),
     )
     monkeypatch.setattr(
         "distr.core.kanban.project_execution.complete_execution_session",
         lambda *args, **kwargs: completed.append((args, kwargs)),
     )
+    monkeypatch.setattr("distr.core.kanban.project_execution.execution_session_is_cancelled",
+                        lambda session_id: cancelled and session_id == 77)
 
     def fake_record_backend_handoff(**kwargs):
         handoffs.append(kwargs)
@@ -62,11 +65,17 @@ def test_run_project_task_records_backend_handoff(monkeypatch, origin):
             backend_id_override="codex",
             board_id_override=9,
             origin=origin,
+            on_event=forwarded.append,
             proactive_candidate_id=42,
             turn_id=11,
         )
     )
 
+    if cancelled:
+        assert result.success is False and result.execution_session_id == 77
+        assert not result.output
+        assert len(handoffs) == 1 and not completed and not forwarded
+        return
     assert result.success is True
     assert sessions[0]["input_packet"]["chat_id"] == 8
     assert sessions[0]["input_packet"]["turn_id"] == 11

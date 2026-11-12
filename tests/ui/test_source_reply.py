@@ -6,6 +6,7 @@ import pytest
 from playwright.sync_api import expect
 from tests.ui.test_development_harness_playwright import _install_api, URL
 from tests.ui.test_incoming_dismiss_undo import fixture_base
+from tests.core.test_proposal_continuity_integration import intake  # noqa: F401
 
 pytestmark = pytest.mark.e2e_playwright
 
@@ -28,6 +29,9 @@ def install(page, *, sources=2, linked=True, failure=False, url=URL, later_messa
         request = route.request
         path = request.url.split('?')[0]
         if request.method == 'GET':
+            if state.get('damaged_history'):
+                route.fulfill(status=409, json={'detail': state['damaged_history'], 'code': 'reply_history_unavailable'})
+                return
             route.fulfill(json={'sources': state.get('choices', choices), 'drafts': state.get('retained', [])}); return
         body = request.post_data_json
         if path.endswith('/approve'):
@@ -66,6 +70,303 @@ def shot(page, name):
     folder = Path(os.environ.get('SOURCE_REPLY_SHOTS', '/tmp/decisions-source-reply-qa'))
     folder.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(folder / f'{name}.png'), full_page=True)
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_damaged_reply_history_has_an_actionable_error_and_can_close(page, width, fixture_base):
+    page.set_viewport_size({'width': width, 'height': 1000})
+    state = install(page, sources=1, url=f'{fixture_base}/development/threads/17/')
+    state['damaged_history'] = ('A saved reply record could not be verified. Check the original conversation '
+                                'and restore the reply history before sending again.')
+    opener = page.get_by_role('button', name='Message Client', exact=True)
+    opener.click()
+    dialog = page.get_by_role('dialog', name='Message Client')
+    status = dialog.get_by_role('status')
+    expect(status).to_have_text(state['damaged_history'])
+    expect(status).to_be_focused()
+    expect(dialog.get_by_label('To:', exact=True)).to_be_hidden()
+    expect(dialog.locator('label[for="source-reply-source"]')).to_be_hidden()
+    expect(dialog.get_by_role('button', name='Approve')).to_be_disabled()
+    expect(dialog.get_by_role('button', name='Rewrite')).to_be_disabled()
+    assert not state['drafts'] and not state['sent']
+    shot(page, f'{width}-damaged-history')
+    dialog.get_by_role('button', name='Close message').click()
+    expect(opener).to_be_focused()
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_merged_reply_keeps_independent_recipient_selectable(page, width, fixture_base):
+    page.set_viewport_size({'width': width, 'height': 900})
+    state = install(page, url=f'{fixture_base}/development/threads/17/')
+    state['choices'] = [
+        {'key': 'whatsapp:group', 'channel': 'whatsapp', 'label': 'Client project group',
+         'reply_blocked_reason': 'The workflow already sent a reply to this conversation. Check the original conversation before sending again.'},
+        {'key': 'gmail:thread', 'channel': 'gmail', 'label': 'Client billing email'},
+    ]
+    page.get_by_role('button', name='Message Client', exact=True).click()
+    dialog = page.get_by_role('dialog', name='Message Client')
+    recipient = dialog.get_by_label('To:', exact=True)
+    recipient.select_option('whatsapp:group')
+    expect(dialog.get_by_role('status')).to_contain_text('The workflow already sent a reply')
+    expect(dialog.get_by_role('button', name='Approve')).to_be_disabled()
+    expect(recipient).to_be_enabled()
+    assert state['drafts'] == 0
+    shot(page, f'{width}-merged-reply-blocked')
+    recipient.select_option('gmail:thread')
+    expect(dialog.get_by_label('Reply', exact=True)).to_be_enabled()
+    shot(page, f'{width}-merged-reply-available')
+    dialog.get_by_role('button', name='Approve').click()
+    expect(page.locator('#studio-toast.success')).to_have_text('Reply sent')
+    assert state['drafts'] == 1 and len(state['sent']) == 1
+    state['retained'] = [{
+        'id': 'draft-1', 'source_key': 'gmail:thread', 'response_id': 18, 'status': 'sent',
+        'text': state['sent'][0]['text'],
+        'target': {'channel': 'gmail', 'to': ['client@example.com'], 'cc': [], 'subject': 'Re: Billing request'},
+    }]
+    page.get_by_role('button', name='Message Client', exact=True).click()
+    recipient.select_option('gmail:thread')
+    expect(dialog.get_by_text('Previously sent.', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('button', name='Approve')).to_be_disabled()
+    shot(page, f'{width}-merged-reply-reopened')
+    assert state['drafts'] == 1 and len(state['sent']) == 1
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+@pytest.mark.parametrize('surface', ['desktop', 'paired'])
+def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_base, intake, monkeypatch):
+    import json
+    from unittest.mock import Mock
+    from urllib.parse import urlsplit
+
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.core.db import Chat, SourceReplyDraft
+    from distr.core.incoming import source_reply as replies
+    from distr.core.orchestrator_proactive import _add_proactive_turn_event, PROACTIVE_RESULT_HELD
+    from distr.gui.web.routes import chat as chat_routes
+    from distr.gui.web.routes.development.thread_tools import register_routes
+    from tests.core.test_chat_development_surface_isolation import _client
+
+    app_view = os.environ.get('DECISIONS_REMOTE_APP_TEST_URL')
+    if surface == 'paired' and not app_view:
+        pytest.skip('Set DECISIONS_REMOTE_APP_TEST_URL to the local App View development server.')
+    session, proposal, projects = intake
+    proposal['source_scope'] = [
+        {'source': 'whatsapp', 'source_thread_id': 'first@g.us', 'message_ids': ['one']},
+        {'source': 'whatsapp', 'source_thread_id': 'second@g.us', 'message_ids': ['two']},
+    ]
+    with session() as db:
+        root = Chat(id=17, title='Merged proposal', project_id=projects[0],
+                    params=json.dumps({'incoming_proposal_handoff': {'proposal': proposal}}))
+        db.add(root)
+        db.flush()
+        response = Chat(parent_id=root.id, response='The work is ready.')
+        db.add(response)
+        db.flush()
+        chat_id, response_id = root.id, response.id
+        db.commit()
+    monkeypatch.setattr(replies, 'resolve_target', lambda source: {
+        'channel': 'whatsapp', 'jid': source['thread_id'], 'label': source['label'],
+    })
+    monkeypatch.setattr(replies, 'generate_draft', lambda *a, **kw: ('The work is ready.', {}))
+    sender = Mock()
+    move_during_preflight = []
+
+    def send(target, text, draft_id, *, before_send):
+        if move_during_preflight:
+            move_during_preflight.clear()
+            with session() as db:
+                root = db.get(Chat, chat_id)
+                root.params = json.dumps({**json.loads(root.params), 'development': {
+                    'source_type': 'proposal', 'board_provider': 'tensology', 'board_key': 'replacement-board',
+                    'board_ticket_key': 'replacement-ticket',
+                }})
+                db.commit()
+        before_send()
+        return sender(target, text, draft_id)
+
+    monkeypatch.setattr(replies, 'send_reply', send)
+    first = replies.create_draft(chat_id, response_id, 'whatsapp:first@g.us')
+    replies.act_on_draft(chat_id, first['id'], 'approve', 'Already delivered.')
+    sender.reset_mock()
+    with session() as db:
+        damaged = db.get(SourceReplyDraft, first['id'])
+        damaged.payload = '{broken'
+        damaged.claimed_response_id = None
+        db.commit()
+
+    api_app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    api_app.include_router(router, prefix='/api')
+    api = TestClient(api_app)
+    path = f'/api/workflows/studio/tasks/{chat_id}/source-replies'
+    chat = {
+        'id': chat_id, 'title': 'Merged proposal', 'project_id': 7, 'development': True,
+        'development_board_key': 'decisions:70', 'has_reply_source': True, 'archived': False,
+        'messages': [{'role': 'assistant', 'content': 'The work is ready.', 'chat_row_id': response_id}],
+    }
+    rejected = api.post(f"{path}/{first['id']}/approve", json={'approved': True, 'text': 'Duplicate.'})
+    assert rejected.status_code == 409
+    assert rejected.json()['code'] == 'reply_history_unavailable'
+    sender.assert_not_called()
+
+    overlapping_approvals = []
+    execution = {'status': 'completed', 'direct': True}
+
+    def repeat_while_sending(_target, _text, draft_id):
+        overlapping_approvals.append(api.post(f'{path}/{draft_id}/approve',
+                                             json={'approved': True, 'text': 'Concurrent duplicate.'}))
+
+    sender.side_effect = repeat_while_sending
+
+    def bridge(route):
+        request = route.request
+        url = urlsplit(request.url)
+        result = api.request(request.method, f'{url.path}?{url.query}', json=request.post_data_json)
+        route.fulfill(status=result.status_code, json=result.json())
+
+    page.set_viewport_size({'width': width, 'height': 900})
+    dialog_root = page
+    if surface == 'paired':
+        def relay(socket):
+            def handle(raw):
+                frame = json.loads(raw)['body']
+                if frame['type'] == 'ping':
+                    socket.send(json.dumps({'type': 'pong'}))
+                    return
+                command = frame['command']
+                status, response = 200, {'screens': []}
+                if command == 'api_relay':
+                    data = frame['data']
+                    request_path = data['path']
+                    if request_path.startswith('/api/workflows/studio/incoming/proposals/review?'):
+                        response = {'status': 'thread', 'chat_id': chat_id}
+                    elif request_path == f'/api/chats/{chat_id}?surface=development':
+                        response = chat
+                    elif request_path == f'/api/workflows/studio/tasks/{chat_id}/execution':
+                        response = execution
+                    else:
+                        result = api.request(data['method'], request_path, json=data.get('body'))
+                        status, response = result.status_code, result.json()
+                socket.send(json.dumps({
+                    'type': 'remote_control_response', 'command': command,
+                    'request_id': frame.get('request_id'), 'data': {'status': status, 'response': response},
+                }))
+            socket.on_message(handle)
+
+        page.route_web_socket('**/ws/telegram?*', relay)
+        page.goto(f"{app_view}?channel=fixture&proposal_key={'a' * 64}")
+        dialog_root = page.frame_locator('iframe[title="Development source reply"]')
+    else:
+        _install_api(page, [], current_board_linked=True, direct_execution=True, terminal_session=False)
+        page.route(f'**/api/chats/{chat_id}**', lambda route: route.fulfill(json=chat))
+        page.route(f'**/api/workflows/studio/tasks/{chat_id}/execution', lambda route: route.fulfill(json=execution))
+        page.route(f'**{path}**', bridge)
+        page.goto(f'{fixture_base}/development/threads/{chat_id}/')
+
+    opener = page.get_by_role('button', name='Message Client', exact=True)
+    opener.click()
+    dialog = dialog_root.get_by_role('dialog', name='Message Client')
+    recipient = dialog.get_by_label('To:', exact=True)
+    approve = dialog.get_by_role('button', name='Approve', exact=True)
+    assert recipient.evaluate("select => getComputedStyle(select.parentElement, '::after').content") == '""'
+    recipient.select_option('whatsapp:first@g.us')
+    expect(recipient.locator('option:checked')).to_have_text('WhatsApp · first@g.us (blocked)')
+    expect(dialog.get_by_role('status')).to_contain_text('Check the original conversation')
+    expect(approve).to_be_disabled()
+    sender.assert_not_called()
+    shot(page, f'{width}-{surface}-unreadable-claim-blocked')
+    recipient.select_option('whatsapp:second@g.us')
+    expect(recipient.locator('option:checked')).to_have_text('WhatsApp · second@g.us')
+    expect(approve).to_be_enabled()
+    shot(page, f'{width}-{surface}-unreadable-claim-independent')
+    dialog.get_by_label('Reply', exact=True).fill('Independent reply.')
+    move_during_preflight.append(True)
+    approve.click()
+    expect(dialog.get_by_role('status')).to_contain_text('board or ticket changed')
+    expect(dialog.get_by_label('Reply', exact=True)).to_have_value('Independent reply.')
+    expect(approve).to_be_disabled()
+    sender.assert_not_called()
+    shot(page, f'{width}-{surface}-changed-reply-scope')
+    dialog.get_by_role('button', name='Rewrite', exact=True).click()
+    expect(approve).to_be_enabled()
+    dialog.get_by_label('Reply', exact=True).fill('Independent reply.')
+    approve.click()
+    toast = (page.get_by_role('status').get_by_text('Reply sent', exact=True)
+             if surface == 'paired' else page.locator('#studio-toast.success'))
+    expect(toast).to_have_text('Reply sent')
+    assert len(overlapping_approvals) == 1
+    assert overlapping_approvals[0].status_code == 409
+    assert 'sending' in overlapping_approvals[0].json()['detail']
+    draft_id = sender.call_args.args[2]
+    duplicate = api.post(f'{path}/{draft_id}/approve', json={'approved': True, 'text': 'Duplicate.'})
+    assert duplicate.status_code == 200 and duplicate.json()['already_sent']
+    sender.assert_called_once()
+    assert sender.call_args.args[0]['jid'] == 'second@g.us'
+    opener.click()
+    recipient.select_option('whatsapp:second@g.us')
+    expect(dialog.get_by_text('Previously sent.', exact=True)).to_be_visible()
+    expect(approve).to_be_disabled()
+    shot(page, f'{width}-{surface}-unreadable-claim-reopened')
+    recipient.select_option('whatsapp:first@g.us')
+    expect(dialog.get_by_role('status')).to_contain_text('Check the original conversation')
+    expect(approve).to_be_disabled()
+    sender.assert_called_once()
+    with session() as db:
+        original = db.get(SourceReplyDraft, first['id'])
+        assert (original.status, original.payload, original.claimed_source_key) == (
+            'sent', '{broken', 'whatsapp:first@g.us',
+        )
+        root = db.get(Chat, chat_id)
+        root.params = json.dumps({**json.loads(root.params), "development": {"source_type": "proposal"}})
+        warning = Chat(parent_id=chat_id, response=PROACTIVE_RESULT_HELD)
+        db.add(warning)
+        db.flush()
+        warning_id = warning.id
+        _add_proactive_turn_event(db, chat_id, warning_id, "turn_failed", "failed", PROACTIVE_RESULT_HELD)
+        db.commit()
+    monkeypatch.setattr(chat_routes, "get_session", session)
+    transcript = _client().get(f'/api/chats/{chat_id}?surface=development')
+    assert transcript.status_code == 200
+    chat['messages'] = transcript.json()['messages']
+    execution.update(status='idle')
+    page.reload()
+    messages = page.locator('#message-list' if surface == 'desktop' else '.av-messages')
+    expect(messages.get_by_text(PROACTIVE_RESULT_HELD, exact=True)).to_be_visible()
+    expect(opener).to_have_count(0)
+    shot(page, f'{width}-{surface}-internal-reply-warning')
+    refused = api.post(path, json={'source_key': 'whatsapp:second@g.us', 'response_id': warning_id})
+    assert refused.status_code == 422
+    sender.assert_called_once()
+
+    waiting_text = 'I need a decision about the billing units before continuing.'
+    with session() as db:
+        waiting = Chat(parent_id=chat_id, response=waiting_text)
+        db.add(waiting)
+        db.flush()
+        waiting_id = waiting.id
+        _add_proactive_turn_event(db, chat_id, waiting_id, "turn_completed", "waiting", waiting_text)
+        db.commit()
+    transcript = _client().get(f'/api/chats/{chat_id}?surface=development')
+    assert transcript.status_code == 200
+    chat['messages'] = transcript.json()['messages']
+    execution.update(status='blocked', waiting_kind='human_review', can_stop=False,
+                     origin='proactive_orchestrator', turn_id=waiting_id)
+    page.reload()
+    expect(messages.get_by_text(waiting_text, exact=True)).to_be_visible()
+    status = page.locator('#task-state b') if surface == 'desktop' else page.get_by_role(
+        'region', name='Development execution').get_by_text('Waiting for review', exact=True)
+    expect(status).to_have_text('Waiting for review')
+    expect(status).to_be_visible()
+    expect(opener).to_have_count(0)
+    expect(page.get_by_role('button', name='Stop', exact=True)).to_have_count(0)
+    if surface == 'desktop':
+        page.get_by_role('textbox', name='Development instruction', exact=True).fill('Use per-byte billing.')
+        expect(page.get_by_role('button', name='Send prompt', exact=True)).to_be_enabled()
+    shot(page, f'{width}-{surface}-waiting-for-review')
+    refused = api.post(path, json={'source_key': 'whatsapp:second@g.us', 'response_id': waiting_id})
+    assert refused.status_code == 422
+    sender.assert_called_once()
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
@@ -161,6 +462,22 @@ def test_unconfirmed_send_preserves_text_and_prevents_double_send(page, width, f
     expect(page.get_by_role('button', name='Approve', exact=True)).to_be_disabled()
     assert len(state['sent']) == 1
     shot(page, f'{width}-unconfirmed-send')
+    state['retained'] = [{
+        'id': 'draft-1', 'status': 'sent', 'response_id': 18, 'source_key': 'gmail:thread',
+        'text': 'The wording confirmed by the first window.',
+        'target': {'channel': 'gmail', 'from': 'paul@example.com', 'to': ['client@example.com'],
+                   'cc': ['reviewer@example.com'], 'subject': 'Re: Billing request'},
+    }]
+    page.get_by_role('button', name='Check send status', exact=True).click()
+    recovered = page.get_by_text('This reply was already sent. Your newer wording is under Your unsent edits.')
+    expect(recovered).to_be_visible()
+    expect(page.get_by_label('Reply', exact=True)).to_have_value('The wording confirmed by the first window.')
+    expect(page.get_by_label('Your unsent edits', exact=True)).to_have_value('Approved wording must remain visible.')
+    expect(page.get_by_role('button', name='Approve', exact=True)).to_be_disabled()
+    assert len(state['sent']) == 1
+    expect(recovered).to_be_focused()
+    expect(recovered).to_be_in_viewport()
+    shot(page, f'{width}-recovered-send-with-unsent-edits')
     page.get_by_role('button', name='Close message', exact=True).click()
     expect(page.get_by_role('dialog')).to_have_count(0)
 

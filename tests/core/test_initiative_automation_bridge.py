@@ -118,7 +118,7 @@ def test_daily_plan_prompt_queues_executable_automation_install(monkeypatch):
 
     class Service:
         def _get_level(self, settings):
-            return "assist"
+            return "operate"
 
         def _log_to_chat(self, message):
             pass

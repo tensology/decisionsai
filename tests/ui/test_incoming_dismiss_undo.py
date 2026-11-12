@@ -103,6 +103,147 @@ def _mock(page, rows):
     return state
 
 
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+@pytest.mark.parametrize(('case', 'message'), [
+    ('changed', 'A proposal or its evidence changed. Refresh Incoming before merging.'),
+    ('reserved', 'A proposal is already part of a Decisions merge. Retry the original pair in Incoming to finish it.'),
+])
+def test_merge_conflict_keeps_cards_and_shows_recovery_message(page, fixture_base, width, case, message):
+    first, second = _proposal(1), _proposal(2)
+    first['merge_revision'], second['merge_revision'] = 'a' * 64, 'b' * 64
+    _install_api(page, [])
+    _mock(page, [first, second])
+    page.route('**/api/workflows/studio/incoming/proposals/merge', lambda route:
+               route.fulfill(status=409, json={'success': False, 'error': message}))
+    page.set_viewport_size({'width': width, 'height': 850})
+    page.goto(f'{fixture_base}/development/incoming/')
+    cards = [page.locator(f'[data-incoming-proposal-open="{row["id"]}"][draggable="true"]') for row in (first, second)]
+    with page.expect_request('**/incoming/proposals/merge') as request:
+        cards[0].drag_to(cards[1])
+    body = request.value.post_data_json
+    assert {body[key]['id']: body[key]['merge_revision'] for key in ('first', 'second')} == {
+        row['id']: row['merge_revision'] for row in (first, second)
+    }
+    expect(page.get_by_text(message, exact=True)).to_be_visible()
+    for card in cards:
+        expect(card).to_be_visible()
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=SHOTS / f'merge-conflict-{case}-{width}.png', animations='disabled')
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+@pytest.mark.parametrize(('source', 'message'), [
+    ('local', 'This proposal is part of an unfinished merge. Refresh Incoming, then select Resume merge.'),
+    ('upstream', 'A proposal is already part of a Decisions merge. Retry the original pair in Incoming to finish it.'),
+    ('replacement', 'This merge has already started dismissing originals. Finish the merge in Decisions Incoming.'),
+])
+def test_reserved_merge_dismissal_keeps_the_card_and_explains_how_to_recover(page, fixture_base, width, source, message):
+    first, second = _proposal(1), _proposal(2)
+    _install_api(page, [])
+    _mock(page, [first, second])
+
+    def dismiss(route):
+        if route.request.post_data_json['proposal']['id'] == first['id']:
+            return route.fulfill(status=409, json={'success': False, 'error': message})
+        return route.fallback()
+
+    page.route('**/api/workflows/studio/incoming/proposals/dismiss', dismiss)
+    page.set_viewport_size({'width': width, 'height': 850})
+    page.goto(f'{fixture_base}/development/incoming/')
+    reserved = page.locator(f'[data-incoming-proposal-dismiss="{first["id"]}"]')
+    reserved.click()
+    expect(page.get_by_text(message, exact=True)).to_be_visible()
+    expect(reserved).to_be_enabled()
+    expect(page.locator('#incoming-undo-snackbar')).to_be_hidden()
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=SHOTS / f'dismiss-merge-reservation-{source}-{width}.png', animations='disabled')
+
+    page.locator(f'[data-incoming-proposal-dismiss="{second["id"]}"]').click()
+    expect(page.locator('#incoming-undo-snackbar')).to_contain_text(second['title'])
+    expect(reserved).to_be_visible()
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+@pytest.mark.browser_context_args(has_touch=True)
+def test_reconnect_reopens_a_proposal_reserved_by_an_upstream_merge(page, fixture_base, monkeypatch, width):
+    from distr.core.incoming import proposals
+
+    reserved_id = 986000 + width
+    retry = {'replacement_id': reserved_id + 2, 'original_ids': [reserved_id, reserved_id + 1]}
+    remote = {
+        'id': reserved_id, 'status': 'pending', 'source': 'gmail',
+        'source_conversation': {'thread_id': f'merge-reconnect-{width}'},
+        'source_message_ids': ['merge-evidence'], 'title': 'Original proposal for merge',
+        'project': {'id': 70, 'decisions_project_id': 7, 'name': 'DecisionsAI'},
+        'candidate_projects': [{'decisions_project_id': 7, 'name': 'DecisionsAI'}],
+        'merge_source_reserved': True,
+        'merge_retry': retry,
+    }
+    proposals._persist_proposal_dismissal(proposals._from_tensology(remote))
+    visible = _proposal(width)
+    connected = False
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests',
+                        lambda **kwargs: [remote] if connected else [])
+    monkeypatch.setattr('distr.core.incoming.project_links.proposal_in_scope', lambda *args, **kwargs: True)
+    monkeypatch.setattr(proposals, '_accepted_proposal_keys', lambda **kwargs: set())
+    monkeypatch.setattr(proposals, '_saved_local_proposals', lambda: [])
+    monkeypatch.setattr(proposals, '_with_restored_snapshots', lambda rows: rows)
+    monkeypatch.setitem(proposals._TRIAGE_CACHE, 'proposals', [])
+    _install_api(page, [])
+
+    def list_proposals(route):
+        proposals.invalidate_proposals_list_cache()
+        payload = proposals.list_incoming_proposals(refresh_local=False)
+        return route.fulfill(json={**payload, 'proposals': [visible, *payload['proposals']]})
+
+    page.route('**/api/workflows/studio/incoming/proposals?*', list_proposals)
+    attempts = []
+
+    def retry_merge(route):
+        attempts.append(route.request.post_data_json)
+        if len(attempts) == 1:
+            return route.fulfill(status=409, json={'error': 'The saved merge sources changed. Refresh Incoming before retrying.'})
+        return route.fulfill(json={'chat_id': 17, 'review_key': 'a' * 64})
+
+    page.route('**/api/workflows/studio/incoming/proposals/merge', retry_merge)
+    page.route('**/api/chats/17?*', lambda route: route.fulfill(json={
+        'id': 17, 'title': 'Recovered proposal', 'project_id': 7, 'development': True,
+        'development_board_key': 'decisions:70', 'messages': [],
+    }))
+    page.set_viewport_size({'width': width, 'height': 850})
+    page.goto(f'{fixture_base}/development/incoming/')
+    expect(page.get_by_role('heading', name=visible['title'])).to_be_visible()
+    card = page.locator(f'[data-incoming-proposal-open="tensology:{reserved_id}"][draggable="true"]')
+    expect(card).to_have_count(0)
+
+    connected = True
+    page.reload()
+    expect(card).to_contain_text('Original proposal for merge')
+    expect(card).to_contain_text('Reserved for a merge. Retry with its original partner.')
+    expect(card.locator('[data-incoming-proposal-thread],[data-incoming-proposal-dismiss]')).to_have_count(0)
+    expect(page.get_by_role('heading', name=visible['title'])).to_be_visible()
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=SHOTS / f'merge-reconnect-restored-{width}.png', animations='disabled')
+    card.get_by_role('heading').click()
+    review = page.get_by_role('dialog', name='Original proposal for merge')
+    expect(review).to_contain_text('Reserved for a merge. Retry with its original partner.')
+    expect(review.get_by_role('button', name='Create Thread')).to_be_disabled()
+    expect(review.get_by_label('Project')).to_be_disabled()
+    expect(review.get_by_label('Project')).to_have_value('7')
+    page.screenshot(path=SHOTS / f'merge-reconnect-review-{width}.png', animations='disabled')
+    review.get_by_role('button', name='Close', exact=True).last.click()
+    retry_button = card.get_by_role('button', name='Retry merge')
+    retry_button.tap()
+    expect(page.locator('#studio-toast')).to_contain_text('The saved merge sources changed.')
+    expect(retry_button).to_be_focused()
+    page.screenshot(path=SHOTS / f'merge-reconnect-conflict-{width}.png', animations='disabled')
+    retry_button.tap()
+    expect(page).to_have_url(f'{fixture_base}/development/threads/17/')
+    expect(page.locator('#header-task')).to_have_text('Recovered proposal')
+    assert attempts == [{'retry': retry}, {'retry': retry}]
+    page.screenshot(path=SHOTS / f'merge-reconnect-opened-{width}.png', animations='disabled')
+
+
 def test_undo_snackbar_restores_row_in_place_and_times_out(page, fixture_base):
     SHOTS.mkdir(parents=True, exist_ok=True)
     _install_api(page, [])
@@ -161,12 +302,12 @@ def test_second_dismiss_replaces_snackbar_and_list_restores_earlier(page, fixtur
     page.screenshot(path=str(SHOTS / 'undo-list-restored.png'))
 
 
-@pytest.mark.parametrize('width', [1280, 390])
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
 def test_legacy_restore_and_delete_history_use_real_handlers(page, fixture_base, monkeypatch, width):
     import json
     from fastapi import APIRouter, FastAPI
     from fastapi.testclient import TestClient
-    from distr.core.db import IncomingProposalDismissal, IncomingProposalRestoration, WhatsAppPhoneLink, WhatsAppMessage, engine, get_session
+    from distr.core.db import Chat, IncomingProposalDismissal, IncomingProposalRestoration, WhatsAppPhoneLink, WhatsAppMessage, engine, get_session
     from distr.core.db.kanban import KanbanBoard
     from distr.core.db.projects import Project
     from distr.core.db.migrations import ensure_incoming_dismissal_snapshot_columns
@@ -177,7 +318,7 @@ def test_legacy_restore_and_delete_history_use_real_handlers(page, fixture_base,
     monkeypatch.setattr(p, '_RESTORED_SNAPSHOTS', {})
     monkeypatch.setattr(p, '_TRIAGE_CACHE', {'at':0.0,'running':False,'proposals':[]})
     monkeypatch.setattr(p, '_local_proposals', lambda *a: [])
-    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda: [])
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: [])
     monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', lambda **kw: None)
     legacy = {'id':'local:whatsapp:restore-fixture@g.us','source':'whatsapp',
               'dedupe_key':'whatsapp:restore-fixture@g.us','message_ids':['restore-fixture-1'],
@@ -188,6 +329,12 @@ def test_legacy_restore_and_delete_history_use_real_handlers(page, fixture_base,
               'title':'Keep the original source dismissed after deleting this history entry',
               'summary':'Deleting history must retain suppression.'}
     keys = [p._proposal_handoff_key(r) for r in (legacy, hidden)]
+    merged_original = {
+        'id': f'local:gmail:merge-fixture-{width}', 'source': 'gmail',
+        'source_thread_id': f'merge-fixture-{width}', 'message_ids': ['merge-evidence'],
+        'title': 'Already merged into Development',
+    }
+    merged_key = p._proposal_handoff_key(merged_original)
     with get_session() as db:
         db.query(IncomingProposalDismissal).delete()
         db.query(IncomingProposalRestoration).delete()
@@ -199,7 +346,11 @@ def test_legacy_restore_and_delete_history_use_real_handlers(page, fixture_base,
         for row,key in zip((legacy,hidden),keys):
             db.add(IncomingProposalDismissal(key=key, conversation_key=row['dedupe_key'],
                 message_ids=json.dumps(row['message_ids']),title=row['title'],summary=row['summary']))
+        db.add(Chat(project_id=700077, title='Merged Development thread', params=json.dumps({
+            'incoming_merge': {'original_keys': [merged_key], 'pending_originals': []},
+        })))
         db.commit()
+    p._persist_proposal_dismissal(merged_original)
     p.invalidate_proposals_list_cache()
     app,router = FastAPI(),APIRouter()
     register_routes(router,None)
@@ -232,7 +383,9 @@ def test_legacy_restore_and_delete_history_use_real_handlers(page, fixture_base,
     page.locator('#incoming-dismissed-toggle').click()
     panel=page.locator('#incoming-dismissed-panel')
     expect(panel.locator('[data-incoming-restore]')).to_have_count(2)
-    shots=Path('/Users/paul/.codex/visualizations/2026/11/03/01a1a0cb-417a-7752-a910-e638cd796850/restore-history')
+    expect(page.get_by_text('Synchronization incomplete.', exact=False)).to_have_count(0)
+    expect(panel).not_to_contain_text(merged_original['title'])
+    shots = SHOTS / 'merge-history'
     shots.mkdir(parents=True,exist_ok=True)
     page.screenshot(path=str(shots/f'actions-{width}.png'),full_page=True)
     for i,row in enumerate(panel.locator('.incoming-dismissed-row').all()):

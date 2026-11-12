@@ -89,6 +89,7 @@ def test_jira_email_to_stage_to_review_chain(monkeypatch, tmp_path):
     with get_session() as session:
         tickets = session.query(KanbanTicket).order_by(KanbanTicket.id).all()
         assert [t.external_id for t in tickets] == ["ACME-1", "ACME-2", "ACME-3"]
+        assert [t.source_url for t in tickets] == [f"https://acme.atlassian.net/browse/ACME-{i}" for i in (1, 2, 3)]
         ticket = tickets[0]
         ticket.time_spent = "45m"
         ticket_id = ticket.id

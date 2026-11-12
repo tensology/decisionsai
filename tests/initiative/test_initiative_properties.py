@@ -199,16 +199,13 @@ def test_observe_produces_no_actions(action, boundaries):
 
 @given(proposed_action_strategy(), boundary_settings_strategy(), trigger_strategy())
 @h_settings(max_examples=100)
-def test_assist_no_idle_cycles(action, boundaries, trigger):
+def test_removed_assist_level_never_executes(action, boundaries, trigger):
     """
-    Property 3: Assist level never runs idle cycles (Requirements 5.1, 5.3, 5.4)
-
-    evaluate() with level="assist" must not execute idle-cycle work. Automation
-    recommendations are allowed to draft-and-ask, because they still require
-    human confirmation.
+    Property 3 (updated 2026-11-11): the Assist posture was removed. A stale raw
+    ``assist`` value must never execute anything; stored values are migrated to
+    ``operate`` on start-up.
     """
     decision = evaluate(action, "assist", boundaries)
-    assert decision in {PolicyDecision.SUGGEST_ONLY, PolicyDecision.DRAFT_AND_ASK}
     assert decision != PolicyDecision.EXECUTE
 
 

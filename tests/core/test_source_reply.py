@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from distr.core.db import Chat, SourceReplyDraft, get_session
+from distr.core.db import Chat, ChatTurnEvent, SourceReplyDraft, get_session
 from distr.core.incoming import source_reply as replies
 
 
@@ -21,6 +21,7 @@ def thread(monkeypatch):
     monkeypatch.setattr(replies, 'resolve_target', lambda source: {'channel': 'whatsapp', 'jid': source['thread_id'], 'label': source['label']})
     yield ids
     with get_session() as db:
+        db.query(ChatTurnEvent).filter_by(chat_id=ids[0]).delete()
         db.query(SourceReplyDraft).filter(SourceReplyDraft.chat_id == ids[0]).delete()
         for cid in reversed(ids):
             row = db.get(Chat, cid)
@@ -197,6 +198,199 @@ def test_legacy_duplicate_draft_cannot_hide_unconfirmed_send(thread):
     sender.assert_not_called()
 
 
+@pytest.mark.parametrize("status", ["sending", "unconfirmed", "sent"])
+def test_corrupt_send_history_is_preserved_and_blocks_new_drafts_and_approval(thread, monkeypatch, status):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.thread_tools import register_routes
+
+    draft = make(thread)
+    with get_session() as db:
+        db.add(SourceReplyDraft(id="damaged-history", chat_id=thread[0], payload="{broken", status=status))
+        db.commit()
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    api = TestClient(app, raise_server_exceptions=False)
+    endpoint = f"/workflows/studio/tasks/{thread[0]}/source-replies"
+    send = Mock()
+    generate = Mock()
+    monkeypatch.setattr(replies, "send_reply", send)
+    monkeypatch.setattr(replies, "generate_draft", generate)
+    results = [
+        api.get(endpoint, params={"response_id": thread[1]}),
+        api.post(endpoint, json={"response_id": thread[1], "source_key": draft["source_key"]}),
+        api.post(f'{endpoint}/{draft["id"]}/approve', json={"approved": True, "text": "Reviewed"}),
+    ]
+    for result in results:
+        assert result.status_code == 409
+        assert result.json()["code"] == "reply_history_unavailable"
+        assert "Check the original conversation" in result.json()["detail"]
+    send.assert_not_called()
+    generate.assert_not_called()
+    with get_session() as db:
+        row = db.get(SourceReplyDraft, "damaged-history")
+        assert (row.status, row.payload) == (status, "{broken")
+        active = db.get(SourceReplyDraft, draft["id"])
+        assert active.status == "draft"
+        assert json.loads(active.payload)["text"] == "Reviewed"
+
+
+def test_corrupt_unsent_draft_can_be_replaced_without_reusing_its_send_identity(thread):
+    draft = make(thread)
+    with get_session() as db:
+        db.get(SourceReplyDraft, draft["id"]).payload = "[]"
+        db.commit()
+
+    assert replies.reply_drafts(*thread) == []
+    replacement = make(thread)
+    assert replacement["id"] != draft["id"]
+    sender = Mock()
+    with pytest.raises(ValueError, match="saved reply record"):
+        replies.act_on_draft(thread[0], draft["id"], "approve", "Wrong draft.", sender=sender)
+    sender.assert_not_called()
+    assert replies.act_on_draft(thread[0], replacement["id"], "approve", "Reviewed.", sender=sender)["status"] == "sent"
+    sender.assert_called_once()
+
+
+@pytest.mark.parametrize("damage", ["invalid_json", "wrong_id", "wrong_source", "missing_claim_response", "disputed_response"])
+def test_damaged_claim_keeps_its_original_recipient_protected(thread, damage):
+    with get_session() as db:
+        root = db.get(Chat, thread[0])
+        later = Chat(parent_id=root.id, response="A separate result.")
+        db.add(later)
+        db.flush()
+        later_id = later.id
+        params = json.loads(root.params)
+        params["incoming_proposal_handoff"]["proposal"]["source_scope"] = [
+            {"source": "whatsapp", "source_thread_id": "fixture@g.us", "message_ids": ["voice"]},
+            {"source": "whatsapp", "source_thread_id": "other@g.us", "message_ids": ["other"]},
+        ]
+        root.params = json.dumps(params)
+        db.commit()
+    original = make(thread)
+    sender = Mock()
+    replies.act_on_draft(thread[0], original["id"], "approve", "First reply.", sender=sender)
+    with get_session() as db:
+        row = db.get(SourceReplyDraft, original["id"])
+        payload = json.loads(row.payload)
+        if damage == "wrong_id":
+            payload["id"] = "different-draft"
+        elif damage == "wrong_source":
+            payload.update(response_id=999999, source_key="whatsapp:other@g.us")
+            payload["target"]["jid"] = "other@g.us"
+        if damage in {"missing_claim_response", "disputed_response"}:
+            row.claimed_response_id = None
+        if damage == "disputed_response":
+            payload.update(response_id=later_id, source_key="whatsapp:other@g.us")
+            payload["target"]["jid"] = "other@g.us"
+        row.payload = "{broken" if damage in {"invalid_json", "missing_claim_response"} else json.dumps(payload)
+        db.commit()
+
+    with get_session() as db:
+        expected = set() if damage in {"missing_claim_response", "disputed_response"} else {thread[1]}
+        assert replies.sent_reply_response_ids(db, thread[0]) == expected
+    if damage in {"missing_claim_response", "disputed_response"}:
+        assert set(replies.reply_review(thread[0], later_id)[1]) == {"whatsapp:fixture@g.us"}
+    drafts, holds = replies.reply_review(*thread)
+    assert not drafts
+    assert set(holds) == {"whatsapp:fixture@g.us"}
+    with pytest.raises(replies.ReplyHistoryUnavailableError):
+        make(thread)
+    with pytest.raises(replies.ReplyHistoryUnavailableError):
+        replies.act_on_draft(thread[0], original["id"], "approve", "Repeated.", sender=sender)
+    other = replies.create_draft(*thread, "whatsapp:other@g.us", complete=lambda *_: "Ready.")
+    replies.act_on_draft(thread[0], other["id"], "approve", "Independent reply.", sender=sender)
+    assert replies.act_on_draft(thread[0], other["id"], "approve", "Repeated.", sender=sender)["already_sent"]
+    assert [call.args[1] for call in sender.call_args_list] == ["First reply.", "Independent reply."]
+
+
+def test_claim_scope_migration_preserves_legacy_reply_history():
+    from sqlalchemy import create_engine
+    from distr.core.db.migrations import ensure_source_reply_claim_scope_columns
+
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE source_reply_drafts (id TEXT PRIMARY KEY, payload TEXT, status TEXT)")
+        conn.exec_driver_sql("INSERT INTO source_reply_drafts VALUES ('legacy', '{broken', 'sent')")
+    for _ in range(2):
+        ensure_source_reply_claim_scope_columns(engine)
+    with engine.connect() as conn:
+        assert conn.exec_driver_sql("SELECT * FROM source_reply_drafts").one() == (
+            "legacy", "{broken", "sent", None, None,
+        )
+
+
+def test_corrupt_history_with_a_known_response_does_not_block_another_response(thread):
+    with get_session() as db:
+        damaged_response = Chat(parent_id=thread[0], response="An older result.")
+        db.add(damaged_response)
+        db.flush()
+        damaged_id = damaged_response.id
+        db.add(SourceReplyDraft(id="damaged-history", chat_id=thread[0], status="unconfirmed",
+                                payload=json.dumps({"id": "damaged-history", "response_id": damaged_id})))
+        db.commit()
+
+    with pytest.raises(replies.ReplyHistoryUnavailableError):
+        replies.reply_drafts(thread[0], damaged_id)
+    draft = make(thread)
+    sender = Mock()
+    assert replies.act_on_draft(thread[0], draft["id"], "approve", "Reviewed.", sender=sender)["status"] == "sent"
+    sender.assert_called_once()
+
+
+@pytest.mark.parametrize("conflicting_target", [False, True])
+def test_merged_reply_review_exposes_only_the_affected_recipient_as_blocked(thread, conflicting_target):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.thread_tools import register_routes
+
+    with get_session() as db:
+        root = db.get(Chat, thread[0])
+        params = json.loads(root.params)
+        proposal = params["incoming_proposal_handoff"]["proposal"]
+        proposal["source_scope"] = [
+            {"source": "whatsapp", "source_thread_id": "fixture@g.us", "message_ids": ["voice"]},
+            {"source": "whatsapp", "source_thread_id": "other@g.us", "message_ids": ["other"]},
+        ]
+        if conflicting_target:
+            proposal["source_scope"].append(
+                {"source": "whatsapp", "source_thread_id": "disputed@g.us", "message_ids": ["disputed"]}
+            )
+        root.params = json.dumps(params)
+        damaged = {"id": "damaged-history", "response_id": thread[1], "source_key": "whatsapp:fixture@g.us"}
+        if conflicting_target:
+            damaged.update(text="Earlier reply.", target={"channel": "whatsapp", "jid": "disputed@g.us"})
+        db.add(SourceReplyDraft(id=damaged["id"], chat_id=thread[0], status="sent", payload=json.dumps(damaged)))
+        db.commit()
+
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    api = TestClient(app)
+    endpoint = f"/workflows/studio/tasks/{thread[0]}/source-replies"
+    response = api.get(endpoint, params={"response_id": thread[1]})
+    assert response.status_code == 200
+    sources = {source["key"]: source for source in response.json()["sources"]}
+    assert "Check the original conversation" in sources["whatsapp:fixture@g.us"]["reply_blocked_reason"]
+    assert "reply_blocked_reason" not in sources["whatsapp:other@g.us"]
+    if conflicting_target:
+        assert "Check the original conversation" in sources["whatsapp:disputed@g.us"]["reply_blocked_reason"]
+        blocked_target = api.post(endpoint, json={"response_id": thread[1], "source_key": "whatsapp:disputed@g.us"})
+        assert blocked_target.status_code == 409
+    blocked = api.post(endpoint, json={"response_id": thread[1], "source_key": "whatsapp:fixture@g.us"})
+    assert blocked.status_code == 409
+    assert blocked.json()["source_key"] == "whatsapp:fixture@g.us"
+    draft = replies.create_draft(*thread, "whatsapp:other@g.us", complete=lambda *_: "Ready to review.")
+    sender = Mock()
+    for text in ("Reviewed reply.", "Duplicate attempt."):
+        assert replies.act_on_draft(thread[0], draft["id"], "approve", text, sender=sender)["status"] == "sent"
+    sender.assert_called_once_with(draft["target"], "Reviewed reply.", draft["id"])
+    with get_session() as db:
+        row = db.get(SourceReplyDraft, damaged["id"])
+        assert row.status == "sent" and json.loads(row.payload) == damaged
+
+
 def test_reject_foreign_response_source_and_draft(thread):
     with pytest.raises(ValueError, match='original sources'):
         replies.create_draft(*thread, 'whatsapp:foreign@g.us')
@@ -270,10 +464,13 @@ def test_mailshot_transport_reply_all_threads_without_appending_signature(monkey
     from distr.core import tensology_client
     client = Mock()
     client.post.return_value = {'_id': 'sent-id'}
+    original = {'id': 'mail', 'thread_id': 'thread', 'messageId': '<original@example.com>',
+                'from': 'client@example.com', 'to': 'paul@example.com', 'cc': 'reviewer@example.com'}
+    client.get.side_effect = lambda path: (
+        [{'email': 'paul@example.com', 'primary': True}] if path == 'mail/senders' else {'email': original}
+    )
     monkeypatch.setattr(tensology_client, 'configured_tensology_client', lambda **kwargs: client)
-    target = {**replies.mail_target('mailshot', {'id': 'mail', 'messageId': '<original@example.com>',
-        'from': 'client@example.com', 'to': 'paul@example.com', 'cc': 'reviewer@example.com'}, ['paul@example.com']),
-        'from': 'paul@example.com'}
+    target = replies.resolve_target({'channel': 'mailshot', 'thread_id': 'thread', 'message_ids': ['mail']})
     replies.send_reply(target, 'Exact approved text.', 'approval-key')
     args, kwargs = client.post.call_args
     assert args[0] == 'mail/send'

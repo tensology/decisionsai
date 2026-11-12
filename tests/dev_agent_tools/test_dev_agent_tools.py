@@ -25,7 +25,9 @@ def _img(tmp_path, name="a.png"):
 
 def test_schemas_cover_tools():
     assert set(t.TOOL_SCHEMAS) == {"image_generate", "vision_analyze", "video_generate", "computer_use", "calendar",
-                                "files", "browser", "approval_wait", "select_thread", "open_thread", "gmail_search"}
+                                "files", "browser", "approval_wait", "select_thread", "open_thread", "gmail_search",
+                                "plan_snapshot", "plan_scan_project", "plan_write_artifacts", "plan_derive_from_design",
+                                "plan_requirements_pack", "plan_build_tickets"}
     for spec in t.TOOL_SCHEMAS.values():
         assert spec["parameters"]["required"]
 

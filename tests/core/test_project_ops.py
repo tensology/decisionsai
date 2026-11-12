@@ -44,7 +44,7 @@ def test_build_execution_plan_requires_approval_for_implementation():
 def test_build_execution_plan_redirects_automation():
     plan = build_execution_plan("Open Chrome every morning")
     assert plan["route"] == "automation"
-    assert plan["redirect_to"] == "/automations/"
+    assert plan["redirect_to"] == "/development/automations/"
 
 
 def test_human_status_label_mapping():

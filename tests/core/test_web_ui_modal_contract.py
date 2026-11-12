@@ -55,7 +55,7 @@ def test_chat_page_cannot_override_shared_modal_styles():
 
 def test_delete_and_reset_flows_use_shared_modal_instead_of_native_confirm():
     snippets_js = read("distr/gui/web/static/snippets/js/snippets.js")
-    automations_js = read("distr/gui/web/static/automations/js/automations.js")
+    automations_js = read("distr/gui/web/static/development/automations/index.js")
     settings_js = read("distr/gui/web/static/settings/js/settings.js")
 
     assert 'window.DecisionsAPI.confirm({' in snippets_js
@@ -63,12 +63,12 @@ def test_delete_and_reset_flows_use_shared_modal_instead_of_native_confirm():
     assert 'confirmLabel: "Delete"' in snippets_js
     assert 'if (!confirm("Delete this snippet?")) return;' not in snippets_js
 
-    assert 'window.DecisionsAPI.confirm({' in automations_js
-    assert 'title: "Remove automation"' in automations_js
-    assert 'confirmLabel: "Remove"' in automations_js
-    assert "Remove automation" in automations_js
+    assert 'confirmAction' in automations_js
+    assert "title: 'Delete automation'" in automations_js
+    assert "confirmLabel: 'Delete'" in automations_js
     assert "confirm('Remove automation" not in automations_js
-    assert 'automation-delete").addEventListener("click", function()' in automations_js
+    assert "confirm('Delete automation" not in automations_js
+    assert 'id="automation-delete"' in automations_js
     assert 'addEventListener("click", deleteSelected)' not in automations_js
 
     assert 'window.DecisionsAPI.confirm({' in settings_js

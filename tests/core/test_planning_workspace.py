@@ -66,6 +66,9 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
         board_key=f"decisions:{board_id}", board_provider="decisions",
         board_name="Scoped plan", project_id=project_id,
     )
+    erd = 'erDiagram\n    ACCOUNT {\n        int id PK "Account identifier"\n    }\n    ACCOUNT ||--o{ DEVICE : owns\n    %% decisions-erd: {"tables":[]}'
+    item = planning_workspace.create_item(workspace_id=workspace["id"], item_type="architecture", content=erd)
+    unsupported = planning_workspace.create_item(workspace_id=workspace["id"], item_type="diagram", content="flowchart LR\nA --> B")
     with plan_workspace_db["session"]() as db:
         root_chat = Chat(title="Scoped conversation", autonomy_level="plan",
                          params=json.dumps({"plan_workspace_id": workspace["id"]}))
@@ -84,9 +87,10 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
     responses = []
     relay = SimpleNamespace(_send_websocket_message=responses.append)
 
-    def read(path):
+    def read(path, *, include_data_model=False):
+        query = scope + ("&include_data_model=true" if include_data_model else "")
         TelegramRemoteControlMixin._dispatch_api_relay(relay, {
-            "request_id": path, "data": {"method": "GET", "path": f"{path}?{scope}"},
+            "request_id": path, "data": {"method": "GET", "path": f"{path}?{query}"},
         })
         frame = responses.pop()
         assert frame["request_id"] == path
@@ -111,6 +115,23 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
             detail = read(root)
             assert detail["status"] == 200
             assert detail["response"]["id"] == workspace["id"]
+            assert all("data_model" not in entry for entry in detail["response"]["items"])
+            structured = read(root, include_data_model=True)
+            assert structured["status"] == 200
+            artifacts = {entry["id"]: entry for entry in structured["response"]["items"]}
+            assert artifacts[item["id"]]["content"] == erd
+            assert artifacts[item["id"]]["data_model"] == {
+                "tables": [
+                    {"name": "ACCOUNT", "alias": None, "fields": [
+                        {"name": "id", "type": "int", "keys": ["PK"], "comment": "Account identifier", "nullable": None},
+                    ]},
+                    {"name": "DEVICE", "alias": None, "fields": []},
+                ],
+                "relations": [
+                    {"from": "ACCOUNT", "to": "DEVICE", "label": "owns", "left": "||", "right": "o{", "identifying": True},
+                ],
+            }
+            assert "data_model" not in artifacts[unsupported["id"]]
             chat = read(root + "/conversation")
             assert chat["status"] == 200, chat["response"]
             assert chat["response"]["messages"][0]["content"] == "Scoped evidence"
@@ -118,7 +139,7 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
                 db.get(PlanWorkspace, workspace["id"]).project_id = None
                 db.commit()
             for path in (root, root + "/conversation"):
-                assert read(path) == {"status": 409, "response": {
+                assert read(path, include_data_model=True) == {"status": 409, "response": {
                     "detail": "The board or project changed. Go back to Plans and refresh the list.",
                 }}
             with plan_workspace_db["session"]() as db:
@@ -368,6 +389,9 @@ class Lot(models.Model):
     assert "Auction" in by_type["architecture"]["content"]
     assert 'route="/auctions"' in by_type["flows"]["content"]
     assert "FR-001" in by_type["frac"]["content"]
+    old_architecture = planning_workspace.update_item(
+        by_type["architecture"]["id"], content="erDiagram\n    Auction {}\n", source="discovery",
+    )
     # Soft re-open must not thrash curated content when already filled.
     by_type["prd"] = planning_workspace.update_item(
         int(by_type["prd"]["id"]),
@@ -385,6 +409,57 @@ class Lot(models.Model):
     refreshed = planning_workspace.get_workspace(int(opened["id"]))
     prd = next(item for item in refreshed["items"] if item["item_type"] == "prd")
     assert prd["content"] == "# Curated PRD\n\nKeep this.\n"
+    architecture = next(item for item in refreshed["items"] if item["item_type"] == "architecture")
+    assert architecture["revision_count"] == old_architecture["revision_count"] + 1
+    assert "string title" in architecture["content"]
+    curated = planning_workspace.update_item(
+        architecture["id"], content="erDiagram\n    Reviewed {\n        string note\n    }\n",
+    )
+    rerun = planning_workspace.materialize_project_scan(int(opened["id"]), force=True)
+    assert "architecture" in rerun["skipped"]
+    preserved = next(item for item in rerun["workspace"]["items"] if item["id"] == curated["id"])
+    assert preserved["revision_count"] == curated["revision_count"]
+    assert preserved["content"] == curated["content"] == Path(curated["file_path"]).read_text()
+
+
+def test_scan_replaces_only_owned_empty_requirements_and_keeps_them_on_empty_rescan(plan_workspace_db):
+    folder = plan_workspace_db["folder"]
+    scope = dict(board_key="decisions:requirements", board_provider="decisions", board_name="Requirements",
+                 project_id=plan_workspace_db["project_id"])
+    opened = planning_workspace.open_project_plan(**scope)
+    workspace_id = opened["id"]
+    items = {item["item_type"]: item for item in opened["items"]}
+    legacy = {
+        "prd": "# Product requirements\n\n## Requirements\n\n- FR-001: Inventory the primary user journeys once routes are available.\n",
+        "frac": "# Functional requirements\n\n## FR-001\n\nCapture acceptance criteria after the first project scan finds routes.\n",
+    }
+    for kind, content in legacy.items():
+        planning_workspace.update_item(items[kind]["id"], content=content, source="discovery")
+    route_file = folder / "frontend" / "src" / "routes.jsx"
+    route_file.parent.mkdir(parents=True)
+    route_file.write_text('export const routes = [{url:"/projects",name:"projects",view:"projects"}];', encoding="utf-8")
+
+    refreshed = planning_workspace.open_project_plan(**scope)
+    by_type = {item["item_type"]: item for item in refreshed["items"]}
+    assert "## FR-001 Projects" in by_type["frac"]["content"]
+    assert "- FR-001: Support `/projects`" in by_type["prd"]["content"]
+    for kind in legacy:
+        assert Path(by_type[kind]["file_path"]).read_text() == by_type[kind]["content"]
+
+    route_file.unlink()
+    empty = planning_workspace.materialize_project_scan(workspace_id, force=True)
+    assert {"prd", "frac"}.issubset(empty["skipped"])
+    for item in empty["workspace"]["items"]:
+        kind = item["item_type"]
+        if kind in legacy:
+            assert item["revision_count"] == by_type[kind]["revision_count"]
+            assert item["content"] == by_type[kind]["content"]
+
+    planning_workspace.update_item(items["frac"]["id"], content=legacy["frac"], source="user")
+    route_file.write_text('export const routes = [{url:"/customers",name:"customers",view:"customers"}];', encoding="utf-8")
+    force = planning_workspace.materialize_project_scan(workspace_id, force=True)
+    assert "frac" in force["skipped"]
+    assert next(item for item in force["workspace"]["items"] if item["item_type"] == "frac")["content"] == legacy["frac"]
 
 
 def test_file_structure_scaffold_is_bounded_and_visual(plan_workspace_db):

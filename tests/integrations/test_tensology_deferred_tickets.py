@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from distr.core import db as database
@@ -197,3 +198,55 @@ def test_deferred_fetch_failure_uses_backoff_instead_of_network_loop(store, monk
     assert tc.sync_tensology_execution_states(force=True) == 0
     assert client.get.call_count == 2
     process.assert_not_called()
+
+
+def test_deferred_slot_read_failure_does_not_skip_another_project(store, monkeypatch):
+    factory, _ = store
+    tickets = {
+        81: {'id': 81, 'project_id': 175, 'execution_status': 'awaiting_decisions',
+             'approved_at': '2026-10-30', '_deferred_project_id': 2},
+        82: {'id': 82, 'project_id': 176, 'execution_status': 'awaiting_decisions',
+             'approved_at': '2026-10-30', '_deferred_project_id': 3},
+    }
+    tc._remember_tensology_tickets(list(tickets.values()))
+    client = MagicMock()
+    client.get.side_effect = lambda _, query: [
+        {key: value for key, value in tickets[int(query['id'])].items() if not key.startswith('_')}
+    ]
+    monkeypatch.setattr(tc, 'configured_tensology_client', lambda **_: client)
+    monkeypatch.setattr(tc, '_resolve_tensology_project', lambda ticket: {'id': tickets[ticket['id']]['_deferred_project_id']})
+    slot_free = MagicMock(wraps=tc._tensology_project_slot_free)
+    monkeypatch.setattr(tc, '_tensology_project_slot_free', slot_free)
+
+    def claim(_, ticket):
+        tc._remember_tensology_tickets([{**ticket, 'execution_status': 'development',
+                                         'decisions_thread_id': str(ticket['id'])}])
+        return True
+
+    process = MagicMock(side_effect=claim)
+    monkeypatch.setattr(tc, '_process_tensology_ticket', process)
+    monkeypatch.setattr(tc, '_existing_tensology_thread', lambda _: None)
+    engine = factory.kw['bind']
+    fail_next = True
+
+    def fail_slot_query(_connection, _cursor, statement, parameters, *_):
+        nonlocal fail_next
+        if fail_next and 'FROM auto_workflow_runs' in statement:
+            fail_next = False
+            raise OperationalError(statement, parameters, RuntimeError('database is locked'))
+
+    event.listen(engine, 'before_cursor_execute', fail_slot_query)
+    try:
+        assert tc.sync_tensology_execution_states(force=True) == 1
+    finally:
+        event.remove(engine, 'before_cursor_execute', fail_slot_query)
+    assert [call.args for call in slot_free.call_args_list] == [(2,), (3,)]
+    assert client.get.call_args.kwargs['query']['id'] == '82'
+    assert tc._TENSOLOGY_TICKETS[81] == tickets[81]
+    assert process.call_args.args[1]['id'] == 82
+
+    assert tc.sync_tensology_execution_states(force=True) == 1
+    assert client.get.call_args.kwargs['query']['id'] == '81'
+    assert process.call_args.args[1]['id'] == 81
+    assert tc.sync_tensology_execution_states(force=True) == 0
+    assert process.call_count == client.get.call_count == 2

@@ -490,6 +490,88 @@ urlpatterns = [
     )
 
 
+def test_generated_erd_keeps_fields_and_relationships_after_sixty_models(tmp_path):
+    from distr.core.planning.db_erd import erd_read_view
+    from distr.core.planning.project_scan import build_erd, scan_django_models
+
+    models_file = tmp_path / "models.py"
+    models_file.write_text(
+        "\n\n".join(
+            [f"class Earlier{index:02d}(models.Model):\n    name = models.CharField()" for index in range(62)]
+            + ["class TrackedDevice(models.Model):\n"
+               + "\n".join(f"    field_{index} = models.CharField()" for index in range(12)),
+               "class TrackedLog(models.Model):\n    device = models.ForeignKey(TrackedDevice)"]
+        ),
+        encoding="utf-8",
+    )
+    model = erd_read_view(build_erd(scan_django_models(tmp_path, with_fields=True)))
+    tables = {table["name"]: table for table in model["tables"]}
+    assert len(tables) == 64
+    assert [field["name"] for field in tables["TrackedDevice"]["fields"]] == [f"field_{index}" for index in range(12)]
+    assert tables["TrackedLog"]["fields"] == []
+    assert [(link["from"], link["to"], link["label"]) for link in model["relations"]] == [
+        ("TrackedLog", "TrackedDevice", "device"),
+    ]
+
+
+def test_generated_erd_reports_size_omissions_without_dangling_tables(monkeypatch):
+    from distr.core.planning import project_scan
+    from distr.core.planning.db_erd import erd_read_view
+
+    monkeypatch.setattr(project_scan, "_MAX_ERD_CHARS", 300)
+    models = [
+        {"name": "Account", "app": "example", "fields": [{"name": "email", "mermaid": "string"}], "relations": []},
+        {"name": "Device", "app": "example", "fields": [
+            {"name": f"field_{index}", "mermaid": "string"} for index in range(10)
+        ], "relations": [{"field": "owner", "kind": "ForeignKey", "target": "Account"}]},
+    ]
+    source = project_scan.build_erd(models)
+    assert len(source) <= 300
+    assert "showing 1 of 2 discovered models and 0 of 1 relationships" in source
+    model = erd_read_view(source)
+    assert [table["name"] for table in model["tables"]] == ["Account"]
+    assert model["relations"] == []
+
+
+def test_generated_erd_preserves_only_literal_django_field_constraints(tmp_path):
+    from distr.core.planning.db_erd import erd_read_view
+    from distr.core.planning.project_scan import build_erd, scan_django_models
+    from distr.core.planning.validation import validate_mermaid
+
+    (tmp_path / "models.py").write_text(
+        """class Owner(models.Model):
+    email = models.CharField(
+        unique=True,
+        null=False,
+    )
+    legacy = models.CharField(unique=DEFAULT_UNIQUE, null=ALLOW_NULL)
+    display = models.CharField(blank=True, **options)
+    note = models.TextField(default="unique=True", null=True)
+    def helper(self):
+        misleading = models.CharField(unique=True, null=False)
+
+class Device(models.Model):
+    serial = models.CharField(primary_key=True)
+    owner = models.ForeignKey(Owner, null=True)
+""",
+        encoding="utf-8",
+    )
+    source = build_erd(scan_django_models(tmp_path, with_fields=True))
+    assert validate_mermaid(source, require_erd=True) == "er"
+    model = erd_read_view(source)
+    fields = {table["name"]: {field["name"]: field for field in table["fields"]} for table in model["tables"]}
+    assert fields["Owner"]["email"]["keys"] == ["UK"]
+    assert fields["Owner"]["email"]["nullable"] is False
+    assert fields["Owner"]["note"]["keys"] == []
+    assert fields["Owner"]["note"]["nullable"] is True
+    assert fields["Owner"]["legacy"]["nullable"] is None
+    assert fields["Owner"]["legacy"]["keys"] == []
+    assert fields["Owner"]["display"]["nullable"] is None
+    assert "misleading" not in fields["Owner"]
+    assert fields["Device"]["serial"]["keys"] == ["PK"]
+    assert model["relations"][0]["right"] == "o|"
+
+
 def _nodes_by_route(model):
     return {node["route"]: node for node in model["nodes"] if node.get("route")}
 
@@ -536,6 +618,39 @@ def test_html_sitemap_resolves_template_view_and_url(tmp_path):
     assert all(node["status"] in {"verified", "inferred", "incomplete", "missing"} for node in model["nodes"])
 
 
+def test_legacy_django_wrapped_views_use_the_real_include_prefix(tmp_path):
+    from distr.core.planning.project_scan import build_html_sitemap, scan_frontend_routes
+
+    webapp = tmp_path / "webapp"
+    app = webapp / "apps" / "devices"
+    templates = app / "templates" / "devices"
+    templates.mkdir(parents=True)
+    (webapp / "urls.py").write_text(
+        "from django.conf.urls import url, include\n"
+        "urlpatterns = [url(r'^account/', include('devices.urls'))]\n"
+    )
+    (app / "urls.py").write_text(
+        "from django.conf.urls import url\nfrom . import views\n"
+        "urlpatterns = [url(r'^device/(?P<pk>\\d+)/$', is_logged_in(views.Device.as_view()), name='device'),"
+        " url(r'^devices/$', views.devices, name='devices')]\n"
+    )
+    (app / "views.py").write_text("class Device:\n    template_name = 'devices/detail.html'\n")
+    (templates / "detail.html").write_text(
+        '<h1>{% translate "Device details" %}</h1>'
+        '<a href="{% url \'devices\' %}">'
+        '{% if other %}<span>{% trans "All devices" context "device_link" %}</span>'
+        ' {{ other.name }}{% endif %}</a>'
+    )
+
+    sitemap = build_html_sitemap(tmp_path)
+    pages = _nodes_by_route(sitemap)
+    assert "/device/:pk" not in pages
+    assert pages["/account/device/:pk"]["view"] == "Device"
+    assert pages["/account/device/:pk"]["template"] == "devices/detail.html"
+    assert any(edge["label"] == "All devices" for edge in sitemap["edges"])
+    assert {row["url"] for row in scan_frontend_routes(tmp_path)} == {"/account/device/:pk", "/account/devices"}
+
+
 def test_html_sitemap_excludes_base_templates_from_nodes(tmp_path):
     root = tmp_path / "shop"
     root.mkdir()
@@ -567,6 +682,32 @@ def test_html_sitemap_cache_written_on_first_scan(tmp_path):
     assert any(node["route"] == "/auctions" and node["status"] == "verified" for node in model["nodes"])
     again = ensure_sitemap_cache(root, cache_path=cache)
     assert again["nodes"] == model["nodes"]
+
+
+def test_concurrent_sitemap_writers_publish_complete_caches(tmp_path, monkeypatch):
+    import json
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from distr.core.planning.project_scan import _write_sitemap_cache
+
+    cache = tmp_path / "sitemap.json"
+    both_staged = Barrier(2)
+    replace = os.replace
+
+    def publish(source, target, **kwargs):
+        if Path(target) == cache:
+            both_staged.wait(timeout=3)
+        return replace(source, target, **kwargs)
+
+    monkeypatch.setattr(os, "replace", publish)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_write_sitemap_cache, cache, tmp_path, {"nodes": [name]}, {})
+                   for name in ("first board", "second board")]
+        for future in futures:
+            future.result(timeout=5)
+    assert json.loads(cache.read_text())["model"]["nodes"] in (["first board"], ["second board"])
+    assert list(tmp_path.iterdir()) == [cache]
 
 
 def test_html_sitemap_drift_schedules_rebuild_without_scan_button(tmp_path, monkeypatch):

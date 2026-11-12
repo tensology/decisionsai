@@ -4,7 +4,14 @@ from distr.core.agent.tools.integrations.development_control import DevelopmentC
 from distr.core.db import Settings, get_session
 
 
-def test_development_control_creates_and_lists_without_activating_chat():
+def test_development_control_creates_and_lists_without_activating_chat(monkeypatch):
+    dispatches = []
+
+    def dispatch(thread_id, instruction, *, dispatch_async):
+        dispatches.append((thread_id, instruction, dispatch_async))
+        return {"job_id": "fixture"}
+
+    monkeypatch.setattr("distr.core.workflow.development_harness.dispatch_development_prompt", dispatch)
     with get_session() as db:
         settings = db.query(Settings).first()
         before = (settings.agent_current_chat_id, settings.last_chat_id)
@@ -18,6 +25,8 @@ def test_development_control_creates_and_lists_without_activating_chat():
     listed = json.loads(tool._run(action="list_threads"))
 
     assert created["surface"] == "development"
+    assert created["run"]["started"] is True
+    assert dispatches == [(created["thread_id"], "Prepare the implementation scope", True)]
     assert any(row["thread_id"] == created["thread_id"] for row in listed["threads"])
     with get_session() as db:
         settings = db.query(Settings).first()

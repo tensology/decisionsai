@@ -101,7 +101,7 @@ def test_legacy_monitor_displays_summary(page, width):
         'status_summary': summary, 'current_step_name': 'Heavy session', 'elapsed_seconds': 720,
         'ticket_title': 'Find part IDs', 'project_name': 'JackCat', 'execution_route': {}}))
     page.set_viewport_size({'width': width, 'height': 900})
-    page.goto(TEST_BASE_URL + '/legacy-workflows/')
+    page.goto(TEST_BASE_URL + '/workflows/?mode=blueprint')
     if width < 800:
         page.locator('#wf-board-pane-toggle-header').click()
     page.get_by_text('Development execution', exact=True).first.click()
@@ -112,6 +112,77 @@ def test_legacy_monitor_displays_summary(page, width):
     page.locator('#wf-active-runs-list').scroll_into_view_if_needed()
     assert page.locator('#wf-active-runs-list').evaluate('el => el.getBoundingClientRect().right <= innerWidth')
     page.screenshot(path=str(EVIDENCE / f'legacy-monitor-{width}.png'))
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_workflow_timeline_explains_why_the_next_ticket_is_held(page, monkeypatch, tmp_path, width):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.core import orchestrator
+    from distr.core.workflow.dispatcher import _record_ticket_queue_hold
+    from distr.gui.web.routes.development.workflow_execution import register_routes
+    from tests.core.test_workflow_crash_guard import _factory, _real_session
+
+    factory = _factory()
+    monkeypatch.setattr(orchestrator, 'get_session', lambda: _real_session(factory))
+    monkeypatch.setattr(orchestrator, 'ensure_orchestrator_tables', lambda: None)
+    monkeypatch.setattr(orchestrator, 'is_orchestrator_enabled', lambda: True)
+    monkeypatch.setattr('distr.core.initiative.outcome_flow._data_dir', lambda: tmp_path)
+    reason = 'The queued ticket is no longer assigned to its selected project.'
+    _record_ticket_queue_hold(44, 99, 42, reason, board_id=70, project_id=7)
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router, prefix='/api')
+    client = TestClient(app)
+    path = '/api/workflows/44/orchestrator-events'
+    result = client.get(path, params={'run_id': 99, 'ticket_id': 42, 'board_id': 70})
+    assert result.status_code == 200
+    assert len(result.json()) == 1
+    assert client.get('/api/workflows/45/orchestrator-events').json() == []
+    assert client.get(path, params={'board_id': 71}).json() == []
+
+    _install_api(page, [])
+    history = [{'id': 99, 'workflow_id': 44, 'status': 'completed', 'ticket_id': 41, 'board_id': 70}]
+    page.route('**/api/workflows/44/runs?*', lambda route: route.fulfill(json=history))
+    page.route('**/api/workflows/44', lambda route: route.fulfill(json={
+        'id': 44, 'name': 'Development execution', 'steps': [], 'runs': history,
+    }))
+    for endpoint, payload in {
+        '/tickets/linkable': [],
+        '/tickets/boards/70/workflow-view': {'id': 70, 'name': 'Decisions delivery', 'lanes': []},
+        '/workflows/presets': {'presets': []},
+        '/tickets/workflows/44/tickets': {'tickets': []},
+        '/projects/7/terminal/keepalive': {'success': True},
+        '/tickets/workflows/44/execution-sessions': {'sessions': []},
+    }.items():
+        page.route('**/api' + endpoint + '*', lambda route, request, value=payload: route.fulfill(json=value))
+
+    def load_events(route):
+        url = urlparse(route.request.url)
+        response = client.get(f'{url.path}?{url.query}')
+        route.fulfill(status=response.status_code, json=response.json())
+
+    page.route('**' + path + '*', load_events)
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.set_default_timeout(8000)
+    page.goto(TEST_BASE_URL + '/workflows/?mode=blueprint')
+    if width < 800:
+        page.locator('#wf-board-pane-toggle-header').click()
+    page.get_by_text('Development execution', exact=True).first.click()
+    page.locator('[data-tab="runs"]').click()
+    page.locator('.wf-runs-subtab[data-runs-tab="timeline"]').click()
+    timeline = page.locator('#wf-orchestrator-events-list')
+    explanation = timeline.get_by_text(reason, exact=True)
+    expect(explanation).to_be_visible()
+    expect(timeline.get_by_text('Held', exact=True)).to_be_visible()
+    expect(timeline.get_by_text('ticket #42 · run #99 · project #7', exact=True)).to_be_visible()
+    expect(timeline.locator('time')).to_be_visible()
+    assert timeline.locator('time').evaluate("el => parseFloat(getComputedStyle(el.parentElement).columnGap) >= 8")
+    explanation.scroll_into_view_if_needed()
+    assert explanation.evaluate('el => el.scrollWidth <= el.clientWidth + 1')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    EVIDENCE.mkdir(exist_ok=True)
+    page.screenshot(path=EVIDENCE / f'workflow-queue-held-{width}.png', animations='disabled')
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])

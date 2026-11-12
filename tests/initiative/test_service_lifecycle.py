@@ -12,7 +12,7 @@ class TestInitiativeServiceLifecycle:
         with patch("distr.core.initiative.service.QTimer") as MockQTimer, \
              patch("distr.core.initiative.service.DraftQueue"), \
              patch("distr.core.initiative.service.ContextAssembler"), \
-             patch("distr.core.utils.load_settings_from_db", return_value={"initiative_level": "assist"}):
+             patch("distr.core.utils.load_settings_from_db", return_value={"initiative_level": "operate"}):
             mock_timer_instance = MagicMock()
             MockQTimer.return_value = mock_timer_instance
             MockQTimer.singleShot = MagicMock()

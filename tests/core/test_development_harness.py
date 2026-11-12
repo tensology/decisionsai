@@ -101,7 +101,9 @@ def test_completion_requires_actual_passing_check_receipts(tmp_path, monkeypatch
     assert result['status'] == expected, result.get('error')
     assert result['outcome']['verification']['status'] == ('passed' if expected == 'completed' else 'failed' if codes else 'not_run')
     if expected == 'blocked':
-        assert result['summary'].startswith('Verification incomplete:')
+        assert result['summary'].startswith('75% done.')
+        assert ("failed when it ran" if codes else "none of the checks I can track have run") in result['summary']
+        assert "which I haven't confirmed myself yet" in result['summary']
     with get_session() as db:
         row = db.get(ProjectExecutionSession, session_id)
         assert row.status == expected
@@ -366,6 +368,101 @@ def _database(tmp_path, monkeypatch):
         return get_session, root.id, turn.id
 
 
+def test_auto_route_uses_the_thread_board_at_dispatch_and_keeps_the_claimed_route(tmp_path, monkeypatch):
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.turn_runtime import TurnResult
+    from tests.core.test_workflow_studio_task_api import _client
+
+    session, chat_id, _ = _database(tmp_path, monkeypatch)
+    monkeypatch.setattr("distr.core.db.get_session", session)
+    monkeypatch.setattr("distr.core.laya_runtime.get_mode", lambda: "off")
+    monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+                        lambda *_args, **_kwargs: {"status": {"ready": True}})
+
+    def policy(model):
+        return json.dumps({"complexity_routing": {level: {
+            "backend": "pi", "provider": "ollama", "model": model,
+        } for level in ("low", "medium", "high")}})
+
+    with session() as db:
+        board = KanbanBoard(name="Engineering", orchestrator_policy=policy("engineering-preview"))
+        operations_folder = tmp_path / "operations"
+        operations_folder.mkdir()
+        operations = Project(name="Operations", folder_location=str(operations_folder))
+        db.add(operations)
+        db.flush()
+        other = KanbanBoard(name="Operations", source="jira", external_board_id="OPS",
+                            default_project_id=operations.id,
+                            orchestrator_policy=policy("operations"))
+        db.add_all([board, other])
+        db.flush()
+        board_id = board.id
+        ops_board_id = other.id
+        ops_project_id = operations.id
+        ops_root = Chat(title="Operations follow-up", project_id=operations.id, autonomy_level="full",
+                        params=json.dumps({"development": {"board_key": "jira:OPS"}}))
+        db.add(ops_root)
+        lane = KanbanLane(board_id=board_id, name="Work")
+        db.add(lane)
+        db.flush()
+        ticket = KanbanTicket(lane_id=lane.id, title="Read configuration")
+        db.add(ticket)
+        db.flush()
+        root = db.get(Chat, chat_id)
+        params = json.loads(root.params)
+        params["development"].update(ticket_id=ticket.id, board_key="jira:OPS")
+        root.params = json.dumps(params)
+        db.commit()
+        ops_chat_id = ops_root.id
+
+    client = _client()
+    endpoint = "/api/workflows/studio/routing-assessment"
+    draft = client.post(endpoint, json={"instruction": "Read configuration", "board_key": "jira:OPS"})
+    assert draft.status_code == 200
+    assert draft.json()["route"]["model"] == "operations"
+    preview = client.post(endpoint, json={"instruction": "Read configuration", "chat_id": chat_id})
+    assert preview.status_code == 200
+    assert preview.json()["route"]["model"] == "engineering-preview"
+
+    def set_board_model(model):
+        with session() as db:
+            db.get(KanbanBoard, board_id).orchestrator_policy = policy(model)
+            db.commit()
+
+    set_board_model("engineering-dispatch")
+    original_run = harness._run_execution
+
+    async def run(**kwargs):
+        set_board_model("engineering-next-turn")
+        await original_run(**kwargs)
+
+    requests = []
+
+    async def execute(request, **kwargs):
+        requests.append(request)
+        return TurnResult(success=True, backend_id="pi", model=request.route.model,
+                          runtime_id="cli_harness", output="Configuration reviewed.")
+
+    monkeypatch.setattr(harness, "_run_execution", run)
+    monkeypatch.setattr("distr.core.turn_runtime.execute_turn", execute)
+    result = harness.dispatch_development_prompt(
+        chat_id, "Read configuration", dispatch_async=False,
+        routing_assessment={**preview.json(), "route_source": "studio_preview"},
+    )
+    assert result["route_receipt"]["selected"]["model"] == "engineering-dispatch"
+    assert len(requests) == 1
+    assert requests[0].scope.board_id == board_id
+    assert requests[0].route.model == "engineering-dispatch"
+
+    follow_up = harness.dispatch_development_prompt(
+        ops_chat_id, "Review the operations configuration", save_prompt=True, dispatch_async=False,
+    )
+    assert follow_up["route_receipt"]["selected"]["model"] == "operations"
+    assert len(requests) == 2
+    assert requests[1].scope.board_id == ops_board_id
+    assert requests[1].scope.project_id == ops_project_id
+
+
 def test_direct_development_prompt_uses_ide_harness_without_workflow(tmp_path, monkeypatch):
     get_session, chat_id, turn_id = _database(tmp_path, monkeypatch)
     captured = {}
@@ -439,7 +536,7 @@ def test_direct_development_prompt_uses_ide_harness_without_workflow(tmp_path, m
         assert execution["route_receipt"]["complexity"] == "medium"
         assert execution["route_receipt"]["selected"]["backend"] == "codex"
         assert execution["route_receipt"]["actual"]["runtime"] == "cli_harness"
-        assert turn.response == "Implemented and verified the feature."
+        assert turn.response == "100% done. Implemented and verified the feature."
 
 
 def test_source_context_reaches_execution_and_blocker_stays_on_same_thread(tmp_path, monkeypatch):
@@ -639,7 +736,7 @@ def test_completed_turn_can_start_a_later_turn_in_the_same_thread(tmp_path, monk
     assert first["job_id"] != second["job_id"]
     assert second["status"] == "completed"
     assert second["execution_session_id"] == 92
-    assert second["summary"] == "Completed turn 2."
+    assert second["summary"] == "100% done. Completed turn 2."
     with get_session() as db:
         execution = json.loads(db.get(Chat, chat_id).params)["development"]["execution"]
         assert execution["job_id"] == second["job_id"]
@@ -778,7 +875,7 @@ def test_direct_development_can_use_native_runtime_without_workflow_identity(tmp
     assert "run_id" not in request.metadata
     assert result["runtime_id"] == "native"
     assert result["status"] == "completed"
-    assert result["summary"] == "Native turn complete."
+    assert result["summary"] == "100% done. Native turn complete."
     assert captured["streamed_during"] == "Native partial response."
     assert result["streamed_output"] == ""
 
@@ -844,7 +941,7 @@ def test_resume_interrupted_native_turn_does_not_repeat_disk_write(tmp_path, mon
     monkeypatch.setattr("distr.core.kanban.project_execution.ensure_project_execution_tables", lambda: None)
     monkeypatch.setattr(service, "_record_native_certification", lambda *args: None)
     monkeypatch.setattr("distr.core.turn_runtime.select_turn_runtime_id", lambda *args, **kwargs: "native")
-    monkeypatch.setattr(harness, "_route", lambda *args: ("native", "test-model", {"model_provider": "ollama"}, "medium"))
+    monkeypatch.setattr(harness, "_route", lambda *args, **kwargs: ("native", "test-model", {"model_provider": "ollama"}, "medium"))
     first = ModelToolCall("first", "write_file", {"path": "first.txt", "content": "first"})
     repeated = ModelToolCall("new-id", "write_file", {"path": "./first.txt", "content": "first", "overwrite": True})
     second = ModelToolCall("second", "write_file", {"path": "second.txt", "content": "second"})
@@ -1003,6 +1100,261 @@ def test_development_workflow_status_and_stop_use_the_same_scope(tmp_path, monke
     assert state["status"] == "waiting"
     assert harness.stop_development_execution(chat_id)["workflow_cancelled"]
     assert cancelled == [own_id]
+
+
+@pytest.mark.parametrize(("flag", "status", "reason"), [
+    ("approval_scope_changed", "failed", "WORKFLOW_APPROVAL_SCOPE_CHANGED"),
+    ("approval_definition_changed", "failed", "WORKFLOW_DEFINITION_CHANGED"),
+    ("approval_scope_changed", "running", None),
+    ("approval_definition_changed", "completed", None),
+])
+def test_development_workflow_reports_only_its_saved_approval_stop(tmp_path, monkeypatch, flag, status, reason):
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import draft_launch
+
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    with get_session() as db:
+        own = AutoWorkflowRun(chat_id=chat_id, workflow_id=1, status=status,
+                              run_data=json.dumps({"project_id": 1, flag: True,
+                                                   "terminal_warning": "Internal provider diagnostics"}))
+        db.add(own)
+        db.flush()
+        own_id = own.id
+        db.add(AutoWorkflowRun(chat_id=chat_id, workflow_id=2, status="failed",
+                               run_data=json.dumps({"project_id": 2, "approval_scope_changed": True})))
+        db.commit()
+    state = harness.development_execution_state(chat_id)
+    assert state["id"] == own_id
+    assert state["summary"] == (getattr(draft_launch, reason) if reason else "")
+    assert "Internal provider diagnostics" not in json.dumps(state)
+
+
+@pytest.mark.parametrize(('flow_status', 'expected'), [
+    ('awaiting_decision', 'telegram_review'), ('sending', 'sending'),
+    ('unconfirmed', 'unconfirmed'), ('sent', 'sent'), ('other_run', 'review_unavailable'),
+    (['damaged'], 'review_unavailable'),
+])
+def test_completed_workflow_projects_only_its_client_reply_state(tmp_path, monkeypatch, flow_status, expected):
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.initiative import outcome_flow
+
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    with get_session() as db:
+        run = AutoWorkflowRun(chat_id=chat_id, workflow_id=1, status='completed',
+                              run_data=json.dumps({'reply_delivery': {'pending_approval': True,
+                                  'telegram_flow_key': 'fixture', 'body': 'private reviewed text'}}))
+        db.add(run)
+        db.flush()
+        run_id = run.id
+        db.commit()
+    monkeypatch.setattr(outcome_flow, 'get_flow', lambda _: {
+        'kind': 'reply', 'ticket_id': None, 'status': flow_status, 'body': 'private reviewed text',
+        'approval_context': {'chat_id': chat_id, 'workflow_id': 1,
+                             'run_id': run_id + 1 if flow_status == 'other_run' else run_id},
+    })
+    state = harness.development_execution_state(chat_id)
+    assert state['status'] == 'completed'
+    assert state['client_reply_status'] == expected
+    assert 'private reviewed text' not in json.dumps(state)
+
+
+def test_exact_workflow_cancel_keeps_terminal_and_foreign_runs_unchanged(tmp_path, monkeypatch):
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher
+
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    monkeypatch.setattr(dispatcher, "get_session", get_session)
+    with get_session() as db:
+        own = AutoWorkflowRun(chat_id=chat_id, workflow_id=1, status="running")
+        foreign = AutoWorkflowRun(chat_id=chat_id + 1, workflow_id=1, status="running")
+        completed = AutoWorkflowRun(chat_id=chat_id, workflow_id=1, status="completed")
+        db.add_all([own, foreign, completed])
+        db.flush()
+        own_id, foreign_id, completed_id = own.id, foreign.id, completed.id
+        db.commit()
+    assert not dispatcher.cancel_run(foreign_id, workflow_id=1, expected_chat_id=chat_id)
+    assert not dispatcher.cancel_run(completed_id, workflow_id=1, expected_chat_id=chat_id)
+    assert dispatcher.cancel_run(own_id, workflow_id=1, expected_chat_id=chat_id)
+    with get_session() as db:
+        assert [db.get(AutoWorkflowRun, run_id).status for run_id in (own_id, foreign_id, completed_id)] == [
+            "cancelled", "running", "completed",
+        ]
+
+
+@pytest.mark.parametrize("drop_start_event", [False, True])
+def test_exact_stop_terminates_only_the_current_cli_session(tmp_path, monkeypatch, drop_start_event):
+    import asyncio
+    import queue
+    import sys
+    import threading
+    from unittest.mock import Mock
+
+    from distr.core.chat_turns import get_turns
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.kanban import project_execution
+    from distr.core.project_cli_backends import registry
+    from distr.core.project_cli_backends.base import BackendTaskResult
+    from tests.core.test_workflow_studio_task_api import _client
+
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    monkeypatch.setattr(project_execution, "get_session", get_session)
+    monkeypatch.setattr(project_execution, "ensure_project_execution_tables", lambda: None)
+    monkeypatch.setattr(harness, "_route", lambda *args, **kwargs: ("pi", "fixture", {}, "medium"))
+    monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend", lambda *a, **k: {"status": {"ready": True}})
+    monkeypatch.setattr("distr.core.project_cli_backends.provider_preflight.preflight_provider_route", lambda *a, **k: None)
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.any_live_session_running", lambda *a, **k: False)
+    monkeypatch.setattr("distr.core.orchestrator.record_backend_handoff", lambda **kwargs: None)
+    monkeypatch.setattr("distr.core.orchestration_events.emit_orchestration_event", lambda **kwargs: None)
+    started = queue.Queue()
+    results = queue.Queue()
+    cleanup_requested = threading.Event()
+    dropped = []
+    emit = registry._emit
+
+    def emit_event(callback, event):
+        if drop_start_event and event.get("type") == "executor_start" and event.get("execution_session_id"):
+            dropped.append(event["execution_session_id"])
+            return
+        emit(callback, event)
+
+    monkeypatch.setattr(registry, "_emit", emit_event)
+
+    class Backend:
+        name = "Fixture CLI"
+
+        def setup_status(self):
+            return SimpleNamespace(ready=True)
+
+        async def send_task(self, task, on_event=None):
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "import sys; sys.stdin.buffer.read()", stdin=asyncio.subprocess.PIPE,
+            )
+            options = {"board_id": task.board_id, "execution_id": registry._task_execution_id(task),
+                       "execution_kind": registry._task_execution_kind(task)}
+            registry._register_oneshot_process(task.project_id, "pi", process, **options)
+            started.put((task, process, asyncio.get_running_loop()))
+            if cleanup_requested.is_set():
+                process.stdin.close()
+            try:
+                await process.wait()
+                return BackendTaskResult(False, "pi", "fixture", error="Process exited.")
+            finally:
+                registry._clear_oneshot_process(task.project_id, "pi", process, **options)
+
+    monkeypatch.setattr(registry, "get_backend", lambda _: Backend())
+    client = _client()
+    endpoint = f"/api/workflows/studio/tasks/{chat_id}/execution"
+    neighbor = Mock(returncode=None)
+    neighbor_scope = {"board_id": None, "execution_id": 999, "execution_kind": "development_session"}
+    registry._register_oneshot_process(2, "pi", neighbor, **neighbor_scope)
+    first_session = None
+
+    def dispatch():
+        try:
+            results.put(harness.dispatch_development_prompt(
+                chat_id, "Read the current configuration.", dispatch_async=False, save_prompt=True,
+            ))
+        except Exception as error:
+            results.put(error)
+
+    try:
+        for _ in range(2):
+            process = None
+            worker = threading.Thread(target=dispatch, daemon=True)
+            worker.start()
+            try:
+                task, process, loop = started.get(timeout=10)
+                session_id = task.execution_session_id
+                assert session_id == registry._task_execution_id(task)
+                assert registry._task_execution_kind(task) == "development_session"
+                status = client.get(endpoint).json()
+                assert status["exact_stop"] == {"execution_session_id": session_id}, status
+                assert client.post(endpoint + "/stop-exact", json={
+                    "execution_session_id": first_session or 999,
+                }).status_code == 409
+                assert process.returncode is None
+                response = client.post(endpoint + "/stop-exact", json={"execution_session_id": session_id})
+                assert response.json() == {"stopped": False, "stop_requested": True}
+            except BaseException:
+                cleanup_requested.set()
+                if process is None and not started.empty():
+                    _, process, loop = started.get_nowait()
+                if process is not None and loop.is_running():
+                    loop.call_soon_threadsafe(process.stdin.close)
+                raise
+            finally:
+                worker.join(timeout=12)
+            if worker.is_alive():
+                cleanup_requested.set()
+                if process is not None and loop.is_running():
+                    loop.call_soon_threadsafe(process.stdin.close)
+                worker.join(timeout=5)
+                pytest.fail("The accepted Stop request did not end the fixture process.")
+            result = results.get_nowait()
+            assert isinstance(result, dict), result
+            assert result["status"] == "cancelled"
+            assert process.returncode is not None and process.returncode < 0
+            turns = get_turns(chat_id)["turns"]
+            assert any(turn["turn_id"] == task.turn_id and turn["status"] == "cancelled" for turn in turns)
+            with get_session() as db:
+                row = db.get(ProjectExecutionSession, session_id)
+                assert row.status == "cancelled"
+                assert json.loads(row.input_packet)["turn_id"] == task.turn_id
+            first_session = session_id
+        neighbor.terminate.assert_not_called()
+        assert len(dropped) == (2 if drop_start_event else 0)
+    finally:
+        registry._clear_oneshot_process(2, "pi", neighbor, **neighbor_scope)
+
+
+def test_unreported_cli_stop_rejects_foreign_or_ambiguous_processes(tmp_path, monkeypatch):
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.project_cli_backends import registry
+
+    get_session, chat_id, turn_id = _database(tmp_path, monkeypatch)
+    harness._update_execution(
+        chat_id, job_id="fixture", status="initializing", runtime_id="cli_harness",
+        turn_id=turn_id, board_id=7,
+    )
+    live = set()
+
+    def registered(project_id, backend_id, *, board_id, execution_id, execution_kind):
+        assert execution_kind == "development_session"
+        return (project_id, backend_id, board_id, execution_id) in live
+
+    monkeypatch.setattr(registry, "backend_process_registered", registered)
+
+    def record(*, project_id=1, chat=chat_id, turn=turn_id, board=7, ticket_id=None):
+        with get_session() as db:
+            row = ProjectExecutionSession(
+                project_id=project_id, ticket_id=ticket_id, route_backend="pi",
+                route_type="project_cli", origin="development", status="running",
+                input_packet=json.dumps({"chat_id": chat, "turn_id": turn, "board_id": board}),
+            )
+            db.add(row)
+            db.flush()
+            session_id = row.id
+            db.commit()
+        live.add((project_id, "pi", board, session_id))
+        return session_id
+
+    record(project_id=2)
+    record(chat=chat_id + 1)
+    record(turn=turn_id + 1)
+    record(board=8)
+    record(ticket_id=9)
+    assert harness.exact_development_stop_target(harness.development_execution_state(chat_id)) is None
+
+    own = record()
+    assert harness.exact_development_stop_target(harness.development_execution_state(chat_id)) == {
+        "execution_session_id": own
+    }
+    duplicate = record()
+    assert harness.exact_development_stop_target(harness.development_execution_state(chat_id)) is None
+    live.remove((1, "pi", 7, duplicate))
+    assert harness.exact_development_stop_target(harness.development_execution_state(chat_id)) == {
+        "execution_session_id": own
+    }
 
 
 def test_old_initiative_notice_does_not_hide_preserved_development_result():
@@ -1202,3 +1554,251 @@ def test_manual_development_route_keeps_cli_pin_over_assessment(monkeypatch):
     assert (backend, model, complexity) == ("codex", "auto", "low")
     assert options["model_provider"] == "openai"
 
+
+
+@pytest.fixture
+def scoped_direct_ticket(tmp_path, monkeypatch):
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+    session, chat_id, previous_turn = _database(tmp_path, monkeypatch)
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        project_id = root.project_id
+        other_project = Project(name="Other project", folder_location=str(tmp_path))
+        original_board = KanbanBoard(name="Original", default_project_id=project_id)
+        db.add_all([other_project, original_board])
+        db.flush()
+        other_board = KanbanBoard(name="Other board", default_project_id=project_id)
+        db.add(other_board)
+        db.flush()
+        original_lane = KanbanLane(name="Original", board_id=original_board.id)
+        other_lane = KanbanLane(name="Moved", board_id=other_board.id)
+        db.add_all([original_lane, other_lane])
+        db.flush()
+        ticket = KanbanTicket(title="Scoped work", lane_id=original_lane.id, linked_project_id=project_id,
+                              source_chat_id=chat_id)
+        db.add(ticket)
+        db.flush()
+        ticket_id, board_id, lane_id = ticket.id, original_board.id, original_lane.id
+        other_lane_id, other_project_id = other_lane.id, other_project.id
+        params = json.loads(root.params)
+        params["development"].update(ticket_id=ticket_id, board_key=f"decisions:{board_id}", board_provider="local")
+        root.params = json.dumps(params)
+        item = db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).one()
+        item.local_ticket_id = ticket_id
+        item.board_key = f"decisions:{board_id}"
+        item.board_provider = "local"
+        db.commit()
+
+    def move(change):
+        with session() as db:
+            ticket = db.get(KanbanTicket, ticket_id)
+            if change == "board":
+                ticket.lane_id = other_lane_id
+            elif change == "project":
+                ticket.linked_project_id = other_project_id
+            else:
+                ticket.source_chat_id = None
+            ticket.workflow_status = "waiting"
+            db.commit()
+
+    return SimpleNamespace(
+        session=session, chat_id=chat_id, previous_turn=previous_turn, project_id=project_id,
+        board_id=board_id, lane_id=lane_id, ticket_id=ticket_id, move=move,
+    )
+
+
+@pytest.mark.parametrize("phase", ["before", "routing", "context", "worker", "unready_worker"])
+@pytest.mark.parametrize("change", ["board", "project", "owner"])
+def test_direct_ticket_scope_is_checked_before_work(scoped_direct_ticket, monkeypatch, phase, change):
+    from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
+    from distr.core.turn_runtime import TurnResult
+
+    scope = scoped_direct_ticket
+    session, chat_id = scope.session, scope.chat_id
+    board_id, ticket_id, project_id = scope.board_id, scope.ticket_id, scope.project_id
+    worker_calls = []
+    queued_outcomes = []
+    queue_advancements = []
+    monkeypatch.setattr("distr.core.incoming.telegram_updates.queue_local_proposal_outcome",
+                        lambda _chat_id, params: queued_outcomes.append(params["development"]["execution"]["status"]))
+    monkeypatch.setattr(harness, "_start_next_queued_instruction", lambda target: queue_advancements.append(target))
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        params = json.loads(root.params)
+        params["incoming_proposal_handoff"] = {
+            "key": "fixture-proposal", "start_pending": True, "proposal": {"title": "Review the scope"},
+        }
+        root.params = json.dumps(params)
+        db.commit()
+
+    async def execute(request, **kwargs):
+        worker_calls.append(request.scope)
+        return TurnResult(success=True, backend_id="pi", model="fixture", runtime_id="cli_harness", output="Reviewed.")
+
+    monkeypatch.setattr("distr.core.turn_runtime.execute_turn", execute)
+    monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+                        lambda *a, **k: {"status": {"ready": True}})
+    if phase == "before":
+        scope.move(change)
+    elif phase == "routing":
+        route = harness._route
+        def move_during_routing(*args, **kwargs):
+            result = route(*args, **kwargs)
+            scope.move(change)
+            return result
+        monkeypatch.setattr(harness, "_route", move_during_routing)
+    elif phase == "context":
+        from distr.core.turn_runtime import build_development_context
+
+        def move_during_context(*args, **kwargs):
+            result = build_development_context(*args, **kwargs)
+            scope.move(change)
+            return result
+
+        monkeypatch.setattr("distr.core.turn_runtime.build_development_context", move_during_context)
+    else:
+        # The CLI availability check runs inside the worker, just before dispatch.
+        def probe(*args, **kwargs):
+            scope.move(change)
+            return {"status": {"ready": phase != "unready_worker"}}
+        monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend", probe)
+
+    kwargs = {
+        "save_prompt": True, "dispatch_async": False,
+        "telegram_proposal_approval": ("fixture-proposal", 12345),
+    }
+    if phase in {"context", "worker", "unready_worker"}:
+        result = harness.dispatch_development_prompt(chat_id, "Review the scope", **kwargs)
+        assert result["status"] == "failed"
+        assert "changed" in result["error"].lower()
+    else:
+        with pytest.raises(harness.DevelopmentExecutionBusy, match="scope|board|ticket|project"):
+            harness.dispatch_development_prompt(chat_id, "Review the scope", **kwargs)
+        with session() as db:
+            assert [row.id for row in db.query(Chat).filter_by(parent_id=chat_id)] == [scope.previous_turn]
+    assert worker_calls == []
+    assert queue_advancements == []
+    assert set(queued_outcomes) <= {"initializing"}
+    with session() as db:
+        handoff = json.loads(db.get(Chat, chat_id).params)["incoming_proposal_handoff"]
+        assert "outcome" not in (handoff.get("telegram_approval") or {})
+        assert db.query(ProjectExecutionSession).count() == 0
+        assert db.get(KanbanTicket, ticket_id).workflow_status == "waiting"
+        ticket = db.get(KanbanTicket, ticket_id)
+        ticket.lane_id = scope.lane_id
+        ticket.linked_project_id = project_id
+        ticket.source_chat_id = chat_id
+        db.commit()
+
+    if phase == "routing":
+        monkeypatch.setattr(harness, "_route", route)
+    elif phase == "context":
+        monkeypatch.setattr("distr.core.turn_runtime.build_development_context", build_development_context)
+    monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+                        lambda *a, **k: {"status": {"ready": True}})
+    result = harness.dispatch_development_prompt(chat_id, "Review the scope", **kwargs)
+    assert result["status"] == "completed"
+    assert [(scope.board_id, scope.project_id, scope.ticket_id) for scope in worker_calls] == [
+        (board_id, project_id, ticket_id),
+    ]
+
+
+@pytest.mark.parametrize("phase", ["progress", "return", "review", "provider_status", "error", "cancel"])
+def test_moved_ticket_cannot_receive_live_worker_updates(scoped_direct_ticket, monkeypatch, phase):
+    from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
+    from distr.core.turn_runtime import TurnCancelled, TurnEvent, TurnEventKind, TurnResult, TurnStatus
+
+    scope = scoped_direct_ticket
+    statuses, queued = [], []
+    monkeypatch.setattr("distr.core.incoming.telegram_updates.queue_local_proposal_outcome",
+                        lambda _, params: statuses.append(params["development"]["execution"]["status"]))
+    monkeypatch.setattr(harness, "_start_next_queued_instruction", queued.append)
+    monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+                        lambda *a, **k: {"status": {"ready": True}})
+    with scope.session() as db:
+        root = db.get(Chat, scope.chat_id)
+        params = json.loads(root.params)
+        params["incoming_proposal_handoff"] = {
+            "key": "fixture-proposal", "start_pending": True, "proposal": {"title": "Review the scope"},
+        }
+        root.params = json.dumps(params)
+        db.commit()
+
+    def move_during_review(*args, **kwargs):
+        scope.move("board")
+        return {}
+
+    if phase == "review":
+        monkeypatch.setattr(harness, "_turn_change_manifest", move_during_review)
+
+    async def execute(request, *, on_event, **kwargs):
+        assert request.scope.project_id == scope.project_id
+        if phase == "provider_status":
+            with scope.session() as db:
+                provider = ProjectExecutionSession(
+                    project_id=scope.project_id, ticket_id=scope.ticket_id, status="failed",
+                    input_packet=json.dumps({"chat_id": scope.chat_id, "turn_id": request.scope.turn_id}),
+                    error="Provider failure after the ticket moved",
+                    output_packet=json.dumps({"output": "Provider-only output."}),
+                )
+                db.add(provider)
+                db.flush()
+                provider_id = provider.id
+                db.commit()
+            on_event(TurnEvent(kind=TurnEventKind.STATUS, status=TurnStatus.WORKING,
+                               summary="Working", runtime_id="cli_harness", execution_session_id=provider_id))
+        if phase != "review":
+            scope.move("board")
+        if phase == "progress":
+            on_event(TurnEvent(kind=TurnEventKind.OUTPUT_DELTA, status=TurnStatus.WORKING,
+                               summary="Old worker progress", runtime_id="cli_harness",
+                               output_delta="Old worker output."))
+            with scope.session() as db:
+                db.get(KanbanTicket, scope.ticket_id).lane_id = scope.lane_id
+                db.commit()
+        if phase == "provider_status":
+            during_move = harness.development_execution_state(scope.chat_id)
+            assert during_move["status"] == "running"
+            assert "Provider-only output" not in json.dumps(during_move)
+        if phase == "error":
+            raise RuntimeError("Provider failed after the move")
+        if phase == "cancel":
+            raise TurnCancelled()
+        return TurnResult(success=True, backend_id="pi", model="fixture",
+                          runtime_id="cli_harness", output="Old worker result.")
+
+    monkeypatch.setattr("distr.core.turn_runtime.execute_turn", execute)
+    result = harness.dispatch_development_prompt(
+        scope.chat_id, "Review the scope", save_prompt=True, dispatch_async=False,
+        telegram_proposal_approval=("fixture-proposal", 12345),
+    )
+    assert result["status"] == "failed"
+    assert "while the worker was running" in result["error"]
+    assert not result.get("streamed_output")
+    assert queued == []
+    assert set(statuses) <= {"initializing", "running"}
+    with scope.session() as db:
+        assert db.get(KanbanTicket, scope.ticket_id).workflow_status == "waiting"
+        root = db.get(Chat, scope.chat_id)
+        handoff = json.loads(root.params)["incoming_proposal_handoff"]
+        assert "outcome" not in handoff["telegram_approval"]
+        assert db.get(Chat, result["turn_id"]).response == result["error"]
+        if phase == "provider_status":
+            db.get(KanbanTicket, scope.ticket_id).lane_id = scope.lane_id
+            db.commit()
+    reloaded = harness.development_execution_state(scope.chat_id)
+    assert reloaded["error"] == result["error"]
+    assert "Provider-only output" not in json.dumps(reloaded)
+
+
+def test_current_local_ticket_keeps_actual_provider_preflight_error(scoped_direct_ticket, monkeypatch):
+    scope = scoped_direct_ticket
+    monkeypatch.setattr("distr.core.project_cli_backends.catalog_probe.probe_cli_backend",
+                        lambda *a, **k: {"status": {"ready": False}, "next_step": "Fixture model unavailable"})
+    worker_calls = []
+    monkeypatch.setattr("distr.core.turn_runtime.execute_turn", lambda *a, **kw: worker_calls.append(a))
+    result = harness.dispatch_development_prompt(scope.chat_id, "Review this ticket", dispatch_async=False)
+    assert result["status"] == "failed"
+    assert "Fixture model unavailable" in result["error"]
+    assert worker_calls == []

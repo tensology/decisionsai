@@ -1,3 +1,6 @@
+import json
+from types import SimpleNamespace
+
 from distr.core.kanban.ticket_policy import (
     infer_ticket_complexity,
     normalize_source_provider,
@@ -5,6 +8,20 @@ from distr.core.kanban.ticket_policy import (
     resolve_ticket_complexity,
     resolve_ticket_cli_route,
 )
+
+
+def test_board_backend_change_drops_the_previous_harness_model_and_provider():
+    settings = {"project_cli_medium_backend": "kilocode", "project_cli_medium_model": "kilo-only"}
+    board = SimpleNamespace(orchestrator_policy=json.dumps({
+        "complexity_routing": {"medium": {"backend": "codex"}},
+    }))
+
+    route = resolve_ticket_cli_route(None, "medium", board, settings=settings)
+
+    assert route["backend"] == "codex"
+    assert route["model"] == "auto"
+    assert "model_provider" not in route
+    assert resolve_ticket_cli_route(None, "medium", settings=settings)["model_provider"] == "kilocode"
 
 
 def test_ticket_complexity_defaults_to_medium_and_detects_high():
@@ -97,7 +114,7 @@ def test_complexity_route_executes_kilo_through_pi_with_provider_metadata(monkey
     }
 
 
-def test_complexity_route_uses_configured_ide_fallback(monkeypatch):
+def test_complexity_route_records_ide_fallback_without_replacing_the_primary(monkeypatch):
     class Backend:
         def __init__(self, backend_id):
             self.backend_id = backend_id
@@ -123,5 +140,7 @@ def test_complexity_route_uses_configured_ide_fallback(monkeypatch):
 
     route = resolve_ticket_cli_route(project, "low")
 
-    assert route["backend"] == "cursor"
-    assert route["model"] == "composer-2.5"
+    assert route["backend"] == "cursor_ide"
+    assert route["model"] == ""
+    assert route["fallback_backend"] == "cursor"
+    assert route["fallback_model"] == "composer-2.5"

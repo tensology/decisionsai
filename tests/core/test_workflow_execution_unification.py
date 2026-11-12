@@ -2652,6 +2652,9 @@ def test_integration_smoke_two_step_workflow_completes():
     mock_run.status = "running"
     mock_run.current_step_id = STEP1_ID
     mock_run.workflow_id = WORKFLOW_ID
+    mock_run.ticket_id = None
+    mock_run.board_id = None
+    mock_run.chat_id = None
     mock_run.completed_at = None
     mock_run.run_data = "{}"
 
@@ -2733,6 +2736,9 @@ def test_integration_smoke_two_step_workflow_completes():
         return q
 
     mock_db.query.side_effect = query_side_effect
+    mock_db.get.side_effect = lambda model, row_id, **kwargs: (
+        mock_run if model.__name__ == "AutoWorkflowRun" and row_id == RUN_ID else None
+    )
     mock_db.add.side_effect = lambda obj: setattr(obj, 'id', RUN_ID) if hasattr(obj, 'status') and not hasattr(obj, 'position') and not hasattr(obj, 'agent_response') else None
     mock_db.flush.side_effect = lambda: None
 

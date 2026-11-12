@@ -932,7 +932,8 @@ def test_service_cancellation_reaches_native_tool_runtime(monkeypatch):
             state["runtime_cancelled"] = True
 
         async def execute(self, request, *, on_event=None, cancellation=None, steering=None):
-            assert turn_service.cancel_active_turn(request.scope.chat_id) is True
+            assert turn_service.cancel_active_turn(request.scope.chat_id, expected_turn_id=request.scope.turn_id + 1) is False
+            assert turn_service.cancel_active_turn(request.scope.chat_id, expected_turn_id=request.scope.turn_id) is True
             cancellation.raise_if_cancelled()
             raise AssertionError("cancelled native turn continued")
 

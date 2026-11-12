@@ -391,6 +391,7 @@ def test_plan_section_tabs_fit_and_switch(page, backend, width):
         assert tab.get_attribute('aria-pressed') == 'true'
         if width < 620 and label != 'Interfaces':
             page.screenshot(path=str(OUT / f'plan-section-{label.lower()}-{width}.png'), animations='disabled')
-    assert page.get_by_role('button', name='Build tickets', exact=True).is_visible()
+    assert page.get_by_role('button', name='Build tickets', exact=True).count() == 0
+    assert page.get_by_role('button', name='Rebuild', exact=True).is_visible()
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     page.screenshot(path=str(OUT / f'plan-section-tabs-{width}.png'), animations='disabled')

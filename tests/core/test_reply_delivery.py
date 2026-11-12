@@ -14,6 +14,12 @@ from distr.core.db import Base
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.workflow import reply_delivery
 
+@pytest.fixture(autouse=True)
+def _ask_first_off(monkeypatch):
+    """These tests cover the transport/ledger with 'Ask before messaging clients' switched off.
+    Ask-first holding is covered in tests/initiative/test_initiative_fixes_20261112.py."""
+    monkeypatch.setattr('distr.core.initiative.outcome_flow.ask_before_client_messages', lambda settings=None: False)
+
 
 @pytest.fixture()
 def db_factory(monkeypatch):

@@ -94,6 +94,87 @@ def test_command_dispatch_steers_the_active_native_turn_without_a_workflow(devel
     assert "apply_run_harness_steer" not in inspect.getsource(control.dispatch_command)
 
 
+def test_exact_steering_receipt_replays_without_reaching_a_replacement_turn(development_db, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.core import chat_turns
+    from distr.core.db import ChatTurnEvent
+    from distr.core.turn_runtime import CancellationToken, SteeringChannel
+    from distr.core.turn_runtime import service
+    from distr.gui.web.routes.development.threads import register_routes
+
+    session = development_db["session"]
+    chat_id, project_id = development_db["chat_id"], development_db["project_id"]
+    monkeypatch.setattr(chat_turns, "get_session", session)
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        first = Chat(parent_id=chat_id, input="Review delivery")
+        second = Chat(parent_id=chat_id, input="Check the handoff")
+        db.add_all((first, second))
+        db.flush()
+        first_id, second_id = first.id, second.id
+        root.params = json.dumps({"development": {"execution": {"runtime_id": "native", "turn_id": first_id}}})
+        db.commit()
+    channel = SteeringChannel()
+    monkeypatch.setitem(service._active_turns, chat_id, service._ActiveTurn(CancellationToken(), channel, "native", first_id))
+    submission = "a" * 32
+    args = (chat_id, first_id, project_id, submission, "Keep the recorded receipt.")
+    assert control.exact_steering_receipt(*args[:-1])["status"] == "missing"
+    with pytest.raises(ValueError, match="thread changed"):
+        control.steer_exact_turn(chat_id, first_id, project_id + 1, submission, args[-1])
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        replies = list(executor.map(lambda _: control.steer_exact_turn(*args), range(2)))
+    assert {reply["status"] for reply in replies} <= {"delivered", "dispatching"}
+    assert [item.content for item in channel.drain()] == [args[-1]]
+    with pytest.raises(ValueError, match="different steering request"):
+        control.steer_exact_turn(*args[:-1], "Change the receipt.")
+
+    replacement = SteeringChannel()
+    monkeypatch.setitem(service._active_turns, chat_id, service._ActiveTurn(CancellationToken(), replacement, "native", second_id))
+    assert control.steer_exact_turn(*args)["status"] == "delivered"
+    receipt = control.exact_steering_receipt(*args[:-1])
+    assert receipt == {"chat_id": chat_id, "turn_id": first_id, "submission_id": submission, "status": "delivered",
+                       "summary": "Accepted by the selected native Development turn."}
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    client = TestClient(app)
+    path = f"/workflows/studio/tasks/{chat_id}/execution/steer-exact"
+    params = {"turn_id": first_id, "expected_project_id": project_id, "submission_id": submission}
+    response = client.get(path, params=params)
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    assert response.json() == receipt and args[-1] not in response.text
+    assert client.get(path, params={**params, "turn_id": second_id}).status_code == 404
+    assert client.get(path, params={**params, "submission_id": "invalid"}).status_code == 422
+    with pytest.raises(LookupError, match="selected turn"):
+        control.exact_steering_receipt(chat_id, second_id, project_id, submission)
+    with pytest.raises(LookupError, match="selected project"):
+        control.exact_steering_receipt(chat_id, first_id, project_id + 1, submission)
+    with pytest.raises(ValueError, match="selected turn changed"):
+        control.steer_exact_turn(chat_id, first_id, project_id, "b" * 32, "Old guidance")
+    assert replacement.drain() == ()
+    assert control.list_commands(chat_id, include_terminal=False) == []
+    with session() as db:
+        event, = db.query(ChatTurnEvent).filter_by(chat_id=chat_id, event_type="turn_steered").all()
+        assert event.turn_id == first_id
+        root = db.get(Chat, chat_id)
+        root.params = json.dumps({"development": {"execution": {"runtime_id": "native", "turn_id": second_id}}})
+        db.commit()
+
+    calls = []
+    def end_before_delivery(chat, guidance, *, expected_turn_id):
+        calls.append(expected_turn_id)
+        return {"accepted": False, "reason": "active_turn_changed"}
+
+    monkeypatch.setattr("distr.core.turn_runtime.steer_active_turn", end_before_delivery)
+    second_args = (chat_id, second_id, project_id, "b" * 32, "Keep the handoff.")
+    assert control.steer_exact_turn(*second_args)["status"] == "failed"
+    assert control.steer_exact_turn(*second_args)["status"] == "failed"
+    assert calls == [second_id]
+    assert control.list_commands(chat_id, include_terminal=False) == []
+
+
 def test_command_stays_queued_when_no_native_turn_is_active(development_db, monkeypatch):
     command = control.enqueue_command(development_db["chat_id"], "Only steer this thread")
     monkeypatch.setattr(
@@ -161,6 +242,40 @@ def test_stale_steering_stays_queued_without_starving_the_new_turn(development_d
     assert control.dispatch_pending(chat_id)["artifacts"][0]["id"] == next_command["id"]
     assert control.list_commands_for_id(original["id"])["status"] == "queued"
     assert calls == [(original["content"], 11), (next_command["content"], 12)]
+
+
+def test_native_guidance_for_an_old_project_cannot_reach_the_new_worker(development_db, monkeypatch):
+    from distr.core.db.projects import Project
+
+    chat_id = development_db["chat_id"]
+    original = control.enqueue_command(chat_id, "Guidance for the original project")
+    with development_db["session"]() as db:
+        project = Project(name="New project")
+        db.add(project)
+        db.flush()
+        project_id = project.id
+        db.commit()
+    control.update_thread_controls(chat_id, project_id=project_id)
+    with development_db["session"]() as db:
+        root = db.get(Chat, chat_id)
+        params = json.loads(root.params)
+        params["development"]["execution"] = {"turn_id": 12}
+        root.params = json.dumps(params)
+        db.commit()
+
+    calls = []
+
+    def steer(_, message, *, expected_turn_id):
+        calls.append((message, expected_turn_id))
+        return {"accepted": True}
+
+    monkeypatch.setattr("distr.core.turn_runtime.steer_active_turn", steer)
+    assert control.dispatch_command(original["id"])["reason"] == "scope_unverified"
+    assert control.dispatch_pending(chat_id)["status"] == "idle"
+    current = control.enqueue_command(chat_id, "Guidance for the current project")
+    assert control.dispatch_pending(chat_id)["artifacts"][0]["id"] == current["id"]
+    assert control.list_commands_for_id(original["id"])["status"] == "queued"
+    assert calls == [(current["content"], 12)]
 
 
 def test_thread_controls_archive_export_and_redacted_snapshot(development_db):

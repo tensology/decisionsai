@@ -31,7 +31,8 @@ def store(monkeypatch):
 def test_telegram_update_survives_missing_manager_and_retries_only_once(store, monkeypatch):
     factory, cid = store
     monkeypatch.setattr(updates, "_manager", lambda: None)
-    ticket = {"source_metadata": {"approval_source": "telegram"}, "project_name": "DecisionsAI", "reference": "PROBE-1"}
+    ticket = {"source_metadata": {"approval_source": "telegram", "approval_telegram_chat_id": 42},
+              "project_name": "DecisionsAI", "reference": "PROBE-1"}
     state = {"job_id": "one", "status": "completed", "summary": "Marker verified. Final verification passed."}
     updates.queue_execution_update(ticket, cid, state, "done")
     with factory() as db:
@@ -289,7 +290,7 @@ def test_delivery_receipt_preserves_execution_updated_during_enqueue(store, monk
     factory, cid = store
     monkeypatch.setattr(updates, "_manager", lambda: None)
     updates.queue_execution_update(
-        {"source_metadata": {"approval_source": "telegram"}}, cid,
+        {"source_metadata": {"approval_source": "telegram", "approval_telegram_chat_id": 42}}, cid,
         {"job_id": "concurrent"}, "testing",
     )
     def enqueue(_text, **_kwargs):

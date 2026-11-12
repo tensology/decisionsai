@@ -121,6 +121,45 @@ def test_per_route_requirement_limits_are_explicit():
     assert 'Review the remaining controls' in result
 
 
+def test_requirements_lead_with_project_evidence_and_share_route_ids(tmp_path):
+    home = {**route(), 'url': '/', 'name': 'home', 'title': 'Home', 'group': 'Core'}
+    context = {'project_name': 'App', 'project_root': str(tmp_path), 'models': [],
+               'routes': [home, route()], 'cues': {'/projects': {'buttons': ['Create project']}}}
+    artifacts = scan.render_artifacts(context)
+    frac = artifacts['frac']
+    assert frac.index('## FR-001 Projects') < frac.index('## FR-002 Home') < frac.index('## Global UX and UI acceptance gate')
+    assert '- FR-001: Support `/projects`' in artifacts['prd']
+    assert '- FR-002: Support `/`' in artifacts['prd']
+    assert 'button "Create project" variant=primary requirement=FR-001' in artifacts['flows']
+
+
+def test_no_routes_and_no_control_evidence_are_reported_explicitly(tmp_path):
+    empty = scan.build_frac(routes=[])
+    assert 'No page routes were discovered' in empty
+    assert 'FR-001' not in empty
+    assert empty.index('No page routes were discovered') < empty.index('## Global UX and UI acceptance gate')
+
+    context = {'project_name': 'App', 'project_root': str(tmp_path), 'models': [], 'routes': [route()], 'depth': 99}
+    artifacts = scan.render_artifacts(context)
+    gaps = scan.assess_artifacts(artifacts, context)
+    assert 'No form fields or actions were observed for this route.' in artifacts['frac']
+    assert any(gap['code'] == 'rich_acs' for gap in gaps)
+
+
+def test_submit_and_hidden_inputs_do_not_become_editable_fields():
+    cues = scan._extract_screen_cues('''
+      <input name="csrf_token" type="hidden" value="private default">
+      <select name="user_shipping_address"></select>
+      <input type="submit" name="continue" value="{% trans 'Continue' %}">
+    ''')
+    assert cues['fields'] == ['User shipping address']
+    assert cues['buttons'] == ['Continue']
+    frac = scan.build_frac(routes=[route()], cues={'/projects': cues})
+    assert 'activates `Continue`' in frac
+    assert 'provides a valid `Continue`' not in frac
+    assert 'private default' not in frac
+
+
 def test_html_form_cannot_end_discovery_before_react_source_is_inspected(tmp_path):
     from tests.core.test_plan_python_inventory_integration import write
     app_fixture(tmp_path)

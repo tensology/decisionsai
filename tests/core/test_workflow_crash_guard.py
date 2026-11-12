@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import datetime
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -35,6 +36,102 @@ def test_executor_shutdown_error_is_only_suppressed_during_interpreter_teardown(
 
     monkeypatch.setattr("distr.core.workflow.step_executor.sys.is_finalizing", lambda: True)
     assert _is_interpreter_shutdown_error(error) is True
+
+
+@pytest.mark.parametrize(("checkpoint", "moved"), [
+    ("buffered", False), ("buffered", True), ("terminal", False), ("terminal", True),
+    ("failure", False), ("damaged", False), ("unconfirmed", False),
+])
+def test_restart_recovers_saved_queued_outcome_without_relaunching(monkeypatch, checkpoint, moved):
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import AutoWorkflowStepResult
+    from distr.core.workflow import dispatcher
+
+    factory = _factory()
+    with factory.begin() as db:
+        project, replacement = Project(name="Original"), Project(name="Replacement")
+        workflow = AutoWorkflow(name="IDE restart recovery")
+        db.add_all([project, replacement, workflow])
+        db.flush()
+        board = KanbanBoard(name="Board", default_project_id=project.id)
+        db.add(board)
+        db.flush()
+        lane = KanbanLane(board_id=board.id, name="In Progress")
+        step = AutoWorkflowStep(workflow_id=workflow.id, name="IDE work", status="running", on_pass_goto=-1)
+        db.add_all([lane, step])
+        db.flush()
+        ticket = KanbanTicket(lane_id=lane.id, title="Queued ticket", linked_workflow_id=workflow.id,
+                             linked_project_id=replacement.id if moved else project.id,
+                             workflow_status="running")
+        db.add(ticket)
+        db.flush()
+        run = AutoWorkflowRun(workflow_id=workflow.id, board_id=board.id, ticket_id=ticket.id,
+            current_step_id=step.id, status={"terminal": "completed", "failure": "waiting"}.get(checkpoint, "running"))
+        db.add(run)
+        db.flush()
+        attempt = ProjectExecutionSession(project_id=project.id, workflow_id=workflow.id,
+            run_id=run.id, step_id=step.id, ticket_id=ticket.id, route_type="ide_bridge",
+            status="failed" if checkpoint == "failure" else "completed")
+        db.add(attempt)
+        db.flush()
+        data = {"source_type": "workflow_queue", "project_id": project.id, "execution_session_id": attempt.id}
+        if checkpoint == "terminal":
+            data["queue_terminal_pending"] = "completed"
+        else:
+            data["early_ide_completion"] = {
+                "execution_session_id": attempt.id + (checkpoint == "damaged"), "step_id": step.id,
+                "output": "Verified editor result.", "passed": checkpoint != "failure",
+            }
+            if checkpoint == "failure":
+                data["waiting_kind"] = "ide_handoff"
+                step.on_fail_goto = -1
+        run.run_data = json.dumps(data)
+
+    def get_session():
+        return _real_session(factory)
+
+    for module in ("dispatcher", "router", "post_execution"):
+        monkeypatch.setattr(f"distr.core.workflow.{module}.get_session", get_session)
+    monkeypatch.setattr(dispatcher, "increment_workflow_updated", lambda: None)
+    monkeypatch.setattr("distr.core.mempalace.hub.call_tool", lambda *_, **__: {})
+    monkeypatch.setattr("distr.core.kanban.ticket_workflow_engagement.notify_ticket_workflow_step_finished",
+                        lambda **_: None)
+    finalized, relaunched = Mock(), Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "_finalize_terminal_run", finalized)
+    monkeypatch.setattr(StepDispatcher, "run_in_workflow", relaunched)
+    for _ in range(2):
+        _cleanup_orphaned_runs_on_startup()
+        dispatcher._auto_resume_interrupted_runs(
+            background=False,
+            unconfirmed_checkpoint_steps={(run.id, step.id)} if checkpoint == "unconfirmed" else None,
+        )
+
+    relaunched.assert_not_called()
+    with get_session() as db:
+        saved = db.get(AutoWorkflowRun, run.id)
+        results = db.query(AutoWorkflowStepResult).filter_by(run_id=run.id).all()
+        metadata = json.loads(saved.run_data)
+        if checkpoint in {"damaged", "unconfirmed"}:
+            assert saved.status == "waiting"
+            assert metadata["early_ide_completion"] == data["early_ide_completion"]
+            assert not results
+            finalized.assert_not_called()
+            return
+        status = "failed" if moved or checkpoint == "failure" else "completed"
+        assert saved.status == status
+        expected_result = [("Verified editor result.", "failed" if checkpoint == "failure" else "passed")]
+        assert [(row.agent_response, row.status) for row in results] == (
+            expected_result if checkpoint in {"buffered", "failure"} and not moved else []
+        )
+        if moved:
+            finalized.assert_not_called()
+            reassigned = db.get(KanbanTicket, ticket.id)
+            assert reassigned.linked_project_id == replacement.id
+            assert reassigned.workflow_status == "running"
+        else:
+            assert "queue_terminal_pending" not in metadata
+            assert "early_ide_completion" not in metadata
+            finalized.assert_called_once_with(run.id, workflow.id, status)
 
 
 def _factory():
@@ -407,3 +504,120 @@ def test_cancelled_run_cannot_dispatch_a_late_provider_step(dispatch_run):
     assert result["cancelled"] is True
     assert result["status"] == "cancelled"
     dispatcher._execute.assert_not_called()
+
+
+@pytest.mark.parametrize("output", ["Finished", "Status: needs_input\nSummary: Waiting\nBlockers: Missing detail"])
+def test_late_workflow_callback_leaves_stopped_run_and_newer_step_untouched(monkeypatch, output):
+    from distr.core.db.workflow import AutoWorkflowStepResult
+    from distr.core.workflow.router import StepRouter
+
+    factory = _factory()
+    provider = lambda: _real_session(factory)
+    for module in ("post_execution", "router"):
+        monkeypatch.setattr(f"distr.core.workflow.{module}.get_session", provider)
+    with provider() as db:
+        workflow = AutoWorkflow(name="Shared definition")
+        db.add(workflow)
+        db.flush()
+        step = AutoWorkflowStep(workflow_id=workflow.id, name="Worker", status="running", result="Newer work")
+        db.add(step)
+        db.flush()
+        stopped = AutoWorkflowRun(workflow_id=workflow.id, current_step_id=step.id, status="failed",
+                                  run_data='{"approval_scope_changed": true}')
+        newer = AutoWorkflowRun(workflow_id=workflow.id, current_step_id=step.id, status="running")
+        db.add_all([stopped, newer])
+        db.flush()
+        step_id, stopped_id, newer_id = step.id, stopped.id, newer.id
+    dispatcher = StepDispatcher()
+    dispatcher._persist_compact_step_memory = Mock()
+    dispatcher._append_workflow_step_audit = Mock()
+    verify = Mock(return_value=True)
+    monkeypatch.setattr("distr.core.workflow.router._run_verification", verify)
+    dispatcher._record_result_and_route(step_id, stopped_id, output, True)
+    assert StepRouter().route(step_id, output, True, stopped_id)["action"] == "ignore"
+    dispatcher._persist_compact_step_memory.assert_not_called()
+    dispatcher._append_workflow_step_audit.assert_not_called()
+    verify.assert_not_called()
+    with provider() as db:
+        assert db.get(AutoWorkflowRun, stopped_id).status == "failed"
+        assert db.get(AutoWorkflowRun, newer_id).status == "running"
+        step = db.get(AutoWorkflowStep, step_id)
+        assert (step.status, step.result) == ("running", "Newer work")
+        assert db.query(AutoWorkflowStepResult).count() == 0
+
+
+def test_late_provider_events_preserve_the_cancellation_receipt(monkeypatch):
+    from distr.core.kanban import project_execution
+    from distr.core.workflow.dispatcher import _cancel_linked_execution_sessions
+
+    factory = _factory()
+    provider = lambda: _real_session(factory)
+    monkeypatch.setattr(project_execution, "get_session", provider)
+    monkeypatch.setattr(project_execution, "ensure_project_execution_tables", lambda: None)
+    notify = Mock()
+    monkeypatch.setattr("distr.core.orchestration_events.emit_orchestration_event", notify)
+    with provider() as db:
+        old = ProjectExecutionSession(project_id=1, run_id=7, status="waiting", route_backend="pi")
+        current = ProjectExecutionSession(project_id=2, run_id=8, status="running", route_backend="pi")
+        db.add_all([old, current])
+        db.flush()
+        old_id, current_id = old.id, current.id
+        _cancel_linked_execution_sessions(db, [7], reason="Ownership changed", event_type="approval_scope_changed")
+    project_execution.append_execution_event(old_id, "message_update", status="running", message="Late progress")
+    project_execution.complete_execution_session(old_id, success=True, output_packet={"summary": "Late success"})
+    with provider() as db:
+        old = db.get(ProjectExecutionSession, old_id)
+        assert (old.status, old.error, old.output_packet) == ("cancelled", "Ownership changed", None)
+        assert db.get(ProjectExecutionSession, current_id).status == "running"
+        assert [event.event_type for event in old.events] == ["approval_scope_changed"]
+    notify.assert_not_called()
+
+
+def test_verification_cannot_publish_after_run_stops(monkeypatch, dispatch_run):
+    from distr.core.db.workflow import AutoWorkflowStepResult
+    from distr.core.workflow import dispatcher, router
+
+    _, step_id, run_id = dispatch_run("running")
+    monkeypatch.setattr(router, "get_session", dispatcher.get_session)
+
+    def verify(*args, **kwargs):
+        with dispatcher.get_session() as db:
+            run = db.get(AutoWorkflowRun, run_id)
+            run.status = "failed"
+            run.run_data = '{"approval_scope_changed": true}'
+        return True
+
+    monkeypatch.setattr(router, "_run_verification", verify)
+    monkeypatch.setattr(router, "_ticket_acceptance_gate", lambda *args, **kwargs: True)
+    assert router.StepRouter().route(step_id, "Late verification", True, run_id)["action"] == "ignore"
+    with dispatcher.get_session() as db:
+        assert db.get(AutoWorkflowRun, run_id).status == "failed"
+        assert db.query(AutoWorkflowStepResult).count() == 0
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_synchronous_worker_return_after_stop_does_not_publish_completion(monkeypatch, dispatch_run, raises):
+    from distr.core.workflow import dispatcher
+
+    workflow_id, step_id, run_id = dispatch_run("running")
+    trace = Mock()
+    monkeypatch.setattr(dispatcher, "record_workflow_chat_event", trace)
+    monkeypatch.setattr(dispatcher, "emit_step_activity", Mock())
+    monkeypatch.setattr(dispatcher, "build_step_preflight", lambda *args: {"ok": True})
+    monkeypatch.setattr("distr.core.kanban.ticket_workflow_engagement.notify_ticket_workflow_step_started", Mock())
+    worker = StepDispatcher()
+    worker._load_step = Mock(return_value={"id": step_id, "workflow_id": workflow_id, "name": "Worker", "position": 0})
+    worker._validate_before_dispatch = Mock(return_value=[])
+    worker._record_result_and_route = Mock()
+
+    def execute(*args, **kwargs):
+        with dispatcher.get_session() as db:
+            db.get(AutoWorkflowRun, run_id).status = "failed"
+        if raises:
+            raise RuntimeError("Backend stopped")
+        return {"output": "Late output", "passed": True}
+
+    worker._execute = execute
+    assert worker.run_in_workflow(step_id, run_id)["ignored"]
+    assert [call.args[1] for call in trace.call_args_list] == ["step_started"]
+    worker._record_result_and_route.assert_not_called()

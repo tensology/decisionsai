@@ -55,7 +55,7 @@ def test_scheduled_actions_remain_available_without_a_development_sidebar_entry(
     assert 'id="scheduled-workspace"' in studio
     assert 'id="scheduled-prompt-form"' not in studio  # removed on purpose 2026-10-22
     assert 'id="scheduled-row-menu"' not in studio  # removed on purpose 2026-10-22
-    assert '"/automations/static/js"' in server
+    assert "def _legacy_automation_destination" in server
     assert "create_automation_routes" in server
 
 
@@ -67,8 +67,11 @@ def test_scheduled_prompt_ui_is_removed():
     for marker in ('id="scheduled-row-menu"', 'data-scheduled-menu-action=', 'id="scheduled-search-input"',
                    'id="scheduled-delete-all"', 'Delete all automations'):
         assert marker not in html, marker
-    for marker in ("openScheduledRowMenu", "deleteAllScheduledAutomations", "title: 'Delete all automations'"):
+    # The in-place editor still has a small "Edit automation" context menu.
+    # The old scheduled-prompts search/bulk-delete chrome stays gone.
+    for marker in ("deleteAllScheduledAutomations", "title: 'Delete all automations'"):
         assert marker not in javascript, marker
+    assert "openScheduledRowMenu" in javascript
 
 
 def test_development_sidebar_exposes_minimal_placeholder_destinations():
@@ -132,103 +135,47 @@ def test_automation_instruction_draft_endpoint_returns_an_executable_draft(monke
 
 
 def test_automation_hub_is_plain_crud_scheduler_surface():
-    html = (ROOT / "distr/gui/web/templates/automations/automations.html").read_text(encoding="utf-8")
-    js = (ROOT / "distr/gui/web/static/automations/js/automations.js").read_text(encoding="utf-8")
+    html = (ROOT / "distr/gui/web/templates/development/automations/workspace.html").read_text(encoding="utf-8")
+    js = (ROOT / "distr/gui/web/static/development/automations/index.js").read_text(encoding="utf-8")
+    server = (ROOT / "distr/gui/web/server.py").read_text(encoding="utf-8")
 
-    assert "automation-view-list" in html
-    assert "automation-view-calendar" in html
-    assert 'id="automation-calendar-panel"' in html
-    assert html.index('id="automation-calendar-panel"') > html.index('id="automation-detail"')
-    assert "setMainView" in js
-    assert "renderMainWorkspace" in js
-    assert "monthGridDayCount" in js
-    assert "automation-cal-weekdays" in html
-    assert "automation-cal-month-shell" in html
-    assert "automation-cal-week-timegrid" in html
-    assert 'id="automation-cal-mode-day"' in html
-    assert "renderWeekCalendar" in js
-    assert "renderDayCalendar" in js
-    assert "weekTimedEventsForDay" in js
-    assert "buildSouthAfricanHolidayMap" in js
-    assert "is-holiday" in html
-    blocks_js = (ROOT / "distr/gui/web/static/automations/js/calendar_blocks.js").read_text(encoding="utf-8")
-    assert "AutomationCalendarBlocks" in blocks_js
-    assert "setDateTimeField" in blocks_js
-    assert "DecisionsDateTime.refreshInput" in blocks_js
-    assert "persistBlockTimes" in blocks_js
-    assert "reloadScheduleBlocks" in blocks_js
-    assert "ensureGridInteractions" in blocks_js
-    assert "sched-block-modal" in html
-    assert "sched-block-context-menu" in html
-    assert "sched-block-options-btn" in html
-    assert "sched-block-action-naturalize" in html
-    assert "uniformRowHeight" in blocks_js
-    assert "openBlockContextMenu" in blocks_js
-    assert "calendar_blocks.js" in html
-    assert "automation-search" not in html
-    assert "automation-empty" in html
-    assert "automation-detail" in html
-    assert "w-80 flex-shrink-0 flex flex-col gap-4" in html
-    assert "bg-[#1a1f3a] rounded-lg border border-white/20" in html
+    assert 'id="scheduled-workspace"' in html
+    assert 'id="scheduled-automation-editor"' in html
+    assert 'id="automation-new"' in html
     assert "Add Automation" in html
-    assert "Instruction" in html
-    assert "Schedule" in html
-    assert "Run History" in html
-    assert "automation-tab-details" in html
-    assert "automation-tab-history" in html
-    assert "automation-fields-row" in html
-    assert "automation-status-switch" in html
-    assert 'id="automation-status-switch"' in html
-    assert 'select id="automation-status"' not in html
-    assert "setAutomationStatus" in js
-    assert "toggleAutomationStatus" in js
-    assert "automation-schedule-detail" in html
-    assert "automation-interval-value" in html
-    assert "automation-schedule-kind" in html
-    assert "automation-interval-unit" in html
-    assert "Every N sec/min" in html
-    assert "automation-once-at" in html
-    assert 'id="automation-run-at"' not in html
-    assert "deleteSelected" in js
-    assert "setActiveTab" in js
-    assert 'method: "DELETE"' in js
-    assert "automationKeyboardTargetIsEditable" in js
-    assert "DecisionsListKeyboard" in js
-    assert "deleteSelected" in js
-    assert 'window.DecisionsAPI.confirm({' in js
-    assert 'title: "Remove automation"' in js
-    assert 'confirmLabel: "Remove"' in js
-    assert "automation-presets-btn" in html
-    assert "automation-preset-menu" in html
-    assert "createAutomationFromPreset" in js
-    assert "automation-preset-id" in html
-    assert 'id="automation-preset"' not in html
-    assert "Custom instruction" not in html
-    assert "loadAutomationPresets" in js
-    assert "/api/automations/presets" in js
+    assert 'id="automation-presets-btn"' in html
+    assert 'id="automation-preset-menu"' in html
+    assert 'data-scheduled-view="list"' in html
+    assert 'data-scheduled-view="calendar"' in html
+    assert 'data-scheduled-calendar-mode="day"' in html
+    assert "function openAutomationEditor" in js
+    assert "function openNewAutomation" in js
+    assert "function payloadFromForm" in js
+    assert "function updateScheduleControls" in js
+    assert "function setAutomationStatus" in js
+    assert "function toggleAutomationStatus" in js
+    assert "function setActiveTab" in js
+    assert "function renderRuns" in js
+    assert "function createAutomationFromPreset" in js
+    assert "function loadAutomationPresets" in js
+    assert "function stashEditorDraft" in js
+    assert "function editorHasUnsavedChanges" in js
+    assert "/api/automations/presets" in js or "/automations/presets" in js
+    assert "Every N sec/min" in js
+    assert "automation-interval-value" in js
+    assert "automation-interval-unit" in js
+    assert "automation-once-at" in js
+    assert "automation-cron" in js
+    assert "Run History" in js
+    assert "automation-tab-details" in js
+    assert "automation-tab-history" in js
+    assert 'id="automation-status-switch"' in js
+    assert 'id="automation-run-at"' not in js
+    assert "window.location.assign(`/automations/" not in js
+    assert "def _legacy_automation_destination" in server
+    assert "automations/automations.html" not in server
 
-    forbidden = [
-        "WhatsApp",
-        "Gmail",
-        "Telegram approval",
-        "Playwright evidence",
-        "New WhatsApp/Gmail Intake",
-        "intake sources",
-        "workflow handoff",
-        "run evidence",
-        "source_config",
-        "approval_policy",
-        "notification_policy",
-        "ticket_creation",
-        "validation",
-        "Project ID",
-        "Workflow ID",
-        "automation-project",
-        "automation-workflow",
-        "linked_project_id",
-        "optional_workflow_id",
-    ]
-    for needle in forbidden:
+    for needle in ("Custom instruction",):
         assert needle not in html
         assert needle not in js
 

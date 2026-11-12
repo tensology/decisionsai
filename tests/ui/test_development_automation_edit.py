@@ -1,4 +1,4 @@
-"""Editing entry points use the existing editor without changing execution config."""
+"""Editing entry points open the in-place Development editor without leaving the automations surface."""
 from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urlparse
@@ -10,6 +10,8 @@ from tests.ui.test_development_modules_playwright import BASE, install_plan
 
 pytestmark = pytest.mark.e2e_playwright
 OUTPUT = Path('/tmp/decisions-automation-edit')
+EDITOR_URL = BASE + '/development/automations/?automation=auto_13'
+LIST_URL = BASE + '/development/automations/'
 
 
 def install(page):
@@ -58,6 +60,15 @@ def install(page):
     return rows, writes, reject
 
 
+def expect_in_place_editor(page, name='Availability monitor'):
+    expect(page).to_have_url(EDITOR_URL)
+    expect(page.locator('#scheduled-workspace')).to_be_visible()
+    expect(page.locator('#scheduled-automation-editor')).to_be_visible()
+    expect(page.locator('#automations-workspace')).to_have_count(0)
+    expect(page.locator('#automation-name')).to_be_visible()
+    expect(page.locator('#automation-name')).to_have_value(name)
+
+
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
 @pytest.mark.parametrize('entry', ['double_click', 'edit_button', 'context_menu'])
 def test_edit_entry_selects_correct_automation_and_preserves_configuration(page: Page, width, entry):
@@ -66,7 +77,7 @@ def test_edit_entry_selects_correct_automation_and_preserves_configuration(page:
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.set_viewport_size({'width': width, 'height': 900})
-    page.goto(BASE + '/development/automations/')
+    page.goto(LIST_URL)
     row = page.locator('[data-scheduled-row="auto_13"]')
     expect(row).to_be_visible()
     OUTPUT.mkdir(exist_ok=True)
@@ -85,9 +96,7 @@ def test_edit_entry_selects_correct_automation_and_preserves_configuration(page:
         expect(row.locator('[data-row-action="edit"]')).to_be_focused()
         row.locator('.scheduled-row-title').click(button='right')
         page.get_by_role('menuitem', name='Edit automation').click()
-    expect(page).to_have_url(BASE + '/automations/?automation=auto_13')
-    expect(page.locator('#automation-name')).to_be_visible()
-    expect(page.locator('#automation-name')).to_have_value(original['name'])
+    expect_in_place_editor(page)
     expect(page.locator('#automation-instruction')).to_have_value(original['instruction'])
     if entry == 'double_click':
         page.screenshot(path=str(OUTPUT / f'editor-{width}.png'))
@@ -118,13 +127,12 @@ def test_edit_entry_selects_correct_automation_and_preserves_configuration(page:
 def test_calendar_double_click_opens_editor_without_history_overlay(page: Page):
     install(page)
     page.set_viewport_size({'width': 1440, 'height': 900})
-    page.goto(BASE + '/development/automations/')
+    page.goto(LIST_URL)
     page.locator('[data-scheduled-view="calendar"]').click()
     event = page.locator('[data-scheduled-calendar-event="auto_13"]').first
     expect(event).to_be_visible()
     event.dblclick()
-    expect(page).to_have_url(BASE + '/automations/?automation=auto_13')
-    expect(page.locator('#automation-name')).to_have_value('Availability monitor')
+    expect_in_place_editor(page)
     expect(page.locator('#scheduled-history-modal')).to_have_count(0)
 
 
@@ -134,6 +142,8 @@ def test_tool_bound_rule_opens_shared_editor_and_retains_tool_type(page: Page):
     original = deepcopy(rows[1])
     page.goto(BASE + '/development/automation-rules/')
     page.locator('[data-scheduled-row="auto_13"] [data-row-action="edit"]').click()
+    expect(page).to_have_url(BASE + '/development/automation-rules/?automation=auto_13')
+    expect(page.locator('#scheduled-workspace')).to_be_visible()
     expect(page.locator('#automation-name')).to_have_value(original['name'])
     page.locator('#automation-name').fill('Edited rule')
     with page.expect_response(lambda response: response.request.method == 'PUT' and '/api/automations/auto_13' in response.url):
@@ -145,7 +155,7 @@ def test_tool_bound_rule_opens_shared_editor_and_retains_tool_type(page: Page):
 def test_calendar_single_click_keeps_history_and_menu_can_edit(page: Page):
     install(page)
     page.set_viewport_size({'width': 1440, 'height': 900})
-    page.goto(BASE + '/development/automations/')
+    page.goto(LIST_URL)
     page.locator('[data-scheduled-view="calendar"]').click()
     event = page.locator('[data-scheduled-calendar-event="auto_13"]').first
     event.click()
@@ -153,4 +163,29 @@ def test_calendar_single_click_keeps_history_and_menu_can_edit(page: Page):
     page.keyboard.press('Escape')
     event.click(button='right')
     page.locator('#scheduled-cal-menu').get_by_role('menuitem', name='Edit automation').click()
-    expect(page.locator('#automation-name')).to_have_value('Availability monitor')
+    expect_in_place_editor(page)
+
+
+def test_deep_link_and_back_stay_on_development_surface(page: Page):
+    install(page)
+    page.set_viewport_size({'width': 1440, 'height': 900})
+    page.goto(EDITOR_URL)
+    expect_in_place_editor(page)
+    page.locator('#automation-back').click()
+    expect(page).to_have_url(LIST_URL)
+    expect(page.locator('#scheduled-list')).to_be_visible()
+    expect(page.locator('[data-scheduled-row="auto_13"]')).to_be_visible()
+    expect(page.locator('#scheduled-automation-editor')).to_be_hidden()
+    page.locator('[data-scheduled-row="auto_13"] .scheduled-row-title').dblclick()
+    expect_in_place_editor(page)
+    page.go_back()
+    expect(page).to_have_url(LIST_URL)
+    expect(page.locator('#scheduled-list')).to_be_visible()
+    expect(page.locator('#scheduled-automation-editor')).to_be_hidden()
+
+
+def test_legacy_automations_url_lands_on_development_surface(page: Page):
+    install(page)
+    page.set_viewport_size({'width': 1440, 'height': 900})
+    page.goto(BASE + '/automations/?automation=auto_13')
+    expect_in_place_editor(page)

@@ -30,7 +30,7 @@ def plan_db(tmp_path, monkeypatch):
             db.close()
 
     monkeypatch.setattr(service, "get_session", get_session)
-    monkeypatch.setattr(service, "_SCANS_IN_FLIGHT", set())
+    monkeypatch.setattr(service, "_SCAN_QUEUES", {})
     monkeypatch.setattr(service, "_SCAN_STATUS", {})
     folder = tmp_path / "project"
     (folder / "frontend" / "src").mkdir(parents=True)
@@ -81,7 +81,34 @@ def test_open_returns_immediately_with_scanning_flag_then_scan_lands(plan_db, mo
     assert "/auctions" in later["prd"]["content"]
 
 
-def test_concurrent_opens_start_only_one_scan_per_project(plan_db, monkeypatch):
+def test_open_does_not_pair_stale_artifacts_with_a_finished_scan(plan_db, monkeypatch):
+    real_get = service.get_workspace
+    scheduled = False
+
+    def start(workspace_id, project_id):
+        nonlocal scheduled
+        scheduled = True
+        service._SCAN_STATUS[workspace_id] = {"state": "scanning", "error": ""}
+        return True
+
+    def get(workspace_id):
+        nonlocal scheduled
+        detail = real_get(workspace_id)
+        if scheduled:
+            scheduled = False
+            service.materialize_project_scan(workspace_id)
+            service._SCAN_STATUS[workspace_id] = {"state": "done", "error": ""}
+        return detail
+
+    monkeypatch.setattr(service, "start_background_scan", start)
+    monkeypatch.setattr(service, "get_workspace", get)
+    opened = _open(plan_db)
+    assert opened["scan"]["state"] == "scanning"
+    assert service.plan_scan_status(opened["id"])["state"] == "done"
+    assert any(item["item_type"] == "prd" and "/auctions" in item["content"] for item in real_get(opened["id"])["items"])
+
+
+def test_concurrent_reopens_start_only_one_scan_for_the_same_workspace(plan_db, monkeypatch):
     gate = threading.Event()
     calls = []
 
@@ -103,6 +130,80 @@ def test_concurrent_opens_start_only_one_scan_per_project(plan_db, monkeypatch):
     _open(plan_db)
     _wait(first["id"])
     assert len(calls) == 2
+
+
+def test_two_boards_for_one_project_each_receive_their_own_scan(plan_db, monkeypatch):
+    gate = threading.Event()
+    started = threading.Event()
+    calls = []
+    real = service.materialize_project_scan
+
+    def slow(workspace_id, **kwargs):
+        calls.append(workspace_id)
+        started.set()
+        assert gate.wait(5)
+        return real(workspace_id, **kwargs)
+
+    monkeypatch.setattr(service, "materialize_project_scan", slow)
+    first = _open(plan_db, key="decisions:first")
+    try:
+        assert started.wait(2)
+        first_prd = next(item for item in first["items"] if item["item_type"] == "prd")
+        service.update_item(first_prd["id"], content="# First board requirements\n\nKeep this.", source="user")
+        second = _open(plan_db, key="decisions:second")
+        assert second["id"] != first["id"]
+        assert second["scan"]["state"] == "scanning"
+        assert service.start_background_scan(second["id"], plan_db["project_id"]) is False
+        assert calls == [first["id"]]
+    finally:
+        gate.set()
+    for opened in (first, second):
+        assert _wait(opened["id"], timeout=3)["state"] == "done"
+    first_items = service.get_workspace(first["id"])["items"]
+    second_items = service.get_workspace(second["id"])["items"]
+    assert next(item for item in first_items if item["item_type"] == "prd")["content"] == "# First board requirements\n\nKeep this."
+    assert any(item["item_type"] == "prd" and "/auctions" in item["content"] for item in second_items)
+    assert calls == [first["id"], second["id"]]
+
+
+def test_a_failed_scan_releases_the_next_board_and_does_not_block_other_projects(plan_db, monkeypatch):
+    gate = threading.Event()
+    started = threading.Event()
+
+    def scan(workspace_id, **kwargs):
+        if workspace_id == 17:
+            started.set()
+            assert gate.wait(5)
+            raise ValueError("This board could not be scanned.")
+        return {"summary": {"route_count": workspace_id}}
+
+    monkeypatch.setattr(service, "materialize_project_scan", scan)
+    project = plan_db["project_id"]
+    assert service.start_background_scan(17, project)
+    try:
+        assert started.wait(2)
+        assert service.start_background_scan(18, project)
+        assert service.start_background_scan(19, project + 1)
+        assert _wait(19, timeout=2)["route_count"] == 19
+        assert service.plan_scan_status(18)["state"] == "scanning"
+    finally:
+        gate.set()
+    assert _wait(17)["error"] == "This board could not be scanned."
+    assert _wait(18)["route_count"] == 18
+
+
+def test_submission_failure_settles_every_workspace_queued_for_that_project(plan_db, monkeypatch):
+    project = plan_db["project_id"]
+
+    class UnavailableExecutor:
+        def submit(self, *_):
+            assert service.start_background_scan(18, project)
+            raise RuntimeError("Scan workers unavailable.")
+
+    monkeypatch.setattr(service, "_SCAN_EXECUTOR", UnavailableExecutor())
+    assert not service.start_background_scan(17, project)
+    for workspace_id in (17, 18):
+        assert _wait(workspace_id) == {"state": "error", "error": "Scan workers unavailable."}
 
 
 def test_scan_error_is_logged_recorded_and_plan_stays_usable(plan_db, monkeypatch, caplog):
@@ -132,13 +233,13 @@ def test_sync_open_still_scans_inline_and_status_is_idle_by_default(plan_db):
 @pytest.mark.parametrize('coverage', ['none', 'partial'])
 def test_background_status_retains_inventory_limitations_without_workspace_content(monkeypatch, coverage):
     monkeypatch.setattr(service, '_SCAN_STATUS', {})
-    monkeypatch.setattr(service, '_SCANS_IN_FLIGHT', {42})
+    monkeypatch.setattr(service, '_SCAN_QUEUES', {})
     monkeypatch.setattr(service, 'materialize_project_scan', lambda *args, **kwargs: {
         'summary': {'coverage':coverage, 'limitations':['Only supported source formats were inventoried.'],
                     'route_count':0, 'model_count':0, 'adequate':False},
         'workspace': {'private_content':'Not scan status'}, 'artifacts': {'private':'Not scan status'}})
-    service._run_background_scan(17, 42)
-    status = service.plan_scan_status(17)
+    assert service.start_background_scan(17, 42)
+    status = _wait(17)
     assert status['state'] == 'done'
     assert status['coverage'] == coverage
     assert status['limitations'] == ['Only supported source formats were inventoried.']
@@ -149,10 +250,11 @@ def test_background_status_retains_inventory_limitations_without_workspace_conte
 
 def test_background_mock_without_inventory_summary_does_not_invent_warning(monkeypatch):
     monkeypatch.setattr(service, '_SCAN_STATUS', {})
-    monkeypatch.setattr(service, '_SCANS_IN_FLIGHT', {42})
+    monkeypatch.setattr(service, '_SCAN_QUEUES', {})
     monkeypatch.setattr(service, 'materialize_project_scan', lambda *args, **kwargs: {})
-    service._run_background_scan(17, 42)
-    assert service.plan_scan_status(17) == {'state':'done', 'error':'', 'finished_at':service.plan_scan_status(17)['finished_at']}
+    assert service.start_background_scan(17, 42)
+    status = _wait(17)
+    assert status == {'state':'done', 'error':'', 'finished_at':status['finished_at']}
 
 
 def test_routes_defer_scan_and_expose_status():

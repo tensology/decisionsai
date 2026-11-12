@@ -215,6 +215,10 @@ def test_actual_download_api_returns_exact_bytes_and_rejects_missing_changed_fil
     assert client.get(public['url'].replace('/tasks/'+str(cid)+'/', '/tasks/'+str(cid+1)+'/')).status_code == 404
     path.write_bytes(PDF+b'changed')
     assert client.get(public['url']).status_code == 404
+    unavailable = media.public_thread_attachments(cid)[0]
+    assert unavailable['url'] == '' and unavailable['download_error']
+    path.write_bytes(PDF)
+    assert media.public_thread_attachments(cid)[0]['url'] == public['url']
 
 
 def test_registered_media_is_in_harness_inputs_and_rejects_arbitrary_paths(store, tmp_path):

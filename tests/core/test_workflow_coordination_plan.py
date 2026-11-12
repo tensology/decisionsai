@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from distr.core.workflow.coordination_plan import (
     build_run_coordination_plan,
     consume_step_replan,
@@ -285,14 +287,18 @@ def test_visual_evidence_ticket_routes_review_to_configured_vision_model(monkeyp
     assert review["required_evidence_capabilities"] == ["vision"]
 
 
-def test_failed_step_replans_only_the_next_run_assignment():
+@pytest.mark.parametrize("pending_steering", [False, True])
+def test_repeated_step_failure_records_evidence_without_switching_workers(pending_steering):
     plan = {
         "assignments": {
             "11": {"status": "planned", "primary_route": {"backend": "pi", "model": "ornith:35b"}},
             "12": {"status": "planned", "revision": 0, "primary_route": {"backend": "pi", "model": "ornith:35b"}},
+            "13": {"status": "planned", "revision": 0, "primary_route": {"backend": "pi", "model": "ornith:35b"}},
         },
         "revisions": [],
     }
+    if pending_steering:
+        plan["assignments"]["12"].update(needs_replan=True, steering_constraints=["Keep the selected model."])
 
     revised, revision = revise_plan_after_step(
         plan,
@@ -308,10 +314,11 @@ def test_failed_step_replans_only_the_next_run_assignment():
     assert revised["assignments"]["11"]["status"] == "failed"
     assert revised["assignments"]["12"]["primary_route"]["backend"] == "pi"
     assert revised["assignments"]["12"]["replan_evidence_count"] == 1
+    assert revised["assignments"]["12"]["needs_replan"] is pending_steering
     assert revision["route_changed"] is False
     assert revised["revisions"][0]["reason"].startswith("The local worker failed")
 
-    escalated, escalation = revise_plan_after_step(
+    repeated, repeated_revision = revise_plan_after_step(
         revised,
         completed_step_id=11,
         next_step_id=12,
@@ -319,9 +326,13 @@ def test_failed_step_replans_only_the_next_run_assignment():
         reason="The corrected attempt still failed the completion contract.",
         settings={},
     )
-    assert escalation is not None
-    assert escalation["route_changed"] is True
-    assert escalated["assignments"]["12"]["primary_route"]["backend"] == "codex"
+    assert repeated["assignments"]["12"]["replan_evidence_count"] == 2
+    assert repeated["assignments"]["12"]["primary_route"] == plan["assignments"]["12"]["primary_route"]
+    assert repeated["assignments"]["12"]["needs_replan"] is pending_steering
+    assert repeated["assignments"]["13"] == plan["assignments"]["13"]
+    assert repeated_revision["route_changed"] is False
+    assert repeated_revision["reason"].startswith("The corrected attempt still failed")
+    assert repeated["revisions"] == [revision, repeated_revision]
 
 
 def test_failed_step_never_replaces_a_manually_locked_route():

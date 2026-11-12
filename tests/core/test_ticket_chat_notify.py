@@ -3,11 +3,62 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base, Chat
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+
+@pytest.mark.parametrize(("end", "savepoint"), [
+    ("commit", None), ("rollback", None), ("commit", "commit"),
+    ("rollback", "commit"), ("commit", "rollback"),
+])
+def test_automated_lane_move_publishes_source_notices_after_commit(tmp_path, monkeypatch, end, savepoint):
+    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+    database_url = f"sqlite:///{tmp_path / 'lane-notices.sqlite3'}"
+    engine = create_engine(database_url, pool_size=1, max_overflow=0, pool_timeout=0.1, connect_args={"timeout": 0.1})
+    observer_sessions = sessionmaker(bind=create_engine(database_url))
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr("distr.core.db.get_session", sessions)
+    monkeypatch.setattr("distr.core.chat.get_session", sessions)
+    with sessions.begin() as db:
+        board = KanbanBoard(name="Deliveries")
+        root = Chat(title="Original request")
+        db.add_all([board, root])
+        db.flush()
+        lane = KanbanLane(board_id=board.id, name="Backlog", position=0)
+        db.add(lane)
+        db.flush()
+        ticket = KanbanTicket(lane_id=lane.id, title="Fix checkout", source_chat_id=root.id)
+        db.add(ticket)
+        db.flush()
+        ticket_id, root_id = ticket.id, root.id
+
+    def notices():
+        with observer_sessions() as observer:
+            return [row.response for row in observer.query(Chat).filter_by(parent_id=root_id).order_by(Chat.id)]
+
+    with sessions() as db:
+        db.get(KanbanTicket, ticket_id).description = "Updated delivery brief"
+        db.flush()
+        nested = db.begin_nested() if savepoint else None
+        assert move_ticket_to_delivery_lane(db, ticket_id, "In Progress")
+        assert move_ticket_to_delivery_lane(db, ticket_id, "QA")
+        assert not move_ticket_to_delivery_lane(db, ticket_id, "QA")
+        assert notices() == []
+        if nested:
+            getattr(nested, savepoint)()
+            assert notices() == []
+        getattr(db, end)()
+        # A second transaction cannot publish a notice from the previous one.
+        db.commit()
+
+    expected = end == "commit" and savepoint != "rollback"
+    assert notices() == (["Ticket moved: Backlog to In Progress.", "Ticket moved: In Progress to QA."] if expected else [])
 
 
 def _memory_ctx(monkeypatch, *patch_targets: str):
@@ -103,7 +154,7 @@ def test_notify_source_chat_ticket_moved_calls_persist_and_signals(monkeypatch):
 
     assert len(persisted) == 1
     assert persisted[0][0] == chat_root.id
-    assert persisted[0][1] == "Ticket moved to Done after workflow completion."
+    assert persisted[0][1] == "Ticket moved to Done."
     emit_mock.assert_called()
     upd_mock.assert_called()
 

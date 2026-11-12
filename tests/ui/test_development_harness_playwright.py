@@ -7,6 +7,7 @@ TEST_BASE_URL = os.environ.get("DEVELOPMENT_TEST_URL", "http://127.0.0.1:8765")
 
 import json
 import re
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -14,6 +15,15 @@ from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e_playwright
 URL = TEST_BASE_URL + "/development/threads/17/"
+ROUTING_EVIDENCE = Path("/tmp/decisions-routing-scope")
+
+
+def _apply_pin_patch(keys, body):
+    key = body["board_key"]
+    if body["pinned"] and key not in keys:
+        keys.append(key)
+    elif not body["pinned"] and key in keys:
+        keys.remove(key)
 
 
 def _open_details(page: Page) -> None:
@@ -31,6 +41,8 @@ def _install_api(
     requests: list[tuple[str, str]],
     *,
     pending_interaction: bool = False,
+    telegram_checkpoint_delivery: str | None = "confirmed",
+    checkpoint_decision_status: str | None = None,
     live_activity: bool = False,
     autonomy_level: str = "full",
     unassigned_recent: bool = False,
@@ -90,6 +102,7 @@ def _install_api(
     queued_commands: list[dict] = []
     forked_chats: dict[int, dict] = {}
     development_settings = {'dev_play_opens_terminals': True, 'dev_play_opens_terminals_set': True}
+    pinned_board_keys = ["decisions:70"]
     deleted_chat_ids: set[int] = set()
     discovered_sessions = ([{"process_id": "discovered:202", "pid": 202, "ppid": discovered_terminal_parent_pid, "command": "python3 -m http.server 43117", "cwd": "/tmp/decisions", "purpose": "discovered"}] if discovered_terminal_session else [])
     startup_sessions = ([{"process_id": "term-1", "pid": 101, "command": terminal_command, "cwd": "/tmp/decisions", "purpose": "startup", "memory_bytes": 134217728}] if terminal_session else [])
@@ -325,7 +338,11 @@ def _install_api(
                 development_settings['dev_play_opens_terminals_set'] = True
             payload = development_settings
         elif path == "/api/workflows/studio/sidebar/pins":
-            payload = {"board_keys": ["decisions:70"]}
+            if request.method == "PUT":
+                pinned_board_keys[:] = request.post_data_json["board_keys"]
+            elif request.method == "PATCH":
+                _apply_pin_patch(pinned_board_keys, request.post_data_json)
+            payload = {"board_keys": pinned_board_keys}
         elif path == "/api/projects/cli-backends":
             payload = {"backends": []}
         elif path == "/api/skins":
@@ -492,6 +509,9 @@ def _install_api(
             if ticket:
                 next(lane for lane in jira_board["lanes"] if lane["id"] == body["target_lane_id"])["tickets"].append(ticket)
             payload = {"success": True, "cache_updated": True}
+        elif path == "/api/tickets/boards/70/tickets/42/development-thread":
+            linked_ticket = next(ticket for lane in local_board["lanes"] for ticket in lane["tickets"] if ticket["id"] == 42)
+            payload = {"chat_id": linked_ticket.get("source_chat_id")}
         elif path == "/api/tickets/thread-draft":
             payload = {
                 "title": "Jira visual review",
@@ -828,8 +848,10 @@ def _install_api(
                     "token": "abc123",
                     "run_id": 99,
                     "kind": "provider_preflight" if provider_preflight_interaction else "control_interrupt" if budget_exhausted_interaction else "approval",
-                    "allowed_actions": ["continue", "stop", "feedback"] if budget_exhausted_interaction else ["model_0", "stop"] if provider_preflight_interaction else ["approve", "stop", "feedback"],
+                    "allowed_actions": [] if checkpoint_decision_status else ["continue", "stop", "feedback"] if budget_exhausted_interaction else ["model_0", "stop"] if provider_preflight_interaction else ["approve", "stop", "feedback"],
+                    "decision_status": checkpoint_decision_status,
                     "telegram_linked": True,
+                    "telegram_delivery": telegram_checkpoint_delivery,
                 }] if pending_interaction and control_chat_id == 17 else []),
             }
         elif path == "/api/workflows/studio/tasks/17/commands" and request.method == "POST":
@@ -1097,6 +1119,8 @@ def _install_api(
             body = json.loads(request.post_data or "{}")
             chat.update(body)
             payload = {"id": 17, **body, "workflow_id": 44}
+        elif path == "/api/automations/presets":
+            payload = {"presets": []}
         elif path == "/api/workflows/studio/routing-assessment":
             body = json.loads(request.post_data or "{}")
             payload = {
@@ -1151,6 +1175,46 @@ def test_recents_section_appears_when_an_open_ended_thread_exists(page: Page):
     expect(page.get_by_text("Open-ended development", exact=True)).to_be_visible()
 
 
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_open_ended_thread_does_not_inherit_the_previous_board(page: Page, width):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, current_board_linked=True, unassigned_recent=True)
+    page.route("**/api/chats/19?*", lambda route: route.fulfill(json={
+        "id": 19, "title": "Open-ended development", "project_id": None, "development": True,
+        "messages": [{"role": "assistant", "content": "Ready to continue without a linked project."}],
+    }))
+    page.route("**/api/workflows/studio/tasks/19/*", lambda route: route.fulfill(json={"items": []}))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(URL)
+    project = page.locator("#header-project")
+    switcher = page.locator("#development-task-header [data-board-view-switch]")
+    terminal = page.locator("#thread-terminal-button")
+    expect(project).to_have_text("Decisions delivery")
+    expect(switcher).to_be_visible()
+    expect(terminal).to_be_enabled()
+    opener = page.get_by_role("button", name="Open development boards")
+    if opener.is_visible():
+        opener.click()
+    page.locator("#recents-toggle").click()
+    page.locator('#recent-task-group [data-chat-id="19"]').click()
+    expect(page.locator("#header-task")).to_have_text("Open-ended development")
+    expect(project).to_have_text("Development")
+    expect(switcher).to_be_hidden()
+    expect(terminal).to_be_disabled()
+    expect(page.locator("#composer-board-label")).to_have_text("No board")
+    expect(page.locator("#task-prompt")).to_have_attribute("placeholder", "Describe the task")
+    ROUTING_EVIDENCE.mkdir(exist_ok=True)
+    page.screenshot(path=ROUTING_EVIDENCE / f"{width}-unlinked-thread.png", animations="disabled")
+
+    if opener.is_visible():
+        opener.click()
+    page.locator('[data-board-group="decisions:70"] [data-chat-id="17"]').first.click()
+    expect(project).to_have_text("Decisions delivery")
+    expect(switcher).to_be_visible()
+    expect(terminal).to_be_enabled()
+    page.screenshot(path=ROUTING_EVIDENCE / f"{width}-linked-thread-return.png", animations="disabled")
+
+
 def test_board_linked_thread_appears_in_board_and_recent(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, unassigned_recent=True, board_linked_projectless=True)
@@ -1170,7 +1234,37 @@ def test_external_ticket_thread_appears_under_its_local_project_board(page: Page
 
     group = page.locator('[data-board-group="decisions:70"]')
     expect(group.locator('[data-chat-id="17"]')).to_be_visible()
-    expect(group.locator('.project-row')).to_have_class(re.compile(r"\bactive\b"))
+    # 2026-11-12: the open thread highlights its own row; the project folder stays normal.
+    expect(group.locator('.task-row-wrap.active [data-chat-id="17"]')).to_be_visible()
+    expect(group.locator('.project-row')).not_to_have_class(re.compile(r"\bactive\b"))
+
+
+def test_folder_opened_for_a_thread_returns_to_normal_after_leaving(page: Page):
+    # 2026-11-12 (Paul): a collapsed project opened to view its threads goes back to
+    # collapsed and unhighlighted once the user leaves that thread, like the other folders.
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    page.add_init_script("localStorage.setItem('decisions-development-collapsed-boards', JSON.stringify(['decisions:70']));")
+    page.goto(TEST_BASE_URL + "/development/incoming/")
+    expect(page.locator("#incoming-workspace")).to_be_visible()
+    group = page.locator('[data-board-group="decisions:70"]')
+    active = re.compile(r"\bactive\b")
+    expect(group.locator('.task-list')).to_be_hidden()
+    expect(group.locator('.project-row')).not_to_have_class(active)
+
+    group.locator('[data-board-toggle="decisions:70"]').click()
+    group.locator('[data-chat-id="17"]').click()
+    expect(page).to_have_url(URL)
+    expect(group.locator('.task-list')).to_be_visible()
+    expect(group.locator('.task-row-wrap.active [data-chat-id="17"]')).to_be_visible()
+    expect(group.locator('.project-row')).not_to_have_class(active)
+
+    page.locator("#sidebar-incoming-toggle").click()
+    expect(page.locator("#incoming-workspace")).to_be_visible()
+    expect(group.locator('.task-list')).to_be_hidden()
+    expect(group.locator('.project-row')).not_to_have_class(active)
+    stored = page.evaluate("JSON.parse(localStorage.getItem('decisions-development-collapsed-boards') || '[]')")
+    assert "decisions:70" in stored
 
 
 def test_recent_show_more_opens_full_recent_development_view(page: Page):
@@ -1750,6 +1844,8 @@ def unpinned_board_preferences(page: Page):
         def pins(route):
             if route.request.method == "PUT":
                 keys[:] = route.request.post_data_json["board_keys"]
+            elif route.request.method == "PATCH":
+                _apply_pin_patch(keys, route.request.post_data_json)
             route.fulfill(json={"board_keys": keys})
 
         page.route("**/api/workflows/studio/sidebar/pins", pins)
@@ -1784,6 +1880,75 @@ def test_project_context_pin_keeps_projects_first_and_collapse_persists(page: Pa
     page.reload()
     expect(page.locator('#pinned-board-tree [data-board-group="decisions:70"] [data-chat-id="17"]')).to_be_hidden()
     page.evaluate("window.localStorage.removeItem('decisions-development-pinned-boards')")
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_delayed_sidebar_refresh_preserves_confirmed_jira_pin(page: Page, width: int):
+    _install_api(page, [])
+    keys = ["decisions:70"]
+    delayed = []
+    writes = []
+    reads = []
+
+    def pins(route):
+        if route.request.method == "PATCH":
+            writes.append(route)
+            page.evaluate("document.documentElement.dataset.pinWriteHeld = 'true'")
+            return
+        else:
+            reads.append(True)
+            if len(reads) == 2:
+                delayed.append((route, list(keys)))
+                page.evaluate("document.documentElement.dataset.pinReadHeld = 'true'")
+                return
+        route.fulfill(json={"board_keys": keys})
+
+    page.route("**/api/workflows/studio/sidebar/pins", pins)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(URL)
+    sidebar_button = page.locator("#sidebar-open")
+    if sidebar_button.is_visible():
+        sidebar_button.click()
+    jira = page.locator('[data-board-select="jira:jira-1"]')
+    expect(jira).to_be_visible()
+    expect(page.locator("html")).to_have_attribute("data-pin-read-held", "true", timeout=15000)
+    assert len(delayed) == 1
+
+    jira.click(button="right")
+    pin_button = page.get_by_role("menuitem", name="Pin Board", exact=True)
+    pin_button.click()
+    expect(page.locator("html")).to_have_attribute("data-pin-write-held", "true")
+    expect(pin_button).to_be_disabled()
+    page.screenshot(path=f"/private/tmp/development-jira-pin-pending-{width}.png", full_page=True)
+    write = writes.pop()
+    assert write.request.post_data_json == {"board_key": "jira:jira-1", "pinned": True}
+    keys.append("trello:trello-1")  # Another client saved a pin after this tab read the list.
+    _apply_pin_patch(keys, write.request.post_data_json)
+    write.fulfill(json={"board_keys": keys})
+    pinned = page.locator('#pinned-board-tree [data-board-select="jira:jira-1"]')
+    expect(pinned).to_be_visible()
+    assert keys == ["decisions:70", "trello:trello-1", "jira:jira-1"]
+    other_pin = page.locator('#pinned-board-tree [data-board-select="trello:trello-1"]')
+    expect(other_pin).to_be_visible()
+    page.evaluate("""() => {
+        const observer = new MutationObserver(() => {
+            observer.disconnect();
+            document.documentElement.dataset.pinRefreshRendered = 'true';
+        });
+        observer.observe(document.getElementById('pinned-board-tree'), { childList: true });
+    }""")
+    stale_route, stale_keys = delayed.pop()
+    stale_route.fulfill(json={"board_keys": stale_keys})
+    expect(page.locator("html")).to_have_attribute("data-pin-refresh-rendered", "true")
+    expect(pinned).to_be_visible(timeout=1000)
+    expect(other_pin).to_be_visible(timeout=1000)
+    page.screenshot(path=f"/private/tmp/development-jira-pin-after-refresh-{width}.png", full_page=True)
+    page.reload()
+    if sidebar_button.is_visible():
+        sidebar_button.click()
+    expect(pinned).to_be_visible()
+    expect(other_pin).to_be_visible()
+    expect(page.locator('#board-task-tree [data-board-select="jira:jira-1"]')).to_have_count(0)
 
 
 def test_boards_section_only_collapses_when_a_board_is_pinned(page: Page, unpinned_board_preferences):
@@ -1855,6 +2020,18 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator("#new-task-dialog")).to_have_count(0)
     page.screenshot(path="/private/tmp/development-harness-empty.png", full_page=True)
 
+    # New Thread, then a project click, starts a scoped draft — not Kanban.
+    page.locator('[data-board-select="decisions:80"]').click()
+    expect(page.locator("#studio-empty")).to_be_visible()
+    expect(page.locator("#kanban-workspace")).to_be_hidden()
+    expect(page.locator("#composer-board-label")).to_have_text("Empty delivery")
+    expect(page.locator("#header-project")).to_have_text("Empty delivery")
+    expect(page.locator("#header-task")).to_have_text("New thread")
+    expect(page.locator("#task-state")).to_contain_text("Draft")
+    expect(page.locator("#development-task-header [data-board-view-switch]")).to_be_visible()
+    expect(page).to_have_url(TEST_BASE_URL + "/development/boards/decisions/80/")
+    expect(page.locator("#new-thread-button")).not_to_have_class(re.compile(r"\bactive\b"))
+
     page.locator('[data-board-toggle="decisions:70"]').click()
     expect(page.locator('[data-chat-id="17"]').first).to_be_hidden()
     page.locator("#sidebar-reports-toggle").click()
@@ -1863,16 +2040,15 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     page.locator('[data-board-toggle="decisions:70"]').click()
     expect(page.locator('[data-chat-id="17"]').first).to_be_visible()
 
-    page.locator('[data-board-select="decisions:80"]').click()
+    # The row Kanban icon is the explicit Open-board path.
+    expect(page.locator('[data-board-kanban="decisions:80"]')).to_be_visible()
+    page.locator('[data-board-kanban="decisions:80"]').click()
     expect(page.locator("#kanban-workspace")).to_be_visible()
     expect(page.locator("#development-kanban-board")).to_have_text("Empty delivery")
     expect(page).to_have_url(TEST_BASE_URL + "/development/boards/decisions/80/kanban/")
     expect(page.locator("#new-thread-button")).not_to_have_class(re.compile(r"\bactive\b"))
     expect(page.locator('[data-board-group="decisions:80"] .project-row')).to_have_class(re.compile(r"\bactive\b"))
     expect(page.locator('[data-board-select="decisions:80"]')).to_have_attribute("aria-current", "true")
-
-    # Selecting the board opens Kanban, so rows no longer carry a separate Kanban button.
-    expect(page.locator('[data-board-kanban]')).to_have_count(0)
     new_thread_button = page.locator('[data-board-new-chat="decisions:70"]')
     expect(new_thread_button).to_be_visible()
     assert new_thread_button.bounding_box()["width"] == 28
@@ -2096,6 +2272,60 @@ def test_mobile_drawers_and_tap_targets(page: Page):
     assert too_small == [], too_small
 
 
+def test_planning_waits_for_the_selected_projects_thread(page: Page):
+    _install_api(page, [], current_board_linked=True)
+    page.set_viewport_size({"width": 1280, "height": 900})
+    threads = [
+        {"id": 17, "title": "Current project thread", "project_id": 7, "development_board_key": "decisions:70"},
+        {"id": 18, "title": "Selected project thread", "project_id": 8, "development_board_key": "decisions:80"},
+    ]
+    for thread in threads:
+        thread.update(development=True, archived=False)
+    page.route("**/api/chats?*", lambda route: route.fulfill(json={"chats": threads, "last_chat_id": 17}))
+    page.route("**/api/workflows/studio/sidebar/pins", lambda route: route.fulfill(json={"board_keys": ["decisions:70", "decisions:80"]}))
+    held = []
+    page.route("**/api/chats/18?*", lambda route: held.append(route))
+    page.route(re.compile(r"/api/workflows/studio/tasks/18/(artifacts|plans)$"),
+               lambda route: route.fulfill(json={"items": []}))
+    opened = []
+
+    def plan(route):
+        if route.request.method == "GET":
+            return route.fallback()
+        opened.append(route.request.post_data_json["board_key"])
+        return route.fulfill(status=409, json={"detail": "Plan read isolated for navigation test"})
+
+    page.route("**/api/workflows/studio/plan-workspaces", plan)
+    page.goto(URL)
+    expect(page.locator("#task-prompt")).to_be_enabled()
+    with page.expect_request("**/api/chats/18?*"):
+        page.get_by_role("button", name="Empty delivery", exact=True).click()
+    page.get_by_role("group", name="Board view").get_by_role("button", name="Planning", exact=True).click()
+    held[0].fulfill(json={**threads[1], "messages": []})
+    expect(page).to_have_url(TEST_BASE_URL + "/development/boards/decisions/80/plan/")
+    expect(page.get_by_text("Plan read isolated for navigation test")).to_be_visible()
+    assert opened == ["decisions:80"]
+
+
+def test_mobile_project_drawer_stays_open_during_initial_thread_restore(page: Page):
+    _install_api(page, [])
+    page.set_viewport_size({"width": 390, "height": 844})
+    restoring = []
+    page.route("**/api/chats/17?*", lambda route: restoring.append(route))
+    with page.expect_request("**/api/chats/17?*"):
+        page.goto(TEST_BASE_URL + "/development/")
+
+    opener = page.get_by_role("button", name="Open development boards")
+    opener.click()
+    expect(opener).to_have_attribute("aria-expanded", "true")
+    restoring[0].fallback()
+    expect(page).to_have_url(URL)
+    expect(opener).to_have_attribute("aria-expanded", "true")
+    page.screenshot(path="/tmp/decisions-mobile-drawer-initial-restore.png", animations="disabled")
+    page.get_by_role("button", name="Close development boards").click()
+    expect(opener).to_have_attribute("aria-expanded", "false")
+
+
 def test_mobile_placeholder_navigation_fits_without_horizontal_overflow(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
@@ -2128,6 +2358,38 @@ def test_web_and_telegram_share_the_pending_run_control(page: Page):
     page.wait_for_timeout(150)
 
     assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_checkpoint_delivery_shows_only_confirmed_telegram_controls(page: Page, width):
+    evidence = Path("/tmp/decisions-checkpoint-delivery")
+    evidence.mkdir(exist_ok=True)
+    page.set_viewport_size({"width": width, "height": 900})
+    for status, notice in (
+        ("pending", "Waiting for Telegram to confirm delivery."),
+        ("rate_limited", "The Telegram relay rate limit blocked delivery. You can respond here."),
+        ("missing_controls", "Telegram received the message without its controls. You can respond here."),
+        ("unconfirmed", "Telegram delivery could not be confirmed. You can respond here."),
+        ("confirmed", None),
+    ):
+        requests = []
+        _install_api(page, requests, pending_interaction=True, telegram_checkpoint_delivery=status)
+        page.goto(URL)
+        _open_details(page)
+        card = page.locator(".waiting-card")
+        heading = "Workflow checkpoint" if notice else "Workflow checkpoint available in web or Telegram"
+        expect(card.get_by_text(heading, exact=True)).to_be_visible()
+        if notice:
+            expect(card.get_by_role("status")).to_have_text(notice)
+        else:
+            expect(card.get_by_role("status")).to_have_count(0)
+        expect(card.get_by_role("button", name="Approve", exact=True)).to_be_enabled()
+        assert not any(method == "POST" and path.endswith("/resolve") for method, path in requests)
+        card.screenshot(path=evidence / f"{width}-{status}.png", animations="disabled")
+        if status == "unconfirmed":
+            card.get_by_role("button", name="Approve", exact=True).click()
+            assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
+        page.unroute_all(behavior="wait")
 
 
 def test_waiting_workflow_defaults_to_loop_and_exposes_approval(page: Page):
@@ -2163,7 +2425,7 @@ def test_budget_checkpoint_shows_reason_and_explicit_continue_action(page: Page)
     pass
 
 
-def test_pending_checkpoint_requires_explicit_revision_and_blocks_normal_send(page: Page):
+def test_pending_checkpoint_requires_explicit_revision(page: Page):
     requests: list[tuple[str, str]] = []
     submitted_payloads: list[dict] = []
     _install_api(
@@ -2174,19 +2436,19 @@ def test_pending_checkpoint_requires_explicit_revision_and_blocks_normal_send(pa
     )
     page.goto(URL)
 
-    page.locator("#task-prompt").fill("This should stay in the composer")
+    page.locator("#task-prompt").fill("Follow up after the checkpoint")
     page.locator("#send-button").click()
-    expect(page.locator("#task-inspector")).to_be_visible()
-    expect(page.locator("#studio-toast")).to_contain_text("checkpoint decision")
+    expect(page.locator("#thread-command-queue")).to_contain_text("Follow up after the checkpoint")
     assert submitted_payloads == []
+    assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") not in requests
 
+    _open_details(page)
     feedback = page.locator("[data-checkpoint-feedback] textarea")
     expect(feedback).to_be_visible()
     feedback.fill("Revise the implementation plan before continuing")
-    page.get_by_role("button", name="Submit revision", exact=True).click()
-    page.wait_for_timeout(100)
-
-    assert ("POST", "/api/workflows/studio/interactions/abc123/resolve") in requests
+    with page.expect_request("**/api/workflows/studio/interactions/abc123/resolve") as submitted:
+        page.get_by_role("button", name="Submit revision", exact=True).click()
+    assert submitted.value.post_data_json["action"] == "feedback"
 
 
 def test_workflow_confirmation_can_send_the_same_prompt_directly(page: Page):
@@ -2614,6 +2876,103 @@ def test_workflow_route_receipt_shows_decision_selection_and_actual_runtime(page
     page.screenshot(path="/private/tmp/development-workflow-route-receipt-mobile.png", full_page=True)
 
 
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_pending_assessment_cannot_send_in_a_different_thread(page: Page, width):
+    requests = []
+    _install_api(page, requests, direct_execution=True, run_status="completed", terminal_session=False)
+    held = []
+    instruction = "Assess and send from the original thread"
+
+    def assessment(route):
+        if route.request.post_data_json["instruction"] == instruction:
+            held.append(route)
+        else:
+            route.fallback()
+
+    page.route("**/api/workflows/studio/routing-assessment", assessment)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(URL)
+    prompt = page.locator("#task-prompt")
+    prompt.fill(instruction)
+    with page.expect_request(lambda request: "routing-assessment" in request.url
+                             and request.post_data_json["instruction"] == instruction):
+        page.locator("#send-button").click()
+    page.evaluate("0")
+    assert len(held) == 1
+    if width <= 680:
+        page.locator("#sidebar-open").click()
+    page.locator("#new-thread-button").click()
+    expect(page).to_have_url(TEST_BASE_URL + "/development/new/")
+    prompt.fill("Keep the new thread draft")
+    held[0].fulfill(json={"execution_mode": "direct", "complexity": "medium", "route": {"backend": "cursor"}})
+    expect(page.locator("#studio-toast")).to_contain_text("Review the draft and send again")
+    expect(prompt).to_have_value("Keep the new thread draft")
+    ROUTING_EVIDENCE.mkdir(exist_ok=True)
+    page.screenshot(path=ROUTING_EVIDENCE / f"{width}-send-cancelled.png", animations="disabled")
+    assert ("POST", "/api/workflows/studio/tasks") not in requests
+    assert ("POST", "/api/workflows/studio/tasks/17/messages") not in requests
+
+
+def test_failed_submit_assessment_does_not_reuse_a_previous_route(page: Page):
+    requests, submitted = [], []
+    _install_api(page, requests, submitted_payloads=submitted, direct_execution=True, run_status="completed")
+    instruction = "Use the current thread routing"
+
+    def assessment(route):
+        if route.request.post_data_json["instruction"] == instruction:
+            route.fulfill(status=503, json={"detail": "Assessment unavailable"})
+        else:
+            route.fallback()
+
+    page.route("**/api/workflows/studio/routing-assessment", assessment)
+    page.goto(URL)
+    expect(page.locator("#model-button")).to_have_attribute("data-tooltip", re.compile("Cursor", re.I))
+    page.locator("#task-prompt").fill(instruction)
+    with page.expect_response("**/api/workflows/studio/tasks/17/messages"):
+        page.locator("#send-button").click()
+    assert submitted[-1]["routing_assessment"] is None
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_older_route_preview_cannot_replace_the_latest_draft(page: Page, width):
+    _install_api(page, [])
+    held = {}
+
+    def assessment(route):
+        instruction = route.request.post_data_json["instruction"]
+        if instruction:
+            held[instruction] = route
+        else:
+            route.fallback()
+
+    page.route("**/api/workflows/studio/routing-assessment", assessment)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(URL)
+    prompt = page.locator("#task-prompt")
+    for text in ("Earlier draft", "Current draft"):
+        with page.expect_request(lambda request: "routing-assessment" in request.url
+                                 and request.post_data_json["instruction"] == text) as request:
+            prompt.fill(text)
+        assert request.value.post_data_json["chat_id"] == 17
+        assert "board_key" not in request.value.post_data_json
+        page.evaluate("0")  # Let the Playwright route handler record the intercepted request.
+    held["Current draft"].fulfill(json={"complexity": "high", "route": {"backend": "codex"}})
+    expect(page.locator("#model-button")).to_have_attribute("data-tooltip", re.compile("High, Codex", re.I))
+    with page.expect_response(lambda response: "routing-assessment" in response.url
+                              and response.request.post_data_json["instruction"] == "Earlier draft") as response:
+        held["Earlier draft"].fulfill(json={"complexity": "low", "route": {"backend": "cursor"}})
+    response.value.finished()
+    page.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    expect(page.locator("#model-button")).to_have_attribute("data-tooltip", re.compile("High, Codex", re.I))
+    page.unroute("**/api/workflows/studio/routing-assessment", assessment)
+    page.route("**/api/workflows/studio/routing-assessment",
+               lambda route: route.fulfill(json={"complexity": "high", "route": {"backend": "codex"}}))
+    page.locator("#model-button").click()
+    expect(page.locator("#model-route-preview-text")).to_have_text(re.compile("Would use: High, Codex", re.I))
+    ROUTING_EVIDENCE.mkdir(exist_ok=True)
+    page.screenshot(path=ROUTING_EVIDENCE / f"{width}-route-preview.png", animations="disabled")
+
+
 def test_completed_direct_thread_message_dispatches_without_a_workflow(page: Page):
     requests: list[tuple[str, str]] = []
     submitted_messages: list[dict] = []
@@ -2650,7 +3009,8 @@ def test_completed_direct_thread_message_dispatches_without_a_workflow(page: Pag
     assert ("POST", "/api/workflows/studio/tasks/17/messages") in requests
     assert submitted_messages[-1]["message"] == instruction
     assert "create a ticket" not in submitted_messages[-1]["message"].lower()
-    expect(page.locator("#model-label")).to_have_text("Auto · Cursor · medium")
+    expect(page.locator("#model-label")).to_have_text("Auto")
+    expect(page.locator("#model-button")).to_have_attribute("data-tooltip", re.compile("Medium, Cursor", re.I))
     assert not any(path == "/api/workflows/44/run" for _, path in requests)
 
     follow_up = "Now tighten the spacing and keep the existing implementation"
@@ -3601,7 +3961,7 @@ def test_local_ticket_delete_is_left_aligned_and_requires_confirmation(page: Pag
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(URL)
 
-    page.locator('[data-board-select="decisions:70"]').click()
+    page.get_by_role("group", name="Board view").get_by_role("button", name="Kanban", exact=True).click()
     page.locator('[data-kanban-ticket="decisions:42"]').dblclick()
     dialog = page.locator("#kanban-ticket-dialog")
     expect(dialog.locator("#kanban-ticket-title")).to_have_css("color", "rgb(248, 250, 252)")
@@ -3621,7 +3981,10 @@ def test_local_ticket_delete_is_left_aligned_and_requires_confirmation(page: Pag
     assert title_box is not None and description_box is not None and complexity_box is not None and footer_box is not None and dialog_box is not None
     assert abs(title_box["width"] - description_box["width"]) <= 1
     assert complexity_box["y"] > title_box["y"]
-    assert footer_box["y"] - (description_box["y"] + description_box["height"]) <= 32
+    review_box = dialog.get_by_text("Workflow review", exact=True).bounding_box()
+    assert review_box is not None
+    assert description_box["y"] + description_box["height"] <= review_box["y"]
+    assert review_box["y"] + review_box["height"] <= footer_box["y"]
     expect(dialog.get_by_role("button", name="Open Thread")).to_be_visible()
     page.screenshot(path="/private/tmp/development-ticket-dialog-compact.png", full_page=True)
     assert dialog_box["height"] < 650
@@ -3662,7 +4025,7 @@ def test_ticket_delete_checkbox_can_preserve_the_linked_thread(page: Page):
     page.on("request", lambda request: requested_urls.append(request.url))
     page.goto(URL)
 
-    page.locator('[data-board-select="decisions:70"]').click()
+    page.get_by_role("group", name="Board view").get_by_role("button", name="Kanban", exact=True).click()
     page.locator('[data-kanban-ticket="decisions:42"]').dblclick()
     page.get_by_role("button", name="Delete", exact=True).click()
     confirmation = page.locator("#decisions-confirm-modal")
@@ -3703,7 +4066,7 @@ def test_ticket_material_creates_a_reviewable_thread_draft_without_submitting(pa
     expect(dialog.get_by_role("tab", name=re.compile("^Files"))).to_have_attribute("aria-selected", "true")
     # Switching tabs never resizes the modal.
     assert dialog.evaluate("node => node.getBoundingClientRect().height") == details_height
-    expect(page.locator("#kanban-ticket-dropzone")).to_be_visible()
+    expect(page.locator("#kanban-ticket-dropzone")).to_be_hidden()
     expect(page.locator("#kanban-ticket-details-panel")).to_be_hidden()
     expect(page.locator("#kanban-ticket-attachments-panel")).to_be_visible()
     page.locator("#kanban-ticket-attachments").evaluate(
@@ -4039,13 +4402,13 @@ def test_auto_routing_is_visible_and_manual_image_incompatibility_blocks_send(pa
     page.locator("#new-thread-button").click()
     page.locator("#task-prompt").fill("Repair the production workflow migration")
     page.locator("#send-button").click()
-    expect(page.locator("#model-label")).to_have_text("Auto · Codex · high")
+    expect(page.locator("#model-label")).to_have_text("Auto")
     assert ("POST", "/api/workflows/studio/routing-assessment") in requests
 
     page.goto(URL)
     page.locator("#model-button").click()
     page.locator('[data-model-pane="harness"]').click()
-    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(5)
+    expect(page.locator("#model-submenu-list .model-choice")).to_have_count(3)  # Auto and the two installed fixtures.
     page.get_by_role("menuitemradio", name=re.compile(r"^Pi\b")).click()
     expect(page.locator("#model-submenu-title")).to_have_text("Model")
     page.get_by_role("menuitemradio", name=re.compile("Kilo Auto Free")).click()

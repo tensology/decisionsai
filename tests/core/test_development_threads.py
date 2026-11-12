@@ -339,7 +339,7 @@ def test_linking_local_ticket_uses_ticket_title_and_rename_updates_both():
 
 
 
-def test_linking_a_recent_thread_creates_one_in_progress_ticket_and_moves_it_with_the_board():
+def test_linking_an_idle_thread_creates_one_backlog_ticket_and_moves_it_with_the_board():
     with get_session() as db:
         first_project = Project(name="Thread Board One")
         second_project = Project(name="Thread Board Two")
@@ -377,7 +377,7 @@ def test_linking_a_recent_thread_creates_one_in_progress_ticket_and_moves_it_wit
         tickets = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == chat_id).all()
         lane = db.get(KanbanLane, tickets[0].lane_id)
         assert len(tickets) == 1
-        assert lane.name == "In Progress"
+        assert lane.name == "Backlog"
         assert lane.board_id == second_board_id
         assert tickets[0].linked_project_id == second_project_id
 

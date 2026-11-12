@@ -30,6 +30,204 @@ def candidate_id():
     return proactive.run_proactive_check()['candidates'][0]['candidate_id']
 
 
+def test_foreign_project_step_blocks_assigned_workflow_without_direct_fallback(work, tmp_path):
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+
+    factory, ids, backend = work
+    foreign = _seed_work_signal(factory, tmp_path / 'foreign')
+    with _session_ctx(factory) as session:
+        workflow = AutoWorkflow(name='Other project review')
+        workflow.steps.append(AutoWorkflowStep(name='Review', linked_project_id=foreign.project_id))
+        session.add(workflow)
+        session.flush()
+        session.get(KanbanBoard, ids.board_id).default_workflow_id = workflow.id
+    candidate = proactive.run_proactive_check(board_id=ids.board_id)['candidates'][0]
+    review = proactive.review_workflow_draft(board_id=ids.board_id, ticket_id=ids.ticket_id)
+    assert review['status'] == 'blocked'
+    assert 'another project' in review['error'] == candidate['approval_question']
+    assert not proactive.dispatch_proactive_candidate(candidate['candidate_id'])['success']
+    backend.assert_not_called()
+
+
+@pytest.mark.parametrize('assigned', [False, True])
+@pytest.mark.parametrize('change', ['thread_link', 'hidden_project'])
+def test_workflow_approval_rechecks_its_scope_after_review(work, tmp_path, monkeypatch, assigned, change):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.core.db.kanban import KanbanLane, KanbanTicket, KanbanTicketTodo
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
+    from distr.core.workflow import dispatcher, draft_launch
+    from distr.core.workflow.development_threads import bind_ticket_development_thread
+    from distr.gui.web.routes.development.workflows import register_routes
+
+    factory, affected, backend = work
+    independent = _seed_work_signal(factory, tmp_path / 'independent')
+    provider = lambda: _session_ctx(factory)
+    monkeypatch.setattr(draft_launch, 'get_session', provider)
+    monkeypatch.setattr(dispatcher, 'get_session', provider)
+    workers = []
+    timer = Mock(side_effect=lambda _delay, callback: SimpleNamespace(start=lambda: workers.append(callback)))
+    monkeypatch.setattr(dispatcher, 'threading', SimpleNamespace(
+        Timer=timer, get_ident=dispatcher.threading.get_ident, Lock=dispatcher.threading.Lock,
+    ))
+    with provider() as db:
+        for scope in (affected, independent):
+            ticket = db.get(KanbanTicket, scope.ticket_id)
+            db.get(KanbanLane, ticket.lane_id).name = 'Backlog'
+            if assigned:
+                workflow = AutoWorkflow(name='Approved checkout flow', status='active')
+                workflow.steps.append(AutoWorkflowStep(
+                    name='Review checkout', instruction='Review checkout', action_type='send_to_project_cli',
+                    linked_project_id=scope.project_id,
+                ))
+                db.add(workflow)
+                db.flush()
+                ticket.linked_workflow_id = workflow.id
+            else:
+                for position, text in enumerate(['Inspect checkout', 'Repair checkout', 'Verify checkout']):
+                    db.add(KanbanTicketTodo(ticket_id=ticket.id, text=text, position=position))
+
+    candidates = {item['ticket_id']: item for item in proactive.run_proactive_check()['candidates']}
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    api = TestClient(app)
+
+    def path(scope):
+        return f'/workflows/studio/boards/{scope.board_id}/tickets/{scope.ticket_id}/workflow-draft'
+
+    def approve(scope, candidate):
+        return api.post(path(scope) + '/approve', json={
+            'approved': True, 'candidate_id': candidate['candidate_id'],
+            'revision': candidate['workflow_draft']['checklist_revision'],
+        })
+
+    assert api.get(path(affected)).json()['status'] == 'awaiting_review'
+    linked_chat = None
+    with provider() as db:
+        ticket = db.get(KanbanTicket, affected.ticket_id)
+        if change == 'hidden_project':
+            db.get(Project, affected.project_id).agent_ignored = True
+        else:
+            original_date = ticket.modified_date
+            root = bind_ticket_development_thread(
+                db, ticket, project_id=affected.project_id, board_id=affected.board_id,
+                lane_name='Backlog', approved_workflow_id=ticket.linked_workflow_id,
+            )
+            linked_chat = root.id
+            db.flush()
+            assert ticket.modified_date == original_date
+    review = api.get(path(affected)).json()
+    assert review['status'] == ('blocked' if change == 'hidden_project' else 'stale')
+    rejected = approve(affected, candidates[affected.ticket_id])
+    assert rejected.status_code == 409
+    if change == 'hidden_project':
+        assert 'hidden from the agent' in review['error'] == rejected.json()['detail']
+        assert proactive.run_proactive_check(project_id=affected.project_id)['candidates'] == []
+    assert workers == []
+    response = approve(independent, candidates[independent.ticket_id])
+    assert response.status_code == 200, response.text
+    other_run = response.json()['run_id']
+    if change == 'hidden_project':
+        with provider() as db:
+            db.get(Project, affected.project_id).agent_ignored = False
+    refreshed = proactive.run_proactive_check(project_id=affected.project_id)['candidates'][0]
+    if change == 'thread_link':
+        assert refreshed['candidate_id'] != candidates[affected.ticket_id]['candidate_id']
+        assert refreshed['workflow_draft']['checklist_revision'] != candidates[affected.ticket_id]['workflow_draft']['checklist_revision']
+    response = approve(affected, refreshed)
+    assert response.status_code == 200, response.text
+    if linked_chat is not None:
+        assert response.json()['chat_id'] == linked_chat
+    if change == 'hidden_project':
+        receipt = response.json()
+        with provider() as db:
+            db.get(Project, affected.project_id).agent_ignored = True
+        assert api.get(path(affected)).json() == receipt
+        assert approve(affected, refreshed).json() == receipt
+    with provider() as db:
+        assert db.get(AutoWorkflowRun, other_run).ticket_id == independent.ticket_id
+        assert db.get(AutoWorkflowRun, response.json()['run_id']).ticket_id == affected.ticket_id
+    assert len(workers) == 2
+    backend.assert_not_called()
+
+
+@pytest.mark.parametrize('receipt_kind', ['ticket', 'candidate'])
+@pytest.mark.parametrize('payload', ['[]', '{}', '"unexpected"', '{"status":"unrecognized"}',
+                                     '{"status":"dispatching","chat_id":42}'])
+def test_malformed_dispatch_receipt_holds_only_its_ticket(work, tmp_path, receipt_kind, payload):
+    from distr.core.db.orchestrator import OrchestratorMaintenanceState
+
+    factory, affected, backend = work
+    unaffected = _seed_work_signal(factory, tmp_path / 'other-project')
+    candidate = proactive.run_proactive_check(project_id=affected.project_id)['candidates'][0]
+    key = (f'proactive-ticket:{affected.ticket_id}' if receipt_kind == 'ticket'
+           else f'proactive-dispatch:{proactive._candidate_identity(candidate)}')
+    with _session_ctx(factory) as session:
+        session.add(OrchestratorMaintenanceState(key=key, value_json=payload))
+
+    candidates = {row['ticket_id']: row for row in proactive.run_proactive_check()['candidates']}
+    held = candidates[affected.ticket_id]
+    ready = candidates[unaffected.ticket_id]
+    assert held['recommended_action'] == 'review_dispatch_outcome'
+    assert held['dispatch_status'] == 'unknown'
+    assert 'unconfirmed' in held['approval_question']
+    assert ready['recommended_action'] == 'ask_approval_to_dispatch'
+    rejected = proactive.dispatch_proactive_candidate(held['candidate_id'])
+    assert not rejected['success']
+    assert rejected['spoken_summary'] == rejected['error'] == held['approval_question']
+    backend.assert_not_called()
+    assert proactive.dispatch_proactive_candidate(ready['candidate_id'])['success']
+    assert backend.call_args.args[0].id == unaffected.project_id
+    assert backend.call_args.kwargs['ticket_id'] == unaffected.ticket_id
+    with _session_ctx(factory) as session:
+        assert session.query(OrchestratorMaintenanceState).filter_by(key=key).one().value_json == payload
+
+
+def test_malformed_candidate_history_does_not_abort_other_project_scan(work, tmp_path):
+    from distr.core.db.orchestrator import OrchestratorEvent
+
+    factory, affected, _ = work
+    unaffected = _seed_work_signal(factory, tmp_path / 'other-project')
+    with _session_ctx(factory) as session:
+        session.add(OrchestratorEvent(
+            event_uid='fixture-old-candidate',
+            source='proactive_orchestrator', event_type='proactive_work_candidate',
+            status='approval_required', ticket_id=affected.ticket_id, project_id=affected.project_id,
+            summary='Invalid historical candidate', payload='{"candidate":["old payload"]}',
+        ))
+
+    candidates = proactive.run_proactive_check()['candidates']
+    assert {row['ticket_id'] for row in candidates if row['candidate_id']} == {
+        affected.ticket_id, unaffected.ticket_id,
+    }
+
+
+def test_worker_outcome_survives_malformed_related_history(work):
+    from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorMaintenanceState
+
+    factory, ids, backend = work
+    cid = candidate_id()
+    ticket_key = f'proactive-ticket:{ids.ticket_id}'
+
+    def finish_worker(*args, **kwargs):
+        with _session_ctx(factory) as session:
+            session.get(OrchestratorEvent, cid).payload = '[]'
+            session.query(OrchestratorMaintenanceState).filter_by(key=ticket_key).one().value_json = '[]'
+        return backend.return_value
+
+    backend.side_effect = finish_worker
+    result = proactive.dispatch_proactive_candidate(cid)
+    assert result['success'] and result['outcome_recorded']
+    with _session_ctx(factory) as session:
+        event = session.get(OrchestratorEvent, cid)
+        assert json.loads(event.payload)['candidate']['ticket_id'] == ids.ticket_id
+        assert json.loads(event.payload)['dispatch_result']['status'] == 'dispatched'
+        assert session.query(OrchestratorMaintenanceState).filter_by(key=ticket_key).one().value_json == '[]'
+
+
 def test_active_proactive_status_and_stop_use_only_the_owned_session(work, monkeypatch):
     from fastapi import APIRouter, FastAPI
     from fastapi.testclient import TestClient
@@ -76,7 +274,7 @@ def test_active_proactive_status_and_stop_use_only_the_owned_session(work, monke
             assert state["model"] == "fixture-model"
             assert state["summary"] == "Checking project files."
             assert state["can_stop"] is True
-            stop_path = f"/workflows/studio/tasks/{chat_id}/execution/stop"
+            stop_path = f"/workflows/studio/tasks/{chat_id}/execution/stop-exact"
             assert client.post(stop_path, json={"execution_session_id": foreign_id}).status_code == 409
             process.terminate.assert_not_called()
             response = client.post(stop_path, json={"execution_session_id": own_id})
@@ -86,7 +284,10 @@ def test_active_proactive_status_and_stop_use_only_the_owned_session(work, monke
             from distr.core.db import Chat
             with _session_ctx(factory) as session:
                 assert json.loads(session.get(Chat, chat_id).params)["development"]["proactive_stop_turn_id"] == turn_id
-            assert harness.development_execution_state(chat_id)["status"] == "running"
+            stopped_state = client.get(stop_path.removesuffix("/stop-exact")).json()
+            assert stopped_state["status"] == "running" and stopped_state["stop_pending"] is True
+            assert stopped_state["exact_stop"] is None
+            assert client.post(stop_path, json={"execution_session_id": own_id}).status_code == 409
             process.terminate.assert_called_once()
             foreign_process.terminate.assert_not_called()
         finally:
@@ -207,6 +408,7 @@ def test_two_active_projects_keep_progress_and_stop_in_their_own_threads(work, m
 
 @pytest.mark.parametrize("outcome", [
     "completed", "recovered", "concurrent", "failed", "waiting", "stopped", "edited", "missing_file", "late_queue", "reassigned",
+    "held_scope", "reassigned_recovery", "revised_brief",
 ])
 def test_proactive_completion_advances_the_exact_queued_followup(work, monkeypatch, tmp_path, outcome):
     from distr.core.db import Chat
@@ -226,10 +428,14 @@ def test_proactive_completion_advances_the_exact_queued_followup(work, monkeypat
     with _session_ctx(factory) as session:
         session.get(Project, ids.project_id).folder_location = str(folder)
     for module in ("distr.core.db", "distr.core.chat", "distr.core.chat_turns", "distr.core.workflow.development_harness",
-                   "distr.core.workflow.development_control", "distr.core.incoming.media"):
+                   "distr.core.workflow.development_control", "distr.core.incoming.media", "distr.core.planning.prerequisites"):
         monkeypatch.setattr(f"{module}.get_session", lambda: _session_ctx(factory))
     monkeypatch.setattr(harness, "_notify", lambda: None)
-    monkeypatch.setattr(harness, "_route", lambda *_: ("pi", "auto", {}, "low"))
+    def route(_project, _metadata, _assessment, *, board_id):
+        assert board_id == ids.board_id
+        return "pi", "auto", {}, "low"
+
+    monkeypatch.setattr(harness, "_route", route)
     calls = []
 
     async def followup(request, **kwargs):
@@ -241,8 +447,17 @@ def test_proactive_completion_advances_the_exact_queued_followup(work, monkeypat
 
     def complete_worker(*args, **kwargs):
         with _session_ctx(factory) as session:
+            if outcome == "held_scope":
+                session.add(DevelopmentCommand(
+                    chat_id=kwargs["chat_id"], command_type="followup", source="app_view",
+                    content="Earlier project follow-up", position=0,
+                    metadata_json=json.dumps({"app_view_scope": [-1, "", "", None, ""]}),
+                ))
             command = DevelopmentCommand(chat_id=kwargs["chat_id"], command_type="followup", content="Check the result")
+            if outcome == "held_scope":
+                command.position = 1
             command.metadata_json = json.dumps({
+                "queued_scope": [ids.project_id, f"decisions:{ids.board_id}", "local", ids.ticket_id, str(ids.ticket_id)],
                 "attachments": [{"name": attachment.name, "path": str(attachment), "mime_type": "text/plain"}],
                 "composer": {"use_playwright": True},
             })
@@ -250,11 +465,13 @@ def test_proactive_completion_advances_the_exact_queued_followup(work, monkeypat
                 attachment.unlink()
             if outcome == "late_queue":
                 command.created_at = datetime.now() + timedelta(minutes=1)
-            if outcome == "reassigned":
+            if outcome in {"reassigned", "reassigned_recovery"}:
                 project = Project(name="Other project")
                 session.add(project)
                 session.flush()
                 session.get(KanbanTicket, ids.ticket_id).linked_project_id = project.id
+            if outcome == "revised_brief":
+                session.get(KanbanTicket, ids.ticket_id).description = "Replacement request."
             status = "failed" if outcome == "failed" else "blocked" if outcome == "waiting" else "completed"
             execution = ProjectExecutionSession(
                 project_id=ids.project_id, ticket_id=ids.ticket_id, origin=kwargs["origin"], status=status,
@@ -289,7 +506,7 @@ def test_proactive_completion_advances_the_exact_queued_followup(work, monkeypat
             return dispatch(*args, **kwargs)
 
         monkeypatch.setattr(harness, "dispatch_development_prompt", edit_during_preparation)
-    if outcome == "recovered":
+    if outcome in {"recovered", "reassigned_recovery"}:
         with monkeypatch.context() as patch:
             patch.setattr(proactive, "_finish_dispatch_claim", lambda *a, **k: None)
             attempt = proactive.dispatch_proactive_candidate(cid)
@@ -320,7 +537,29 @@ def test_proactive_completion_advances_the_exact_queued_followup(work, monkeypat
     else:
         result = proactive.dispatch_proactive_candidate(cid)
     _join_new_workers(result["chat_id"], previous)
-    if outcome not in {"completed", "recovered", "concurrent"}:
+    if outcome in {"reassigned", "reassigned_recovery", "revised_brief"}:
+        from distr.core.db.orchestrator import OrchestratorEvent
+
+        assert not result["success"]
+        assert "held for review" in result["error"]
+        assert "Approved fixture outcome." not in json.dumps(result)
+        with _session_ctx(factory) as session:
+            turn = session.get(Chat, result["turn_id"])
+            assert turn.response == result["error"]
+            execution = session.get(ProjectExecutionSession, result["execution_session_id"])
+            assert json.loads(execution.output_packet)["output"] == "Approved fixture outcome."
+            candidate = session.get(OrchestratorEvent, cid)
+            assert candidate.status == "held"
+            audit = session.query(OrchestratorEvent).filter_by(parent_event_id=cid).all()
+            assert all("Approved fixture outcome." not in (row.evidence or "") for row in audit)
+        replay = proactive.dispatch_proactive_candidate(cid)
+        assert not replay["success"] and replay["error"] == result["error"]
+        assert replay["execution_session_id"] == result["execution_session_id"]
+        revised = proactive.run_proactive_check(board_id=ids.board_id)["candidates"][0]
+        assert revised["recommended_action"] == "review_dispatch_outcome"
+        assert not proactive.dispatch_proactive_candidate(revised["candidate_id"])["success"]
+        backend.assert_called_once()
+    if outcome not in {"completed", "recovered", "concurrent", "held_scope"}:
         with _session_ctx(factory) as session:
             assert session.query(DevelopmentCommand).one().status == "queued"
             assert session.query(Chat).filter_by(parent_id=result["chat_id"]).count() == 1
@@ -330,7 +569,9 @@ def test_proactive_completion_advances_the_exact_queued_followup(work, monkeypat
     assert calls[0].metadata["use_playwright"] is True
     assert [file["path"] for file in calls[0].metadata["attachments"]] == [str(attachment.resolve())]
     with _session_ctx(factory) as session:
-        command = session.query(DevelopmentCommand).one()
+        command = session.query(DevelopmentCommand).filter_by(content="Check the result").one()
+        if outcome == "held_scope":
+            assert session.query(DevelopmentCommand).filter_by(content="Earlier project follow-up").one().status == "queued"
         turn = session.get(Chat, calls[0].scope.turn_id)
         assert command.status == "delivered"
         assert turn.input == command.content and turn.parent_id == result["chat_id"]
@@ -406,7 +647,7 @@ def test_explicit_ticket_project_overrides_board_default(work):
     assert proactive.run_proactive_check(project_id=other_id)['candidates'][0]['project_id'] == other_id
 
 
-@pytest.mark.parametrize('change', ['done','running','waiting','removed_project','removed_ticket','archived_board','moved_project','changed_description','moved_board','custom_done'])
+@pytest.mark.parametrize('change', ['done','running','waiting','removed_project','hidden_project','removed_ticket','archived_board','moved_project','changed_description','moved_board','custom_done'])
 def test_stale_or_inactive_approval_never_dispatches(work, change):
     from distr.core.db.projects import Project
     from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard
@@ -419,6 +660,7 @@ def test_stale_or_inactive_approval_never_dispatches(work, change):
         elif change=='running': ticket.workflow_status='running'
         elif change=='waiting': ticket.workflow_status='waiting'
         elif change=='removed_project': session.get(Project,ids.project_id).deleted_at=datetime.utcnow()
+        elif change=='hidden_project': session.get(Project,ids.project_id).agent_ignored=True
         elif change=='removed_ticket': session.delete(ticket)
         elif change=='archived_board': board.archived=True
         elif change=='changed_description': ticket.description='New scope not yet approved'
@@ -432,6 +674,30 @@ def test_stale_or_inactive_approval_never_dispatches(work, change):
     backend.assert_not_called()
 
 
+def test_project_hidden_during_direct_approval_is_checked_before_the_claim(work, monkeypatch):
+    from distr.core.db import Chat
+    from distr.core.db.orchestrator import OrchestratorMaintenanceState
+    from distr.core.db.projects import Project
+
+    factory, ids, backend = work
+    cid = candidate_id()
+    claim = proactive._claim_dispatch
+
+    def hide_before_claim(*args, **kwargs):
+        with _session_ctx(factory) as session:
+            session.get(Project, ids.project_id).agent_ignored = True
+        return claim(*args, **kwargs)
+
+    monkeypatch.setattr(proactive, '_claim_dispatch', hide_before_claim)
+    result = proactive.dispatch_proactive_candidate(cid)
+    assert not result['success'] and result['error'] == proactive.PROJECT_HIDDEN_FROM_AGENT
+    backend.assert_not_called()
+    with _session_ctx(factory) as session:
+        assert session.query(Chat).count() == 0
+        assert session.query(OrchestratorMaintenanceState).filter(
+            OrchestratorMaintenanceState.key.like('proactive-dispatch:%')).count() == 0
+
+
 def test_exact_candidate_approval_is_dispatched_once_across_scans(work):
     from distr.core.db.orchestrator import OrchestratorEvent
     factory, _, backend=work
@@ -442,6 +708,494 @@ def test_exact_candidate_approval_is_dispatched_once_across_scans(work):
     backend.assert_called_once()
     with _session_ctx(factory) as session:
         assert session.get(OrchestratorEvent,first).status=='dispatched'
+
+
+@pytest.mark.parametrize("change", ["before_approval", "before_claim"])
+def test_direct_approval_rejects_replaced_checkout_without_losing_existing_receipt(work, tmp_path, monkeypatch, change):
+    from pathlib import Path
+    from distr.core.agent.tools.system.proactive_orchestrator import ProactiveOrchestratorTool
+    from distr.core.db import Chat
+    from distr.core.db.orchestrator import OrchestratorMaintenanceState
+    from distr.core.db.projects import Project
+
+    factory, ids, backend = work
+    with _session_ctx(factory) as session:
+        checkout = Path(session.get(Project, ids.project_id).folder_location)
+    checkout.mkdir()
+    first = candidate_id()
+    (checkout / "notes.txt").write_text("Ordinary edit.", encoding="utf-8")
+    assert candidate_id() == first
+
+    def replace_checkout():
+        checkout.rename(tmp_path / "original-checkout")
+        checkout.mkdir()
+
+    if change == "before_claim":
+        claim = proactive._claim_dispatch
+
+        def change_before_claim(*args, **kwargs):
+            replace_checkout()
+            return claim(*args, **kwargs)
+
+        monkeypatch.setattr(proactive, "_claim_dispatch", change_before_claim)
+    else:
+        replace_checkout()
+
+    response = ProactiveOrchestratorTool()._run(action="approve", candidate_id=first)
+    spoken, _, reference = response.partition("REFERENCE:")
+    assert spoken.strip() == proactive.PROJECT_FOLDER_CHANGED
+    blocked = json.loads(reference)
+    assert not blocked["success"]
+    assert "project folder changed" in blocked["error"].lower()
+    backend.assert_not_called()
+    with _session_ctx(factory) as session:
+        assert session.query(Chat).count() == 0
+        assert session.query(OrchestratorMaintenanceState).filter(
+            OrchestratorMaintenanceState.key.like("proactive-dispatch:%")).count() == 0
+
+    if change == "before_claim":
+        monkeypatch.setattr(proactive, "_claim_dispatch", claim)
+    replacement = candidate_id()
+    assert replacement != first
+    accepted = proactive.dispatch_proactive_candidate(replacement)
+    assert accepted["success"]
+    backend.assert_called_once()
+
+    checkout.rename(tmp_path / "reviewed-checkout")
+    checkout.mkdir()
+    reopened = proactive.dispatch_proactive_candidate(replacement)
+    assert not reopened["success"] and reopened["chat_id"] == accepted["chat_id"]
+    assert candidate_id() == replacement
+    backend.assert_called_once()
+
+
+@pytest.mark.parametrize("change", [
+    "replace_directory", "change_setting", "recover_receipt", "pi_timing", "codex_command", "ide_availability",
+    "ticket_moved", "brief_edited", "project_hidden", "workflow_added", "thread_unlinked", "prompt_edited",
+])
+def test_direct_worker_rechecks_scope_after_setup(work, tmp_path, monkeypatch, change):
+    from pathlib import Path
+    from unittest.mock import AsyncMock
+
+    from distr.core.db import Chat
+    from distr.core.db.kanban import KanbanBoard, KanbanTicket, ProjectExecutionSession
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import AutoWorkflow
+    from distr.core.kanban import project_execution
+    from distr.core.project_cli_backends import registry
+    from distr.core.project_cli_backends.base import BackendTaskResult
+
+    factory, ids, _ = work
+    session_provider = lambda: _session_ctx(factory)
+    monkeypatch.setattr("distr.core.db.get_session", session_provider)
+    monkeypatch.setattr(project_execution, "get_session", session_provider)
+    monkeypatch.setattr(project_execution, "ensure_project_execution_tables", lambda: None)
+    monkeypatch.setattr("distr.core.terminal.get_project_runtime_snapshot", lambda _id: {})
+    monkeypatch.setattr("distr.core.workspace_memory.feedback_sync.persist_worker_feedback", Mock())
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.any_live_session_running", lambda *a, **kw: False)
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.mark_live_session_presence", Mock())
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.set_live_session_running", Mock())
+    monkeypatch.setattr(proactive, "_run_backend_task", lambda *a, **kw: asyncio.run(registry.run_project_task(*a, **kw)))
+    with session_provider() as session:
+        checkout = Path(session.get(Project, ids.project_id).folder_location)
+    checkout.mkdir()
+    sender = AsyncMock(return_value=BackendTaskResult(True, "pi", "pi", output="Worker result."))
+    backend = SimpleNamespace(name="Pi", setup_status=lambda: SimpleNamespace(ready=True), send_task=sender)
+    changed = False
+    previous_values = []
+    scope_changes = {
+        "ticket_moved": "changed project or board",
+        "brief_edited": "ticket changed",
+        "project_hidden": "hidden from the agent",
+        "workflow_added": "current workflow",
+        "thread_unlinked": "development thread",
+        "prompt_edited": "approved development prompt changed",
+    }
+    other = _seed_work_signal(factory, tmp_path / "independent") if change in scope_changes else None
+
+    def change_scope():
+        from sqlalchemy.orm.attributes import flag_modified
+
+        with session_provider() as session:
+            ticket = session.get(KanbanTicket, ids.ticket_id)
+            if change == "workflow_added":
+                workflow = AutoWorkflow(name="Newly assigned", status="active")
+                session.add(workflow)
+                session.flush()
+                row, field, value = session.get(KanbanBoard, ids.board_id), "default_workflow_id", workflow.id
+            elif change == "project_hidden":
+                row, field, value = session.get(Project, ids.project_id), "agent_ignored", True
+            elif change == "ticket_moved":
+                row, field, value = ticket, "linked_project_id", other.project_id
+            elif change == "thread_unlinked":
+                row, field, value = ticket, "source_chat_id", None
+            elif change == "prompt_edited":
+                turn = session.query(Chat).filter_by(parent_id=ticket.source_chat_id).one()
+                row, field, value = turn, "input", "Unreviewed prompt text"
+            else:
+                row, field, value = ticket, "description", "The client supplied a revised brief."
+            if change not in {"brief_edited", "prompt_edited"}:
+                previous_values.append((type(row), row.id, field, getattr(row, field)))
+            setattr(row, field, value)
+            if row is ticket:
+                flag_modified(ticket, "modified_date")
+
+    def change_during_setup():
+        nonlocal changed
+        changed = True
+        if change in scope_changes:
+            change_scope()
+        elif change == "change_setting":
+            new_checkout = tmp_path / "different-folder"
+            new_checkout.mkdir()
+            with session_provider() as session:
+                session.get(Project, ids.project_id).folder_location = str(new_checkout)
+        else:
+            checkout.rename(tmp_path / "previous-directory")
+            checkout.mkdir()
+
+    subprocess_launch = AsyncMock(side_effect=RuntimeError("Unexpected process launch"))
+    monkeypatch.setattr(registry.asyncio, "create_subprocess_exec", subprocess_launch)
+    write_packet = Mock(side_effect=RuntimeError("Unexpected IDE handoff"))
+    monkeypatch.setattr("distr.core.project_cli_backends.ide_handoff.write_ide_work_packet", write_packet)
+    if change == "pi_timing":
+        adapter = registry.PiBackend()
+        monkeypatch.setattr(adapter, "setup_status", backend.setup_status)
+        monkeypatch.setattr("distr.core.pi_rpc.PiRpcSession.find_pi", lambda: "/mock/pi")
+        timing = registry.resolve_worker_timing
+
+        def change_at_timing(**kwargs):
+            change_during_setup()
+            return timing(**kwargs)
+
+        monkeypatch.setattr(registry, "resolve_worker_timing", change_at_timing)
+    elif change == "codex_command":
+        adapter = registry.CodexBackend()
+        monkeypatch.setattr(adapter, "setup_status", lambda: SimpleNamespace(ready=True, path="/mock/codex"))
+
+        def change_at_command(executable, _task):
+            change_during_setup()
+            return [executable, "test"]
+
+        monkeypatch.setattr(adapter, "_build_command", change_at_command)
+        monkeypatch.setattr(proactive, "_resolve_route", lambda _signal: {"backend": "codex", "model": ""})
+    elif change == "ide_availability":
+        adapter = registry.CodexIdeBackend()
+        monkeypatch.setattr(adapter, "setup_status", backend.setup_status)
+
+        def change_at_availability():
+            change_during_setup()
+            return SimpleNamespace(ready=True)
+
+        monkeypatch.setattr(adapter, "check_availability", change_at_availability)
+        monkeypatch.setattr(proactive, "_resolve_route", lambda _signal: {"backend": "codex_ide", "model": ""})
+    else:
+        adapter = backend
+        append_event = project_execution.append_execution_event
+
+        def change_at_start(session_id, event, **kwargs):
+            result = append_event(session_id, event, **kwargs)
+            if event == "executor_start" and not changed:
+                change_during_setup()
+            return result
+
+        monkeypatch.setattr(project_execution, "append_execution_event", change_at_start)
+    monkeypatch.setattr(registry, "get_backend", lambda _: adapter)
+    first = proactive.run_proactive_check(board_id=ids.board_id)["candidates"][0]["candidate_id"]
+    if change == "recover_receipt":
+        with monkeypatch.context() as missed:
+            missed.setattr(proactive, "_record_dispatch_result", lambda *_a, **_kw: None)
+            assert not proactive.dispatch_proactive_candidate(first)["outcome_recorded"]
+        stopped = proactive.dispatch_proactive_candidate(first)
+        assert stopped["outcome_recovered"]
+    else:
+        stopped = proactive.dispatch_proactive_candidate(first)
+    assert changed
+    sender.assert_not_awaited()
+    subprocess_launch.assert_not_awaited()
+    write_packet.assert_not_called()
+    assert stopped["outcome_recorded"] and not stopped["success"]
+    assert scope_changes.get(change, proactive.PROJECT_FOLDER_CHANGED.lower()) in stopped["error"].lower()
+    with session_provider() as session:
+        execution = session.get(ProjectExecutionSession, stopped["execution_session_id"])
+        assert execution.status == "failed" and execution.completed_at is not None
+        assert json.loads(execution.output_packet)["proactive_scope_changed"] is True
+        assert session.get(Chat, stopped["turn_id"]).response == stopped["error"]
+        assert session.get(OrchestratorEvent, first).execution_session_id == execution.id
+        handoffs = session.query(OrchestratorEvent).filter_by(execution_session_id=execution.id).all()
+        assert any(event.event_type == "backend_handoff_created" and event.status == "prepared" for event in handoffs)
+        assert any(event.event_type == "backend_handoff_updated" and event.status == "failed" for event in handoffs)
+
+    if change == "replace_directory" or change in scope_changes:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from distr.gui.web.routes import chat
+
+        monkeypatch.setattr(chat, "get_session", session_provider)
+        monkeypatch.setattr("distr.core.chat_turns.get_session", session_provider)
+        monkeypatch.setattr(chat, "load_settings_from_db", lambda: {})
+        app = FastAPI()
+        app.include_router(chat.create_routes(tmp_path))
+        with TestClient(app) as client:
+            transcript = client.get(f"/chats/{stopped['chat_id']}?surface=development")
+        assert transcript.status_code == 200
+        assert any(message.get("content") == stopped["error"]
+                   and message.get("chat_row_id") == stopped["turn_id"]
+                   for message in transcript.json()["messages"] if message["role"] == "assistant")
+
+    if change == "recover_receipt":
+        checkout.rmdir()
+        (tmp_path / "previous-directory").rename(checkout)
+        assert not proactive.dispatch_proactive_candidate(first)["success"]
+        sender.assert_not_awaited()
+    if other:
+        unrelated = proactive.run_proactive_check(board_id=other.board_id)["candidates"][0]
+        assert proactive.dispatch_proactive_candidate(unrelated["candidate_id"])["success"]
+        sender.assert_awaited_once()
+        assert sender.await_args.args[0].project_id == other.project_id
+        sender.reset_mock()
+    if change == "workflow_added":
+        revised = proactive.run_proactive_check(board_id=ids.board_id)["candidates"][0]
+        assert revised["recommended_action"] == "review_workflow_draft"
+        assert not proactive.dispatch_proactive_candidate(revised["candidate_id"])["success"]
+        sender.assert_not_awaited()
+    with session_provider() as session:
+        for model, row_id, field, value in previous_values:
+            setattr(session.get(model, row_id), field, value)
+    fresh = proactive.run_proactive_check(board_id=ids.board_id)["candidates"][0]["candidate_id"]
+    assert fresh != first
+    monkeypatch.setattr(registry, "get_backend", lambda _: backend)
+    launched = proactive.dispatch_proactive_candidate(fresh)
+    assert launched["success"] and launched["chat_id"] == stopped["chat_id"]
+    sender.assert_awaited_once()
+    if change == "brief_edited":
+        assert "The client supplied a revised brief." in sender.await_args.args[0].instruction
+    if change == "prompt_edited":
+        assert "Unreviewed prompt text" not in sender.await_args.args[0].instruction
+    reopened = proactive.dispatch_proactive_candidate(first)
+    assert not reopened["success"] and reopened["turn_id"] == stopped["turn_id"]
+    assert reopened["execution_session_id"] == stopped["execution_session_id"]
+    assert not proactive.dispatch_proactive_candidate(fresh)["success"]
+    sender.assert_awaited_once()
+
+
+@pytest.mark.parametrize("change", ["none", "ticket_project", "thread_project"])
+def test_real_proactive_worker_publishes_feedback_only_after_scope_review(work, tmp_path, monkeypatch, change):
+    from unittest.mock import AsyncMock
+    from distr.core.db import Chat
+    from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.kanban import project_execution
+    from distr.core.project_cli_backends import registry
+    from distr.core.project_cli_backends.base import BackendTaskResult
+
+    factory, ids, _ = work
+    other = _seed_work_signal(factory, tmp_path / "another-project")
+    session_provider = lambda: _session_ctx(factory)
+    monkeypatch.setattr("distr.core.db.get_session", session_provider)
+    monkeypatch.setattr(project_execution, "get_session", session_provider)
+    monkeypatch.setattr(project_execution, "ensure_project_execution_tables", lambda: None)
+    monkeypatch.setattr("distr.core.terminal.get_project_runtime_snapshot", lambda _id: {})
+    feedback = Mock()
+    monkeypatch.setattr("distr.core.workspace_memory.feedback_sync.persist_worker_feedback", feedback)
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.any_live_session_running", lambda *a, **kw: False)
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.mark_live_session_presence", Mock())
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.set_live_session_running", Mock())
+    monkeypatch.setattr(proactive, "_run_backend_task", lambda *a, **kw: asyncio.run(registry.run_project_task(*a, **kw)))
+
+    raw_result = "Isolated worker evidence from the approved project."
+
+    async def complete(task, **_kwargs):
+        with session_provider() as db:
+            if change == "ticket_project":
+                db.get(KanbanTicket, ids.ticket_id).linked_project_id = other.project_id
+            elif change == "thread_project":
+                db.get(Chat, task.chat_id).project_id = other.project_id
+        return BackendTaskResult(True, "pi", "pi", output=raw_result)
+
+    sender = AsyncMock(side_effect=complete)
+    backend = SimpleNamespace(name="Pi", setup_status=lambda: SimpleNamespace(ready=True), send_task=sender)
+    monkeypatch.setattr(registry, "get_backend", lambda _: backend)
+    finish = proactive._record_dispatch_result
+
+    def observe_before_review(candidate, **kwargs):
+        if not kwargs.get("recover"):
+            feedback.assert_not_called()
+            with session_provider() as db:
+                session = db.get(ProjectExecutionSession, kwargs["execution_session_id"])
+                preview = project_execution.serialize_execution_session(session, include_events=True)
+                assert preview["status"] == "pending_review"
+                assert raw_result not in json.dumps(preview)
+        return finish(candidate, **kwargs)
+
+    monkeypatch.setattr(proactive, "_record_dispatch_result", observe_before_review)
+    cid = proactive.run_proactive_check(board_id=ids.board_id)["candidates"][0]["candidate_id"]
+    result = proactive.dispatch_proactive_candidate(cid)
+    sender.assert_awaited_once()
+    with session_provider() as db:
+        session = db.get(ProjectExecutionSession, result["execution_session_id"])
+        task = sender.await_args.args[0]
+        turn = db.get(Chat, task.turn_id)
+        assert json.loads(session.output_packet)["output"] == raw_result
+        audit = db.query(OrchestratorEvent).filter_by(execution_session_id=session.id).all()
+        backend_updates = [event for event in audit if event.event_type == "backend_handoff_updated"]
+        assert backend_updates and all(raw_result not in (event.evidence or "") for event in backend_updates)
+        if change == "none":
+            assert result["success"] and turn.response == raw_result
+            assert project_execution.list_execution_sessions_for_ticket(ids.ticket_id)[0]["status"] == "completed"
+            feedback.assert_called_once()
+            assert feedback.call_args.kwargs["ticket_id"] == ids.ticket_id
+        else:
+            assert not result["success"] and raw_result not in json.dumps(result)
+            assert raw_result not in json.dumps(project_execution.serialize_execution_session(session, include_events=True))
+            history = project_execution.list_execution_sessions_for_ticket(ids.ticket_id)
+            if change == "thread_project":
+                assert "chat_id" not in result and turn.response is None
+                assert history[0]["status"] == "held"
+            else:
+                assert turn.response == proactive.PROACTIVE_RESULT_HELD and not history
+            feedback.assert_not_called()
+    replay = proactive.dispatch_proactive_candidate(cid)
+    assert not replay["success"]
+    if change == "thread_project":
+        assert "chat_id" not in replay
+    assert feedback.call_count == (1 if change == "none" else 0)
+    sender.assert_awaited_once()
+
+    if change == "ticket_project":
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from distr.gui.web.routes import chat
+
+        monkeypatch.setattr(chat, "get_session", session_provider)
+        monkeypatch.setattr("distr.core.chat_turns.get_session", session_provider)
+        monkeypatch.setattr(chat, "load_settings_from_db", lambda: {})
+        app = FastAPI()
+        app.include_router(chat.create_routes(tmp_path))
+        with TestClient(app) as client:
+            transcript = client.get(f"/chats/{result['chat_id']}?surface=development")
+        assert transcript.status_code == 200
+        assert raw_result not in transcript.text
+        assert any(message.get("content") == proactive.PROACTIVE_RESULT_HELD
+                   for message in transcript.json()["messages"] if message["role"] == "assistant")
+
+
+@pytest.mark.parametrize("case", ["matching", "moved", "early", "moved_during_open"])
+@pytest.mark.parametrize("source", ["codex", "cursor"])
+def test_proactive_ide_callback_finalizes_the_exact_approved_turn(work, tmp_path, monkeypatch, case, source):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.core.db import Chat
+    from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
+    from distr.core.db.projects import Project
+    from distr.core.kanban import project_execution
+    from distr.core.project_cli_backends import registry
+    from distr.core.project_cli_backends.base import BackendTaskResult
+    from distr.gui.web.routes import chat
+    from distr.gui.web.routes.development.threads import register_routes as register_threads
+    from distr.gui.web.routes.ide_bridge import create_routes
+
+    factory, ids, _ = work
+    provider = lambda: _session_ctx(factory)
+    monkeypatch.setattr("distr.core.db.get_session", provider)
+    monkeypatch.setattr("distr.core.ide_bridge.get_session", provider)
+    monkeypatch.setattr("distr.core.chat.get_session", provider)
+    monkeypatch.setattr("distr.core.chat_turns.get_session", provider)
+    monkeypatch.setattr("distr.core.workflow.development_harness.get_session", provider)
+    monkeypatch.setattr(chat, "get_session", provider)
+    monkeypatch.setattr(chat, "load_settings_from_db", lambda: {})
+    monkeypatch.setattr(project_execution, "get_session", provider)
+    monkeypatch.setattr(project_execution, "ensure_project_execution_tables", lambda: None)
+    monkeypatch.setattr("distr.core.terminal.get_project_runtime_snapshot", lambda _: {})
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.any_live_session_running", lambda *a, **kw: False)
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.mark_live_session_presence", Mock())
+    monkeypatch.setattr("distr.core.project_cli_backends.live_sessions.set_live_session_running", Mock())
+    feedback = Mock()
+    monkeypatch.setattr("distr.core.workspace_memory.feedback_sync.persist_worker_feedback", feedback)
+    monkeypatch.setattr(proactive, "_run_backend_task", lambda *a, **kw: asyncio.run(registry.run_project_task(*a, **kw)))
+    backend_id = f"{source}_ide"
+    monkeypatch.setattr(proactive, "_resolve_route", lambda _: {"backend": backend_id, "model": ""})
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    other = _seed_work_signal(factory, tmp_path / "other")
+    with provider() as db:
+        db.get(Project, ids.project_id).folder_location = str(checkout)
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    router = APIRouter()
+    register_threads(router, None)
+    app.include_router(router, prefix="/api")
+    app.include_router(chat.create_routes(tmp_path), prefix="/api")
+    client = TestClient(app)
+    output = "Result from the exact IDE worker."
+    held = case in {"moved", "moved_during_open"}
+    callback_results = []
+    tasks = []
+
+    def report(task, **overrides):
+        return client.post("/api/ide/sessions/event", json={
+            "source": source, "event_type": f"{source}_completed", "status": "completed",
+            "cwd": str(checkout), "project_id": ids.project_id, "session_id": task.execution_session_id,
+            "ticket_id": ids.ticket_id,
+            "output": output, **overrides,
+        })
+
+    async def launch(task, **_kwargs):
+        tasks.append(task)
+        if case == "early":
+            callback_results.append(report(task))
+        if case == "moved_during_open":
+            with provider() as db:
+                db.get(KanbanTicket, ids.ticket_id).linked_project_id = other.project_id
+        return BackendTaskResult(True, backend_id, backend_id, output="Opened IDE.", waits_for_human=True)
+
+    adapter = SimpleNamespace(name="Codex IDE", setup_status=lambda: SimpleNamespace(ready=True), send_task=launch)
+    monkeypatch.setattr(registry, "get_backend", lambda _: adapter)
+    cid = proactive.run_proactive_check(board_id=ids.board_id)["candidates"][0]["candidate_id"]
+    approval = proactive.dispatch_proactive_candidate(cid)
+    task, = tasks
+    assert approval["outcome_recorded"] and approval["success"] == (case == "early")
+    if case in {"matching", "moved"}:
+        with provider() as db:
+            assert db.get(Chat, task.turn_id).response is None
+        pending = client.get(f"/api/workflows/studio/tasks/{task.chat_id}/execution")
+        assert pending.status_code == 200
+        assert pending.json()["waiting_kind"] == "ide_handoff"
+        assert pending.json()["exact_stop"] is None
+        assert pending.json().get("last_proactive_result_turn_id") is None
+        progress = report(task, status="observed", event_type=f"{source}_progress", output="Unreviewed progress.")
+        assert progress.status_code == 200 and progress.json()["session"]["status"] == "waiting"
+        if case == "moved":
+            with provider() as db:
+                db.get(KanbanTicket, ids.ticket_id).linked_project_id = other.project_id
+        assert report(task, source="cursor" if source == "codex" else "codex").status_code == 404
+        assert report(task, cwd=str(tmp_path)).status_code == 404
+        assert report(task, ticket_id=other.ticket_id).status_code == 404
+    if case != "early":
+        callback_results.append(report(task))
+    reply, = callback_results
+    assert reply.status_code == 200
+    assert reply.json()["session"]["status"] == ("held" if held else "completed")
+    assert report(task, output="Conflicting duplicate.").status_code == 200
+    with provider() as db:
+        execution = db.get(ProjectExecutionSession, task.execution_session_id)
+        assert execution.status == "completed" and execution.completed_at
+        assert json.loads(execution.output_packet)["output"] == output
+        assert db.get(Chat, task.turn_id).response == (proactive.PROACTIVE_RESULT_HELD if held else output)
+        assert db.query(Chat).filter_by(parent_id=task.chat_id).count() == 1
+    assert feedback.call_count == (0 if held else 1)
+    transcript = client.get(f"/api/chats/{task.chat_id}?surface=development")
+    assert transcript.status_code == 200
+    assert (output in transcript.text) == (not held)
+    message = next(message for message in transcript.json()["messages"]
+                   if message["role"] == "assistant" and message.get("chat_row_id") == task.turn_id)
+    assert (message.get("source_reply_eligible") is False) == held
+    current = client.get(f"/api/workflows/studio/tasks/{task.chat_id}/execution")
+    assert current.json()["last_proactive_result_turn_id"] == task.turn_id
+    assert transcript.json()["development"]["last_proactive_result_turn_id"] == task.turn_id
+    assert not proactive.dispatch_proactive_candidate(cid)["success"]
+    assert len(tasks) == 1
 
 
 def test_proactive_finalization_retries_sqlite_lock_without_relaunch(work, monkeypatch):
@@ -620,11 +1374,15 @@ def test_retry_recovers_only_the_exact_saved_proactive_execution(work, monkeypat
     assert backend.call_args.kwargs["proactive_candidate_id"] == cid
 
 
-def test_worker_waiting_for_review_keeps_the_existing_dispatch(work):
+def test_worker_waiting_for_review_keeps_the_existing_dispatch(work, monkeypatch):
+    from distr.core.db import Chat, ChatTurnEvent
+    from distr.core.incoming.source_reply import _reply_response
     from distr.core.db.kanban import KanbanTicket
     from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.workflow import development_harness as harness
 
     factory, ids, backend = work
+    monkeypatch.setattr(harness, "get_session", lambda: _session_ctx(factory))
     backend.return_value.waits_for_human = True
     cid = candidate_id()
     result = proactive.dispatch_proactive_candidate(cid)
@@ -632,7 +1390,19 @@ def test_worker_waiting_for_review_keeps_the_existing_dispatch(work):
     assert result["success"] is False
     assert "paused for human review" in result["spoken_summary"]
     assert proactive.dispatch_proactive_candidate(cid)["success"] is False
+    state = harness.development_execution_state(result["chat_id"])
+    assert state["waiting_kind"] == "human_review"
+    assert state["status"] == "blocked" and not state["can_stop"]
+    assert state["turn_id"] == result["turn_id"]
     with _session_ctx(factory) as session:
+        root = session.get(Chat, result["chat_id"])
+        assert session.get(Chat, result["turn_id"]).response
+        assert _reply_response(session, root, result["turn_id"]) is None
+        terminal = session.query(ChatTurnEvent).filter_by(turn_id=result["turn_id"], event_type="turn_completed").one()
+        assert terminal.status == "waiting"
+        terminal.status = "completed"  # Existing waiting approvals used this status.
+        session.flush()
+        assert _reply_response(session, root, result["turn_id"]) is None
         candidate = session.get(OrchestratorEvent, cid)
         activity = session.query(OrchestratorEvent).filter_by(parent_event_id=cid).one()
         assert candidate.status == activity.status == "waiting"
@@ -642,6 +1412,16 @@ def test_worker_waiting_for_review_keeps_the_existing_dispatch(work):
     assert revised["dispatch_status"] == "waiting"
     assert proactive.dispatch_proactive_candidate(revised["candidate_id"])["success"] is False
     backend.assert_called_once()
+    assert harness.development_execution_state(result["chat_id"])["waiting_kind"] == "human_review"
+    with _session_ctx(factory) as session:
+        ticket = session.get(KanbanTicket, ids.ticket_id)
+        linked_project = ticket.linked_project_id
+        ticket.linked_project_id = ids.project_id + 100
+    assert harness.development_execution_state(result["chat_id"]).get("waiting_kind") != "human_review"
+    with _session_ctx(factory) as session:
+        session.get(KanbanTicket, ids.ticket_id).linked_project_id = linked_project
+        session.add(Chat(parent_id=result["chat_id"], input="I reviewed the earlier response."))
+    assert harness.development_execution_state(result["chat_id"]).get("waiting_kind") != "human_review"
 
 
 def test_backend_runtime_error_does_not_repeat_side_effects(monkeypatch):

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
@@ -292,6 +293,62 @@ def test_studio_direct_execution_state_and_stop_are_thread_scoped(monkeypatch):
     assert stopped.status_code == 200
     assert stopped.json()["status"] == "cancelled"
     assert calls == [17]
+
+
+def test_exact_stop_requires_one_current_target(monkeypatch):
+    from distr.core.workflow import development_harness as harness
+
+    run = {"id": 27, "workflow_id": 3, "direct": False, "status": "running"}
+    monkeypatch.setattr(harness, "development_execution_state", lambda chat_id: run if chat_id == 17 else {})
+    calls = []
+    monkeypatch.setattr("distr.core.workflow.dispatcher.cancel_run", lambda run_id, **scope: calls.append((run_id, scope)) or True)
+    client = _client()
+    root = "/api/workflows/studio/tasks/17/execution"
+    assert client.get(root).json()["exact_stop"] == {"workflow_run_id": 27}
+    assert client.post(root + "/stop-exact", json={}).status_code == 422
+    assert client.post(root + "/stop-exact", json={"workflow_run_id": 27, "turn_id": 2}).status_code == 422
+    assert client.post(root + "/stop-exact", json={"workflow_run_id": 26}).status_code == 409
+    assert calls == []
+    assert client.post(root + "/stop-exact", json={"workflow_run_id": 27}).json() == {
+        "stopped": True, "stop_requested": True,
+    }
+    assert calls == [(27, {"workflow_id": 3, "expected_chat_id": 17})]
+
+
+@pytest.mark.parametrize("runtime", ["native", "cli_harness"])
+def test_exact_stop_is_visible_and_does_not_cancel_the_turn_twice(monkeypatch, runtime):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    from distr.core.turn_runtime import CancellationToken, SteeringChannel, service
+    from distr.core.workflow import development_harness as harness
+
+    calls = []
+    active = service._ActiveTurn(CancellationToken(), SteeringChannel(), runtime, 42,
+                                 SimpleNamespace(cancel_active=lambda: calls.append("cancel")))
+    monkeypatch.setitem(service._active_turns, 17, active)
+    state = {"runtime_id": runtime, "status": "running", "direct": True, "turn_id": 42}
+    target = {"turn_id": 42}
+    if runtime == "cli_harness":
+        state.update(cli_stop_available=True, execution_session_id=99, project_id=7, board_id=3, backend_id="pi")
+        target = {"execution_session_id": 99}
+        monkeypatch.setattr("distr.core.project_cli_backends.registry.terminate_backend_process",
+                            lambda *a, **k: calls.append("terminate") or True)
+    monkeypatch.setattr(harness, "development_execution_state", lambda _: dict(state))
+    client = _client()
+    path = "/api/workflows/studio/tasks/17/execution"
+    assert client.get(path).json()["exact_stop"] == target
+    assert client.get(path).json()["stop_pending"] is False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(lambda _: client.post(path + "/stop-exact", json=target).status_code, range(2)))
+    assert sorted(statuses) == [200, 409]
+    assert calls == (["cancel", "terminate"] if runtime == "cli_harness" else ["cancel"])
+    refreshed = client.get(path).json()
+    assert refreshed["stop_pending"] is True
+    assert refreshed["exact_stop"] is None
+    assert refreshed["exact_steer"] is None
+    state.update(status="cancelled")
+    assert client.get(path).json()["stop_pending"] is False
 
 
 def test_studio_development_lifecycle_routes_are_thread_scoped(monkeypatch):
@@ -637,6 +694,7 @@ def test_studio_thread_edit_rebinds_ticket_scope(monkeypatch):
         "board_ticket_lane": None,
         "permission_profile": {"mode": "trusted"},
         "remote_continuation": True,
+        "_scope_fields": {"project_id", "board_key", "board_provider", "board_ticket_key"},
     }
 
 
@@ -656,16 +714,17 @@ def test_studio_thread_rename_preserves_ticket_scope(monkeypatch):
 
 def test_existing_development_thread_message_resumes_direct_harness_not_workflow(monkeypatch):
     calls = _patch_studio_dependencies(monkeypatch, autonomy="full")
+    preview = {"complexity": "low", "route": {"backend": "cursor"}, "route_source": "client_override"}
 
     response = _client().post(
         "/api/workflows/studio/tasks/17/messages",
-        json={"message": "Implement the ticket and verify it in the browser"},
+        json={"message": "Implement the ticket and verify it in the browser", "routing_assessment": preview},
     )
 
     assert response.status_code == 200
     assert not calls.get("messages")
     assert calls["dispatch"] == [(17, "Implement the ticket and verify it in the browser", {
-        "routing_assessment": {},
+        "routing_assessment": {**preview, "route_source": "studio_preview"},
         "attachments": [],
         "skill_ids": [],
         "use_playwright": False,
@@ -767,14 +826,24 @@ def test_studio_task_rejects_invalid_execution_contract():
     assert "route_mode" in response.json()["detail"]
 
 
-def test_studio_control_state_exposes_safe_telegram_and_pending_interaction(monkeypatch):
+@pytest.mark.parametrize(("message_id", "error", "attempt", "delivery"), [
+    (None, None, 0, None),
+    (None, None, 1, "pending"),
+    (None, "Telegram relay rate limit blocked this delivery attempt.", 1, "rate_limited"),
+    (None, "Telegram delivery could not be confirmed.", 1, "unconfirmed"),
+    ("13579", "Telegram acknowledged the message without its controls", 1, "missing_controls"),
+    ("13579", None, 1, "confirmed"),
+])
+def test_studio_control_state_exposes_safe_telegram_and_pending_interaction(
+    monkeypatch, message_id, error, attempt, delivery,
+):
     monkeypatch.setattr(
         "distr.core.settings.load_settings_from_db",
         lambda: {"connected_accounts": '[{"provider":"telegram","token":"secret"}]'},
     )
-    monkeypatch.setattr(
-        "distr.core.workflow.interactions.pending_interactions",
-        lambda: [
+    def pending_interactions(*, run_id, development_chat_id, include_decisions):
+        assert run_id == 99 and development_chat_id is None and include_decisions
+        return [
             {
                 "token": "abc123",
                 "run_id": 99,
@@ -783,11 +852,13 @@ def test_studio_control_state_exposes_safe_telegram_and_pending_interaction(monk
                 "allowed_actions": '["approve","stop","feedback"]',
                 "telegram_chat_id": "987654321",
                 "expires_at": 123456.0,
-                "error": None,
+                "telegram_message_id": message_id,
+                "telegram_send_attempt": attempt,
+                "error": error,
             },
-            {"token": "other", "run_id": 100, "allowed_actions": "[]"},
-        ],
-    )
+        ]
+
+    monkeypatch.setattr("distr.core.workflow.interactions.pending_interactions", pending_interactions)
     manager = SimpleNamespace(is_connected=lambda: True)
     monkeypatch.setattr(
         "distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app",
@@ -807,12 +878,14 @@ def test_studio_control_state_exposes_safe_telegram_and_pending_interaction(monk
             "kind": "approval",
             "allowed_actions": ["approve", "stop", "feedback"],
             "expires_at": 123456.0,
-            "error": None,
+            "error": error,
             "telegram_linked": True,
+            "telegram_delivery": delivery,
         }
     ]
     assert "secret" not in response.text
     assert "987654321" not in response.text
+    assert "13579" not in response.text
 
 
 def test_studio_web_resolution_uses_the_same_durable_interaction(monkeypatch):

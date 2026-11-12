@@ -24,30 +24,24 @@ class TestObserveLevel:
         for at in ["suggestion", "routine_task", "external_comms", "file_change", "sensitive", "none"]:
             assert evaluate(make_action(at), "observe", full_boundaries()) == PolicyDecision.SKIP
 
-    def test_observe_with_rubric_13_plus_is_draft(self):
+    def test_observe_ignores_rubric_quiet_never_drafts(self):
         action = ProposedAction(
             action_type="suggestion",
             description="Important",
-            rubric=RubricScore(3, 3, 3, 2, 2),
+            rubric=RubricScore(5, 5, 5, 5, 5),
         )
-        assert action.rubric.total == 13
-        assert evaluate(action, "observe", full_boundaries()) == PolicyDecision.DRAFT_AND_ASK
+        assert action.rubric.total == 25
+        assert evaluate(action, "observe", full_boundaries()) == PolicyDecision.SKIP
 
 
-# --- assist level ---
-class TestAssistLevel:
-    def test_assist_without_rubric_is_suggest_only(self):
+# --- assist removed (2026-11-11): legacy value is not a posture any more ---
+class TestAssistRemoved:
+    def test_raw_assist_level_is_not_a_posture(self):
         for at in ["suggestion", "routine_task", "external_comms", "file_change", "sensitive", "none"]:
-            assert evaluate(make_action(at), "assist", full_boundaries()) == PolicyDecision.SUGGEST_ONLY
+            assert evaluate(make_action(at), "assist", full_boundaries()) == PolicyDecision.SKIP
 
-    def test_assist_with_high_rubric_is_draft_not_execute(self):
-        action = ProposedAction(
-            action_type="suggestion",
-            description="Big deal",
-            rubric=RubricScore(4, 4, 4, 4, 4),
-        )
-        assert action.rubric.total == 20
-        assert evaluate(action, "assist", full_boundaries()) == PolicyDecision.DRAFT_AND_ASK
+    def test_assist_migrates_to_standard(self):
+        assert migrate_initiative_level("assist") == "operate"
 
 
 # --- operate level ---
@@ -145,8 +139,8 @@ class TestMigrateInitiativeLevel:
     def test_passive_to_observe(self):
         assert migrate_initiative_level("passive") == "observe"
 
-    def test_assistive_to_assist(self):
-        assert migrate_initiative_level("assistive") == "assist"
+    def test_assistive_to_operate(self):
+        assert migrate_initiative_level("assistive") == "operate"
 
     def test_proactive_to_operate(self):
         assert migrate_initiative_level("proactive") == "operate"
@@ -155,7 +149,7 @@ class TestMigrateInitiativeLevel:
         assert migrate_initiative_level("autonomous") == "own"
 
     def test_current_values_unchanged(self):
-        for v in ["observe", "assist", "operate", "own"]:
+        for v in ["observe", "operate", "own"]:
             assert migrate_initiative_level(v) == v
 
     def test_unknown_value_unchanged(self):

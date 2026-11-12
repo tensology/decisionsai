@@ -53,6 +53,40 @@ def run(tasks, **kwargs):
     return build.build_tasks(1, tasks=tasks, expected_revisions=kwargs.get("revisions", {"1": 1}))
 
 
+def test_ticket_detail_reports_current_changed_and_unavailable_plan_sources(store, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes import kanban
+
+    ticket_id = run([task()])["tasks"][0]["id"]
+    monkeypatch.setattr(kanban, "get_session", store)
+    app = FastAPI()
+    app.include_router(kanban.create_routes())
+    client = TestClient(app)
+    endpoint = f"/tickets/tickets/{ticket_id}"
+    response = client.get(endpoint)
+    assert response.status_code == 200
+    assert response.json()["plan_sources"]["status"] == "current"
+    with store() as db:
+        original_notes = db.get(KanbanTicket, ticket_id).context_notes
+        db.add(PlanItemRevision(item_id=1, revision=2, title="Wireframe"))
+        db.commit()
+    changed = client.get(endpoint).json()["plan_sources"]
+    assert changed == {"status": "changed", "changes": [
+        {"item_id": 1, "title": "Wireframe", "built_revision": 1, "current_revision": 2},
+    ]}
+    with store() as db:
+        db.get(PlanItem, 1).workspace_id = 2
+        db.get(PlanItem, 1).title = "Other project document"
+        db.commit()
+    unavailable = client.get(endpoint).json()["plan_sources"]
+    assert unavailable == {"status": "changed", "changes": [
+        {"item_id": 1, "title": None, "built_revision": 1, "current_revision": None},
+    ]}
+    with store() as db:
+        assert db.get(KanbanTicket, ticket_id).context_notes == original_notes
+
+
 def test_build_rejects_unresolved_wireframe_references_even_when_other_project_defines_them(store):
     with store() as db:
         wire = db.get(PlanItem, 1)

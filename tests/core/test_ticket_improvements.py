@@ -92,6 +92,22 @@ def test_restart_auto_retry_limit_survives_second_restart(monkeypatch):
         assert 'retry limit' in data['restart_recovery']['blocked_reason']
 
 
+def test_restart_holds_only_the_step_with_an_unconfirmed_checkpoint_decision(monkeypatch):
+    _, blocked_run, blocked_step = seed()
+    _, other_run, other_step = seed()
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    dispatcher._cleanup_orphaned_runs_on_startup()
+    dispatcher._auto_resume_interrupted_runs(
+        background=False, unconfirmed_checkpoint_steps={(blocked_run, blocked_step)},
+    )
+    dispatch.assert_called_once_with(other_run, other_step)
+    with get_session() as db:
+        run = db.get(AutoWorkflowRun, blocked_run)
+        assert run.status == "waiting"
+        assert "checkpoint decision" in json.loads(run.run_data)["restart_recovery"]["blocked_reason"]
+
+
 def test_restart_dispatch_failure_remains_visible(monkeypatch):
     wid, rid, _ = seed()
     monkeypatch.setattr(dispatcher, '_dispatch_workflow_step', Mock(side_effect=RuntimeError('worker unavailable')))

@@ -16,7 +16,8 @@ def test_unknown_provider_cannot_use_email_transport(provider):
     assert 'unsupported_source_provider' in target.missing
 
 
-@pytest.mark.parametrize('alias', ['gmail', 'google_mail', 'mail', 'outlook', 'email'])
+# 'outlook' left out on purpose: Outlook in must be Outlook out, never Gmail (same-channel rule, 12 Nov 2026).
+@pytest.mark.parametrize('alias', ['gmail', 'google_mail', 'mail', 'email'])
 def test_known_mail_alias_preserves_exact_mailbox(alias):
     target = resolve_reply_target(SimpleNamespace(source_provider=alias,
         source_thread_id='original-thread', source_contact='Client Name <client@example.com>'))

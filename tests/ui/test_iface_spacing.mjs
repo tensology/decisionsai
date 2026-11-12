@@ -21,6 +21,29 @@ test('the map retains navigation back to Home and ignores protocol-relative dest
     assert.equal(model.nodes.find(node => node.screenKey === 'external').route, '');
 });
 
+test('a large discovery uses compact lanes even when several pages link to the same route', () => {
+    const screens = Array.from({ length: 90 }, (_, index) => ({
+        id: `page-${index}`, label: `Page ${index}`, attrs: { id: `page-${index}`, route: `/page-${index}` },
+        children: index === 0 ? [1, 2, 3, 4].map(target => ({
+            type: 'link', label: `Page ${target}`, attrs: { route: `/page-${target}` }, children: [],
+        })) : [],
+    }));
+    const model = buildIfaceModel({ screens });
+    const layout = layoutIface(model, { aspect: 1 });
+    assert.equal(layout.lanes[0].count, 90);
+    assert.ok(layout.width / layout.height > 0.75 && layout.width / layout.height < 1.25);
+    assert.ok(model.nodes.every(node => node.x + node.w <= layout.width && node.y + node.h <= layout.height));
+});
+
+test('a large single lane fills a wide canvas without becoming a tall column', () => {
+    const model = buildIfaceModel({ screens: Array.from({ length: 158 }, (_, index) =>
+        screen(`page-${index}`, `Page ${index}`, `/page-${index}`)) });
+    const layout = layoutIface(model, { aspect: 1.6 });
+    assert.ok(layout.cols > 8);
+    assert.ok(layout.width / layout.height > 1.2);
+    assert.equal(new Set(model.nodes.map(node => `${node.x},${node.y}`)).size, 158);
+});
+
 test('pages split into backend, frontend, ajax, and guidance, and a comment is kept', () => {
     const source = [
         'screen "Orders" id=orders route=/admin/orders layer=backend',

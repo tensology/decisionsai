@@ -106,6 +106,32 @@ def test_ide_handoff_writes_ticket_packet_and_starts_harness(tmp_path):
     assert "Started the Cursor harness" in (result.output or "")
 
 
+def test_proactive_ide_packet_names_the_exact_callback_session(tmp_path):
+    import shlex
+
+    from distr.core.project_cli_backends.base import ProjectTask
+    from distr.core.project_cli_backends.ide_handoff import build_ide_callback_meta, write_ide_work_packet
+
+    folder = tmp_path / "project with $name"
+    folder.mkdir()
+    task = ProjectTask(project_id=3, project_name="Demo", folder=str(folder), instruction="Inspect the checkout.",
+                       execution_session_id=19, origin="proactive_orchestrator")
+    meta = build_ide_callback_meta(task, backend_id="codex_ide")
+    meta["ticket_id"] = 7
+    packet = Path(write_ide_work_packet(task, backend_id="codex_ide", meta=meta)).read_text()
+    commands = [shlex.split(line.removeprefix("Reporter: ")) for line in packet.splitlines()
+                if line.startswith(("python3 ", "Reporter: python3 "))]
+    assert meta["callback_payload_type"] == "ide_session_event"
+    assert len(commands) == 2
+    for command in commands:
+        assert command[command.index("--cwd") + 1] == str(folder)
+        assert command[command.index("--callback-url") + 1] == meta["bridge_url"]
+        assert meta["bridge_url"].endswith("/api/ide/sessions/event")
+        assert command[command.index("--execution-session-id") + 1] == "19"
+        assert command[command.index("--project-id") + 1] == "3"
+        assert command[command.index("--ticket-id") + 1] == "7"
+
+
 def test_run_project_task_sets_ide_handoff_pending(tmp_path):
     from distr.core.project_cli_backends.registry import run_project_task
     from distr.core.db import get_session

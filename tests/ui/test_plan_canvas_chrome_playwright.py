@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import expect
 
 from tests.ui.test_development_harness_playwright import _install_api
 from tests.ui.test_plan_inline_edit_playwright import Backend, PLAN_URL
@@ -228,3 +229,59 @@ def test_data_docks_are_separate_on_a_320px_screen(page, backend):
     page.get_by_label('Add table', exact=True).click()
     assert tables.count() == count + 1
     page.screenshot(path=str(OUT / 'data-edit-320.png'), animations='disabled')
+
+
+@pytest.mark.parametrize('size', [(390, 844), (768, 1024), (1280, 900), (1440, 900)])
+def test_dense_data_diagram_opens_readably_and_can_fit(page, backend, size):
+    backend.items[1]['content'] = 'erDiagram\n' + '\n'.join(
+        f'    DEVICE_{n:02d} ||--o{{ DEVICE_{n+1:02d} : tracks' for n in range(82)
+    )
+    _open(page, 'Data', '.erd-table', size)
+    viewport = page.get_by_label('ERD canvas', exact=True)
+    zoom = page.locator('.erd-zoom')
+    expect(zoom).to_have_text('100%', timeout=1500)
+    stage = viewport.locator('.erd-stage')
+    visible_table = viewport.locator('.erd-table-head').evaluate_all("""heads => {
+        const canvas = heads[0].closest('.erd-viewport').getBoundingClientRect();
+        return heads.find(head => {
+            const box = head.getBoundingClientRect();
+            return box.left >= canvas.left && box.right <= canvas.right && box.top >= canvas.top && box.bottom <= canvas.bottom;
+        })?.dataset.drag;
+    }""")
+    assert visible_table
+    page.screenshot(path=str(OUT / f'dense-data-start-{size[0]}.png'), animations='disabled')
+    header = viewport.get_by_role('group', name=f'Table {visible_table}', exact=True).locator('.erd-table-head')
+    header.click()
+    details = page.get_by_label('Selection details', exact=True)
+    expect(details.get_by_label('Table name', exact=True)).to_have_value(visible_table)
+    assert inside(box(page, '.erd-panel[data-mode="edit"]'), box(page, '.erd-viewport'))
+    page.screenshot(path=str(OUT / f'dense-data-details-{size[0]}.png'), animations='disabled')
+    details.get_by_role('button', name='Close selection details').click()
+    expect(viewport).to_be_focused()
+    expect(details).to_be_hidden()
+    message = page.get_by_role('textbox', name='Message', exact=True)
+    message.fill('Review the device schema.')
+    viewport.focus()
+    before = stage.get_attribute('style')
+    viewport.press('ArrowRight')
+    assert stage.get_attribute('style') != before
+    viewport.press('ArrowLeft')
+    assert stage.get_attribute('style') == before
+    page.get_by_label('Fit to view', exact=True).click()
+    assert int(zoom.inner_text().rstrip('%')) < 65
+    page.screenshot(path=str(OUT / f'dense-data-fit-{size[0]}.png'), animations='disabled')
+    page.get_by_role('button', name='Documents', exact=True).click()
+    page.get_by_role('button', name='Data', exact=True).click()
+    assert int(zoom.inner_text().rstrip('%')) < 65
+    expect(message).to_have_value('Review the device schema.')
+    assert backend.saves == []
+
+
+def test_dense_data_diagram_respects_saved_view(page, backend):
+    backend.items[1]['content'] = 'erDiagram\n' + '\n'.join(
+        f'    DEVICE_{n:02d} ||--o{{ DEVICE_{n+1:02d} : tracks' for n in range(24)
+    ) + '\n%% decisions-erd: {"v":1,"view":{"zoom":0.45,"x":32,"y":48}}\n'
+    _open(page, 'Data', '.erd-table', (390, 844))
+    expect(page.locator('.erd-zoom')).to_have_text('45%')
+    expect(page.locator('.erd-stage')).to_have_attribute('style', 'transform: translate(32px, 48px) scale(0.45);')
+    assert backend.saves == []

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.e2e_playwright
 SHOTS = Path('/tmp/decisions-proposal-sync')
 
 
-def _open(page, fixture_base, *, sync=None, fail_save=False, local=False):
+def _open(page, fixture_base, *, sync=None, fail_save=False, local=False, review_key=None):
     page.set_default_timeout(10_000)
     SHOTS.mkdir(parents=True, exist_ok=True)
     proposal = {
@@ -24,6 +24,8 @@ def _open(page, fixture_base, *, sync=None, fail_save=False, local=False):
     }
     if local:
         proposal = {**proposal, 'id': 'local:gmail:fixture', 'origin': 'local'}
+    if review_key:
+        proposal['review_key'] = review_key
     state = {'proposal': proposal, 'writes': [], 'list_requests': [], 'sync': sync or {'state': 'complete'}, 'fail_save': fail_save}
     _install_api(page, [])
 
@@ -57,6 +59,57 @@ def _open(page, fixture_base, *, sync=None, fail_save=False, local=False):
     page.goto(f'{fixture_base}/development/incoming/', wait_until='domcontentloaded')
     expect(page.locator('.proposal-card')).to_have_count(1)
     return state
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_open_review_does_not_submit_the_background_replacement(page, fixture_base, width):
+    page.add_init_script("""window.proposalSockets = [];
+        window.WebSocket = class {
+            static OPEN = 1;
+            constructor() { this.readyState = 0; this.sent = []; window.proposalSockets.push(this);
+                setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 0); }
+            send(value) { this.sent.push(JSON.parse(value)); }
+            close() { this.readyState = 3; }
+        };""")
+    page.set_viewport_size({'width': width, 'height': 900})
+    key = 'a' * 64
+    state = _open(page, fixture_base, review_key=key)
+    original = state['proposal']
+    submissions = []
+
+    def create(route):
+        body = route.request.post_data_json
+        submissions.append(body)
+        if body == {'proposal': original, 'review_key': key}:
+            route.fulfill(status=409, json={'code': 'proposal_review_changed',
+                                            'error': 'The linked proposal changed. Reopen the proposal to review it again.'})
+        else:
+            route.fulfill(json={'success': True, 'chat_id': 17})
+
+    page.route('**/api/workflows/studio/incoming/proposals/thread', create)
+    page.locator('.proposal-title').click()
+    modal = page.get_by_role('dialog', name=original['title'])
+    modal.get_by_role('tab', name='Tasks', exact=False).click()
+    expect(modal.get_by_text(original['tasks'][0], exact=True)).to_be_visible()
+    state['proposal'] = {**original, 'description': 'Revised brief', 'tasks': ['Review the revised scope']}
+    page.wait_for_function("window.proposalSockets.some(socket => socket.sent.some(message => message.subscribe_topic === 'incoming'))")
+    page.evaluate("""() => {
+        const socket = window.proposalSockets.find(item => item.sent.some(message => message.subscribe_topic === 'incoming'));
+        socket.onmessage({data: JSON.stringify({type: 'proposal_changed', status: 'proposal_updated'})});
+    }""")
+    expect(page.locator('.proposal-card')).to_contain_text('Revised brief')
+    expect(modal.get_by_text(original['tasks'][0], exact=True)).to_be_visible()
+    modal.get_by_role('button', name='Create Thread', exact=True).click()
+    assert submissions == [{'proposal': original, 'review_key': key}]
+    expect(page.locator('#studio-toast')).to_contain_text('The linked proposal changed.')
+    page.screenshot(path=SHOTS / f'review-changed-{width}.png', animations='disabled')
+    page.locator('.proposal-title').click()
+    modal.get_by_role('tab', name='Tasks', exact=False).click()
+    expect(modal.get_by_text('Review the revised scope', exact=True)).to_be_visible()
+    page.screenshot(path=SHOTS / f'review-reopened-{width}.png', animations='disabled')
+    modal.get_by_role('button', name='Create Thread', exact=True).click()
+    expect(page).to_have_url(f'{fixture_base}/development/threads/17/')
+    assert submissions[-1] == {'proposal': state['proposal'], 'review_key': key}
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])

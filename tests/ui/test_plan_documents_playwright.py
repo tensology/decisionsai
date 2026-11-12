@@ -17,7 +17,7 @@ pytestmark = pytest.mark.e2e_playwright
 OUT = Path('/tmp/planning-verify')
 SIZES = [(1440, 900), (768, 1024), (390, 844)]
 FRAC = "# FRAC\n\n## Sign in\n\n1. User enters email\n2. User gets a code\n\nFR-001: Customers can sign in.\n"
-ORDER = ['FRAC', 'Brief', 'PRD', 'Handover', 'Skills', 'File structure', 'Decision', 'Overview', 'Discovery']
+ORDER = ['FRAC', 'Brief', 'PRD', 'Requirements Pack', 'File structure', 'Decision']
 
 
 class DocsBackend(Backend):
@@ -25,7 +25,8 @@ class DocsBackend(Backend):
         super().__init__()
         arch = self.items[1]
         kinds = [('brief', 'Outcome brief'), ('prd', 'Product requirements'), ('discovery_proposal', 'Discovery proposal'), ('handover', 'Handover'),
-                 ('skills', 'Skills'), ('frac', 'Functional requirements'), ('file_structure', 'File structure'), ('decision', 'Decision'), ('project_overview', 'Overview')]
+                 ('skills', 'Skills'), ('frac', 'Functional requirements'), ('file_structure', 'File structure'), ('decision', 'Decision'), ('project_overview', 'Overview'),
+                 ('requirements_pack', 'Requirements Pack')]
         self.items = [{"id": 20 + i, "item_type": k, "title": t, "content": FRAC if k == 'frac' else f"# {t}\n\nBody of {t}.\n",
                        "content_format": "markdown", "status": "draft", "revision_count": 1, "sort_order": i} for i, (k, t) in enumerate(kinds)] + [arch]
         self.created, self.renamed, self.deleted = [], [], []
@@ -162,13 +163,13 @@ def test_documents_tab_bar_frac_default_and_keyboard(page, w, h):
     assert page.locator('.plan-doc-tab[aria-selected="true"]').inner_text().strip() == 'Brief'
     assert page.locator('#plan-context-hint').inner_text() == 'Context: Brief'
     page.keyboard.press('End')
-    assert page.evaluate("() => document.activeElement.textContent.trim()") == 'Discovery'
+    assert page.evaluate("() => document.activeElement.textContent.trim()") == 'Decision'
     vis = page.evaluate("() => { const t = document.activeElement.getBoundingClientRect(), s = document.querySelector('.plan-doc-tabs').getBoundingClientRect(); return t.left >= s.left - 1 && t.right <= s.right + 1; }")
     assert vis                                                                                   # scrolled into view
     page.keyboard.press('Home')
     assert page.locator('.plan-doc-tab[aria-selected="true"]').inner_text().strip() == 'FRAC'
     page.keyboard.press('ArrowLeft')
-    assert page.locator('.plan-doc-tab[aria-selected="true"]').inner_text().strip() == 'Discovery'
+    assert page.locator('.plan-doc-tab[aria-selected="true"]').inner_text().strip() == 'Decision'
     # Interfaces / Data unaffected, chat hint only on Documents
     page.get_by_role("button", name="Data", exact=True).click()
     page.locator('.erd-editor, .plan-mermaid').first.wait_for()

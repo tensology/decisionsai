@@ -232,6 +232,42 @@ def test_dismissal_retry_survives_offline_and_later_refresh(client, monkeypatch)
     assert client.post.call_args.args[1] == {'action': 'dismiss'}
 
 
+@pytest.mark.parametrize('reservation_reported', [False, True])
+def test_offline_dismissal_reopens_only_the_reserved_proposal(monkeypatch, reservation_reported):
+    from distr.core.db import IncomingProposalDismissal, get_session
+    from distr.core.tensology_client import TensologyApiError
+
+    row = {**remote(), 'id': 985018 if reservation_reported else 985019}
+    row['source_conversation'] = {'thread_id': f'reservation-{row["id"]}'}
+    proposal = incoming._from_tensology(row)
+    alias = {**proposal, 'id': f'local:{proposal["dedupe_key"]}', 'origin': 'local'}
+    later = {**proposal, 'id': f'local:gmail:later-{row["id"]}', 'message_ids': ['later-message']}
+    client = Mock()
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: client)
+    monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', Mock())
+    monkeypatch.setattr(sync, '_thread_receipts', lambda: [])
+    client.post.side_effect = OSError('Offline')
+    assert incoming.dismiss_proposal(proposal)
+    assert incoming.dismiss_proposal(alias)
+    assert incoming.dismiss_proposal(later)
+    assert incoming._undismissed_proposals([proposal, later]) == []
+
+    client.post.reset_mock()
+    client.post.side_effect = TensologyApiError('Reserved for a merge', status=409, code='merge_source_reserved')
+    if reservation_reported:
+        row['merge_source_reserved'] = True
+    rows, errors = sync.reconcile_decisions([row])
+    assert not errors
+    assert len(rows) == 1 and rows[0]['status'] == 'pending'
+    assert incoming._undismissed_proposals([proposal, later]) == [proposal]
+    sync.reconcile_decisions([row])
+    assert client.post.call_count == (0 if reservation_reported else 1)
+    with get_session() as db:
+        assert db.get(IncomingProposalDismissal, proposal['id']) is None
+        assert db.get(IncomingProposalDismissal, incoming._proposal_handoff_key(alias)) is None
+        assert db.get(IncomingProposalDismissal, incoming._proposal_handoff_key(later)) is not None
+
+
 def test_thread_receipt_retries_by_source_identity_without_starting_work_again(client, monkeypatch):
     proposal = incoming._from_tensology(remote(), {})
     proposal['id'] = 'local:gmail:thread'
@@ -240,6 +276,44 @@ def test_thread_receipt_retries_by_source_identity_without_starting_work_again(c
     rows, errors = sync.reconcile_decisions([remote()])
     assert not errors and rows[0]['status'] == 'sent_to_decisions'
     assert client.post.call_args.args[1] == {'action': 'acknowledge_thread', 'thread_id': 936}
+
+
+@pytest.mark.parametrize("damage", [None, "fingerprint", "missing_dismissal"])
+def test_reconciliation_requires_original_merge_dismissal_evidence(client, monkeypatch, damage):
+    from distr.core.db import IncomingProposalDismissal, get_session
+
+    replacement = remote()
+    replacement["requires_merge_receipt"] = True
+    shaped = incoming._from_tensology(replacement)
+    originals = [f"tensology:{wid}" for wid in {
+        None: (985001, 985002), "fingerprint": (985003, 985004), "missing_dismissal": (985005, 985006),
+    }[damage]]
+    with get_session() as db:
+        for key in originals[:1] if damage == "missing_dismissal" else originals:
+            db.merge(IncomingProposalDismissal(key=key, conversation_key=key))
+        db.commit()
+    receipt = {
+        "key": incoming._merge_key(originals),
+        "original_keys": originals if damage != "fingerprint" else [originals[0], "tensology:985007"],
+        "merged": {**shaped, "merged_from": []},
+        "pending_originals": [],
+    }
+    monkeypatch.setattr(sync, "_thread_receipts", lambda: [
+        (936, {"key": incoming._proposal_handoff_key(shaped), "merge_ack_ready": True}),
+    ])
+    monkeypatch.setattr(incoming, "_thread_merge_receipt", lambda *args: receipt)
+    monkeypatch.setattr(incoming, "_undismissed_proposals", lambda rows: rows)
+    monkeypatch.setattr("distr.core.incoming.project_links.proposal_in_scope", lambda proposal: True)
+    client.post.return_value = {"status": "sent_to_decisions"}
+
+    rows, errors = sync.reconcile_decisions([replacement])
+    assert not errors
+    if damage:
+        assert rows[0]["status"] == "pending"
+        client.post.assert_not_called()
+    else:
+        assert rows[0]["status"] == "sent_to_decisions"
+        assert client.post.call_args.args[1] == {"action": "acknowledge_thread", "thread_id": 936}
 
 
 def test_remote_decision_missed_while_offline_is_imported_without_write(client, monkeypatch):

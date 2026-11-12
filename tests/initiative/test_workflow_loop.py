@@ -399,8 +399,8 @@ def test_context_assembler_partial_failure():
 # 10. assist level — suggestions only, no execution
 # ---------------------------------------------------------------------------
 
-def test_assist_suggest_only():
-    print("\n[10] assist level — all actions become suggestions")
+def test_assist_removed_never_dispatches():
+    print("\n[10] removed assist level — nothing dispatches or drafts")
     q, path = _tmp_queue()
     telegram = MagicMock()
     try:
@@ -408,7 +408,7 @@ def test_assist_suggest_only():
             action = ProposedAction(action_type=at, description="test", telegram_message="msg")
             settings = _make_settings("assist")
             result = simulate_dispatch(action, settings, q, telegram)
-            check(f"assist/{at} → suggested", result["suggested"])
+            check(f"assist/{at} → skipped", result["skipped"])
             check(f"assist/{at} → not dispatched", not result["dispatched"])
 
         check("draft queue empty", len(q.get_all()) == 0)

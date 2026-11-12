@@ -12,9 +12,75 @@ from distr.core.incoming import proposals as intake
 from distr.gui.web.routes.development.incoming import register_routes
 from tests.ui.test_development_harness_playwright import _install_api
 from tests.ui.test_incoming_dismiss_undo import fixture_base
+from tests.core.test_proposal_continuity_integration import intake as intake_db
 
 pytestmark = pytest.mark.e2e_playwright
 EVIDENCE = Path('/tmp/decisions-proposal-source-navigation')
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_merged_telegram_sources_with_the_same_message_id_open_their_own_groups(
+    page, fixture_base, monkeypatch, intake_db, width,
+):
+    from distr.core.incoming import proposal_conversation
+    from distr.core.integrations.telegram import third_party_intake
+    from tests.telegram.test_telegram_groups_20261112 import GROUP, OTHER_GROUP, GroupHarness, msg
+
+    session, _, _ = intake_db
+    monkeypatch.setattr(proposal_conversation, 'get_session', session)
+    monkeypatch.setattr(third_party_intake, 'handle_group_inbound', lambda *args, **kwargs: None)
+    first = {'id': f'local:telegram:{GROUP}:dispatch', 'source': 'telegram', 'source_thread_id': GROUP,
+             'message_ids': ['42'], 'participant': 'Dispatch', 'title': 'Review delivery'}
+    second = {**first, 'id': f'local:telegram:{OTHER_GROUP}:operations', 'source_thread_id': OTHER_GROUP,
+              'participant': 'Operations', 'title': 'Review capacity'}
+    desktop = GroupHarness()
+    texts = {'Dispatch': 'Dispatch confirmed the shipping change.',
+             'Operations': 'Operations requested a capacity review.'}
+    for original in (first, second):
+        name = original['participant']
+        frame = msg(chat=int(original['source_thread_id']), mid=42, text=texts[name])
+        desktop._handle_telegram_message({'data': {**frame, 'chat': {**frame['chat'], 'title': name}}})
+    merged = intake._combine_frac_proposals(first, second)
+    key = intake.proposal_review_key(merged)
+    proposal = {**merged, 'review_key': key}
+    monkeypatch.setattr(intake, 'resolve_proposal_review', lambda review_key: (
+        {'status': 'proposal', 'proposal': proposal} if review_key == key else {'status': 'unavailable'}))
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router, prefix='/api')
+    client = TestClient(app)
+
+    def source(route):
+        response = client.get(route.request.url)
+        route.fulfill(status=response.status_code, json=response.json())
+
+    _install_api(page, [])
+    page.route('**/api/workflows/studio/incoming/proposals?*',
+               lambda route: route.fulfill(json={'proposals': [proposal]}))
+    page.route('**/api/workflows/studio/incoming/proposals/source?*', source)
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.goto(f'{fixture_base}/development/incoming/')
+    page.get_by_role('button', name='Open evidence for Review delivery + Review capacity').press('Enter')
+    dialog = page.get_by_role('dialog', name='Review delivery + Review capacity')
+    source_tab = dialog.get_by_role('tab', name='Source')
+    expect(source_tab.locator('.proposal-tab-count')).to_have_text('2')
+    source_tab.click()
+    expect(dialog.locator('.proposal-source-summary')).to_have_text('Open an original conversation to look up the 2 source messages.')
+    EVIDENCE.mkdir(exist_ok=True)
+    page.screenshot(path=EVIDENCE / f'{width}-telegram-shared-id-summary.png', animations='disabled')
+    jump = dialog.get_by_role('button', name='View in conversation')
+    jump.click()
+    picker = dialog.get_by_label('Original conversation', exact=True)
+    for name, other in (('Operations', 'Dispatch'), ('Dispatch', 'Operations')):
+        picker.select_option(label=f'Telegram · {name}')
+        jump.click()
+        anchor = dialog.locator('[data-original-message]')
+        expect(anchor).to_contain_text(texts[name])
+        expect(anchor).to_be_focused()
+        expect(dialog.get_by_text(texts[other], exact=True)).to_have_count(0)
+        page.screenshot(path=EVIDENCE / f'{width}-telegram-shared-id-{name.lower()}.png', animations='disabled')
+        dialog.get_by_role('button', name='Back to source evidence').click()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
@@ -180,7 +246,19 @@ def test_desktop_merged_proposal_reads_exact_sources_outside_the_recent_list(pag
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
 def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page, fixture_base, monkeypatch, width):
+    page.set_default_timeout(5000)
     _install_api(page, [])
+    page.add_init_script("""window.composerSubmissions = [];
+        document.addEventListener('submit', event => {
+            if (event.target.id === 'studio-composer') window.composerSubmissions.push(event.submitter?.outerHTML);
+        }, true);
+        const setIntervalOriginal = window.setInterval.bind(window);
+        window.setInterval = (callback, delay, ...args) => {
+            if (delay === 6000) window.refreshDevelopmentForTest = callback;
+            return setIntervalOriginal(callback, delay, ...args);
+        };""")
+    execution = {}
+    page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json=execution))
     first = {'id': 'local:gmail:dispatch', 'source': 'gmail', 'source_thread_id': 'dispatch',
              'message_ids': ['10'], 'participant': 'Dispatch', 'title': 'Review delivery'}
     second = {**first, 'id': 'local:gmail:operations', 'source_thread_id': 'operations',
@@ -239,7 +317,7 @@ def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page
             history.pushState(null, '', '/development/threads/' + id + '/');
             dispatchEvent(new PopStateEvent('popstate'));
         }""", chat_id)
-        expect(page.locator('#header-task')).to_have_text(titles[chat_id])
+        expect(page.locator('#header-task')).to_have_attribute('title', titles[chat_id])
 
     page.route('**/api/workflows/studio/incoming/proposals/source?*', source)
     page.set_viewport_size({'width': width, 'height': 900})
@@ -254,6 +332,16 @@ def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page
     EVIDENCE.mkdir(exist_ok=True)
     page.locator('#task-prompt').fill('Keep this unsent draft')
     menu.click()
+    action.focus()
+    page.keyboard.press('Escape')
+    expect(menu).to_be_focused()
+    expect(menu).to_have_attribute('aria-expanded', 'false')
+    menu.click()
+    expect(action).to_be_visible()
+    execution.update(direct=True, status='failed')
+    page.evaluate("window.refreshDevelopmentForTest()")
+    expect(page.locator('#task-state')).to_have_class('task-state failed')
+    expect(menu).to_have_attribute('aria-expanded', 'true')
     expect(action).to_be_visible()
     page.screenshot(path=EVIDENCE / f'{width}-submitted-menu.png', animations='disabled')
     action.click()
@@ -275,6 +363,7 @@ def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page
     dialog.get_by_role('button', name='Close').click()
     expect(menu).to_be_focused()
     expect(page.locator('#task-prompt')).to_have_value('Keep this unsent draft')
+    assert page.evaluate('window.composerSubmissions') == []
     menu.click()
     hold.append(True)
     with page.expect_request('**/api/workflows/studio/incoming/proposals/source?*'):
@@ -290,6 +379,7 @@ def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page
     expect(dialog).to_have_count(0)
     hold.clear()
     switch_thread(19)
+    expect(menu).to_have_attribute('aria-expanded', 'false')
     menu.click()
     action.click()
     expect(anchor).to_contain_text('Dispatch original')

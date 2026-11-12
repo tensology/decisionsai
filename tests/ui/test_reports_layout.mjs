@@ -474,6 +474,40 @@ test('adjacent intervals share a lane', () => {
     assert.deepEqual([...period.initialProjectSelection({ projects: [0, 3, 3], projectFilterVersion: 2 }, [2, 9])], [0, 3]);
  });
 
+test('non-billable entries are hidden from the calendar and its totals by default, and can be shown', () => {
+    const data = {
+        projects: [{ id: 1, name: 'Spoortrack' }, { id: 2, name: 'Plan My Charter' }],
+        by_project: [{ project_id: 1, name: 'Spoortrack', seconds: 3600 }, { project_id: 2, name: 'Plan My Charter', seconds: 7200 }],
+        by_day: [{ date: '2026-11-04', seconds: 10800, projects: { 1: 3600, 2: 7200 } }],
+        totals: { seconds: 10800, activity_seconds: 10800, blocks: 2, projects: 2, active_days: 1 },
+        blocks: [
+            { id: 'calendar-1', project_id: 1, project_name: 'Spoortrack', invoice_status: 'ready', seconds: 3600,
+              start_local: '2026-11-04T09:00:00', end_local: '2026-11-04T10:00:00' },
+            { id: 'calendar-2', project_id: 2, project_name: 'Plan My Charter', invoice_status: 'non_billable', seconds: 7200,
+              start_local: '2026-11-04T16:00:00', end_local: '2026-11-04T18:00:00' },
+        ],
+    };
+    const hidden = period.billableView(data);
+    assert.deepEqual(hidden.blocks.map((b) => b.id), ['calendar-1']);
+    assert.deepEqual(hidden.by_project.map((r) => [r.project_id, r.seconds]), [[1, 3600]]);
+    assert.deepEqual(hidden.by_day, [{ date: '2026-11-04', seconds: 3600, projects: { 1: 3600 } }]);
+    assert.equal(hidden.totals.seconds, 3600);
+    assert.equal(hidden.totals.blocks, 1);
+    assert.deepEqual(hidden.non_billable, { blocks: 1, seconds: 7200, shown: false });
+    assert.equal(data.blocks.length, 2, 'source data is not mutated');
+    const shown = period.billableView(data, true);
+    assert.equal(shown.blocks.length, 2);
+    assert.equal(shown.totals.seconds, 10800);
+    assert.deepEqual(shown.non_billable, { blocks: 1, seconds: 7200, shown: true });
+});
+
+test('the calendar offers a non-billable toggle and remembers the choice', () => {
+    const source = readFileSync(new URL('../../distr/gui/web/static/development/reports/period.js', import.meta.url), 'utf8');
+    assert.match(source, /showNonBillable: prefs\.showNonBillable === true/);
+    assert.match(source, /data-show-nonbillable/);
+    assert.match(source, /selectReportProjects\(billableView\(state\.data, state\.showNonBillable\), state\.projects\)/);
+});
+
 test("pinned defaults resolve linked projects and board aliases without duplicates", async () => {
     const { createSidebar } = await import("../../distr/gui/web/static/development/sidebar/index.js");
     const previous = globalThis.window;

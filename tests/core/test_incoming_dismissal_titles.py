@@ -118,15 +118,26 @@ def test_remote_decision_uses_event_title():
 
 
 def test_merge_path_stores_titles_for_both_originals(monkeypatch):
-    monkeypatch.setattr('distr.core.chat.ChatService.create_new_chat', lambda **kw: (501, None))
+    from distr.core.db import Chat, get_session
+    from distr.core.db.projects import Project
+
+    with get_session() as db:
+        project = Project(name='Dismissal title fixture')
+        db.add(project)
+        db.commit()
+        project_id = project.id
+    monkeypatch.setattr('distr.core.incoming.project_links.source_project_index', lambda: {('whatsapp', 'm@g.us'): {project_id}})
+    monkeypatch.setattr('distr.core.incoming.transcription.prepare_thread_transcripts', lambda *a: None)
     monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {})
     monkeypatch.setattr('distr.core.incoming.media.register_thread_attachments', lambda *a, **kw: None)
     monkeypatch.setattr('distr.core.tensology_notify.notify_proposal_created', lambda *a, **kw: None)
     monkeypatch.setattr(proposals_mod, '_merge_proposal_attachments', lambda *a, **kw: [])
     a, b = _wa('m@g.us', 'first'), _wa('m@g.us', 'second')
+    a['project_id'] = b['project_id'] = project_id
     b['message_ids'] = ['second-m1']
     result = proposals_mod.merge_proposals(a, b, complete=lambda *a: '{"title":"Combined task"}')
-    assert result['chat_id'] == 501
+    with get_session() as db:
+        assert db.get(Chat, result['chat_id']).project_id == project_id
     for p in (a, b):
         title, summary, snapshot = _row(proposals_mod.dismissal_receipt_keys(p)[0])
         assert (title, summary) == (p['title'], p['summary'])
@@ -141,7 +152,7 @@ def test_telegram_dismiss_path_stores_original_title_and_source_snapshot(monkeyp
         'source': 'whatsapp', 'source_conversation': {'thread_id': 'telegram-selected@g.us'},
         'evidence': [{'id': 'telegram-selected-m1', 'body': 'Please fix it'}],
     }])
-    reply = tensology_client.handle_proposal_decision_reply('dismiss 1', source='telegram')
+    reply = tensology_client.handle_proposal_decision_reply('dismiss #4444', source='telegram')
     assert 'Fix Telegram-selected task' in reply
     title, summary, snapshot = _row('tensology:4444')
     assert (title, summary) == ('Fix Telegram-selected task', 'Original task summary')

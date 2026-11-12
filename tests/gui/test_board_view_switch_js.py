@@ -22,16 +22,17 @@ def _node(script: str) -> None:
 
 def test_options_icons_active_state_and_labels():
     _node(r'''
-for (const current of ['kanban', 'plan', 'thread']) {
+for (const current of ['kanban', 'plan', 'thread', 'terminals']) {
   const opts = m.boardViewOptions(current, 7);
-  assert.deepEqual(opts.map(o => o.view), ['kanban', 'plan', 'thread']);
+  assert.deepEqual(opts.map(o => o.view), ['kanban', 'plan', 'thread', 'terminals']);
   assert.deepEqual(opts.filter(o => o.active).map(o => o.view), [current]);
 }
 const html = m.boardViewSwitchHtml(m.boardViewOptions('plan', 7));
-assert.match(html, /data-board-view="plan" title="Plan" aria-label="Plan" aria-pressed="true"/);
+assert.match(html, /data-board-view="plan" title="Planning" aria-label="Planning" aria-pressed="true"/);
 assert.match(html, /data-board-view="kanban" title="Kanban" aria-label="Kanban" aria-pressed="false"/);
-assert.match(html, /data-board-view="thread" title="Last thread" aria-label="Last thread"/);
-assert.equal((html.match(/<svg/g) || []).length, 3);   // icons, not text
+assert.match(html, /data-board-view="thread" title="Thread" aria-label="Thread"/);
+assert.match(html, /data-board-view="terminals" title="Terminal" aria-label="Terminal" aria-pressed="false"/);
+assert.equal((html.match(/<svg/g) || []).length, 4);   // icons, not text
 assert.doesNotMatch(html, /aria-disabled/);
 ''')
 

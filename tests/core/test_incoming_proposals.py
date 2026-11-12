@@ -142,6 +142,24 @@ def test_failed_upstream_dismissal_keeps_local_receipt(monkeypatch):
     assert proposal.get('_upstream_dismiss_error')
 
 
+@pytest.mark.parametrize('code', ['merge_source_reserved', 'merge_handoff_pending'])
+def test_upstream_merge_conflict_prevents_local_dismissal(monkeypatch, code):
+    from distr.core.tensology_client import TensologyApiError
+
+    row = _tensology_row(91048, 'dismiss-reserved', 'gmail', 'Reserved for a merge')
+    proposal = proposals_mod._from_tensology(row)
+    message = 'Retry the original pair in Incoming to finish it.'
+
+    def reject(*_args):
+        raise TensologyApiError(message, status=409, code=code)
+
+    monkeypatch.setattr('distr.core.tensology_client.decide_work_request', reject)
+    with pytest.raises(ValueError, match='Retry the original pair'):
+        proposals_mod.dismiss_proposal(proposal)
+    assert proposals_mod._undismissed_proposals([proposal]) == [proposal]
+    assert '_upstream_dismiss_error' not in proposal
+
+
 def test_remote_tensology_dismissal_is_honoured_on_intake(monkeypatch):
     row = _tensology_row(91047, 'remote-dismiss', 'whatsapp', 'Remote dismiss')
     row['evidence'][0]['id'] = 'wa-msg-1'
@@ -416,7 +434,11 @@ def test_merge_rebuilds_two_proposals_into_one(monkeypatch):
     notices = []
     monkeypatch.setattr("distr.core.tensology_notify.notify_proposal_created", lambda event: notices.append(event))
     dismissed = []
-    monkeypatch.setattr("distr.core.tensology_client.decide_work_request", lambda pid, action: dismissed.append((pid, action)))
+    def dismiss(pid, action):
+        dismissed.append((pid, action))
+        return {'id': pid, 'status': 'dismissed'}
+
+    monkeypatch.setattr("distr.core.tensology_client.decide_work_request", dismiss)
 
     first = {
         "id": "tensology:45", "title": "Check shipping cost", "project_id": 2, "project_name": "Merrypak",
@@ -470,7 +492,8 @@ def test_merge_dedupes_duplicate_attachments_via_shared_storage_path(monkeypatch
     registered = []
     monkeypatch.setattr("distr.core.incoming.media.register_thread_attachments", lambda chat_id, rows: registered.append((chat_id, rows)))
     monkeypatch.setattr("distr.core.tensology_notify.notify_proposal_created", lambda event: None)
-    monkeypatch.setattr("distr.core.tensology_client.decide_work_request", lambda *a, **k: None)
+    monkeypatch.setattr("distr.core.tensology_client.decide_work_request",
+                        lambda pid, action: {'id': pid, 'status': 'dismissed'})
 
     shared = {
         "name": "invoice.pdf", "mime_type": "application/pdf", "size": 12,

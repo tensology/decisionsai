@@ -22,23 +22,25 @@ def test_interfaces_dock_matches_data_dock(page, backend, size):
     data_dock, data_canvas, data_callout = box(page, '.erd-dock-left'), box(page, '.erd-viewport'), box(page, '.erd-callout')
     data_style = page.evaluate(STYLE, '.erd-dock-left')
     page.get_by_role("button", name="Interfaces", exact=True).click()
-    page.locator('.plan-interfaces-tools .plan-advanced-open').wait_for(state='visible', timeout=10000)
+    dock_selector = '.iface-canvas .iface-dock'
+    advanced = page.locator(f'{dock_selector} .plan-advanced-open')
+    advanced.wait_for(state='visible', timeout=10000)
     page.wait_for_timeout(350)
-    dock, surface, callout = box(page, '.plan-interfaces-tools'), box(page, '#plan-preview'), box(page, '.plan-canvas-callout')
+    dock, surface, callout = box(page, dock_selector), box(page, '.iface-viewport'), box(page, '.plan-canvas-callout')
     assert inside(dock, surface, pad=4), (dock, surface)
     dx, dy = corner(dock, surface)
     ddx, ddy = corner(data_dock, data_canvas)
     assert abs(dx - ddx) <= 2 and abs(dy - ddy) <= 2, ((dx, dy), (ddx, ddy))          # same inset as Data
     assert abs(dock['height'] - data_dock['height']) <= 1
-    assert page.evaluate(STYLE, '.plan-interfaces-tools')[:4] == data_style[:4]        # same chrome
-    assert inside(callout, surface, pad=4)
+    assert page.evaluate(STYLE, dock_selector)[:4] == data_style[:4]                  # same chrome
+    assert callout['y'] + callout['height'] <= surface['y'] + 1
     assert abs((surface['x'] + surface['width'] - callout['x'] - callout['width']) - (data_canvas['x'] + data_canvas['width'] - data_callout['x'] - data_callout['width'])) <= 24
     assert page.locator('.plan-preview-toolbar .plan-advanced-open').count() == 0        # no longer above the surface
     page.screenshot(path=str(OUT / f'ifaces-match-{size[0]}.png'))
     page.locator('#plan-preview').evaluate('n => n.scrollTop = n.scrollHeight')        # content scrolls, dock stays
     page.wait_for_timeout(200)
-    assert box(page, '.plan-interfaces-tools') == dock
-    page.locator('.plan-interfaces-tools .plan-advanced-open').click()
+    assert box(page, dock_selector) == dock
+    advanced.click()
     page.locator('.plan-drawer').wait_for()
     page.wait_for_timeout(250)
     d = box(page, '.plan-drawer')

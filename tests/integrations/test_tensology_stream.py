@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 import distr.core.tensology_client as tc
 import distr.core.tensology_stream as stream
@@ -324,14 +325,17 @@ def test_download_sends_key_only_to_tensology_host(tmp_path):
     assert not list(tmp_path.glob("*.part"))
 
 
-def test_download_retains_original_content_type_for_cached_previews(tmp_path):
+@pytest.mark.parametrize("cache_sha256", ["", "a" * 64])
+def test_download_retains_original_content_type_for_cached_previews(tmp_path, cache_sha256):
     client = TensologyClient("https://www.tensology.com", "test-key")
     response = FakeResponse(PNG)
     response.headers['Content-Type'] = 'image/png'
+    if cache_sha256:
+        response.headers['X-Incoming-Cache-SHA256'] = cache_sha256
     metadata = {}
     with patch('urllib.request.urlopen', return_value=response):
         assert client.download('work-requests/1/attachment?snapshot_id=1', tmp_path / 'image.bin', metadata=metadata) == len(PNG)
-    assert metadata == {'content_type': 'image/png'}
+    assert metadata == {'content_type': 'image/png', 'cache_sha256': cache_sha256}
 
 
 def test_download_rejects_too_large_and_http_errors(tmp_path):
@@ -445,8 +449,82 @@ def test_state_sync_patches_only_on_change():
     assert client.patch.call_count == 1
 
 
+@pytest.mark.parametrize("failure", ["flush", "queue", "remote"])
+def test_state_sync_isolates_ticket_and_telegram_failures(failure):
+    from distr.core.incoming import telegram_updates
+
+    first = _ticket(id=17, project_id=8, execution_status="development", decisions_thread_id="42")
+    second = _ticket(id=18, project_id=9, execution_status="development", decisions_thread_id="43")
+    tickets = {"tickets/17/execution": first, "tickets/18/execution": second}
+    tc._remember_tensology_tickets([first, second])
+    fault_pending = True
+    client = MagicMock()
+
+    def fail_once(stage, error):
+        nonlocal fault_pending
+        if failure == stage and fault_pending:
+            fault_pending = False
+            raise error
+
+    lock_error = OperationalError("fixture update", {}, RuntimeError("database is locked"))
+
+    def queue_update(_ticket, chat_id, _execution, _status):
+        if chat_id == 42:
+            fail_once("queue", lock_error)
+
+    def patch_ticket(path, payload, **_kwargs):
+        if path == "tickets/17/execution":
+            fail_once("remote", TensologyApiError("Temporary upstream error", status=503))
+        return {**tickets[path], "execution_status": payload["status"]}
+
+    client.patch.side_effect = patch_ticket
+    with (
+        patch.object(tc, "configured_tensology_client", return_value=client),
+        patch.object(tc, "_existing_tensology_thread", side_effect=lambda ticket: int(ticket["decisions_thread_id"])),
+        patch.object(telegram_updates, "flush_execution_updates", side_effect=lambda: fail_once("flush", lock_error)),
+        patch.object(telegram_updates, "queue_execution_update", side_effect=queue_update),
+        patch("distr.core.workflow.development_harness.development_execution_state",
+              side_effect=lambda chat_id: {"status": "failed", "job_id": f"job-{chat_id}"}),
+    ):
+        assert tc.sync_tensology_execution_states(force=True) == (2 if failure == "flush" else 1)
+        assert client.patch.call_args.args[0] == "tickets/18/execution"
+        if failure != "flush":
+            assert tc._TENSOLOGY_TICKETS[17]["execution_status"] == "development"
+            assert 18 not in tc._TENSOLOGY_TICKETS
+            assert tc.sync_tensology_execution_states(force=True) == 1
+            assert client.patch.call_args.args[0] == "tickets/17/execution"
+        assert tc.sync_tensology_execution_states(force=True) == 0
+    assert [call.args[0] for call in client.patch.call_args_list].count("tickets/18/execution") == 1
+    first_attempts = [call for call in client.patch.call_args_list if call.args[0] == "tickets/17/execution"]
+    assert len(first_attempts) == (2 if failure == "remote" else 1)
+    assert {call.kwargs["idempotency_key"] for call in first_attempts} == {"tensology-ticket-17-status-failed-job-42"}
+
+
 def test_state_sync_does_nothing_without_claimed_tickets():
     with patch("distr.core.tensology_client.configured_tensology_client") as configured:
+        assert tc.sync_tensology_execution_states(force=True) == 0
+    configured.assert_not_called()
+
+
+def test_state_sync_reads_ticket_cache_after_a_concurrent_push_finishes(monkeypatch):
+    ticket = _ticket(execution_status="development", decisions_thread_id="42")
+    tc._remember_tensology_tickets([ticket])
+    lock = tc._TICKET_PROCESS_LOCK
+
+    def acquire_after_push(*, blocking):
+        tc._remember_tensology_tickets([{**ticket, "execution_status": "done"}])
+        return lock.acquire(blocking=blocking)
+
+    process_lock = MagicMock()
+    process_lock.acquire.side_effect = acquire_after_push
+    process_lock.release.side_effect = lock.release
+    monkeypatch.setattr(tc, "_TICKET_PROCESS_LOCK", process_lock)
+    with (
+        patch.object(tc, "configured_tensology_client") as configured,
+        patch.object(tc, "_existing_tensology_thread", return_value=42),
+        patch("distr.core.workflow.development_harness.development_execution_state", return_value={"status": "failed"}),
+        patch("distr.core.incoming.telegram_updates.flush_execution_updates"),
+    ):
         assert tc.sync_tensology_execution_states(force=True) == 0
     configured.assert_not_called()
 

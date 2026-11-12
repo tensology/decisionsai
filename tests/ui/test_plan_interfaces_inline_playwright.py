@@ -175,7 +175,7 @@ def test_description_reads_and_saves_the_selected_page(page, w, h):
         node = page.locator('.iface-node', has_text=name)
         node.focus()
         node.press('Enter')
-        page.get_by_role('button', name='Planning', exact=True).click()
+        page.get_by_role('tablist', name='Page perspective').get_by_role('button', name='Planning', exact=True).click()
 
     open_page('Customers')
     page.locator('[data-desc-mode="raw"]').click()

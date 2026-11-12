@@ -300,19 +300,137 @@ def test_other_durable_work_blocks_move_even_with_old_terminal_metadata(intake,k
         rebind_development_thread(chat_id,project_id=ids[1],board_key=None,board_provider=None)
 
 
-def test_unlinked_project_uses_matching_synthetic_claim_identity(intake,monkeypatch):
-    _,proposal,_=intake
-    chat_id=proposals.create_proposal_thread(proposal)
-    rebind_development_thread(chat_id,project_id=None,board_key=None,board_provider=None)
-    calls=[]
-    monkeypatch.setattr(harness,'_route',lambda *args,**kwargs:('codex','auto',{},'low'))
-    async def backend(request,**kwargs):
+@pytest.mark.parametrize("endpoint", ["scope", "controls"])
+@pytest.mark.parametrize("destination", ["unbound", "other_project"])
+def test_project_change_clears_the_previous_ticket_before_the_next_run(intake, monkeypatch, endpoint, destination):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.workflow import DevelopmentWorkItem
+    from distr.gui.web.routes.development.thread_controls import register_routes as register_controls
+    from distr.gui.web.routes.development.threads import register_routes as register_threads
+
+    session, proposal, projects = intake
+    project_id = None if destination == "unbound" else projects[1]
+    monkeypatch.setattr("distr.core.workflow.development_control.get_session", session)
+    chat_id = proposals.create_proposal_thread(proposal)
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        ticket = db.query(KanbanTicket).filter_by(source_chat_id=chat_id).one()
+        ticket_id, lane_id, old_status = ticket.id, ticket.lane_id, ticket.workflow_status
+        original_handoff = json.loads(root.params)["incoming_proposal_handoff"]
+        params = json.loads(root.params)
+        params["development"]["execution"] = {"status": "running", "job_id": "existing"}
+        root.params = json.dumps(params)
+        db.commit()
+
+    app, router = FastAPI(), APIRouter()
+    register_threads(router, None)
+    register_controls(router, None)
+    app.include_router(router)
+    client = TestClient(app)
+    path = f"/workflows/studio/tasks/{chat_id}"
+    payload = {"project_id": project_id}
+    if endpoint == "controls":
+        path += "/controls"
+        payload["pinned"] = True
+    else:
+        payload.update(title="Unlinked proposal", board_key=None, board_provider=None, ticket_id=None)
+    held = client.patch(path, json=payload)
+    assert held.status_code == 409, held.text
+    assert "Stop or finish" in held.json()["detail"]
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        assert root.project_id == projects[0]
+        assert db.get(KanbanTicket, ticket_id).source_chat_id == chat_id
+        params = json.loads(root.params)
+        assert not params["development"].get("pinned")
+        params["development"]["execution"]["status"] = "completed"
+        root.params = json.dumps(params)
+        db.commit()
+
+    unlinked = client.patch(path, json=payload)
+    assert unlinked.status_code == 200, unlinked.text
+    assert unlinked.json()["project_id"] == project_id
+    assert unlinked.json()["ticket_id"] is None
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        item = db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).one()
+        params = json.loads(root.params)
+        assert (root.project_id, item.project_id, item.board_key, item.local_ticket_id, item.ticket_key) == (
+            project_id, project_id, None, None, None,
+        )
+        assert params["incoming_proposal_handoff"] == original_handoff
+        assert params["development"]["ticket_id"] is None
+        assert not {"board_key", "board_provider", "board_ticket_key"} & params["development"].keys()
+        ticket = db.get(KanbanTicket, ticket_id)
+        assert (ticket.lane_id, ticket.linked_project_id, ticket.source_chat_id) == (lane_id, projects[0], None)
+        assert bool(params["development"].get("pinned")) == (endpoint == "controls")
+
+    calls = []
+    monkeypatch.setattr(harness, "_route", lambda *args, **kwargs: ("codex", "auto", {}, "low"))
+
+    async def backend(request, **kwargs):
         calls.append(request)
-        return TurnResult(success=False,backend_id='codex',model='auto',runtime_id='cli_harness',error='Fixture result')
-    monkeypatch.setattr('distr.core.turn_runtime.execute_turn',backend)
-    result=harness.dispatch_development_prompt(chat_id,'Read configuration',dispatch_async=False)
-    assert len(calls)==1 and calls[0].scope.project_id==-chat_id
-    assert result['status']=='failed'
+        return TurnResult(success=True, backend_id="codex", model="auto", runtime_id="cli_harness", output="Fixture result")
+
+    monkeypatch.setattr("distr.core.turn_runtime.execute_turn", backend)
+    result = harness.dispatch_development_prompt(chat_id, "Read configuration", save_prompt=True, dispatch_async=False)
+    assert len(calls) == 1
+    assert (calls[0].scope.project_id, calls[0].scope.board_id, calls[0].scope.ticket_id) == (
+        project_id if project_id is not None else -chat_id, None, None,
+    )
+    assert result["status"] == "completed"
+    with session() as db:
+        ticket = db.get(KanbanTicket, ticket_id)
+        assert ticket.workflow_status == old_status
+
+
+def test_rename_cannot_restore_a_concurrently_unlinked_ticket(intake, monkeypatch):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.workflow import development_threads
+
+    session, proposal, _ = intake
+    chat_id = proposals.create_proposal_thread(proposal)
+    with session() as db:
+        ticket_id = db.query(KanbanTicket).filter_by(source_chat_id=chat_id).one().id
+
+    def rename_after_unlink(target, **settings):
+        rebind_development_thread(target, project_id=None, board_key=None, board_provider=None)
+        return rebind_development_thread(target, **settings)
+
+    monkeypatch.setattr(development_threads, "rebind_development_thread", rename_after_unlink)
+    renamed = development_threads.update_development_thread_settings(chat_id, title="Rename after unlink")
+    assert (renamed["title"], renamed["project_id"], renamed["ticket_id"]) == ("Rename after unlink", None, None)
+    with session() as db:
+        ticket = db.get(KanbanTicket, ticket_id)
+        assert ticket.source_chat_id is None
+        assert ticket.title != "Rename after unlink"
+
+
+@pytest.mark.parametrize("extra", ["same_project", "ticket_title"])
+def test_partial_settings_patch_keeps_the_existing_ticket(intake, extra):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.gui.web.routes.development.threads import register_routes
+
+    session, proposal, projects = intake
+    chat_id = proposals.create_proposal_thread(proposal)
+    with session() as db:
+        ticket_id = db.query(KanbanTicket).filter_by(source_chat_id=chat_id).one().id
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    body = {"title": "Keep the same ticket"}
+    if extra == "same_project":
+        body["project_id"] = projects[0]
+    else:
+        body["board_ticket_title"] = "Old ticket title"
+    result = TestClient(app).patch(f"/workflows/studio/tasks/{chat_id}", json=body)
+    assert result.status_code == 200, result.text
+    assert result.json()["ticket_id"] == ticket_id
+    with session() as db:
+        ticket = db.get(KanbanTicket, ticket_id)
+        assert (ticket.source_chat_id, ticket.linked_project_id, ticket.title) == (
+            chat_id, projects[0], body["title"],
+        )
 
 
 @pytest.mark.parametrize('invalid',[['unknown'],'broken',42])

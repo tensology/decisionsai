@@ -73,6 +73,71 @@ def decide(review, rid, action='approve', headers=CLICK):
     return review[0].post(f'/api/dev-approvals/{rid}/{action}', headers=headers, json={})
 
 
+@pytest.mark.parametrize('change', ['none', 'email', 'expired', 'different_run', 'changed_ticket', 'changed_digest'])
+def test_paired_preview_requires_the_current_exact_review(review, monkeypatch, change):
+    from fastapi import APIRouter
+    from distr.core.workflow import development_harness
+    from distr.core.workflow.reply_channel import resolve_reply_target
+    from distr.gui.web.routes.development.threads import register_routes
+    from distr.gui.web.security import INTERNAL_AUTH_HEADER
+
+    _, factory, details, sender = review
+    scope = details['workflow']
+    ticket_id = details['ticket_id']
+    monkeypatch.setattr(development_harness, 'get_session', factory)
+    monkeypatch.setattr('distr.gui.web.security.get_internal_api_token', lambda: 'fixture-only')
+    prepared = None
+    with factory.begin() as db:
+        ticket = db.get(KanbanTicket, ticket_id)
+        if change == 'email':
+            ticket.source_provider = 'gmail'
+            ticket.source_thread_id = 'original-thread'
+            ticket.source_contact = 'client@example.test'
+            prepared = {'from': 'team@example.test', 'to': ['client@example.test'],
+                        'cc': ['reviewer@example.test'], 'subject': 'Re: Original request'}
+        envelope = reply_delivery._delivery_envelope(
+            db, ticket, resolve_reply_target(ticket), prepared['subject'] if prepared else '', prepared,
+        )
+    details = {**details, 'delivery': envelope, 'channel': envelope['channel']}
+    approval = request_review(review, details).json()
+    assert approval['status'] == 'pending'
+    with factory.begin() as db:
+        db.get(Chat, scope['chat_id']).params = json.dumps({'development': {'ticket_id': ticket_id}})
+        run = db.get(AutoWorkflowRun, scope['run_id'])
+        run.run_data = json.dumps({'project_id': 9, 'reply_delivery': {
+            'pending_approval': True, 'approval_request_id': approval['request_id'],
+        }})
+        row = db.query(DevApprovalRequest).one()
+        if change == 'expired':
+            row.expires_at = routes._now() - timedelta(seconds=1)
+        elif change == 'different_run':
+            db.add(AutoWorkflowRun(workflow_id=run.workflow_id, chat_id=run.chat_id,
+                                   ticket_id=ticket_id, status='running'))
+        elif change == 'changed_ticket':
+            db.get(KanbanTicket, ticket_id).source_thread_id = 'another-conversation'
+        elif change == 'changed_digest':
+            row.details_json = json.dumps({**details, 'body': 'Unexpected body.'})
+
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router, prefix='/api')
+    path = f'/api/workflows/studio/tasks/{scope["chat_id"]}/execution/client-reply?run_id={scope["run_id"]}'
+    with TestClient(app) as client:
+        assert client.get(path).status_code == 401
+        response = client.get(path, headers={INTERNAL_AUTH_HEADER: 'fixture-only'})
+    assert response.headers['cache-control'] == 'no-store'
+    if change in {'none', 'email'}:
+        assert response.status_code == 200
+        assert response.json() == {
+            'run_id': scope['run_id'], 'channel': details['channel'], 'body': details['body'],
+            **(prepared or {'from': None, 'to': ['12025550142'], 'cc': [], 'subject': ''}),
+        }
+    else:
+        assert response.status_code == 404
+        assert details['body'] not in response.text
+    sender.assert_not_called()
+
+
 def test_managed_review_dedupes_survives_new_boot_and_sends_exact_body_once(review, monkeypatch):
     first = request_review(review).json()
     assert first['status'] == 'pending' and first['details'] == review[2]

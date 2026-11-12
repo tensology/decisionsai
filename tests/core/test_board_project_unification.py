@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -382,6 +382,51 @@ def test_ticket_delete_can_preserve_and_detach_its_linked_thread(board_api):
         assert item.ticket_key is None
 
 
+@pytest.mark.parametrize("change", ["none", "legacy", "wrong_board", "wrong_project", "wrong_owner", "detached", "no_link"])
+def test_ticket_thread_lookup_checks_the_current_board_project_and_link(board_api, change):
+    client, get_session, _ = board_api
+    board_data = client.post("/api/tickets/boards", json={"name": "Source Board"}).json()
+    other = client.post("/api/tickets/boards", json={"name": "Other Board"}).json()
+    board_id, project_id = board_data["id"], board_data["project_id"]
+    with get_session() as db:
+        board = db.get(KanbanBoard, board_id)
+        root = Chat(title="Linked work", project_id=project_id)
+        db.add(root)
+        db.flush()
+        ticket = KanbanTicket(lane_id=board.lanes[0].id, title="Linked work", source_chat_id=root.id)
+        db.add(ticket)
+        db.flush()
+        ticket_id, chat_id = ticket.id, root.id
+        root.params = json.dumps({"development": {"ticket_id": ticket_id, "board_key": f"decisions:{board_id}"}})
+        if change not in {"legacy", "no_link"}:
+            item = DevelopmentWorkItem(chat_id=chat_id, identity_key=f"ticket:local:{ticket_id}",
+                                       local_ticket_id=ticket_id, project_id=project_id, board_key=f"decisions:{board_id}")
+            db.add(item)
+            if change == "wrong_owner":
+                item.local_ticket_id = None
+        if change == "wrong_board":
+            ticket.lane_id = db.get(KanbanBoard, other["id"]).lanes[0].id
+        elif change == "wrong_project":
+            root.project_id = other["project_id"]
+        elif change in {"detached", "no_link"}:
+            ticket.source_chat_id = None
+    path = f"/api/tickets/boards/{board_id}/tickets/{ticket_id}/development-thread"
+    response = client.get(path, params={"expected_chat_id": chat_id})
+    if change in {"none", "legacy"}:
+        assert response.status_code == 200 and response.json() == {"chat_id": chat_id}
+        assert client.get(path).json() == {"chat_id": chat_id}
+    else:
+        assert response.status_code == (404 if change == "wrong_board" else 409)
+        assert "chat_id" not in response.json()
+        if change == "no_link":
+            assert client.get(path).json() == {"chat_id": None}
+        if change == "detached":
+            assert client.get(path).status_code == 409
+    with get_session() as db:
+        assert db.query(Chat).count() == 1
+        assert db.query(AutoWorkflow).count() == 0
+
+
 def test_local_ticket_thread_draft_copies_attachments_without_starting_work(board_api, monkeypatch):
     client, get_session, tmp_path = board_api
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -462,3 +507,131 @@ def test_jira_ticket_thread_draft_downloads_files_and_writes_comments(tmp_path, 
     assert [item["name"] for item in body["attachments"]] == ["screen.png", "ticket-comments.txt"]
     assert Path(body["attachments"][0]["path"]).read_bytes() == b"png"
     assert "Keep it compact." in Path(body["attachments"][1]["path"]).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("change", ["none", "project", "linked", "board", "late_move", "late_bound", "concurrent"])
+def test_local_ticket_draft_and_submission_use_current_scope(board_api, monkeypatch, change):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from distr.core.workflow import development_threads
+    from distr.gui.web.routes.development.threads import register_routes
+
+    client, get_session, tmp_path = board_api
+    board = client.post("/api/tickets/boards", json={"name": "Review board"}).json()
+    other = client.post("/api/tickets/boards", json={"name": "Assigned project"}).json()
+    source = tmp_path / "scope-evidence.txt"
+    source.write_text("Evidence")
+    root_dir = tmp_path / "draft-evidence"
+    staging_calls = []
+
+    def staging(project_id, provider, board_id, ticket_id):
+        staging_calls.append((project_id, provider, board_id, ticket_id))
+        root_dir.mkdir(exist_ok=True)
+        return root_dir
+
+    monkeypatch.setattr(kanban, "_ticket_thread_attachment_root", staging)
+    with get_session() as db:
+        lane = db.get(KanbanBoard, board["id"]).lanes[0]
+        ticket = KanbanTicket(lane_id=lane.id, title="Review evidence", linked_project_id=other["project_id"])
+        db.add(ticket)
+        db.flush()
+        ticket_id = ticket.id
+        db.add(KanbanTicketFile(ticket_id=ticket_id, filename=source.name, file_path=str(source)))
+
+    request = {"provider": "decisions", "board_id": str(board["id"]), "ticket_id": str(ticket_id),
+               "project_id": other["project_id"]}
+    if change not in {"none", "late_move", "late_bound", "concurrent"}:
+        with get_session() as db:
+            ticket = db.get(KanbanTicket, ticket_id)
+            if change == "project":
+                ticket.linked_project_id = board["project_id"]
+            elif change == "board":
+                ticket.lane_id = db.get(KanbanBoard, other["id"]).lanes[0].id
+            else:
+                root = Chat(title="Already linked", project_id=other["project_id"])
+                db.add(root)
+                db.flush()
+                ticket.source_chat_id = root.id
+
+    response = client.post("/api/tickets/thread-draft", json=request)
+    if change in {"none", "late_move", "late_bound", "concurrent"}:
+        assert response.status_code == 200
+        assert response.json()["project_id"] == other["project_id"]
+        assert (root_dir / source.name).read_text() == "Evidence"
+        assert staging_calls == [(other["project_id"], "decisions", str(board["id"]), str(ticket_id))]
+    else:
+        assert response.status_code == (404 if change == "board" else 409)
+        assert not staging_calls
+
+    monkeypatch.setattr("distr.core.db.get_session", get_session)
+    monkeypatch.setattr(development_threads, "get_session", get_session)
+    monkeypatch.setattr("distr.core.workflow.development_harness.get_session", get_session)
+    attempts = []
+    simultaneous = Barrier(2) if change == "concurrent" else None
+
+    def create_chat(**kwargs):
+        attempts.append("create")
+        with get_session() as db:
+            root = Chat(title=kwargs["title"], project_id=kwargs["project_id"])
+            db.add(root)
+            db.flush()
+            root_id = root.id
+            if change == "late_move":
+                db.get(KanbanTicket, ticket_id).linked_project_id = board["project_id"]
+        if simultaneous:
+            simultaneous.wait(timeout=10)
+        return root_id, None
+
+    monkeypatch.setattr("distr.core.chat.ChatService.create_new_chat", create_chat)
+    monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {})
+    def update_controls(*args, **kwargs):
+        if change == "late_bound":
+            with get_session() as db:
+                db.get(KanbanTicket, ticket_id).linked_project_id = board["project_id"]
+
+    monkeypatch.setattr("distr.core.workflow.development_control.update_thread_controls", update_controls)
+    monkeypatch.setattr("distr.gui.web.workflow_events.increment_workflow_updated", lambda: None)
+    router = APIRouter()
+    register_routes(router, None)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    submission = {
+        "prompt": "Review evidence", "project_id": other["project_id"],
+        "ticket_id": ticket_id, "board_key": f"decisions:{board['id']}",
+        "autonomy_level": "full" if change == "late_bound" else "approval",
+    }
+
+    def submit():
+        return TestClient(app).post("/api/workflows/studio/tasks", json=submission)
+
+    if simultaneous:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _: submit(), range(2)))
+        assert sorted(response.status_code for response in outcomes) == [200, 409]
+        with get_session() as db:
+            owner = db.get(KanbanTicket, ticket_id).source_chat_id
+            assert db.query(DevelopmentWorkItem).one().chat_id == owner
+            assert [root.id for root in db.query(Chat).filter_by(is_archived=False)] == [owner]
+        return
+
+    response = submit()
+    assert response.status_code == (200 if change == "none" else 409), response.text
+    assert attempts == (["create"] if change in {"none", "late_move", "late_bound"} else [])
+    with get_session() as db:
+        ticket = db.get(KanbanTicket, ticket_id)
+        if change == "none":
+            assert not response.json()["started"]
+            root = db.get(Chat, ticket.source_chat_id)
+            item = db.query(DevelopmentWorkItem).one()
+            assert root.project_id == item.project_id == ticket.linked_project_id == other["project_id"]
+        elif change == "late_bound":
+            root = db.get(Chat, ticket.source_chat_id)
+            assert response.json()["chat_id"] == root.id
+            assert not root.is_archived
+            assert db.query(DevelopmentWorkItem).one().chat_id == root.id
+            assert "execution" not in json.loads(root.params)["development"]
+        else:
+            assert db.query(DevelopmentWorkItem).count() == 0
+            if change == "late_move":
+                assert ticket.source_chat_id is None
+                assert db.query(Chat).one().is_archived

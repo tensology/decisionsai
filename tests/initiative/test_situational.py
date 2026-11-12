@@ -146,7 +146,9 @@ def test_situational_surfaces_needs_call_state():
     assert sit["needs_call_count"] == 2
     block = format_situational_prompt_block(sit)
     assert "needs_your_call: 1 waiting run(s), 1 pending decision(s)" in block
-    assert "Sandbox: Paul open questions is waiting for run_briefing" in block
+    # The block now speaks in plain words (waiting_reason_phrase); the internal kind must not leak.
+    assert 'Sandbox: Paul open questions is waiting for your go-ahead to start: "Should I start?"' in block
+    assert "run_briefing" not in block
     assert "sprint labels" in block
 
 

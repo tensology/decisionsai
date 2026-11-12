@@ -31,6 +31,17 @@ os.environ.setdefault(
 )
 os.environ.setdefault("DECISIONS_TEST_MODE", "1")
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_workspace_memory(tmp_path_factory):
+    """Fixture workflow IDs can overlap with IDs in the user's workspace."""
+    from distr.core.workspace_memory import paths
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(paths, "WORKSPACES_ROOT", tmp_path_factory.mktemp("decisions-workspaces"))
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Settings — many tests import code that touches DB-backed settings first.
 # ---------------------------------------------------------------------------

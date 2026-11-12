@@ -31,10 +31,13 @@ def intake(tmp_path, monkeypatch):
         finally:
             db.close()
 
-    for name in ('distr.core.db', 'distr.core.chat', 'distr.core.chat_turns',
-                 'distr.core.workflow.development_threads', 'distr.core.workflow.development_harness',
-                 'distr.core.incoming.media'):
-        monkeypatch.setattr(importlib.import_module(name), 'get_session', session)
+    modules = [importlib.import_module(name) for name in (
+        'distr.core.db', 'distr.core.chat', 'distr.core.chat_turns',
+        'distr.core.workflow.development_threads', 'distr.core.workflow.development_harness',
+        'distr.core.incoming.media',
+    )]
+    for module in modules:
+        monkeypatch.setattr(module, 'get_session', session)
     home = tmp_path/'home'
     home.mkdir()
     monkeypatch.setattr(Path, 'home', staticmethod(lambda: home))
@@ -60,6 +63,221 @@ def intake(tmp_path, monkeypatch):
                 'tasks':['Read the configuration'], 'attachments':[]}
     yield session, proposal, ids
     engine.dispose()
+
+
+@pytest.mark.parametrize("source,queue_interrupted,verified", [
+    ("gmail", False, True), ("whatsapp", True, True), ("gmail", False, False),
+])
+def test_native_telegram_proposal_outcome_survives_disconnect_and_later_work(
+        intake, monkeypatch, source, queue_interrupted, verified):
+    from sqlalchemy.exc import OperationalError
+    from distr.core import tensology_client
+    from distr.core.incoming import telegram_updates as updates
+    from distr.core.initiative import outcome_flow
+    from tests.telegram.test_telegram_delivery_stability import DummyTelegramMessages, DummyTelegramSender
+
+    session, proposal, projects = intake
+    if source == "whatsapp":
+        proposal.update(id="local:whatsapp:fixture-a", dedupe_key="whatsapp:fixture@g.us",
+                        source=source, source_thread_id="fixture@g.us")
+        links = Path.home() / ".decisions/cache/incoming-project-links.json"
+        links.write_text(json.dumps([{"source": source, "source_thread_id": "fixture@g.us",
+                                      "projects": [{"decisions_project_id": projects[0]}]}]))
+    stage = "done" if verified else "failed"
+    sender = DummyTelegramSender()
+    connection = {"sender": None}
+    monkeypatch.setattr(updates, "get_session", session)
+    monkeypatch.setattr(updates, "_manager", lambda: connection["sender"])
+    monkeypatch.setattr(tensology_client, "_ticket_push_paused", lambda: True)
+    monkeypatch.setattr(outcome_flow, "_pending_proposals", lambda **_: [proposal])
+    monkeypatch.setattr(outcome_flow, "audit", lambda *a, **kw: None)
+    workers = []
+    queue = updates._queue_execution_update
+    interrupt = {"enabled": queue_interrupted}
+
+    def enqueue(*args, **kwargs):
+        if interrupt["enabled"]:
+            raise OperationalError("enqueue", {}, RuntimeError("database is locked"))
+        return queue(*args, **kwargs)
+
+    async def worker(*, chat_id, job_id, **kwargs):
+        with session() as db:
+            params = json.loads(db.get(Chat, chat_id).params)
+        assert params["incoming_proposal_handoff"]["telegram_approval"] == {
+            "chat_id": 12345, "job_id": job_id, "project_id": projects[0],
+        }
+        if not queue_interrupted:
+            updates.queue_execution_update({"source_metadata": {
+                "approval_source": "telegram", "approval_telegram_chat_id": 54321,
+            }}, chat_id, {"job_id": job_id, "summary": "Stale remote result."}, "failed")
+            with session() as db:
+                assert updates._KEY not in json.loads(db.get(Chat, chat_id).params)
+        harness._update_execution(chat_id, job_id=job_id, status="completed", summary="Approved result.",
+                                  outcome={"verification": {"final_verdict": "pass"} if verified else {}})
+        workers.append((chat_id, job_id))
+
+    monkeypatch.setattr(updates, "_queue_execution_update", enqueue)
+    monkeypatch.setattr(harness, "_run_execution", worker)
+    inbound = DummyTelegramMessages()
+    callback = f"ip:{outcome_flow._proposal_key_hash(proposal)}:accept"
+    previous = set(threading.enumerate())
+    inbound._handle_telegram_message({"data": {
+        "message_id": "native-proposal", "chat_id": 12345, "chat": {"type": "private"},
+        "from": {"id": 12345}, "callback_data": callback,
+    }})
+    assert len(inbound.sent) == 1 and "started work" in inbound.sent[0]
+    chat_id = proposals._existing_proposal_thread(proposal, projects[0])
+    assert chat_id is not None
+    _join_new_workers(chat_id, previous)
+    [(finished_chat, job_id)] = workers
+    assert finished_chat == chat_id
+    with session() as db:
+        params = json.loads(db.get(Chat, chat_id).params)
+    assert params["incoming_proposal_handoff"]["started"] is True
+    assert params["incoming_proposal_handoff"]["telegram_approval"]["outcome"]["stage"] == stage
+    assert (updates._KEY not in params) == queue_interrupted
+
+    harness._update_execution(chat_id, job_id="later", status="initializing", started_at="2026-11-12")
+    harness._update_execution(chat_id, job_id="later", status="completed",
+                              summary="[DECISIONS_STAGE: done] Unrelated follow-up.")
+    interrupt["enabled"] = False
+    sender.telegram_user_id = 54321
+    connection["sender"] = sender
+    if not queue_interrupted:
+        # A stale remote mirror must not replace the locally verified result or its owner.
+        updates.queue_execution_update({"source_metadata": {
+            "approval_source": "telegram", "approval_telegram_chat_id": 54321,
+        }}, chat_id, {"job_id": job_id, "summary": "Stale remote result."}, "failed")
+    tensology_client.sync_tensology_execution_states(force=True)
+    assert sender._message_queue.empty() and not sender.websocket_attempts
+
+    sender.telegram_user_id = 12345
+    tensology_client.sync_tensology_execution_states(force=True)
+    sender._process_message_queue()
+    [delivery] = sender.websocket_attempts
+    assert delivery["chat_id"] == 12345
+    assert "Approved result." in delivery["text"]
+    assert all(incorrect not in delivery["text"] for incorrect in ("Unrelated", "Stale remote result"))
+    assert ("Final verification evidence is missing." in delivery["text"]) is not verified
+    token = delivery["client_message_id"]
+    assert updates.record_delivery(token, telegram_message_id=71, telegram_chat_id=12345)
+    updates.queue_execution_update({"source_metadata": {
+        "approval_source": "telegram", "approval_telegram_chat_id": 12345,
+    }}, chat_id, {"job_id": "later", "summary": "Unrelated follow-up."}, "done")
+    tensology_client.sync_tensology_execution_states(force=True)
+    sender._process_message_queue()
+    assert sender.websocket_attempts == [delivery]
+    with session() as db:
+        receipt = json.loads(db.get(Chat, chat_id).params)[updates._KEY]
+    assert receipt["sent"] == f"{job_id}:{stage}"
+
+
+@pytest.mark.parametrize("first_status,interrupted_at", [
+    ("failed", "enqueue"), ("blocked", "receipt"), ("failed", None),
+])
+def test_native_telegram_retry_preserves_order_across_queue_failures(intake, monkeypatch, first_status, interrupted_at):
+    from sqlalchemy.exc import OperationalError
+    from distr.core import tensology_client
+    from distr.core.incoming import telegram_updates as updates
+    from distr.core.initiative import outcome_flow
+    from tests.telegram.test_telegram_delivery_stability import DummyTelegramMessages, DummyTelegramSender
+
+    session, proposal, projects = intake
+    sender = DummyTelegramSender()
+    sender.telegram_user_id = 54321
+    monkeypatch.setattr(updates, "get_session", session)
+    monkeypatch.setattr(updates, "_manager", lambda: sender)
+    monkeypatch.setattr(tensology_client, "_ticket_push_paused", lambda: True)
+    monkeypatch.setattr(outcome_flow, "_pending_proposals", lambda **_: [proposal])
+    monkeypatch.setattr(outcome_flow, "audit", lambda *a, **kw: None)
+    interrupted_writer = {
+        "enqueue": "_queue_execution_update", "receipt": "_write_receipt",
+    }.get(interrupted_at)
+
+    def unavailable(*args, **kwargs):
+        raise OperationalError("enqueue", {}, RuntimeError("database is locked"))
+
+    if interrupted_writer:
+        writer = getattr(updates, interrupted_writer)
+        monkeypatch.setattr(updates, interrupted_writer, unavailable)
+    jobs = []
+
+    async def worker(*, chat_id, job_id, **kwargs):
+        first = not jobs
+        jobs.append(job_id)
+        harness._update_execution(chat_id, job_id=job_id, status=first_status if first else "completed",
+                                  summary="Original run needs review." if first else "Retry finished.",
+                                  outcome={"verification": {"final_verdict": "pass"}})
+
+    monkeypatch.setattr(harness, "_run_execution", worker)
+    inbound = DummyTelegramMessages()
+    callback = f"ip:{outcome_flow._proposal_key_hash(proposal)}:accept"
+    for index in range(2):
+        previous = set(threading.enumerate())
+        inbound._handle_telegram_message({"data": {
+            "message_id": f"retry-{index}", "chat_id": 12345, "chat": {"type": "private"},
+            "from": {"id": 12345}, "callback_data": callback,
+        }})
+        chat_id = proposals._existing_proposal_thread(proposal, projects[0])
+        assert chat_id is not None and "started work" in inbound.sent[-1]
+        _join_new_workers(chat_id, previous)
+    assert len(jobs) == len(set(jobs)) == 2
+    with session() as db:
+        stale_params = json.loads(db.get(Chat, chat_id).params)
+    if interrupted_writer:
+        previous = stale_params["incoming_proposal_handoff"]["telegram_previous_approvals"]
+        assert [approval["job_id"] for approval in previous] == jobs[:1]
+        assert updates._KEY not in stale_params
+        assert updates.public_proposal_update_status(stale_params)["state"] == "queued"
+        monkeypatch.setattr(updates, interrupted_writer, writer)
+    tensology_client.sync_tensology_execution_states(force=True)
+    assert sender._message_queue.empty() and not sender.websocket_attempts
+
+    sender.telegram_user_id = 12345
+    tensology_client.sync_tensology_execution_states(force=True)
+    for index, expected in enumerate(("Original run needs review.", "Retry finished.")):
+        sender._process_message_queue()
+        assert len(sender.websocket_attempts) == index + 1
+        delivery = sender.websocket_attempts[-1]
+        assert delivery["chat_id"] == 12345 and expected in delivery["text"]
+        assert updates.record_delivery(delivery["client_message_id"], telegram_message_id=70 + index,
+                                       telegram_chat_id=12345)
+    updates.queue_local_proposal_outcome(chat_id, stale_params)
+    tensology_client.sync_tensology_execution_states(force=True)
+    sender._process_message_queue()
+    assert len(sender.websocket_attempts) == 2
+    with session() as db:
+        saved = json.loads(db.get(Chat, chat_id).params)
+    assert "telegram_previous_approvals" not in saved["incoming_proposal_handoff"]
+    assert saved[updates._KEY]["delivered_keys"] == [f"{jobs[0]}:{first_status}", f"{jobs[1]}:done"]
+    assert updates.public_proposal_update_status(saved)["state"] == "sent"
+
+
+def test_execution_update_holds_the_reply_receipt_write_boundary(intake, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy.exc import OperationalError
+
+    session, proposal, _ = intake
+    chat_id = proposals.create_proposal_thread(proposal)
+    reading, release = threading.Event(), threading.Event()
+
+    def hold_route(*args, **kwargs):
+        reading.set()
+        release.wait(5)
+
+    monkeypatch.setattr(harness, "_remember_turn_route", hold_route)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        result = worker.submit(harness._update_execution, chat_id, status="completed", route_receipt={})
+        try:
+            assert reading.wait(5)
+            with session() as db:
+                connection = db.connection()
+                connection.exec_driver_sql("PRAGMA busy_timeout = 0")
+                with pytest.raises(OperationalError, match="locked"):
+                    connection.exec_driver_sql("BEGIN IMMEDIATE")
+        finally:
+            release.set()
+        assert result.result(timeout=5)["status"] == "completed"
 
 
 @pytest.mark.parametrize('project_changed', [False, True])
@@ -145,6 +363,112 @@ def test_proposal_review_link_opens_the_exact_snapshot_or_existing_thread(intake
     monkeypatch.setattr(proposals, "create_proposal_thread", lambda *a, **k: pytest.fail("Existing proposal must not dispatch again"))
     result = client.post(base + "/thread", json={"proposal": original, "review_key": key})
     assert result.json()["chat_id"] == chat_id
+
+
+@pytest.mark.parametrize("changes", [
+    {"tasks": ["A different task"]},
+    {"task_completed_indexes": [0]},
+    {"attachments": [{"name": "replacement.pdf", "api_path": "/api/replacement.pdf"}]},
+    {"source_scope": [{"source": "gmail", "source_thread_id": "other-recipient", "message_ids": ["message-b"]}]},
+])
+def test_review_submit_requires_the_reviewed_work_and_sources(intake, monkeypatch, changes):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.incoming import register_routes
+
+    _, proposal, _ = intake
+    key = proposals.proposal_review_key(proposal)
+    monkeypatch.setattr(proposals, "list_incoming_proposals",
+                        lambda **kwargs: {"proposals": [{**proposal, **changes}]})
+    attempts = []
+    monkeypatch.setattr(proposals, "create_proposal_thread", lambda *a, **k: attempts.append(a) or 1)
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+
+    result = TestClient(app).post("/workflows/studio/incoming/proposals/thread",
+                                  json={"proposal": proposal, "review_key": key})
+    assert result.status_code == 409
+    assert "changed" in result.json()["error"]
+    assert attempts == []
+
+
+@pytest.mark.parametrize(("route_name", "changes", "mutation"), [
+    ("details", {"task_completed_indexes": [0]}, "distr.core.incoming.proposal_sync.update_proposal"),
+    ("project", {"project_id": 2}, "distr.core.incoming.proposals.reassign_proposal_project"),
+])
+def test_review_edit_rejects_changed_tasks_without_advancing_the_timestamp(intake, monkeypatch, route_name, changes, mutation):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.incoming import register_routes
+
+    _, proposal, projects = intake
+    proposal["updated_at"] = "2026-11-12T12:00:00Z"
+    newer = {**proposal, "tasks": ["A different task"]}
+    if route_name == "project":
+        changes = {"project_id": projects[1]}
+    monkeypatch.setattr(proposals, "list_incoming_proposals", lambda **kwargs: {"proposals": [newer]})
+    writes = []
+    monkeypatch.setattr(mutation, lambda *args, **kwargs: writes.append(args) or newer)
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    body = {"proposal_id": proposal["id"], "message_ids": proposal["message_ids"],
+            "expected_updated_at": proposal["updated_at"], "reviewed_proposal": proposal, **changes}
+    api = TestClient(app)
+    endpoint = f"/workflows/studio/incoming/proposals/{route_name}"
+    rejected = api.put(endpoint, json=body)
+    assert rejected.status_code == 409 and not writes
+    assert api.put(endpoint, json={**body, "reviewed_proposal": newer}).status_code == 200
+    assert len(writes) == 1
+    if route_name == "details":
+        assert writes[0][1] == changes
+
+
+def test_review_submit_rejects_a_changed_upstream_manifest_after_cache_lookup(intake, monkeypatch):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.incoming import register_routes
+
+    session, proposal, projects = intake
+    row = {**proposal, "id": 811, "status": "pending", "updated_at": "2026-11-12T12:00:00Z",
+           "project": {"id": 9001, "name": "First", "decisions_project_id": projects[0]},
+           "source_conversation": {"thread_id": "source-a"}, "source_message_ids": ["message-a"],
+           "attachments": [{"name": "scope.pdf", "sha256": "a" * 64}]}
+    snapshot = proposals._from_tensology(row)
+    newer = {**row, "attachments": [{"name": "scope.pdf", "sha256": "b" * 64}]}
+    receipts = []
+    client = SimpleNamespace(get=lambda path: newer, post=lambda *a, **k: receipts.append(a))
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: client)
+    pending = [snapshot]
+    monkeypatch.setattr(proposals, "list_incoming_proposals", lambda **kwargs: {"proposals": pending})
+    downloads, dispatches, invalidations = [], [], []
+    monkeypatch.setattr(proposals, "invalidate_proposals_list_cache", lambda: invalidations.append(True))
+    monkeypatch.setattr('distr.core.incoming.media.ensure_proposal_attachments',
+                        lambda *a, **k: downloads.append(a) or {"attachments": []})
+    monkeypatch.setattr(harness, 'dispatch_development_prompt',
+                        lambda *a, **k: dispatches.append(a) or {"status": "running"})
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+
+    api = TestClient(app)
+    base = "/workflows/studio/incoming/proposals"
+    key = proposals.proposal_review_key(snapshot)
+    result = api.post(base + "/thread", json={"proposal": snapshot, "review_key": key})
+    assert result.status_code == 409
+    assert "changed" in result.json()["error"]
+    assert not downloads and not dispatches and not receipts
+    assert invalidations == [True]
+    with session() as db:
+        assert db.query(Chat).count() == 0
+    pending[:] = [proposals._from_tensology(newer)]
+    fresh = api.get(base + "/review", params={"review_key": key}).json()["proposal"]
+    body = {"proposal": fresh, "review_key": key}
+    started = api.post(base + "/thread", json=body)
+    assert started.status_code == 200
+    assert api.post(base + "/thread", json=body).json()["chat_id"] == started.json()["chat_id"]
+    assert len(downloads) == len(dispatches) == len(receipts) == 1
 
 
 def test_attachment_report_preserves_concurrent_execution_state(intake):

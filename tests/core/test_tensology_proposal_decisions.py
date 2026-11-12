@@ -39,7 +39,9 @@ def test_format_pending_proposals_markdown_lists_names_and_choices():
     assert "Proposals needing your call" in block
     assert "Celery worker dead on jackcat-ub-srv" in block
     assert "Merrypak" in block and "**(urgent)**" in block
-    assert "run 1" in block and "dismiss all" in block
+    assert "#1 Celery worker" in block and "#2 Add CSV export" in block
+    assert "Ask for **proposals**" in block
+    assert "run 1" not in block and "dismiss all" not in block
 
 
 def test_format_pending_proposals_markdown_empty():
@@ -91,6 +93,51 @@ def test_telegram_create_ticket_preserves_approval_source():
         patch.object(tc, "fetch_pending_work_requests", return_value=[{"id":7,"title":"Check database"}]),
         patch.object(tc, "decide_work_request") as decide,
     ):
-        reply = tc.handle_proposal_decision_reply("create ticket 1", source="telegram")
-    decide.assert_called_once_with(7, "send_to_decisions", source="telegram")
+        reply = tc.handle_proposal_decision_reply("create ticket #7", source="telegram", telegram_chat_id=12345)
+    decide.assert_called_once_with(7, "send_to_decisions", source="telegram", telegram_chat_id=12345)
     assert "Check database" in reply
+
+
+def test_telegram_approval_request_carries_the_private_chat():
+    client = Mock()
+    with patch.object(tc, 'configured_tensology_client', return_value=client):
+        tc.decide_work_request(7, 'run', source='telegram', telegram_chat_id='12345')
+    client.post.assert_called_once_with(
+        'work-requests/7/action',
+        {'action': 'send_to_decisions', 'source': 'telegram', 'approval_telegram_chat_id': 12345},
+        idempotency_key='work-request-7-send_to_decisions',
+    )
+
+
+def test_telegram_exact_reference_survives_pending_list_reorder():
+    with (
+        patch.object(tc, "fetch_pending_work_requests", return_value=[
+            {"id": 19, "title": "Newly arrived"}, {"id": 8, "title": "Reviewed proposal"},
+        ]),
+        patch.object(tc, "decide_work_request") as decide,
+    ):
+        result = tc.handle_proposal_decision_reply("run #8", source="telegram", telegram_chat_id=12345)
+    decide.assert_called_once_with(8, "send_to_decisions", source="telegram", telegram_chat_id=12345)
+    assert "Reviewed proposal" in result
+
+
+def test_telegram_position_and_bulk_commands_cannot_change_unreviewed_proposals():
+    with (
+        patch.object(tc, "fetch_pending_work_requests", return_value=[{"id": 19, "title": "Newly arrived"}]) as fetch,
+        patch.object(tc, "decide_work_request") as decide,
+    ):
+        for command in ("run 1", "queue 1", "dismiss 1", "run all", "dismiss all"):
+            result = tc.handle_proposal_decision_reply(command, source="telegram", telegram_chat_id=12345)
+            assert "Ask for proposals" in result
+    fetch.assert_not_called()
+    decide.assert_not_called()
+
+
+def test_telegram_missing_exact_reference_does_not_select_a_replacement():
+    with (
+        patch.object(tc, "fetch_pending_work_requests", return_value=[{"id": 19, "title": "Newly arrived"}]),
+        patch.object(tc, "decide_work_request") as decide,
+    ):
+        result = tc.handle_proposal_decision_reply("run #8", source="telegram", telegram_chat_id=12345)
+    decide.assert_not_called()
+    assert "Proposal #8 is no longer waiting" in result

@@ -327,12 +327,13 @@ class TestSelfRoutingGuard:
     @patch("distr.core.workflow.router._run_verification", return_value=True)
     def test_self_route_ends_run(self, mock_verify, mock_get_session, mock_ws):
         step = _make_step(id=5, on_pass_goto=5)
-        run = _make_run(id=10)
+        run = _make_run(id=10, current_step_id=5)
         next_step = _make_step(id=5)  # same step
 
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
 
         router = StepRouter()
@@ -413,6 +414,7 @@ class TestWaitState:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run]
 
         router = StepRouter()
@@ -442,6 +444,7 @@ class TestWaitState:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
         db.query.return_value.filter.return_value.order_by.return_value.first.return_value = next_step
 
@@ -459,11 +462,12 @@ class TestWaitState:
     @patch("distr.core.workflow.router.get_session")
     def test_wait_emits_step_waiting_for_feedback(self, mock_get_session, mock_ws, mock_pause, mock_notify):
         step = _make_step(id=3, workflow_id=200, wait_for_continue=True, name="Review")
-        run = _make_run(id=15, run_data="{}")
+        run = _make_run(id=15, workflow_id=200, current_step_id=3, run_data="{}")
 
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run]
 
         with patch("distr.core.workflow.router.StepRouter._emit_waiting_for_feedback") as mock_emit:
@@ -551,6 +555,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
         db.add = MagicMock()
 
@@ -570,6 +575,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run, None]
         db.add = MagicMock()
 
@@ -590,6 +596,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
         db.add = MagicMock()
 
@@ -655,6 +662,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
         db.add = MagicMock()
 
@@ -692,6 +700,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.get.return_value = run
         db.query.return_value.filter.return_value.first.side_effect = [step, run, run, run, next_step]
         db.add = MagicMock()
         db.flush = MagicMock()

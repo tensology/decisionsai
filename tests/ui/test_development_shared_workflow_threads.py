@@ -265,3 +265,26 @@ def test_completed_chat_without_workflow_messages_retains_keyboard_inspectable_o
     page.keyboard.press('Enter')
     expect(own).to_be_hidden()
     expect(reply).to_be_visible()
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_stopped_approval_explains_why_in_desktop_workflow_history(page, fixture_base, width):
+    from distr.core.workflow.draft_launch import WORKFLOW_APPROVAL_SCOPE_CHANGED, approved_workflow_stop_reason
+
+    install_shared_workflow(page, workflow_message=False)
+    reason = approved_workflow_stop_reason('failed', {'approval_scope_changed': True})
+    execution = {'id': 99, 'direct': False, 'workflow_id': 44, 'status': 'failed',
+                 'current_step_id': 1, 'summary': reason}
+    page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json=execution))
+    page.set_viewport_size({'width': width, 'height': 1000})
+    page.goto(f'{fixture_base}/development/threads/17/')
+    disclosure = page.locator('details.turn-activity-disclosure > summary').filter(has_text='View workflow')
+    expect(disclosure).to_have_count(1)
+    disclosure.click()
+    result = page.locator('[data-workflow-run-result="99"]')
+    expect(result.get_by_text(WORKFLOW_APPROVAL_SCOPE_CHANGED, exact=True)).to_be_visible()
+    expect(page.locator('[data-run-id="98"]')).to_have_count(0)
+    assert result.evaluate('node => node.scrollWidth <= node.clientWidth')
+    folder = Path('/tmp/decisions-shared-workflow-regression')
+    folder.mkdir(exist_ok=True)
+    page.screenshot(path=folder / f'approval-stopped-{width}.png', animations='disabled')

@@ -74,6 +74,53 @@ def test_sidebar_pin_boundary_rejects_invalid_keys_and_returns_shared_state(monk
         assert saved == [['trello:ABC']]
 
 
+def test_pin_operations_merge_across_clients_and_stale_seed_is_ignored(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    engine = create_engine(f'sqlite:///{tmp_path / "board-pins.db"}')
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr(utils, 'Session', sessions)
+    monkeypatch.setattr('distr.core.db.get_session', sessions)
+    monkeypatch.setattr('distr.core.settings.load_settings_from_db', utils.load_settings_from_db)
+    monkeypatch.setattr('distr.core.tensology_project_sync.invalidate_pinned_project_sync', lambda: None)
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    path = '/workflows/studio/sidebar/pins'
+    with TestClient(app) as client:
+        client.put(path, json={'board_keys': ['decisions:13']}).raise_for_status()
+        snapshot = client.get(path).json()['board_keys']
+        client.put(path, json={'board_keys': [*snapshot, 'jira:ABC']}).raise_for_status()
+        client.put(path, json={'board_keys': [*snapshot, 'trello:XYZ']}).raise_for_status()
+        assert client.get(path).json() == {'board_keys': ['decisions:13', 'trello:XYZ']}
+        client.put(path, json={'board_keys': snapshot}).raise_for_status()
+
+    gate = Barrier(2, timeout=5)
+
+    def pin(key):
+        with TestClient(app) as client:
+            assert client.get(path).json() == {'board_keys': ['decisions:13']}
+            gate.wait()
+            return client.patch(path, json={'board_key': key, 'pinned': True}).raise_for_status().json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jira, trello = pool.map(pin, ['jira:ABC', 'trello:XYZ'])
+    assert 'jira:ABC' in jira['board_keys'] and 'trello:XYZ' in trello['board_keys']
+    with TestClient(app) as client:
+        assert client.patch(path, json={'board_key': 'jira:ABC', 'pinned': 'false'}).status_code == 400
+        assert client.patch(path, json={'board_key': 'unknown:ABC', 'pinned': True}).status_code == 400
+        expected = client.get(path).json()['board_keys']
+        assert set(expected) == {'decisions:13', 'jira:ABC', 'trello:XYZ'}
+        assert client.put(path, json={'board_keys': [], 'only_if_unset': 'true'}).status_code == 400
+        assert client.put(path, json={'board_keys': ['decisions:99'], 'only_if_unset': True}).json() == {'board_keys': expected}
+        assert client.patch(path, json={'board_key': 'jira:ABC', 'pinned': True}).json() == {'board_keys': expected}
+        for _ in range(2):
+            assert client.patch(path, json={'board_key': 'jira:ABC', 'pinned': False}).json() == {
+                'board_keys': ['decisions:13', 'trello:XYZ'],
+            }
+
+
 def _isolated_pin_db(monkeypatch, legacy):
     from distr.core.db.kanban import KanbanBoard
     from distr.core.db.projects import Project

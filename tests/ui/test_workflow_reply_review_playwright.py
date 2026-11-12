@@ -2,12 +2,14 @@
 import os
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from playwright.sync_api import expect
 
 from tests.ui.test_development_harness_playwright import _install_api, URL
-from tests.core.test_workflow_reply_review import review, request_review
+from tests.core.test_workflow_reply_review import decide, review, request_review
+from distr.core.workflow.reply_delivery import execute_approved_workflow_reply
 from distr.gui.web.routes.dev_approvals import _post_card as real_post_card
 
 pytestmark = pytest.mark.e2e_playwright
@@ -16,7 +18,7 @@ LABELS = {'pending': 'Waiting for you', 'sending': 'Sending reply', 'sent': 'Rep
           'unconfirmed': 'Send not confirmed', 'rejected': 'Reply not sent', 'denied': 'Denied', 'expired': 'Expired'}
 
 
-def install(page, state='pending', long=False, generic=False, unavailable=False, projected=None, decision_outcome=None):
+def install(page, state='pending', long=False, generic=False, unavailable=False, projected=None, decide_request=None):
     body = ('The requested changes are ready for review.\nDeployment still needs your approval.' if not long else
             '\n'.join(f'Checked item {index}: source text <img src=x onerror=alert(1)> stays readable and exact.' for index in range(1, 50)))
     to = 'client@example.com' if not long else 'project-owner-with-a-long-mailbox@customer-with-a-long-domain.example.com'
@@ -53,17 +55,17 @@ def install(page, state='pending', long=False, generic=False, unavailable=False,
         event = projected
         request = event['metadata']['approval_request']
         body = request['details']['body']
-        to = request['details']['delivery']['resolved_target']['to'][0]
+        envelope = request['details']['delivery']
+        to = envelope['resolved_target']['to'][0] if envelope.get('resolved_target') else envelope['recipient']
     _install_api(page, [], current_board_linked=True, direct_execution=True,
                  completed_activity=True, assistant_markdown=True, terminal_session=False, activity_events=[event])
     actions = []
     def decision(route):
         actions.append((route.request.url.rsplit('/', 1)[-1], route.request.headers))
         status = 'sent' if actions[-1][0] == 'approve' else 'denied'
-        if status == 'sent' and decision_outcome is not None:
-            route.fulfill(json={**request, 'status': 'rejected',
-                'summary': 'The closing reply was not sent.',
-                'details': {**request['details'], 'delivery_outcome': decision_outcome}})
+        if decide_request is not None:
+            response = decide_request(request['request_id'], actions[-1][0])
+            route.fulfill(status=response.status_code, json=response.json())
             return
         route.fulfill(json={**request, 'status': status})
     page.route(f'**/api/dev-approvals/{request["request_id"]}/*', decision)
@@ -85,6 +87,145 @@ def reveal(locator):
     # The conversation uses smooth scrolling. Capture its settled deliberate
     # position, rather than a frame while it is still sliding under the composer.
     locator.evaluate('(el) => el.scrollIntoView({block: "center", behavior: "instant"})')
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_telegram_closing_reply_waits_for_verified_receipt(page, width, review, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.integrations.telegram.manager import TelegramWebSocketManager
+    from distr.core.integrations.telegram import receipt_writes
+    from distr.core.workflow import reply_delivery
+    from tests.telegram.test_telegram_delivery_stability import DummyTelegramSender
+
+    api, factory, details, _ = review
+    sender = DummyTelegramSender()
+    sender._closing_reply_receipts = True
+    monkeypatch.setattr(receipt_writes, '_journal_path', lambda: tmp_path / 'receipts')
+    monkeypatch.setattr('distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app', lambda: sender)
+    monkeypatch.setattr(reply_delivery, 'execute_approved_workflow_reply', execute_approved_workflow_reply)
+    with factory.begin() as db:
+        ticket = db.get(KanbanTicket, details['ticket_id'])
+        ticket.source_provider, ticket.source_thread_id = 'telegram', str(sender.telegram_user_id)
+        envelope = reply_delivery._delivery_envelope(db, ticket, reply_delivery.resolve_reply_target(ticket), '')
+    request = request_review(review, {**details, 'channel': 'telegram', 'delivery': envelope}).json()
+    path = f"/api/dev-approvals/{request['request_id']}"
+    def receipt(route):
+        response = api.get(path)
+        route.fulfill(status=response.status_code, json=response.json())
+
+    event = {'event_id': 'review-event', 'event_type': 'tool_started', 'status': 'pending',
+             'title': 'Closing reply review', 'metadata': {'tool_name': 'reply_delivery', 'approval_request': request}}
+    page.set_viewport_size({'width': width, 'height': 900})
+    card, body, _, actions = install(page, projected=event, decide_request=lambda rid, action: decide(review, rid, action))
+    page.route(f'**{path}', receipt)
+    approve = card.get_by_role('button', name='Approve', exact=True)
+    reveal(approve)
+    approve.click()
+    expect(card.locator('.dev-approval-status')).to_have_text('Sending reply')
+    expect(card.get_by_label('Reply', exact=True)).to_have_value(body)
+    expect(card.get_by_role('button')).to_have_count(0)
+    reveal(card.locator('.dev-approval-head'))
+    shot(page, f'{width}-telegram-closing-awaiting')
+    sender._process_message_queue()
+    [frame] = sender.websocket_attempts
+    assert frame['text'] == body and frame['chat_id'] == sender.telegram_user_id
+    manager = SimpleNamespace(_mark_socket_heartbeat_seen=lambda: None)
+    ack = {'type': 'message_sent', 'client_message_id': frame['client_message_id'], 'telegram_message_id': 44,
+           'chat_id': sender.telegram_user_id, 'closing_reply_verified': True}
+    TelegramWebSocketManager._on_message(manager, json.dumps({**ack, 'chat_id': 999}))
+    assert api.get(path).json()['status'] == 'sending'
+    with factory.begin() as db:
+        row = db.query(OrchestratorEvent).filter_by(source='reply_delivery').one()
+        payload = json.loads(row.payload)
+        payload['telegram_attempt']['deadline'] = 0
+        row.payload = json.dumps(payload)
+    expect(card.locator('.dev-approval-status')).to_have_text('Send not confirmed', timeout=8000)
+    reveal(card.locator('.dev-approval-head'))
+    shot(page, f'{width}-telegram-closing-unconfirmed')
+    requests = []
+    def relay_lookup(request):
+        requests.append(request)
+        TelegramWebSocketManager._on_message(manager, json.dumps(ack))
+        return True
+    manager.is_connected = lambda: True
+    manager._send_websocket_message = relay_lookup
+    manager._recover_closing_reply_receipts = lambda: TelegramWebSocketManager._recover_closing_reply_receipts(manager)
+    TelegramWebSocketManager._on_message(manager, json.dumps({'type': 'connection', 'status': 'connected',
+        'closing_reply_receipts': True, 'closing_reply_receipt_recovery': True}))
+    assert requests == [{'type': 'closing_reply_receipt_lookup', 'token': frame['client_message_id']}]
+    expect(card.locator('.dev-approval-status')).to_have_text('Reply sent', timeout=8000)
+    reveal(card.locator('.dev-approval-head'))
+    shot(page, f'{width}-telegram-closing-sent')
+    assert decide(review, request['request_id']).json()['status'] == 'sent'
+    sender._process_message_queue()
+    assert sender.websocket_attempts == [frame] and len(actions) == 1
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+@pytest.mark.parametrize('channel', ['whatsapp', 'jira'])
+def test_scope_change_during_provider_checks_is_shown_as_not_sent(page, width, review, monkeypatch, channel):
+    from distr.core.db import Chat
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.integrations.whatsapp import relay_client
+    from distr.core.kanban import jira_intake
+    from distr.core.workflow import reply_delivery
+
+    _, factory, details, _ = review
+    monkeypatch.setattr(reply_delivery, 'execute_approved_workflow_reply', execute_approved_workflow_reply)
+    post = Mock(return_value=Mock(status_code=200, json=Mock(return_value={'success': True})))
+    monkeypatch.setattr(relay_client.requests, 'post', post)
+    monkeypatch.setattr(relay_client, 'whatsapp_send_dry_run_enabled', lambda: False)
+    with factory.begin() as db:
+        ticket = db.get(KanbanTicket, details['ticket_id'])
+        if channel == 'jira':
+            ticket.source_provider = 'jira'
+            ticket.source_thread_id = None
+            ticket.source_external_id = 'ABC-12'
+            ticket.source_url = 'https://example.atlassian.net/browse/ABC-12'
+        envelope = reply_delivery._delivery_envelope(db, ticket, reply_delivery.resolve_reply_target(ticket), '')
+    def move_thread():
+        with factory.begin() as db:
+            assert db.query(OrchestratorEvent).filter_by(source='reply_delivery', status='sending').count() == 1
+            db.get(Chat, details['workflow']['chat_id']).project_id = 10
+        return {}
+    if channel == 'jira':
+        def account():
+            move_thread()
+            return {'email': 'team@example.test', 'api_token': 'fixture', 'domain': 'example.atlassian.net'}
+        monkeypatch.setattr(jira_intake, 'load_jira_account', account)
+    else:
+        monkeypatch.setattr(relay_client, 'relay_request_headers', move_thread)
+    request = request_review(review, {**details, 'channel': channel, 'delivery': envelope}).json()
+    assert request['status'] == 'pending'
+    event = {'event_id': 'review-event', 'event_type': 'tool_started', 'status': 'pending',
+             'title': 'Closing reply review', 'metadata': {'tool_name': 'reply_delivery', 'approval_request': request}}
+    page.set_viewport_size({'width': width, 'height': 900})
+    card, body, _, actions = install(page, projected=event, decide_request=lambda rid, action: decide(review, rid, action))
+    approve = card.get_by_role('button', name='Approve', exact=True)
+    if channel == 'jira':
+        expect(card.get_by_text('Closing reply · Jira', exact=True)).to_be_visible()
+        expect(card.get_by_text(envelope['source_url'], exact=True)).to_be_visible()
+        reveal(card.locator('.dev-approval-head') if width == 390 else card)
+        shot(page, f'{width}-jira-provider-scope-pending')
+        if width == 390:
+            reveal(approve)
+            shot(page, f'{width}-jira-provider-scope-pending-lower')
+    reveal(approve)
+    approve.click()
+    expect(card.locator('.dev-approval-status')).to_have_text('Reply not sent')
+    expect(card.get_by_label('Reply', exact=True)).to_have_value(body)
+    reason = 'Nothing was sent. The Development thread project no longer matches this reply.'
+    expect(card.get_by_role('status')).to_have_text(reason)
+    expect(card.get_by_text(reason, exact=False)).to_have_count(1)
+    expect(card.get_by_role('button')).to_have_count(0)
+    reveal(card.locator('.dev-approval-head') if width == 390 else card)
+    shot(page, f'{width}-{channel}-provider-scope-changed')
+    assert len(actions) == 1
+    assert decide(review, request['request_id']).json()['status'] == 'rejected'
+    post.assert_not_called()
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
@@ -121,12 +262,33 @@ def test_workflow_review_is_readable_and_truthful(page, width, state):
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
-def test_earlier_receipt_does_not_show_this_review_as_sent(page, width):
+def test_earlier_receipt_does_not_show_this_review_as_sent(page, width, review, monkeypatch):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.workflow import reply_delivery
+    from distr.core.workflow.reply_channel import resolve_reply_target
+
+    _, factory, details, _ = review
+    monkeypatch.setattr(reply_delivery, 'execute_approved_workflow_reply', execute_approved_workflow_reply)
+    send = Mock(return_value={'success': True, 'message_id': 'original-confirmation'})
+    monkeypatch.setitem(reply_delivery.ADAPTERS, 'whatsapp', send)
+    with factory() as db:
+        ticket = db.get(KanbanTicket, details['ticket_id'])
+        delivery = reply_delivery._delivery_envelope(db, ticket, resolve_reply_target(ticket), '')
+    original = {**details, 'delivery': delivery}
+    first = request_review(review, original).json()
+    assert decide(review, first['request_id']).json()['status'] == 'sent'
+    with factory.begin() as db:
+        receipt = db.query(OrchestratorEvent).filter_by(source='reply_delivery').one()
+        receipt.payload, receipt.evidence = '{broken', None
+    revised = {**original, 'body': 'The requested changes are ready for review.\nDeployment still needs your approval.'}
+    request = request_review(review, revised).json()
+    assert request['status'] == 'pending'
+    projected = {'event_id': 'review-event', 'event_type': 'tool_started', 'status': 'pending',
+                 'title': 'Closing reply review', 'metadata': {'tool_name': 'reply_delivery', 'approval_request': request}}
     page.set_viewport_size({'width': width, 'height': 844 if width == 390 else 1000})
     reason = 'An earlier delivery record does not match this review. Check the original conversation before sending another reply.'
-    card, body, _, actions = install(page, decision_outcome={
-        'delivered': False, 'duplicate': True, 'delivery_status': 'scope_conflict', 'reason': reason,
-    })
+    card, body, _, actions = install(page, projected=projected, decide_request=lambda rid, action: decide(review, rid, action))
     approve = card.get_by_role('button', name='Approve', exact=True)
     reveal(approve)
     approve.click()
@@ -142,6 +304,10 @@ def test_earlier_receipt_does_not_show_this_review_as_sent(page, width):
         reveal(note)
         shot(page, f'{width}-earlier-receipt-conflict-lower')
     assert len(actions) == 1 and actions[0][0] == 'approve'
+    send.assert_called_once()
+    assert review[0].get(f'/api/dev-approvals/{first["request_id"]}').json()['status'] == 'sent'
+    with factory() as db:
+        assert db.query(OrchestratorEvent).filter_by(source='reply_delivery').one().payload == '{broken'
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])

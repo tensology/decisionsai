@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 
 import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
@@ -153,29 +154,22 @@ def test_sequential_queue_auto_starts_next_ticket(tmp_path):
             assert "error" not in result, result
             first_run_id = result["run_id"]
 
-            wait_for_terminal_run(factory, first_run_id, timeout=90.0)
+            first_run = wait_for_terminal_run(factory, first_run_id, timeout=90.0)
+            assert first_run.status == "completed"
 
-            session = factory()
-            try:
-                first_run = session.query(AutoWorkflowRun).filter(
-                    AutoWorkflowRun.id == first_run_id
-                ).one()
-                assert first_run.status == "completed"
-
-                second_run = (
-                    session.query(AutoWorkflowRun)
-                    .filter(
-                        AutoWorkflowRun.workflow_id == workflow_id,
-                        AutoWorkflowRun.ticket_id == ids["ticket_b_id"],
-                    )
-                    .order_by(AutoWorkflowRun.id.desc())
-                    .first()
-                )
-                assert second_run is not None, "expected auto-started run for second ticket"
-                second_run_id = second_run.id
-                assert second_run.status in ("running", "waiting", "completed")
-            finally:
-                session.close()
+            # The completion receipt is committed before asynchronous handoff.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with factory() as session:
+                    successor = session.query(AutoWorkflowRun).filter_by(
+                        workflow_id=workflow_id, ticket_id=ids["ticket_b_id"],
+                    ).one_or_none()
+                    if successor:
+                        second_run_id = successor.id
+                        assert successor.status in ("running", "waiting", "completed")
+                        break
+                time.sleep(0.05)
+            assert second_run_id is not None, "expected auto-started run for second ticket"
 
             if second_run_id:
                 wait_for_terminal_run(factory, second_run_id, timeout=90.0)

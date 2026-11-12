@@ -16,7 +16,7 @@ import distr.core.workspace_memory.paths as wm_paths
 from distr.core.db import Base
 from distr.core.db.orchestrator import OrchestratorLearnedRule
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
-from distr.core.workspace_memory.paths import HANDOFF_FILE, companion_root
+from distr.core.workspace_memory.paths import HANDOFF_FILE, WORKER_HANDOFF_FILE, companion_root
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -47,8 +47,10 @@ def _session_ctx(factory):
         session.close()
 
 
-def test_persist_worker_feedback_writes_ticket_handoff(tmp_path):
-    wm_paths.WORKSPACES_ROOT = tmp_path / "workspaces"
+def test_persist_worker_feedback_writes_ticket_handoff(tmp_path, monkeypatch):
+    monkeypatch.setattr(wm_paths, "WORKSPACES_ROOT", tmp_path / "workspaces")
+    monkeypatch.setattr("distr.core.mempalace.wiring.dual_write_workspace_event", lambda **_: None)
+    monkeypatch.setattr("distr.core.workspace_memory.feedback_sync._resolve_linked_workflow_id", lambda _: None)
     with patch("distr.core.workspace_memory.sync.sync_projection_for_project", return_value={"ok": True}):
         from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
 
@@ -64,6 +66,110 @@ def test_persist_worker_feedback_writes_ticket_handoff(tmp_path):
     handoff = companion_root("tickets", 42) / "memory" / HANDOFF_FILE
     assert handoff.is_file()
     assert "duplicate status badges" in handoff.read_text(encoding="utf-8")
+
+
+def test_project_worker_feedback_preserves_project_notes_and_remains_in_pickup(tmp_path, monkeypatch):
+    from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+    from distr.core.workspace_memory.pickup_handoff import build_pickup_brief, read_ledger_tail
+    from distr.core.workspace_memory.reader import load_workspace_context
+
+    monkeypatch.setattr(wm_paths, "WORKSPACES_ROOT", tmp_path / "workspaces")
+    monkeypatch.setattr("distr.core.mempalace.wiring.dual_write_workspace_event", lambda **_: None)
+    monkeypatch.setattr("distr.core.workspace_memory.feedback_sync._resolve_linked_workflow_id", lambda _: None)
+    monkeypatch.setattr("distr.core.workspace_memory.sync.sync_projection_for_project", lambda *a, **kw: {})
+    notes = companion_root("projects", 7) / "memory" / HANDOFF_FILE
+    notes.parent.mkdir(parents=True)
+    original = b"# Handoff\n\nReview the rollback plan before launch.\n\n"
+    notes.write_bytes(original)
+
+    for ticket_id, summary in [(42, "First ticket completed."), (None, "Standalone worker completed.")]:
+        assert persist_worker_feedback(
+            output=summary, event_type="cli_completed", source="pi", ticket_id=ticket_id, project_id=7,
+        )["handoff"]
+        assert notes.read_bytes() == original
+        pickup = build_pickup_brief(entity_type="projects", entity_id=7)
+        assert "Review the rollback plan before launch." in pickup
+        assert summary in pickup
+
+    ticket = companion_root("tickets", 42) / "memory" / HANDOFF_FILE
+    assert "First ticket completed." in ticket.read_text()
+    messages = [event["message"] for event in read_ledger_tail("projects", 7)]
+    assert "First ticket completed." in messages
+    assert "Standalone worker completed." in messages
+    context = load_workspace_context(project_id=7, ensure=False, include_pickup_brief=True)
+    assert "Review the rollback plan before launch." in context.handoff_preview
+    assert "Standalone worker completed." in context.handoff_full
+    assert "Standalone worker completed." in context.pickup_brief
+    assert "First ticket completed." not in context.pickup_brief
+
+
+def test_project_memory_endpoint_and_projection_keep_both_handoffs(tmp_path, monkeypatch):
+    from distr.core.db.projects import Project
+    from distr.core.workspace_memory.lifecycle import handoff_cli_session
+    from distr.core.workspace_memory.pickup_handoff import build_pickup_brief, read_handoff_preview, write_handoff
+    from distr.core.workspace_memory.template import empty_handoff_md
+    from distr.gui.web.routes.workspace_memory import create_routes
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    factory = _make_factory()
+    with _session_ctx(factory) as session:
+        session.add(Project(id=7, name="Workspace handoff", folder_location=str(repo)))
+        session.add(Project(id=8, name="New project"))
+    monkeypatch.setattr("distr.core.db.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr(wm_paths, "WORKSPACES_ROOT", tmp_path / "workspaces")
+    monkeypatch.setattr("distr.core.mempalace.wiring.dual_write_workspace_event", lambda **_: None)
+    monkeypatch.setattr("distr.core.workspace_memory.provision.bootstrap_project", lambda *_: None)
+    monkeypatch.setenv("DECISIONS_ENABLE_REPO_PROJECTION", "1")
+
+    write_handoff("projects", 7, body="Keep the pending release decision visible.\n\n_No handoff recorded yet_")
+    handoff_cli_session(project_id=7, summary="Verified the migration in staging.")
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    client = TestClient(app)
+    response = client.get("/api/projects/7/workspace-memory")
+    assert response.status_code == 200, response.text
+    memory = response.json()
+    assert "Keep the pending release decision visible." in memory["handoff_preview"]
+    assert any(entry["message"] == "Verified the migration in staging." for entry in memory["ledger_tail"])
+    projection = repo / ".decisions" / "memory"
+    assert "Keep the pending release decision visible." in (projection / HANDOFF_FILE).read_text()
+    assert "Verified the migration in staging." in (projection / WORKER_HANDOFF_FILE).read_text()
+
+    empty_notes = companion_root("projects", 8) / "memory" / HANDOFF_FILE
+    empty_notes.parent.mkdir(parents=True)
+    empty_notes.write_text(empty_handoff_md())
+    handoff_cli_session(project_id=8, summary="First result for project eight.")
+    assert "First result for project eight." in read_handoff_preview("projects", 8)
+    assert read_handoff_preview("projects", 8, max_chars=16).startswith("# Latest")
+    response = client.get("/api/projects/8/workspace-memory")
+    assert response.status_code == 200, response.text
+    assert "First result for project eight." in response.json()["handoff_preview"]
+    assert "Verified the migration in staging." not in response.text
+    pickup = build_pickup_brief(entity_type="projects", entity_id=8)
+    assert "First result for project eight." in pickup
+    assert "No handoff recorded yet" not in pickup
+    assert "No handoff recorded yet" in empty_notes.read_text()
+    assert "Verified the migration in staging." in (projection / WORKER_HANDOFF_FILE).read_text()
+
+
+def test_feedback_reports_partial_handoff_when_project_write_fails(tmp_path, monkeypatch):
+    from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+    from distr.core.workspace_memory.pickup_handoff import read_ledger_tail
+
+    monkeypatch.setattr(wm_paths, "WORKSPACES_ROOT", tmp_path / "workspaces")
+    monkeypatch.setattr("distr.core.mempalace.wiring.dual_write_workspace_event", lambda **_: None)
+    monkeypatch.setattr("distr.core.workspace_memory.feedback_sync._resolve_linked_workflow_id", lambda _: None)
+    monkeypatch.setattr("distr.core.workspace_memory.sync.sync_projection_for_project", lambda *a, **kw: {})
+    project_handoff = companion_root("projects", 7) / "memory" / WORKER_HANDOFF_FILE
+    project_handoff.mkdir(parents=True)
+    result = persist_worker_feedback(output="Finished the check.", event_type="cli_completed", ticket_id=42, project_id=7)
+
+    assert result["handoff"] is False
+    assert result["ticket_ledger"] and result["project_ledger"]
+    assert "Finished the check." in (companion_root("tickets", 42) / "memory" / HANDOFF_FILE).read_text()
+    assert read_ledger_tail("projects", 7)[-1]["message"] == "Finished the check."
+    assert project_handoff.is_dir()
 
 
 def test_capture_feedback_as_memory_uses_linked_workflow_not_audit(monkeypatch):
@@ -102,7 +208,8 @@ def test_capture_feedback_as_memory_uses_linked_workflow_not_audit(monkeypatch):
 
 
 def test_codex_bridge_completion_persists_workspace_handoff(monkeypatch, tmp_path):
-    wm_paths.WORKSPACES_ROOT = tmp_path / "workspaces"
+    monkeypatch.setattr(wm_paths, "WORKSPACES_ROOT", tmp_path / "workspaces")
+    monkeypatch.setattr("distr.core.mempalace.wiring.dual_write_workspace_event", lambda **_: None)
     factory = _make_factory()
 
     with _session_ctx(factory) as session:
@@ -158,6 +265,10 @@ def test_codex_bridge_completion_persists_workspace_handoff(monkeypatch, tmp_pat
     client = TestClient(app)
 
     with patch("distr.core.workspace_memory.sync.sync_projection_for_project", return_value={"ok": True}):
+        from distr.core.workspace_memory.pickup_handoff import write_handoff
+
+        notes = Path(write_handoff("projects", 11, body="Retain the project acceptance criteria."))
+        before = notes.read_bytes()
         response = client.post(
             f"/api/workflows/{workflow_id}/runs/{run_id}/codex-events",
             json={
@@ -177,6 +288,9 @@ def test_codex_bridge_completion_persists_workspace_handoff(monkeypatch, tmp_pat
     handoff = companion_root("tickets", 5) / "memory" / HANDOFF_FILE
     assert handoff.is_file()
     assert "duplicate UI labels" in handoff.read_text(encoding="utf-8")
+    assert notes.read_bytes() == before
+    worker_handoff = companion_root("projects", 11) / "memory" / WORKER_HANDOFF_FILE
+    assert "duplicate UI labels" in worker_handoff.read_text(encoding="utf-8")
 
     with _session_ctx(factory) as session:
         run_row = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).one()

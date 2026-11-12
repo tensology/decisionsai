@@ -8,6 +8,23 @@ from distr.core.workflow import development_threads
 from tests.core.test_incoming_project_routing import projects, item
 
 
+def test_telegram_group_snapshot_requires_a_fresh_source_and_live_project(projects, monkeypatch, tmp_path):
+    cache = tmp_path / 'links.json'
+    monkeypatch.setattr(project_links, '_cache_path', lambda: cache)
+    rows = [
+        {'source': source, 'source_thread_id': chat, 'projects': [{'decisions_project_id': project}]}
+        for source, chat, project in [('telegram', '-1001234567', 3), ('telegram', '-1009999999', 999),
+                                      ('telegram', '12345', 3), ('whatsapp', '-1009876543', 3)]
+    ]
+    client = Mock()
+    client.get.side_effect = [{'data': rows}, OSError('offline'), {'data': []}]
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **_: client)
+    assert project_links.telegram_group_snapshot() == [-1001234567]
+    assert project_links.telegram_group_snapshot() is None
+    assert project_links.project_links() == rows
+    assert project_links.telegram_group_snapshot() == []
+
+
 @pytest.mark.parametrize('source,thread', [('whatsapp', 'personal-group@g.us'), ('whatsapp', 'unknown-person'), ('gmail', 'unknown-mail'), ('mailshot', 'unknown-email')])
 def test_unlinked_messages_never_reach_the_model(projects, monkeypatch, source, thread):
     monkeypatch.setattr(project_links, 'project_links', lambda **kw: [])

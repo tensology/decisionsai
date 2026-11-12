@@ -77,6 +77,25 @@ def test_exact_time_union_does_not_add_overlaps_gaps_or_rounding():
     assert abs(union_seconds(spans)-900.1)<0.000001
 
 
+def test_approved_estimate_exposes_recorded_intervals_without_changing_calendar_time(tmp_path):
+    data, _, snapshot = fixture(tmp_path)
+    evidence = data['evidence']['1']
+    evidence['allocation_estimate'] = {'approved_minutes': 60}
+    evidence['source_intervals'] = [
+        {'start': '2026-10-26T08:00:00Z', 'end': '2026-10-26T08:10:00Z'},
+        {'start': '2026-10-26T08:05:00Z', 'end': '2026-10-26T08:12:00Z'},
+        {'start': '2026-10-26T09:00:00Z', 'end': '2026-10-26T09:06:12Z'},
+    ]
+    block = apply_review(snapshot, data=data)['blocks'][0]
+    assert block['approved_estimate_seconds'] == 3600
+    assert block['recorded_work_seconds'] == 1092
+    assert block['seconds'] == 1200
+
+    del evidence['source_intervals']
+    block = apply_review(snapshot, data=data)['blocks'][0]
+    assert block['recorded_work_seconds'] is None
+
+
 def test_calendar_only_project_and_review_hold_remain_visible_without_new_coding_project(tmp_path):
     data,path,snapshot=fixture(tmp_path)
     data['project_map']['1000183']=183

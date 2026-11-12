@@ -93,6 +93,16 @@ class DummyTelegramSender(TelegramSenderMixin):
         return self.connected
 
 
+def test_reviewed_private_reply_cannot_queue_for_a_replaced_owner():
+    sender = DummyTelegramSender()
+    assert sender.send_to_telegram('Reviewed result', expected_chat_id='11111') is False
+    assert sender._message_queue.empty()
+    assert sender.send_to_telegram('Reviewed result', expected_chat_id='12345') is True
+    sender.telegram_user_id = 11111
+    sender._process_message_queue()
+    assert sender.websocket_attempts == []
+
+
 def test_telegram_delivery_worker_has_no_artificial_post_send_delay():
     source = inspect.getsource(EventHandlerMixin._send_to_telegram_worker)
 
@@ -634,7 +644,11 @@ def test_voice_transcription_failure_notifies_telegram():
     assert kwargs == {}
 
 
-def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch):
+@pytest.mark.parametrize(("transcript", "literal"), [
+    ("yes, approve it", False),
+    ("Do not stop the receipt check. Keep option 2 in the report.", True),
+])
+def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch, transcript, literal):
     import json
     from sqlalchemy import text
     from sqlalchemy.orm import Session
@@ -666,10 +680,10 @@ def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch):
         def start(self):
             self.target(**self.kwargs)
     monkeypatch.setattr('distr.core.workflow.interactions.threading.Thread', ImmediateWorkflowThread)
-    def resume_fixture(run_id, feedback, *, expected_checkpoint):
+    def resume_fixture(run_id, feedback, *, expected_checkpoint, literal_feedback=False):
         assert expected_checkpoint['owner']['id'] == run_id
         assert expected_checkpoint['checkpoint']['step_id'] == 30
-        resumed.append((run_id, feedback))
+        resumed.append((run_id, feedback, literal_feedback))
         return {'success': True}
     monkeypatch.setattr('distr.core.workflow.dispatcher.continue_waiting_step', resume_fixture)
     manager = DummyTelegramManager(connected=True)
@@ -679,11 +693,11 @@ def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch):
     app._evt_telegram_transcription({
         "request_id": "voice-workflow-1",
         "success": True,
-        "transcript": "yes, approve it",
+        "transcript": transcript,
         "input_type": "voice",
     })
 
-    assert resumed == [(20, "yes, approve it")]
+    assert resumed == [(20, transcript, literal)]
     assert any(
         "queued your decision for run #20" in (kwargs.get("text") or (args[0] if args else ""))
         for args, kwargs in manager.sent

@@ -57,6 +57,17 @@ def test_wa_classify_stages_tg_yes_no_add_then_ready_creates_ticket(monkeypatch,
         "distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app",
         lambda: FakeManager(),
     )
+    # The intake card now respects "Telegram conversations" (2026-11-11), so the
+    # dry-run turns it on explicitly in Standard posture.
+    import distr.core.utils as core_utils
+
+    _real_settings = core_utils.load_settings_from_db
+    monkeypatch.setattr(
+        core_utils,
+        "load_settings_from_db",
+        lambda *a, **k: {**(_real_settings(*a, **k) or {}), "initiative_allow_telegram": True,
+                         "initiative_level": "operate"},
+    )
 
     # Avoid durable board/ticket DB — prove gate + fold + readiness handoff.
     created = {}
@@ -122,8 +133,11 @@ def test_wa_classify_stages_tg_yes_no_add_then_ready_creates_ticket(monkeypatch,
         token = decision.diagnostics["whatsapp_intake_token"]
         assert token
         assert len(sent) == 1
-        assert "Yes" in [b["text"] for b in sent[0]["reply_markup"]["inline_keyboard"][0]]
-        assert "ready" in sent[0]["text"].lower()
+        labels = [b["text"] for b in sent[0]["reply_markup"]["inline_keyboard"][0]]
+        assert "Accept" in labels and "Decline" in labels
+        assert sent[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"].endswith(":yes")
+        # Standard-posture card is humanized (no IDs); it asks to take the work on.
+        assert "take it on" in sent[0]["text"].lower()
 
         # 2) Add fold
         folded = wi.handle_telegram_reply(f"wi:{token}:add", chat_id=42)

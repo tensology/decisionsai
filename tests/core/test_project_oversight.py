@@ -110,6 +110,45 @@ def test_recipient_blocked_delivery_is_attention_first_read_only_and_not_executi
         assert db.get(Chat, blocked).params == before
 
 
+@pytest.mark.parametrize('location', ['pending', 'backlog'])
+def test_expired_telegram_send_surfaces_without_a_sync_or_receipt_write(store, location):
+    from distr.core.incoming.telegram_updates import ACK_TIMEOUT_SECONDS
+    from distr.core.project_oversight import project_oversight_prompt_view
+
+    now = datetime.now(timezone.utc)
+
+    def sending(age, *, state='sending', chat_age=0):
+        delivery = {'key': 'job:done', 'text': 'Result', 'awaiting': {
+            'token': 'receipt', 'end': 6, 'state': state, 'at': now.timestamp() - age,
+        }}
+        receipt = {location: delivery if location == 'pending' else [delivery]}
+        return add(store, 1, 'completed', age=chat_age, params={
+            'development': {'execution': {'status': 'completed'}}, 'telegram_proposal_update': receipt,
+        })
+
+    expired = sending(ACK_TIMEOUT_SECONDS + 1, chat_age=8)
+    fresh = sending(ACK_TIMEOUT_SECONDS)
+    queued = sending(ACK_TIMEOUT_SECONDS + 1, state='queued')
+    waiting = add(store, 2, 'waiting')
+    with store() as db:
+        before = db.get(Chat, expired).params
+    snapshot = build_project_oversight(limit=2, now=now)
+    focused = threads(snapshot)
+    assert set(focused) == {expired, waiting}
+    assert focused[expired]['status'] == 'completed'
+    assert focused[expired]['telegram_delivery']['status'] == 'unconfirmed'
+    assert focused[expired]['attention'][0]['kind'] == 'delivery_unconfirmed'
+    assert focused[waiting]['attention'][0]['kind'] == 'needs_input'
+    prompt = project_oversight_prompt_view(snapshot)
+    assert prompt['attention_threads'][0]['chat_id'] == expired
+    assert 'did not confirm this send in time' in prompt['attention_threads'][0]['attention'][0]['recommendation']
+    all_threads = threads(build_project_oversight(now=now))
+    assert 'telegram_delivery' not in all_threads[fresh]
+    assert 'telegram_delivery' not in all_threads[queued]
+    with store() as db:
+        assert db.get(Chat, expired).params == before
+
+
 def test_backlog_unknown_is_not_starved(store):
     unknown = add(store, 1, 'completed', age=8, params={'telegram_proposal_update': {'backlog': [
         {'key': 'job:done', 'text': 'Result', 'awaiting': {'token': 'receipt', 'end': 6, 'state': 'unconfirmed'}}]}})
@@ -605,6 +644,41 @@ def test_oversized_inventory_reports_missing_identities_without_losing_totals():
     assert view['not_all_reviewed']
 
 
+def test_inventory_that_just_fits_leaves_room_for_delivery_attention():
+    from distr.core.project_oversight import project_oversight_prompt_view
+
+    snapshot = large_snapshot()
+    inventory_only = {**snapshot, 'projects': [{**project, 'threads': []} for project in snapshot['projects']]}
+    budget = len(json.dumps(project_oversight_prompt_view(inventory_only), ensure_ascii=False)) + 40
+
+    view = project_oversight_prompt_view(snapshot, max_chars=budget)
+
+    assert len(json.dumps(view, ensure_ascii=False)) <= budget
+    assert view['attention_threads'][0]['chat_id'] == 59
+    assert view['attention_threads'][0]['project_id'] == 5
+    assert view['attention_threads'][0]['attention'][0]['kind'] == 'delivery_unconfirmed'
+    assert view['inventory_omitted_count'] == 6 - len(view['projects'])
+    assert view['thread_details_omitted_count'] == 60 - len(view['attention_threads'])
+
+
+def test_fallback_brief_shares_equal_priority_slots_across_projects():
+    from distr.core.initiative.planners import _fallback_project_attention
+
+    snapshot = large_snapshot()
+    for project in snapshot['projects']:
+        for thread in project['threads']:
+            thread['attention'] = []
+    for thread in [*snapshot['projects'][1]['threads'], snapshot['projects'][-1]['threads'][-1]]:
+        thread['status'] = 'blocked'
+        thread['attention'] = [{'kind': 'needs_input', 'recommendation': 'Review the pending question.'}]
+
+    items, _, _ = _fallback_project_attention(snapshot)
+
+    assert len(items) == 4
+    assert '/development/threads/59/' in items[1]
+    assert 'Project 5' in items[1]
+
+
 def test_unavailable_oversight_is_not_misrepresented_as_an_empty_review():
     from distr.core.project_oversight import project_oversight_prompt_view
     view = project_oversight_prompt_view({})
@@ -640,7 +714,7 @@ def test_initiative_payload_uses_bounded_view_without_model_calls(monkeypatch):
     monkeypatch.setattr(module, '_litellm_model', lambda *args: 'fixture')
     bundle = ContextBundle(project_oversight=large_snapshot())
     service = object.__new__(module.InitiativeService)
-    assert service._call_llm(bundle, {}, 'assist') == '{"action_type":"none"}'
+    assert service._call_llm(bundle, {}, 'operate') == '{"action_type":"none"}'
     view = json.loads(captured[1]['content'])['project_oversight']
     assert len(json.dumps(view, ensure_ascii=False)) <= 12_000
     assert view['attention_threads'][0]['chat_id'] == 59
