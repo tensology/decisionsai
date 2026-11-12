@@ -42,9 +42,10 @@ def _apply_intent_to_settings(settings: dict, intent) -> dict:
     if intent == "text_only":
         settings["telegram_text_only_override"] = True
         settings["telegram_auto_match_mode"] = True
-    elif intent == "voice":
+    elif intent in ("voice", "auto"):
+        # Mirror mode: clear the text override and match the input format.
         settings["telegram_text_only_override"] = False
-        settings["telegram_auto_match_mode"] = False
+        settings["telegram_auto_match_mode"] = True
     return settings
 
 
@@ -189,7 +190,7 @@ class TestNaturalLanguageTextSwitch:
 
 
 class TestNaturalLanguageVoiceSwitch:
-    """Full cycle: enable text override → voice intent → revert to voice-first."""
+    """Full cycle: enable text override → voice/auto intent → restore mirror."""
 
     def test_respond_with_voice_clears_override(self):
         # Start with text_only_override already enabled
@@ -202,20 +203,16 @@ class TestNaturalLanguageVoiceSwitch:
         # Persist the intent
         _apply_intent_to_settings(settings, intent)
 
-        # Reload — override should be cleared
+        # Reload — override cleared and mirror mode restored
         text_only, auto_match = load_response_format_settings(settings)
         assert text_only is False
-        assert auto_match is False
+        assert auto_match is True
 
-        # Voice input should now produce voice response.
-        result = determine_response_format(
-            input_type="voice",
-            text_only_override=text_only,
-            auto_match_mode=auto_match,
-        )
-        assert result == "voice"
+        # Voice input → voice; text input → text (mirror)
+        assert determine_response_format("voice", text_only, auto_match) == "voice"
+        assert determine_response_format("text", text_only, auto_match) == "text"
 
-    def test_voice_switch_reverts_text_input_to_voice_first(self):
+    def test_voice_switch_restores_mirror_for_text_input(self):
         # Override was on, user clears it
         settings = _make_settings(text_only_override=True)
         intent = detect_mode_switch_intent("use voice")
@@ -223,13 +220,26 @@ class TestNaturalLanguageVoiceSwitch:
 
         text_only, auto_match = load_response_format_settings(settings)
 
-        # Text input should now produce voice (default voice-first mode)
+        # Mirror restored: typed text gets text back
         result = determine_response_format(
             input_type="text",
             text_only_override=text_only,
             auto_match_mode=auto_match,
         )
-        assert result == "voice"
+        assert result == "text"
+
+    def test_auto_phrase_restores_mirror_mode(self):
+        """Saying "auto" (or "match") also clears a stuck text-only override."""
+        settings = _make_settings(text_only_override=True)
+        intent = detect_mode_switch_intent("go back to auto")
+        assert intent == "auto"
+        _apply_intent_to_settings(settings, intent)
+
+        text_only, auto_match = load_response_format_settings(settings)
+        assert text_only is False
+        assert auto_match is True
+        assert determine_response_format("voice", text_only, auto_match) == "voice"
+        assert determine_response_format("text", text_only, auto_match) == "text"
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +272,6 @@ class TestFullCycle:
         _apply_intent_to_settings(settings, intent)
 
         text_only, auto_match = load_response_format_settings(settings)
-        # Voice input → voice response (auto-match restored)
+        # Mirror restored: voice → voice, text → text
         assert determine_response_format("voice", text_only, auto_match) == "voice"
-        # Text input → voice response (voice-first restored)
-        assert determine_response_format("text", text_only, auto_match) == "voice"
+        assert determine_response_format("text", text_only, auto_match) == "text"

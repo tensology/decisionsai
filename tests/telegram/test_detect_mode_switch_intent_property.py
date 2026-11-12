@@ -13,6 +13,7 @@ from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
 from distr.core.integrations.telegram.response_format import (
+    _AUTO_PREFERENCE_PHRASES,
     _TEXT_PREFERENCE_PHRASES,
     _VOICE_PREFERENCE_PHRASES,
     detect_mode_switch_intent,
@@ -24,6 +25,7 @@ from distr.core.integrations.telegram.response_format import (
 
 _text_phrase_strategy = st.sampled_from(_TEXT_PREFERENCE_PHRASES)
 _voice_phrase_strategy = st.sampled_from(_VOICE_PREFERENCE_PHRASES)
+_auto_phrase_strategy = st.sampled_from(_AUTO_PREFERENCE_PHRASES)
 
 # Surrounding text that won't accidentally contain any known phrase.
 # We use short alphanumeric tokens separated by spaces.
@@ -31,7 +33,7 @@ _safe_word = st.from_regex(r"[a-z]{1,4}", fullmatch=True)
 _safe_padding = st.lists(_safe_word, min_size=0, max_size=3).map(" ".join)
 
 # Strategy for messages guaranteed to contain NO known phrase.
-_all_phrases = _TEXT_PREFERENCE_PHRASES + _VOICE_PREFERENCE_PHRASES
+_all_phrases = _TEXT_PREFERENCE_PHRASES + _VOICE_PREFERENCE_PHRASES + _AUTO_PREFERENCE_PHRASES
 
 def _contains_any_phrase(text: str) -> bool:
     lowered = text.lower()
@@ -123,4 +125,33 @@ def test_no_mode_switch_phrases_return_none(message: str) -> None:
     assert result is None, (
         f"Expected None for message without any known phrase, "
         f"got {result!r} (message: {message!r})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 5: Known auto/match phrases always return "auto"
+# ---------------------------------------------------------------------------
+
+
+@settings(max_examples=200)
+@given(
+    phrase=_auto_phrase_strategy,
+    prefix=_safe_padding,
+    suffix=_safe_padding,
+)
+def test_auto_preference_phrases_return_auto(
+    phrase: str,
+    prefix: str,
+    suffix: str,
+) -> None:
+    """An explicit auto/match request restores mirror mode."""
+
+    message = f"{prefix} {phrase} {suffix}".strip()
+    assume(not any(vp in message.lower() for vp in _VOICE_PREFERENCE_PHRASES))
+    assume(not any(tp in message.lower() for tp in _TEXT_PREFERENCE_PHRASES))
+
+    result = detect_mode_switch_intent(message)
+    assert result == "auto", (
+        f"Expected 'auto' for message containing auto phrase {phrase!r}, "
+        f"got {result!r} (full message: {message!r})"
     )

@@ -549,11 +549,14 @@ class TelegramMessagesMixin:
                 logger.info(
                     "[Telegram] ✅ Detected text-only intent — persisted telegram_text_only_override=True"
                 )
-            elif mode_intent == "voice":
+            elif mode_intent in ("voice", "auto"):
+                # Mirror mode: voice notes get voice, typed messages get text.
                 update_setting("telegram_text_only_override", False)
-                update_setting("telegram_auto_match_mode", False)
+                update_setting("telegram_auto_match_mode", True)
                 logger.info(
-                    "[Telegram] ✅ Detected voice intent — persisted telegram_text_only_override=False"
+                    "[Telegram] ✅ Detected %s intent — persisted mirror mode "
+                    "(text_only_override=False, auto_match=True)",
+                    mode_intent,
                 )
 
         # Always log incoming messages for visibility with chat_id
