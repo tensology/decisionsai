@@ -941,6 +941,7 @@ class SpeakSpokenRequest(ChatRequestModel):
     text: str
     chat_id: Optional[int] = None  # Development thread the spoken text belongs to
     source_row_id: Optional[int] = None  # reply the spoken text summarises
+    remote_device: bool = False  # phone read-aloud: stream to the remote app only
 
 
 class TTSGenerateRequest(ChatRequestModel):
@@ -2811,11 +2812,29 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             raise HTTPException(status_code=403, detail="Only localhost may trigger speech")
         require_internal_token_request(request)
 
-        try:
-            ok = rr.speak_spoken_text(request_data.text)
-        except Exception as e:
-            logger.warning("Speak spoken response failed: %s", e)
-            ok = False
+        remote_streamed = False
+        if bool(getattr(request_data, "remote_device", False)):
+            # Phone read-aloud: stream to the remote app only — never the desktop.
+            try:
+                from distr.core.integrations.telegram.remote_tts_delivery import (
+                    enqueue_remote_tts_delivery, is_remote_delivery_available,
+                )
+                from distr.core.kanban.ticket_workflow_engagement import _telegram_manager_from_app
+
+                if is_remote_delivery_available(_telegram_manager_from_app()):
+                    remote_streamed = bool(enqueue_remote_tts_delivery(
+                        request_data.text,
+                        data={"mode": "proactive", "source_command": "speak_spoken"},
+                    ))
+            except Exception:
+                logger.warning("Remote speak-spoken delivery failed", exc_info=True)
+            ok = remote_streamed
+        else:
+            try:
+                ok = rr.speak_spoken_text(request_data.text)
+            except Exception as e:
+                logger.warning("Speak spoken response failed: %s", e)
+                ok = False
         note_id = None
         if ok and request_data.chat_id is not None:
             # Oracle context note: mirror into the oracle's current chat (read-only lookup,
@@ -2829,7 +2848,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     )
             except Exception as e:
                 logger.warning("Oracle context note failed: %s", e)
-        return JSONResponse({"ok": bool(ok), "oracle_note_row_id": note_id})
+        return JSONResponse({"ok": bool(ok), "oracle_note_row_id": note_id, "remote_streamed": remote_streamed})
 
     @router.get("/models")
     async def get_models():

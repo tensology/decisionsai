@@ -584,6 +584,9 @@ def register_routes(router, templates):
             return JSONResponse({"success": False, "error": "Text to read is required."}, status_code=422)
         proposal_id = body.get("proposal_id")
         title = str(body.get("title") or "").strip()
+        # Phone read-aloud asks with remote_device=true: stream to the remote app
+        # only — never play it on the desktop. The desktop web UI reads locally.
+        remote_device = bool(body.get("remote_device"))
 
         from distr.core import read_response as rr
         from distr.core.settings import load_settings_from_db
@@ -607,13 +610,37 @@ def register_routes(router, templates):
 
         if await request.is_disconnected():
             return JSONResponse({"success": False, "error": "The read request was cancelled."}, status_code=499)
-        try:
-            spoken_ok = bool(rr.speak_spoken_text(spoken))
-        except Exception:
-            logger.warning("Proposal speech dispatch failed", exc_info=True)
-            spoken_ok = False
-        if not spoken_ok:
-            return JSONResponse({"success": False, "error": "Speech is unavailable. Check that the Oracle is running and try again."}, status_code=503)
+        remote_streamed = False
+        if remote_device:
+            try:
+                from distr.core.integrations.telegram.remote_tts_delivery import (
+                    enqueue_remote_tts_delivery, is_remote_delivery_available,
+                )
+                from distr.core.kanban.ticket_workflow_engagement import _telegram_manager_from_app
+
+                if is_remote_delivery_available(_telegram_manager_from_app()):
+                    remote_streamed = bool(enqueue_remote_tts_delivery(
+                        spoken,
+                        data={
+                            "mode": "proactive",
+                            "source_command": "proposal_read",
+                            "proposal_id": proposal_id,
+                            "title": title,
+                        },
+                    ))
+            except Exception:
+                logger.warning("Proposal remote read delivery failed", exc_info=True)
+            if not remote_streamed:
+                return JSONResponse({"success": False, "error": "Could not play this on the remote app. Check the remote is connected and try again."}, status_code=503)
+            spoken_ok = True
+        else:
+            try:
+                spoken_ok = bool(rr.speak_spoken_text(spoken))
+            except Exception:
+                logger.warning("Proposal speech dispatch failed", exc_info=True)
+                spoken_ok = False
+            if not spoken_ok:
+                return JSONResponse({"success": False, "error": "Speech is unavailable. Check that the Oracle is running and try again."}, status_code=503)
         note_id = None
         if spoken_ok:
             try:
@@ -632,6 +659,7 @@ def register_routes(router, templates):
             "provider": provider,
             "model": model,
             "oracle_note_row_id": note_id,
+            "remote_streamed": remote_streamed,
         })
 
 
