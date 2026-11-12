@@ -7,11 +7,112 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from playwright.sync_api import expect
 
-from tests.core.test_workflow_interactions import _clear_interactions, crowded_development_checkpoints, paired_checkpoint
+from tests.core.test_workflow_interactions import (
+    _clear_interactions, crowded_development_checkpoints, paired_checkpoint, restart_checkpoint,
+)
 from tests.ui.test_development_harness_playwright import URL, _install_api, _open_details
+from tests.ui.test_incoming_dismiss_undo import fixture_base
 
 pytestmark = pytest.mark.e2e_playwright
 EVIDENCE = Path("/tmp/decisions-checkpoint-scope")
+
+
+@pytest.mark.parametrize("surface,width", [("desktop", 1440), ("desktop", 390), ("paired", 1440), ("paired", 390)])
+@pytest.mark.parametrize("blocked", [False, True])
+def test_development_thread_reviews_interrupted_workflow(page, fixture_base, restart_checkpoint, surface, width, blocked):
+    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+
+    scope = restart_checkpoint
+    execution = "/api/workflows/studio/tasks/17/execution"
+    title = "Review interrupted workflow"
+    if blocked:
+        with scope.factory.begin() as db:
+            worker = ProjectExecutionSession(project_id=9, workflow_id=10, run_id=20, step_id=30)
+            db.add(worker)
+            db.flush()
+            db.add(ProjectExecutionEvent(session_id=worker.id, event_type="executor_start"))
+    page.set_viewport_size({"width": width, "height": 900})
+
+    if surface == "desktop":
+        _install_api(page, [], pending_interaction=True)
+        page.route_web_socket("**/api/ws?*", lambda socket: socket.on_message(lambda _: None))
+        page.route(f"**{execution}", lambda route: route.fulfill(json={
+            **scope.client.get(execution).json(), "workflow_id": 44,
+        }))
+
+        def api(route):
+            url = urlsplit(route.request.url)
+            response = scope.client.request(
+                route.request.method, url.path, params=parse_qs(url.query), json=route.request.post_data_json,
+            )
+            route.fulfill(status=response.status_code, json=response.json())
+
+        page.route("**/api/workflows/studio/control-state?*", api)
+        page.route("**/api/workflows/studio/interactions/*/resolve", api)
+        page.goto(f"{fixture_base}/development/threads/17/")
+        _open_details(page)
+        panel = page.locator(".waiting-card")
+        expect(panel.get_by_text(title, exact=True)).to_be_visible()
+    else:
+        remote = os.environ.get("DECISIONS_REMOTE_APP_TEST_URL")
+        if not remote:
+            pytest.skip("Set DECISIONS_REMOTE_APP_TEST_URL to the local App View development server.")
+        project = {"id": 9, "name": "Workflow test project"}
+        chat = {"id": 17, "title": "Workflow test thread", "project_id": 9, "development": True, "messages": []}
+        reads = {
+            "/api/projects": [project],
+            "/api/projects/9": project,
+            "/api/chats?surface=development": [chat],
+            "/api/chats/17?surface=development": chat,
+        }
+
+        def relay(socket):
+            def handle(raw):
+                frame = json.loads(raw)["body"]
+                if frame["type"] == "ping":
+                    socket.send(json.dumps({"type": "pong"}))
+                    return
+                command = frame["command"]
+                data = {"screens": []}
+                if command == "api_relay":
+                    call = frame["data"]
+                    path = call["path"]
+                    status, result = 200, reads.get(path, {})
+                    if path in {execution, execution + "/checkpoint"}:
+                        response = scope.client.request(
+                            call["method"], path, headers=scope.headers, json=call.get("body"),
+                        )
+                        status, result = response.status_code, response.json()
+                    data = {"status": status, "response": result}
+                socket.send(json.dumps({"type": "remote_control_response", "command": command,
+                                        "request_id": frame["request_id"], "data": data}))
+            socket.on_message(handle)
+
+        page.route_web_socket("**/ws/telegram?*", relay)
+        page.goto(f"{remote}?channel=paired-test")
+        page.get_by_title("App View", exact=True).click()
+        page.get_by_role("button", name="Projects", exact=True).click()
+        page.get_by_text(project["name"], exact=True).click()
+        page.get_by_role("button", name=chat["title"]).click()
+        page.get_by_role("button", name=title, exact=True).click()
+        panel = page.get_by_role("dialog", name=title)
+
+    resume = panel.get_by_role("button", name="Resume saved step", exact=True)
+    expect(panel.get_by_role("button", name="Stop workflow", exact=True)).to_be_enabled()
+    if blocked:
+        expect(panel).to_contain_text("already started")
+        expect(resume).to_have_count(0)
+    else:
+        expect(panel).to_contain_text(scope.prompt)
+        expect(resume).to_be_enabled()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    EVIDENCE.mkdir(exist_ok=True)
+    page.screenshot(path=EVIDENCE / f"{width}-{surface}-restart-{'blocked' if blocked else 'ready'}.png", animations="disabled")
+    assert not scope.workers
+    if not blocked:
+        resume.click()
+        expect(page.get_by_text("Applying checkpoint decision", exact=False).first).to_be_visible()
+        assert [worker["action"] for worker in scope.workers] == ["continue"]
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280, 1440])

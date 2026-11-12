@@ -1029,24 +1029,29 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const interaction = (context.controlState?.interactions || []).find((item) => String(item.run_id || '') === runId) || null;
         const interactionActions = Array.isArray(interaction?.allowed_actions) ? interaction.allowed_actions : [];
         const actionable = interactionActions.filter((action) => action !== 'feedback');
+        const restarting = ['waiting', 'paused'].includes(runStatus)
+            && (run?.waiting_kind === 'restart_recovery' || interaction?.kind === 'restart_recovery');
+        const needsApproval = actionable.includes('approve') || interaction?.kind === 'provider_preflight';
+        const runBadge = restarting ? 'Interrupted' : needsApproval ? 'Approval required' : actions.statusLabel(runStatus);
         const checkpointTitle = {
             resolving: 'Applying checkpoint decision',
             unconfirmed: 'Checkpoint decision unconfirmed',
-        }[interaction?.decision_status] || 'Approval required';
+        }[interaction?.decision_status] || (restarting ? 'Review interrupted workflow'
+            : needsApproval ? 'Approval required' : 'Workflow checkpoint');
         const approval = run?.pending_route_approval || {};
         const budgetApproval = false; // budget gate removed
-        const waitingPrompt = budgetApproval
+        const waitingPrompt = interaction?.review_notice || (budgetApproval
             ? run?.blueprint?.interrupt_line?.question || run?.waiting_prompt || 'The run budget is exhausted. Raise the budget to continue, or stop.'
             : interaction?.kind === 'provider_preflight' && (approval.name || approval.model)
             ? `Use ${approval.name || approval.model} for this step and continue the workflow.`
-            : run?.worker_question || run?.waiting_prompt || 'Review the pending checkpoint before the workflow continues.';
+            : run?.worker_question || run?.waiting_prompt || 'Review the pending checkpoint before the workflow continues.');
         const checkpointNotice = interaction?.decision_status === 'unconfirmed'
             ? 'The desktop restarted before it could confirm the decision. Review this run before continuing.'
             : interaction?.decision_status === 'resolving' ? '' : waitingPrompt;
         const checkpoint = ['waiting', 'paused'].includes(runStatus)
-            ? `<section class="thread-workflow-checkpoint" aria-label="${interaction?.decision_status ? checkpointTitle : 'Workflow approval required'}">
+            ? `<section class="thread-workflow-checkpoint" aria-label="${checkpointTitle}">
                 <div><strong>${checkpointTitle}</strong>${checkpointNotice ? `<p>${actions.escapeHtml(checkpointNotice)}</p>` : ''}</div>
-                ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(index === 0 && action !== 'stop' ? (budgetApproval ? 'Raise budget and continue' : 'Approve and continue') : actions.actionLabel(action))}</button>`).join('')}</div>` : ''}
+                ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 && action !== 'stop' ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(action === 'approve' ? (budgetApproval ? 'Raise budget and continue' : 'Approve and continue') : actions.actionLabel(action, interaction.kind))}</button>`).join('')}</div>` : ''}
             </section>`
             : '';
         const currentStep = statusSteps[activeIndex];
@@ -1069,7 +1074,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             idPrefix: ringPrefix,
             escapeHtml: actions.escapeHtml,
             statusLabel: actions.statusLabel,
-            coreLabel: interaction ? 'Approval' : actions.statusLabel(runStatus),
+            coreLabel: needsApproval ? 'Approval' : runBadge,
             coreCaption: count === 1 ? 'step' : 'steps',
             mapRole: 'tablist',
             ariaLabel: `${title} step loop`,
@@ -1078,7 +1083,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         });
         return `<article class="studio-message workflow-runner" data-workflow-runner="${mode}" data-run-id="${actions.escapeHtml(String(run?.id || event.run_id || ''))}">
             <div class="thread-workflow-runner ${mode}" data-view="${viewMode}" data-status="${actions.escapeHtml(runStatus)}" role="region" aria-label="${actions.escapeHtml(title)} workflow" aria-live="${mode === 'live' ? 'polite' : 'off'}">
-                <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><div class="thread-workflow-runner-tools"><span class="thread-workflow-status-badge ${actions.escapeHtml(runStatus)}">${actions.escapeHtml(interaction ? 'Approval required' : actions.statusLabel(runStatus))}</span>${workflowViewSwitchHtml(viewMode, { attr: 'data-thread-workflow-view', className: 'workflow-view-switch thread-workflow-view-switch' })}</div></div>
+                <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><div class="thread-workflow-runner-tools"><span class="thread-workflow-status-badge ${actions.escapeHtml(runStatus)}">${actions.escapeHtml(runBadge)}</span>${workflowViewSwitchHtml(viewMode, { attr: 'data-thread-workflow-view', className: 'workflow-view-switch thread-workflow-view-switch' })}</div></div>
                 ${checkpoint}
                 <div class="thread-workflow-ring">${ring}</div>
                 <div class="thread-workflow-steps">${numbers}</div>

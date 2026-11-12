@@ -408,7 +408,7 @@ def register_routes(router, templates):
         """Return safe cross-surface status and pending controls for Development."""
         try:
             from distr.core.settings import load_settings_from_db
-            from distr.core.workflow.interactions import pending_interactions, telegram_checkpoint_delivery_status
+            from distr.core.workflow.interactions import development_pending_interactions, telegram_checkpoint_delivery_status
 
             settings = await asyncio.to_thread(load_settings_from_db)
             accounts = settings.get("connected_accounts") or []
@@ -435,7 +435,7 @@ def register_routes(router, templates):
             interactions = []
             if run_id is not None or chat_id is not None:
                 interactions = await asyncio.to_thread(
-                    pending_interactions, run_id=run_id, development_chat_id=chat_id, include_decisions=True,
+                    development_pending_interactions, run_id=run_id, development_chat_id=chat_id,
                 )
             safe_interactions = [
                 {
@@ -447,6 +447,7 @@ def register_routes(router, templates):
                     if item.get("status", "pending") == "pending" else [],
                     "expires_at": item.get("expires_at"),
                     "error": item.get("error"),
+                    **({"review_notice": item["review_notice"]} if item.get("review_notice") else {}),
                     "telegram_linked": bool(item.get("telegram_chat_id")),
                     "telegram_delivery": telegram_checkpoint_delivery_status(item),
                     **({"decision_status": item["status"]} if item.get("status") in {"resolving", "unconfirmed"} else {}),

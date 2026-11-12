@@ -640,10 +640,10 @@ def register_routes(router, templates):
             turn_id = stop.get("turn_id") if stop else None
             steer = {"turn_id": turn_id} if turn_id and native_steering_available(chat_id, turn_id) else None
             if state.get("direct") is False and state.get("status") == "waiting" and not state.get("completed_at"):
-                from distr.core.workflow.interactions import pending_interactions, telegram_checkpoint_delivery_status
+                from distr.core.workflow.interactions import development_pending_interactions, telegram_checkpoint_delivery_status
 
                 pending = await asyncio.to_thread(
-                    pending_interactions, run_id=state["id"], development_chat_id=chat_id, include_decisions=True,
+                    development_pending_interactions, run_id=state["id"], development_chat_id=chat_id,
                 )
                 if len(pending) == 1:
                     item = pending[0]
@@ -664,6 +664,8 @@ def register_routes(router, templates):
                                 "token": item["token"], "allowed_actions": allowed,
                                 "telegram_delivery": telegram_checkpoint_delivery_status(item),
                             }
+                            if item.get("review_notice"):
+                                state["waiting_prompt"] = item["review_notice"]
             return JSONResponse({**state, "stop_pending": state.get("stop_pending") is True,
                                  "exact_stop": stop, "exact_steer": steer})
         except LookupError as exc:

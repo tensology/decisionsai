@@ -696,7 +696,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
         }
     }
 
-    function actionLabel(action) {
+    function actionLabel(action, kind) {
+        if (kind === 'restart_recovery' && action === 'continue') return 'Resume saved step';
+        if (kind === 'restart_recovery' && action === 'stop') return 'Stop workflow';
         const modelChoice = String(action || '').match(/^model_(\d+)$/i);
         if (modelChoice) return Number(modelChoice[1]) === 0 ? 'Approve and continue' : `Use option ${Number(modelChoice[1]) + 1}`;
         const labels = {

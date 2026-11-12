@@ -582,6 +582,85 @@ def test_paired_checkpoint_rejects_a_changed_question(paired_checkpoint):
     assert state["waiting_prompt"] == run_data["waiting_prompt"]
 
 
+@pytest.fixture
+def restart_checkpoint(paired_checkpoint):
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    scope = paired_checkpoint
+    scope.prompt = "The desktop restarted before the saved step started."
+    with scope.factory.begin() as db:
+        run = db.get(AutoWorkflowRun, 20)
+        run.run_data = json.dumps({
+            "project_id": 9, "waiting_kind": "restart_recovery", "waiting_prompt": scope.prompt,
+        })
+    return scope
+
+
+def test_development_restart_review_resumes_saved_step_once(restart_checkpoint, monkeypatch):
+    from unittest.mock import Mock
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher, interactions
+
+    scope = restart_checkpoint
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    monkeypatch.setattr(dispatcher, "record_workflow_chat_event", lambda *_, **__: None)
+    execution = "/api/workflows/studio/tasks/17/execution"
+    controls = "/api/workflows/studio/control-state"
+    checkpoint = scope.client.get(execution).json()["checkpoint"]
+    token = checkpoint["token"]
+    assert token != scope.token
+    assert checkpoint["allowed_actions"] == ["continue", "stop"]
+    assert scope.client.get(controls, params={"chat_id": 17, "run_id": 20}).json()["interactions"][0]["token"] == token
+    assert scope.client.get(controls, params={"chat_id": 18, "run_id": 20}).json()["interactions"] == []
+    assert not pending_interactions(chat_id=123, run_id=20)
+    body = {"run_id": 20, "token": token, "action": "continue"}
+    assert scope.client.post(execution + "/checkpoint", json=body, headers=scope.headers).json()["queued"]
+    desktop = f"/api/workflows/studio/interactions/{token}/resolve"
+    assert scope.client.post(desktop, json={"action": "continue"}).json()["idempotent"]
+    assert len(scope.workers) == 1
+    assert interactions._apply_claimed_interaction(**scope.workers[0])["success"]
+    dispatch.assert_called_once_with(20, 30)
+    with scope.factory() as db:
+        assert db.get(AutoWorkflowRun, 20).status == "running"
+    assert scope.client.post(execution + "/checkpoint", json=body, headers=scope.headers).json()["idempotent"]
+    assert len(scope.workers) == 1
+
+
+def test_development_restart_refuses_replay_after_executor_started(restart_checkpoint):
+    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+
+    scope = restart_checkpoint
+    execution = "/api/workflows/studio/tasks/17/execution"
+    checkpoint = scope.client.get(execution).json()["checkpoint"]
+    with scope.factory.begin() as db:
+        worker = ProjectExecutionSession(project_id=9, workflow_id=10, run_id=20, step_id=30)
+        db.add(worker)
+        db.flush()
+        db.add(ProjectExecutionEvent(session_id=worker.id, event_type="executor_start"))
+    blocked = scope.client.get(execution).json()
+    assert blocked["checkpoint"]["allowed_actions"] == ["stop"]
+    assert "already started" in blocked["waiting_prompt"]
+    body = {"run_id": 20, "token": checkpoint["token"], "action": "continue"}
+    result = scope.client.post(execution + "/checkpoint", json=body, headers=scope.headers)
+    assert result.status_code == 409 and "already started" in result.json()["detail"]
+    assert not scope.workers
+
+
+def test_development_restart_rejects_a_stale_review_after_saved_step_changes(restart_checkpoint):
+    from distr.core.db.workflow import AutoWorkflowStep
+
+    scope = restart_checkpoint
+    execution = "/api/workflows/studio/tasks/17/execution"
+    token = scope.client.get(execution).json()["checkpoint"]["token"]
+    with scope.factory.begin() as db:
+        db.get(AutoWorkflowStep, 30).instruction = "Use the revised workflow instruction."
+    body = {"run_id": 20, "token": token, "action": "continue"}
+    assert scope.client.post(execution + "/checkpoint", json=body, headers=scope.headers).status_code == 409
+    assert scope.client.get(execution).json()["checkpoint"]["token"] != token
+    assert not scope.workers
+
+
 def test_checkpoint_revision_replay_preserves_the_first_guidance_across_surfaces(paired_checkpoint):
     from distr.core.db.workflow import AutoWorkflowRun
     from distr.core.workflow.interactions import authorize_telegram_checkpoint_delivery

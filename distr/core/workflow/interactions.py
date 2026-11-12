@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from distr.core.db import engine
 
@@ -223,6 +224,7 @@ def allowed_actions_for_kind(kind: str) -> list[str]:
 def create_workflow_interaction(
     *, workflow_id: int, run_id: int, step_id: int | None, kind: str,
     telegram_chat_id: int | str | None = None, ttl_s: int = DEFAULT_TTL_S,
+    development_chat_id: int | None = None,
 ) -> dict[str, Any]:
     """Create or reuse the pending interaction for the same run checkpoint."""
     from distr.core.incoming.telegram_updates import _recipient_id
@@ -239,9 +241,19 @@ def create_workflow_interaction(
             scope=_checkpoint_scope(conn,int(run_id))
             if (scope['owner']['workflow_id']!=int(workflow_id)
                     or scope['checkpoint']['step_id']!=step_id
+                    or (development_chat_id is not None and scope['owner']['root_id'] != development_chat_id)
                     or scope['checkpoint']['kind']!=normalized_kind):
                 raise ValueError('The workflow checkpoint changed before its controls were created.')
             current_actions=actions
+            if normalized_kind == "restart_recovery" and development_chat_id is not None:
+                unresolved = conn.execute(text("""
+                    SELECT 1 FROM workflow_interactions
+                    WHERE run_id=:run_id AND status IN ('resolving','unconfirmed')
+                    LIMIT 1
+                """), {"run_id": run_id}).first()
+                if unresolved:
+                    raise ValueError("The previous checkpoint decision is still unresolved.")
+                current_actions = ["stop"] if _restart_checkpoint_block_reason(conn, run_id) else ["continue", "stop"]
             if normalized_kind=='provider_preflight':
                 raw=conn.execute(text('SELECT run_data FROM auto_workflow_runs WHERE id=:id'),{'id':int(run_id)}).scalar()
                 candidates=json.loads(raw or '{}').get('provider_free_candidates') or []
@@ -588,6 +600,7 @@ def pending_interactions(
     parameters = {}
     if chat_id is not None:
         filters.append("(telegram_chat_id IS NULL OR telegram_chat_id=:chat_id)")
+        filters.append("(kind != 'restart_recovery' OR telegram_chat_id IS NOT NULL)")
         parameters["chat_id"] = str(chat_id)
     if run_id is not None:
         filters.append("run_id=:run_id")
@@ -614,6 +627,62 @@ def pending_interactions(
                 pending.append(item)
             else:
                 conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE id=:id AND status='pending'"),{'id':item['id']})
+    return pending
+
+
+def _restart_checkpoint_block_reason(conn, run_id: int) -> str:
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.dispatcher import restart_resume_block_reason
+
+    with Session(bind=conn) as db:
+        run = db.get(AutoWorkflowRun, run_id)
+        data = json.loads(run.run_data or "{}")
+        recovery = data.get("restart_recovery")
+        if isinstance(recovery, dict) and recovery.get("auto_resume_pending"):
+            return "Automatic recovery is in progress. Check the current workflow state."
+        return restart_resume_block_reason(db, run, data)
+
+
+def development_pending_interactions(*, run_id: int | None, development_chat_id: int | None) -> list[dict[str, Any]]:
+    """Expose a saved restart as a scoped checkpoint in the owning Development thread."""
+    filters = dict(run_id=run_id, development_chat_id=development_chat_id, include_decisions=True)
+    pending = pending_interactions(**filters)
+    if run_id is None or development_chat_id is None:
+        return pending
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.dispatcher import restart_resume_block_reason
+
+    with get_session() as db:
+        run = db.get(AutoWorkflowRun, run_id)
+        if run is None or run.status != "waiting" or run.completed_at is not None or run.chat_id is None:
+            return pending
+        try:
+            data = json.loads(run.run_data or "{}")
+        except ValueError:
+            return pending
+        if not isinstance(data, dict) or data.get("waiting_kind") != "restart_recovery":
+            return pending
+        recovery = data.get("restart_recovery")
+        if isinstance(recovery, dict) and recovery.get("auto_resume_pending"):
+            return []
+        reason = restart_resume_block_reason(db, run, data)
+        workflow_id, step_id = run.workflow_id, run.current_step_id
+
+    if not pending:
+        try:
+            create_workflow_interaction(
+                workflow_id=workflow_id, run_id=run_id, step_id=step_id, kind="restart_recovery",
+                development_chat_id=development_chat_id,
+            )
+        except ValueError:
+            return []
+        pending = pending_interactions(**filters)
+    if reason:
+        for item in pending:
+            if item["kind"] == "restart_recovery" and item["status"] == "pending":
+                item["allowed_actions"] = json.dumps(["stop"])
+                item["review_notice"] = reason
     return pending
 
 
@@ -665,6 +734,10 @@ def resolve_interaction(
             conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE token=:token AND status='pending'"), {"token": token})
             return {"error": "Interaction expired", "status_code": 410}
         allowed = json.loads(item["allowed_actions"] or "[]")
+        if item["kind"] == "restart_recovery" and action == "continue":
+            reason = _restart_checkpoint_block_reason(conn, item["run_id"])
+            if reason:
+                return {"error": reason, "status_code": 409}
         if action not in allowed:
             return {"error": f"Action {action!r} is not allowed", "status_code": 400}
         if (
@@ -910,6 +983,8 @@ def _apply_standard_workflow_interaction(
         from distr.core.workflow.dispatcher import continue_waiting_step
 
         feedback = response_text if action == "feedback" else response_text or action
+        if item["kind"] == "restart_recovery" and action == "continue" and not response_text:
+            feedback = ""
         options = {"literal_feedback": True} if action == "feedback" else {}
         result = continue_waiting_step(int(item["run_id"]), feedback, expected_checkpoint=checkpoint_scope, **options)
     return result

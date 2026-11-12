@@ -928,21 +928,14 @@ def _auto_resume_interrupted_runs(
             if data.get("waiting_kind") != "restart_recovery":
                 continue
             recovery = dict(data.get("restart_recovery") or {})
-            step = db.get(AutoWorkflowStep, run.current_step_id) if run.current_step_id else None
+            recovery.pop("auto_resume_pending", None)
             allowed, attempts = auto_resume_decision(data, run.current_step_id or 0)
-            reason = ""
             if (run.id, run.current_step_id) in unconfirmed:
-                reason = "A checkpoint decision for this step could not be confirmed"
-            elif step is None or step.workflow_id != run.workflow_id:
-                reason = "No valid saved step"
-            elif not allowed:
+                recovery["decision_unconfirmed"] = True
+            data["restart_recovery"] = recovery
+            reason = restart_resume_block_reason(db, run, data)
+            if not reason and not allowed:
                 reason = "Automatic recovery retry limit reached"
-            elif recovery.get("interrupted_waiting_kind") not in {None, "", "restart_recovery"}:
-                reason = "The interrupted step was already at a human checkpoint"
-            elif data.get("pending_route_approval") or data.get("human_intervention_state") == "needs_human_input":
-                reason = "An approval or answer is still required"
-            elif step.action_type not in {"send_to_project_cli", "agent_instruction", "instruction", "agent", "llm"}:
-                reason = "This action may have side effects and cannot safely be replayed automatically"
             if reason:
                 recovery["blocked_reason"] = reason
                 data["waiting_prompt"] = restart_prompt(run_label(data, ticket_id=run.ticket_id)) + " Recovery blocked: " + reason + "."
@@ -984,6 +977,7 @@ def _auto_resume_interrupted_runs(
                 data["waiting_kind"] = "restart_recovery"
                 data["waiting_prompt"] = restart_prompt(run_label(data, ticket_id=run.ticket_id)) + f" Recovery failed: {exc}."
                 recovery = dict(data.get("restart_recovery") or {})
+                recovery.pop("auto_resume_pending", None)
                 recovery["blocked_reason"] = str(exc)[:300]
                 data["restart_recovery"] = recovery
                 run.run_data = json.dumps(data)
@@ -3409,6 +3403,39 @@ def _resume_worker_needs_input(run_id: int, feedback: str, *, expected_checkpoin
     }
 
 
+def restart_resume_block_reason(db, run, data) -> str:
+    """Check whether replaying the saved step could repeat work or skip a decision."""
+    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+
+    step = db.get(AutoWorkflowStep, run.current_step_id) if run.current_step_id else None
+    if step is None or step.workflow_id != run.workflow_id:
+        return "No valid saved step is available to resume."
+    recovery = data.get("restart_recovery") or {}
+    if not isinstance(recovery, dict):
+        return "The saved recovery context is invalid. Review the run history."
+    if recovery.get("decision_unconfirmed"):
+        return "The previous checkpoint decision could not be confirmed. Review the run history."
+    if (recovery.get("interrupted_waiting_kind") not in (None, "", "restart_recovery")
+            or data.get("pending_route_approval")
+            or data.get("human_intervention_state") == "needs_human_input"):
+        return "The interrupted step was already waiting for a decision. Review the run history."
+    started = (
+        db.query(ProjectExecutionEvent.id)
+        .join(ProjectExecutionSession)
+        .filter(
+            ProjectExecutionSession.run_id == run.id,
+            ProjectExecutionSession.step_id == step.id,
+            ProjectExecutionEvent.event_type == "executor_start",
+        )
+        .first()
+    )
+    if started:
+        return "The interrupted workflow worker already started. Inspect its effects before starting the step again."
+    if step.action_type not in {"send_to_project_cli", "agent_instruction", "instruction", "agent", "llm"}:
+        return "The saved action may have side effects. Review its effects before running it again."
+    return ""
+
+
 def continue_waiting_step(
     run_id: int, optional_input: str = "", *, expected_checkpoint: dict | None = None, literal_feedback: bool = False,
 ) -> Dict[str, Any]:
@@ -3488,33 +3515,25 @@ def continue_waiting_step(
             return {"success": True, "action": "end_run", "status": "cancelled"}
         with get_session() as db:
             from distr.core.workflow.interactions import guard_workflow_checkpoint
+            if expected_checkpoint is None and db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             guard_workflow_checkpoint(db,run_id,expected_checkpoint)
             run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-            if not run or not run.current_step_id:
-                return {"error": "No saved step is available to recover", "status_code": 409}
+            if not run or run.status != "waiting" or run.completed_at is not None:
+                return {"error": "The saved step is no longer waiting to resume", "status_code": 409}
             try:
                 run_data = json.loads(run.run_data or "{}") or {}
             except Exception:
                 run_data = {}
-            step_id = int(run.current_step_id)
-            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
-            if not step:
-                return {"error": "The saved recovery step no longer exists", "status_code": 409}
+            if run_data.get("waiting_kind") != "restart_recovery":
+                return {"error": "The workflow checkpoint changed before it could resume", "status_code": 409}
             from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
 
-            started = (
-                db.query(ProjectExecutionEvent.id)
-                .join(ProjectExecutionSession)
-                .filter(
-                    ProjectExecutionSession.run_id == int(run_id),
-                    ProjectExecutionSession.step_id == step_id,
-                    ProjectExecutionEvent.event_type == "executor_start",
-                )
-                .first()
-            )
-            if started:
-                reason = "The interrupted workflow worker already started. Inspect its effects before starting the step again."
-                recovery = dict(run_data.get("restart_recovery") or {})
+            reason = restart_resume_block_reason(db, run, run_data)
+            if reason:
+                recovery = run_data.get("restart_recovery")
+                if not isinstance(recovery, dict):
+                    return {"error": reason, "status_code": 409}
                 recovery["blocked_reason"] = reason
                 recovery.pop("auto_resume_pending", None)
                 run_data["restart_recovery"] = recovery
@@ -3522,6 +3541,8 @@ def continue_waiting_step(
                 run.run_data = json.dumps(run_data)
                 db.commit()
                 return {"error": reason, "status_code": 409}
+            step_id = int(run.current_step_id)
+            step = db.get(AutoWorkflowStep, step_id)
             run.status = "running"
             step.status = "queued"
             if run.ticket_id:
