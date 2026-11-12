@@ -1,8 +1,10 @@
 
-.kanban-workspace { position: absolute; z-index: 4; inset: 0; display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--studio-bg); }
-/* Background, border, padding and gap come from the shared .task-header (threads/styles.css), same as thread and plan. */
-.development-kanban-header { min-height: 56px; grid-row: 1; }
-.development-kanban-header > #development-kanban-more { flex: 0 0 auto; width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
+.kanban-workspace { position: relative; inset: auto; z-index: auto; grid-row: 2; display: grid; min-width: 0; min-height: 0; height: auto; grid-template-rows: minmax(0, 1fr); overflow: hidden; background: var(--studio-bg); }
+/* Inner Kanban header is retired: breadcrumb lives in the shared header, Board/List/⋯/Play/Refresh live in toolbar row 2. Hide this empty bordered strip. */
+.development-kanban-header { display: none !important; }
+.development-kanban-header .development-kanban-breadcrumb { display: none; }
+.development-kanban-actions #development-kanban-more { flex: 0 0 auto; width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
+#board-chrome-unit .development-kanban-view-toggle { margin: 0; }
 .development-kanban-breadcrumb { flex: 1 1 auto; }
 .development-kanban-breadcrumb span { max-width: min(42vw, 280px); }
 .development-kanban-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
@@ -17,7 +19,7 @@
 .development-kanban-view-toggle button.active { background: var(--studio-raised-2); color: var(--studio-text); box-shadow: inset 0 -1px 0 var(--studio-accent); }
 .development-kanban-status { overflow: hidden; max-width: min(34vw, 320px); color: var(--studio-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .development-kanban-status.error { color: #ff938a; }
-.development-kanban-lanes { display: flex; min-width: 0; min-height: 0; grid-row: 2; align-items: stretch; gap: 14px; padding: 18px 24px 24px; overflow: auto; }
+.development-kanban-lanes { display: flex; min-width: 0; min-height: 0; grid-row: 1; align-items: stretch; gap: 14px; padding: 18px 24px 24px; overflow: auto; }
 .development-kanban-lanes.list-view { display: block; padding: 14px 24px 28px; }
 .development-kanban-lane { display: grid; flex: 0 0 296px; min-height: 0; grid-template-rows: auto minmax(0, 1fr); border: 1px solid var(--studio-line-soft); border-radius: 10px; background: rgba(255,255,255,.025); }
 .development-kanban-lane > header { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--studio-line-soft); }
@@ -104,6 +106,10 @@ button.kanban-run-status:focus-visible { box-shadow: 0 0 0 1px var(--studio-acce
 .kanban-ticket-workflow-draft-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .kanban-ticket-workflow-draft-actions a:not(.hidden) { display: inline-flex; align-items: center; text-decoration: none; }
 .kanban-ticket-workflow-draft button[aria-disabled="true"] { opacity: .65; }
+.kanban-ticket-plan-sources { margin: 0 var(--ticket-modal-pane-pad) 12px; padding: 10px 12px; border: 1px solid var(--studio-line); border-radius: 8px; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.kanban-ticket-plan-sources p { margin: 0; }
+.kanban-ticket-plan-sources ul { margin: 6px 0; padding-inline-start: 1.4em; }
+.kanban-ticket-plan-sources a { color: var(--studio-accent); }
 .kanban-ticket-panel[hidden] { display: none; }
 .kanban-ticket-panel > label { margin: 10px var(--ticket-modal-pane-pad) 0; font-size: var(--ticket-modal-label-size); }
 .kanban-ticket-dialog #kanban-ticket-title, .kanban-ticket-dialog #kanban-ticket-description { font-size: var(--ticket-modal-text-size); }

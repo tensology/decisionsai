@@ -280,6 +280,10 @@ def _mail_attachment_preview_url(
         params["attachment_id"] = aid
     if cid:
         params["content_id"] = cid
+    # 2026-11-11 pdf-preview: the real name, so preview/download is not served as "attachment".
+    name = str(attachment.get("filename") or attachment.get("name") or "").strip()
+    if name:
+        params["filename"] = name
     provider_key = str(provider or attachment.get("provider") or "").strip().lower()
     if provider_key:
         params["provider"] = provider_key
@@ -320,10 +324,39 @@ def _load_gmail_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dict[s
             return [], {"connected": False, "error": "Connect Gmail in Settings to load inbox threads."}
         rows = connector.check_inbox(max_results=max(1, min(int(max_results), 30)), query="in:inbox")
         if connector.last_error:
-            return [], {"connected": False, "error": "Reconnect Gmail in Settings to load inbox threads."}
+            # Connected account whose inbox read failed: report it as connected so the UI offers Reconnect.
+            return [], {"connected": True, "error": "Reconnect Gmail in Settings to load inbox threads."}
         return [row for row in (rows or []) if isinstance(row, dict)], {"connected": True, "error": ""}
     except Exception:
         return [], {"connected": False, "error": "Gmail is temporarily unavailable."}
+
+
+def _gmail_inbox_message_ids(*, max_pages: int = 10) -> set[str] | None:
+    """Return every message id currently in the Gmail inbox (ids only), or None when it cannot be known."""
+    try:
+        from urllib.parse import quote
+
+        from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+
+        connector = GoogleWorkspaceConnector()
+        if not connector.is_connected():
+            return None
+        ids: set[str] = set()
+        token = ""
+        for _ in range(max(1, int(max_pages))):
+            url = "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=500&q=" + quote("in:inbox")
+            if token:
+                url += "&pageToken=" + quote(token)
+            result = connector._make_request("GET", url)
+            if not isinstance(result, dict):
+                return None
+            ids.update(str(row.get("id")) for row in result.get("messages") or [] if isinstance(row, dict) and row.get("id"))
+            token = str(result.get("nextPageToken") or "")
+            if not token:
+                return ids
+        return None
+    except Exception:
+        return None
 
 
 def ingest_gmail_as_work(
@@ -336,12 +369,15 @@ def ingest_gmail_as_work(
     board_hint: str = "",
     project_hint: str = "",
     force_ticket: bool = False,
+    attachments: Any = None,
 ) -> dict[str, Any]:
     """Create a WorkIntake(source=gmail) decision, mirroring Telegram channel intake."""
+    from distr.core.incoming.mail_attachments import work_intake_attachments
     from distr.core.work_intake import WorkIntake, get_work_intake_service
 
     text_body = str(body or "").strip() or str(subject or "").strip() or "Incoming Gmail message"
     subject_clean = str(subject or "").strip()
+    intake_attachments = work_intake_attachments(attachments)
     if force_ticket and not text_body.lower().startswith(("create a ticket", "create ticket")):
         user_text = f"Create a ticket: {subject_clean + ' — ' if subject_clean else ''}{text_body}"
     else:
@@ -355,7 +391,8 @@ def ingest_gmail_as_work(
             source_message_id=str(message_id or ""),
             board_hint=str(board_hint or ""),
             project_hint=str(project_hint or ""),
-            metadata={"subject": subject_clean, "channel": "gmail"},
+            attachments=intake_attachments,
+            metadata={"subject": subject_clean, "channel": "gmail", "attachment_count": len(intake_attachments)},
         )
     )
     return decision.to_dict()
@@ -543,6 +580,12 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
 
     # Preserve Gmail items already normalized by WorkIntake, without duplicating
     # messages returned directly by the connected Gmail inbox.
+    # 2026-11-11 stale-gmail: once the live inbox read succeeds, an intake row whose message has been
+    # archived/deleted in Gmail is no longer shown in the Gmail folder (unless it still needs attention).
+    gmail_live = bool(network and gmail_status.get("connected") and not gmail_status.get("error"))
+    live_gmail_ids = set(gmail_items_by_id)
+    inbox_ids: set[str] | None = None
+    inbox_ids_loaded = False
     try:
         from distr.core.work_intake import get_work_intake_service
 
@@ -557,6 +600,12 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                     existing["ticket_id"] = row["ticket_id"]
                     existing["board_id"] = row.get("board_id")
                 continue
+            if gmail_live and message_id and message_id not in live_gmail_ids and not row.get("needs_attention"):
+                if not inbox_ids_loaded:
+                    inbox_ids = _gmail_inbox_message_ids()
+                    inbox_ids_loaded = True
+                if inbox_ids is not None and message_id not in inbox_ids:
+                    continue
             intake_item = {
                 "key": f"intake:{row.get('event_id')}",
                 "event_id": row.get("event_id"),

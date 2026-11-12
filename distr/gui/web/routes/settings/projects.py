@@ -1430,6 +1430,7 @@ def register_routes(router, templates):
                     "additional_trigger_words": project.additional_trigger_words or "[]",
                     "startup_instructions": project.startup_instructions or "",
                     "start_time_tracker": bool(getattr(project, "start_time_tracker", True)),
+                    "agent_ignored": bool(getattr(project, "agent_ignored", False)),
                     "context_items": [{"id": c.id, "title": c.title or "", "content": c.content or ""} for c in context_items],
                     "files": [{"id": f.id, "filename": f.filename or "", "description": f.description or "", "file_path": f.file_path or ""} for f in files],
                 })
@@ -1709,6 +1710,8 @@ def register_routes(router, templates):
                     project.startup_instructions = payload.startup_instructions
                 if payload.start_time_tracker is not None:
                     project.start_time_tracker = bool(payload.start_time_tracker)
+                if getattr(payload, "agent_ignored", None) is not None:
+                    project.agent_ignored = bool(payload.agent_ignored)
                 if payload.coding_backend is not None:
                     from distr.core.project_cli_backends import normalize_backend_id
 

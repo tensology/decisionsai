@@ -2150,7 +2150,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._open_web_url("/workflows/")
             return
         if action_name == "open_automations":
-            self._open_web_url("/automations/")
+            self._open_web_url("/development/automations/")
             return
         if action_name == "open_ticket_board":
             self._open_web_url("/tickets/")

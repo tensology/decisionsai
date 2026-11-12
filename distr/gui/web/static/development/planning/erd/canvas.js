@@ -10,6 +10,8 @@ import { availableBottom } from '../canvas-chrome.js?v=20261103-ifaces3';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const SVG = 'http://www.w3.org/2000/svg';
 const MIN_ZOOM = 0.1, MAX_ZOOM = 2.5;
+const DENSE_DIAGRAM_TABLES = 20, MIN_READABLE_FIT = 0.65;
+const PAN_KEYS = { ArrowLeft: [64, 0], ArrowRight: [-64, 0], ArrowUp: [0, 64], ArrowDown: [0, -64] };
 const KEYS = ['PK', 'FK', 'UK'];
 const DOTS = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></svg>';
 const MENU_ICONS = { edit: 'M3 13h3l7-7-3-3-7 7v3z', view: 'M2.5 3.5h11v9h-11zM2.5 6.5h11M6 6.5v6', duplicate: 'M5 5h8v8H5zM3 11V3h8', delete: 'M3 4.5h10M6.5 4.5V3h3v1.5M5 4.5l.6 8.5h4.8l.6-8.5' };
@@ -107,7 +109,7 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
     el.innerHTML = `
         <details class="erd-warnings" hidden></details>
         <div class="erd-body">
-            <div class="erd-viewport" tabindex="0" aria-label="ERD canvas">
+            <div class="erd-viewport" tabindex="0" aria-label="ERD canvas" aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown">
                 <div class="erd-stage"><svg class="erd-lines" aria-hidden="true"></svg><div class="erd-nodes"></div><svg class="erd-draft" aria-hidden="true"><path/></svg></div>
             </div>
             <div class="erd-dock erd-dock-left" role="toolbar" aria-label="Edit diagram">
@@ -152,15 +154,21 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
         stage.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
         $('.erd-zoom').textContent = `${Math.round(view.zoom * 100)}%`;
     }
-    function fit() {
+    function fit({ initial = false } = {}) {
         const b = bounds(store.state);
         const vw = viewport.clientWidth || 800, vh = viewport.clientHeight || 500;
         const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min((vw - 40) / b.w, (vh - 40) / b.h, 1)));
-        view = { zoom, x: (vw - b.w * zoom) / 2 - b.x * zoom, y: (vh - b.h * zoom) / 2 - b.y * zoom };
+        if (initial && store.state.tables.length > DENSE_DIAGRAM_TABLES && zoom < MIN_READABLE_FIT) {
+            const first = store.state.tables.reduce((best, table) =>
+                table.y < best.y || (table.y === best.y && table.x < best.x) ? table : best);
+            view = { zoom: 1, x: 20 - first.x, y: 20 - first.y };
+        } else {
+            view = { zoom, x: (vw - b.w * zoom) / 2 - b.x * zoom, y: (vh - b.h * zoom) / 2 - b.y * zoom };
+            fittedView = view;
+        }
         store.setView(view);
         applyView();
-        fittedView = view;
-        return zoom;
+        return view.zoom;
     }
     // The canvas fills the space left in the window below it (header, tabs, chat panel and footer are
     // whatever sits above / beside it), never a fixed 458px; re-fits on resize if the user hasn't moved the view.
@@ -281,14 +289,25 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
     }
 
     // ---- side panel (table / relation details) -------------------------------------
+    const closeSelection = `<button type="button" class="icon-button erd-selection-close" data-p="close" aria-label="Close selection details" title="Close (Esc)">${icon('M4.5 4.5l7 7M11.5 4.5l-7 7')}</button>`;
+    let renderedSelection = null;
+    function clearSelection() {
+        selected = null;
+        render();
+        viewport.focus({ preventScroll: true });
+    }
     function renderPanel() {
         const s = store.state;
         panel.dataset.mode = selected ? 'edit' : 'hint';   // no selection: the top-right call-out carries the hint
+        if (selected !== renderedSelection) {
+            panel.scrollTop = 0;
+            renderedSelection = selected;
+        }
         renderCallout();
         if (selected?.kind === 'table') {
             const t = s.tables.find((x) => x.name === selected.name);
             if (!t) { selected = null; return renderPanel(); }
-            panel.innerHTML = `<div class="erd-panel-head"><h4>Table</h4><button type="button" class="icon-button erd-panel-more" data-p="more" aria-haspopup="menu" aria-expanded="false" aria-label="Table actions" title="Table actions">${DOTS}</button></div>
+            panel.innerHTML = `<div class="erd-panel-head"><h4>Table</h4><div><button type="button" class="icon-button erd-panel-more" data-p="more" aria-haspopup="menu" aria-expanded="false" aria-label="Table actions" title="Table actions">${DOTS}</button>${closeSelection}</div></div>
                 <label>Name <input data-p="rename" value="${esc(t.name)}" aria-label="Table name"></label>
                 <h4>Fields</h4>
                 <ol class="erd-fields">${t.fields.map((f, i) => `<li data-field="${i}">
@@ -306,7 +325,7 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
             const r = s.relations[selected.index];
             if (!r) { selected = null; return renderPanel(); }
             const opts = (side, cur) => Object.entries(CARDINALITY[side]).map(([k, v]) => `<option value="${esc(k)}"${k === cur ? ' selected' : ''}>${v}</option>`).join('');
-            panel.innerHTML = `<h4>Relation</h4><p><strong>${esc(r.from)}</strong> → <strong>${esc(r.to)}</strong></p>
+            panel.innerHTML = `<div class="erd-panel-head"><h4>Relation</h4>${closeSelection}</div><p><strong>${esc(r.from)}</strong> → <strong>${esc(r.to)}</strong></p>
                 <label>Preset <select data-r="preset" aria-label="Cardinality preset"><option value="">Custom</option>${RELATION_PRESETS.map(([n, l, rr]) => `<option value="${l}|${rr}"${l === r.left && rr === r.right ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
                 <label>${esc(r.from)} side <select data-r="left">${opts('left', r.left)}</select></label>
                 <label>${esc(r.to)} side <select data-r="right">${opts('right', r.right)}</select></label>
@@ -355,6 +374,7 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
     panel.addEventListener('click', async (e) => {
         const b = e.target.closest('button');
         if (!b) return;
+        if (b.dataset.p === 'close') { clearSelection(); return; }
         if (selected?.kind === 'table') {
             const name = selected.name;
             const li = b.closest('[data-field]');
@@ -368,6 +388,11 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
         } else if (selected?.kind === 'relation' && b.dataset.r === 'delete') {
             if (await askConfirm('Delete this relation?')) { const i = selected.index; selected = null; store.deleteRelation(i); }
         }
+    });
+    panel.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        e.preventDefault();
+        clearSelection();
     });
 
     // ---- table actions (panel ⋯ menu, canvas context menu, keyboard) -------------------
@@ -526,6 +551,14 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
     });
     viewport.addEventListener('keydown', (e) => {
         if (e.target.matches('input, select, textarea')) return;
+        if (e.target === viewport && Object.hasOwn(PAN_KEYS, e.key)) {
+            e.preventDefault();
+            const [dx, dy] = PAN_KEYS[e.key];
+            view = { ...view, x: view.x + dx, y: view.y + dy };
+            store.setView(view);
+            applyView();
+            return;
+        }
         const focused = e.target.closest?.('[data-table]');
         const name = focused?.dataset.table || (selected?.kind === 'table' ? selected.name : null);
         if (!name) return;
@@ -694,7 +727,7 @@ export function createErdEditor({ text, onSave, onReloadLatest = null, onViewRow
             sizeToWindow();
             const aspectNow = (viewport.clientWidth || 1) / (viewport.clientHeight || 1);
             if (layoutLive && Math.abs(aspectNow - layoutAspect) / layoutAspect > 0.05) { layoutAspect = aspectNow; autoLayout(store.state, { aspect: aspectNow }); render(); }
-            if (!parsed.model.view) fit(); else applyView();
+            if (!parsed.model.view) fit({ initial: true }); else applyView();
         },
         destroy() { openMenuApi?.close(false); clearTimeout(saveTimer); clearTimeout(dataSkel); document.removeEventListener('keydown', onDataKey, true); resizeObserver?.disconnect(); window.removeEventListener('resize', onResize); el.remove(); },
     };

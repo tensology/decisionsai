@@ -37,6 +37,9 @@ class HarnessContext:
     on_event: Optional[Callable[[dict[str, Any]], None]] = None
     required_capabilities: list[str] = field(default_factory=list)
     adapter_options: dict[str, Any] = field(default_factory=dict)
+    turn_id: int | None = None
+    cancel_requested: Callable[[], bool] | None = None
+    queued_workflow: bool = False
 
 
 @dataclass

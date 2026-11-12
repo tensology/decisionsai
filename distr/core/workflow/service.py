@@ -547,7 +547,12 @@ def get_workflow(workflow_id: int) -> Optional[Dict[str, Any]]:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return None
-        return _serialize_workflow(wf)
+        payload = _serialize_workflow(wf)
+        payload["automation_backed"] = int(wf.id) in automation_backed_workflow_ids(db)
+        from distr.core.workflow.builtin import builtin_slug_of
+
+        payload["builtin_slug"] = builtin_slug_of(wf)
+        return payload
 
 
 def get_workflow_type(workflow_id: int) -> Optional[str]:
@@ -555,6 +560,51 @@ def get_workflow_type(workflow_id: int) -> Optional[str]:
     with get_session() as db:
         wf = db.query(AutoWorkflow.workflow_type).filter(AutoWorkflow.id == workflow_id).first()
         return wf[0] if wf else None
+
+
+def _automation_workflow_refs(db) -> Dict[int, Dict[str, Any]]:
+    """Map workflow ids that power an automation (any trigger type) to that automation.
+
+    These backing workflows are managed from Automations, so the Workflows
+    library hides them and refuses to delete them there.
+    """
+    from distr.core.db.automation import Automation
+
+    refs: Dict[int, Dict[str, Any]] = {}
+    rows = db.query(
+        Automation.id, Automation.name, Automation.linked_workflow_id,
+        Automation.legacy_workflow_id, Automation.action_config,
+    ).all()
+    for automation_id, name, linked_id, legacy_id, action_config in rows:
+        try:
+            config = json.loads(action_config or "{}")
+        except (TypeError, ValueError):
+            config = {}
+        configured = config.get("development_workflow_id") if isinstance(config, dict) else None
+        for value in (configured, linked_id, legacy_id):
+            if isinstance(value, bool):
+                continue
+            try:
+                workflow_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if workflow_id > 0:
+                refs.setdefault(workflow_id, {"automation_id": int(automation_id), "automation_name": name or ""})
+    return refs
+
+
+def automation_backed_workflow_ids(db=None) -> set:
+    """Return ids of workflows referenced by any automation."""
+    if db is not None:
+        return set(_automation_workflow_refs(db))
+    with get_session() as session:
+        return set(_automation_workflow_refs(session))
+
+
+def workflow_backing_automation(workflow_id: int) -> Optional[Dict[str, Any]]:
+    """Return the automation a workflow powers, or None."""
+    with get_session() as db:
+        return _automation_workflow_refs(db).get(int(workflow_id))
 
 
 def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -574,7 +624,8 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
             q = q.filter(AutoWorkflow.name.ilike(f"%{search.strip()}%"))
         fetch_limit = max(int(limit or 50) * 4, int(limit or 50) + 20)
         rows = q.order_by(AutoWorkflow.modified_date.desc()).limit(fetch_limit).all()
-        visible = [w for w in rows if not is_automation_workflow(w)]
+        backed = automation_backed_workflow_ids(db)
+        visible = [w for w in rows if not is_automation_workflow(w) and int(w.id) not in backed]
         visible.sort(
             key=lambda w: (
                 0 if _workflow_display_order(w) is not None else 1,

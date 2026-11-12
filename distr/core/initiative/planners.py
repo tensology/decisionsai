@@ -834,19 +834,20 @@ def format_pending_proposals_markdown(proposals: list, *, max_items: int = 6) ->
     if not items:
         return ""
     lines = ["", "## Proposals needing your call"]
-    for idx, proposal in enumerate(items[:max_items], start=1):
+    for proposal in items[:max_items]:
         project = str((proposal.get("project") or {}).get("name") or "").strip()
         title = " ".join(str(proposal.get("title") or "").split()) or f"Proposal {proposal.get('id')}"
         priority = str(proposal.get("priority") or "").strip().lower()
         flag = " **(urgent)**" if priority in {"urgent", "high", "critical", "immediate"} else ""
         where = f" — {project}" if project else ""
-        lines.append(f"{idx}. {title}{where}{flag}")
+        reference = str(proposal.get('id') or '')
+        label = f"#{reference} " if reference.isascii() and reference.isdecimal() else ""
+        lines.append(f"- {label}{title}{where}{flag}")
         rationale = " ".join(str(proposal.get("rationale") or "").split())
         if rationale:
             lines.append(f"   {rationale[:160]}")
     lines.append("")
     lines.append(
-        "Reply **run 1**, **queue 2**, **dismiss 3** (or **run all**, **dismiss all**), "
-        "or open Tensology to review."
+        "Ask for **proposals** to review and act in Telegram, or open Tensology."
     )
     return "\n".join(lines)

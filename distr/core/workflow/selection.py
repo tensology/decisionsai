@@ -26,6 +26,8 @@ _LARGE_SCOPE_TERMS = {
     "multiple tickets", "one-shot", "one shot", "product", "project", "ticket group",
 }
 _REQUIRED_SOFTWARE_ROLES = {"planning", "implementation", "review", "reporting"}
+# Deploy built-ins (2026-11-12) release an already-verified commit; they do not implement.
+_REQUIRED_DEPLOY_ROLES = {"planning", "release", "deployment", "review", "reporting"}
 _REQUIRED_CONFIG_FIELDS = {
     "skills", "tools", "guardrail", "failure_checklist", "required_context",
     "expected_outputs", "model_policy",
@@ -70,6 +72,9 @@ def audit_workflow_contract(
 ) -> dict[str, Any]:
     """Score whether a workflow is executable, observable, and context-complete."""
     profile = request_profile or classify_work_request("")
+    from distr.core.workflow.builtin import is_deploy_workflow
+
+    deploy_builtin = is_deploy_workflow(workflow)
     steps = sorted(workflow.get("steps") or [], key=lambda step: int(step.get("position") or 0))
     missing: list[str] = []
     roles: set[str] = set()
@@ -103,8 +108,9 @@ def audit_workflow_contract(
         else:
             validation_count += 1
 
-    if profile.get("software"):
-        missing_roles = sorted(_REQUIRED_SOFTWARE_ROLES - roles)
+    if profile.get("software") or deploy_builtin:
+        required_roles = _REQUIRED_DEPLOY_ROLES if deploy_builtin else _REQUIRED_SOFTWARE_ROLES
+        missing_roles = sorted(required_roles - roles)
         if missing_roles:
             missing.append(f"workflow roles: {', '.join(missing_roles)}")
         if not ({"cli", "shell"} & tools):
@@ -128,6 +134,7 @@ def audit_workflow_contract(
         "tools": sorted(tools),
         "skills": sorted(skills),
         "validation_count": validation_count,
+        "has_deploy_steps": "deployment" in roles,
     }
 
 
@@ -171,12 +178,47 @@ def select_workflow_for_request(
     request_text: str,
     *,
     candidates: list[dict[str, Any]] | None = None,
+    project_folder: str | None = None,
+    project_id: int | None = None,
+    plan_sections: dict[str, Any] | None = None,
+    allow_deploy_steps: bool = False,
 ) -> dict[str, Any]:
-    """Choose the strongest viable existing workflow; creation is the fallback."""
+    """Choose the strongest viable existing workflow; creation is the fallback.
+
+    Built-in workflows (``workflow.builtin``) are seeded when candidates are read from the DB.
+    Discernment uses the ticket/thread text plus the project's Plan sections
+    (Interfaces, Data, Documents): each built-in competes only for its own
+    scenario, deploy built-ins only for a pure deploy request, and a workflow that
+    contains deployment steps is never picked for implement-and-verify work.
+    """
     from distr.core.workflow.service import get_workflow, list_workflows
 
     profile = classify_work_request(request_text)
+    from distr.core.workflow.builtin import (
+        BUILTIN_LABELS,
+        builtin_slug_of,
+        discern_builtin,
+        ensure_builtin_workflows,
+    )
+
+    if plan_sections is None and project_id:
+        try:
+            from distr.core.planning.sections import plan_sections as _read_plan_sections
+
+            plan_sections = _read_plan_sections(int(project_id))
+        except Exception:
+            plan_sections = None
+    decision = discern_builtin(request_text, project_folder=project_folder, plan=plan_sections)
+    preferred_builtin, builtin_reason = decision["slug"], decision["reason"]
+    deploy_requested = bool(decision["signals"].get("deploy_intent")) and not decision["signals"].get("implement_intent")
+    profile["builtin_preference"] = preferred_builtin
+    profile["deploy_requested"] = deploy_requested
+    profile["plan_sections"] = decision["signals"].get("plan")
     if candidates is None:
+        try:
+            ensure_builtin_workflows()
+        except Exception:
+            pass
         candidates = [
             workflow
             for row in list_workflows(limit=200)
@@ -187,12 +229,25 @@ def select_workflow_for_request(
     for workflow in candidates:
         audit = audit_workflow_contract(workflow, request_profile=profile)
         relevant = _scope_relevant(workflow, profile)
+        score = _scope_score(workflow, profile, audit)
+        builtin = builtin_slug_of(workflow)
+        excluded = ""
+        if builtin and builtin != preferred_builtin:
+            relevant = False  # scenario built-ins run only for their own scenario
+        elif builtin and builtin == preferred_builtin:
+            relevant = True
+            score += 100
+        elif audit.get("has_deploy_steps") and not deploy_requested and not allow_deploy_steps:
+            relevant = False
+            excluded = "contains deployment steps; implement-and-verify work must not deploy"
         ranked.append({
             "workflow_id": workflow.get("id"),
             "workflow_name": workflow.get("name"),
-            "score": _scope_score(workflow, profile, audit),
+            "score": score,
+            "builtin_slug": builtin,
             "viable": bool(audit["viable"] and relevant),
             "scope_relevant": relevant,
+            "excluded_reason": excluded,
             "audit": audit,
         })
     ranked.sort(key=lambda row: (bool(row["viable"]), int(row["score"])), reverse=True)
@@ -202,12 +257,20 @@ def select_workflow_for_request(
             f"Reused {selected['workflow_name']} because its full execution contract covers "
             "the requested scope, context, tools, validation, routing, and memory."
         )
+    elif preferred_builtin is None:
+        reason = f"No existing workflow fits this ticket. {builtin_reason}"
+    elif not any(row.get("builtin_slug") == preferred_builtin for row in ranked):
+        reason = (f"The {BUILTIN_LABELS.get(preferred_builtin, preferred_builtin)} built-in fits this ticket but is not "
+                  "registered yet (it is seeded when Decisions restarts). " + builtin_reason)
     else:
         reason = "No existing workflow passed the complete execution-contract audit."
+    if selected and selected.get("builtin_slug") and selected.get("builtin_slug") == preferred_builtin:
+        reason = f"{reason} Built-in choice: {builtin_reason}"
     return {
         "selected": selected,
         "create_required": selected is None,
         "reason": reason,
+        "discernment": decision,
         "request_profile": profile,
         "candidates": ranked,
     }

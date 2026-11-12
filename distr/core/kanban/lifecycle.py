@@ -198,4 +198,19 @@ def move_ticket_to_delivery_lane(
     )
     ticket.lane_id = int(target.id)
     ticket.position = (int(max_position) + 1) if max_position is not None else 0
+    from distr.core.kanban.lane_history import record_lane_change
+
+    record_lane_change(
+        session,
+        int(ticket_id),
+        from_lane=current_name or None,
+        to_lane=target_name,
+        actor="automation",
+        reason="delivery_lane_move",
+        source="lifecycle",
+    )
+    if ticket.source_chat_id:
+        from distr.core.kanban.ticket_chat_notify import queue_source_chat_ticket_notice
+
+        queue_source_chat_ticket_notice(session, int(ticket_id), from_lane=current_name, to_lane=target_name)
     return True

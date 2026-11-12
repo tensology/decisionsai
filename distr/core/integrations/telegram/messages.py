@@ -94,14 +94,15 @@ class TelegramMessagesMixin:
         )
 
         # 1. ID Deduplication
-        if not is_callback and msg_id and msg_id in self._processed_message_ids:
+        message_key = (str(chat_id_raw), str(msg_id))
+        if not is_callback and msg_id and message_key in self._processed_message_ids:
             logger.debug(f"Skipping duplicate message ID: {msg_id}")
             return
         if msg_id and not is_callback:
-            self._processed_message_ids.add(msg_id)
+            self._processed_message_ids.add(message_key)
             order = getattr(self, "_processed_message_id_order", None)
             if order is not None:
-                order.append(msg_id)
+                order.append(message_key)
             if len(self._processed_message_ids) > self._max_processed_cache_size:
                 oldest = order.popleft() if order is not None and order else next(iter(self._processed_message_ids))
                 self._processed_message_ids.discard(oldest)
@@ -110,7 +111,8 @@ class TelegramMessagesMixin:
 
         # Create a hash of the critical content — include message_id to avoid
         # false deduplication of voice notes (which have no text and similar dates)
-        content_str = f"{chat_id_raw if is_callback else ''}{msg_id}{inner_data.get('text')}{inner_data.get('date')}{inner_data.get('from', {}).get('id')}"
+        content_str = json.dumps([*message_key, inner_data.get('text'), inner_data.get('date'),
+                                  (inner_data.get('from') or {}).get('id')], default=str)
         msg_hash = hashlib.md5(content_str.encode()).hexdigest()
 
         if msg_hash in self._processed_message_hashes:
@@ -254,7 +256,14 @@ class TelegramMessagesMixin:
                     self.telegram_user_id,
                 )
                 return
-            self.chat_id = chat_id
+            # 2026-11-12 outstanding-desktop-A: self.chat_id is the manager's personal
+            # (private) chat, used for remote-control links and default sends. A
+            # group/supergroup/channel id must never replace it; group messages keep
+            # their own chat_id and go through the group-intake path below.
+            _is_group_chat = str(chat_id).startswith("-") or str(chat_type or "").lower() in {
+                "group", "supergroup", "channel"}
+            if not _is_group_chat:
+                self.chat_id = chat_id
 
             # CRITICAL: Set telegram_user_id ONLY for private chats (positive chat_id)
             # This ensures we always send responses to the private chat, not groups
@@ -405,9 +414,25 @@ class TelegramMessagesMixin:
 
 
             try:
+                # Proposals on demand (/proposals or plain English), Accept/Decline
+                # buttons, Standard-mode Continue/Check/Send buttons, project
+                # round-ups, and "it's not done" follow-ups. Works in every posture.
+                from distr.core.initiative.outcome_flow import handle_telegram_text as _initiative_flow_reply
+
+                flow_reply = _initiative_flow_reply(text, chat_id=chat_id if is_private_message else None)
+                if flow_reply:
+                    if flow_reply.get("reply_markup"):
+                        self.send_to_telegram(flow_reply.get("text") or "Done.", reply_markup=flow_reply["reply_markup"])
+                    else:
+                        self.send_to_telegram(flow_reply.get("text") or "Done.")
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] Initiative flow routing failed: %s", exc, exc_info=True)
+
+            try:
                 from distr.core.tensology_client import handle_proposal_decision_reply
 
-                proposal_reply = handle_proposal_decision_reply(text, source="telegram")
+                proposal_reply = handle_proposal_decision_reply(text, source="telegram", telegram_chat_id=chat_id if is_private_message else None)
                 if proposal_reply:
                     self.send_to_telegram(proposal_reply)
                     return
@@ -659,27 +684,12 @@ class TelegramMessagesMixin:
                 "raw_data": inner_data,  # Store full raw data for later processing
             }
 
-            # Add to queue for batch processing
-            try:
-                self._group_message_queue.put_nowait(stored_message)
-            except queue.Full:
-                logger.warning(
-                    f"[Telegram] Group message queue is full, dropping message {msg_id}"
-                )
-
-            # Add to storage list (with size limit)
-            self._group_messages_storage.append(stored_message)
-            if len(self._group_messages_storage) > self._max_stored_group_messages:
-                # Remove oldest messages
-                self._group_messages_storage.pop(0)
-
             # CRITICAL: Also persist to database for access when app is not running
             try:
                 from distr.core.db import get_session
 
                 # Import TelegramGroupMessage - this ensures the table exists
                 from distr.core.db import TelegramGroupMessage
-                import json
 
                 with get_session() as session:
                     # Check if message already exists (deduplication)
@@ -807,6 +817,7 @@ class TelegramMessagesMixin:
                         logger.debug(
                             f"[Telegram] Message {msg_id} already exists in database, skipping"
                         )
+                        return
             except Exception as e:
                 logger.error(
                     f"[Telegram] ❌ Failed to persist group message to database: {e}",
@@ -816,6 +827,24 @@ class TelegramMessagesMixin:
 
                 traceback.print_exc()
                 # Don't fail the whole operation if DB save fails - in-memory storage still works
+
+            try:
+                self._group_message_queue.put_nowait(stored_message)
+            except queue.Full:
+                logger.warning("[Telegram] Group message queue is full, dropping message %s", msg_id)
+
+            self._group_messages_storage.append(stored_message)
+            if len(self._group_messages_storage) > self._max_stored_group_messages:
+                self._group_messages_storage.pop(0)
+
+            # Third-party chats: never Paul's channel and never commands. Only an explicitly
+            # linked group with complete provenance may lead to a (single, ask-first) heads-up.
+            try:
+                from distr.core.integrations.telegram.third_party_intake import handle_group_inbound
+
+                handle_group_inbound(inner_data, paired_user_id=getattr(self, "telegram_user_id", None))
+            except Exception:
+                logger.debug("[Telegram] Third-party intake skipped", exc_info=True)
 
             # Emit raw signal for any direct listeners (but don't forward to agent)
             self.message_received.emit(inner_data)

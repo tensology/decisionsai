@@ -1,3 +1,5 @@
+import { setOverflowLabel } from '../shared/overflow-names.js?v=20261111-overflow-names2';
+
 // The embedded plan reuses the thread header breadcrumb (#development-task-header .task-breadcrumb):
 // "<project> / plan / <section>". Extra segments are added as the same <i>/</i><strong> pair.
 
@@ -12,7 +14,7 @@ export function renderPlanCrumbs(doc, segments) {
     clearPlanCrumbs(doc);
     const [first, second, ...rest] = segments;
     project.textContent = first;
-    task.textContent = second;
+    setOverflowLabel(task, second);
     // Only the last segment is emphasised; earlier ones render muted like the project.
     if (rest.length) task.dataset.planCrumbParent = '';
     let after = task;
@@ -21,8 +23,8 @@ export function renderPlanCrumbs(doc, segments) {
         slash.textContent = '/';
         slash.dataset.planCrumb = '';
         const strong = doc.createElement('strong');
-        strong.textContent = text;
         strong.dataset.planCrumb = '';
+        setOverflowLabel(strong, text);
         after.after(slash, strong);
         after = strong;
     }

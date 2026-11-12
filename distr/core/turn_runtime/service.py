@@ -464,21 +464,34 @@ async def execute_turn(
                 _active_turns.pop(chat_id, None)
 
 
-def cancel_active_turn(chat_id: int) -> bool:
+def cancel_active_turn(chat_id: int, *, expected_turn_id: int | None = None) -> bool:
     with _active_lock:
         active = _active_turns.get(int(chat_id))
-    if active is None:
-        return False
-    active.token.cancel()
+        if (active is None or active.token.cancelled
+                or (expected_turn_id is not None and active.turn_id != expected_turn_id)):
+            return False
+        active.token.cancel()
     cancel_runtime = getattr(active.runtime, "cancel_active", None)
     if callable(cancel_runtime):
         cancel_runtime()
     return True
 
 
+def active_turn_stop_pending(chat_id: int, turn_id: int) -> bool:
+    with _active_lock:
+        active = _active_turns.get(chat_id)
+        return bool(active and active.turn_id == turn_id and active.token.cancelled)
+
+
 def active_turn_registered(chat_id: int) -> bool:
     with _active_lock:
         return int(chat_id) in _active_turns
+
+
+def native_steering_available(chat_id: int, turn_id: int) -> bool:
+    with _active_lock:
+        active = _active_turns.get(chat_id)
+        return bool(active and active.runtime_id == "native" and active.turn_id == turn_id and not active.token.cancelled)
 
 
 def steer_active_turn(chat_id: int, guidance: str, *, expected_turn_id: int | None = None) -> dict[str, object]:

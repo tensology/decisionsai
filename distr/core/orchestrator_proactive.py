@@ -28,7 +28,14 @@ _active_dispatches_lock = threading.Lock()
 
 ACTIVE_SOURCES = {"gmail", "slack", "whatsapp", "telegram", "trello", "jira", "board", "manual", "web"}
 DONE_LANE_HINTS = {"done", "closed", "complete", "completed", "cancelled", "canceled", "archive", "archived"}
-UNRESOLVED_DISPATCH_STATUSES = {"dispatching", "unknown", "waiting"}
+UNRESOLVED_DISPATCH_STATUSES = {"dispatching", "unknown", "waiting", "held"}
+UNCONFIRMED_DISPATCH_MESSAGE = "The previous dispatch outcome is unconfirmed. Review it before approving this ticket again."
+PROJECT_HIDDEN_FROM_AGENT = "This project is hidden from the agent. Change its project setting before approving new work."
+PROJECT_FOLDER_CHANGED = "The project folder changed after this candidate was prepared. Scan again before approving."
+TICKET_SCOPE_CHANGED = "The ticket changed project or board. Scan again before approving it."
+TICKET_CHANGED = "The ticket changed after this candidate was prepared. Scan again."
+PROACTIVE_RESULT_HELD = ("The approved scope changed while the worker was running. "
+                         "The result is held for review in the original execution.")
 URGENT_TERMS = (
     "urgent",
     "asap",
@@ -100,6 +107,15 @@ def dispatch_proactive_candidate(
         return {"success": False, "error": "That work candidate is not linked to a project yet."}
 
     state = _dispatch_state(candidate)
+    if state and state.get('status') == 'unknown' and state.get('candidate_id') is None:
+        return {"success": False, "candidate_id": int(candidate_id),
+                "error": UNCONFIRMED_DISPATCH_MESSAGE, "spoken_summary": UNCONFIRMED_DISPATCH_MESSAGE}
+    if state and _is_prelaunch_scope_stop(state):
+        return {"success": False, **state, "outcome_recorded": True, "spoken_summary": state["error"]}
+    if state and state.get("status") == "held":
+        return {"success": False, "candidate_id": int(candidate_id), **_dispatch_thread_link(state),
+                "execution_session_id": state.get("execution_session_id"), "outcome_recorded": True,
+                "error": PROACTIVE_RESULT_HELD, "spoken_summary": PROACTIVE_RESULT_HELD}
     if state and state.get("candidate_id") == int(candidate_id) and state.get("status") in {"dispatching", "unknown"}:
         receipt = _record_dispatch_result(candidate, recover=True)
         if receipt:
@@ -116,8 +132,8 @@ def dispatch_proactive_candidate(
                 "outcome_recovered": True,
                 "error": receipt["error"],
                 "spoken_summary": (
-                    f"I recovered the previous dispatch outcome ({receipt['status']}). "
-                    "Review the existing execution for details."
+                    receipt["error"] if receipt["status"] == "held" else
+                    f"I recovered the previous dispatch outcome ({receipt['status']}). Review the existing execution for details."
                 ),
             }
     if state and state.get("candidate_id") == int(candidate_id) and state.get("chat_id") is not None:
@@ -130,33 +146,20 @@ def dispatch_proactive_candidate(
         }
 
     if candidate.get("workflow_draft"):
+        if candidate["workflow_draft"].get("workflow_id"):
+            message = "Open Workflow review on the ticket to approve a launch."
+            return {"success": False, "candidate_id": int(candidate_id), "error": message, "spoken_summary": message}
         message = "This candidate has a workflow draft for review. Direct dispatch cannot launch it."
         return {"success": False, "candidate_id": int(candidate_id), "error": message, "spoken_summary": message}
 
-    from distr.core.db.kanban import KanbanTicket
-    from distr.core.db.projects import Project
     from distr.core.workflow.development_threads import DevelopmentThreadConflict
 
-    from distr.core.db.kanban import KanbanLane, KanbanBoard
     with get_session() as session:
-        project = session.query(Project).filter(Project.id == int(project_id)).first()
-        ticket = session.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first() if ticket_id else None
-        if not project or project.deleted_at is not None:
-            return {"success": False, "error": "The linked project no longer exists."}
-        lane = session.get(KanbanLane, ticket.lane_id) if ticket else None
-        board = session.get(KanbanBoard, lane.board_id) if lane else None
-        if not ticket or not lane or not board:
-            return {"success": False, "error": "The ticket or its board no longer exists. Scan again."}
-        current_project = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
-        if current_project != int(project_id) or board.id != candidate.get('board_id'):
-            return {"success": False, "error": "The ticket changed project or board. Scan again before approving it."}
-        if _inactive_ticket(ticket, lane, board, session):
-            return {"success": False, "error": "This ticket is completed, archived, or already running. Scan again."}
-        if (str(ticket.title or '') != str(candidate.get('title') or '')
-                or str(ticket.description or '') != str(candidate.get('description') or '')
-                or (candidate.get('lane_id') is not None and candidate['lane_id'] != lane.id)
-                or (candidate.get('modified_at') and candidate['modified_at'] != ticket.modified_date.isoformat())):
-            return {"success": False, "error": "The ticket changed after this candidate was prepared. Scan again."}
+        project, ticket, lane, board = _direct_scope_records(session, candidate)
+        scope_error = _direct_ticket_error(session, candidate, project, ticket, lane, board)
+        if scope_error:
+            return {"success": False, "candidate_id": int(candidate_id),
+                    "error": scope_error, "spoken_summary": scope_error}
         instruction = _dispatch_instruction(candidate, ticket)
         complexity = str(candidate.get("complexity") or getattr(ticket, "complexity", None) or "medium")
         resolved_backend = (backend_id or candidate.get("route", {}).get("backend") or getattr(project, "coding_backend", "") or "pi").strip()
@@ -185,6 +188,9 @@ def dispatch_proactive_candidate(
             turn_id=claim["turn_id"],
             board_id_override=candidate.get("board_id"),
             proactive_candidate_id=int(candidate_id),
+            proactive_scope_error=lambda folder, execution_id: _dispatch_scope_error(
+                candidate, claim, folder, execution_id,
+            ),
             codex_reasoning_effort_override=(candidate.get("route", {}).get("codex_reasoning_effort") or None),
             codex_service_tier_override=(candidate.get("route", {}).get("codex_service_tier") or None),
         )
@@ -211,6 +217,12 @@ def dispatch_proactive_candidate(
         _advance_proactive_queue(candidate, receipt)
     recorded = receipt is not None
     execution_id = receipt['execution_session_id'] if receipt else None
+    status = receipt["status"] if receipt else "unknown"
+    held = status == "held"
+    output = result.output if recorded and not held and (not waits_for_human or status == "waiting") else ""
+    error = receipt["error"] if recorded else ""
+    if recorded:
+        thread = _dispatch_thread_link(receipt)
     payload = {
         "candidate_id": int(candidate_id),
         "candidate": candidate,
@@ -224,28 +236,32 @@ def dispatch_proactive_candidate(
     _emit(
         source="proactive_orchestrator",
         event_type="proactive_work_dispatched",
-        status="waiting" if waits_for_human else "dispatched" if result.success else "failed",
+        status=status,
         ticket_id=int(ticket_id) if ticket_id else None,
         board_id=candidate.get("board_id"),
         project_id=int(project_id),
         execution_session_id=execution_id,
         parent_event_id=int(candidate_id),
-        summary=("Approved proactive work is waiting for human review." if waits_for_human
-                 else f"Approved proactive work dispatched to {_backend_label(result.backend_id)}." if result.success
+        summary=(PROACTIVE_RESULT_HELD if held
+                 else "Approved proactive work outcome could not be saved." if not recorded
+                 else "Approved proactive work is waiting for human review." if status == "waiting"
+                 else f"Approved proactive work dispatched to {_backend_label(result.backend_id)}." if status == "dispatched"
                  else f"Approved proactive work could not be dispatched: {result.error or 'backend rejected the task'}."),
         payload=payload,
-        evidence={"output": result.output, "error": result.error},
+        evidence={"output": output, "error": error},
     )
     if not recorded:
         spoken = "The worker returned, but I could not save its outcome. Review the existing execution before retrying."
-    elif waits_for_human:
+    elif held:
+        spoken = PROACTIVE_RESULT_HELD
+    elif status == "waiting":
         spoken = "The worker paused for human review. Check the existing execution before retrying."
-    elif result.success:
+    elif status == "dispatched":
         spoken = f"I sent that {candidate.get('project_name') or 'project'} work item to {_backend_label(result.backend_id)}."
     else:
         spoken = f"I could not dispatch that work item: {result.error or 'the backend did not accept it'}."
     return {
-        "success": bool(result.success) and not waits_for_human,
+        "success": status == "dispatched",
         "candidate_id": int(candidate_id),
         **thread,
         "backend_id": result.backend_id,
@@ -253,8 +269,8 @@ def dispatch_proactive_candidate(
         "engine": result.engine,
         "execution_session_id": execution_id,
         "outcome_recorded": recorded,
-        "output": result.output,
-        "error": result.error,
+        "output": output,
+        "error": error,
         "spoken_summary": spoken,
     }
 
@@ -268,6 +284,7 @@ def _collect_board_signals(
 ) -> list[dict[str, Any]]:
     from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
     from distr.core.db.projects import Project
+    from distr.core.workflow.development_threads import ticket_development_thread_ids
 
     wanted_source = _normalize_source_filter(source_filter)
     with get_session() as session:
@@ -302,8 +319,11 @@ def _collect_board_signals(
             project = linked_project or default_project
             if project is not None and project.deleted_at is not None:
                 continue
+            if project is not None and getattr(project, "agent_ignored", False):
+                continue  # Hidden from the agent in Projects.
             if source not in ACTIVE_SOURCES and not project:
                 continue
+            assignment = _workflow_assignment(ticket, board) if project else None
             signal = {
                 "ticket_id": ticket.id,
                 "title": ticket.title or "",
@@ -313,6 +333,7 @@ def _collect_board_signals(
                 "source": source,
                 "source_contact": ticket.source_contact or "",
                 "source_thread_id": ticket.source_thread_id or "",
+                "source_chat_id": ticket.source_chat_id,
                 "source_label": ticket.source_label or "",
                 "source_url": ticket.source_url or ticket.external_url or "",
                 "board_id": board.id,
@@ -324,7 +345,8 @@ def _collect_board_signals(
                 "project_folder": project.folder_location if project else "",
                 "project_backend": project.coding_backend if project else "",
                 "project_model": project.coding_backend_model if project else "",
-                "can_draft_workflow": bool(project and _can_draft_workflow(ticket, board)),
+                "assigned_workflow": assignment,
+                "can_draft_workflow": bool(project and not assignment and _can_draft_workflow(ticket, board)),
                 "created_at": ticket.created_date.isoformat() if ticket.created_date else "",
                 "modified_at": ticket.modified_date.isoformat() if ticket.modified_date else "",
             }
@@ -335,10 +357,19 @@ def _collect_board_signals(
             signals.sort(key=lambda item: (int(item.get('priority_score') or 0), item.get('modified_at') or ''), reverse=True)
             del signals[limit:]
         signals.sort(key=lambda item: (int(item.get("priority_score") or 0), item.get('modified_at') or ''), reverse=True)
-        draft_signals = {signal["ticket_id"]: signal for signal in signals if signal.pop("can_draft_workflow")}
-        checklists = _workflow_checklists(session, draft_signals)
-        for ticket_id, signal in draft_signals.items():
-            draft = _workflow_draft(signal, checklists.get(ticket_id))
+        checklists = _workflow_checklists(session, [signal["ticket_id"] for signal in signals if signal["can_draft_workflow"]])
+        for signal in signals:
+            assignment = signal.pop("assigned_workflow", None)
+            can_draft = signal.pop("can_draft_workflow")
+            source_chat_id = signal.pop("source_chat_id")
+            if not (assignment or can_draft):
+                continue
+            ticket_id = signal["ticket_id"]
+            thread_ids = ticket_development_thread_ids(session, ticket_id, source_chat_id)
+            if assignment:
+                draft = _assigned_workflow_review(session, signal, assignment, thread_ids=thread_ids)
+            else:
+                draft = _workflow_draft(signal, checklists.get(ticket_id), thread_ids=thread_ids)
             if draft:
                 signal["workflow_draft"] = draft
         return signals[:limit]
@@ -346,10 +377,72 @@ def _collect_board_signals(
 
 def _can_draft_workflow(ticket, board) -> bool:
     return (
-        not ticket.send_to_cli
-        and not (ticket.linked_workflow_id or board.default_workflow_id)
+        not (ticket.send_to_cli or board.send_to_cli)
         and str(ticket.complexity or '').strip().casefold() in {"high", "complex", "very_complex"}
     )
+
+
+def _workflow_assignment(ticket, board):
+    if ticket.linked_workflow_id:
+        return ticket.linked_workflow_id, "ticket", "Assigned to this ticket."
+    if not ticket.send_to_cli and not board.send_to_cli and board.default_workflow_id:
+        return board.default_workflow_id, "board", "Assigned as the board default."
+    if not ticket.send_to_cli and not board.send_to_cli:
+        # Built-in fallback (2026-11-11): explicit new/existing-project work or high complexity only.
+        from distr.core.workflow.builtin import builtin_recommendation
+
+        recommendation = builtin_recommendation(ticket, board)
+        if recommendation:
+            workflow_id, reason = recommendation
+            return workflow_id, "builtin", reason
+    return None
+
+
+def _assigned_workflow_review(session, signal, assignment, *, thread_ids):
+    from distr.core.chat_turns import redact_text
+    from distr.core.db.workflow import AutoWorkflow
+    from distr.core.workflow.draft_launch import project_folder_revision, workflow_definition_revision, workflow_step_action
+    from distr.core.workflow.step_validator import workflow_start_error
+
+    workflow_id, assigned_by, reason = assignment
+    workflow = session.get(AutoWorkflow, workflow_id)
+    base = {"workflow_id": workflow_id, "assigned_by": assigned_by, "development_thread_ids": thread_ids,
+            "project_folder_revision": project_folder_revision(signal.get("project_folder"))}
+    if workflow is None:
+        return {**base, "error": "The assigned workflow no longer exists. Update the ticket or board assignment."}
+    error = workflow_start_error(workflow)
+    steps = sorted(workflow.steps, key=lambda step: (step.position or 0, step.id))
+    if error or not steps:
+        return {**base, "name": workflow.name, "error": error or "The assigned workflow has no steps."}
+    if any(step.linked_project_id not in (None, signal["project_id"]) for step in steps):
+        return {**base, "name": workflow.name,
+                "error": "The assigned workflow includes work in another project. Review it from Workflows."}
+    revision = hashlib.sha256(json.dumps(
+        [base, _candidate_identity(signal), workflow_definition_revision(session, workflow)], sort_keys=True,
+    ).encode()).hexdigest()
+    step_review = []
+    for step in steps:
+        action = workflow_step_action(session, step)
+        detail = (action.get("instruction_text") or action.get("title")) if action else step.instruction
+        step_review.append({"instruction": step.name, "detail": redact_text(detail or "", limit=1000)})
+    return {
+        **base, "status": "awaiting_review", "name": workflow.name,
+        "reason": reason,
+        "steps": step_review,
+        "start_step_position": int(workflow.start_step_position or 0),
+        "omitted_steps": 0, "checklist_revision": revision,
+    }
+
+
+def _same_workflow_draft(saved, current):
+    if saved == current:
+        return True
+    # Older built-in recommendations used the board-default label. Keep their
+    # approval identity when the executable revision and all other fields match.
+    return (isinstance(saved, dict) and isinstance(current, dict)
+            and saved.get("assigned_by") == "builtin"
+            and saved.get("reason") == "Assigned as the board default."
+            and {**saved, "reason": current.get("reason")} == current)
 
 
 def _workflow_checklists(session, ticket_ids) -> dict[int, list[str]]:
@@ -372,9 +465,7 @@ def _workflow_checklists(session, ticket_ids) -> dict[int, list[str]]:
     return {ticket_id: list(labels.values()) for ticket_id, labels in by_ticket.items()}
 
 
-def _description_workflow_steps(description: str) -> list[str]:
-    steps: dict[str, str] = {}
-    in_steps = False
+def _description_lines(description: str):
     fence = ""
     for line in description.splitlines():
         marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
@@ -384,7 +475,15 @@ def _description_workflow_steps(description: str) -> list[str]:
             continue
         if marker:
             fence = marker[1]
+            yield ""
             continue
+        yield line
+
+
+def _description_workflow_steps(description: str) -> list[str]:
+    steps: dict[str, str] = {}
+    in_steps = False
+    for line in _description_lines(description):
         heading = re.match(r"^ {0,3}#{1,6}[ \t]+(.+)$", line)
         if heading:
             title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[1]).strip().casefold()
@@ -406,30 +505,118 @@ def _description_workflow_steps(description: str) -> list[str]:
     return list(steps.values())
 
 
-def _workflow_draft(signal: dict[str, Any], checklist: list[str] | None) -> dict[str, Any] | None:
+def _ordered_prose_workflow_steps(description: str) -> list[str]:
+    # Only use a sequence explicitly stated together in the ticket. Do not
+    # guess the missing stages or lift instructions out of a quoted example.
+    paragraphs = re.split(r"\n[ \t]*\n", "\n".join(_description_lines(description)))
+    sequences = []
+    for paragraph in paragraphs:
+        start = re.match(r"^ {0,3}first[,:][ \t]+", paragraph, re.IGNORECASE)
+        if not start:
+            continue
+        parts = re.split(
+            r"(?:\.[ \t]+|\n[ \t]*)(then|next|after that|finally)[,:][ \t]+",
+            paragraph[start.end():],
+            flags=re.IGNORECASE,
+        )
+        markers = [marker.casefold() for marker in parts[1::2]]
+        if len(markers) < 2 or markers[-1] != "finally" or "finally" in markers[:-1]:
+            continue
+        labels = [" ".join(stage.strip().removesuffix(".").splitlines()).strip() for stage in parts[::2]]
+        if all(labels) and len({label.casefold() for label in labels}) == len(labels):
+            sequences.append(labels)
+    return sequences[0] if len(sequences) == 1 else []
+
+
+_OUTCOME_HEADING = {"requirements", "deliverables", "requested outcomes"}
+_OUTCOME_SUBJECT = r"[A-Z][^.!?;:\n]{0,90}?[ \t]+(?i:must|needs? to)[ \t]+"
+_OUTCOME_BOUNDARY = re.compile(rf"(?<=[.!?])[ \t]+(?={_OUTCOME_SUBJECT})")
+_OUTCOME_STATEMENT = re.compile(rf"^{_OUTCOME_SUBJECT}\S", re.IGNORECASE)
+_OUTCOME_EXCLUDED = re.compile(
+    r"""^(?:[>"“'‘]|(?:for example|do not|never|avoid)\b)|\b(?:must|needs? to)[ \t]+(?:not|never)\b""",
+    re.IGNORECASE,
+)
+
+
+def _requested_workflow_outcomes(description: str) -> list[str]:
+    """Keep the ticket's independently stated outcomes in their original order."""
+    outcomes: dict[str, str] = {}
+    section = ""
+    for raw_line in _description_lines(description):
+        heading = re.match(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*#*\s*$", raw_line)
+        if heading:
+            section = heading[1].strip().casefold()
+            continue
+        if section and section not in _OUTCOME_HEADING:
+            continue
+        line = raw_line.strip()
+        if not line or raw_line.startswith(("    ", "\t")):
+            continue
+        bullet = re.match(r"^(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(.+)$", line)
+        if bullet:
+            if not section or bullet[1].startswith(("[x]", "[X]")):
+                continue
+            labels = [bullet[1].removeprefix("[ ]").strip()]
+        else:
+            labels = [label for label in _OUTCOME_BOUNDARY.split(line) if _OUTCOME_STATEMENT.match(label)]
+        for label in labels:
+            if _OUTCOME_EXCLUDED.search(label):
+                continue
+            label = label.removesuffix(".").strip()
+            if label:
+                outcomes.setdefault(label.casefold(), label)
+    return list(outcomes.values())
+
+
+def _workflow_draft(signal: dict[str, Any], checklist: list[str] | None, *, complete: bool = False,
+                    thread_ids=()) -> dict[str, Any] | None:
+    from distr.core.workflow.draft_launch import project_folder_revision
+
     from_description = checklist is None
-    labels = _description_workflow_steps(signal.get("description") or "") if from_description else checklist
+    description = signal.get("description") or ""
+    labels = _description_workflow_steps(description) if from_description else checklist
+    from_prose = False
+    from_outcomes = False
+    if from_description and not labels:
+        labels = _ordered_prose_workflow_steps(description)
+        from_prose = bool(labels)
+    if from_description and not labels:
+        labels = _requested_workflow_outcomes(description)
+        from_outcomes = bool(labels)
     if len(labels) < 3:
         return None
-    revision_data = {"description_steps": labels} if from_description else labels
-    # The candidate holds review data only. It cannot be passed to the workflow runner.
-    step_limit = 12
+    if from_outcomes:
+        revision_data = {"requested_outcomes": labels, "brief": description}
+        reason = f"The ticket describes {len(labels)} distinct outcomes. Review their proposed order before launching."
+    elif from_prose:
+        revision_data = {"ordered_prose_steps": labels}
+        reason = f"The ticket description sets out {len(labels)} stages in order."
+    elif from_description:
+        revision_data = {"description_steps": labels}
+        reason = f"The ticket description lists {len(labels)} distinct implementation steps."
+    else:
+        revision_data = labels
+        reason = f"The ticket has {len(labels)} distinct pending checklist items."
+    # Keep the scan compact. Ticket review expands the same revision before approval.
+    step_limit = len(labels) if complete else 12
+    folder_revision = project_folder_revision(signal.get("project_folder"))
     return {
         "status": "awaiting_review",
         "name": signal["title"],
-        "reason": (
-            f"The ticket description lists {len(labels)} distinct implementation steps."
-            if from_description else f"The ticket has {len(labels)} distinct pending checklist items."
-        ),
+        "reason": reason,
         "project_id": signal["project_id"],
         "board_id": signal["board_id"],
         "ticket_id": signal["ticket_id"],
+        "development_thread_ids": list(thread_ids),
+        "project_folder_revision": folder_revision,
         "steps": [
             {"instruction": label, "acceptance": "Record the check performed and its result for this item."}
             for label in labels[:step_limit]
         ],
         "omitted_steps": max(0, len(labels) - step_limit),
-        "checklist_revision": hashlib.sha256(json.dumps(revision_data, ensure_ascii=False).encode()).hexdigest(),
+        "checklist_revision": hashlib.sha256(
+            json.dumps([revision_data, thread_ids, folder_revision], ensure_ascii=False).encode(),
+        ).hexdigest(),
     }
 
 
@@ -438,6 +625,7 @@ def review_workflow_draft(*, board_id: int, ticket_id: int, _session=None) -> di
     from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
     from distr.core.db.orchestrator import OrchestratorEvent
     from distr.core.db.projects import Project
+    from distr.core.workflow.development_threads import ticket_development_thread_ids
 
     with (get_session() if _session is None else nullcontext(_session)) as session:
         ticket = session.get(KanbanTicket, ticket_id)
@@ -453,13 +641,18 @@ def review_workflow_draft(*, board_id: int, ticket_id: int, _session=None) -> di
             source="proactive_orchestrator", event_type="proactive_work_candidate",
             board_id=board_id, ticket_id=ticket_id, project_id=project_id,
         ).order_by(OrchestratorEvent.id.desc())
+        event = events.first()
         if ticket.linked_workflow_id is not None:
-            launch = events.filter_by(status="workflow_launched", workflow_id=ticket.linked_workflow_id).first()
-            if launch:
+            launch = events.filter(
+                OrchestratorEvent.status.in_(("workflow_launched", "workflow_review_invalidated")),
+                OrchestratorEvent.workflow_id == ticket.linked_workflow_id,
+            ).first()
+            if launch and (launch.status == "workflow_launched" or event.id == launch.id):
                 from distr.core.workflow.draft_launch import approved_draft_receipt
 
                 return approved_draft_receipt(session, launch)
-        event = events.first()
+        if project.agent_ignored:
+            return {"status": "blocked", "error": PROJECT_HIDDEN_FROM_AGENT}
         if event is None:
             return {"status": "missing"}
         try:
@@ -471,21 +664,38 @@ def review_workflow_draft(*, board_id: int, ticket_id: int, _session=None) -> di
             return {"status": "missing"}
         scope = {"board_id": board_id, "ticket_id": ticket_id, "project_id": project_id}
         checklist = _workflow_checklists(session, [ticket_id]).get(ticket_id)
-        current_signal = {**scope, "title": ticket.title or "", "description": ticket.description or ""}
+        current_signal = {**scope, "title": ticket.title or "", "description": ticket.description or "",
+                          "lane_id": lane.id, "modified_at": ticket.modified_date.isoformat() if ticket.modified_date else "",
+                          "complexity": ticket.complexity or "medium", "source": _signal_source(ticket),
+                          "source_thread_id": ticket.source_thread_id or "", "project_folder": project.folder_location}
+        assignment = _workflow_assignment(ticket, board)
+        thread_ids = ticket_development_thread_ids(session, ticket_id, ticket.source_chat_id)
+        current = (_assigned_workflow_review(session, current_signal, assignment, thread_ids=thread_ids) if assignment
+                   else _workflow_draft(current_signal, checklist, thread_ids=thread_ids) if _can_draft_workflow(ticket, board) else None)
         if (event.status != "approval_required"
                 or any(candidate.get(key) != value for key, value in scope.items())
-                or not _can_draft_workflow(ticket, board) or _inactive_ticket(ticket, lane, board, session)
+                or _inactive_ticket(ticket, lane, board, session)
                 or candidate.get("lane_id") != lane.id
                 or candidate.get("description") != (ticket.description or "")
                 or candidate.get("modified_at") != (ticket.modified_date.isoformat() if ticket.modified_date else "")
-                or draft != _workflow_draft(current_signal, checklist)):
+                or not _same_workflow_draft(draft, current)):
             return {"status": "stale"}
+        if draft.get("error"):
+            return {"status": "blocked", "error": draft["error"]}
+        if draft["omitted_steps"]:
+            draft = _workflow_draft(current_signal, checklist, complete=True, thread_ids=thread_ids)
+        else:
+            draft = current
         return {"status": "awaiting_review", "candidate_id": event.id, "project_name": project.name, "draft": draft}
 
 
 def _build_candidate(signal: dict[str, Any], context: dict[str, list[str]]) -> dict[str, Any]:
+    from distr.core.workflow.draft_launch import project_folder_revision
+
     route = _resolve_route(signal)
     candidate = dict(signal)
+    if candidate.get("project_id"):
+        candidate["project_folder_revision"] = project_folder_revision(signal.get("project_folder"))
     candidate["priority_score"] = int(signal.get("priority_score") or 0)
     candidate["priority"] = _priority_label(candidate["priority_score"], signal.get("priority"))
     candidate["route"] = route
@@ -500,6 +710,9 @@ def _build_candidate(signal: dict[str, Any], context: dict[str, list[str]]) -> d
     )
     if candidate.get("workflow_draft"):
         candidate["recommended_action"] = "review_workflow_draft"
+        candidate["review_url"] = (
+            f"/development/boards/decisions/{candidate['board_id']}/kanban/?ticket_id={candidate['ticket_id']}"
+        )
     candidate["approval_question"] = _approval_question(candidate)
     previous = _dispatch_state(candidate)
     if previous:
@@ -510,9 +723,12 @@ def _build_candidate(signal: dict[str, Any], context: dict[str, list[str]]) -> d
         if previous.get("chat_id") is not None:
             candidate.update(_dispatch_thread_link(previous))
         candidate['recommended_action'] = 'review_dispatch_outcome'
-        candidate['approval_question'] = (
-            f"{candidate.get('project_name') or 'This project'}: {candidate.get('title') or 'this work'} was already submitted "
-            f"(dispatch: {candidate['dispatch_status']}). Review that execution outcome before sending it again.")
+        if candidate['dispatch_status'] == 'unknown' and previous.get('candidate_id') is None:
+            candidate['approval_question'] = UNCONFIRMED_DISPATCH_MESSAGE
+        else:
+            candidate['approval_question'] = (
+                f"{candidate.get('project_name') or 'This project'}: {candidate.get('title') or 'this work'} was already submitted "
+                f"(dispatch: {candidate['dispatch_status']}). Review that execution outcome before sending it again.")
     candidate["candidate_id"] = None
     return candidate
 
@@ -646,6 +862,13 @@ def _approval_question(candidate: dict[str, Any]) -> str:
     if not candidate.get("project_id"):
         return f"{source} has work that looks important: {title}. Which project should I attach it to?"
     if candidate.get("workflow_draft"):
+        draft = candidate["workflow_draft"]
+        if draft.get("error"):
+            return draft["error"]
+        if draft.get("assigned_by") == "builtin":
+            return f"I recommend {draft['name']} for {title}. {draft['reason']} Open Workflow review before approving a launch."
+        if draft.get("workflow_id"):
+            return f"{title} has an assigned workflow, {draft['name']}. Open Workflow review on the ticket before approving a launch."
         return f"I drafted workflow steps for {project}: {title}. Would you like to review them before approving a launch?"
     return f"{source} has important work for {project}: {title}. Should I send it to {backend}?"
 
@@ -659,13 +882,17 @@ def _spoken_summary(candidates: list[dict[str, Any]]) -> str:
             project = review[0].get("project_name") or "the linked project"
             if review[0].get("chat_id") is not None:
                 return f"The work item for {project} already has a Development turn. Open it to review the current outcome."
+            if review[0].get("dispatch_status") == "unknown":
+                return f"The dispatch outcome for {project} is unconfirmed. Review it before approving the work again."
             return f"The work item for {project} has already been submitted. Review its dispatch outcome."
-        return f"I found {len(review)} previously submitted work items. Review their current dispatch outcomes."
+        return f"I found {len(review)} work items that need their dispatch outcomes reviewed."
     top = next(candidate for candidate in candidates if candidate.get("recommended_action") != "review_dispatch_outcome")
     count = len(candidates)
     project = top.get("project_name") or "an unmatched project"
     source = _source_label(top.get("source"))
     if top.get("workflow_draft"):
+        if top["workflow_draft"].get("workflow_id"):
+            return _approval_question(top)
         if count == 1:
             return f"I drafted a workflow for {project}. It is ready for review before launch."
         return f"I found {count} work items. The most important is for {project}, and its workflow draft is ready for review."
@@ -707,7 +934,7 @@ def _dispatch_instruction(candidate: dict[str, Any], ticket: Any | None) -> str:
     )
 
 
-def _inactive_ticket(ticket, lane, board, session) -> bool:
+def _inactive_ticket(ticket, lane, board, session, *, own_execution_id=None) -> bool:
     if board.archived or str(lane.name or '').strip().lower() in DONE_LANE_HINTS:
         return True
     if board.agent_done_lane and str(lane.name or '').strip().casefold() == board.agent_done_lane.strip().casefold():
@@ -715,9 +942,12 @@ def _inactive_ticket(ticket, lane, board, session) -> bool:
     if str(ticket.workflow_status or '').lower() in {'completed', 'cancelled', 'canceled', 'queued', 'running', 'waiting'}:
         return True
     from distr.core.db.kanban import ProjectExecutionSession
-    return session.query(ProjectExecutionSession.id).filter(
+    active = session.query(ProjectExecutionSession.id).filter(
         ProjectExecutionSession.ticket_id == ticket.id,
-        ProjectExecutionSession.status.in_(['queued', 'running', 'waiting'])).first() is not None
+        ProjectExecutionSession.status.in_(['queued', 'running', 'waiting']))
+    if own_execution_id is not None:
+        active = active.filter(ProjectExecutionSession.id != own_execution_id)
+    return active.first() is not None
 
 
 def _candidate_identity(candidate):
@@ -726,11 +956,154 @@ def _candidate_identity(candidate):
     return hashlib.sha256(json.dumps({key:candidate.get(key) for key in fields}, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _candidate_folder_matches(candidate, folder):
+    from distr.core.workflow.draft_launch import project_folder_matches, project_folder_revision
+
+    if "project_folder_revision" in candidate:
+        return project_folder_matches(folder, candidate["project_folder_revision"])
+    if "project_folder" in candidate:
+        previous = project_folder_revision(candidate["project_folder"], include_directory=False)
+        return project_folder_matches(folder, previous)
+    return True
+
+
+def _direct_scope_records(session, candidate):
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.projects import Project
+
+    project = session.get(Project, candidate["project_id"])
+    ticket = session.get(KanbanTicket, candidate["ticket_id"]) if candidate.get("ticket_id") else None
+    lane = session.get(KanbanLane, ticket.lane_id) if ticket else None
+    board = session.get(KanbanBoard, lane.board_id) if lane else None
+    return project, ticket, lane, board
+
+
+def _direct_ticket_error(session, candidate, project, ticket, lane, board, *, own_execution_id=None):
+    if project is None or project.deleted_at is not None:
+        return "The linked project no longer exists."
+    if project.agent_ignored:
+        return PROJECT_HIDDEN_FROM_AGENT
+    if not ticket or not lane or not board:
+        return "The ticket or its board no longer exists. Scan again."
+    current_project = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
+    if current_project != project.id or board.id != candidate.get("board_id"):
+        return TICKET_SCOPE_CHANGED
+    if not _candidate_folder_matches(candidate, project.folder_location):
+        return PROJECT_FOLDER_CHANGED
+    if _inactive_ticket(ticket, lane, board, session, own_execution_id=own_execution_id):
+        return "This ticket is completed, archived, or already running. Scan again."
+    current_request = {
+        "title": ticket.title or "", "description": ticket.description or "",
+        "complexity": ticket.complexity or "medium", "source": _signal_source(ticket),
+        "source_contact": ticket.source_contact or "", "source_thread_id": ticket.source_thread_id or "",
+        "lane_id": lane.id, "modified_at": ticket.modified_date.isoformat() if ticket.modified_date else "",
+    }
+    if any(candidate.get(key) != value for key, value in current_request.items() if candidate.get(key) is not None):
+        return TICKET_CHANGED
+    return ""
+
+
+def _direct_workflow_error(session, candidate, ticket, board):
+    if _workflow_assignment(ticket, board):
+        return "Review this ticket's current workflow before approving a launch."
+    if _can_draft_workflow(ticket, board):
+        checklist = _workflow_checklists(session, [ticket.id]).get(ticket.id)
+        if _workflow_draft(candidate, checklist):
+            return "This ticket now has a workflow draft for review. Scan again before approving."
+    return ""
+
+
+def _dispatch_scope_error(candidate, claim, task_folder, execution_id):
+    with get_session() as session:
+        return _approved_scope_error(session, candidate, claim, task_folder, execution_id)
+
+
+def _approved_scope_error(session, candidate, claim, task_folder, execution_id):
+    from distr.core.chat import _chat_params
+    from distr.core.db import Chat
+    from distr.core.db.workflow import DevelopmentWorkItem
+    from distr.core.workflow.development_threads import development_thread_metadata, ticket_development_thread_ids
+
+    project, ticket, lane, board = _direct_scope_records(session, candidate)
+    error = _direct_ticket_error(session, candidate, project, ticket, lane, board, own_execution_id=execution_id)
+    if error:
+        return error
+    chat_id, turn_id = claim["chat_id"], claim["turn_id"]
+    root, turn = session.get(Chat, chat_id), session.get(Chat, turn_id)
+    item = session.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).first()
+    if (ticket.source_chat_id != chat_id or ticket_development_thread_ids(session, ticket.id, chat_id) != [chat_id]
+            or root is None or root.parent_id is not None or root.is_archived or root.project_id != project.id
+            or turn is None or turn.parent_id != chat_id or turn.response is not None
+            or _chat_params(root.params).get("active_turn_chat_row_id") != turn_id or item is None
+            or (item.local_ticket_id, item.project_id) != (ticket.id, project.id)
+            or development_thread_metadata(root).get("proactive_dispatch") != {
+                "candidate_id": candidate["candidate_id"], "turn_id": turn_id,
+            }):
+        return "The ticket's Development thread changed before work started. Scan again."
+    if turn.input != _dispatch_instruction(candidate, ticket):
+        return "The approved Development prompt changed before work started. Scan again."
+    if item.workflow_id or str(root.autonomy_level or "").strip().lower() in {"plan", "approval"}:
+        return "Review the Development thread's current workflow or approval settings before starting work."
+    error = _direct_workflow_error(session, candidate, ticket, board)
+    if error:
+        return error
+    if task_folder is not None and not _candidate_folder_matches(candidate, task_folder):
+        return PROJECT_FOLDER_CHANGED
+    return ""
+
+
 def _dispatch_thread_link(claim):
     chat_id = claim.get("chat_id")
     if chat_id is None:
         return {}
     return {"chat_id": chat_id, "turn_id": claim["turn_id"], "chat_url": f"/development/threads/{chat_id}/"}
+
+
+def proactive_waiting_reviews(session, chat_id, *, turn_id=None):
+    """Read waiting receipts, including approvals saved before turn status tracked the pause."""
+    from sqlalchemy import case, func
+    from distr.core.db.orchestrator import OrchestratorEvent
+
+    payload = case((func.json_valid(OrchestratorEvent.payload), OrchestratorEvent.payload), else_="{}")
+    receipt_turn = func.json_extract(payload, "$.dispatch_result.turn_id")
+    rows = session.query(OrchestratorEvent, receipt_turn).filter(
+        OrchestratorEvent.event_type == "proactive_work_candidate",
+        OrchestratorEvent.status == "waiting",
+        func.json_extract(payload, "$.dispatch_result.status") == "waiting",
+        func.json_extract(payload, "$.dispatch_result.chat_id") == chat_id,
+    )
+    if turn_id is not None:
+        rows = rows.filter(receipt_turn == turn_id)
+    return {saved_turn: event for event, saved_turn in rows if type(saved_turn) is int and saved_turn > 0}
+
+
+def proactive_waiting_review_state(session, root, scope, turn_id):
+    from distr.core.db import Chat
+
+    if scope is None:
+        return None
+    turn = session.get(Chat, turn_id)
+    if turn is None or turn.parent_id != root.id or not turn.response:
+        return None
+    event = proactive_waiting_reviews(session, root.id, turn_id=turn_id).get(turn_id)
+    if event is None or (event.project_id, event.ticket_id) != scope:
+        return None
+    project, ticket, _, board = _direct_scope_records(
+        session, {"project_id": event.project_id, "ticket_id": event.ticket_id},
+    )
+    if (project is None or project.deleted_at is not None or ticket is None
+            or ticket.source_chat_id != root.id or board is None or board.id != event.board_id):
+        return None
+    current_project = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
+    if current_project != project.id:
+        return None
+    if session.query(Chat.id).filter(Chat.parent_id == root.id, Chat.id > turn_id, Chat.input != "").first():
+        return None
+    return {
+        "id": event.execution_session_id or f"proactive-{event.id}",
+        "direct": True, "origin": "proactive_orchestrator", "turn_id": turn_id,
+        "status": "blocked", "waiting_kind": "human_review", "can_stop": False,
+    }
 
 
 def _add_proactive_turn_event(session, chat_id, turn_id, event_type, status, summary):
@@ -753,41 +1126,28 @@ def _claim_dispatch(candidate, *, approved_by="user", instruction=None):
     from sqlalchemy import text
     from sqlalchemy.dialects.sqlite import insert
     from distr.core.chat import _append_user_turn, _chat_params
-    from distr.core.db.orchestrator import OrchestratorMaintenanceState
-    from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard
-    from distr.core.db.projects import Project
+    from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorMaintenanceState
     from distr.core.workflow.development_threads import DevelopmentThreadConflict, bind_ticket_development_thread
     with get_session() as session:
         # Reserve at ticket scope under a short write transaction. Different
         # prepared revisions cannot both pass a pre-dispatch snapshot check.
         session.execute(text('BEGIN IMMEDIATE'))
-        ticket = session.get(KanbanTicket, candidate.get('ticket_id'))
-        lane = session.get(KanbanLane, ticket.lane_id) if ticket else None
-        board = session.get(KanbanBoard, lane.board_id) if lane else None
-        project = session.get(Project, candidate.get('project_id'))
-        if not ticket or not lane or not board or not project or project.deleted_at is not None:
+        if candidate.get("candidate_id") is not None and _scope_stop_receipt(
+                session.get(OrchestratorEvent, candidate["candidate_id"])):
             return False
-        current_project = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
-        if (current_project != candidate.get('project_id') or board.id != candidate.get('board_id')
-                or _inactive_ticket(ticket, lane, board, session)
-                or str(ticket.title or '') != str(candidate.get('title') or '')
-                or str(ticket.description or '') != str(candidate.get('description') or '')
-                or (candidate.get('lane_id') is not None and lane.id != candidate['lane_id'])
-                or (candidate.get('modified_at') and candidate['modified_at'] != ticket.modified_date.isoformat())):
+        project, ticket, lane, board = _direct_scope_records(session, candidate)
+        error = _direct_ticket_error(session, candidate, project, ticket, lane, board)
+        if error in {PROJECT_HIDDEN_FROM_AGENT, PROJECT_FOLDER_CHANGED}:
+            raise DevelopmentThreadConflict(error)
+        if error:
             return False
-        if _can_draft_workflow(ticket, board):
-            checklist = _workflow_checklists(session, [ticket.id]).get(ticket.id)
-            if _workflow_draft(candidate, checklist):
-                raise DevelopmentThreadConflict("This ticket now has a workflow draft for review. Scan again before approving.")
+        error = _direct_workflow_error(session, candidate, ticket, board)
+        if error:
+            raise DevelopmentThreadConflict(error)
         ticket_key = 'proactive-ticket:' + str(ticket.id)
         ticket_claim = session.query(OrchestratorMaintenanceState).filter_by(key=ticket_key).first()
-        if ticket_claim:
-            try:
-                state = json.loads(ticket_claim.value_json or '{}')
-            except ValueError:
-                return False
-            if state.get('status') in UNRESOLVED_DISPATCH_STATUSES:
-                return False
+        if ticket_claim and _read_dispatch_receipt(ticket_claim, {'finished'}, ticket_id=ticket.id)['status'] != 'finished':
+            return False
         claim = {"status": "dispatching", "candidate_id": candidate.get("candidate_id"), "approved_by": approved_by}
         result = session.execute(insert(OrchestratorMaintenanceState).values(
             key='proactive-dispatch:' + _candidate_identity(candidate),
@@ -819,20 +1179,59 @@ def _claim_dispatch(candidate, *, approved_by="user", instruction=None):
         return claim
 
 
+def _json_object(raw):
+    try:
+        parsed = json.loads(raw or '{}')
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _read_dispatch_receipt(row, terminal_statuses, *, ticket_id=None):
+    state = _json_object(row.value_json)
+    status = state.get('status')
+    if not isinstance(status, str) or status not in UNRESOLVED_DISPATCH_STATUSES | terminal_statuses:
+        return {'status': 'unknown'}
+    if ticket_id is not None and (state.get('ticket_id') != ticket_id or not state.get('candidate_identity')):
+        return {'status': 'unknown'}
+    chat_id, turn_id = state.get('chat_id'), state.get('turn_id')
+    if (chat_id is not None or turn_id is not None) and not (type(chat_id) is int and type(turn_id) is int):
+        return {'status': 'unknown'}
+    return state
+
+
+def _is_prelaunch_scope_stop(payload):
+    return payload.get("proactive_scope_changed") is True or payload.get("proactive_checkout_changed") is True
+
+
+def _scope_stop_receipt(event):
+    if event is None or event.event_type != "proactive_work_candidate" or event.status != "failed":
+        return None
+    receipt = _json_object(event.payload).get("dispatch_result")
+    if (isinstance(receipt, dict) and _is_prelaunch_scope_stop(receipt)
+            and receipt.get("candidate_id") == event.id and receipt.get("status") == "failed"):
+        return receipt
+    return None
+
+
 def _dispatch_state(candidate):
-    from distr.core.db.orchestrator import OrchestratorMaintenanceState
+    from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorMaintenanceState
     with get_session() as session:
+        if candidate.get("candidate_id") is not None:
+            stopped = _scope_stop_receipt(session.get(OrchestratorEvent, candidate["candidate_id"]))
+            if stopped:
+                return stopped
         row = session.query(OrchestratorMaintenanceState).filter_by(
             key='proactive-dispatch:' + _candidate_identity(candidate)).first()
-        try:
-            if row:
-                return json.loads(row.value_json or '{}')
-            ticket_claim = session.query(OrchestratorMaintenanceState).filter_by(
-                key='proactive-ticket:' + str(candidate.get('ticket_id'))).first()
-            state = json.loads(ticket_claim.value_json or '{}') if ticket_claim else {}
-            return state if state.get('status') in UNRESOLVED_DISPATCH_STATUSES else None
-        except ValueError:
-            return {'status':'unknown'}
+        if row:
+            return _read_dispatch_receipt(row, {'dispatched', 'failed'})
+        ticket_claim = session.query(OrchestratorMaintenanceState).filter_by(
+            key='proactive-ticket:' + str(candidate.get('ticket_id'))).first()
+        if ticket_claim:
+            state = _read_dispatch_receipt(ticket_claim, {'finished'}, ticket_id=candidate.get('ticket_id'))
+            if state['status'] != 'finished':
+                return state
+        return None
 
 
 def _record_dispatch_result(candidate, **result):
@@ -843,6 +1242,20 @@ def _record_dispatch_result(candidate, **result):
     except SQLAlchemyError:
         logger.exception("Could not record proactive dispatch outcome for candidate %s", candidate.get('candidate_id'))
         return None
+
+
+def complete_proactive_ide_result(candidate_id, execution_id, *, status, source, output, error):
+    candidate = _candidate_from_event(candidate_id)
+    if not candidate:
+        raise ValueError("The approved IDE work item is unavailable.")
+    receipt = _record_dispatch_result(
+        candidate, success=status == "completed", error=error, output=output,
+        backend_id=f"{source}_ide", engine=f"{source}_ide", execution_session_id=execution_id, ide_status=status,
+    )
+    if receipt is None:
+        raise ValueError("The IDE result does not match a pending approval.")
+    _advance_proactive_queue(candidate, receipt)
+    return receipt
 
 
 def _advance_proactive_queue(candidate, receipt):
@@ -900,6 +1313,7 @@ def proactive_development_execution(session, root, scope, marker):
     from distr.core.db.kanban import KanbanTicket, ProjectExecutionEvent
     from distr.core.db.orchestrator import OrchestratorEvent
     from distr.core.project_cli_backends.registry import backend_process_registered
+    from distr.core.workflow.development_threads import development_thread_metadata
 
     if not isinstance(marker, dict) or scope is None:
         return None
@@ -931,7 +1345,7 @@ def proactive_development_execution(session, root, scope, marker):
     packet = json.loads(execution.input_packet)
     backend = str(packet.get("backend_id") or execution.route_backend or "")
     active = execution.status in {"queued", "running"}
-    can_stop = active and backend_process_registered(
+    registered = active and backend_process_registered(
         event.project_id, backend, board_id=event.board_id,
         execution_id=execution.id, execution_kind="proactive",
     )
@@ -939,7 +1353,8 @@ def proactive_development_execution(session, root, scope, marker):
         id=execution.id, execution_session_id=execution.id, backend_id=backend,
         model=execution.selected_model, started_at=execution.started_at.isoformat() if execution.started_at else None,
     )
-    if active and (live or can_stop):
+    if active and (live or registered):
+        stopping = development_thread_metadata(root).get("proactive_stop_turn_id") == turn_id
         progress = session.query(ProjectExecutionEvent.message).filter(
             ProjectExecutionEvent.session_id == execution.id,
             ProjectExecutionEvent.message.isnot(None),
@@ -948,27 +1363,37 @@ def proactive_development_execution(session, root, scope, marker):
         state.update(
             status=execution.status,
             summary=progress[0][:240] if progress else state["summary"],
-            can_stop=can_stop,
+            can_stop=registered and not stopping,
+            stop_pending=stopping,
         )
+    elif execution.route_type == "ide_bridge" and execution.status == "waiting":
+        state.update(status="waiting", waiting_kind="ide_handoff",
+                     summary="Waiting for the IDE worker to report its result.")
     elif live:
         state.update(status="running", summary="Saving the approved work result.")
     return state
 
 
 def _finish_dispatch_claim(candidate, *, success=False, error='', unknown=False, waits_for_human=False,
-                           backend_id='', engine='', execution_session_id=None, approved_by='', recover=False, output=''):
+                           backend_id='', engine='', execution_session_id=None, approved_by='', recover=False, output='',
+                           ide_status=''):
     from sqlalchemy import text
 
     from distr.core.chat import _chat_params
     from distr.core.db import Chat
-    from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
+    from distr.core.db.kanban import KanbanTicket, ProjectExecutionEvent, ProjectExecutionSession
     from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorMaintenanceState
+    from distr.core.db.workflow import DevelopmentWorkItem
     from distr.core.workflow.development_harness import _remember_turn_route
     from distr.core.workflow.development_threads import development_thread_metadata
 
     identity = _candidate_identity(candidate)
     with get_session() as session:
         session.execute(text('BEGIN IMMEDIATE'))
+        event = session.get(OrchestratorEvent, candidate['candidate_id']) if candidate.get('candidate_id') else None
+        stopped = _scope_stop_receipt(event)
+        if stopped:
+            return stopped
         row = session.query(OrchestratorMaintenanceState).filter_by(
             key='proactive-dispatch:' + identity).first()
         if row is None:
@@ -977,7 +1402,7 @@ def _finish_dispatch_claim(candidate, *, success=False, error='', unknown=False,
             claim = json.loads(row.value_json or '{}')
         except ValueError:
             return None
-        if not isinstance(claim, dict):
+        if not isinstance(claim, dict) or claim.get("candidate_id") != candidate["candidate_id"]:
             return None
         if recover:
             if claim.get("candidate_id") != candidate["candidate_id"] or claim.get("status") not in {"dispatching", "unknown"}:
@@ -1002,25 +1427,82 @@ def _finish_dispatch_claim(candidate, *, success=False, error='', unknown=False,
         else:
             # A retry may already have restored the receipt while the original
             # caller was waiting to write its outcome.
-            if claim.get("status") not in {"dispatching", "unknown"}:
-                return claim
             execution = session.get(ProjectExecutionSession, execution_session_id) if execution_session_id else None
+            if ide_status and (execution is None or execution.route_type != "ide_bridge"
+                               or not _execution_matches_claim(execution, candidate, claim)):
+                return None
+            active = {"dispatching", "unknown"}
+            if ide_status and not execution.completed_at:
+                active.update({"waiting", "held"})
+            if claim.get("status") not in active:
+                return claim
         if execution and not _execution_matches_claim(execution, candidate, claim):
             execution = None
+        if ide_status:
+            from distr.core.db.time import utc_now_naive
+            from distr.core.orchestrator import redact_handoff_payload
+
+            if execution.completed_at or execution.status not in {"queued", "running", "waiting"}:
+                return None
+            output = str(redact_handoff_payload(output or ""))
+            error = str(redact_handoff_payload(error or ""))
+            approved_by = claim.get("approved_by") or ""
+            execution.status = ide_status
+            execution.completed_at = execution.updated_at = utc_now_naive()
+            execution.error = error
+            execution.output_packet = json.dumps({
+                "backend_id": backend_id, "engine": engine, "output": output,
+                "proactive_result_pending_review": True,
+            }, ensure_ascii=False)
+            session.add(ProjectExecutionEvent(
+                session_id=execution.id, event_type="ide_callback_result", status=ide_status,
+                message="IDE worker reported its result.", payload="{}",
+            ))
         model = execution.selected_model if execution else None
-        provider = json.loads(execution.input_packet or "{}").get("model_provider") if execution else None
+        input_packet = _json_object(execution.input_packet) if execution else {}
+        provider = input_packet.get("model_provider")
         status = 'waiting' if waits_for_human else 'unknown' if unknown else 'dispatched' if success else 'failed'
+        scope_changed = (
+            event is not None and status == "failed" and execution is not None
+            and execution.status == "failed" and execution.completed_at is not None
+            and _is_prelaunch_scope_stop(_json_object(execution.output_packet))
+        )
+        stale_result = (claim.get("chat_id") and not unknown and not scope_changed and _approved_scope_error(
+            session, candidate, claim, input_packet.get("folder"), execution.id if execution else None,
+        ))
+        if claim.get("status") == "held" or stale_result:
+            status, error, output = "held", PROACTIVE_RESULT_HELD, ""
+        feedback_packet = None
+        if execution is not None and not unknown:
+            packet = _json_object(execution.output_packet)
+            pending = packet.pop("proactive_result_pending_review", None) is True
+            if status == "held":
+                packet["proactive_result_held"] = True
+            if pending or status == "held":
+                execution.output_packet = json.dumps(packet, ensure_ascii=False)
+            if pending and status == "dispatched" and execution.status == "completed":
+                feedback_packet = packet
         receipt = {'status': status, 'candidate_id': candidate.get('candidate_id'),
                    'error': str(error or '')[:2000], 'backend_id': backend_id, 'approved_by': approved_by,
                    'engine': engine, 'model': model, 'execution_session_id': execution.id if execution else None,
                    **_dispatch_thread_link(claim)}
-        if claim.get("chat_id") and not unknown:
+        if scope_changed:
+            receipt["proactive_scope_changed"] = True
+        waiting_for_ide = status == "waiting" and execution is not None and execution.route_type == "ide_bridge"
+        if claim.get("chat_id") and not unknown and not waiting_for_ide:
             root = session.get(Chat, claim["chat_id"])
             turn = session.get(Chat, claim["turn_id"])
             ticket = session.get(KanbanTicket, candidate["ticket_id"])
-            if (root and root.project_id == candidate["project_id"] and root.parent_id is None
-                    and ticket and ticket.source_chat_id == root.id and turn and turn.parent_id == root.id
-                    and development_thread_metadata(root).get("ticket_id") == ticket.id):
+            original_scope = (candidate["ticket_id"], candidate["project_id"])
+            item = session.query(DevelopmentWorkItem).filter_by(chat_id=claim["chat_id"]).first()
+            owns_turn = (root is not None and root.project_id == candidate["project_id"] and root.parent_id is None
+                         and turn is not None and turn.parent_id == root.id
+                         and development_thread_metadata(root).get("ticket_id") == candidate["ticket_id"]
+                         and (item is None or (item.local_ticket_id, item.project_id) == original_scope))
+            if not owns_turn and (scope_changed or status == "held"):
+                for key in _dispatch_thread_link(claim):
+                    receipt.pop(key, None)
+            if owns_turn and (scope_changed or status == "held" or (ticket and ticket.source_chat_id == root.id)):
                 params = _chat_params(root.params)
                 development = params["development"]
                 if development.get("proactive_dispatch") == {
@@ -1041,23 +1523,39 @@ def _finish_dispatch_claim(candidate, *, success=False, error='', unknown=False,
                         "Waiting for human review." if waits_for_human else
                         "Approved work completed." if success else "Approved work could not start."
                     ))
+                    development["last_proactive_result_turn_id"] = turn.id
                     if params.get("active_turn_chat_row_id") == turn.id:
                         params.pop("active_turn_chat_row_id")
                     root.params = json.dumps(params, ensure_ascii=False, default=str)
-                    turn_status = "completed" if success or waits_for_human else "failed"
-                    _add_proactive_turn_event(session, root.id, turn.id, f"turn_{turn_status}", turn_status, turn.response)
-        row.value_json = json.dumps(receipt)
+                    turn_status = "completed" if status in {"dispatched", "waiting"} else "failed"
+                    _add_proactive_turn_event(
+                        session, root.id, turn.id, f"turn_{turn_status}",
+                        "waiting" if status == "waiting" else turn_status, turn.response,
+                    )
+        if scope_changed:
+            session.delete(row)
+        else:
+            row.value_json = json.dumps(receipt)
         ticket_claim = session.query(OrchestratorMaintenanceState).filter_by(
             key='proactive-ticket:' + str(candidate['ticket_id'])).first()
-        if ticket_claim and json.loads(ticket_claim.value_json or '{}').get('candidate_identity') == identity:
+        if ticket_claim and _json_object(ticket_claim.value_json).get('candidate_identity') == identity:
             ticket_claim.value_json = json.dumps({'status':status if status in UNRESOLVED_DISPATCH_STATUSES else 'finished',
                 'ticket_id':candidate['ticket_id'], 'candidate_identity':identity, 'error':receipt['error']})
-        event = session.get(OrchestratorEvent, candidate['candidate_id']) if candidate.get('candidate_id') else None
         if event:
             event.status = status
             event.execution_session_id = receipt['execution_session_id']
-            event.payload = json.dumps({**json.loads(event.payload or '{}'), 'dispatch_result': receipt})
+            payload = _json_object(event.payload)
+            if not isinstance(payload.get('candidate'), dict):
+                payload['candidate'] = candidate
+            event.payload = json.dumps({**payload, 'dispatch_result': receipt})
         session.commit()
+        if feedback_packet:
+            from distr.core.kanban.project_execution import persist_execution_feedback
+
+            project, ticket, lane, board = _direct_scope_records(session, candidate)
+            if not _direct_ticket_error(session, candidate, project, ticket, lane, board,
+                                        own_execution_id=execution.id):
+                persist_execution_feedback(execution, feedback_packet)
         return receipt
 
 
@@ -1068,11 +1566,7 @@ def _candidate_from_event(candidate_id: int) -> dict[str, Any] | None:
         row = session.query(OrchestratorEvent).filter(OrchestratorEvent.id == int(candidate_id)).first()
         if not row or row.event_type != "proactive_work_candidate":
             return None
-        try:
-            payload = json.loads(row.payload or "{}")
-        except Exception:
-            payload = {}
-        candidate = payload.get("candidate") if isinstance(payload, dict) else None
+        candidate = _json_object(row.payload).get("candidate")
         if isinstance(candidate, dict):
             candidate['candidate_id'] = int(candidate_id)
             return candidate
@@ -1101,14 +1595,16 @@ def _emit_candidate(candidate: dict[str, Any]) -> int | None:
             OrchestratorEvent.event_type == 'proactive_work_candidate',
             OrchestratorEvent.ticket_id == candidate.get('ticket_id')).order_by(OrchestratorEvent.id.desc()).all()
         for row in rows:
-            try:
-                previous = json.loads(row.payload or '{}').get('candidate') or {}
-            except (ValueError, AttributeError):
+            previous = _json_object(row.payload).get('candidate')
+            if not isinstance(previous, dict):
                 continue
-            same_draft = previous.get("workflow_draft") == candidate.get("workflow_draft")
+            same_draft = _same_workflow_draft(previous.get("workflow_draft"), candidate.get("workflow_draft"))
             reviewing_outcome = candidate.get("recommended_action") == "review_dispatch_outcome"
             if _candidate_identity(previous) == _candidate_identity(candidate):
-                if same_draft or reviewing_outcome:
+                if row.status == "workflow_review_invalidated" or _scope_stop_receipt(row):
+                    break
+                same_folder = previous.get("project_folder_revision") == candidate.get("project_folder_revision")
+                if (same_draft and same_folder) or reviewing_outcome:
                     return int(row.id)
                 break
     return _emit(

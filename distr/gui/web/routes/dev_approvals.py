@@ -128,6 +128,9 @@ def _save_managed_outcome(session, row: Any, details: dict[str, Any], outcome: d
     if outcome.get('delivered'):
         row.status = 'sent'
         row.summary = MANAGED_REPLY_SENT_SUMMARY
+    elif outcome.get('delivery_status') == 'sending' and outcome.get('channel') == 'telegram':
+        row.status = 'sending'
+        row.summary = 'Waiting for Telegram to confirm the closing reply.'
     elif outcome.get('unconfirmed') or outcome.get('delivery_status') in {'sending', 'unconfirmed'}:
         row.status = 'unconfirmed'
         row.summary = ('The closing reply was not confirmed.' if outcome.get('reason') else
@@ -154,6 +157,11 @@ def _save_managed_outcome(session, row: Any, details: dict[str, Any], outcome: d
             data = {}
         if not isinstance(data, dict):
             data = {}
+        previous = data.get('reply_delivery')
+        if (outcome.get('delivery_status') == 'scope_conflict' and isinstance(previous, dict)
+                and (previous.get('delivered') is True or previous.get('unconfirmed') is True)):
+            # Reject the new review while retaining the run's original delivery evidence.
+            return
         data['reply_delivery'] = outcome
         if isinstance(data.get('terminal_receipt'), dict):
             data['terminal_receipt']['reply_delivery'] = outcome
@@ -161,6 +169,18 @@ def _save_managed_outcome(session, row: Any, details: dict[str, Any], outcome: d
 
 
 def _expire(session, row) -> None:
+    if row.status in {'sending', 'unconfirmed'}:
+        from distr.core.workflow.dev_approvals import telegram_managed_reply
+
+        details = _managed_details(row)
+        outcome = telegram_managed_reply(session, row, details)
+        if outcome:
+            status = outcome['delivery_status']
+            if status != row.status:
+                _save_managed_outcome(session, row, details, outcome)
+                session.commit()
+                _update_card(row)
+            return
     if row.status == 'sending':
         from distr.core.db import DevApprovalRequest
         from distr.core.workflow.dev_approvals import confirmed_managed_reply
@@ -374,8 +394,12 @@ async def approve(request_id: str, request: Request):
             if row.status == 'sent' and _managed_details(row) == details:
                 return JSONResponse(_view(row), headers=_NO_STORE)
             if row.status != 'sending':
+                if outcome.get('delivery_status') == 'sending' and _managed_details(row) == details:
+                    return JSONResponse(_view(row), headers=_NO_STORE)
                 raise HTTPException(status_code=409, detail='Closing reply decision changed. Check the original conversation.')
-            _save_managed_outcome(session, row, details, outcome)
+            from distr.core.workflow.dev_approvals import telegram_managed_reply
+
+            _save_managed_outcome(session, row, details, telegram_managed_reply(session, row, details) or outcome)
             session.commit()
             _update_card(row)
             return JSONResponse(_view(row), headers=_NO_STORE)

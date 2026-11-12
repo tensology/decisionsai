@@ -1,0 +1,378 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "new-work-design-to-plan",
+  "name": "New Work: Design to Plan",
+  "role": "product_designer",
+  "category": "Engineering",
+  "archetype": "incremental_ship",
+  "description": "Design a new project's pages in the Plan wire DSL for preview, stop for design approval, then derive Brief, PRD, FRAC, Flows and ERD from the design and build Backlog tickets.",
+  "kickoff": "Start the \"New Work: Design to Plan\" loop.\nGoal: an approved page design in Plan Interfaces with derived requirements and Backlog tickets.\nExit when: the design is approved, PRD/FRAC/Flows/Architecture are derived, and tickets cite their FR keys.",
+  "loop_contract": {
+    "name": "New Work: Design to Plan",
+    "goal": "approved Plan design with derived requirements and Backlog tickets",
+    "exit_when": "design approved, planning derived from it, tickets built with FR keys",
+    "check_command": "plan_snapshot validation_warnings empty",
+    "max_iterations": 4,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass the design or plan approval gate",
+      "If stuck after several iterations, stop and report blockers instead of inventing content"
+    ]
+  },
+  "expected_check_command": "plan_snapshot shows the expected artifacts with validation_warnings empty",
+  "tags": [
+    "design",
+    "plan",
+    "wireframe",
+    "new-project",
+    "frac"
+  ],
+  "run_settings": {
+    "execution_mode": "sequential",
+    "human_checkpoints": true,
+    "concurrency_scope": "project",
+    "max_parallel_tickets": 1,
+    "branch_per_ticket": false,
+    "auto_route_models": true,
+    "adaptive_multi_model_enabled": true,
+    "max_parallel_evaluators": 2,
+    "prefer_free_local": true,
+    "ui_local_first": true,
+    "hosted_ui_escalation_after_failures": 2,
+    "independent_validation": true,
+    "allow_provider_failover": false,
+    "memory_enabled": true,
+    "load_workflow_memory": true,
+    "load_project_memory": true,
+    "capture_memory_deltas": true,
+    "capture_failures_and_lessons": true
+  },
+  "steps": [
+    {
+      "name": "Capture intent and constraints",
+      "instruction": "Read the linked ticket, board, project record, attachments, and any chat context. Call plan_snapshot to see what the board's Plan already holds. Write a short outcome brief (audience, purpose, primary journeys, must-have pages, brand/reference cues, out-of-scope) and save it as the Plan Brief with plan_write_artifacts (item_type brief, markdown). Record unknowns as open questions in the brief instead of guessing. Do not design pages yet.",
+      "skills": [
+        "product-lens",
+        "brainstorming"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Brief missing audience or journeys",
+        "Pages listed without a purpose",
+        "Unknowns were guessed instead of recorded"
+      ],
+      "validation_prompt": "A Plan Brief exists with audience, purpose, primary journeys, must-have pages, constraints, and open questions.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "planning",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "ticket",
+          "board",
+          "project",
+          "linked_attachments",
+          "plan_snapshot"
+        ],
+        "expected_outputs": [
+          "plan_brief",
+          "open_questions",
+          "page_inventory"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Design the site in the Plan wire DSL",
+      "instruction": "Design every page from the brief as Plan Interfaces using the wire DSL (one `screen \"Label\" route=\"/path\" id=page-id device=desktop` per page, two-space indentation, nodes such as stack, row, grid, nav, section, heading, text, button, input, list, item). Put a `#|` description directly under each screen saying what the page is for and its states, and link pages with the trailing `# decisions-flow: {json}` sidecar. Save with plan_write_artifacts (item_type wireframe or flows, content_format wire). Fix every diagnostic the tool returns and resubmit until it reports none.",
+      "skills": [
+        "frontend-design",
+        "product-lens"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "A must-have page has no screen",
+        "Wire validation diagnostics remain",
+        "Screens lack routes, ids, or #| descriptions"
+      ],
+      "validation_prompt": "Every must-have page from the brief is a validated wire screen with a route, an id, a #| description, and navigation in the sidecar.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 1200,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "implementation",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "plan_brief",
+          "page_inventory",
+          "plan_snapshot"
+        ],
+        "expected_outputs": [
+          "interfaces_wire",
+          "page_routes",
+          "navigation_flow",
+          "validation_diagnostics"
+        ],
+        "output_token_budget": 2000
+      },
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Preview and self-review the design",
+      "instruction": "Review the saved Interfaces as Paul will see them in Development > Plan > Interfaces. Use plan_snapshot for the stored wire and, when a browser is available, render the Plan page read-only with Playwright and capture screenshots (never submit forms or click mutating actions). Check that each journey in the brief can be completed by following the links, that states (empty, error, loading, success) are described, and that naming is consistent. Correct gaps with plan_write_artifacts.",
+      "skills": [
+        "ui-ux-principles",
+        "qa-tester"
+      ],
+      "tools": [
+        "cli",
+        "playwright",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "A brief journey cannot be followed",
+        "Page states are missing",
+        "Screenshots claimed without evidence"
+      ],
+      "validation_prompt": "A review note lists each journey as walkable or fixed, states are described per page, and no validation diagnostics remain.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "review",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "interfaces_wire",
+          "plan_brief"
+        ],
+        "expected_outputs": [
+          "design_review",
+          "preview_screenshots_or_na",
+          "fixed_gaps"
+        ],
+        "output_token_budget": 2000
+      },
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Design approval",
+      "instruction": "Stop for Paul's approval of the design. Present a compact summary: pages with routes, the main journeys, open questions, and where to preview (Development > Plan > Interfaces). Do not derive requirements or build tickets until the design is approved.",
+      "skills": [
+        "completion-protocol"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Approval requested without a preview location",
+        "Work continued before approval"
+      ],
+      "validation_prompt": "Paul approved the design, or the run is paused waiting for approval with a clear summary of what to review.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": true,
+      "require_approval": true,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "release",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "design_review",
+          "interfaces_wire"
+        ],
+        "expected_outputs": [
+          "approval_summary",
+          "approval_decision"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Derive planning from the approved design",
+      "instruction": "Call plan_derive_from_design to generate the PRD, FRAC (one FR per page or action with Given/When/Then acceptance criteria), Flows, and an Architecture ERD from the approved wire (bind= fields become entities). Then refine wording with plan_write_artifacts where the generated text is thin, keeping FR keys stable. These are NEW requirements; mark anything inferred from an existing system as derived with its evidence.",
+      "skills": [
+        "product-lens",
+        "completion-protocol"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "A page has no FR",
+        "Acceptance criteria are not testable",
+        "FR keys were renumbered"
+      ],
+      "validation_prompt": "PRD, FRAC, Flows, and Architecture exist in Plan, every page maps to at least one FR with acceptance criteria, and FR keys are stable.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "planning",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "approval_decision",
+          "interfaces_wire",
+          "plan_brief"
+        ],
+        "expected_outputs": [
+          "prd",
+          "frac",
+          "flows",
+          "architecture",
+          "requirement_keys"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Build Backlog tickets from the plan",
+      "instruction": "Turn the FRAC into a dependency-ordered ticket graph and submit it with plan_build_tickets. Each task cites its source Plan item ids, lists its FR keys and acceptance criteria, and has complexity and role set. Tickets land in Backlog; never move tickets to Complete.",
+      "skills": [
+        "completion-protocol"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "An FR has no ticket",
+        "Tickets do not cite FR keys",
+        "Tickets were moved past Backlog"
+      ],
+      "validation_prompt": "Backlog tickets exist for every FR, each citing source item ids and FR keys, with no dependency cycles.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "planning",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "frac",
+          "prd",
+          "plan_snapshot"
+        ],
+        "expected_outputs": [
+          "ticket_graph",
+          "created_ticket_ids",
+          "uncovered_requirements"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Report and compact memory",
+      "instruction": "Report what was designed, approved, derived, and ticketed, with links to the Plan and the created tickets, remaining open questions, and the suggested next ticket. Compact the run into workspace memory. Do not edit project files.",
+      "skills": [
+        "completion-protocol"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Ticket ids missing from report",
+        "Open questions dropped"
+      ],
+      "validation_prompt": "A compact report exists with pages, requirement keys, ticket ids, open questions, and next step.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "reporting",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "created_ticket_ids",
+          "requirement_keys",
+          "approval_decision"
+        ],
+        "expected_outputs": [
+          "run_report",
+          "memory_delta"
+        ],
+        "output_token_budget": 2000
+      }
+    }
+  ],
+  "references": {
+    "source": "decisionsai_builtin_workflows",
+    "proposal": "builtin-workflows-planning-proposal.md (2026-11-11)"
+  }
+}

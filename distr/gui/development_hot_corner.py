@@ -1522,24 +1522,27 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             logger.warning("Could not %s Development timer for chat %s: %s", action, chat_id, exc)
 
     def _toggle_project_pin(self, project_id: int) -> None:
-        if project_id in self._pinned_project_ids:
-            self._pinned_project_ids.remove(project_id)
-        else:
-            self._pinned_project_ids.add(project_id)
+        pinning = project_id not in self._pinned_project_ids
         if self._uses_shared_pins:
-            from distr.core.workflow.development_sidebar import load_pinned_boards, save_pinned_boards
+            from distr.core.workflow.development_sidebar import set_board_pin
+
             groups = [group for _item, group in self._project_rows]
             key = next((group.get('board_key') for group in groups if group['project_id'] == project_id), None)
-            if key:
-                keys = [existing for existing in (load_pinned_boards() or []) if existing != key]
-                if project_id in self._pinned_project_ids:
-                    keys.append(key)
-                save_pinned_boards(keys)
+            if not key:
+                return
+            try:
+                keys = set_board_pin(key, pinning)
+            except Exception as exc:
+                logger.warning("Could not save Development pin for board %s: %s", key, exc)
+                return
+            self._pinned_project_ids = {group['project_id'] for group in groups if group.get('board_key') in keys}
+        else:
+            if pinning:
+                self._pinned_project_ids.add(project_id)
             else:
-                # Without a board there is nothing to pin in the shared list.
                 self._pinned_project_ids.discard(project_id)
-        elif self._pin_saver is not None:
-            self._pin_saver(sorted(self._pinned_project_ids))
+            if self._pin_saver is not None:
+                self._pin_saver(sorted(self._pinned_project_ids))
         self._refresh_threads()
 
     def _create_project_thread(self, group: dict[str, Any]) -> None:

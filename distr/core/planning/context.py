@@ -22,8 +22,16 @@ def _text(value, limit=120):
     return " ".join(str(value or "").split())[:limit]
 
 
+# Inventory slots per Plan section (Documents, Interfaces, Data) per workspace.
+_ITEMS_PER_SECTION = 4
+
+# Retired 2026-11-11: stored, never shown to workers.
+_RETIRED_TYPES = ("handover", "skills")
+
+
 def planning_snapshot(project_id: int | None, *, workspace_id: int | None = None) -> dict[str, Any]:
     """Read known project scope only. Never fall back to another project's plan."""
+    from distr.core.planning.provenance import origin_of
     from sqlalchemy import Integer, String, and_, case, cast, func, literal, or_
     from distr.core.db import Chat, get_session
     from distr.core.db.projects import Project
@@ -54,19 +62,26 @@ def planning_snapshot(project_id: int | None, *, workspace_id: int | None = None
             return result
         # Counts cover all eligible project workspaces, including omitted workspaces.
         all_ids = query.with_entities(PlanWorkspace.id).scalar_subquery()
-        coverage["item_total"] = db.query(PlanItem.id).filter(PlanItem.workspace_id.in_(all_ids), PlanItem.status != "archived").count()
+        coverage["item_total"] = db.query(PlanItem.id).filter(PlanItem.workspace_id.in_(all_ids), PlanItem.status != "archived",
+                                                              PlanItem.item_type.notin_(_RETIRED_TYPES)).count()
         revision = db.query(PlanItemRevision.item_id.label("item_id"), func.max(PlanItemRevision.revision).label("revision")).join(
             PlanItem, PlanItem.id == PlanItemRevision.item_id).filter(PlanItem.workspace_id.in_(ids)).group_by(PlanItemRevision.item_id).subquery()
-        # Rank within each workspace so a large workspace cannot starve others.
-        priority = case((PlanItem.item_type == "brief", 0), (PlanItem.item_type == "frac", 1), (PlanItem.item_type == "prd", 2), else_=3)
-        ranked = db.query(PlanItem.id.label("id"), func.row_number().over(
-            partition_by=PlanItem.workspace_id, order_by=(priority, PlanItem.modified_at.desc(), PlanItem.id.desc())).label("rank")).filter(
-                PlanItem.workspace_id.in_(ids), PlanItem.status != "archived").subquery()
+        # Rank within each workspace so a large workspace cannot starve others, and
+        # (2026-11-12) within each Plan section, so Brief/FRAC/PRD can no longer crowd
+        # out Interfaces (wireframe, flows) or Data (erd, architecture, diagram).
+        section = case((PlanItem.item_type.in_(("wireframe", "flows")), 1),
+                       (PlanItem.item_type.in_(("erd", "architecture", "diagram")), 2), else_=0)
+        priority = case((PlanItem.item_type.in_(("brief", "wireframe", "erd")), 0),
+                        (PlanItem.item_type.in_(("frac", "flows", "architecture")), 1),
+                        (PlanItem.item_type == "prd", 2), else_=3)
+        ranked = db.query(PlanItem.id.label("id"), section.label("section"), func.row_number().over(
+            partition_by=[PlanItem.workspace_id, section], order_by=(priority, PlanItem.modified_at.desc(), PlanItem.id.desc())).label("rank")).filter(
+                PlanItem.workspace_id.in_(ids), PlanItem.status != "archived", PlanItem.item_type.notin_(_RETIRED_TYPES)).subquery()
         items = db.query(PlanItem.id, PlanItem.workspace_id, PlanItem.item_type, PlanItem.title,
                          PlanItem.status, PlanItem.file_path, revision.c.revision, PlanItemRevision.source,
                          func.substr(PlanItem.content, 1, 600).label("excerpt"), func.length(PlanItem.content).label("content_chars")).join(ranked, ranked.c.id == PlanItem.id).outerjoin(
                              revision, revision.c.item_id == PlanItem.id).outerjoin(PlanItemRevision,
-                                 and_(PlanItemRevision.item_id == PlanItem.id, PlanItemRevision.revision == revision.c.revision)).filter(ranked.c.rank <= 4).order_by(PlanItem.workspace_id, ranked.c.rank).all()
+                                 and_(PlanItemRevision.item_id == PlanItem.id, PlanItemRevision.revision == revision.c.revision)).filter(ranked.c.rank <= _ITEMS_PER_SECTION).order_by(PlanItem.workspace_id, ranked.c.rank, ranked.c.section).all()
         safe_params = case((func.json_valid(Chat.params), Chat.params), else_="{}")
         tagged_id = func.json_extract(safe_params, "$.plan_workspace_id")
         legacy_suffix = func.substr(DevelopmentWorkItem.identity_key, len("source:plan_workspace:") + 1)
@@ -91,11 +106,24 @@ def planning_snapshot(project_id: int | None, *, workspace_id: int | None = None
                 "name": _text(row.board_name), "status": _text(row.status, 30), "root_path": _text(row.root_path, 180),
                 "items": [{"id": item.id, "revision": item.revision, "type": _text(item.item_type, 30),
                            "title": _text(item.title), "status": _text(item.status, 30), "path": _text(item.file_path, 180),
-                           "source": _text(item.source, 40) or "unknown", "saved_excerpt": item.excerpt or "",
+                           "source": _text(item.source, 40) or "unknown", "origin": origin_of(item.source), "saved_excerpt": item.excerpt or "",
                            "excerpt_omitted_chars": max(0, (item.content_chars or 0) - len(item.excerpt or ""))}
                           for item in items if item.workspace_id == row.id],
                 "source_chats": [{"id": chat.id, "title": _text(chat.title), "archived": bool(chat.archived)}
                                  for chat in chats if _id(chat.workspace_id) == row.id]})
+        try:  # derived-vs-new requirement counts per workspace (Requirements Pack ledger)
+            from distr.core.planning.requirements_pack import LEDGER_TYPES, ledger_from_items
+            ledger_rows = db.query(PlanItem.id, PlanItem.workspace_id, PlanItem.item_type, PlanItem.content, PlanItemRevision.source).outerjoin(
+                revision, revision.c.item_id == PlanItem.id).outerjoin(PlanItemRevision, and_(
+                    PlanItemRevision.item_id == PlanItem.id, PlanItemRevision.revision == revision.c.revision)).filter(
+                        PlanItem.workspace_id.in_(ids), PlanItem.status != "archived", PlanItem.item_type.in_(LEDGER_TYPES)).all()
+            for entry in result["workspaces"]:
+                ledger = ledger_from_items([{"id": r.id, "item_type": r.item_type, "content": r.content or "", "last_source": r.source}
+                                            for r in ledger_rows if r.workspace_id == entry["id"]])
+                if ledger["requirements"]:
+                    entry["requirements"] = {**ledger["counts"], "conflict_keys": ledger["conflict_keys"][:5]}
+        except Exception:
+            pass
         coverage["item_omitted"] = coverage["item_total"] - len(items)
         coverage["chat_omitted"] = coverage["chat_total"] - len(chats)
     return result

@@ -19,10 +19,61 @@
         askExternalComms: 'initiative_ask_external_comms',
         askFileChanges: 'initiative_ask_file_changes',
         askSensitive: 'initiative_ask_sensitive',
+        triageTelegram: 'initiative_telegram_notify_suggestions',
+        recommendations: 'initiative_recommendations',
+        ownChannel: 'initiative_own_channel',
+        ownerWhatsapp: 'initiative_owner_whatsapp',
     };
+    var OWN_CHANNELS = ['telegram', 'whatsapp', 'voice', 'log'];
+
+    function getOwnChannel() {
+        var el = document.querySelector('input[name="' + FIELDS.ownChannel + '"]:checked');
+        return el ? el.value : '';
+    }
+
+    function setOwnChannel(value) {
+        if (OWN_CHANNELS.indexOf(value) < 0) {
+            var tg = document.getElementById(FIELDS.allowTelegram);
+            value = tg && tg.checked ? 'telegram' : 'log';
+        }
+        document.querySelectorAll('input[name="' + FIELDS.ownChannel + '"]').forEach(function(r) {
+            r.checked = r.value === value;
+        });
+        syncOwnPanel();
+    }
+
+    function syncOwnPanel(level) {
+        level = level || document.getElementById(FIELDS.level).value;
+        var panel = document.getElementById('initiative-own-updates');
+        if (panel) panel.classList.toggle('hidden', level !== 'own');
+        document.querySelectorAll('input[name="' + FIELDS.ownChannel + '"]').forEach(function(r) {
+            r.disabled = level !== 'own';
+        });
+        var row = document.getElementById('initiative-owner-whatsapp-row');
+        if (row) row.classList.toggle('hidden', !(level === 'own' && getOwnChannel() === 'whatsapp'));
+    }
+    var LEGACY_LEVELS = { assist: 'operate', assistive: 'operate', passive: 'observe', proactive: 'operate', autonomous: 'own' };
+
+    function normalizeLevel(level) {
+        level = LEGACY_LEVELS[level] || level;
+        return (level === 'observe' || level === 'operate' || level === 'own') ? level : 'operate';
+    }
+
+    function syncRecommendationsAvailability(level) {
+        var rec = document.getElementById(FIELDS.recommendations);
+        if (!rec) return;
+        var available = level === 'operate' || level === 'own';
+        rec.disabled = !available;
+        if (!available) rec.checked = false;
+        var wrap = rec.closest('label');
+        if (wrap) wrap.classList.toggle('opacity-50', !available);
+    }
 
     function setLevel(level) {
+        level = normalizeLevel(level);
         document.getElementById(FIELDS.level).value = level;
+        syncRecommendationsAvailability(level);
+        syncOwnPanel(level);
         document.querySelectorAll('.initiative-btn').forEach(function(btn) {
             var isActive = btn.dataset.level === level;
             btn.classList.toggle('border-[#f97316]', isActive);
@@ -38,6 +89,9 @@
                 setLevel(btn.dataset.level);
                 applyLevelDefaults(btn.dataset.level);
             });
+        });
+        document.querySelectorAll('input[name="' + FIELDS.ownChannel + '"]').forEach(function(r) {
+            r.addEventListener('change', function() { syncOwnPanel(); });
         });
         var inlineSaveBtn = document.getElementById('initiative-inline-save');
         if (inlineSaveBtn) {
@@ -65,25 +119,20 @@
             observe: {
                 tg: false, routine: false, lanes: false, workflows: false, cli: false,
                 boards: false, backlog: false, whatsapp: false, telegram: false, external: false, email: false,
-                askExternal: true, askFiles: true, askSensitive: true,
-            },
-            assist: {
-                tg: false, routine: false, lanes: false, workflows: false, cli: false,
-                boards: true, backlog: true, whatsapp: true, telegram: true, external: false, email: false,
-                askExternal: true, askFiles: true, askSensitive: true,
+                askExternal: true, askFiles: true, askSensitive: true, triageTg: false, recommendations: false,
             },
             operate: {
                 tg: true, routine: true, lanes: false, workflows: true, cli: true,
                 boards: true, backlog: true, whatsapp: true, telegram: true, external: true, email: true,
-                askExternal: true, askFiles: true, askSensitive: true,
+                askExternal: true, askFiles: true, askSensitive: true, triageTg: true, recommendations: true,
             },
             own: {
                 tg: true, routine: true, lanes: true, workflows: true, cli: true,
                 boards: true, backlog: true, whatsapp: true, telegram: true, external: true, email: true,
-                askExternal: true, askFiles: false, askSensitive: true,
+                askExternal: true, askFiles: false, askSensitive: true, triageTg: true, recommendations: true,
             },
         };
-        var p = presets[level] || presets.assist;
+        var p = presets[normalizeLevel(level)] || presets.operate;
         setChecked(FIELDS.allowTelegram, p.tg);
         setChecked(FIELDS.allowRoutineTasks, p.routine);
         setChecked(FIELDS.allowTicketLaneMoves, p.lanes);
@@ -98,6 +147,11 @@
         setChecked(FIELDS.askExternalComms, p.askExternal);
         setChecked(FIELDS.askFileChanges, p.askFiles);
         setChecked(FIELDS.askSensitive, p.askSensitive);
+        setChecked(FIELDS.triageTelegram, p.triageTg);
+        setChecked(FIELDS.recommendations, p.recommendations);
+        syncRecommendationsAvailability(normalizeLevel(level));
+        if (normalizeLevel(level) === 'own' && !getOwnChannel()) setOwnChannel('');
+        syncOwnPanel(normalizeLevel(level));
     }
 
     function paintHealthDot(dot, labelEl, state, detail) {
@@ -166,7 +220,7 @@
     window.loadInitiativeSettings = function() {
         fetch('/api/initiative').then(function(r) { return r.ok ? r.json() : {}; })
         .then(function(data) {
-            setLevel(data.initiative_level || 'assist');
+            setLevel(data.initiative_level || 'operate');
             document.getElementById(FIELDS.allowTelegram).checked = !!data.initiative_allow_telegram;
             document.getElementById(FIELDS.allowRoutineTasks).checked = !!data.initiative_allow_routine_tasks;
             document.getElementById(FIELDS.scanBoards).checked = data.initiative_scan_boards !== false;
@@ -181,7 +235,14 @@
             document.getElementById(FIELDS.askExternalComms).checked = data.initiative_ask_external_comms !== false;
             document.getElementById(FIELDS.askFileChanges).checked = data.initiative_ask_file_changes !== false;
             document.getElementById(FIELDS.askSensitive).checked = data.initiative_ask_sensitive !== false;
+            setChecked(FIELDS.triageTelegram, !!data.initiative_telegram_notify_suggestions);
+            setChecked(FIELDS.recommendations, !!data.initiative_recommendations);
+            syncRecommendationsAvailability(normalizeLevel(data.initiative_level || 'operate'));
+            var owner = document.getElementById(FIELDS.ownerWhatsapp);
+            if (owner) owner.value = data.initiative_owner_whatsapp || '';
+            setOwnChannel(data.initiative_own_channel || '');
         }).catch(function() {});
+        loadAssistantNudges();
 
         updateDraftNavBadge(0);
     };
@@ -203,6 +264,10 @@
             initiative_ask_external_comms: document.getElementById(FIELDS.askExternalComms).checked,
             initiative_ask_file_changes: document.getElementById(FIELDS.askFileChanges).checked,
             initiative_ask_sensitive: document.getElementById(FIELDS.askSensitive).checked,
+            initiative_telegram_notify_suggestions: !!(document.getElementById(FIELDS.triageTelegram) || {}).checked,
+            initiative_recommendations: !!(document.getElementById(FIELDS.recommendations) || {}).checked,
+            initiative_own_channel: getOwnChannel(),
+            initiative_owner_whatsapp: ((document.getElementById(FIELDS.ownerWhatsapp) || {}).value || '').trim(),
         };
         fetch('/api/initiative', {
             method: 'POST',
@@ -213,6 +278,55 @@
             else showNotification('Failed to save', 'error');
         }).catch(function() { showNotification('Failed to save', 'error'); });
     };
+
+    // "Be my assistant": gentle, non-modal suggestions. Hidden when there are none
+    // or the server doesn't offer the list yet.
+    function loadAssistantNudges() {
+        var panel = document.getElementById('initiative-assistant-nudges');
+        var list = document.getElementById('initiative-assistant-nudges-list');
+        if (!panel || !list) return;
+        fetch('/api/initiative/assistant/nudges').then(function(r) { return r.ok ? r.json() : { nudges: [] }; })
+        .then(function(data) {
+            var nudges = (data && data.nudges) || [];
+            list.innerHTML = nudges.map(function(n) {
+                return '<li class="flex items-start justify-between gap-3">' +
+                    '<span>' + escapeHtml(n.text) +
+                    (n.why ? '<span class="block text-xs text-gray-500">' + escapeHtml(n.why) + '</span>' : '') +
+                    // Same-channel rule: if the original channel couldn't take it, say so; it is never re-sent elsewhere.
+                    (n.undelivered ? '<span class="block text-xs text-amber-600">Not delivered: ' +
+                        escapeHtml(n.delivery_note || 'the original channel could not take it') + '</span>' : '') +
+                    (n.channel_question ? '<span class="block text-xs text-gray-400 mt-1">' +
+                        escapeHtml(n.channel_question.text) + ' ' +
+                        (n.channel_question.choices || []).map(function(c) {
+                            return '<button type="button" class="mr-2 underline hover:text-white" data-ask-id="' +
+                                escapeHtml(n.channel_question.id) + '" data-channel="' + escapeHtml(c.value) + '">' +
+                                escapeHtml(c.label) + '</button>';
+                        }).join('') + '</span>' : '') +
+                    '</span>' +
+                    '<button type="button" class="shrink-0 text-xs text-gray-400 hover:text-white" data-nudge-id="' +
+                    escapeHtml(n.id) + '">Not now</button></li>';
+            }).join('');
+            panel.classList.toggle('hidden', nudges.length === 0);
+            list.querySelectorAll('button[data-ask-id]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    fetch('/api/initiative/assistant/channel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ask_id: btn.dataset.askId, channel: btn.dataset.channel }),
+                    }).then(function(r) { return r.json(); }).then(function(res) {
+                        if (res && res.message) showNotification(res.message, 'success');
+                        loadAssistantNudges();
+                    }).catch(function() {});
+                });
+            });
+            list.querySelectorAll('button[data-nudge-id]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    fetch('/api/initiative/assistant/nudges/' + encodeURIComponent(btn.dataset.nudgeId) + '/dismiss', { method: 'POST' })
+                    .then(function() { loadAssistantNudges(); }).catch(function() {});
+                });
+            });
+        }).catch(function() { panel.classList.add('hidden'); });
+    }
 
     function escapeHtml(str) {
         var div = document.createElement('div');

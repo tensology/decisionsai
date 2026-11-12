@@ -624,52 +624,37 @@ def revise_plan_after_step(
         return updated, None
 
     evidence_count = int(target.get("replan_evidence_count") or 0) + 1
+    pending_steering = target.get("needs_replan") and (
+        target.get("route_preference") or target.get("steering_constraints")
+    )
     target["replan_evidence_count"] = evidence_count
-    target["needs_replan"] = True
+    target["needs_replan"] = not manual_route_locked and bool(pending_steering)
+    target["revision"] = int(target.get("revision") or 0) + 1
+    assignments[str(next_step_id)] = target
+
     if manual_route_locked:
-        target["needs_replan"] = False
-        target["revision"] = int(target.get("revision") or 0) + 1
-        assignments[str(next_step_id)] = target
-        revision = {
-            "from_step_id": completed_step_id,
-            "target_step_id": next_step_id,
-            "previous_route": previous,
-            "new_route": previous,
-            "reason": (
-                f"{reason or 'Validation failed.'} Retry the manually selected worker; "
-                "automatic provider replacement is disabled for this run."
-            ),
-            "replan_evidence_count": evidence_count,
-            "route_changed": False,
-            "manual_route_locked": True,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        updated["assignments"] = assignments
-        updated["updated_at"] = revision["created_at"]
-        updated.setdefault("revisions", []).append(revision)
-        return updated, revision
-    if evidence_count < 2:
-        target["revision"] = int(target.get("revision") or 0) + 1
-        assignments[str(next_step_id)] = target
-        revision = {
-            "from_step_id": completed_step_id,
-            "target_step_id": next_step_id,
-            "previous_route": previous,
-            "new_route": previous,
-            "reason": (
-                f"{reason or 'Validation failed.'} Retry the inexpensive worker once with correction evidence "
-                "before changing providers."
-            ),
-            "replan_evidence_count": evidence_count,
-            "route_changed": False,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        updated["assignments"] = assignments
-        updated["updated_at"] = revision["created_at"]
-        updated.setdefault("revisions", []).append(revision)
-        return updated, revision
-    # Deterministic harness: never replan onto another backend/model.
-    return updated, None
+        disposition = "Retry the manually selected worker. Automatic provider replacement is disabled for this run."
+    elif evidence_count == 1:
+        disposition = "Retry the current worker once with the correction evidence."
+    else:
+        disposition = "Repeated validation failures were recorded. The current worker route was retained."
+
+    revision = {
+        "from_step_id": completed_step_id,
+        "target_step_id": next_step_id,
+        "previous_route": previous,
+        "new_route": previous,
+        "reason": f"{reason or 'Validation failed.'} {disposition}",
+        "replan_evidence_count": evidence_count,
+        "route_changed": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if manual_route_locked:
+        revision["manual_route_locked"] = True
+    updated["assignments"] = assignments
+    updated["updated_at"] = revision["created_at"]
+    updated.setdefault("revisions", []).append(revision)
+    return updated, revision
 
 
 def consume_step_replan(

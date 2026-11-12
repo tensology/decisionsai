@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import time
 from typing import Any, Callable
@@ -182,6 +183,32 @@ def resolve_remote_delivery_context(
     return None
 
 
+def remote_spoken_text(text: str, *, proactive: bool) -> str:
+    """Shape remote speech the same way the desktop orchestrator does.
+
+    Desktop proactive notices go through ``_cmd_speak_text_directly``, which runs
+    ``voice_friendly_text(clean_text_for_tts(text, spoken_prose=True))``. Desktop
+    agent replies are cleaned with ``clean_text_for_tts`` before they reach TTS.
+    The remote path used to speak the raw text with only whitespace collapsed.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    try:
+        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+
+        spoken = clean_text_for_tts(raw, spoken_prose=True)
+        if proactive:
+            from distr.core.human_engagement import voice_friendly_text
+
+            spoken = voice_friendly_text(spoken)
+    except Exception:
+        logger.debug("[REMOTE TTS] spoken shaping failed; using raw text", exc_info=True)
+        return raw
+    spoken = re.sub(r"\s+", " ", str(spoken or "")).strip()
+    return spoken or raw
+
+
 def deliver_remote_tts(
     manager: Any,
     text: str,
@@ -203,6 +230,18 @@ def deliver_remote_tts(
     if not request_id:
         request_id = build_synthetic_remote_context(remote_ctx).get("request_id")
 
+    # Speak what the desktop orchestrator would speak. Proactive notices have no
+    # chat transcript, so their on-screen text matches the spoken text; command
+    # replies keep their original display text (links, formatting) and only the
+    # audio is shaped.
+    proactive = str(remote_ctx.get("mode") or "").strip().lower() == "proactive"
+    spoken = remote_spoken_text(clean, proactive=proactive)
+    # 2026-11-12 agent-conversational: audio says "Forty percent done.", the
+    # screen shows "40% done." with the same words after it.
+    from distr.core.conversational_progress import display_progress
+
+    display_text = display_progress(spoken) if proactive else clean
+
     try:
         from distr.core.agent.services.tts.outbound_voice import resolve_outbound_voice_settings
 
@@ -213,7 +252,7 @@ def deliver_remote_tts(
 
     def response_data(*, audio_streamed: bool, audio_pending: bool, audio_mime_type: str | None = None) -> dict:
         payload = {
-            "text": clean,
+            "text": display_text,
             "mode": remote_ctx.get("mode") or "command",
             "source_command": remote_ctx.get("source_command"),
             "audio": None,
@@ -274,7 +313,7 @@ def deliver_remote_tts(
     audio_stream_ready = False
 
     if not is_cancelled():
-        generated_audio_file = generate_tts(clean)
+        generated_audio_file = generate_tts(spoken)
         stream_audio_file = generated_audio_file
         if stream_audio_file and stream_audio_file.exists() and str(stream_audio_file).endswith(".wav"):
             stream_audio_file = convert_wav_to_ogg(stream_audio_file)

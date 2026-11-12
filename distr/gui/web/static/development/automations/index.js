@@ -1,5 +1,5 @@
-// Development automation list/calendar. Full edits use the shared Automations
-// editor so execution bindings and schedule metadata have one save path.
+// Development automation list/calendar. Full edits open in place on this
+// surface so execution bindings and schedule metadata have one save path.
 import { displayModelName, shortModelName } from '../../shared/model_variant.js?v=20261022-automodel';
 import { SNAP_MINUTES, snapMinutes, timeToMinutes, minutesToTime, topForMinutes, shiftSchedule, groupCalendarEvents } from './calendar_drag.js?v=20261030-calendar-groups';
 import { loadInstalledHarnesses, harnessSelectOptions, harnessLabel } from '../../shared/harnesses.js?v=20261022-harnesssrc';
@@ -12,6 +12,13 @@ export function createAutomations({ context, actions, el }) {
     const writeSession = (key, value) => { try { sessionStorage.setItem(key, value); } catch (_) {} };
     const state = {
         selectedAutomationId: '',
+        creatingAutomation: false,
+        editorDrafts: {},
+        formBaseline: null,
+        formAutomation: null,
+        presets: [],
+        editorTab: 'details',
+        missingAutomationId: '',
         automationRuns: {},
         view: readSession(VIEW_KEY, 'list') === 'calendar' ? 'calendar' : 'list',
         statusFilter: readSession(STATUS_KEY, 'all'),
@@ -243,7 +250,8 @@ export function createAutomations({ context, actions, el }) {
             ? `<div class="scheduled-table" role="table">${head}${automations.map(scheduledRowHtml).join('')}</div>`
             : (state.statusFilter !== 'all' && typeAutomations().length
                 ? `<div class="development-empty">No ${esc((STATUS_LABELS[state.statusFilter] || state.statusFilter).toLowerCase())} automations.</div>`
-                : '<div class="development-empty">No scheduled actions yet. Ask Laya in a thread to create one.</div>');
+                : '<div class="development-empty">No scheduled actions yet.<div class="development-empty-actions"><button type="button" id="automation-create-big" class="scheduled-compose-add">+ Add Automation</button></div></div>');
+        list.querySelector('#automation-create-big')?.addEventListener('click', () => openNewAutomation());
         list.querySelectorAll('[data-row-action]').forEach((button) =>
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
@@ -790,19 +798,25 @@ export function createAutomations({ context, actions, el }) {
         const list = el('scheduled-list');
         if (!list) return;
         const rules = context.workspaceMode === 'automation_rules';
-        if (state.selectedAutomationId && !visibleAutomations().some((item) => String(item.id) === String(state.selectedAutomationId))) {
-            state.selectedAutomationId = '';
-        }
+        syncEditorFromRoute();
+        const editingOpen = Boolean(state.selectedAutomationId && (state.selectedAutomationId === 'new' || state.creatingAutomation || findAutomation(state.selectedAutomationId)));
         const calendarView = state.view === 'calendar';
         placeStatusFilter(calendarView);
-        list.classList.toggle('hidden', calendarView);
-        el('scheduled-calendar-wrap')?.classList.toggle('hidden', !calendarView);
+        list.classList.toggle('hidden', calendarView || editingOpen);
+        el('scheduled-calendar-wrap')?.classList.toggle('hidden', !calendarView || editingOpen);
+        const editorRoot = el('scheduled-automation-editor');
+        editorRoot?.classList.toggle('hidden', !editingOpen);
+        if (editorRoot) editorRoot.hidden = !editingOpen;
+        el('scheduled-view-toggle')?.classList.toggle('hidden', editingOpen);
+        el('scheduled-automation-compose')?.classList.toggle('hidden', editingOpen);
         const toolbar = el('scheduled-calendar-toolbar');
         if (toolbar) {
-            toolbar.classList.remove('hidden');
-            toolbar.classList.toggle('list-mode', !calendarView);
-            const toggleButton = el('scheduled-view-toggle');
-            if (toggleButton && toggleButton.parentElement !== toolbar) toolbar.appendChild(toggleButton);
+            toolbar.classList.toggle('hidden', editingOpen);
+            if (!editingOpen) {
+                toolbar.classList.toggle('list-mode', !calendarView);
+                const toggleButton = el('scheduled-view-toggle');
+                if (toggleButton && toggleButton.parentElement !== toolbar) toolbar.appendChild(toggleButton);
+            }
         }
         document.querySelectorAll('[data-scheduled-view]').forEach((button) => {
             const active = button.dataset.scheduledView === state.view;
@@ -810,6 +824,15 @@ export function createAutomations({ context, actions, el }) {
             button.setAttribute('aria-pressed', String(active));
         });
         renderStatusFilter();
+        if (editingOpen) {
+            renderAutomationEditor();
+            return;
+        }
+        if (editorRoot) {
+            editorRoot.innerHTML = '';
+            delete editorRoot.dataset.editingId;
+            delete editorRoot.dataset.bound;
+        }
         if (calendarView) renderCalendar();
         else renderList();
         renderScheduledDetail();
@@ -826,6 +849,16 @@ export function createAutomations({ context, actions, el }) {
         settings: '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4"/><circle cx="10" cy="10" r="5.3"/></svg>',
         delete: '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 6h12M8 6V4h4v2M6 6l.8 10h6.4L14 6"/></svg>'
     };
+
+    // 2026-11-12 fluid1: run history showed raw markdown (**bold**, `code`, # headings). Show clean text.
+    function plainRunSummary(value) {
+        return String(value || '')
+            .replace(/```[^\n]*\n?/g, '')
+            .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_m, a, b) => a || b)
+            .replace(/`([^`]+)`/g, '$1')
+            .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+            .replace(/^\s*[-*]\s+/gm, '• ');
+    }
 
     function rowActionsHtml(automation, group) {
         const id = esc(automation.id);
@@ -863,7 +896,7 @@ export function createAutomations({ context, actions, el }) {
               ? shown
                     .map(
                         (run) =>
-                            `<div class="scheduled-run"><div><strong>${esc(actions.statusLabel(run.status))}</strong><span>${esc(actions.formatDateTime(run.started_at || run.created_at))}</span></div>${run.summary ? `<p class="scheduled-run-summary">${esc(run.summary)}</p><button type="button" class="scheduled-run-expand" data-run-expand aria-expanded="false">Show full</button>` : ''}</div>`
+                            `<div class="scheduled-run"><div><strong>${esc(actions.statusLabel(run.status))}</strong><span>${esc(actions.formatDateTime(run.started_at || run.created_at))}</span></div>${run.summary ? `<p class="scheduled-run-summary">${esc(plainRunSummary(run.summary))}</p><button type="button" class="scheduled-run-expand" data-run-expand aria-expanded="false">Show full</button>` : ''}</div>`
                     )
                     .join('') +
                 (runs.length > 5 ? `<button type="button" class="scheduled-runs-more" data-runs-more>${state.historyExpanded ? 'Show fewer' : `Show more (${Math.min(runs.length, 50) - 5})`}</button>` : '')
@@ -1183,6 +1216,673 @@ export function createAutomations({ context, actions, el }) {
         el('scheduled-layout')?.classList.remove('detail-open');
     }
 
+    function findAutomation(automationId) {
+        return (context.automations || []).find((item) => String(item.id) === String(automationId)) || null;
+    }
+
+    function automationWorkspacePath(automationId) {
+        const base = context.workspaceMode === 'automation_rules'
+            ? '/development/automation-rules/'
+            : '/development/automations/';
+        return automationId ? `${base}?automation=${encodeURIComponent(automationId)}` : base;
+    }
+
+    function requestedAutomationId() {
+        const path = new URL(window.location.href).pathname;
+        if (!/(?:^|\/)development\/(?:automations|automation-rules|scheduled-actions)\/?$/.test(path)) return '';
+        return (new URL(window.location.href).searchParams.get('automation') || '').trim();
+    }
+
+    function setAutomationLocation(path, options) {
+        if (actions.setDevelopmentLocation) actions.setDevelopmentLocation(path, options);
+        else window.history[options?.replace ? 'replaceState' : 'pushState']({}, '', path);
+    }
+
+    function syncEditorFromRoute() {
+        stashEditorDraft();
+        const requested = requestedAutomationId();
+        if (!requested) {
+            state.selectedAutomationId = '';
+            state.creatingAutomation = false;
+            return;
+        }
+        if (requested === 'new') {
+            state.selectedAutomationId = 'new';
+            state.creatingAutomation = true;
+            return;
+        }
+        state.creatingAutomation = false;
+        const automation = findAutomation(requested);
+        if (automation) {
+            state.selectedAutomationId = String(automation.id);
+            return;
+        }
+        if ((context.automations || []).length) {
+            state.selectedAutomationId = '';
+            if (state.missingAutomationId !== requested) {
+                state.missingAutomationId = requested;
+                actions.toast('That automation is no longer available.', 'error');
+            }
+            return;
+        }
+        state.selectedAutomationId = requested;
+    }
+
+    function emptyAutomation() {
+        return {
+            id: '',
+            name: '',
+            status: 'active',
+            instruction: '',
+            preset_id: '',
+            automation_type: 'scheduled_instruction',
+            action_config: {},
+            schedule: { kind: 'daily', time: '09:00' },
+            next_run_at: null
+        };
+    }
+
+    function normalizeScheduleKind(kind) {
+        kind = String(kind || 'daily').toLowerCase();
+        if (kind === '15min' || kind === '15m' || kind === '30min' || kind === '30m') return 'interval';
+        return kind;
+    }
+
+    function setFormValue(id, value) {
+        const node = document.getElementById(id);
+        if (node) node.value = value == null ? '' : String(value);
+    }
+
+    function setAutomationStatus(status) {
+        const hidden = document.getElementById('automation-status');
+        const toggle = document.getElementById('automation-status-switch');
+        if (!hidden || !toggle) return;
+        const isActive = String(status || 'active').toLowerCase() !== 'paused';
+        hidden.value = isActive ? 'active' : 'paused';
+        toggle.classList.toggle('is-on', isActive);
+        toggle.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        toggle.setAttribute('aria-label', isActive ? 'Active' : 'Inactive');
+        const text = toggle.querySelector('.automation-status-switch-text');
+        if (text) text.textContent = isActive ? 'Active' : 'Inactive';
+    }
+
+    function toggleAutomationStatus() {
+        const hidden = document.getElementById('automation-status');
+        if (!hidden) return;
+        setAutomationStatus(hidden.value === 'active' ? 'paused' : 'active');
+    }
+
+    function setWeeklyDaySelection(raw) {
+        let selected = String(raw || '1').split(',').map((part) => parseInt(part.trim(), 10)).filter((n) => !Number.isNaN(n));
+        if (!selected.length) selected = [1];
+        document.querySelectorAll('.automation-weekday-btn').forEach((btn) => {
+            const day = parseInt(btn.getAttribute('data-day'), 10);
+            btn.classList.toggle('is-selected', selected.includes(day));
+        });
+    }
+
+    function getWeeklyDaysCsv() {
+        const days = [];
+        document.querySelectorAll('.automation-weekday-btn.is-selected').forEach((btn) => days.push(btn.getAttribute('data-day')));
+        return days.length ? days.join(',') : '1';
+    }
+
+    function renderMonthlyDayBadges(days) {
+        const wrap = document.getElementById('automation-monthly-badges');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        (days || []).forEach((day) => {
+            const value = String(day).trim();
+            if (!value) return;
+            const badge = document.createElement('span');
+            badge.className = 'automation-monthly-day-badge';
+            badge.setAttribute('data-day', value);
+            badge.innerHTML = `<span class="automation-monthly-day-text">${esc(value)}</span> <button type="button" class="automation-monthly-day-remove" aria-label="Remove">&times;</button>`;
+            badge.querySelector('.automation-monthly-day-remove')?.addEventListener('click', () => badge.remove());
+            wrap.appendChild(badge);
+        });
+    }
+
+    function getMonthlyDaysArray() {
+        const wrap = document.getElementById('automation-monthly-badges');
+        const input = document.getElementById('automation-monthly-days-input');
+        const seen = {};
+        const days = [];
+        wrap?.querySelectorAll('.automation-monthly-day-badge[data-day]').forEach((badge) => {
+            const value = String(badge.getAttribute('data-day') || '').trim();
+            if (!value || seen[value]) return;
+            seen[value] = true;
+            days.push(value);
+        });
+        if (input && String(input.value || '').trim()) {
+            String(input.value || '').split(',').forEach((part) => {
+                const value = part.trim();
+                if (!value || seen[value]) return;
+                seen[value] = true;
+                days.push(value);
+            });
+        }
+        return days;
+    }
+
+    function addMonthlyDaysFromInput() {
+        const input = document.getElementById('automation-monthly-days-input');
+        if (!input) return;
+        const raw = String(input.value || '').trim();
+        if (!raw) return;
+        const existing = getMonthlyDaysArray();
+        const seen = {};
+        existing.forEach((day) => { seen[day] = true; });
+        raw.split(',').map((part) => part.trim()).filter(Boolean).forEach((day) => {
+            if (seen[day]) return;
+            seen[day] = true;
+            existing.push(day);
+        });
+        input.value = '';
+        renderMonthlyDayBadges(existing);
+    }
+
+    function updateScheduleControls() {
+        if (window.DecisionsDateTime && window.DecisionsDateTime.close) window.DecisionsDateTime.close();
+        const kindEl = document.getElementById('automation-kind');
+        const timeWrap = document.getElementById('automation-time-wrap');
+        const onceWrap = document.getElementById('automation-once-wrap');
+        const intervalWrap = document.getElementById('automation-interval-wrap');
+        const weeklyWrap = document.getElementById('automation-weekly-days-wrap');
+        const monthlyWrap = document.getElementById('automation-monthly-days-wrap');
+        const cronWrap = document.getElementById('automation-cron-wrap');
+        const timezoneWrap = document.getElementById('automation-timezone-wrap');
+        const time = document.getElementById('automation-time');
+        const onceAt = document.getElementById('automation-once-at');
+        if (!kindEl || !timeWrap || !onceWrap || !intervalWrap) return;
+        const kind = kindEl.value || 'daily';
+        kindEl.classList.toggle('is-interval', kind === 'interval');
+        const showTime = kind === 'daily' || kind === 'weekly' || kind === 'monthly';
+        timeWrap.classList.toggle('hidden', !showTime);
+        onceWrap.classList.toggle('hidden', kind !== 'once');
+        intervalWrap.classList.toggle('hidden', kind !== 'interval');
+        cronWrap?.classList.toggle('hidden', kind !== 'cron');
+        timezoneWrap?.classList.toggle('hidden', kind !== 'cron');
+        weeklyWrap?.classList.toggle('hidden', kind !== 'weekly');
+        monthlyWrap?.classList.toggle('hidden', kind !== 'monthly');
+        if (time) time.disabled = !showTime;
+        if (onceAt) onceAt.disabled = kind !== 'once';
+        [time, onceAt].forEach((node) => {
+            if (node && window.DecisionsDateTime) window.DecisionsDateTime.refreshInput(node);
+        });
+    }
+
+    function payloadFromForm() {
+        const kind = document.getElementById('automation-kind')?.value || 'daily';
+        const schedule = Object.assign({}, state.formAutomation?.schedule || {}, { kind });
+        if (kind !== 'cron') delete schedule.cron;
+        if (kind === 'cron') {
+            schedule.cron = (document.getElementById('automation-cron')?.value || '').trim();
+            schedule.timezone = (document.getElementById('automation-timezone')?.value || '').trim();
+        } else if (kind === 'once') {
+            const runAt = document.getElementById('automation-once-at')?.value;
+            if (runAt) schedule.run_at = runAt;
+        } else if (kind === 'interval') {
+            const intervalValue = parseInt(document.getElementById('automation-interval-value')?.value, 10);
+            schedule.interval = intervalValue > 0 ? intervalValue : 15;
+            schedule.interval_unit = document.getElementById('automation-interval-unit')?.value || 'minutes';
+        } else if (kind === 'daily' || kind === 'weekly' || kind === 'monthly') {
+            const time = document.getElementById('automation-time')?.value;
+            if (time) schedule.time = time;
+            if (kind === 'weekly') schedule.days = getWeeklyDaysCsv();
+            if (kind === 'monthly') {
+                const monthDays = getMonthlyDaysArray();
+                schedule.days = monthDays.length ? monthDays.join(',') : '1';
+            }
+        }
+        return {
+            name: (document.getElementById('automation-name')?.value || 'Untitled Automation').trim(),
+            automation_type: state.formAutomation?.automation_type || 'scheduled_instruction',
+            status: document.getElementById('automation-status')?.value || 'active',
+            instruction: (document.getElementById('automation-instruction')?.value || '').trim(),
+            preset_id: document.getElementById('automation-preset-id')?.value || '',
+            schedule
+        };
+    }
+
+    function editorDraftKey() {
+        if (state.selectedAutomationId) return String(state.selectedAutomationId);
+        return state.creatingAutomation ? 'new' : '';
+    }
+
+    function editorHasUnsavedChanges() {
+        const root = el('scheduled-automation-editor');
+        if (!root || root.hidden || !document.getElementById('automation-detail') || state.formBaseline == null) return false;
+        try {
+            return JSON.stringify(payloadFromForm()) !== state.formBaseline;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function stashEditorDraft() {
+        if (!editorHasUnsavedChanges()) return;
+        const key = editorDraftKey();
+        if (key) state.editorDrafts[key] = payloadFromForm();
+    }
+
+    function fillForm(row) {
+        row = row || emptyAutomation();
+        state.formAutomation = row;
+        const schedule = row.schedule || {};
+        const kind = normalizeScheduleKind(schedule.kind || schedule.frequency || 'daily');
+        let interval = schedule.interval || 15;
+        let intervalUnit = schedule.interval_unit || 'minutes';
+        if (schedule.kind === '15min' || schedule.kind === '15m') { interval = 15; intervalUnit = 'minutes'; }
+        else if (schedule.kind === '30min' || schedule.kind === '30m') { interval = 30; intervalUnit = 'minutes'; }
+        setFormValue('automation-id', row.id || '');
+        setFormValue('automation-name', row.name || '');
+        setFormValue('automation-instruction', row.instruction || '');
+        setFormValue('automation-preset-id', row.preset_id || '');
+        setFormValue('automation-kind', kind);
+        setFormValue('automation-cron', schedule.cron || '');
+        setFormValue('automation-timezone', schedule.timezone || '');
+        setFormValue('automation-time', schedule.time || '09:00');
+        setFormValue('automation-once-at', String(schedule.run_at || ''));
+        setFormValue('automation-interval-value', interval);
+        setFormValue('automation-interval-unit', intervalUnit === 'seconds' ? 'seconds' : 'minutes');
+        setWeeklyDaySelection(kind === 'weekly' ? (schedule.days || '1') : '1');
+        renderMonthlyDayBadges(kind === 'monthly' ? String(schedule.days || '1').split(',').map((part) => part.trim()).filter(Boolean) : []);
+        const monthlyInput = document.getElementById('automation-monthly-days-input');
+        if (monthlyInput) monthlyInput.value = '';
+        setAutomationStatus(row.status || 'active');
+        const title = document.getElementById('automation-detail-title');
+        const meta = document.getElementById('automation-detail-meta');
+        if (title) title.textContent = row.id ? (row.name || 'Untitled Automation') : 'New Automation';
+        if (meta) meta.textContent = row.id ? `Next run: ${row.next_run_at ? relativeWhen(row.next_run_at) : '—'}` : 'Not saved yet';
+        const remove = document.getElementById('automation-delete');
+        const run = document.getElementById('automation-run');
+        if (remove) remove.disabled = !row.id;
+        if (run) run.disabled = !row.id;
+        updateScheduleControls();
+        state.formBaseline = JSON.stringify(payloadFromForm());
+    }
+
+    function setActiveTab(tab) {
+        state.editorTab = tab === 'history' ? 'history' : 'details';
+        document.querySelectorAll('.automation-tab').forEach((btn) => {
+            const active = btn.getAttribute('data-tab') === state.editorTab;
+            btn.classList.toggle('is-active', active);
+            btn.setAttribute('aria-selected', String(active));
+        });
+        document.querySelectorAll('.automation-tab-pane').forEach((pane) => {
+            pane.classList.toggle('hidden', pane.id !== `automation-tab-${state.editorTab}`);
+        });
+    }
+
+    function renderRuns(runs) {
+        const node = document.getElementById('automation-runs');
+        if (!node) return;
+        const id = document.getElementById('automation-id')?.value;
+        if (!id) {
+            node.innerHTML = '<p class="scheduled-history-empty">Save an automation to see runs.</p>';
+            return;
+        }
+        if (!runs || !runs.length) {
+            node.innerHTML = '<p class="scheduled-history-empty">No runs yet.</p>';
+            return;
+        }
+        node.innerHTML = runs.map((run) => {
+            const chat = run.chat_id ? ` · chat #${run.chat_id}` : '';
+            return `<div class="scheduled-run-row"><div class="scheduled-run-row-head"><span>${esc(run.status || 'recorded')}</span><span>${esc(run.started_at ? relativeWhen(run.started_at) : '')}</span></div><div class="scheduled-run-row-body">${esc((run.summary || 'Automation run recorded.') + chat)}</div></div>`;
+        }).join('');
+    }
+
+    async function loadEditorRuns(automationId) {
+        if (!automationId || automationId === 'new') {
+            renderRuns([]);
+            const node = document.getElementById('automation-runs');
+            if (node && (!automationId || automationId === 'new')) node.innerHTML = '<p class="scheduled-history-empty">Save an automation to see runs.</p>';
+            return;
+        }
+        renderRuns(null);
+        const node = document.getElementById('automation-runs');
+        if (node && !node.innerHTML) node.innerHTML = '<p class="scheduled-history-empty">Loading runs…</p>';
+        const runs = await loadRuns(automationId, true);
+        if (String(state.selectedAutomationId) === String(automationId)) renderRuns(runs);
+    }
+
+    function closeAutomationPresetMenu() {
+        const menu = document.getElementById('automation-preset-menu');
+        const btn = document.getElementById('automation-presets-btn');
+        menu?.classList.add('hidden');
+        if (menu) menu.hidden = true;
+        btn?.setAttribute('aria-expanded', 'false');
+    }
+
+    async function loadAutomationPresets() {
+        if (state.presets.length) return state.presets;
+        try {
+            const data = await actions.api('/automations/presets');
+            state.presets = data.presets || data || [];
+            if (!Array.isArray(state.presets)) state.presets = [];
+        } catch (_) {
+            state.presets = [];
+        }
+        return state.presets;
+    }
+
+    function renderAutomationPresetMenu() {
+        const menu = document.getElementById('automation-preset-menu');
+        if (!menu) return;
+        if (!state.presets.length) {
+            menu.innerHTML = '<p class="automation-preset-menu-header">Presets</p><p class="automation-preset-empty">No presets available.</p>';
+            return;
+        }
+        menu.innerHTML = `<p class="automation-preset-menu-header">Add preset</p>${state.presets.map((preset) => {
+            const existing = (context.automations || []).some((item) => item.preset_id === preset.preset_id);
+            return `<button type="button" class="automation-preset-item${existing ? ' is-disabled' : ''}" role="menuitem" data-preset-id="${esc(preset.preset_id)}"${existing ? ' aria-disabled="true"' : ''}><span class="automation-preset-item-name">${esc(preset.name || preset.preset_id)}${existing ? ' (added)' : ''}</span><span class="automation-preset-item-desc">${esc(preset.description || '')}</span></button>`;
+        }).join('')}`;
+        menu.querySelectorAll('.automation-preset-item:not(.is-disabled)').forEach((item) => {
+            item.addEventListener('click', (event) => {
+                event.stopPropagation();
+                closeAutomationPresetMenu();
+                createAutomationFromPreset(item.getAttribute('data-preset-id'));
+            });
+        });
+    }
+
+    async function openAutomationPresetMenu(anchorEl) {
+        const menu = document.getElementById('automation-preset-menu');
+        const btn = document.getElementById('automation-presets-btn');
+        if (!menu || !anchorEl) return;
+        await loadAutomationPresets();
+        renderAutomationPresetMenu();
+        menu.classList.remove('hidden');
+        menu.hidden = false;
+        btn?.setAttribute('aria-expanded', 'true');
+        const rect = anchorEl.getBoundingClientRect();
+        const menuWidth = menu.offsetWidth || 320;
+        let left = Math.min(rect.left, window.innerWidth - menuWidth - 8);
+        let top = rect.bottom + 6;
+        if (top + menu.offsetHeight > window.innerHeight - 8) top = Math.max(8, rect.top - menu.offsetHeight - 6);
+        menu.style.left = `${Math.max(8, left)}px`;
+        menu.style.top = `${top}px`;
+    }
+
+    async function createAutomationFromPreset(presetId) {
+        const preset = (state.presets || []).find((item) => item.preset_id === presetId);
+        if (!preset) return;
+        try {
+            const result = await actions.api('/automations', {
+                method: 'POST',
+                body: {
+                    name: preset.name || '',
+                    preset_id: presetId,
+                    schedule: preset.schedule || { kind: 'daily', time: '09:00' }
+                }
+            });
+            const automation = result.automation || {};
+            actions.toast(`Added “${automation.name || preset.name}”.`);
+            await actions.refreshShell({ preserveConversation: true });
+            if (automation.id) openAutomationEditor(automation.id);
+        } catch (error) {
+            actions.toast(error.message || 'Could not add the preset.', 'error');
+        }
+    }
+
+    function showEditorSnackbar(message, type) {
+        const bar = document.getElementById('automation-snackbar');
+        if (!bar) return;
+        bar.textContent = message || '';
+        bar.dataset.type = type || '';
+        bar.hidden = !message;
+    }
+
+    function editorSourceAutomation() {
+        if (state.selectedAutomationId && state.selectedAutomationId !== 'new') {
+            return findAutomation(state.selectedAutomationId) || emptyAutomation();
+        }
+        return emptyAutomation();
+    }
+
+    function renderAutomationEditor() {
+        const root = el('scheduled-automation-editor');
+        const creating = state.selectedAutomationId === 'new' || state.creatingAutomation;
+        const automation = creating ? emptyAutomation() : findAutomation(state.selectedAutomationId);
+        if (!root || (!creating && !automation)) return;
+        const editorId = creating ? 'new' : String(automation.id);
+        if (root.dataset.editingId === editorId && root.dataset.bound === '1') return;
+        root.dataset.editingId = editorId;
+        root.innerHTML = `<form id="automation-detail" class="scheduled-automation-form">
+            <input type="hidden" id="automation-id" value="${esc(automation?.id || '')}">
+            <input type="hidden" id="automation-preset-id" value="${esc(automation?.preset_id || '')}">
+            <input type="hidden" id="automation-status" value="${esc(automation?.status || 'active')}">
+            <header class="scheduled-editor-head">
+                <button type="button" id="automation-back" class="scheduled-editor-back" aria-label="Back to automations">Back</button>
+                <div class="automation-title">
+                    <h2 id="automation-detail-title">${esc((creating ? 'New Automation' : (automation.name || 'Automation')))}</h2>
+                    <p id="automation-detail-meta" class="scheduled-editor-meta">${esc(creating ? 'Not saved yet' : (automationScheduleLabel(automation) + ' · ' + automationProject(automation)))}</p>
+                </div>
+                <div class="scheduled-editor-head-actions">
+                    <button type="button" id="automation-run" class="scheduled-editor-secondary" ${creating ? 'disabled' : ''}>Run Now</button>
+                    <button type="submit" class="scheduled-model-save" id="automation-save">Save</button>
+                    <button type="button" id="automation-delete" class="scheduled-editor-danger" ${creating ? 'disabled' : ''}>Remove</button>
+                </div>
+            </header>
+            <div class="automation-tabs" role="tablist" aria-label="Automation sections">
+                <button type="button" class="automation-tab is-active" role="tab" data-tab="details" aria-selected="true">Automation</button>
+                <button type="button" class="automation-tab" role="tab" data-tab="history" aria-selected="false">Run History</button>
+            </div>
+            <div id="automation-tab-details" class="automation-tab-pane">
+                <div class="automation-fields-row">
+                    <div class="scheduled-edit-field automation-status-field">
+                        <span>Status</span>
+                        <button type="button" id="automation-status-switch" class="automation-status-switch is-on" role="switch" aria-checked="true" aria-label="Active">
+                            <span class="automation-status-switch-track" aria-hidden="true"><span class="automation-status-switch-knob"></span></span>
+                            <span class="automation-status-switch-text">Active</span>
+                        </button>
+                    </div>
+                    <label class="scheduled-edit-field automation-name-field"><span>Name</span>
+                        <input type="text" id="automation-name" value="" autocomplete="off" required placeholder="Daily planning reminder">
+                    </label>
+                    <label class="scheduled-edit-field"><span>Schedule</span>
+                        <select id="automation-kind" class="automation-schedule-kind">
+                            <option value="once">Once</option>
+                            <option value="interval">Every N sec/min</option>
+                            <option value="hourly">Hourly</option>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="cron">Cron</option>
+                        </select>
+                    </label>
+                    <div id="automation-time-wrap" class="scheduled-edit-field">
+                        <label for="automation-time">Time</label>
+                        <input id="automation-time" type="time">
+                    </div>
+                    <div id="automation-once-wrap" class="scheduled-edit-field hidden">
+                        <label for="automation-once-at">Run at</label>
+                        <input id="automation-once-at" type="datetime-local">
+                    </div>
+                    <div id="automation-cron-wrap" class="scheduled-edit-field hidden">
+                        <label for="automation-cron">Cron expression</label>
+                        <input id="automation-cron" type="text" placeholder="0 9 * * *">
+                    </div>
+                    <div id="automation-timezone-wrap" class="scheduled-edit-field hidden">
+                        <label for="automation-timezone">Timezone</label>
+                        <input id="automation-timezone" type="text" placeholder="System timezone">
+                    </div>
+                    <div id="automation-interval-wrap" class="scheduled-edit-field hidden">
+                        <span>Every</span>
+                        <div class="automation-interval-fields">
+                            <input id="automation-interval-value" type="number" min="1" step="1" value="15" class="automation-interval-value">
+                            <select id="automation-interval-unit" class="automation-interval-unit">
+                                <option value="seconds">Seconds</option>
+                                <option value="minutes" selected>Minutes</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="automation-weekly-days-wrap" class="scheduled-edit-field hidden">
+                        <span>Days</span>
+                        <div id="automation-weekly-days" class="automation-weekday-row">
+                            <button type="button" class="automation-weekday-btn" data-day="0">Sun</button>
+                            <button type="button" class="automation-weekday-btn" data-day="1">Mon</button>
+                            <button type="button" class="automation-weekday-btn" data-day="2">Tue</button>
+                            <button type="button" class="automation-weekday-btn" data-day="3">Wed</button>
+                            <button type="button" class="automation-weekday-btn" data-day="4">Thu</button>
+                            <button type="button" class="automation-weekday-btn" data-day="5">Fri</button>
+                            <button type="button" class="automation-weekday-btn" data-day="6">Sat</button>
+                        </div>
+                    </div>
+                    <div id="automation-monthly-days-wrap" class="scheduled-edit-field hidden">
+                        <span>Days of month</span>
+                        <div id="automation-monthly-days" class="automation-monthly-days-wrap">
+                            <div id="automation-monthly-badges" class="automation-monthly-badges"></div>
+                            <input type="text" id="automation-monthly-days-input" class="automation-monthly-days-input" placeholder="1, 15, 25" autocomplete="off">
+                        </div>
+                    </div>
+                </div>
+                <label class="scheduled-edit-field"><span>Instruction</span>
+                    <textarea id="automation-instruction" rows="8" placeholder="Enter the instruction this automation should run..."></textarea>
+                </label>
+            </div>
+            <div id="automation-tab-history" class="automation-tab-pane hidden">
+                <div id="automation-runs" class="automation-runs"><p class="scheduled-history-empty">Save an automation to see runs.</p></div>
+            </div>
+            <p id="automation-snackbar" class="scheduled-editor-snackbar" role="status" hidden></p>
+            <footer class="scheduled-edit-actions">
+                <button type="button" class="scheduled-edit-cancel" id="automation-cancel">Cancel</button>
+                <button type="submit" class="scheduled-model-save" id="automation-save-footer">Save</button>
+            </footer>
+        </form>`;
+        const draft = state.editorDrafts[editorId];
+        const source = draft
+            ? Object.assign({}, automation || emptyAutomation(), draft, { schedule: draft.schedule || (automation && automation.schedule) || emptyAutomation().schedule, id: automation?.id || '' })
+            : (automation || emptyAutomation());
+        fillForm(source);
+        bindAutomationEditor(root, editorId);
+        setActiveTab(state.editorTab || 'details');
+        root.dataset.bound = '1';
+        document.getElementById('automation-name')?.focus();
+        if (!creating) loadEditorRuns(editorId);
+    }
+
+    function bindAutomationEditor(root) {
+        const form = root.querySelector('#automation-detail');
+        root.querySelector('#automation-back').addEventListener('click', () => requestCloseEditor({ discard: false }));
+        root.querySelector('#automation-cancel').addEventListener('click', () => requestCloseEditor({ discard: true }));
+        root.querySelectorAll('.automation-tab').forEach((btn) => btn.addEventListener('click', () => setActiveTab(btn.getAttribute('data-tab'))));
+        root.querySelector('#automation-status-switch')?.addEventListener('click', toggleAutomationStatus);
+        root.querySelector('#automation-kind')?.addEventListener('change', updateScheduleControls);
+        root.querySelectorAll('.automation-weekday-btn').forEach((btn) => btn.addEventListener('click', () => btn.classList.toggle('is-selected')));
+        const monthlyInput = root.querySelector('#automation-monthly-days-input');
+        monthlyInput?.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ',') {
+                event.preventDefault();
+                addMonthlyDaysFromInput();
+            }
+        });
+        monthlyInput?.addEventListener('blur', addMonthlyDaysFromInput);
+        root.querySelector('#automation-run')?.addEventListener('click', () => {
+            const id = document.getElementById('automation-id')?.value;
+            if (id) runAutomation(id);
+        });
+        root.querySelector('#automation-delete')?.addEventListener('click', async () => {
+            const id = document.getElementById('automation-id')?.value;
+            if (!id) return;
+            await deleteAutomation(id);
+        });
+        form.addEventListener('submit', saveEditorForm);
+    }
+
+    async function saveEditorForm(event) {
+        event.preventDefault();
+        const current = state.formAutomation || editorSourceAutomation();
+        const payload = payloadFromForm();
+        // Preserve execution bindings the form does not edit.
+        if (current.action_config) payload.action_config = current.action_config;
+        showEditorSnackbar('');
+        const existingId = (document.getElementById('automation-id')?.value || '').trim();
+        try {
+            let saved;
+            if (existingId) {
+                const result = await saveAutomationPatch(current, payload);
+                saved = result?.automation || Object.assign({}, current, payload, { id: existingId });
+            } else {
+                const result = await actions.api('/automations', { method: 'POST', body: payload });
+                saved = result?.automation || Object.assign({}, payload);
+            }
+            delete state.editorDrafts[existingId || 'new'];
+            delete state.editorDrafts.new;
+            state.creatingAutomation = false;
+            state.selectedAutomationId = String(saved.id || existingId);
+            fillForm(saved);
+            showEditorSnackbar('Automation saved', 'success');
+            actions.toast('Automation saved.');
+            setAutomationLocation(automationWorkspacePath(saved.id || existingId), { replace: true });
+            const root = el('scheduled-automation-editor');
+            if (root) root.dataset.editingId = String(saved.id || existingId);
+            if (['automations', 'automation_rules'].includes(context.workspaceMode)) {
+                await actions.refreshShell({ preserveConversation: true });
+            }
+        } catch (error) {
+            const message = error.message || 'Could not save automation';
+            showEditorSnackbar(message, 'error');
+            actions.toast(message, 'error');
+        }
+    }
+
+    async function requestCloseEditor(options) {
+        const discard = Boolean(options?.discard);
+        if (discard && editorHasUnsavedChanges()) {
+            const ok = await actions.confirmAction({
+                title: 'Discard unsaved changes?',
+                message: 'Leave this automation and lose unsaved edits?',
+                confirmLabel: 'Discard',
+                danger: true
+            });
+            if (!ok) return;
+            delete state.editorDrafts[editorDraftKey()];
+        } else {
+            stashEditorDraft();
+        }
+        closeAutomationEditor(options);
+    }
+
+    function closeAutomationEditor(options) {
+        closeScheduledRowMenu();
+        closeAutomationPresetMenu();
+        const root = el('scheduled-automation-editor');
+        if (root) {
+            root.innerHTML = '';
+            delete root.dataset.editingId;
+            delete root.dataset.bound;
+        }
+        state.selectedAutomationId = '';
+        state.creatingAutomation = false;
+        state.formBaseline = null;
+        state.formAutomation = null;
+        state.editorTab = 'details';
+        if (options?.updateUrl !== false) setAutomationLocation(automationWorkspacePath(), options);
+        renderScheduledWorkspace();
+    }
+
+    function openNewAutomation() {
+        closeScheduledRowMenu();
+        closeHistoryModal();
+        closeEditModal();
+        closeDayPopover();
+        closeAutomationPresetMenu();
+        stashEditorDraft();
+        state.creatingAutomation = true;
+        state.selectedAutomationId = 'new';
+        state.editorTab = 'details';
+        state.missingAutomationId = '';
+        setAutomationLocation(automationWorkspacePath('new'));
+        const root = el('scheduled-automation-editor');
+        if (root) {
+            delete root.dataset.editingId;
+            delete root.dataset.bound;
+        }
+        renderScheduledWorkspace();
+    }
+
     // Kept under the old name for callers: shows the automation read-only on this page.
     function openAutomationDialog(automation) {
         if (!automation) return;
@@ -1248,6 +1948,10 @@ export function createAutomations({ context, actions, el }) {
     }
 
     function bindEvents() {
+        if (location.hash === '#calendar' && !requestedAutomationId()) {
+            state.view = 'calendar';
+            writeSession(VIEW_KEY, 'calendar');
+        }
         let resizeTimer = 0;
         window.addEventListener('resize', () => {
             window.clearTimeout(resizeTimer);
@@ -1260,7 +1964,17 @@ export function createAutomations({ context, actions, el }) {
             if (pop && !pop.contains(event.target) && !event.target.closest('.cal-more, [data-cal-cluster]')) closeDayPopover();
             const menu = document.getElementById('scheduled-cal-menu');
             if (menu && !menu.contains(event.target)) closeCalendarMenu();
+            if (!event.target.closest('#automation-preset-menu, #automation-presets-btn')) closeAutomationPresetMenu();
         });
+        el('automation-new')?.addEventListener('click', () => openNewAutomation());
+        el('automation-presets-btn')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const menu = document.getElementById('automation-preset-menu');
+            if (menu && !menu.classList.contains('hidden')) closeAutomationPresetMenu();
+            else openAutomationPresetMenu(event.currentTarget);
+        });
+        document.getElementById('automation-preset-menu')?.addEventListener('click', (event) => event.stopPropagation());
+        loadAutomationPresets();
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 closeScheduledRowMenu();
@@ -1296,9 +2010,27 @@ export function createAutomations({ context, actions, el }) {
         );
     }
 
-    function openAutomationEditor(automationId) {
+    function openAutomationEditor(automationId, options) {
         closeScheduledRowMenu();
-        window.location.assign(`/automations/?automation=${encodeURIComponent(automationId)}`);
+        closeHistoryModal();
+        closeEditModal();
+        closeDayPopover();
+        closeAutomationPresetMenu();
+        stashEditorDraft();
+        const root = el('scheduled-automation-editor');
+        if (root && root.dataset.editingId !== String(automationId)) {
+            delete root.dataset.editingId;
+            delete root.dataset.bound;
+        }
+        const automation = findAutomation(automationId);
+        if (!automation) {
+            actions.toast('That automation is no longer available.', 'error');
+            return;
+        }
+        state.selectedAutomationId = String(automation.id);
+        state.missingAutomationId = '';
+        if (options?.updateUrl !== false) setAutomationLocation(automationWorkspacePath(automation.id), options);
+        renderScheduledWorkspace();
     }
 
     function closeScheduledRowMenu() {
@@ -1330,9 +2062,13 @@ export function createAutomations({ context, actions, el }) {
 
     return {
         bindEvents,
+        closeAutomationEditor,
         closeAutomationImportMenu,
+        closeAutomationPresetMenu,
         closeScheduledRowMenu,
         openAutomationDialog,
+        openAutomationEditor,
+        openNewAutomation,
         renderScheduledWorkspace,
         runAutomation,
         toggleAutomation

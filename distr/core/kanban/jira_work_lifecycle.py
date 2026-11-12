@@ -205,6 +205,16 @@ def prepare_completed_jira_review(
             })
         return None
 
+    try:
+        from distr.core.initiative.outcome_flow import posture_handles_reply
+
+        if posture_handles_reply(int(ticket_id)):
+            # The Initiative flow already sent this update or is holding it for Paul.
+            _audit(ticket_id, run_id, "client_update_via_initiative", "Client update handled by the Initiative flow")
+            return None
+    except Exception:
+        logger.debug("Initiative reply check skipped", exc_info=True)
+
     from distr.core.db.kanban import KanbanTicket
 
     with get_session() as db:
@@ -338,6 +348,7 @@ def post_jira_comment(
     body: str,
     *,
     http_post: Callable[..., Any] | None = None,
+    before_send: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     import requests
     from requests.auth import HTTPBasicAuth
@@ -355,6 +366,8 @@ def post_jira_comment(
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": body}]}],
         }
     }
+    if before_send is not None:
+        before_send()
     try:
         resp = poster(
             f"https://{domain}/rest/api/3/issue/{issue_key}/comment",

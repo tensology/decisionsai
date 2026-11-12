@@ -7,9 +7,10 @@ import re
 import secrets
 from pathlib import Path
 from datetime import datetime, timedelta
+from hashlib import sha256
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, case, func, or_
 
 from distr.core.chat import _chat_params
 from distr.core.chat_turns import redact_metadata, redact_text
@@ -17,10 +18,19 @@ from distr.core.db import Chat, Settings, get_session
 from distr.core.db.projects import Project
 from distr.core.db.time import utc_now_naive
 from distr.core.db.workflow import DevelopmentCommand, DevelopmentTimeEntry, DevelopmentWorkItem, StudioArtifact
-from distr.core.workflow.development_threads import development_thread_metadata, is_development_thread
+from distr.core.workflow.development_threads import (
+    DevelopmentThreadConflict, development_scope_identity, development_thread_metadata,
+    development_thread_receipt_identity, is_development_thread,
+)
 
 
 COMMAND_STATUSES = {"queued", "editing", "dispatching", "delivered", "completed", "cancelled", "failed"}
+
+
+class FollowupThreadIdentityConflict(DevelopmentThreadConflict):
+    """The desktop no longer has the thread reviewed by the App View submission."""
+
+
 # Reject syncing absurd thread totals into tickets (e.g. cancelled workflow ghosts).
 MAX_TICKET_TIME_SYNC_SECONDS = 12 * 60 * 60
 DEVELOPMENT_TIMER_MENU = {
@@ -72,7 +82,10 @@ def _json(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
-def _command_payload(row: DevelopmentCommand) -> dict[str, Any]:
+def _command_payload(row: DevelopmentCommand, *, root: Chat | None = None) -> dict[str, Any]:
+    metadata = _json(row.metadata_json, {})
+    if isinstance(metadata, dict):
+        metadata.pop("app_view_submission_digest", None)
     return {
         "id": int(row.id),
         "chat_id": int(row.chat_id),
@@ -85,25 +98,96 @@ def _command_payload(row: DevelopmentCommand) -> dict[str, Any]:
         "status": row.status or "queued",
         "position": int(row.position or 0),
         "result_summary": row.result_summary or "",
-        "metadata": _json(row.metadata_json, {}),
+        "metadata": metadata,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "modified_at": row.modified_at.isoformat() if row.modified_at else None,
         "delivered_at": row.delivered_at.isoformat() if row.delivered_at else None,
         "cancelled_at": row.cancelled_at.isoformat() if row.cancelled_at else None,
+        **({"scope_status": command_scope_status(row, root)}
+           if root is not None and row.status in {"queued", "editing", "dispatching"} else {}),
     }
 
 
+def _next_command_position(db, chat_id: int) -> int:
+    return int(db.query(func.coalesce(func.max(DevelopmentCommand.position), 0))
+               .filter(DevelopmentCommand.chat_id == chat_id).scalar() or 0) + 1
+
+
+def _queue_scope(root: Chat) -> tuple:
+    return development_scope_identity(root.project_id, development_thread_metadata(root), chat_id=root.id)
+
+
+def command_scope_status(command: DevelopmentCommand, root: Chat) -> str:
+    metadata = _json(command.metadata_json, {})
+    if not isinstance(metadata, dict):
+        return "unknown"
+    saved = metadata.get("queued_scope", metadata.get("app_view_scope") if command.source == "app_view" else None)
+    if (not isinstance(saved, list) or len(saved) != 5 or type(saved[0]) is not int
+            or any(type(saved[index]) is not str for index in (1, 2, 4))
+            or (saved[3] is not None and type(saved[3]) is not int)):
+        return "unknown"
+    return "current" if saved == list(_queue_scope(root)) else "earlier"
+
+
+def _ordered_pending_commands(db, root: Chat, *, include_held: bool = False):
+    scope = _queue_scope(root)
+    metadata = case(
+        (func.json_valid(DevelopmentCommand.metadata_json) == 1, DevelopmentCommand.metadata_json),
+        else_="{}",
+    )
+    saved_scope = case(
+        (func.json_type(metadata, "$.queued_scope").is_not(None), "$.queued_scope"),
+        (DevelopmentCommand.source == "app_view", "$.app_view_scope"),
+        else_="$.queued_scope",
+    )
+    scope_types = ("integer", "text", "text", "null" if scope[3] is None else "integer", "text")
+    matches = [func.json_array_length(metadata, saved_scope) == len(scope)]
+    for index, (value, kind) in enumerate(zip(scope, scope_types)):
+        path = saved_scope + f"[{index}]"
+        matches.append(func.json_type(metadata, path) == kind)
+        matches.append(func.json_extract(metadata, path).is_not_distinct_from(value))
+    eligible = and_(*matches)
+    query = db.query(DevelopmentCommand).filter(
+        DevelopmentCommand.chat_id == root.id,
+        DevelopmentCommand.status.in_(["queued", "editing", "dispatching"]),
+        or_(DevelopmentCommand.source.is_(None), DevelopmentCommand.source != "app_view_steer"),
+    )
+    if include_held:
+        query = query.order_by(case((eligible, 0), else_=1))
+    else:
+        query = query.filter(eligible)
+    return query.order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc())
+
+
 def list_commands(chat_id: int, *, include_terminal: bool = True, limit: int = 50) -> list[dict[str, Any]]:
+    from .queued_submissions import recover_manual_starts
+
     with get_session() as db:
-        _require_development_root(db, int(chat_id))
-        query = db.query(DevelopmentCommand).filter(DevelopmentCommand.chat_id == int(chat_id))
-        if not include_terminal:
-            query = query.filter(DevelopmentCommand.status.in_(["queued", "editing", "dispatching"]))
-        rows = query.order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc()).limit(max(1, min(limit, 200))).all()
-        return [_command_payload(row) for row in rows]
+        root = _require_development_root(db, int(chat_id))
+        recover_manual_starts(db, root.id)
+        if include_terminal:
+            query = db.query(DevelopmentCommand).filter(DevelopmentCommand.chat_id == root.id).order_by(
+                DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc(),
+            )
+        else:
+            query = _ordered_pending_commands(db, root, include_held=True)
+        rows = query.limit(max(1, min(limit, 200))).all()
+        return [_command_payload(row, root=root) for row in rows]
 
 
-def is_duplicate_instruction(chat_id: int, content: str, *, window_sec: float | None = None) -> bool:
+def app_view_followup_receipt(chat_id: int, submission_id: str) -> dict[str, Any] | None:
+    with get_session() as db:
+        root = _require_development_root(db, chat_id)
+        row = db.query(DevelopmentCommand).filter_by(
+            chat_id=root.id, source="app_view", source_ref=submission_id, command_type="followup",
+        ).first()
+        if row is None:
+            return None
+        return {"id": row.id, "chat_id": row.chat_id, "source_ref": row.source_ref, "status": row.status}
+
+
+def is_duplicate_instruction(chat_id: int, content: str, expected_scope: tuple | None = None,
+                             *, window_sec: float | None = None) -> bool:
     """Identical instruction already pending for this thread within a few seconds:
     either the latest unanswered user row, or a queued command just created."""
     from datetime import datetime, timezone
@@ -114,14 +198,19 @@ def is_duplicate_instruction(chat_id: int, content: str, *, window_sec: float | 
     cleaned = str(content or "").strip()
     if not cleaned:
         return False
+    if expected_scope is not None:
+        with get_session() as db:
+            if _queue_scope(_require_development_root(db, int(chat_id))) != expected_scope:
+                return False
     if is_duplicate_pending_input(int(chat_id), cleaned, window_sec=window):
         return True
     instruction = redact_text(cleaned, limit=12000, preserve_paths=True)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with get_session() as db:
+        root = _require_development_root(db, int(chat_id))
         rows = (
-            db.query(DevelopmentCommand)
-            .filter(DevelopmentCommand.chat_id == int(chat_id), DevelopmentCommand.status == "queued")
+            _ordered_pending_commands(db, root)
+            .filter(DevelopmentCommand.status == "queued").order_by(None)
             .order_by(DevelopmentCommand.id.desc())
             .limit(5)
             .all()
@@ -141,43 +230,80 @@ def enqueue_command(
     source_ref: str = "",
     command_type: str = "instruction",
     metadata: dict[str, Any] | None = None,
+    idempotent: bool = False,
+    expected_project_id: int | None = None,
+    expected_scope: tuple[int, str, str, int | None, str] | None = None,
+    expected_thread_identity: str | None = None,
 ) -> dict[str, Any]:
     instruction = redact_text(content, limit=64000 if command_type == 'followup' else 12000, preserve_paths=True)
     if not instruction:
         raise ValueError("A development instruction is required.")
+    submission_digest = sha256(instruction.encode()).hexdigest() if idempotent else None
+    reviewed_scope = expected_scope
     if command_type == 'followup':
         from .queued_submissions import submission_metadata
+        if expected_scope is None:
+            with get_session() as db:
+                expected_scope = _queue_scope(_require_development_root(db, int(chat_id)))
         metadata = submission_metadata(int(chat_id), metadata)
+    source = str(source or "web").strip().lower()[:40]
     with get_session() as db:
-        _require_development_root(db, int(chat_id))
-        position = int(
-            db.query(func.coalesce(func.max(DevelopmentCommand.position), 0))
-            .filter(DevelopmentCommand.chat_id == int(chat_id))
-            .scalar()
-            or 0
-        ) + 1
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        root = _require_development_root(db, int(chat_id))
+        if expected_thread_identity is not None and development_thread_receipt_identity(root) != expected_thread_identity:
+            raise FollowupThreadIdentityConflict("This is a different Development thread. Reopen the original thread before retrying.")
+        if idempotent:
+            existing = db.query(DevelopmentCommand).filter_by(
+                chat_id=int(chat_id), source=source, source_ref=source_ref, command_type=command_type,
+            ).first()
+            if existing is not None:
+                saved = _json(existing.metadata_json, {})
+                saved = saved if isinstance(saved, dict) else {}
+                original_digest = saved.get("app_view_submission_digest") or sha256(existing.content.encode()).hexdigest()
+                if original_digest != submission_digest:
+                    raise ValueError("This submission was already used for a different instruction.")
+                if reviewed_scope is not None and saved.get("app_view_scope") != list(reviewed_scope):
+                    raise ValueError("This submission belongs to a different Development scope.")
+                return _command_payload(existing, root=root)
+        if root.is_archived or (idempotent and root.project_id != expected_project_id):
+            raise ValueError("The Development thread changed. Reopen it before queuing this instruction.")
+        scope = _queue_scope(root)
+        if expected_scope is not None and scope != expected_scope:
+            raise DevelopmentThreadConflict("The Development project, board or ticket changed. Review the draft before queuing it.")
+        metadata = dict(metadata or {}) if command_type == "followup" else redact_metadata(metadata or {})
+        metadata.pop("app_view_scope", None)
+        metadata.pop("app_view_submission_digest", None)
+        metadata["queued_scope"] = list(scope)
+        if idempotent:
+            metadata["app_view_scope"] = list(scope)
+            metadata["app_view_submission_digest"] = submission_digest
         row = DevelopmentCommand(
             chat_id=int(chat_id),
             workflow_id=None,
-            source=str(source or "web").strip().lower()[:40],
+            source=source,
             source_ref=str(source_ref or "").strip()[:240] or None,
             command_type=str(command_type or "instruction").strip().lower()[:40],
             content=instruction,
             status="queued",
-            position=position,
-            metadata_json=json.dumps(metadata if command_type == 'followup' else redact_metadata(metadata or {}), ensure_ascii=False, default=str),
+            position=_next_command_position(db, int(chat_id)),
+            metadata_json=json.dumps(metadata, ensure_ascii=False, default=str),
         )
         db.add(row)
         db.commit()
         db.refresh(row)
-        return _command_payload(row)
+        return _command_payload(row, root=root)
 
 
-def update_command(command_id: int, *, content: str | None = None, cancel: bool = False, metadata: dict | None = None, editing: bool | None = None, expected_modified_at: str | None = None) -> dict[str, Any] | None:
+def update_command(command_id: int, *, content: str | None = None, cancel: bool = False, metadata: dict | None = None, editing: bool | None = None, expected_modified_at: str | None = None,
+                   followup_chat_id: int | None = None) -> dict[str, Any] | None:
     with get_session() as db:
         row = db.get(DevelopmentCommand, int(command_id))
-        if row is None:
+        if row is None or (followup_chat_id is not None
+                           and (row.chat_id != followup_chat_id or row.command_type != "followup")):
             return None
+        if followup_chat_id is not None and cancel and row.status == "cancelled":
+            return _command_payload(row)
         if row.status not in {"queued", "editing"}:
             raise ValueError("Only queued instructions can be changed.")
         if expected_modified_at and row.modified_at.isoformat() != expected_modified_at:
@@ -188,6 +314,8 @@ def update_command(command_id: int, *, content: str | None = None, cancel: bool 
         if not claimed:
             raise ValueError('This queued item changed. Refresh the queue.')
         db.refresh(row)
+        previous_metadata = _json(row.metadata_json, {})
+        previous_metadata = previous_metadata if isinstance(previous_metadata, dict) else {}
         if cancel:
             row.status = "cancelled"
             row.cancelled_at = utc_now_naive()
@@ -196,17 +324,25 @@ def update_command(command_id: int, *, content: str | None = None, cancel: bool 
             clean = redact_text(content, limit=64000 if row.command_type == 'followup' else 12000, preserve_paths=True)
             if not clean:
                 raise ValueError("Instruction cannot be empty.")
+            if row.source == "app_view" and row.command_type == "followup" and row.source_ref:
+                previous_metadata.setdefault("app_view_submission_digest", sha256(row.content.encode()).hexdigest())
+                row.metadata_json = json.dumps(previous_metadata, ensure_ascii=False, default=str)
             row.content = clean
         if metadata is not None and not cancel:
             from .queued_submissions import submission_metadata
-            row.metadata_json = json.dumps(submission_metadata(row.chat_id, metadata), ensure_ascii=False, default=str)
+            updated_metadata = submission_metadata(row.chat_id, metadata)
+            for key in ("queued_scope", "app_view_scope", "app_view_submission_digest"):
+                updated_metadata.pop(key, None)
+                if key in previous_metadata:
+                    updated_metadata[key] = previous_metadata[key]
+            row.metadata_json = json.dumps(updated_metadata, ensure_ascii=False, default=str)
         if editing is not None and not cancel:
             row.status = 'editing' if editing else 'queued'
         elif not cancel:
             row.status = previous_status
         db.commit()
         db.refresh(row)
-        return _command_payload(row)
+        return _command_payload(row, root=_require_development_root(db, row.chat_id))
 
 
 def _steering_turn_id(chat) -> int | None:
@@ -215,6 +351,74 @@ def _steering_turn_id(chat) -> int | None:
     turn_id = execution.get("turn_id") if isinstance(execution, dict) else None
     turn_id = turn_id or params.get("active_turn_chat_row_id")
     return turn_id if type(turn_id) is int and turn_id > 0 else None
+
+
+def _exact_steering_command(db, chat_id: int, submission_id: str):
+    return db.query(DevelopmentCommand).filter_by(
+        chat_id=chat_id, source="app_view_steer", source_ref=submission_id,
+    ).first()
+
+
+def exact_steering_receipt(chat_id: int, turn_id: int, project_id: int, submission_id: str) -> dict[str, Any]:
+    """Read the receipt without exposing the instruction or writing to the queue."""
+    with get_session() as db:
+        chat = _require_development_root(db, chat_id)
+        if chat.project_id != project_id:
+            raise LookupError("This steering request is unavailable on the selected project.")
+        command = _exact_steering_command(db, chat_id, submission_id)
+        if command is None:
+            status, summary = "missing", ""
+        else:
+            metadata = _json(command.metadata_json, {})
+            if metadata.get("project_id") != project_id or metadata.get("steering_turn_id") != turn_id:
+                raise LookupError("This steering request is unavailable on the selected turn.")
+            status, summary = command.status, command.result_summary or ""
+        return {"chat_id": chat_id, "turn_id": turn_id, "submission_id": submission_id,
+                "status": status, "summary": summary}
+
+
+def steer_exact_turn(chat_id: int, turn_id: int, project_id: int, submission_id: str, guidance: str) -> dict[str, Any]:
+    """Accept or recover one App View steering request for a specific native turn."""
+    from distr.core.db.orm_compat import retry_sqlite_locked
+    from distr.core.turn_runtime import steer_active_turn
+    from distr.core.turn_runtime.service import native_steering_available
+
+    instruction = redact_text(guidance, limit=12000, preserve_paths=True)
+    if not instruction:
+        raise ValueError("Steering guidance is required.")
+    scope = {"steering_turn_id": turn_id, "project_id": project_id}
+    with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        chat = _require_development_root(db, chat_id)
+        if chat.is_archived or chat.project_id != project_id:
+            raise ValueError("The Development thread changed. Reopen it before steering.")
+        prior = _exact_steering_command(db, chat_id, submission_id)
+        if prior is not None:
+            metadata = _json(prior.metadata_json, {})
+            if prior.content != instruction or any(metadata.get(key) != value for key, value in scope.items()):
+                raise ValueError("This submission belongs to a different steering request.")
+            return _command_payload(prior)
+        project = db.get(Project, project_id)
+        development = development_thread_metadata(chat)
+        execution = development.get("execution") or {}
+        if (not project or project.deleted_at is not None or development.get("proactive_dispatch")
+                or execution.get("runtime_id") != "native" or execution.get("turn_id") != turn_id
+                or execution.get("completed_at") or not native_steering_available(chat_id, turn_id)):
+            raise ValueError("The selected turn changed or can no longer accept guidance.")
+        row = DevelopmentCommand(
+            chat_id=chat_id, source="app_view_steer", source_ref=submission_id, command_type="steer",
+            content=instruction, status="dispatching", position=_next_command_position(db, chat_id),
+            metadata_json=json.dumps(scope),
+        )
+        db.add(row)
+        db.flush()
+        command_id = row.id
+        db.commit()
+
+    result = steer_active_turn(chat_id, instruction, expected_turn_id=turn_id)
+    delivery = retry_sqlite_locked(lambda: _finish_command_steering(command_id, result, exact=True))
+    return delivery["command"]
 
 
 def dispatch_command(command_id: int) -> dict[str, Any]:
@@ -229,6 +433,8 @@ def dispatch_command(command_id: int) -> dict[str, Any]:
             return {"command": _command_payload(row), "dispatched": row.status == "delivered"}
         chat_id = int(row.chat_id)
         chat = _require_development_root(db, chat_id)
+        if command_scope_status(row, chat) != "current":
+            return {"command": _command_payload(row, root=chat), "dispatched": False, "reason": "scope_unverified"}
         params = _chat_params(chat.params)
         development = params.get("development") or {}
         if development.get("proactive_dispatch") or row.command_type == "followup":
@@ -272,7 +478,7 @@ def dispatch_command(command_id: int) -> dict[str, Any]:
     return retry_sqlite_locked(lambda: _finish_command_steering(command_id, result))
 
 
-def _finish_command_steering(command_id: int, result: dict[str, Any]) -> dict[str, Any]:
+def _finish_command_steering(command_id: int, result: dict[str, Any], *, exact: bool = False) -> dict[str, Any]:
     with get_session() as db:
         row = db.get(DevelopmentCommand, int(command_id))
         if row is None:
@@ -280,7 +486,9 @@ def _finish_command_steering(command_id: int, result: dict[str, Any]) -> dict[st
         if row.status != "dispatching":
             return {"command": _command_payload(row), "dispatched": row.status == "delivered"}
         if not result.get("accepted"):
-            row.status = "queued"
+            row.status = "failed" if exact else "queued"
+            if exact:
+                row.result_summary = "The selected turn ended before accepting this guidance."
             db.commit()
             db.refresh(row)
             return {"command": _command_payload(row), "dispatched": False,
@@ -288,7 +496,8 @@ def _finish_command_steering(command_id: int, result: dict[str, Any]) -> dict[st
         row.run_id = None
         row.status = "delivered"
         row.delivered_at = utc_now_naive()
-        row.result_summary = "Applied to the active native Development turn."
+        row.result_summary = ("Accepted by the selected native Development turn." if exact
+                              else "Applied to the active native Development turn.")
         metadata = _json(row.metadata_json, {})
         metadata["delivery"] = redact_metadata(result)
         row.metadata_json = json.dumps(metadata, ensure_ascii=False, default=str)
@@ -307,9 +516,10 @@ def dispatch_pending(chat_id: int) -> dict[str, Any]:
     with get_session() as db:
         chat = _require_development_root(db, chat_id)
         turn_id = _steering_turn_id(chat)
-        pending = db.query(DevelopmentCommand).filter_by(chat_id=int(chat_id), status="queued").filter(
+        pending = _ordered_pending_commands(db, chat).filter(
+            DevelopmentCommand.status == "queued",
             DevelopmentCommand.command_type != "followup",
-        ).order_by(DevelopmentCommand.id)
+        ).order_by(None).order_by(DevelopmentCommand.id)
         command_id = None
         for row in pending:
             metadata = _json(row.metadata_json, {})
@@ -330,18 +540,37 @@ def dispatch_pending(chat_id: int) -> dict[str, Any]:
 def update_thread_controls(chat_id: int, **updates: Any) -> dict[str, Any]:
     allowed = {"pinned", "permission_profile", "remote_continuation", "shared_with_telegram"}
     with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         chat = _require_development_root(db, chat_id)
+        if "project_id" in updates:
+            from distr.core.workflow.development_threads import (
+                _release_local_ticket_link, _require_idle_scope_change, _upsert_work_item,
+            )
+
+            project_id = int(updates["project_id"]) if updates["project_id"] is not None else None
+            current = development_thread_metadata(chat)
+            unlinked_scope = development_scope_identity(project_id, {}, chat_id=chat.id)
+            current_scope = development_scope_identity(chat.project_id, current, chat_id=chat.id)
+            if project_id != chat.project_id or (project_id is None and unlinked_scope != current_scope):
+                _require_idle_scope_change(db, chat, current, unlinked_scope)
+                if project_id is not None:
+                    project = db.get(Project, project_id)
+                    if project is None or project.deleted_at is not None:
+                        raise ValueError("Selected project is unavailable.")
+                chat.project_id = project_id
+                _release_local_ticket_link(db, chat.id)
+                _upsert_work_item(
+                    db, chat, workflow_id=current.get("workflow_id"), ticket_id=None,
+                    source_type=current.get("source_type") or "prompt", source_ref=current.get("source_ref"),
+                    board_key=None, board_provider=None, board_ticket_key=None,
+                    board_ticket_title=None, board_ticket_lane=None,
+                )
         params = _chat_params(chat.params)
         metadata = dict(params.get("development") or {})
         for key, value in updates.items():
             if key in allowed and value is not None:
                 metadata[key] = value
-        if "project_id" in updates:
-            project_id = updates.get("project_id")
-            chat.project_id = int(project_id) if project_id is not None else None
-            item = db.query(DevelopmentWorkItem).filter_by(chat_id=int(chat_id)).first()
-            if item is not None:
-                item.project_id = chat.project_id
         if "workflow_id" in updates:
             from distr.core.db.workflow import AutoWorkflow
 
@@ -472,15 +701,19 @@ def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 2) -> dic
         if item is None:
             raise LookupError("Development thread not found.")
         if not item.time_paused and item.time_started_at:
-            latest_response = db.query(Chat).filter(
-                Chat.parent_id == int(chat_id),
-                Chat.response.isnot(None),
-            ).order_by(Chat.modified_date.desc(), Chat.id.desc()).first()
-            response_at = latest_response.modified_date if latest_response else None
-            # The timer needs a deadline even when a worker never produced a response.
-            activity_at = max(value for value in (
-                item.time_started_at, item.time_last_activity_at, response_at
-            ) if value is not None)
+            from distr.core.workflow.thread_time_bounds import settled_segment_end, thread_turns
+
+            # Close at the end of the first continuous stretch of work after the segment
+            # started, not at the latest reply. An unpolled timer on a daily automation
+            # thread otherwise swallowed a week of separate runs into one auto_pause row.
+            # The timer still gets a deadline when a worker never produced a response.
+            activity_at = settled_segment_end(
+                item.time_started_at,
+                thread_turns(db, int(chat_id), item.time_started_at),
+                last_activity_at=item.time_last_activity_at,
+                now=now,
+                grace_seconds=0,
+            )
             if not agent_active and (now - activity_at).total_seconds() >= auto_pause_after_seconds:
                 pause_at = activity_at + timedelta(seconds=auto_pause_after_seconds)
                 item.time_accumulated_seconds = _close_running_segment(db, item, pause_at, "auto_pause")
@@ -547,6 +780,15 @@ def resume_thread_time(chat_id: int, *, _session_provider=None) -> dict[str, Any
         item = db.query(DevelopmentWorkItem).filter_by(chat_id=int(chat_id)).first()
         if item is None:
             raise LookupError("Development thread not found.")
+        from distr.core.workflow.thread_time_bounds import stale_segment_end
+
+        # A new run on a timer nobody paused starts its own segment; the old one
+        # closes where its own work went idle instead of stretching to this run.
+        stale_end = stale_segment_end(db, item, now)
+        if stale_end is not None:
+            item.time_accumulated_seconds = _close_running_segment(db, item, stale_end, "auto_pause")
+            item.time_started_at = None
+            item.time_paused = True
         if item.time_paused or not item.time_started_at:
             item.time_started_at = now
         item.time_paused = False

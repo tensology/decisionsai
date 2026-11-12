@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from distr.core.turn_runtime.verification import tool_exit_code
 
@@ -386,6 +387,9 @@ class CliHarnessTurnRuntime:
         options = dict(route.adapter_options)
         if route.provider:
             options["model_provider"] = route.provider
+        image_paths = inline_image_paths(request.metadata.get("attachments") or [])
+        if image_paths:
+            options["development_image_paths"] = image_paths
         if request.autonomy_level == "plan":
             options["read_only_expected"] = True
         handle = await dispatch_harness(
@@ -404,9 +408,15 @@ class CliHarnessTurnRuntime:
                 on_event=relay,
                 required_capabilities=list(request.required_capabilities),
                 adapter_options=options,
+                turn_id=request.scope.turn_id,
+                cancel_requested=lambda: token.cancelled,
             )
         )
-        token.raise_if_cancelled()
+        if token.cancelled:
+            from distr.core.kanban.project_execution import cancel_execution_session
+
+            cancel_execution_session(handle.execution_session_id)
+            token.raise_if_cancelled()
         result = handle.result
         from distr.core.project_cli_backends.contracts import normalize_execution_result
 
@@ -425,3 +435,23 @@ class CliHarnessTurnRuntime:
                       **({"proposal_error": (getattr(result, "diagnostics", {}) or {}).get("proposal_error")}
                          if options.get("proposal_only") else {})},
         )
+
+
+_INLINE_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
+
+
+def inline_image_paths(attachments: list[Any]) -> list[str]:
+    """Return turn image attachments a CLI harness can pass as direct image input."""
+    paths: list[str] = []
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        mime_type = str(item.get("mime_type") or "").split(";", 1)[0].strip().lower()
+        path = Path(str(item.get("path") or "")).expanduser()
+        try:
+            usable = mime_type in _INLINE_IMAGE_TYPES and path.is_absolute() and path.is_file() and path.stat().st_size <= 8 * 1024 * 1024
+        except OSError:
+            usable = False
+        if usable and str(path) not in paths:
+            paths.append(str(path))
+    return paths[:8]

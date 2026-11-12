@@ -275,7 +275,8 @@ def run_scheduled_automation(
         result = {"status": "unknown", "summary": "Dispatch acknowledgement was lost. Review execution history before retrying."}
     if not isinstance(result, dict):
         result = {"status": "unknown", "summary": "Dispatch returned no acknowledgement. Review before retrying."}
-    accepted = result.get("status") in {"running", "queued", "dispatched", "completed", "waiting"}
+    # "held": Initiative skipped this occurrence on purpose (ignored project/client); the schedule continues.
+    accepted = result.get("status") in {"running", "queued", "dispatched", "completed", "waiting", "held"}
     with get_session() as session:
         if session.get_bind().dialect.name == "sqlite":
             session.execute(text("BEGIN IMMEDIATE"))
@@ -293,7 +294,8 @@ def run_scheduled_automation(
                     advance_next_run_for_automation(row)
                 else:
                     _advance_legacy_workflow_next_run(row)
-                row.last_run_at = utc_now()
+                if result.get("status") != "held":
+                    row.last_run_at = utc_now()
             else:
                 row.schedule_enabled = False
                 row.next_run_at = due_at

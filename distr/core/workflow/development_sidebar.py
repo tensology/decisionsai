@@ -96,7 +96,7 @@ def migrate_legacy_project_pins(session_provider=None, settings: dict | None = N
         return None
     mapping = project_board_keys(session_provider)
     keys = [mapping[pid] for pid in legacy_ids if pid in mapping]
-    return save_pinned_boards(keys)
+    return seed_pinned_boards(keys)
 
 
 def load_pinned_boards(migrate: bool = True) -> list[str] | None:
@@ -113,9 +113,11 @@ def load_pinned_boards(migrate: bool = True) -> list[str] | None:
             import logging
             logging.getLogger(__name__).warning('Board pin migration failed', exc_info=True)
             return None
-    if isinstance(value, str):
-        value = json.loads(value)
-    return normalize_board_keys(value)
+    return _parse_board_keys(value)
+
+
+def _parse_board_keys(value) -> list[str]:
+    return normalize_board_keys(json.loads(value) if isinstance(value, str) else value)
 
 
 def normalize_board_keys(keys) -> list[str]:
@@ -141,6 +143,48 @@ def save_pinned_boards(keys) -> list[str]:
     from distr.core.tensology_project_sync import invalidate_pinned_project_sync
     invalidate_pinned_project_sync()
     return normalized
+
+
+def _update_pinned_boards(transform) -> list[str]:
+    from distr.core.db import Settings, get_session
+    from distr.core.tensology_project_sync import invalidate_pinned_project_sync
+
+    with get_session() as db:
+        if db.get_bind().dialect.name == 'sqlite':
+            db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+        row = db.query(Settings).order_by(Settings.id).with_for_update().first()
+        raw = row.development_pinned_board_keys if row else None
+        current = _parse_board_keys(raw) if raw is not None else None
+        updated = normalize_board_keys(transform(current))
+        if updated == current:
+            return updated
+        if row is None:
+            row = Settings()
+            db.add(row)
+        row.development_pinned_board_keys = json.dumps(updated)
+        db.commit()
+    invalidate_pinned_project_sync()
+    return updated
+
+
+def seed_pinned_boards(keys) -> list[str]:
+    normalized = normalize_board_keys(keys)
+    return _update_pinned_boards(lambda current: normalized if current is None else current)
+
+
+def set_board_pin(board_key: str, pinned: bool) -> list[str]:
+    key = normalize_board_keys([board_key])[0]
+    if type(pinned) is not bool:
+        raise ValueError('Pinned must be true or false.')
+    migrate_legacy_project_pins()  # Preserve any legacy desktop pins on the first write.
+
+    def update(current):
+        keys = current or []
+        if pinned:
+            return keys if key in keys else [*keys, key]
+        return [existing for existing in keys if existing != key]
+
+    return _update_pinned_boards(update)
 
 
 def sidebar_pin_preferences() -> dict:

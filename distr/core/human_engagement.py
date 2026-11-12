@@ -667,11 +667,145 @@ def sanitize_engagement_text(
     return clean
 
 
+_EXECUTION_NOTICE_RE = re.compile(
+    r"^(?P<backend>the IDE session|the project session|Cursor|Codex|Claude|Cline|OpenCode)\s+"
+    r"(?P<verb>finished|ran into an issue on)\s+(?P<project>[^\n]+?)\.\s+"
+    r"(?:It was working on:\s*(?P<task>.*?)\s)?Result:\s*(?P<result>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_LOG_PARENTHETICAL_RE = re.compile(r"\s*\([^()]*(?:\.log\b|\d{6,})[^()]*\)")
+_RAW_TASK_MARKERS_RE = re.compile(
+    r"a local path|report whether|decisions [a-z ]*thread|python file|https?\b|\.{3,}|…",
+    re.IGNORECASE,
+)
+
+
+def _speakable_task(task: str) -> str:
+    """Return a short human task title, or "" for raw CLI/prompt instructions."""
+    raw = re.sub(r"\s+", " ", str(task or "")).strip()
+    if not raw or _RAW_TASK_MARKERS_RE.search(raw):
+        return ""
+    clean = raw.rstrip(" .")
+    if not clean or len(clean) > 90 or len(clean.split()) > 14:
+        return ""
+    return clean
+
+
+def _complete_spoken_result(result: str) -> str:
+    """Keep only complete, speakable sentences from a clipped result summary."""
+    clean = _LOG_PARENTHETICAL_RE.sub("", str(result or ""))
+    clean = re.sub(r"\s+", " ", clean).strip()
+    truncated = bool(re.search(r"(?:\.{3,}|…)$", clean)) or not clean.endswith((".", "!", "?"))
+    clean = re.sub(r"[\s.…]+$", "", clean).strip()
+    if not clean:
+        return ""
+    if not truncated:
+        return clean + "."
+    parts = re.split(r"(?<=[.!?])\s+", clean)
+    last = parts[-1]
+    head = " ".join(parts[:-1]).strip()
+    keep = ""
+    clauses = re.split(r"\s+(?:—|–|-)\s+|[;,]\s+", last)
+    if len(clauses) > 1:
+        candidate = last[: last.rfind(clauses[-1])].rstrip(" ,;—–-")
+        if len(candidate.split()) >= 4:
+            keep = candidate
+    pieces = [piece for piece in (head, keep) if piece]
+    if not pieces:
+        return clean + "."
+    spoken = " ".join(pieces).strip()
+    if not spoken.endswith((".", "!", "?")):
+        spoken += "."
+    return spoken
+
+
+def _spoken_execution_notice(text: str) -> str:
+    """Turn the Initiative execution-terminal template into a short spoken update.
+
+    The template ("the IDE session finished X. It was working on: <raw CLI
+    instruction>. Result: <clipped worker output>") reads like thread output when
+    spoken. Voice keeps the project, the outcome and complete result sentences.
+    """
+    match = _EXECUTION_NOTICE_RE.match(re.sub(r"\s+", " ", str(text or "")).strip())
+    if not match:
+        return ""
+    backend = match.group("backend").strip()
+    project = match.group("project").strip()
+    named_backend = not backend.lower().startswith("the ")
+    finished = match.group("verb").lower() == "finished"
+    if finished:
+        lead = f"{backend} finished {project}." if named_backend else f"{project} is done."
+    else:
+        lead = f"{backend} hit a problem on {project}." if named_backend else f"{project} hit a problem."
+    task = _speakable_task(match.group("task") or "")
+    if task:
+        lead = f"{lead[:-1]}: {task}."
+    # 2026-11-12 agent-conversational: percent first. A percent the run reported
+    # (the thread reply now leads with one) wins; otherwise a finished run is
+    # 100% and an unfinished one says it can't be measured instead of guessing.
+    from distr.core.conversational_progress import format_progress, leading_percent, strip_leading_percent
+
+    raw_result = str(match.group("result") or "").strip()
+    reported = leading_percent(raw_result)
+    result = _complete_spoken_result(strip_leading_percent(raw_result))
+    percent = reported if reported is not None else (100 if finished else None)
+    if percent is not None and percent >= 100 and not finished:
+        percent = 99
+    if percent is None:
+        lead = f"{lead} It stopped before finishing, so I can't give you an honest percentage yet."
+    else:
+        lead = f"{format_progress(percent)} {lead}"
+    return f"{lead} {result}".strip() if result else lead
+
+
+_IDLE_NOTICE_RE = re.compile(
+    r"^(?P<backend>.+?) has been quiet on (?P<project>.+?) for (?P<minutes>\d+) minutes\."
+    r"(?: It was working on: .*?\.)?\s*Ask me to check it when you want me to step in\.?$",
+    re.IGNORECASE | re.DOTALL,
+)
+_WAITING_NOTICE_RE = re.compile(
+    r"^(?P<backend>.+?) for (?P<project>.+?) is waiting for input\."
+    r"(?: It was working on: .*?\.)?\s*Tell me what you want it to do next\.?$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _spoken_status_notice(text: str) -> str:
+    """Mid-task Initiative notices (quiet / waiting) as conversational speech.
+
+    These carry no step counts, so they say plainly that progress can't be
+    measured rather than inventing a percentage.
+    """
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    idle = _IDLE_NOTICE_RE.match(clean)
+    if idle:
+        backend = idle.group("backend").strip()
+        if backend.lower().startswith("the "):
+            backend = "the " + backend[4:]
+        return (
+            f"{idle.group('project').strip()} is still running, but {backend} "
+            f"has been quiet for {idle.group('minutes')} minutes, so I can't tell how far along it is. "
+            "Ask me to check on it whenever you want me to step in."
+        )
+    waiting = _WAITING_NOTICE_RE.match(clean)
+    if waiting:
+        return (
+            f"{waiting.group('project').strip()} is paused and waiting for you, so it can't get further until you answer. "
+            "Tell me what you'd like it to do next."
+        )
+    return ""
+
+
 def voice_friendly_text(text: str) -> str:
     """Shape text for spoken delivery — short, human, no chat-only instructions."""
     clean = sanitize_engagement_text(text)
     if not clean:
         return ""
+    from distr.core.conversational_progress import spoken_progress
+
+    notice = _spoken_execution_notice(clean) or _spoken_status_notice(clean)
+    if notice:
+        return spoken_progress(notice)
     clean = re.sub(
         r"\s*reply continue, retry, skip, or add instructions\.?",
         "",
@@ -710,7 +844,7 @@ def voice_friendly_text(text: str) -> str:
     clean = re.sub(r"\s{2,}", " ", clean).strip(" .")
     if clean and not clean.endswith((".", "!", "?")):
         clean += "."
-    return clean
+    return spoken_progress(clean)
 
 
 def is_low_value_status_text(text: str) -> bool:

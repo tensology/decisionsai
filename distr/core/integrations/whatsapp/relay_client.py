@@ -296,7 +296,7 @@ def sync_messages_from_relay(*, mark_processed: bool = True) -> dict[str, Any]:
         return {"synced": 0, "total": 0, "error": str(exc)}
 
 
-def send_message_via_relay(*, jid: str, text: str, caption: str = "") -> dict[str, Any]:
+def send_message_via_relay(*, jid: str, text: str, caption: str = "", before_send=None) -> dict[str, Any]:
     """Submit text and require an explicit relay acceptance, not just HTTP 200.
 
     The relay acknowledges the Baileys handoff, not delivery to the recipient.
@@ -312,9 +312,12 @@ def send_message_via_relay(*, jid: str, text: str, caption: str = "") -> dict[st
         return {"success": True, "jid": jid, "dry_run": True}
     payload = {"jid": jid, "text": text, "caption": caption or "", "audio": None}
     headers = relay_request_headers()
+    url = f"{relay_api_base()}/send"
+    if before_send is not None:
+        before_send()
     try:
         resp = requests.post(
-            f"{relay_api_base()}/send",
+            url,
             json=payload,
             headers=headers,
             timeout=10,

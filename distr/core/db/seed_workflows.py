@@ -22,6 +22,15 @@ def managed_workflow_names() -> list[str]:
     return []
 
 
+def _is_current_builtin(row) -> bool:
+    try:
+        from distr.core.workflow.builtin import BUILTIN_SLUGS, _input_dict
+
+        return _input_dict(getattr(row, "workflow_input", None)).get("builtin_slug") in BUILTIN_SLUGS
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def retire_legacy_workflows() -> dict[str, int]:
     """Archive the retired Development pipeline. Reversible, never deleted."""
     from distr.core.db import get_session
@@ -35,6 +44,11 @@ def retire_legacy_workflows() -> dict[str, int]:
             .all()
         )
         for row in rows:
+            # 2026-11-12: the slim implement-and-verify built-in is also named
+            # "Development". Only the legacy pipeline is retired; never archive
+            # a row that carries a current built-in marker.
+            if _is_current_builtin(row):
+                continue
             if str(row.status or "").lower() != "archived":
                 row.status = "archived"
                 retired += 1

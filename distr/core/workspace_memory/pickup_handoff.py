@@ -13,12 +13,14 @@ from .paths import (
     HANDOFF_FILE,
     LEDGER_FILE,
     PICKUP_FILE,
+    WORKER_HANDOFF_FILE,
     companion_memory_file,
     companion_root,
 )
 
 _PICKUP_RE = re.compile(r"\bpick\s*up\b", re.IGNORECASE)
 _HANDOFF_RE = re.compile(r"\bhandoff\b", re.IGNORECASE)
+_EMPTY_HANDOFF_RE = re.compile(r"(?:# Handoff\s+)?_No handoff recorded yet\.?_(?:\s+_updated: [^\n]+_)?")
 
 
 def _utc_now_iso() -> str:
@@ -55,10 +57,22 @@ def read_text_file(path: Path, max_chars: int = 8000) -> str:
 
 
 def read_handoff_preview(entity_type: str, entity_id: int | str, *, max_chars: int = 500) -> str:
-    text = read_text_file(_handoff_path(entity_type, entity_id), max_chars=max_chars)
-    if not text or "_No handoff recorded yet_" in text:
-        return ""
+    text = read_text_file(_handoff_path(entity_type, entity_id), max_chars=max(max_chars, 256))
+    if not text or _EMPTY_HANDOFF_RE.fullmatch(text):
+        text = read_text_file(_worker_handoff_path(entity_id), max_chars=max_chars) if entity_type == "projects" else ""
     return " ".join(text.split())[:max_chars]
+
+
+def _worker_handoff_path(project_id: int | str) -> Path:
+    return companion_memory_file("projects", project_id, WORKER_HANDOFF_FILE)
+
+
+def read_handoff_context(entity_type: str, entity_id: int | str) -> str:
+    worker = read_text_file(_worker_handoff_path(entity_id), max_chars=2200) if entity_type == "projects" else ""
+    notes = read_text_file(_handoff_path(entity_type, entity_id), max_chars=8000 - len(worker) - (2 if worker else 0))
+    if worker and _EMPTY_HANDOFF_RE.fullmatch(notes):
+        notes = ""
+    return "\n\n".join(section for section in (notes, worker) if section)
 
 
 def append_ledger(
@@ -101,13 +115,37 @@ def write_handoff(
     extra: dict[str, Any] | None = None,
 ) -> str:
     """Write handoff.md and append ledger. Returns written path."""
-    path = _handoff_path(entity_type, entity_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    return _write_handoff_record(
+        entity_type, entity_id, _handoff_path(entity_type, entity_id), "Handoff",
+        body=body, source=source, extra=extra,
+    )
+
+
+def write_project_worker_handoff(project_id: int, *, body: str, source: str, ticket_id: int | None) -> str:
+    title = f"Latest worker handoff for ticket #{ticket_id}" if ticket_id else "Latest worker handoff"
+    return _write_handoff_record(
+        "projects", project_id, _worker_handoff_path(project_id), title,
+        body=body, source=source, extra={"ticket_id": ticket_id},
+    )
+
+
+def _write_handoff_record(
+    entity_type: str,
+    entity_id: int | str,
+    path: Path,
+    title: str,
+    *,
+    body: str,
+    source: str,
+    extra: dict[str, Any] | None,
+) -> str:
+    from distr.core.memory.files import atomic_write_text
+
     content = (body or "").strip()
     if not content:
         content = "_Empty handoff._"
-    stamped = f"# Handoff\n\n{content}\n\n_updated: {_utc_now_iso()}_\n"
-    path.write_text(stamped, encoding="utf-8")
+    stamped = f"# {title}\n\n{content}\n\n_updated: {_utc_now_iso()}_\n"
+    atomic_write_text(path, stamped)
     append_ledger(entity_type, entity_id, event_type=source, message=content[:500], extra=extra)
     _sync_projection_after_handoff(entity_type, entity_id, extra=extra)
     return str(path)
@@ -167,7 +205,7 @@ def build_pickup_brief(
             if decisions.get(key):
                 lines.append(f"- {key}: {decisions[key]}")
         lines.append("")
-    handoff = read_text_file(_handoff_path(entity_type, entity_id))
+    handoff = read_handoff_context(entity_type, entity_id)
     active = read_text_file(_active_path(entity_type, entity_id))
     if handoff:
         lines.extend(["## Handoff", "", handoff, ""])

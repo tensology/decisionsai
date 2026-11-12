@@ -10,7 +10,9 @@ import os
 import queue
 import re
 import time
+from functools import partial
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from sqlalchemy.exc import OperationalError
 
@@ -22,10 +24,21 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+_INTERNAL_PROMPT_LEAK_RE = re.compile(
+    r"(?:\s*It was working on:\s*)?\[?DECISIONS [A-Z ]*THREAD\]?[^\n]*(?:\n(?!\n)[^\n]*)*", re.I)
+
+
+def _strip_internal_prompt(text: str) -> str:
+    """Last line of defence: never send the internal Development-thread prompt to Telegram (audit 12 Nov)."""
+    cleaned = _INTERNAL_PROMPT_LEAK_RE.sub("", text)
+    cleaned = re.sub(r"\s*Work as the active IDE coding agent[^\n]*", "", cleaned)
+    return re.sub(r"[ \t]+\n", "\n", cleaned).strip()
+
+
 def _audit_outbound_telegram_text(text: Optional[str]) -> Optional[str]:
     if not text:
         return text
-    clean = str(text).strip()
+    clean = _strip_internal_prompt(str(text).strip())
     try:
         from distr.core.human_engagement import sanitize_engagement_text
 
@@ -85,6 +98,13 @@ def _outbound_destination(sender):
 class TelegramSenderMixin:
     """Handles sending messages to Telegram, message queue processing, and connection data persistence."""
 
+    def queue_closing_reply(self, frame):
+        try:
+            self._message_queue.put_nowait(frame)
+        except queue.Full:
+            return False
+        return True
+
     def send_to_telegram(
         self,
         text: Optional[str] = None,
@@ -94,6 +114,8 @@ class TelegramSenderMixin:
         video_path: Optional[str] = None,
         reply_markup: Optional[Dict[str, Any]] = None,
         interaction_token: Optional[str] = None,
+        *,
+        expected_chat_id: Optional[str] = None,
     ):
         """Enqueue message for sending."""
         # Stop the persistent typing loop — we're about to send the actual response
@@ -210,6 +232,9 @@ class TelegramSenderMixin:
         if destination is None:
             logger.error('No valid private Telegram destination; message retained by its durable caller.')
             return False
+        if expected_chat_id is not None and str(destination.get('chat_id')) != expected_chat_id:
+            logger.warning('Telegram recipient changed before queueing the reviewed reply.')
+            return False
         message_content = json.dumps([
             text or '', audio_file_path or '', screenshot_path or '',
             document_path or '', video_path or '', interaction_token or '',
@@ -243,6 +268,8 @@ class TelegramSenderMixin:
             # durable workflow interaction distinguish "queued locally" from
             # a Telegram API acknowledgment without exposing run internals.
             msg["client_message_id"] = str(interaction_token)
+            if not durable_proposal:
+                msg["_checkpoint_dedup_key"] = message_hash
         if not_before:
             msg["_not_before"] = not_before
 
@@ -543,6 +570,15 @@ class TelegramSenderMixin:
                     break
                 msg.pop("_not_before", None)
                 release_pending = msg.pop("_proposal_release_pending", False)
+                if release_pending:
+                    from distr.core.integrations.telegram.receipt_writes import flush_pending_receipt_writes
+
+                    # Apply earlier relay evidence before the local refusal.
+                    if not flush_pending_receipt_writes():
+                        msg["_proposal_release_pending"] = True
+                        self._outbound_retry_message = msg
+                        break
+                checkpoint_dedup_key = msg.pop("_checkpoint_dedup_key", None)
                 json_str = json.dumps(msg)
 
                 # Log what we're sending and to which chat_id
@@ -619,53 +655,112 @@ class TelegramSenderMixin:
                             )
 
                 token = str(msg.get('client_message_id') or '')
+                from distr.core.workflow import telegram_reply_receipts as closing
+
+                if token.startswith(closing.PREFIX):
+                    from distr.core.incoming.telegram_updates import _recipient_id
+
+                    relay_verified = getattr(self, '_closing_reply_receipts', None)
+                    if relay_verified is None:
+                        self._outbound_retry_message = msg
+                        break
+                    try:
+                        authorized = closing.authorize(msg, owner=_recipient_id(self.telegram_user_id),
+                                                       relay_verified=relay_verified)
+                    except OperationalError:
+                        self._outbound_retry_message = msg
+                        break
+                    if authorized:
+                        try:
+                            accepted = self._send_websocket_message(msg)
+                        except Exception:
+                            accepted = False
+                        if accepted is not True:
+                            closing.accept_receipt(token, uncertain=True)
+                        else:
+                            self._last_send_time = self._last_message_time = time.time()
+                    continue
                 queue_id = getattr(self, '_proposal_delivery_queue_id', None)
                 durable_proposal = token.startswith('proposal-update:')
+                workflow_checkpoint = bool(token) and not durable_proposal
+                outbound = msg
                 queued_destination = {key: msg[key] for key in ('chat_id', 'app_user_id') if key in msg}
                 try:
-                    if release_pending:
-                        from distr.core.incoming.telegram_updates import mark_delivery_not_sent
-                        if not mark_delivery_not_sent(token, queue_id=queue_id):
-                            continue
-                        release_pending = False
                     if queued_destination != _outbound_destination(self):
                         if durable_proposal:
                             from distr.core.incoming.telegram_updates import mark_delivery_recipient_changed
                             mark_delivery_recipient_changed(token, queue_id=queue_id)
+                        if checkpoint_dedup_key:
+                            self._recent_messages.pop(checkpoint_dedup_key, None)
                         logger.warning('Telegram recipient changed before transport; blocked queued payload for the previous owner.')
                         continue
                     if durable_proposal:
                         from distr.core.incoming.telegram_updates import mark_delivery_attempt
-                        if not mark_delivery_attempt(token, queue_id=queue_id,
+                        socket_attempt_id = uuid4().hex
+                        if not mark_delivery_attempt(token, queue_id=queue_id, attempt_id=socket_attempt_id,
                                                      recipient_id=queued_destination.get('chat_id')):
                             continue  # Never send without the matching durable claim.
+                    elif workflow_checkpoint:
+                        from distr.core.incoming.telegram_updates import _recipient_id
+                        from distr.core.workflow.interactions import (
+                            TELEGRAM_CHECKPOINT_RECEIPT_PREFIX,
+                            authorize_telegram_checkpoint_delivery,
+                        )
+
+                        owner = _recipient_id(self.telegram_user_id)
+                        attempt = (
+                            authorize_telegram_checkpoint_delivery(token=token, telegram_chat_id=owner)
+                            if owner is not None and owner == queued_destination.get('chat_id') else None
+                        )
+                        if attempt is None or queued_destination != _outbound_destination(self):
+                            if checkpoint_dedup_key:
+                                self._recent_messages.pop(checkpoint_dedup_key, None)
+                            logger.warning('Telegram workflow checkpoint was blocked before transport because its recipient or scope changed.')
+                            continue
+                        outbound = {**msg, 'client_message_id': f'{TELEGRAM_CHECKPOINT_RECEIPT_PREFIX}{token}:{attempt}'}
                 except OperationalError:
-                    if release_pending:
-                        msg['_proposal_release_pending'] = True
+                    if checkpoint_dedup_key:
+                        msg['_checkpoint_dedup_key'] = checkpoint_dedup_key
                     self._outbound_retry_message = msg
                     logger.warning('Could not update the Telegram delivery receipt before transport; retained the queued message.')
                     break
                 try:
-                    sent = self._send_websocket_message(msg)
+                    sent = self._send_websocket_message(outbound)
+                    if (durable_proposal or workflow_checkpoint) and type(sent) is not bool:
+                        raise OSError('Telegram WebSocket did not return a definite write result.')
                 except Exception as exc:
                     # Transport may have accepted the payload before raising.
                     # Keep the durable receipt unconfirmed, never blind-retry.
                     if durable_proposal:
-                        from distr.core.incoming.telegram_updates import record_delivery
-                        record_delivery(token, error=str(exc) or 'Telegram transport outcome was not confirmed.')
+                        from distr.core.incoming.telegram_updates import accept_relay_receipt
+                        accept_relay_receipt(token, error=str(exc) or 'Telegram transport outcome was not confirmed.')
+                    elif workflow_checkpoint:
+                        from distr.core.integrations.telegram.receipt_writes import (
+                            checkpoint_delivery_error_message,
+                            persist_or_defer_receipt_write,
+                        )
+                        from distr.core.workflow.interactions import record_telegram_delivery_error
+
+                        persist = partial(
+                            record_telegram_delivery_error, token=token, attempt=attempt,
+                            error=checkpoint_delivery_error_message(rate_limited=False),
+                        )
+                        persist_or_defer_receipt_write(
+                            persist, journal_entry=("checkpoint-error", token, attempt, False),
+                        )
                     logger.exception('Telegram transport outcome was not confirmed; automatic resend suppressed.')
                     continue
                 if not sent:
                     if durable_proposal:
-                        from distr.core.incoming.telegram_updates import mark_delivery_not_sent
-                        try:
-                            if not mark_delivery_not_sent(token, queue_id=queue_id):
-                                # A relay response may have resolved the claim during the socket write.
-                                break
-                        except OperationalError:
-                            # The socket refused the payload. Restore its durable
-                            # queued state before any later transport attempt.
+                        from distr.core.incoming.telegram_updates import accept_socket_refusal
+
+                        released = accept_socket_refusal(token, queue_id=queue_id, attempt_id=socket_attempt_id)
+                        if released is False:
+                            break
+                        if released is None:
                             msg['_proposal_release_pending'] = True
+                    if checkpoint_dedup_key:
+                        msg['_checkpoint_dedup_key'] = checkpoint_dedup_key
                     # The socket can disconnect after the loop-level connection
                     # check. Retain the exact payload at the front of the logical
                     # queue so reconnect processing cannot silently lose or reorder it.

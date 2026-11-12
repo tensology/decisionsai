@@ -89,13 +89,12 @@ def persist_worker_feedback(
         try:
             from distr.core.workspace_memory.lifecycle import handoff_cli_session
 
-            handoff_cli_session(
+            result["handoff"] = handoff_cli_session(
                 ticket_id=ticket_id,
                 project_id=project_id,
                 summary=text[:2000],
                 source=low or source,
             )
-            result["handoff"] = True
         except Exception:
             logger.debug("persist_worker_feedback: handoff failed", exc_info=True)
 

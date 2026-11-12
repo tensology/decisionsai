@@ -18,6 +18,12 @@ def register_routes(router, templates):
     async def workflow_list(limit: int = 50, search: Optional[str] = None, type: Optional[str] = None):
         try:
             from distr.core.workflow.service import list_workflows
+            try:
+                from distr.core.workflow.builtin import ensure_builtin_workflows
+
+                await asyncio.to_thread(ensure_builtin_workflows)
+            except Exception as seed_error:
+                logger.warning("Built-in workflow seeding skipped: %s", seed_error)
             rows = await asyncio.to_thread(list_workflows, limit=limit, search=search, workflow_type=type)
             return JSONResponse(rows)
         except Exception as e:
@@ -411,6 +417,82 @@ def register_routes(router, templates):
         return JSONResponse({"presets": list_loop_presets()})
 
 
+    # Presets offered under "+ Add workflow" in Development. Content and sales
+    # presets stay parked; Ship PR Until Green is read from its parked bundle.
+    # 2026-11-12: the 11-step Development preset is split into slim Development
+    # (implement + verify, never deploys) and two separately approved deploy
+    # workflows. The legacy bundle file stays on disk for existing rows and runs.
+    DEVELOPMENT_AREA_PRESETS = (
+        "development-implement-verify", "deploy-to-development", "deploy-to-production",
+        "new-work-design-to-plan", "existing-project-to-plan",
+        "polish-verify-and-ship", "ship-pr-until-green",
+    )
+
+    def _development_area_preset(slug):
+        from distr.core.workflow.loop_preset_loader import bundles_dir, load_bundle_by_slug
+
+        key = str(slug or "").strip().lower()
+        if key not in DEVELOPMENT_AREA_PRESETS:
+            return None
+        bundle = load_bundle_by_slug(key)
+        if bundle is None:
+            path = bundles_dir() / f"{key}.json"
+            if path.is_file():
+                bundle = json.loads(path.read_text(encoding="utf-8"))
+        return bundle if isinstance(bundle, dict) else None
+
+    @router.get("/workflows/development-presets")
+    async def workflow_development_presets():
+        try:
+            from distr.core.workflow.loop_preset_loader import normalize_bundle_steps
+
+            presets = []
+            for slug in DEVELOPMENT_AREA_PRESETS:
+                bundle = _development_area_preset(slug)
+                if not bundle:
+                    continue
+                presets.append({
+                    "slug": slug,
+                    "name": bundle.get("name") or slug,
+                    "description": str(bundle.get("description") or "")[:300],
+                    "step_count": len(normalize_bundle_steps(bundle)),
+                })
+            return JSONResponse({"presets": presets})
+        except Exception as e:
+            logger.error("Development presets failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/from-preset")
+    async def workflow_create_from_preset(request: Request):
+        try:
+            try:
+                body = await request.json()
+            except Exception:
+                body = None
+            slug = str(body.get("slug") or "") if isinstance(body, dict) else ""
+            bundle = _development_area_preset(slug)
+            if not bundle:
+                return JSONResponse({"detail": "That preset is not available here."}, status_code=404)
+            from distr.core.workflow.loop_presets import apply_loop_bundle
+            from distr.core.workflow.service import create_workflow, delete_workflow, get_workflow
+
+            wf_id = create_workflow(name=str(bundle.get("name") or "Workflow"), description=str(bundle.get("description") or ""))
+            result = apply_loop_bundle(wf_id, bundle, mode="replace")
+            if not result.get("success"):
+                delete_workflow(wf_id)
+                return JSONResponse(
+                    {"detail": result.get("error") or "Could not add the preset."},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            increment_workflow_updated()
+            return JSONResponse(get_workflow(wf_id))
+        except Exception as e:
+            logger.error("Workflow create from preset failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+
     @router.post("/workflows/presets/{filename}/load")
     async def workflow_load_preset(filename: str):
         try:
@@ -577,7 +659,27 @@ def register_routes(router, templates):
         try:
             if _is_audit_workflow(workflow_id):
                 return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
-            from distr.core.workflow.service import delete_workflow
+            from distr.core.workflow.service import delete_workflow, workflow_backing_automation
+
+            backing = workflow_backing_automation(workflow_id)
+            if backing:
+                label = backing.get("automation_name") or f"#{backing['automation_id']}"
+                return JSONResponse({
+                    "detail": f"This workflow powers the automation \u201c{label}\u201d. Manage or delete it from Automations instead.",
+                    "automation_id": backing["automation_id"],
+                }, status_code=409)
+            from distr.core.workflow.builtin import builtin_slug_of, reset_builtin_workflow
+            from distr.core.workflow.service import get_workflow
+
+            if builtin_slug_of(get_workflow(workflow_id) or {}):
+                # Built-ins are reset to their bundle instead of deleted (they would be reseeded).
+                result = await asyncio.to_thread(reset_builtin_workflow, workflow_id)
+                if not result.get("success"):
+                    return JSONResponse({"detail": result.get("error") or "Could not reset the built-in workflow."}, status_code=409)
+                from distr.gui.web.workflow_events import increment_workflow_updated
+
+                increment_workflow_updated()
+                return JSONResponse({"success": True, "reset": True, "detail": "Built-in workflow restored to its original steps."})
             if not delete_workflow(workflow_id):
                 return JSONResponse({"detail": "Workflow not found"}, status_code=404)
             from distr.gui.web.workflow_events import increment_workflow_updated

@@ -3558,6 +3558,12 @@ body.wf-split-dragging * {
     .wf-page-shell { height: calc(100dvh - 3.5rem); }
     #sr-llm-modal .wf-config-field-row { grid-template-columns: minmax(0, 1fr); }
 }
+.wf-queue-hold-heading,
+.wf-queue-hold-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+}
 </style>
 {% endblock %}
 
@@ -4320,7 +4326,7 @@ body.wf-split-dragging * {
 {% block extra_scripts %}
 <script src="/tickets/static/js/kanban_ticket.js"></script>
 <script src="/static/shared/js/workflow_exec_routing.js?v=20261022-autocol3"></script>
-<script src="/workflows/static/js/workflows.js?v=20261022-llmsrouting4"></script>
+<script src="/workflows/static/js/workflows.js?v=20261112-queue-hold"></script>
 <script>
 (function() {
     var modalHtml = [

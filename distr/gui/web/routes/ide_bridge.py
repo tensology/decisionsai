@@ -18,6 +18,7 @@ class IdeSessionRequest(BaseModel):
 
 
 class IdeEventRequest(IdeSessionRequest):
+    ticket_id: Optional[int] = None
     event_type: str = "ide_event"
     status: str = ""
     message: str = ""
@@ -61,6 +62,7 @@ def create_routes() -> APIRouter:
                     project_id=request.project_id,
                     session_id=request.session_id,
                     chat_id=request.chat_id,
+                    ticket_id=request.ticket_id,
                     event_type=request.event_type,
                     status=request.status,
                     message=request.message,

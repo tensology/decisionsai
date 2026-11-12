@@ -376,6 +376,8 @@ class StepExecutorMixin:
                 label="before",
             )
         result = handler()
+        if "dispatch_stopped" in result:
+            return result
         if wants_ui_capture and not result.get("async"):
             after_path = capture_ui_screenshot(
                 step_id=int(step_data.get("id") or 0),
@@ -1092,6 +1094,13 @@ class StepExecutorMixin:
             from distr.core.project_cli_backends.harness import HarnessContext
             import concurrent.futures
 
+            queued_run = run_id is not None and run_data.get("source_type") == "workflow_queue"
+
+            def recheck_queue_before_worker():
+                from distr.core.workflow.dispatcher import _recheck_queued_run_scope
+
+                return _recheck_queued_run_scope(run_id, claimed_step_id=step_data["id"])
+
             async def _run_task():
                 with get_session() as db:
                     project = db.query(Project).filter(Project.id == int(project_id)).first()
@@ -1426,6 +1435,10 @@ class StepExecutorMixin:
                                 "OpenRouter free-model readiness probe failed unexpectedly; leaving route unverified",
                                 exc_info=True,
                             )
+                    if queued_run:
+                        failure = recheck_queue_before_worker()
+                        if failure:
+                            return {"dispatch_stopped": failure}
                     if run_row and provider_model_readiness is not None:
                         latest = json.loads(run_row.run_data or "{}") or {}
                         latest["provider_model_readiness"] = provider_model_readiness.to_dict()
@@ -1769,6 +1782,7 @@ class StepExecutorMixin:
                             codex_reasoning_effort=route.get("codex_reasoning_effort") or "",
                             codex_service_tier=route.get("codex_service_tier") or "",
                             origin="workflow",
+                            queued_workflow=queued_run,
                             required_capabilities=required_capabilities,
                             adapter_options={
                                 key: value for key, value in {
@@ -1860,6 +1874,12 @@ class StepExecutorMixin:
                                 str(route.get("model_provider") or ""),
                             )
                         )
+                        if isinstance(handle, dict):
+                            return handle
+                    if handle.result:
+                        stopped = (handle.result.diagnostics or {}).get("queue_dispatch_stopped")
+                        if queued_run and isinstance(stopped, dict):
+                            return {"dispatch_stopped": stopped}
                     safety_issue = _worker_result_safety_issue(handle.result)
                     if safety_issue and handle.result is not None:
                         handle.result.success = False
@@ -1895,8 +1915,13 @@ class StepExecutorMixin:
                                 latest["next_action"] = "worker_continue"
                             run_row.run_data = json.dumps(latest)
                             db.commit()
-                    if run_id and handle.execution_session_id:
-                        if run_row:
+                    if run_id and run_row and handle.execution_session_id:
+                        from distr.core.workflow.runtime_contract import accepts_step_result, lock_step_result_run
+
+                        # Handoff callbacks and the registry can update run
+                        # metadata while the adapter is open.
+                        run_row = lock_step_result_run(db, run_id)
+                        if run_row and (not queued_run or accepts_step_result(run_row, step_data["id"])):
                             run_data_local = json.loads(run_row.run_data or "{}") or {}
                             run_data_local["execution_session_id"] = handle.execution_session_id
                             run_data_local["execution_route"] = route
@@ -1929,6 +1954,18 @@ class StepExecutorMixin:
                     model_loaded=None,
                 )
                 timeout_seconds = timing.timeout_seconds + 30
+                if run_id is not None and "_approved_workflow_revision" in step_data:
+                    from distr.core.workflow.dispatcher import _recheck_approved_step_dispatch
+
+                    failure = _recheck_approved_step_dispatch(
+                        run_id, step_data["id"], step_data["_approved_workflow_revision"],
+                    )
+                    if failure:
+                        return {"dispatch_stopped": failure}
+                if queued_run:
+                    failure = recheck_queue_before_worker()
+                    if failure:
+                        return {"dispatch_stopped": failure}
                 try:
                     return await asyncio.wait_for(
                         dispatch_harness(context),
@@ -1973,6 +2010,8 @@ class StepExecutorMixin:
             else:
                 result = _threaded_run_task()
 
+            if isinstance(result, dict) and "dispatch_stopped" in result:
+                return result
             if isinstance(result, dict) and (
                 result.get("route_approval_pending") or result.get("provider_preflight_pending")
             ):
@@ -2181,15 +2220,22 @@ class StepExecutorMixin:
         if not action_id:
             return {"output": "No Decisions Action selected for this step", "passed": False}
         try:
-            from distr.core.db import Action
-            with get_session() as db:
-                action = db.query(Action).filter(Action.id == int(action_id)).first()
-                if not action:
-                    return {"output": f"Decisions Action #{action_id} was not found", "passed": False}
-                title = action.title or f"Action #{action.id}"
-                is_instruction = bool(action.is_instruction)
-                instruction_text = action.instruction_text or ""
-                recording_filename = action.recording_filename or ""
+            if "approved_action" in step_data:
+                action = step_data["approved_action"]
+            else:
+                from distr.core.db import Action
+
+                with get_session() as db:
+                    row = db.query(Action).filter(Action.id == int(action_id)).first()
+                    action = ({"id": row.id, "title": row.title, "is_instruction": row.is_instruction,
+                               "instruction_text": row.instruction_text, "recording_filename": row.recording_filename}
+                              if row else None)
+            if not action or action["id"] != int(action_id):
+                return {"output": f"Decisions Action #{action_id} was not found", "passed": False}
+            title = action["title"] or f"Action #{action_id}"
+            is_instruction = bool(action["is_instruction"])
+            instruction_text = action["instruction_text"] or ""
+            recording_filename = action["recording_filename"] or ""
 
             self._emit_decisions_action_event(
                 step_data,
@@ -3264,6 +3310,9 @@ class StepExecutorMixin:
         action_id = config.get("recording_id") or step_data.get("action_id")
         if not action_id:
             return None
+        if "approved_action" in step_data:
+            action = step_data["approved_action"]
+            return action["recording_filename"] if action and str(action["id"]) == str(action_id) else None
         try:
             from distr.core.db import Action
             with get_session() as db:

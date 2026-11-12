@@ -128,6 +128,21 @@ def apply_review(snapshot, *, path=None, data=None, drafts=None, live_projects=N
         if needs_review:
             status = 'needs_review'
         invoiced = data.get('invoiced_events', {}).get(str(event['id']))
+        estimate = proof.get('allocation_estimate', {}).get('approved_minutes')
+        timing = {}
+        if estimate is not None:
+            recorded = union_seconds([
+                (stamp(interval['start']), stamp(interval['end']))
+                for interval in proof.get('source_intervals', [])
+            ])
+            timing = {'approved_estimate_seconds': estimate * 60,
+                      'recorded_work_seconds': recorded or None}
+        integrity = {}
+        if proof.get('source_intervals'):
+            # Show when one saved entry folds several separate pieces of work together, or
+            # sits at an allocated time instead of where the work was recorded.
+            from distr.core.reports.work_blocks import event_integrity
+            integrity = {'block_integrity': event_integrity(event, proof)}
         editor = {}
         if connected:
             from distr.core.reports.calendar_sync import edit_lock, edit_version
@@ -137,7 +152,7 @@ def apply_review(snapshot, *, path=None, data=None, drafts=None, live_projects=N
                       'entry_end': event['end_at'], 'entry_start_local': local(stamp(event['start_at'])),
                       'entry_end_local': local(stamp(event['end_at']))}
         rows.append(piece({
-            **editor, 'id': f"calendar-{event['id']}", 'source': 'audited_calendar',
+            **editor, **timing, **integrity, 'id': f"calendar-{event['id']}", 'source': 'audited_calendar',
             'family': proof.get('family', 'decisions'), 'source_label': 'Tensology calendar' if connected else 'Audited calendar work',
             'project_id': pid, 'project_name': names.get(pid, 'Unassigned') if connected else proof.get('project_name') or names.get(pid, 'Unassigned'),
             'title': event['title'], 'ref': ref, 'related_refs': proof.get('related_refs', []),

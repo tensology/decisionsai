@@ -148,6 +148,8 @@ class DeveloperWorkContext:
     ide_thread_locks: dict[str, Any] = field(default_factory=dict)
     active_plan: DeveloperPlanContext | None = None
     planning_snapshot: dict[str, Any] = field(default_factory=dict)
+    # Rendered Plan sections (Interfaces, Data, Documents) with their own budget (2026-11-12).
+    plan_sections_text: str = ""
     active_tickets: list[DeveloperTicketContext] = field(default_factory=list)
     active_workflows: list[DeveloperWorkflowContext] = field(default_factory=list)
     active_executions: list[DeveloperExecutionContext] = field(default_factory=list)
@@ -164,14 +166,23 @@ class DeveloperWorkContext:
 
     def to_prompt_text(self, max_chars: int = 4000) -> str:
         """Render compact, stable context for agent prompts."""
-        if self.planning_snapshot and max_chars >= 1200:
+        if (self.planning_snapshot or self.plan_sections_text) and max_chars >= 1200:
             from dataclasses import replace
             from distr.core.planning.context import planning_prompt_text
             # Reserve room rather than letting later context clipping silently
             # discard the artifact coverage or the no-authority contract.
-            planning = planning_prompt_text(self.planning_snapshot, max_chars=min(1500, max_chars - 700))
-            prefix = replace(self, planning_snapshot={}).to_prompt_text(max_chars=max(100, max_chars - len(planning) - 30))
-            return prefix + "\nPersisted planning reference:\n" + planning
+            # The inventory stays bounded (~1,500 chars). The Plan's Interfaces,
+            # Data and Documents content is appended with its own fair
+            # per-section budget (planning.sections), so it is never dropped
+            # in favour of Brief.
+            planning = (planning_prompt_text(self.planning_snapshot, max_chars=min(1500, max_chars - 700))
+                        if self.planning_snapshot else "")
+            prefix = replace(self, planning_snapshot={}, plan_sections_text="").to_prompt_text(
+                max_chars=max(100, max_chars - len(planning) - 30))
+            text = prefix + ("\nPersisted planning reference:\n" + planning if planning else "")
+            if self.plan_sections_text:
+                text += "\n" + self.plan_sections_text
+            return text
         lines: list[str] = ["Developer workflow context:"]
         if self.runtime.captured_at:
             lines.append(f"- now: {self.runtime.captured_at}")
@@ -194,12 +205,33 @@ class DeveloperWorkContext:
                 thread_bits.append(f"title={_one_line(thread['title'], 120)}")
             if thread.get("ticket_id"):
                 thread_bits.append(f"ticket={thread['ticket_id']}")
+            if thread.get("ticket_lane"):
+                thread_bits.append(f"lane={thread['ticket_lane']}")
             if thread.get("source_type"):
                 thread_bits.append(f"source={thread['source_type']}")
             lines.append("- development_harness_thread: " + ", ".join(thread_bits))
+            history = thread.get("ticket_lane_history") or []
+            if history:
+                recent = "; ".join(
+                    f"{(row.get('from_lane') or 'created')}→{row.get('to_lane')}"
+                    for row in history[:5]
+                    if isinstance(row, dict)
+                )
+                if recent:
+                    lines.append(f"  ticket_lane_history: {recent}")
             lines.append(
                 "  Decisions Development section only. Separate from locked Cursor/Codex threads."
             )
+            for item in (thread.get("attachments") or [])[:12]:
+                if not isinstance(item, dict):
+                    continue
+                path_value = str(item.get("path") or "")
+                name = str(item.get("name") or "attachment")
+                mime = str(item.get("mime_type") or "")
+                lines.append(f"  attachment: {name} ({mime}): {path_value}")
+                excerpt = str(item.get("extracted_text") or item.get("transcript") or "").strip()
+                if excerpt:
+                    lines.append(f"    extracted_text: {_one_line(excerpt, 400)}")
         if self.ide_thread_locks:
             from distr.core.ide_threads.lock import format_locks_for_prompt
 
@@ -399,6 +431,9 @@ class DeveloperContextAssembler:
         planning_snapshot = _safe_call(
             "persisted planning reference", warnings, self._fetch_planning_snapshot, active_project, active_thread
         ) or {}
+        plan_sections_text = _safe_call(
+            "plan sections", warnings, self._fetch_plan_sections_text, active_project, active_thread
+        ) or ""
         active_tickets = _safe_call("active tickets", warnings, self._fetch_active_tickets, active_board, current_chat_id) or []
         active_workflows = _safe_call("active workflows", warnings, self._fetch_active_workflows, active_board, active_tickets) or []
         active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
@@ -443,6 +478,7 @@ class DeveloperContextAssembler:
             ide_thread_locks=ide_thread_locks,
             active_plan=active_plan,
             planning_snapshot=planning_snapshot,
+            plan_sections_text=plan_sections_text,
             active_tickets=active_tickets,
             active_workflows=active_workflows,
             active_executions=active_executions,
@@ -465,6 +501,18 @@ class DeveloperContextAssembler:
         if declared_project is not None and _id(declared_project) != active_project.id:
             return {}
         return planning_snapshot(active_project.id)
+
+    def _fetch_plan_sections_text(self, active_project: DeveloperProjectContext | None, scope: dict[str, Any] | None = None) -> str:
+        """Interfaces, Data and Documents of the scoped project, fairly budgeted (same scope rule as the snapshot)."""
+        if active_project is None:
+            return ""
+        from distr.core.planning.context import _id
+        from distr.core.planning.sections import plan_sections, plan_sections_prompt_text
+
+        declared_project = (scope or {}).get("project_id")
+        if declared_project is not None and _id(declared_project) != active_project.id:
+            return ""
+        return plan_sections_prompt_text(plan_sections(active_project.id))
 
     def _fetch_ide_thread_locks(self, chat_id: int | None) -> dict[str, Any]:
         """Cursor/Codex locks for follow-ups. Never the Development harness thread."""
@@ -492,6 +540,29 @@ class DeveloperContextAssembler:
                 **{key: value for key, value in metadata.items() if value not in (None, "")},
                 **{key: value for key, value in scope.items() if value not in (None, "")},
             }
+            ticket_id = result.get("ticket_id")
+            if ticket_id:
+                from distr.core.kanban.lane_history import current_ticket_lane, recent_lane_history_for_ticket
+
+                current = current_ticket_lane(int(ticket_id))
+                if current:
+                    result["ticket_lane"] = current
+                history = recent_lane_history_for_ticket(int(ticket_id), limit=5)
+                if history:
+                    result["ticket_lane_history"] = history
+            attachments = []
+            for item in params.get("incoming_attachments") or []:
+                if not isinstance(item, dict):
+                    continue
+                attachments.append({
+                    "name": item.get("name") or item.get("filename") or "attachment",
+                    "path": item.get("path") or "",
+                    "mime_type": item.get("mime_type") or "",
+                    "size": item.get("size") or 0,
+                    "extracted_text": str(item.get("extracted_text") or item.get("transcript") or "")[:1500],
+                })
+            if attachments:
+                result["attachments"] = attachments
             return result
 
     def _fetch_project_for_scope(self, scope: dict[str, Any]) -> DeveloperProjectContext | None:
@@ -1157,7 +1228,31 @@ def format_developer_context_dict_for_prompt(
         lines.append(f"- active_project: #{project.get('id')} {project.get('name', '')}{folder}")
 
     if isinstance(active_thread, dict) and active_thread.get("chat_id"):
-        lines.append(f"- development_harness_thread: chat={active_thread.get('chat_id')}")
+        thread_bits = [f"chat={active_thread.get('chat_id')}"]
+        if active_thread.get("ticket_id"):
+            thread_bits.append(f"ticket={active_thread.get('ticket_id')}")
+        if active_thread.get("ticket_lane"):
+            thread_bits.append(f"lane={active_thread.get('ticket_lane')}")
+        lines.append("- development_harness_thread: " + ", ".join(thread_bits))
+        history = active_thread.get("ticket_lane_history") or []
+        if history:
+            recent = "; ".join(
+                f"{(row.get('from_lane') or 'created')}→{row.get('to_lane')}"
+                for row in history[:5]
+                if isinstance(row, dict)
+            )
+            if recent:
+                lines.append(f"  ticket_lane_history: {recent}")
+        for item in (active_thread.get("attachments") or [])[:12]:
+            if not isinstance(item, dict):
+                continue
+            path_value = str(item.get("path") or "")
+            name = str(item.get("name") or "attachment")
+            mime = str(item.get("mime_type") or "")
+            lines.append(f"  attachment: {name} ({mime}): {path_value}")
+            excerpt = str(item.get("extracted_text") or item.get("transcript") or "").strip()
+            if excerpt:
+                lines.append(f"    extracted_text: {_one_line(excerpt, 400)}")
     if isinstance(ide_thread_locks, dict) and ide_thread_locks.get("by_surface"):
         from distr.core.ide_threads.lock import format_locks_for_prompt
 

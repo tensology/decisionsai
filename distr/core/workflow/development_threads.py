@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 from typing import Any
 
 from sqlalchemy import func
@@ -20,7 +21,7 @@ from distr.core.db.workflow import DevelopmentWorkItem
 
 
 class DevelopmentThreadConflict(ValueError):
-    """Raised when a work item is already owned by another thread."""
+    """Raised when current Development ownership prevents a scope change."""
 
 
 def _clean(value: Any) -> str:
@@ -320,6 +321,50 @@ def _write_legacy_projection(
     root.params = json.dumps(params)
 
 
+def development_board(db, *, ticket_id: int | None = None, board_key: str | None = None):
+    """Resolve the ticket's current board or a ticketless thread's board key."""
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.workflow.development_sidebar import board_key_for
+
+    if ticket_id is not None:
+        ticket = db.get(KanbanTicket, int(ticket_id))
+        lane = db.get(KanbanLane, ticket.lane_id) if ticket and ticket.lane_id else None
+        return db.get(KanbanBoard, lane.board_id) if lane else None
+    provider, _, identity = _clean(board_key).partition(":")
+    if provider.lower() == "decisions":
+        try:
+            board_id = int(identity)
+        except ValueError:
+            raise ValueError("Invalid local board identity.") from None
+        if not 0 < board_id < 2**63:
+            raise ValueError("Invalid local board identity.")
+        board = db.get(KanbanBoard, board_id)
+        return board if board_key_for(board) == f"decisions:{board_id}" else None
+    if provider and identity:
+        return db.query(KanbanBoard).filter(
+            KanbanBoard.source == provider.lower(), KanbanBoard.external_board_id == identity,
+        ).first()
+    return None
+
+
+def require_unlinked_local_ticket_scope(db, ticket_id: int, board_key: str):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.projects import Project
+    from distr.core.workflow.development_sidebar import board_key_for
+
+    ticket = db.get(KanbanTicket, ticket_id)
+    board = development_board(db, ticket_id=ticket_id) if ticket else None
+    if not board or board.archived or board_key_for(board) != board_key:
+        raise LookupError("Ticket not found on the selected board.")
+    if ticket.source_chat_id is not None or db.query(DevelopmentWorkItem.id).filter_by(local_ticket_id=ticket_id).first():
+        raise DevelopmentThreadConflict("The ticket now has a Development thread. Refresh the board and reopen the ticket.")
+    project_id = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
+    project = db.get(Project, project_id) if project_id is not None else None
+    if project_id is not None and (not project or project.deleted_at is not None):
+        raise DevelopmentThreadConflict("The ticket's project is unavailable.")
+    return ticket, project_id
+
+
 def _ensure_local_ticket_for_thread(
     db,
     root: Chat,
@@ -329,38 +374,28 @@ def _ensure_local_ticket_for_thread(
     title: str | None,
 ) -> tuple[int | None, str | None, str | None]:
     """Create the one ticket owned by a thread when it joins a local board."""
-    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.kanban import KanbanLane, KanbanTicket
 
     existing = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == int(root.id)).first()
-    raw_board = _clean(board_key)
-    clean_board = raw_board.lower()
-    target_board = None
-    if clean_board.startswith("decisions:"):
-        try:
-            board_id = int(clean_board.split(":", 1)[1])
-        except (TypeError, ValueError):
-            raise ValueError("Invalid local board identity.")
-        target_board = db.get(KanbanBoard, board_id)
-    elif ":" in clean_board:
-        provider = clean_board.split(":", 1)[0]
-        external_id = raw_board.split(":", 1)[1]
-        target_board = db.query(KanbanBoard).filter(
-            KanbanBoard.source == provider,
-            KanbanBoard.external_board_id == external_id,
-        ).first()
+    target_board = development_board(db, board_key=board_key)
 
-    def target_progress_lane():
+    def _thread_is_running():
+        try:
+            metadata = development_thread_metadata(root)
+            return _scope_execution_active(db, root, metadata)
+        except Exception:
+            return False
+
+    def target_delivery_lane(*, prefer_progress: bool = False):
+        """New cards go to Backlog. Already-running threads stay in In Progress."""
         if target_board is None:
             return None
-        lane = db.query(KanbanLane).filter(
-            KanbanLane.board_id == int(target_board.id),
-            KanbanLane.name.ilike("%progress%"),
-        ).order_by(KanbanLane.position).first()
-        if lane is None:
-            lane = KanbanLane(board_id=int(target_board.id), name="In Progress", position=1)
-            db.add(lane)
-            db.flush()
-        return lane
+        from distr.core.kanban.lifecycle import DELIVERY_SOURCE_LANE, ensure_delivery_lanes
+
+        lanes = ensure_delivery_lanes(db, int(target_board.id))
+        if prefer_progress:
+            return lanes["In Progress"]
+        return lanes[DELIVERY_SOURCE_LANE]
 
     if ticket_id is not None:
         owner = (
@@ -390,7 +425,21 @@ def _ensure_local_ticket_for_thread(
     if existing is not None:
         lane = db.get(KanbanLane, int(existing.lane_id)) if existing.lane_id else None
         if target_board is not None and (lane is None or int(lane.board_id) != int(target_board.id)):
-            lane = target_progress_lane()
+            # Keep the current canonical lane when the ticket already exists;
+            # fall back to In Progress only if the thread is already executing,
+            # otherwise Backlog for work that has not started.
+            current_name = lane.name if lane is not None else None
+            prefer_progress = _thread_is_running() or (
+                str(current_name or "").strip() in {"In Progress", "QA"}
+            )
+            if current_name == "Complete":
+                prefer_progress = False
+            from distr.core.kanban.lifecycle import ensure_delivery_lanes
+            lanes = ensure_delivery_lanes(db, int(target_board.id))
+            if current_name in lanes:
+                lane = lanes[current_name]
+            else:
+                lane = target_delivery_lane(prefer_progress=prefer_progress)
             max_position = db.query(func.coalesce(func.max(KanbanTicket.position), -1)).filter(
                 KanbanTicket.lane_id == int(lane.id)
             ).scalar()
@@ -400,12 +449,14 @@ def _ensure_local_ticket_for_thread(
             existing.linked_workflow_id = target_board.default_workflow_id or existing.linked_workflow_id
         return int(existing.id), str(existing.id), lane.name if lane else None
     if target_board is None:
-        if clean_board.startswith("decisions:"):
+        if _clean(board_key).lower().startswith("decisions:"):
             raise ValueError("Selected board was not found.")
         return None, None, None
     board = target_board
     board_id = int(board.id)
-    lane = target_progress_lane()
+    # New tickets land in Backlog unless this thread is already executing, in
+    # which case In Progress matches the work that is already underway.
+    lane = target_delivery_lane(prefer_progress=_thread_is_running())
     max_position = db.query(func.coalesce(func.max(KanbanTicket.position), -1)).filter(
         KanbanTicket.lane_id == int(lane.id)
     ).scalar()
@@ -423,6 +474,16 @@ def _ensure_local_ticket_for_thread(
     )
     db.add(ticket)
     db.flush()
+    try:
+        from distr.core.kanban.lane_history import record_lane_change
+        record_lane_change(
+            db, int(ticket.id), from_lane=None, to_lane=lane.name,
+            actor="system", reason="created", source="development_thread",
+        )
+    except Exception:
+        pass
+    from distr.core.kanban.ticket_chat_notify import queue_source_chat_ticket_notice
+    queue_source_chat_ticket_notice(db, int(ticket.id), to_lane=lane.name, reason="created")
     return int(ticket.id), str(ticket.id), lane.name
 
 
@@ -596,18 +657,24 @@ def orchestrator_surface(text: str) -> str:
     return "unspecified"
 
 
-def bind_ticket_development_thread(db, ticket, *, project_id: int, board_id: int, lane_name: str) -> Chat:
+def ticket_development_thread_ids(db, ticket_id: int, source_chat_id: int | None) -> list[int]:
+    owners = db.query(DevelopmentWorkItem.chat_id).filter_by(local_ticket_id=ticket_id)
+    chat_ids = {chat_id for (chat_id,) in owners}
+    if source_chat_id is not None:
+        chat_ids.add(source_chat_id)
+    return sorted(chat_ids)
+
+
+def bind_ticket_development_thread(db, ticket, *, project_id: int, board_id: int, lane_name: str,
+                                   approved_workflow_id: int | None = None) -> Chat:
     """Resolve a ticket's exact thread inside the caller's write transaction."""
-    if ticket.linked_workflow_id is not None:
+    if ticket.linked_workflow_id not in (None, approved_workflow_id):
         raise DevelopmentThreadConflict("Open the ticket to run it with its selected workflow.")
-    owners = db.query(DevelopmentWorkItem).filter_by(local_ticket_id=ticket.id).all()
-    chat_ids = {item.chat_id for item in owners}
-    if ticket.source_chat_id is not None:
-        chat_ids.add(ticket.source_chat_id)
+    chat_ids = ticket_development_thread_ids(db, ticket.id, ticket.source_chat_id)
     if len(chat_ids) > 1:
         raise DevelopmentThreadConflict("The ticket has conflicting Development thread links.")
     if chat_ids:
-        root = db.get(Chat, next(iter(chat_ids)))
+        root = db.get(Chat, chat_ids[0])
         if root is None or root.parent_id is not None or root.project_id != project_id:
             raise DevelopmentThreadConflict("The ticket's Development thread is outside the approved project.")
         metadata = development_thread_metadata(root)
@@ -619,7 +686,8 @@ def bind_ticket_development_thread(db, ticket, *, project_id: int, board_id: int
         if not matches_ticket:
             raise DevelopmentThreadConflict("The Development thread belongs to another work item.")
         workflow_id = item.workflow_id if item else metadata.get("workflow_id")
-        if workflow_id or str(root.autonomy_level or "").strip().lower() in {"plan", "approval"}:
+        if ((workflow_id and workflow_id != approved_workflow_id)
+                or str(root.autonomy_level or "").strip().lower() in {"plan", "approval"}):
             raise DevelopmentThreadConflict("Open the Development thread to run this ticket with its current workflow or approval settings.")
         if _scope_execution_active(db, root, metadata):
             raise DevelopmentThreadConflict("The ticket's Development thread already has active work.")
@@ -764,22 +832,46 @@ def mark_development_thread(
     board_ticket_key: str | None = None,
     board_ticket_title: str | None = None,
     board_ticket_lane: str | None = None,
+    require_current_local_ticket: bool = False,
     _session_provider=None,
 ) -> None:
     session_provider = _session_provider or get_session
     with session_provider() as db:
+        if require_current_local_ticket and db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         root = db.get(Chat, int(chat_id))
         if root is None:
             raise ValueError(f"Development thread #{chat_id} was not found.")
         if ticket_id is not None:
             from distr.core.db.kanban import KanbanTicket
 
-            ticket = db.get(KanbanTicket, int(ticket_id))
+            if require_current_local_ticket:
+                try:
+                    ticket, project_id = require_unlinked_local_ticket_scope(db, int(ticket_id), board_key)
+                except LookupError as exc:
+                    raise DevelopmentThreadConflict(str(exc)) from exc
+                if root.project_id != project_id:
+                    raise DevelopmentThreadConflict("The ticket's project changed. Refresh the board and reopen the ticket.")
+                ticket.linked_project_id = project_id
+            else:
+                ticket = db.get(KanbanTicket, int(ticket_id))
             if ticket is not None:
                 if ticket.source_chat_id not in (None, int(root.id)):
                     raise DevelopmentThreadConflict(
                         f"Ticket #{ticket.id} already belongs to Development thread #{ticket.source_chat_id}."
                     )
+                prior_owners = (
+                    db.query(KanbanTicket)
+                    .filter(
+                        KanbanTicket.source_chat_id == int(root.id),
+                        KanbanTicket.id != int(ticket.id),
+                    )
+                    .all()
+                )
+                for owned in prior_owners:
+                    owned.source_chat_id = None
+                if prior_owners:
+                    db.flush()
                 ticket.source_chat_id = int(root.id)
                 board_ticket_title = synchronize_linked_ticket_title(db, ticket) or board_ticket_title
         _upsert_work_item(
@@ -800,6 +892,13 @@ def mark_development_thread(
     if ticket_id is not None:
         from distr.core.incoming.media import sync_thread_files_safely
         sync_thread_files_safely(int(chat_id), int(ticket_id))
+
+
+def development_thread_receipt_identity(root: Chat) -> str | None:
+    """Distinguish separately created threads that share a local numeric ID."""
+    if root.created_date is None:
+        return None
+    return sha256(f"{root.id}:{root.created_date.isoformat()}".encode()).hexdigest()
 
 
 def development_scope_identity(project_id, metadata: dict, *, chat_id: int) -> tuple:
@@ -843,6 +942,22 @@ def _scope_execution_active(db, root, metadata: dict) -> bool:
     return False
 
 
+def _require_idle_scope_change(db, root, metadata, requested_scope) -> None:
+    if (requested_scope != development_scope_identity(root.project_id, metadata, chat_id=root.id)
+            and _scope_execution_active(db, root, metadata)):
+        raise DevelopmentThreadConflict(
+            "Stop or finish the active Development work before changing its project, board or ticket."
+        )
+
+
+def _release_local_ticket_link(db, chat_id: int) -> None:
+    from distr.core.db.kanban import KanbanTicket
+
+    db.query(KanbanTicket).filter_by(source_chat_id=chat_id).update(
+        {KanbanTicket.source_chat_id: None}, synchronize_session="fetch",
+    )
+
+
 def rebind_development_thread(
     chat_id: int,
     *,
@@ -856,9 +971,12 @@ def rebind_development_thread(
     board_ticket_lane: str | None = None,
     permission_profile: dict[str, Any] | None = None,
     remote_continuation: bool | None = None,
+    _scope_fields: set[str] | None = None,
 ) -> dict[str, Any]:
     """Atomically move a Development thread and clear stale scope fields."""
-    with get_session() as db:
+    from distr.core import db as db_mod
+
+    with db_mod.get_session() as db:
         if db.get_bind().dialect.name == 'sqlite':
             # Serialize with the dispatcher's initial scope claim, before read.
             db.connection().exec_driver_sql('BEGIN IMMEDIATE')
@@ -877,15 +995,31 @@ def rebind_development_thread(
             workflow_id = item.workflow_id
         if not metadata and item is None:
             raise ValueError("This conversation is not a Development thread.")
+        if _scope_fields is not None and "project_id" not in _scope_fields:
+            project_id = root.project_id
+        preserve_scope = (
+            _scope_fields is not None and not (_scope_fields - {"project_id"})
+            and project_id == root.project_id
+        )
+        if preserve_scope:
+            project_id = root.project_id
+            board_key = metadata.get("board_key")
+            board_provider = metadata.get("board_provider")
+            ticket_id = metadata.get("ticket_id")
+            board_ticket_key = metadata.get("board_ticket_key")
+            board_ticket_title = metadata.get("board_ticket_title")
+            board_ticket_lane = metadata.get("board_ticket_lane")
         from distr.core.db.kanban import KanbanTicket
         owned_ticket = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == root.id).first()
-        next_ticket_id = int(ticket_id) if ticket_id is not None else (owned_ticket.id if owned_ticket else None)
+        clear_binding = not preserve_scope and not any((board_key, board_provider, ticket_id, board_ticket_key))
+        next_ticket_id = int(ticket_id) if ticket_id is not None else (
+            owned_ticket.id if owned_ticket is not None and not clear_binding else None
+        )
         requested_scope = development_scope_identity(project_id, {
             'board_key':board_key, 'board_provider':board_provider, 'ticket_id':next_ticket_id,
             'board_ticket_key':board_ticket_key or (str(next_ticket_id) if next_ticket_id is not None else None),
         }, chat_id=root.id)
-        if requested_scope != development_scope_identity(root.project_id,metadata,chat_id=root.id) and _scope_execution_active(db,root,metadata):
-            raise ValueError('Stop or finish the active Development work before changing its project, board or ticket.')
+        _require_idle_scope_change(db, root, metadata, requested_scope)
         if title is not None:
             clean_title = _clean(title)
             if not clean_title:
@@ -900,13 +1034,14 @@ def rebind_development_thread(
             context["title_auto"] = title_auto
             root.additional_context = json.dumps(context)
         root.project_id = int(project_id) if project_id is not None else None
-        ticket_id, created_ticket_key, created_ticket_lane = _ensure_local_ticket_for_thread(
-            db,
-            root,
-            board_key=board_key,
-            ticket_id=ticket_id,
-            title=board_ticket_title or root.title,
-        )
+        if clear_binding:
+            _release_local_ticket_link(db, root.id)
+            board_ticket_title = board_ticket_lane = None
+        else:
+            ticket_id, created_ticket_key, created_ticket_lane = _ensure_local_ticket_for_thread(
+                db, root, board_key=board_key, ticket_id=ticket_id,
+                title=board_ticket_title or root.title,
+            )
         if ticket_id is not None:
             board_ticket_key = board_ticket_key or created_ticket_key
             board_ticket_lane = board_ticket_lane or created_ticket_lane
@@ -969,24 +1104,15 @@ def update_development_thread_settings(
     remote_continuation: bool | None = None,
 ) -> dict[str, Any]:
     """Update mutable thread settings while preserving its creation-time scope."""
-    with get_session() as db:
-        root = db.get(Chat, int(chat_id))
-        if root is None or root.parent_id is not None:
-            raise ValueError(f"Development thread #{chat_id} was not found.")
-        metadata = development_thread_metadata(root)
-        project_id = int(root.project_id) if root.project_id is not None else None
     return rebind_development_thread(
         int(chat_id),
         title=title,
-        project_id=project_id,
-        board_key=metadata.get("board_key"),
-        board_provider=metadata.get("board_provider"),
-        ticket_id=metadata.get("ticket_id"),
-        board_ticket_key=metadata.get("board_ticket_key"),
-        board_ticket_title=metadata.get("board_ticket_title"),
-        board_ticket_lane=metadata.get("board_ticket_lane"),
+        project_id=None,
+        board_key=None,
+        board_provider=None,
         permission_profile=permission_profile,
         remote_continuation=remote_continuation,
+        _scope_fields=set(),
     )
 
 

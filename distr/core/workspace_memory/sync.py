@@ -14,6 +14,7 @@ from .paths import (
     CONTEXT_FILE,
     DECISIONS_FILE,
     HANDOFF_FILE,
+    WORKER_HANDOFF_FILE,
     ACTIVE_FILE,
     ROUTER_FILE,
     ROOT_AGENTS_FILE,
@@ -33,7 +34,7 @@ from .template import (
 logger = logging.getLogger(__name__)
 
 _PROJECTION_FILES = (AGENTS_FILE, ROUTER_FILE, DECISIONS_FILE)
-_PROJECTION_MEMORY_FILES = (HANDOFF_FILE, ACTIVE_FILE)
+_PROJECTION_MEMORY_FILES = (HANDOFF_FILE, WORKER_HANDOFF_FILE, ACTIVE_FILE)
 
 
 def sync_projection_for_project(project_id: int, *, force: bool = False) -> dict[str, Any]:

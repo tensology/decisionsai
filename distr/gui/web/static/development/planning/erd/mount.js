@@ -4,7 +4,6 @@
 // Saves go through the existing PATCH /workflows/studio/plan-items/{id} (revision + .mmd sync).
 import { addedDbColumns, isErdMermaid } from './parser.js?v=20261103-rows1';
 import { advancedButton, availableBottom } from '../canvas-chrome.js?v=20261103-ifaces3';
-import { databasesButton } from './db-drawer.js?v=20261103-ifaces3';
 
 export { isErdMermaid };
 
@@ -27,7 +26,7 @@ export async function mountErdItem({ preview, item, session, api, toast = () => 
     if (!entry) {
         // Guard a second mount racing the first one's dynamic import: both await the same creation.
         session.erdMounting[item.id] ||= (async () => {
-            const { createErdEditor } = await import('./canvas.js?v=20261103-rows1');
+            const { createErdEditor } = await import('./canvas.js?v=20261112-readable-data');
             const created = { ctx };
             created.editor = createErdEditor({
                 text: item.content || '',
@@ -37,11 +36,7 @@ export async function mountErdItem({ preview, item, session, api, toast = () => 
                 aspect: layoutAspect(preview),
             });
             created.editor.el.querySelector('.erd-dock-left')?.append(advancedButton({ text: () => created.ctx.item.content || '' }));
-            // N5 phase 4: link local databases and pull their schema into this or a per-link ERD (explicit apply).
-            created.editor.el.querySelector('.erd-dock-left')?.append(databasesButton(() => ({
-                workspaceId: created.ctx.item.workspace_id, item: created.ctx.item, api: created.ctx.api,
-                toast: created.ctx.toast, onApplied: (updated) => created.ctx.onSchemaApplied(updated),
-            })));
+            // Database links were retired from the Plan UI (2026-11-11); existing link rows stay readable.
             session.erdEditors[item.id] = created;
             return created;
         })().finally(() => { delete session.erdMounting[item.id]; });

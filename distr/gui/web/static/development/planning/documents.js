@@ -2,9 +2,9 @@
 // which tab is open (always one, FRAC first), and roving-tab keyboard movement.
 import { USER_DOCUMENT_TYPE } from './documents-config.js?v=20261103-ifaces3';
 
-export const DOCUMENT_ORDER = ['frac', 'brief', 'prd', 'handover', 'skills', 'file_structure', 'decision', 'project_overview', 'discovery_proposal', USER_DOCUMENT_TYPE];
+export const DOCUMENT_ORDER = ['frac', 'brief', 'prd', 'requirements_pack', 'file_structure', 'decision', USER_DOCUMENT_TYPE];
 export const DOCUMENT_TYPES = new Set(DOCUMENT_ORDER);
-const LABELS = { frac: 'FRAC', brief: 'Brief', prd: 'PRD', handover: 'Handover', skills: 'Skills', file_structure: 'File structure', decision: 'Decision', project_overview: 'Overview', discovery_proposal: 'Discovery' };
+const LABELS = { frac: 'FRAC', brief: 'Brief', prd: 'PRD', requirements_pack: 'Requirements Pack', file_structure: 'File structure', decision: 'Decision' };
 
 export const isDocument = (item) => DOCUMENT_TYPES.has(String(item?.item_type || ''));
 export const isUserDocument = (item) => item?.item_type === USER_DOCUMENT_TYPE;

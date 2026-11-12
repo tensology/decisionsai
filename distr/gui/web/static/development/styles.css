@@ -1,14 +1,15 @@
 @import './shell.css?v=20261111-client-message';
 @import './shared/components.css?v=20261102-verify';
-@import './threads/styles.css?v=20261111-client-message';
-@import './sidebar/styles.css?v=20261110-media-nav1';
-@import './boards/styles.css?v=20261102-verify';
-@import './planning/styles.css?v=20261111-buildjump';
+@import './threads/styles.css?v=20261112-queue-handoff';
+@import './sidebar/styles.css?v=20261111-nav-apply-ack';
+@import './boards/styles.css?v=20261111-nav-apply-chrome7';
+@import './planning/styles.css?v=20261112-plan-tabs2';
 @import './incoming/styles.css?v=20261111-submitted-proposal-source';
-@import './automations/styles.css?v=20261030-calendar-groups';
+@import './automations/styles.css?v=20261111-automation-inplace4';
 @import './workflows/styles.css?v=20261028-responsive';
-@import './terminals/styles.css?v=20261110-layout1';
+@import './terminals/styles.css?v=20261111-nav-apply-chrome8';
 @import './reports/styles.css?v=20261111-client-message';
+@import './shared/overflow-names.css?v=20261112-header-phone5';
 
 /* Shared page layout (2026-10-22): every Development page uses the Reports gutter (--page-gutter from shared base.css). */
 .reports-workspace { padding: var(--page-gutter, 24px); }

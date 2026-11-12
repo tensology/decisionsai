@@ -12,6 +12,12 @@ from .review_document import development_review_document
 def register_routes(router, templates):
     from fastapi import Request
 
+    def reply_history_conflict(exc):
+        payload = {'detail': str(exc), 'code': 'reply_history_unavailable'}
+        if exc.source_key:
+            payload['source_key'] = exc.source_key
+        return JSONResponse(payload, status_code=409)
+
     @router.get('/workflows/studio/source-reply-surface')
     async def source_reply_surface():
         document = await asyncio.to_thread(
@@ -23,24 +29,32 @@ def register_routes(router, templates):
 
     @router.get('/workflows/studio/tasks/{chat_id}/source-replies')
     async def source_reply_choices(chat_id: int, response_id: int | None = None):
-        from distr.core.incoming.source_reply import proposal_for_thread, source_choices, reply_drafts
+        from distr.core.incoming.source_reply import ReplyHistoryUnavailableError, proposal_for_thread, reply_review, source_choices
         try:
             def choices():
-                return {'sources': source_choices(proposal_for_thread(chat_id)),
-                        'drafts': reply_drafts(chat_id, response_id) if response_id is not None else []}
+                sources = source_choices(proposal_for_thread(chat_id))
+                drafts, blocked = reply_review(chat_id, response_id) if response_id is not None else ([], {})
+                for source in sources:
+                    if source['key'] in blocked:
+                        source['reply_blocked_reason'] = blocked[source['key']]
+                return {'sources': sources, 'drafts': drafts}
             return JSONResponse(await asyncio.to_thread(choices))
+        except ReplyHistoryUnavailableError as exc:
+            return reply_history_conflict(exc)
         except ValueError as exc:
             return JSONResponse({'detail': str(exc)}, status_code=422)
 
     @router.post('/workflows/studio/tasks/{chat_id}/source-replies')
     async def source_reply_draft(chat_id: int, request: Request):
-        from distr.core.incoming.source_reply import create_draft
+        from distr.core.incoming.source_reply import ReplyHistoryUnavailableError, create_draft
         try:
             body = await request.json()
             draft = await asyncio.to_thread(create_draft, chat_id, int(body['response_id']), str(body['source_key']),
                 previous=str(body.get('previous') or ''), instruction=str(body.get('instruction') or ''),
                 replaces=str(body.get('replaces') or ''))
             return JSONResponse(draft)
+        except ReplyHistoryUnavailableError as exc:
+            return reply_history_conflict(exc)
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({'detail': str(exc)}, status_code=422)
         except Exception:
@@ -50,13 +64,15 @@ def register_routes(router, templates):
     @router.post('/workflows/studio/tasks/{chat_id}/source-replies/{draft_id}/{action}')
     async def source_reply_action(chat_id: int, draft_id: str, action: str, request: Request):
         from distr.core.incoming.source_reply import (
-            act_on_draft, ReplyPreflightError, ReplyRewriteRequiredError, ReplySourceChangedError,
+            act_on_draft, ReplyHistoryUnavailableError, ReplyPreflightError, ReplyRewriteRequiredError, ReplySourceChangedError,
         )
         try:
             body = await request.json()
             if action == 'approve' and body.get('approved') is not True:
                 return JSONResponse({'detail': 'Approve the displayed reply before sending.'}, status_code=409)
             return JSONResponse(await asyncio.to_thread(act_on_draft, chat_id, draft_id, action, str(body.get('text') or '')))
+        except ReplyHistoryUnavailableError as exc:
+            return reply_history_conflict(exc)
         except ReplyPreflightError as exc:
             payload = {'detail': str(exc), 'code': 'reply_not_sent',
                        'send_attempted': False, 'draft_status': 'draft'}

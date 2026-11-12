@@ -399,6 +399,12 @@
 
     var apiFetch = window.DecisionsAPI.fetch;
 
+    function humanBoardMoveHeaders() {
+        // Only board drag/move calls may send this. Agent, MCP, and CLI callers must not.
+        return { "Content-Type": "application/json", "X-Decisions-Actor": "user" };
+    }
+
+
     function showSnackbar(msg, type) { window.DecisionsAPI.snackbar(msg, type, { id: "kb-snackbar" }); }
     var modalHelpers = window.KanbanModalHelpers;
 
@@ -1681,7 +1687,7 @@
         if (!isFinite(ticketId) || !isFinite(laneIdNum)) return;
         apiFetch("/api/tickets/tickets/" + ticketId + "/move", {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers: humanBoardMoveHeaders(),
             body: JSON.stringify({ lane_id: laneIdNum, position: listLaneDropPosition(bodyEl) }),
         }).then(function() {
             if (currentBoard && currentBoard.source === "database") {
@@ -2371,7 +2377,7 @@
             ? computeTicketDropPosition(bodyEl, ticketId, clientY)
             : bodyEl.querySelectorAll(".kb-card, .kb-ticket-list-row").length;
         apiFetch("/api/tickets/tickets/" + ticketId + "/move", {
-            method: "PUT", headers: { "Content-Type": "application/json" },
+            method: "PUT", headers: humanBoardMoveHeaders(),
             body: JSON.stringify({ lane_id: laneId, position: position })
         }).then(function() { selectBoard("database", currentBoard.id); })
         .catch(function(e) { showSnackbar("Move failed: " + e.message, "error"); });

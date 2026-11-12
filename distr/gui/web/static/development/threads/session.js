@@ -58,6 +58,8 @@ export function createThreadSession({ api, workflowForChat, runForWorkflow, dire
                 ...(chat ? { currentChat: chat } : {}),
                 currentWorkflow: workflow,
                 currentRun: run,
+                executionAvailable: execution != null,
+                lastProactiveResultTurnId: execution?.last_proactive_result_turn_id,
                 artifacts: artifacts.items || [],
                 plans: plans.items || [],
                 steeringMemory,

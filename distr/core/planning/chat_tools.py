@@ -13,7 +13,7 @@ from typing import Any
 INTERFACE_TYPES = {"wireframe", "flows"}
 ERD_TYPES = {"erd"}
 DIAGRAM_TYPES = {"architecture", "diagram"}
-DOCUMENT_TYPES = {"brief", "prd", "frac", "skills", "handover", "decision", "document", "file_structure"}
+DOCUMENT_TYPES = {"brief", "prd", "frac", "decision", "document", "file_structure"}  # handover/skills retired 2026-11-11
 FAMILIES = {"interface": INTERFACE_TYPES, "erd": ERD_TYPES, "diagram": DIAGRAM_TYPES, "document": DOCUMENT_TYPES}
 TOOLS = {f"{verb}_{family}": family for family in FAMILIES for verb in ("create", "update")}
 AI_SOURCES = {"ai", "agent"}          # "agent" = rows written before the rename; both read as AI

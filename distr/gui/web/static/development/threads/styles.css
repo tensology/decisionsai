@@ -19,7 +19,48 @@
 
 .thread-more-button { margin-left: 2px; }
 
-.thread-header-menu { position: absolute; top: 48px; right: 10px; left: auto; }
+.thread-header-menu { position: fixed; z-index: 60; pointer-events: auto; }
+#board-chrome-unit .thread-more-button { margin-left: 0; margin-right: 0; }
+#board-chrome-unit .board-chrome-divider {
+    display: inline-block;
+    width: 1px;
+    height: 18px;
+    flex: 0 0 auto;
+    margin: 0 4px;
+    background: var(--studio-line);
+}
+#board-chrome-unit .board-chrome-play-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+#board-chrome-unit #header-time-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin: 0;
+    padding: 0 2px;
+    background: transparent;
+    position: static;
+    pointer-events: auto;
+}
+#development-task-header.kanban-mode #header-time-controls,
+#development-task-header.plan-mode #header-time-controls,
+#development-task-header.terminals-mode #header-time-controls,
+#header-time-controls.hidden { display: none !important; }
+#development-task-header.kanban-mode #thread-cli-mode-toggle,
+#development-task-header.kanban-mode #chrome-cli-divider,
+#development-task-header.plan-mode #thread-cli-mode-toggle,
+#development-task-header.plan-mode #chrome-cli-divider,
+#development-task-header.terminals-mode #thread-cli-mode-toggle,
+#development-task-header.terminals-mode #chrome-cli-divider { display: none !important; }
+#chrome-kanban-divider,
+#chrome-kanban-view-slot { display: none; }
+#development-task-header.kanban-mode #chrome-kanban-divider { display: inline-block; }
+#development-task-header.kanban-mode #chrome-kanban-view-slot { display: inline-flex; align-items: center; }
+#board-chrome-unit .run-elapsed { color: var(--studio-dim); font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+#board-chrome-unit .time-toggle-button { width: 22px; height: 22px; min-width: 22px; min-height: 22px; padding: 0; pointer-events: auto; }
 
 .thread-time-field { margin: 13px 16px 0; }
 
@@ -33,25 +74,124 @@
     position: relative;
     z-index: 2;
     display: flex;
+    flex-direction: row;
     align-items: center;
     gap: 10px;
+    height: 56px;
+    min-height: 56px;
     min-width: 0;
     padding: 0 15px;
     border-bottom: 1px solid var(--studio-line);
     background: var(--studio-panel);
 }
 
+/* Shared right cluster: section controls + Play + 4 switches sit at the right of the single header row. */
+#board-chrome-unit {
+    position: relative;
+    right: auto;
+    top: auto;
+    height: 100%;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    margin-left: auto;
+}
+#header-controls-divider {
+    flex: 0 0 auto;
+    width: 1px;
+    height: 18px;
+    background: var(--studio-line);
+    margin: 0 2px;
+}
+#development-task-header.kanban-mode #header-controls-divider,
+#development-task-header.plan-mode #header-controls-divider { display: none !important; }
+#development-task-header,
+#development-task-header.kanban-mode,
+#development-task-header.plan-mode,
+#development-task-header.terminals-mode,
+#development-task-header.chat-mode {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 56px;
+    min-height: 56px;
+}
+#development-task-header.kanban-mode > #board-chrome-unit,
+#development-task-header.plan-mode > #board-chrome-unit,
+#development-task-header.terminals-mode > #board-chrome-unit,
+#development-task-header.chat-mode > #board-chrome-unit {
+    margin-left: auto;
+    width: auto;
+    height: 100%;
+    padding: 0;
+    justify-content: flex-end;
+}
+/* Status badges live in the header after the crumbs and before the divider. */
+#development-task-header > #task-state {
+    flex: 0 0 auto;
+    margin: 0 8px 0 2px;
+}
+#development-task-header > #terminal-running-count {
+    display: none;
+    flex: 0 0 auto;
+    margin: 0 8px 0 2px;
+}
+#development-task-header.terminals-mode > #terminal-running-count { display: inline-flex; }
+#development-task-header.chat-mode #chrome-cli-divider { display: none !important; }
+#board-chrome-unit .board-view-switch { position: relative; }
+#board-chrome-unit #terminal-running-count { display: none; }
+#development-task-header.terminals-mode #terminal-running-count {
+    display: inline-flex;
+    margin: 0;
+}
+#development-task-header.terminals-mode > .header-context,
+#development-task-header.terminals-mode > #stop-run-button { display: none !important; }
+#development-task-header.kanban-mode > #stop-run-button { display: none !important; }
+#development-task-header.kanban-mode #thread-more-button,
+#development-task-header.kanban-mode #thread-header-menu,
+#development-task-header.plan-mode #thread-more-button,
+#development-task-header.plan-mode #thread-header-menu,
+#development-task-header.terminals-mode #thread-more-button,
+#development-task-header.terminals-mode #thread-header-menu { display: none !important; }
+#development-task-header.kanban-mode #task-state,
+#development-task-header.plan-mode #task-state,
+#development-task-header.terminals-mode #task-state { display: none !important; }
+
 .task-breadcrumb { display: flex; min-width: 0; align-items: center; gap: 6px; color: var(--studio-muted); font-size: 12px; }
 
-.task-breadcrumb span, .task-breadcrumb strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-breadcrumb span, .task-breadcrumb strong { overflow: hidden; white-space: nowrap; }
 
-.task-breadcrumb span { max-width: 130px; }
+.task-breadcrumb > #header-project {
+    max-width: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    text-overflow: clip;
+}
+
+.task-breadcrumb strong { text-overflow: ellipsis; }
+
+.task-breadcrumb span:not(#header-project) { max-width: 130px; text-overflow: ellipsis; }
 
 .task-breadcrumb i { color: var(--studio-dim); font-style: normal; }
 
 .task-breadcrumb strong { color: var(--studio-text); font-weight: 650; }
 
-.task-state { display: flex; align-items: center; gap: 7px; margin-left: auto; color: #c6ccd2; font-size: 11px; }
+.task-state { display: flex; align-items: center; gap: 7px; margin: 0 8px 0 10px; padding: 0 2px; flex: 0 0 auto; color: #c6ccd2; font-size: 11px; white-space: nowrap; }
+#board-chrome-unit #task-state { margin-left: 10px; margin-right: 8px; }
+#development-kanban-more { display: none; }
+#development-task-header.kanban-mode #chrome-play-group #development-kanban-more,
+#development-task-header.plan-mode #chrome-play-group #development-kanban-more,
+#development-task-header.terminals-mode #chrome-play-group #development-kanban-more,
+#development-task-header.chat-mode #chrome-play-group #development-kanban-more { display: grid !important; }
+/* First-paint: project ⋯ is already in the header play group on every Development route. */
+html.dev-chat-route #chrome-play-group #development-kanban-more,
+html.dev-board-route #chrome-play-group #development-kanban-more { display: grid !important; }
+#development-task-header #thread-more-button,
+#development-task-header #thread-header-menu { display: none !important; }
+#chrome-kanban-view-slot { display: none; }
+#development-task-header.kanban-mode #chrome-kanban-view-slot { display: inline-flex; align-items: center; margin-right: 4px; }
 
 .task-state span { width: 7px; height: 7px; border-radius: 50%; background: var(--studio-dim); }
 
@@ -63,7 +203,13 @@
 
 .task-state.failed span { background: var(--studio-red); }
 
-.conversation { min-height: 0; overflow: auto; scroll-behavior: smooth; scrollbar-width: thin; }
+.conversation { min-height: 0; overflow: auto; scroll-behavior: smooth; scrollbar-width: thin; background: var(--studio-bg); }
+.thread-conversation { grid-row: 2; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--studio-bg); }
+.thread-conversation:has(> .conversation.hidden) { display: none; }
+.thread-attachment-warning { width: min(780px, calc(100% - 42px)); margin: 8px auto 0; padding: 8px 12px; border: 1px solid rgba(255,120,120,.45); border-radius: 8px; color: var(--studio-danger-text, #fca5a5); font-size: 12px; overflow-wrap: anywhere; }
+.thread-telegram-status, .thread-queue-handoff { width: min(780px, calc(100% - 42px)); margin: 8px auto 0; padding: 8px 12px; border: 1px solid var(--studio-line); border-radius: 8px; color: var(--studio-muted); font-size: 12px; overflow-wrap: anywhere; }
+.thread-queue-handoff { border-color: rgba(245,158,11,.46); color: var(--studio-text); }
+.thread-telegram-status[data-state="unconfirmed"], .thread-telegram-status[data-state="held"] { color: var(--studio-text); }
 
 .conversation-inner { width: min(780px, calc(100% - 42px)); min-height: 100%; margin: 0 auto; padding: 26px 0 178px; }
 
@@ -572,7 +718,7 @@
     bottom: 0;
     left: 0;
     padding: 38px 24px 18px;
-    background: linear-gradient(transparent, var(--studio-panel) 32%);
+    background: linear-gradient(transparent, var(--studio-bg) 32%);
     pointer-events: none;
 }
 
@@ -844,16 +990,15 @@
 .model-route-preview {
     margin: 0 8px 4px;
     padding: 5px 8px;
-    overflow: hidden;
     border-radius: 6px;
     background: rgba(255,255,255,.04);
-    color: var(--studio-muted);
-    font-size: 8px;
+    color: var(--studio-text);
+    font-size: 12px;
     line-height: 1.35;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
 }
 
+.model-route-preview small { font: inherit; }
 .model-route-preview[hidden] { display: none; }
 
 .model-menu-note { margin: 4px 9px 2px; padding-top: 8px; border-top: 1px solid var(--studio-line); color: var(--studio-dim); font-size: 9px; line-height: 1.4; }
@@ -913,10 +1058,11 @@
 
 @media (max-width: 680px) {
     .task-header { padding: 0 10px; }
-    .task-breadcrumb span, .task-breadcrumb i { display: none; }
+    .task-breadcrumb > span, .task-breadcrumb > i { display: none; }
     .task-state b { display: none; }
+    .task-state.ide-waiting b { display: inline; }
     .task-state.blocked b { display: inline; }
-    .task-state.proactive-state.blocked b { display: none; }
+    .task-state.proactive-state.blocked:not(.review-waiting) b { display: none; }
     .header-button.danger.proactive-turn-stop { display: inline-flex; align-items: center; margin-top: 8px; }
     .conversation-inner { width: calc(100% - 24px); padding-top: 19px; padding-bottom: 158px; }
     .studio-empty { min-height: calc(100dvh - 230px); }
@@ -972,6 +1118,8 @@
 .studio-composer textarea { padding: 6px 14px 4px; line-height: 1.45; }
 /* Ready dot was grey: there was no .ready rule. Ready = solid green; running keeps its green glow. */
 .task-state.ready span { background: var(--studio-green); }
+.task-state.draft span { background: var(--studio-dim); }
+
 
 /* 2026-10-22 turnchip: per-turn route label under each sent message. */
 .studio-message.user .turn-route-label { margin: 4px 2px 0 auto; max-width: 70%; overflow: hidden; color: var(--studio-dim); font-size: 9px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
@@ -1031,8 +1179,59 @@
 /* Textarea text starts top-left with even padding; time/play block floats over its top-right corner. */
 .studio-composer textarea { padding: 10px 14px; line-height: 1.45; vertical-align: top; }
 .composer-prompt-wrap { position: relative; }
-.composer-prompt-wrap .composer-time-controls { position: absolute; top: 6px; right: 10px; z-index: 4; margin-left: 0; padding: 2px 4px 2px 8px; border-radius: 6px; background: rgba(21, 29, 73, .8); background: color-mix(in srgb, #151d49 80%, transparent); pointer-events: none; }
-.composer-prompt-wrap .composer-time-controls .time-toggle-button { pointer-events: auto; }
+.composer-prompt-wrap .composer-time-controls,
+.composer-prompt-wrap #composer-chrome-slot {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    z-index: 4;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 0;
+    padding: 2px 4px 2px 8px;
+    border-radius: 6px;
+    background: transparent;
+    pointer-events: auto;
+}
+.composer-prompt-wrap #composer-chrome-slot #header-time-controls,
+.composer-prompt-wrap #composer-chrome-slot .composer-time-controls {
+    position: static;
+    top: auto;
+    right: auto;
+    inset: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin: 0;
+    padding: 0 2px;
+    background: transparent;
+    pointer-events: auto;
+}
+.composer-prompt-wrap #composer-chrome-slot #run-elapsed { pointer-events: none; }
+.composer-prompt-wrap #composer-chrome-slot .thread-more-button,
+.composer-prompt-wrap #composer-chrome-slot .time-toggle-button {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    margin: 0;
+    padding: 0;
+    pointer-events: auto;
+}
+.composer-prompt-wrap #composer-chrome-slot #task-state {
+    margin: 0 8px;
+    padding: 0 4px;
+    pointer-events: none;
+    white-space: nowrap;
+}
+.composer-prompt-wrap #composer-chrome-slot #thread-terminal-button {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    pointer-events: auto;
+}
+.studio-composer textarea { padding-right: 120px; }
 /* 2026-10-22 permcolor2: collapse empty scope strip; keep the overlay on narrow screens (beats the old sticky rule). */
 /* 2026-10-22 timerrow: strip no longer collapses when empty; it always reserves the row the timer lives in. */
 @media (max-width: 680px) { .composer-prompt-wrap .composer-time-controls { position: absolute; right: 8px; padding-left: 8px; background: color-mix(in srgb, #151d49 80%, transparent); } }
@@ -1137,7 +1336,7 @@
 .dev-closing-reply-body { display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-height: 120px; margin: 6px 0 10px; padding: 8px; border: 1px solid var(--studio-border, #565869); border-radius: 6px; background: var(--studio-bg, #0d1117); color: var(--studio-text, #ececf1); font: inherit; font-size: 15px; line-height: 1.5; resize: vertical; }
 
 /* 2026-10-22 timerrow: the time/play block always sits in the board-selector row (same spot with or without a board). */
-.composer-scope-strip { padding-right: 120px; }
+.composer-scope-strip { padding-right: 220px; }
 .composer-prompt-wrap .composer-time-controls { top: -25px; background: transparent; }
 @media (max-width: 680px) { .composer-prompt-wrap .composer-time-controls { top: -25px; background: transparent; } }
 
@@ -1261,50 +1460,11 @@ button.thread-source-file { border: 0; background: transparent; padding: 0; curs
 
 
 /* 2026-11-06 cli-mode1: live harness session viewer (not a chat restyle). */
-.thread-cli-mode-toggle {
-    display: inline-flex;
-    align-items: stretch;
-    gap: 2px;
-    box-sizing: border-box;
-    height: 28px;
-    min-height: 28px;
-    padding: 2px;
-    border: 1px solid var(--studio-line, #354078);
-    border-radius: 6px;
-    background: transparent;
-    color: var(--studio-muted, #9ca3af);
-    font-size: 10px;
-    font-weight: 650;
-    letter-spacing: .04em;
-    cursor: pointer;
-}
-.thread-cli-mode-toggle:hover { color: var(--studio-text, #ececf1); border-color: var(--studio-line); }
-.thread-cli-mode-toggle[aria-pressed="true"] {
-    border-color: rgba(249,115,22,.55);
-    background: rgba(249,115,22,.12);
-    color: #fdba74;
-}
-.thread-cli-mode-toggle > span {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 32px;
-    padding: 0 5px;
-    border-radius: 3px;
-    color: var(--studio-muted, #9ca3af);
-}
-.thread-cli-mode-toggle[aria-pressed="false"] .thread-mode-chat {
-    background: var(--studio-raised, #283040);
-    color: var(--studio-text, #ececf1);
-    box-shadow: inset 0 0 0 1px var(--studio-line, #354078);
-}
-.thread-cli-mode-toggle[aria-pressed="true"] .thread-mode-cli {
-    background: rgba(249,115,22,.24);
-    color: #fdba74;
-    box-shadow: inset 0 0 0 1px rgba(249,115,22,.55);
-}
-.thread-cli-mode-toggle:focus-visible { outline: 2px solid #fb923c; outline-offset: 2px; }
-.thread-cli-mode-toggle:disabled { opacity: .45; cursor: not-allowed; }
+/* Chat/CLI reuses .development-kanban-view-toggle (Board/List) for colors, border,
+   radius, padding, font, hover, and the selected inset accent underline. No icons. */
+#thread-cli-mode-toggle.thread-cli-mode-toggle.hidden { display: none !important; }
+#thread-cli-mode-toggle button:disabled { cursor: not-allowed; opacity: .45; }
+#thread-cli-mode-toggle button:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
 .thread-terminal-menu { position: absolute; top: calc(100% - 4px); right: 12px; left: auto; z-index: 20; }
 .thread-terminal-menu button:focus-visible { outline: 2px solid #fb923c; outline-offset: -2px; }
 .thread-cli-pane.is-drop-target { position: relative; outline: 2px dashed #f97316; outline-offset: -6px; }
@@ -2159,6 +2319,7 @@ button.thread-source-file:focus-visible { outline: 2px solid var(--studio-accent
 .queued-copy > small { color: var(--studio-muted); font-size: 12px; }
 .queued-actions { display: flex; flex: 0 0 auto; gap: 4px; }
 .queued-actions button { display: grid; place-items: center; width: 28px; height: 32px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: var(--studio-muted); cursor: pointer; }
+.queued-actions button[data-queued-action="retry"] { width: auto; padding-inline: 8px; color: var(--studio-text); }
 .queued-actions button:hover { background: var(--studio-raised-2); color: var(--studio-text); }
 .queued-actions button:focus-visible, .queued-edit-status button:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
 .queued-actions button:disabled { opacity: .5; cursor: wait; }
@@ -2197,13 +2358,31 @@ button.thread-source-file:focus-visible { outline: 2px solid var(--studio-accent
 .source-reply-dialog footer { justify-content: center; border-top: 1px solid var(--studio-line); }
 .source-reply-content { display: grid; align-content: start; grid-auto-rows: max-content; gap: 8px; min-height: 0; overflow-y: auto; padding: 16px; font-size: 14px; }
 .source-reply-content label { margin: 0; font-weight: 500; }
-.source-reply-content select, .source-reply-content input, .source-reply-content textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 12px; border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-raised); color: var(--studio-text); font: inherit; }
+.source-reply-content label[hidden] { display: none; }
+.source-reply-content select, .source-reply-content input, .source-reply-content textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 12px; border: 1px solid var(--studio-line); border-radius: 6px; background-color: var(--studio-raised); color: var(--studio-text); font: inherit; }
+.source-reply-recipient { position: relative; }
+.source-reply-recipient:has(select[hidden]) { display: none; }
+.source-reply-recipient select { appearance: none; display: block; padding-inline-end: 32px; }
+.source-reply-recipient::after {
+    content: "";
+    position: absolute;
+    inset-inline-end: 15px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    border: solid var(--studio-muted);
+    border-width: 0 2px 2px 0;
+    transform: translateY(-70%) rotate(45deg);
+    pointer-events: none;
+}
 .source-reply-content textarea { resize: vertical; min-height: 160px; }
 .source-reply-content [data-unsent-edits] textarea { min-height: 96px; }
 .source-reply-content :focus-visible, .source-reply-dialog button:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
 .source-reply-destination { overflow-wrap: anywhere; color: var(--studio-muted); font-size: 12px; }
 .source-reply-destination p { margin: 0 0 4px; }
 .source-reply-status { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--studio-muted); }
+.source-reply-check-status { justify-self: start; }
+.source-reply-check-status[hidden] { display: none; }
 .source-reply-dialog button { min-height: 36px; }
 .source-reply-dialog button:disabled { opacity: .45; cursor: not-allowed; }
 .source-reply-content [data-draft-fields]:not([hidden]) { display: grid; gap: 8px; }
@@ -2211,3 +2390,165 @@ button.thread-source-file:focus-visible { outline: 2px solid var(--studio-accent
     .message-actions button.source-reply-button, .source-reply-dialog button { min-height: 44px; }
     .source-reply-content select, .source-reply-content input, .source-reply-content textarea { font-size: 16px; }
 }
+
+/* Thread: ⋯ and time stay in the composer. Play stays visible in the header play group, same position as Planning (immediately before the 4 view switches). Status stays in the header. */
+#development-task-header.chat-mode #chrome-play-group { display: inline-flex; }
+
+
+/* ---- 2026-11-11 chrome11: first-paint thread chrome, one divider, composer row, model footer ---- */
+
+/* Thread/new routes (class set by a head script before paint): show the post-badge
+   divider immediately; never show the leftover Chat/CLI divider. */
+#chrome-cli-divider[hidden],
+#header-controls-divider[hidden] { display: none !important; }
+html.dev-chat-route #header-controls-divider { display: inline-block !important; }
+#development-task-header.chat-mode #chrome-cli-divider,
+html.dev-chat-route #chrome-cli-divider { display: none !important; }
+
+@media (max-width: 900px) {
+    .studio-main:has(> #development-task-header.chat-mode) {
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+    #development-task-header.chat-mode {
+        height: auto;
+        flex-wrap: wrap;
+        gap: 4px 8px;
+        padding: 5px 8px;
+    }
+    #development-task-header.chat-mode > .task-breadcrumb {
+        min-height: 28px;
+    }
+    #development-task-header.chat-mode .task-breadcrumb > i { display: block; }
+    #development-task-header.chat-mode > #header-controls-divider {
+        display: none !important;
+    }
+    #development-task-header.chat-mode > #board-chrome-unit {
+        flex: 0 0 100%;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        height: auto;
+    }
+    #development-task-header.chat-mode .board-view-switch { margin-left: auto; }
+}
+
+@media (max-width: 680px) {
+    #development-task-header.chat-mode { padding-inline: 4px; }
+    #development-task-header.chat-mode > #board-chrome-unit { gap: 2px; }
+    #development-task-header.chat-mode #thread-cli-mode-toggle button {
+        min-width: 44px;
+        padding-inline: 6px;
+    }
+    #development-task-header.chat-mode .thread-terminal-button { margin-left: 0; }
+    #development-task-header.chat-mode #chrome-play-group { gap: 0; }
+    #development-task-header.chat-mode .board-view-switch {
+        gap: 0;
+        padding-inline: 0;
+    }
+}
+
+/* Composer ⋯ and time live in the scope strip so they share a row with Board/Ticket
+   on a new thread. The slot itself does not capture clicks (restores pre-chrome
+   pointer-events:none on the chrome wrapper) so it cannot cover the model selector. */
+.composer-scope-strip #composer-chrome-slot,
+#composer-chrome-slot {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding: 0 2px;
+    background: transparent;
+    z-index: 4;
+    pointer-events: none;
+}
+#composer-chrome-slot .thread-more-button,
+#composer-chrome-slot .time-toggle-button,
+#composer-chrome-slot #header-time-controls,
+#composer-chrome-slot #composer-time-toggle,
+#composer-chrome-slot #run-elapsed {
+    pointer-events: auto;
+}
+#composer-chrome-slot #header-time-controls,
+#composer-chrome-slot .composer-time-controls {
+    position: static;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin: 0;
+    padding: 0 2px;
+    background: transparent;
+    pointer-events: auto;
+}
+#composer-chrome-slot .thread-more-button,
+#composer-chrome-slot .time-toggle-button {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    margin: 0;
+    padding: 0;
+}
+/* Existing threads (pickers hidden): collapse the strip row and overlay chrome
+   on the top-right of the textarea, matching the delivered thread composer look. */
+.composer-scope-strip:not(:has(> :not(.hidden):not(#composer-chrome-slot))) {
+    display: block;
+    position: relative;
+    height: 0;
+    min-height: 0;
+    padding: 0;
+    overflow: visible;
+    pointer-events: none;
+}
+.composer-scope-strip:not(:has(> :not(.hidden):not(#composer-chrome-slot))) #composer-chrome-slot {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    margin-left: 0;
+    pointer-events: none;
+}
+.studio-composer textarea,
+.studio-composer #task-prompt { padding-right: 120px; }
+
+/* Model selector footer: keep it vertically centered with + / permissions / send.
+   The auto chip must not sit beside the button (Auto XOR the model name). */
+.composer-toolbar,
+.composer-toolbar-start,
+.composer-toolbar-end {
+    display: flex;
+    align-items: center;
+}
+.composer-toolbar .model-button,
+.composer-toolbar .send-button,
+.composer-toolbar .tool-button,
+.composer-toolbar .permission-control {
+    align-self: center;
+}
+.composer-toolbar .model-button {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    min-height: 28px;
+    line-height: 28px;
+}
+#model-auto-chip[hidden],
+.composer-toolbar #model-auto-chip[hidden] { display: none !important; }
+
+@media (max-width: 640px) {
+    .studio-composer:not(.is-editing-queue) .composer-toolbar:has(.composer-attachment-strip:not(.is-empty)) {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+    .studio-composer:not(.is-editing-queue) .composer-attachment-strip:not(.is-empty) {
+        grid-row: 1;
+        grid-column: 1 / -1;
+    }
+    .studio-composer:not(.is-editing-queue) .composer-toolbar:has(.composer-attachment-strip:not(.is-empty)) .composer-toolbar-end {
+        justify-content: flex-end;
+    }
+}
+
+/* Incoming threads: "ready to send this?" call-out under the final reply, outside the response text. */
+.client-reply-callout-slot:empty { display: none; }
+.client-reply-callout { margin-top: 12px; border: 1px solid var(--studio-accent, var(--studio-line)); border-radius: 10px; max-width: 720px; }
+.client-reply-callout header button[data-close] { width: auto; padding: 0 10px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; }
+.client-reply-callout textarea { width: 100%; box-sizing: border-box; }

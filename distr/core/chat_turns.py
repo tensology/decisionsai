@@ -218,6 +218,7 @@ def create_event(
     event_id: Optional[str] = None,
     broadcast: bool = True,
     transcript_notice: str = "",
+    transcript_workflow_run_id: int | None = None,
 ) -> Optional[dict[str, Any]]:
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Unsupported chat turn event type: {event_type}")
@@ -285,6 +286,10 @@ def create_event(
                             from distr.core.chat import _assistant_notice_row
 
                             notice = _assistant_notice_row(root, transcript_notice.strip())
+                            if transcript_workflow_run_id is not None:
+                                notice.params = json.dumps({"workflow_reply": {
+                                    "run_id": transcript_workflow_run_id, "turn_id": resolved_turn_id,
+                                }})
                             session.add(notice)
                             root.modified_date = notice.modified_date
                             session.flush()
@@ -572,6 +577,7 @@ def complete_turn(
     display_text: str = "",
     speech_text: str = "",
     transcript_notice: str = "",
+    transcript_workflow_run_id: int | None = None,
 ) -> Optional[dict[str, Any]]:
     return create_event(
         chat_id,
@@ -582,6 +588,7 @@ def complete_turn(
         summary=display_text,
         metadata={"display_text": display_text, "speech_text": speech_text or display_text, "speak": True},
         transcript_notice=transcript_notice,
+        transcript_workflow_run_id=transcript_workflow_run_id,
     )
 
 

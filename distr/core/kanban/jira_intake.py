@@ -404,6 +404,7 @@ def stage_jira_intake_batch(
                 send_to_cli=bool(board.send_to_cli),
                 source_provider="jira",
                 source_external_id=external_id or None,
+                source_url=draft.get("source_url") or None,
                 source_label="Jira",
                 external_id=external_id or None,
             )
@@ -952,6 +953,10 @@ def run_jira_morning_intake(
     if not drafts:
         return {"created": [], "skipped": [], "keys": new_keys, "notified": False, "reason": "fetch_empty"}
 
+    domain = jira_domain_from_account(account)
+    for draft in drafts:
+        if domain:
+            draft["source_url"] = f"https://{domain}/browse/{draft['key']}"
     staged = stage_jira_intake_batch(board_id=board_id, drafts=drafts, skip_existing=True)
     created = staged.get("created") or []
     if not created:

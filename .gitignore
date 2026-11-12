@@ -160,6 +160,7 @@ docs/skills/*
 
 # --- Dev scratch at repo root ---
 .superpowers/
+scratch_e2e_thread_style/
 test.js
 server.log
 

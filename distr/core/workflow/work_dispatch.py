@@ -122,19 +122,32 @@ def dispatch_work_item(
         mark_development_thread,
     )
     from distr.core.planning.prerequisites import PlanPrerequisiteError, execution_ticket_id
-    from distr.core.workflow.ticket_dispatch import implicit_queue_ticket_error
+    from distr.core.workflow.ticket_dispatch import implicit_queue_ticket_error, ticket_group_scope_error
     from distr.core.workflow.step_validator import WorkflowStartError
 
     queue_metadata = run_metadata if isinstance(run_metadata, dict) else {}
     implicit_queue = source_type == "workflow_queue" and not queue_metadata.get("ticket_group_items")
+    group_scope = queue_metadata.get("ticket_group_scope") if source_type in {"ticket_group", "workflow_queue"} else None
+    group_scope = group_scope if isinstance(group_scope, dict) else None
+    queued = implicit_queue or group_scope is not None
     queued_project = queue_metadata.get("project_id")
+
+    def queue_scope_error(ticket):
+        if implicit_queue:
+            return implicit_queue_ticket_error(ticket, workflow_id, board_id, queued_project)
+        if group_scope is not None:
+            if group_scope.get("ticket_id") != ticket_id:
+                return "The queued ticket identity changed."
+            return ticket_group_scope_error(ticket, workflow_id, group_scope, automatic=source_type == "workflow_queue")
+        return None
+
     try:
-        if ticket_id is not None or chat_id is not None or implicit_queue:
+        if ticket_id is not None or chat_id is not None or queued:
             with (_session_provider or get_session)() as db:
                 ticket_id = execution_ticket_id(ticket_id, chat_id=chat_id, session=db)
-                if implicit_queue:
+                if queued:
                     ticket = db.get(KanbanTicket, ticket_id) if ticket_id is not None else None
-                    error = implicit_queue_ticket_error(ticket, workflow_id, board_id, queued_project)
+                    error = queue_scope_error(ticket)
                     if error:
                         return {"status": "blocked", "error": error}
 
@@ -154,6 +167,11 @@ def dispatch_work_item(
         )
     except (PlanPrerequisiteError, WorkflowStartError) as exc:
         return {'success':False, 'status':'blocked', 'error':str(exc)}
+    if group_scope is not None and (
+        group_scope.get("board_id", scope["board_id"]) != scope["board_id"]
+        or group_scope.get("project_id", scope["project_id"]) != scope["project_id"]
+    ):
+        return {"status": "blocked", "error": "The queued launch does not match its selected board or project."}
     # Ticket-triggered paths must reuse the ticket's durable Development
     # thread.  Older callers only supplied ticket_id, which allowed each
     # retry/spawn path to create a fresh ordinary Chat containing the brief.
@@ -172,8 +190,10 @@ def dispatch_work_item(
                 chat = db.get(Chat, int(chat_id))
                 if chat is None or chat.parent_id is not None:
                     raise ValueError(f"Development thread #{chat_id} was not found.")
+                if group_scope is not None and chat.project_id != scope["project_id"]:
+                    return {"status": "blocked", "error": "The linked Development thread belongs to a different project."}
                 existing = development_thread_metadata(chat)
-                if not implicit_queue and scope.get("project_id") is None and chat.project_id is not None:
+                if not queued and scope.get("project_id") is None and chat.project_id is not None:
                     scope["project_id"] = int(chat.project_id)
             if str(existing.get("board_provider") or "").strip().lower() not in {"", "local", "database", "decisions"}:
                 for key in ("board_provider", "board_key", "board_ticket_key", "board_ticket_title", "board_ticket_lane"):
@@ -223,17 +243,18 @@ def dispatch_work_item(
 
     if ticket_id is not None:
         with (_session_provider or get_session)() as db:
-            ticket = db.get(KanbanTicket, int(ticket_id))
-            if implicit_queue:
-                error = implicit_queue_ticket_error(ticket, workflow_id, board_id, queued_project)
-                if error:
-                    return {"status": "blocked", "error": error}
+            if group_scope is not None and db.get_bind().dialect.name == "sqlite":
+                db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            ticket = db.get(KanbanTicket, int(ticket_id), with_for_update=group_scope is not None)
+            error = queue_scope_error(ticket)
+            if error:
+                return {"status": "blocked", "error": error}
             if ticket is None:
                 raise ValueError(f"Ticket #{ticket_id} disappeared before execution.")
             ticket.source_chat_id = int(chat_id)
             if not implicit_queue:
                 ticket.linked_workflow_id = int(workflow_id)
-                if scope["project_id"] is not None:
+                if group_scope is None and scope["project_id"] is not None:
                     ticket.linked_project_id = int(scope["project_id"])
             db.commit()
         from distr.core.incoming.media import sync_thread_files_safely

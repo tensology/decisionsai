@@ -1,0 +1,405 @@
+/* 2026-11-11 overflow-names: project names never truncate; long thread / breadcrumb
+   names (not project names) use one shared seamless marquee. Additive overrides only.
+   Do not un-hide terminal-details breadcrumbs the navigation worker removed. */
+
+/* ---- Project names: always fully visible; wrap if the row is tight. ---- */
+#header-project,
+.task-breadcrumb > #header-project,
+.development-kanban-breadcrumb > span,
+.development-kanban-breadcrumb #development-kanban-board,
+.studio-shell .project-select span,
+.plan-project,
+.plan-detail-header .plan-project,
+.terminal-project-titlebar strong,
+#terminal-project-name,
+.proposal-project,
+.reports-chip,
+.reports-block > b,
+.reports-pie li span,
+.reports-project-legend-row > span,
+.reports-project-option > span,
+.reports-select-button,
+.reports-detail-project,
+.reports-day-project > h3 {
+    flex-shrink: 0;
+    min-width: 0;
+    max-width: 100%;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* Header / Kanban breadcrumb: the 130px / 42vw caps were clipping the project name
+   when the thread title was long. The thread / current segment yields space instead. */
+.task-breadcrumb {
+    flex-wrap: nowrap;
+    align-items: center;
+}
+#development-task-header .task-breadcrumb {
+    flex-wrap: nowrap;
+    min-width: 0;
+}
+.task-breadcrumb > #header-project,
+.development-kanban-breadcrumb > span,
+.development-kanban-breadcrumb #development-kanban-board {
+    flex: 0 1 auto;
+    max-width: 100%;
+}
+.task-breadcrumb > #header-task,
+.task-breadcrumb > strong,
+.task-breadcrumb strong[data-plan-crumb],
+#development-kanban-view-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+}
+
+/* Plan mode capped the whole breadcrumb (34% / 24%), which clipped the project name.
+   Let the breadcrumb grow with the project; the current segment marquees. */
+#development-task-header.plan-mode > .task-breadcrumb,
+#development-task-header.plan-mode > .task-breadcrumb {
+    max-width: none;
+    /* 2026-11-12 header-phone1: was 1 1 auto, which let the crumbs grow and made the
+       Interfaces/Data/Documents tabs float at a name-dependent position. */
+    flex: 0 1 auto;
+    min-width: 0;
+}
+@media (min-width: 1400px) {
+    #development-task-header.plan-mode > .task-breadcrumb {
+        max-width: none;
+    }
+}
+@media (max-width: 1100px) {
+    #development-task-header.plan-mode > .task-breadcrumb {
+        max-width: none;
+    }
+}
+
+/* Phones previously hid the project segment entirely. Keep it visible. */
+@media (max-width: 680px) {
+    .task-breadcrumb > #header-project {
+        display: inline !important;
+        max-width: 100%;
+    }
+}
+
+/* Sidebar project row: grow vertically if the name wraps. */
+.studio-shell .project-select {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    align-items: flex-start;
+    min-height: 30px;
+    height: auto;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+.studio-shell .project-row {
+    min-height: 32px;
+    height: auto;
+    align-items: start;
+}
+
+/* Terminals list cards: let the titlebar grow so a wrapped project name is not clipped
+   by the 44px row / card overflow. Do not un-hide .terminal-project-header. */
+.terminal-project-card {
+    grid-template-rows: auto minmax(0, 1fr) 42px;
+}
+.terminal-project-titlebar {
+    min-height: 44px;
+    height: auto;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    align-items: start;
+}
+
+/* Reports: project labels wrap inside their chip / block / menu instead of ellipsizing. */
+.reports-select-button {
+    height: auto;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+}
+.reports-chip,
+.reports-block > b {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+}
+
+/* Incoming proposal project line already wraps in a later rule; reinforce it. */
+.proposal-project {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* ---- Shared thread / breadcrumb marquee (JS adds these classes) ---- */
+.name-marquee {
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    vertical-align: bottom;
+    /* Keep the host in a fixed-width box; the track scrolls inside. */
+    flex: 1 1 auto;
+}
+.name-marquee__viewport {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.name-marquee__track {
+    display: inline-flex;
+    width: max-content;
+    gap: var(--name-marquee-gap, 2.5em);
+    will-change: transform;
+    backface-visibility: hidden;
+    transform: translate3d(0, 0, 0);
+}
+.name-marquee__text {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+/* Seamless circular loop: 100% is exactly one copy + gap, so the restart
+   is visually identical to 0%. Continuous; no mid-cycle reset. */
+@keyframes name-marquee-seamless {
+    from { transform: translate3d(0, 0, 0); }
+    to { transform: translate3d(calc(-1 * var(--name-marquee-distance, 0px)), 0, 0); }
+}
+.name-marquee.is-overflowing.name-marquee--auto .name-marquee__track {
+    animation: name-marquee-seamless var(--name-marquee-duration, 8s) linear infinite;
+}
+.name-marquee.is-overflowing.name-marquee--hover:hover .name-marquee__track,
+.name-marquee.is-overflowing.name-marquee--hover:focus .name-marquee__track,
+.name-marquee.is-overflowing.name-marquee--hover:focus-within .name-marquee__track {
+    animation: name-marquee-seamless var(--name-marquee-duration, 8s) linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .name-marquee__track {
+        animation: none !important;
+        transform: none !important;
+    }
+}
+
+/* Hosts that used to ellipsize thread titles: clip to the box, no ellipsis. */
+.task-row .task-title,
+.plan-chat-title,
+.plan-chat-menu-title,
+.incoming-row-title strong,
+.incoming-proposal-main strong,
+.development-kanban-card-title > strong,
+.development-kanban-card.list-row .development-kanban-card-copy strong {
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+}
+.task-row .task-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.task-row .task-title > .name-marquee {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* The scrolling copies must never be capped by host ellipsis / max-width rules.
+   Only the viewport clips; the track is as wide as both copies + gap. */
+#development-task-header .task-breadcrumb .name-marquee__viewport {
+    overflow: hidden;
+    max-width: 100%;
+    text-overflow: clip;
+}
+#development-task-header .task-breadcrumb .name-marquee__track,
+#development-task-header .task-breadcrumb .name-marquee__text,
+.name-marquee__track,
+.name-marquee__text {
+    max-width: none !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    width: max-content;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+/* 2026-11-12 marquee1: breadcrumb priority. The project name is the main crumb:
+   full natural width, one line, never shrinks or wraps letter-by-letter.
+   The thread title is the shrinking side, capped so it cannot eat the row;
+   it marquees inside its own (smaller) viewport when it overflows. */
+#development-task-header .task-breadcrumb > #header-project {
+    flex: 0 0 auto;
+    min-width: max-content;
+    max-width: none;
+    white-space: nowrap;
+    overflow: visible;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+#development-task-header .task-breadcrumb > i {
+    flex: 0 0 auto;
+}
+#development-task-header .task-breadcrumb > #header-task {
+    flex: 0 1 auto;
+    min-width: 48px;
+    /* Secondary crumb: never more than ~45% of the breadcrumb, 320px max. */
+    max-width: min(320px, 45%);
+}
+
+/* ---- 2026-11-12 header-phone1: shared header fixes (all Development header modes) ----
+   1) Project name: one line at its natural width in every mode (beats the Planning
+      <=900px rule that let it break into vertical letters).
+   2) Before the route has loaded, the status badge, divider, Play group and view
+      switches are invisible but keep their space, and the empty switch reserves its
+      width, so nothing slides when the controls arrive.
+   3) Brand-new thread with no project picked: no Play, no project dots, no divider.
+   4) Phones (<=680px): the header wraps to a second row instead of running off-screen. */
+.studio-main > #development-task-header .task-breadcrumb > #header-project {
+    flex: 0 0 auto;
+    min-width: max-content;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+#development-task-header:not([data-mode-known]) > #task-state,
+#development-task-header:not([data-mode-known]) > #terminal-running-count,
+#development-task-header:not([data-mode-known]) > #header-controls-divider,
+#development-task-header:not([data-mode-known]) #chrome-play-group,
+#development-task-header:not([data-mode-known]) .board-view-switch {
+    visibility: hidden;
+}
+@media (min-width: 681px) {
+    html.dev-chat-route #development-task-header:not([data-mode-known]) .board-view-switch:empty,
+    html.dev-board-route #development-task-header:not([data-mode-known]) .board-view-switch:empty {
+        display: inline-flex;
+        min-width: 116px;
+    }
+}
+
+/* An empty Planning controls slot (plan still loading) must not take a row or space. */
+.studio-main > #development-task-header > .header-context:empty { display: none; }
+
+#development-task-header.no-project #chrome-play-group,
+#development-task-header.no-project > #header-controls-divider {
+    display: none !important;
+}
+
+@media (max-width: 680px) {
+    .studio-main:has(> #development-task-header:not(.hidden)) {
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+    .studio-main > #development-task-header {
+        height: auto;
+        min-height: 56px;
+        flex-wrap: wrap;
+        align-content: center;
+        gap: 4px 6px;
+        padding: 4px;
+    }
+    .studio-main > #development-task-header > .task-breadcrumb {
+        flex: 1 1 auto;
+        min-width: 0;
+        max-width: 100%;
+        min-height: 32px;
+    }
+    /* Thread layout (controls on their own row): basis 0 lets the crumbs share row 1 with
+       the status badge instead of pushing it to a row of its own once the long thread
+       title arrives, so the header height does not jump on load. */
+    .studio-main > #development-task-header:not(.kanban-mode):not(.plan-mode):not(.terminals-mode) > .task-breadcrumb {
+        flex: 1 1 0%;
+    }
+    .studio-main > #development-task-header .task-breadcrumb > i { display: block; }
+    .studio-main > #development-task-header > #header-controls-divider { display: none !important; }
+    /* Thread, and first paint before a mode class lands: controls take their own
+       full-width row (same as the existing chat-mode <=900px layout), so the header
+       height does not flip while the page loads. */
+    .studio-main > #development-task-header:not(.kanban-mode):not(.plan-mode):not(.terminals-mode) > #board-chrome-unit {
+        flex: 0 0 100%;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        height: auto;
+        margin-left: 0;
+    }
+    .studio-main > #development-task-header:not(.kanban-mode):not(.plan-mode):not(.terminals-mode) .board-view-switch { margin-left: auto; }
+    /* Kanban / Planning / Terminals: controls sit right-aligned and wrap inside. */
+    .studio-main > #development-task-header:is(.kanban-mode, .plan-mode, .terminals-mode) > #board-chrome-unit {
+        flex: 0 1 auto;
+        max-width: 100%;
+        height: auto;
+        min-height: 44px;
+        margin-left: auto;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 0;
+    }
+    .studio-main > #development-task-header .board-view-switch { gap: 0; }
+    .studio-main > #development-task-header #chrome-play-group { gap: 0; }
+    .studio-main > #development-task-header #chrome-kanban-view-slot { margin-right: 0; }
+    .studio-main > #development-task-header .development-kanban-view-toggle button {
+        min-width: 42px;
+        padding-inline: 6px;
+    }
+}
+
+/* 2026-11-12 nov11-audit-2: before the route loads, give the thread header the same rows it will
+   have once loaded, so the page below does not jump at narrow widths. Pre-load only. */
+@media (min-width: 681px) and (max-width: 900px) {
+    html.dev-chat-route:not(.dev-new-route) .studio-main:has(> #development-task-header:not([data-mode-known])) { grid-template-rows: auto minmax(0, 1fr); }
+    html.dev-chat-route:not(.dev-new-route) #development-task-header:not([data-mode-known]) {
+        height: auto;
+        flex-wrap: wrap;
+        gap: 4px 8px;
+        padding: 5px 8px;
+    }
+    html.dev-chat-route:not(.dev-new-route) #development-task-header:not([data-mode-known]) > .task-breadcrumb { min-height: 28px; }
+    html.dev-chat-route:not(.dev-new-route) #development-task-header:not([data-mode-known]) > #header-controls-divider { display: none !important; }
+    html.dev-chat-route:not(.dev-new-route) #development-task-header:not([data-mode-known]) > #board-chrome-unit {
+        flex: 0 0 100%;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        height: auto;
+        min-height: 44px;
+    }
+    html.dev-chat-route:not(.dev-new-route) #development-task-header:not([data-mode-known]) .board-view-switch:empty {
+        margin-left: auto;
+        min-height: 32px;
+    }
+}
+@media (max-width: 680px) {
+    html.dev-chat-route:not(.dev-new-route) #development-task-header:not([data-mode-known]) > #board-chrome-unit { min-height: 50px; }
+    html.dev-new-route #development-task-header:not([data-mode-known]) > #board-chrome-unit { display: none; }
+}
+
+/* 2026-11-12 outstanding-desktop-1: three load-time header glitches.
+   a) Until the route has loaded, the default "No thread selected" title is not drawn
+      (space kept), so it never flashes before the real title / "New thread" arrives.
+   b) 681-900px thread header: the crumbs may shrink (basis 0, title clips) so the status
+      badge stays on row 1 instead of dropping to its own row once a long title loads.
+      Same rule the <=680px thread layout already uses; height is 87px for any title.
+   c) <=680px board routes (Kanban / Plan / Terminals): before the route has loaded, the
+      controls row is drawn full-width at its loaded 50px height, so the header does not
+      grow 89 -> 95px (or dip to 56px) as the controls arrive. Pre-load only. */
+#development-task-header:not([data-mode-known]) #header-task { visibility: hidden; }
+@media (min-width: 681px) and (max-width: 900px) {
+    .studio-main > #development-task-header.chat-mode > .task-breadcrumb,
+    html.dev-chat-route:not(.dev-new-route) #development-task-header:not([data-mode-known]) > .task-breadcrumb {
+        flex: 1 1 0%;
+        min-width: 0;
+    }
+}
+@media (max-width: 680px) {
+    html.dev-board-route .studio-main > #development-task-header:not([data-mode-known]) > #board-chrome-unit,
+    .studio-main > #development-task-header:is(.kanban-mode, .plan-mode, .terminals-mode):not([data-mode-known]) > #board-chrome-unit {
+        flex: 0 0 100%;
+        min-height: 50px;
+    }
+}

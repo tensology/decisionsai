@@ -685,3 +685,11 @@
     .workflow-step-tools { grid-column: 2; grid-row: 2; flex-wrap: wrap; justify-content: flex-start; }
     .workflow-step-tools .workflow-icon-action { min-width: 44px; }
 }
+
+/* Development presets offered in + Add workflow (2026-11-11). */
+.workflow-preset-list { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--studio-line); }
+.workflow-preset-list h3 { margin: 0 0 10px; color: var(--studio-muted, #9aa3c7); font-size: 12px; font-weight: 600; }
+.workflow-preset-options { display: grid; gap: 8px; }
+.workflow-preset-option { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; height: auto; padding: 10px 12px; text-align: left; white-space: normal; }
+.workflow-preset-option small { color: var(--studio-muted, #9aa3c7); font-size: 11px; line-height: 1.4; }
+.workflow-automation-note { color: var(--studio-muted, #9aa3c7); font-size: 12px; }

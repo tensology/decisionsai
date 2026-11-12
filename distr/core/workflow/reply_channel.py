@@ -104,7 +104,20 @@ CHANNEL_PROFILES: dict[str, ChannelProfile] = {
     ),
 }
 
+# Shaping fallback only (tone/length for an unrecognised name). It is NEVER a delivery
+# channel: resolve_reply_target() reports an unknown or missing provider as channel
+# "unknown" with can_send=False, so nothing is sent on a channel the message didn't come from.
 DEFAULT_CHANNEL = "email"
+
+UNKNOWN_PROFILE = ChannelProfile(
+    key="unknown",
+    label="Unknown channel",
+    max_chars=700,
+    greeting=False,
+    signoff=False,
+    tone="Draft only. The original channel is unknown, so this reply cannot be sent.",
+    supports_thread_reply=False,
+)
 
 # Aliases seen in ticket provenance that map onto a profile.
 _CHANNEL_ALIASES = {
@@ -191,6 +204,9 @@ class ReplyTarget:
     url: str = ""
     can_send: bool = False
     missing: list[str] = field(default_factory=list)
+    # Provider message id to reply to, when it isn't the ticket's own source_external_id
+    # (proposal-born email tickets). Not part of to_dict(); delivery-only.
+    message_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -229,13 +245,124 @@ def _reply_mailbox(value: str) -> str:
     return address.addr_spec if address.username and address.domain else ""
 
 
+_PROPOSAL_REF_RE = re.compile(r"^local:(whatsapp|telegram|gmail|mailshot):(.+):[0-9a-f]{12,64}$")
+
+
+def proposal_origin(ticket: Any) -> dict[str, Any] | None:
+    """The original source conversation behind an Incoming-proposal ticket, or None.
+
+    Only the explicit handoff reference is used; nothing is guessed. For a proposal that came
+    from email, the reply address comes from the original inbound message the proposal kept
+    (see ``_proposal_mail_contact``). If there is none, source_contact stays empty and the
+    ticket keeps reporting what's missing.
+    """
+    ref = str(_get(ticket, "source_external_id", "") or "").strip()
+    match = _PROPOSAL_REF_RE.match(ref)
+    if not match:
+        return None
+    source, thread = match.group(1), match.group(2).strip()
+    if not thread:
+        return None
+    contact = _get(ticket, "source_contact", "") or ""
+    message_id = ""
+    if source in {"gmail", "mailshot"}:
+        found_contact, message_id = _proposal_mail_contact(ticket, source, thread)
+        # An explicit, valid contact already on the ticket wins; otherwise use the original sender.
+        if not _reply_mailbox(str(contact).strip()):
+            contact = found_contact
+    return {
+        "source_provider": source,
+        "source_thread_id": thread,
+        "source_contact": contact,
+        "source_url": _get(ticket, "source_url", "") or "",
+        "source_external_id": "",
+        "external_id": "",
+        "source_message_id": message_id,
+    }
+
+
+def _retained_proposal_for_ticket(ticket: Any) -> dict[str, Any] | None:
+    """The proposal brief kept on the ticket's Development thread (no network)."""
+    chat_id = _get(ticket, "source_chat_id", None)
+    if not chat_id:
+        return None
+    try:
+        from sqlalchemy.orm import object_session
+        from sqlalchemy.orm.exc import UnmappedInstanceError
+        from distr.core.db import Chat, get_session
+        from distr.core.incoming.source_reply import _retained_proposal
+
+        try:
+            owner = object_session(ticket)
+        except UnmappedInstanceError:
+            owner = None
+        if owner is not None:
+            chat = owner.get(Chat, int(chat_id))
+            return _retained_proposal(chat) if chat is not None else None
+        with get_session() as db:
+            chat = db.get(Chat, int(chat_id))
+            return _retained_proposal(chat) if chat is not None else None
+    except Exception:
+        return None
+
+
+def _proposal_mail_contact(ticket: Any, source: str, thread: str) -> tuple[str, str]:
+    """(reply address, provider message id) of the latest inbound email the proposal came from.
+
+    Uses only the proposal's own record of that conversation: its primary (inbound) message
+    ids for this exact thread, and the sender address stored with that exact message. The
+    address must parse as exactly one mailbox. No display-name or domain guessing, no other
+    thread, no address book. Delivery then re-reads that message from Gmail/Mailshot and
+    replies to its Reply-To/From, so the provider stays the authority. ('', '') when absent.
+    """
+    proposal = _retained_proposal_for_ticket(ticket)
+    if not isinstance(proposal, dict):
+        return "", ""
+    try:
+        from distr.core.incoming.source_reply import source_choices
+
+        choices = {c["key"]: c for c in source_choices(proposal)}
+    except Exception:
+        return "", ""
+    choice = choices.get(f"{source}:{thread}")
+    if not choice or not choice.get("primary_message_ids"):
+        return "", ""
+    message_id = str(choice["primary_message_ids"][-1])
+    evidence = [row for field in ("evidence", "context_evidence") for row in proposal.get(field) or []
+                if isinstance(row, dict)]
+    contact = ""
+    for row in evidence:
+        if str(row.get("id") or row.get("source_message_id") or "") != message_id:
+            continue
+        if str(row.get("direction") or "").lower() == "outbound" or row.get("context_only"):
+            continue
+        for field in ("reply_to", "sender_email", "sender", "sender_name", "from"):
+            candidate = _reply_mailbox(str(row.get(field) or "").strip())
+            if candidate:
+                contact = candidate
+                break
+        if contact:
+            break
+    return contact, message_id
+
+
 def resolve_reply_target(ticket: Any) -> ReplyTarget:
     """Resolve a ticket's provenance into a sendable reply target.
 
     Reports what is missing instead of guessing a channel, so a ticket with no
     provenance cannot be auto-replied to by accident.
+
+    Same-channel rule (Paul, 12 Nov 2026): the reply target is always the channel the
+    request came in on (a proposal-born ticket uses the proposal's original source).
+    There is no "preferred" or "best" channel, and an unknown or missing provider is
+    reported as channel "unknown" (can_send=False) rather than defaulting to email.
     """
     provider = _get(ticket, "source_provider", "") or _get(ticket, "external_source", "")
+    origin = proposal_origin(ticket) if str(provider or "").strip().lower() == "incoming_proposal" else None
+    if origin is not None:
+        # Proposal-born tickets keep the original conversation in source_external_id
+        # ("local:<source>:<thread>:<digest>"). Reply where the request came from.
+        return resolve_reply_target(origin)
     channel = normalize_channel(provider)
     profile = channel_profile(channel)
 
@@ -258,6 +385,12 @@ def resolve_reply_target(ticket: Any) -> ReplyTarget:
         raw_provider = str(provider).strip().lower().replace("-", "_")
         if raw_provider not in CHANNEL_PROFILES and raw_provider not in _CHANNEL_ALIASES:
             missing.append("unsupported_source_provider")
+    if missing:
+        # Never relabel an unknown origin as email (or anything else).
+        profile = UNKNOWN_PROFILE
+    elif str(provider).strip().lower() == "outlook":
+        # Outlook in must be Outlook out. There is no Outlook sender here, so never reply via Gmail.
+        missing.append("outlook_reply_not_supported")
     if profile.key == "whatsapp":
         # The other identifiers above are provider message IDs, not chat JIDs.
         # Canonical WhatsApp intake stores msg.jid / msg.jid_phone here.
@@ -283,6 +416,7 @@ def resolve_reply_target(ticket: Any) -> ReplyTarget:
         url=url,
         can_send=not missing,
         missing=missing,
+        message_id=str(_get(ticket, "source_message_id", "") or "").strip() if isinstance(ticket, dict) else "",
     )
     return target
 

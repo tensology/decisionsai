@@ -1,6 +1,7 @@
 import { bindWorkflowStepNumbers, nextWorkflowLoopId, workflowLoopHtml, workflowStepDataAttrs, workflowStepNumbersHtml, workflowViewSwitchHtml } from '../../shared/workflow-loop.js?v=20261022-threadring2';
 import { shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 import { splitProposalSourceContext } from './source-context.js?v=20261110-readable1';
+import { splitClientDraft } from './client-draft.js?v=20261112-message-client';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
     const activityDisclosureState = new Map();
@@ -252,8 +253,48 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return [];
     }
 
+    // 2026-11-12 thread-style1: Codex-style persistent edited-files list. A new turn resets the
+    // backend execution record (and its changes), which used to make this table vanish the moment
+    // the next prompt was submitted. Keep the latest turn's change set per thread (memory +
+    // localStorage, display only) and keep showing it until a newer turn reports its own edits.
+    const SESSION_CHANGES_KEY = 'decisions.thread.changes.v1.';
+    const sessionChangesByChat = new Map();
+
+    function compactChangeSet(changes) {
+        const files = (Array.isArray(changes.files) ? changes.files : []).slice(0, 200).map((file) => ({
+            path: file.path, additions: file.additions, deletions: file.deletions, line_counts_available: file.line_counts_available
+        }));
+        return { files, additions: changes.additions, deletions: changes.deletions, undone: Boolean(changes.undone), saved_at: Date.now() };
+    }
+
+    function sessionTurnChanges() {
+        const chatId = Number(context.currentChat?.id || 0);
+        const live = context.currentRun?.changes || {};
+        if (Array.isArray(live.files) && live.files.length) {
+            if (chatId) {
+                const saved = compactChangeSet(live);
+                sessionChangesByChat.set(chatId, saved);
+                try { window.localStorage?.setItem(SESSION_CHANGES_KEY + chatId, JSON.stringify(saved)); } catch (_error) { /* storage optional */ }
+            }
+            return { changes: live, carried: false };
+        }
+        // fluid1: server-side carry (execution.last_changes) works across browsers and reloads.
+        const serverCarried = context.currentRun?.last_changes;
+        if (serverCarried && Array.isArray(serverCarried.files) && serverCarried.files.length && !serverCarried.undone) {
+            return { changes: serverCarried, carried: true };
+        }
+        if (!chatId) return { changes: live, carried: false };
+        let saved = sessionChangesByChat.get(chatId);
+        if (!saved) {
+            try { saved = JSON.parse(window.localStorage?.getItem(SESSION_CHANGES_KEY + chatId) || 'null'); } catch (_error) { saved = null; }
+            if (saved) sessionChangesByChat.set(chatId, saved);
+        }
+        if (!saved || saved.undone || !Array.isArray(saved.files) || !saved.files.length) return { changes: live, carried: false };
+        return { changes: saved, carried: true };
+    }
+
     function turnChangesHtml() {
-        const changes = context.currentRun?.changes || {};
+        const { changes, carried } = sessionTurnChanges();
         const files = Array.isArray(changes.files) ? changes.files : [];
         if (!files.length || changes.undone) return '';
         const additions = Number(changes.additions || 0);
@@ -268,13 +309,16 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         </tr>`
             )
             .join('');
-        const undoTitle = changes.reversible
+        const undoTitle = carried
+            ? 'Undo is available only while these edits belong to the latest turn'
+            : changes.reversible
             ? 'Restore only the files changed by this turn'
             : 'Undo is unavailable because this turn overlaps changes that already existed';
-        return `<section class="turn-changes" aria-label="Files changed by this turn">
+        const reversible = !carried && changes.reversible;
+        return `<section class="turn-changes${carried ? ' turn-changes-carried' : ''}" aria-label="${carried ? 'Files edited earlier in this thread' : 'Files changed by this turn'}">
             <div class="turn-changes-head">
-                <button type="button" class="turn-changes-toggle" data-turn-changes-toggle aria-expanded="true"><span class="change-disclosure">›</span><strong>Edited ${files.length} ${files.length === 1 ? 'file' : 'files'}</strong>${totalsAvailable ? `<small><b>+${additions}</b><i>-${deletions}</i></small>` : ''}</button>
-                <div class="turn-change-actions"><button type="button" data-turn-undo ${changes.reversible ? '' : 'disabled'} title="${actions.escapeHtml(undoTitle)}">Undo</button><button type="button" data-turn-review>Review</button></div>
+                <button type="button" class="turn-changes-toggle" data-turn-changes-toggle aria-expanded="true"><span class="change-disclosure">›</span><strong>Edited ${files.length} ${files.length === 1 ? 'file' : 'files'}</strong>${totalsAvailable ? `<small><b>+${additions}</b><i>-${deletions}</i></small>` : ''}${carried ? '<span class="turn-changes-note" style="opacity:.6;font-size:.9em">earlier turn</span>' : ''}</button>
+                <div class="turn-change-actions"><button type="button" data-turn-undo ${reversible ? '' : 'disabled'} title="${actions.escapeHtml(undoTitle)}">Undo</button>${carried ? '' : '<button type="button" data-turn-review>Review</button>'}</div>
             </div>
             <div class="turn-change-list"><table><thead><tr><th>File</th><th>Added</th><th>Removed</th></tr></thead><tbody>${rows}</tbody></table></div>
         </section>`;
@@ -298,7 +342,8 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5"></rect><path d="M3 10V4.5A1.5 1.5 0 0 1 4.5 3H10"></path></svg>';
         const forkIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5"></circle><circle cx="12" cy="5" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><path d="M4 4.5v3A4.5 4.5 0 0 0 8.5 12h2M5.5 5h5"></path></svg>';
-        const replyButton = canReply && context.currentChat?.has_reply_source && message.chat_row_id != null
+        const replyButton = canReply && message.source_reply_eligible !== false
+            && context.currentChat?.has_reply_source && message.chat_row_id != null
             ? `<button type="button" class="source-reply-button" data-source-reply="${index}">Message Client</button>` : '';
         const mouthIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8c2-2.2 4-2.2 6-1.2C10 5.8 12 5.8 14 8c-1.6 2.6-3.8 3.6-6 3.6S3.6 10.6 2 8z"></path><path d="M3.5 8.2h9"></path></svg>';
@@ -309,6 +354,20 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             ? `<button type="button" class="read-response-button" data-read-response="${index}" aria-label="Read response aloud" title="Read response: speak a short spoken version and add it to this thread">${mouthIcon}</button>`
             : playButton;
         return `<footer class="message-footer"><div class="message-actions" aria-label="Response actions"><button type="button" data-copy-message="${index}" aria-label="Copy response" title="Copy response to clipboard">${copyIcon}</button>${readButton}${latestAssistant ? `<button type="button" data-fork-current aria-label="Fork thread" title="Continue from this transcript in a new independent thread. This does not create a Git branch.">${forkIcon}</button>` : ''}${replyButton}</div>${turnTimingHtml(message)}</footer>`;
+    }
+
+    // Incoming threads end with a "ready to send this?" call-out, but only once all work is done:
+    // never while a run or workflow is still running, paused at a checkpoint, or ended unsuccessfully.
+    // Only the reply that completes the Incoming-created task gets it; later turns use Message Client.
+    function clientCalloutHtml(message, index, canReply, messages) {
+        if (!canReply || message.source_reply_eligible === false || message.source_reply_sent) return '';
+        const chat = context.currentChat;
+        if (!chat?.has_reply_source || chat.development?.source_type !== 'incoming_proposal' || message.chat_row_id == null) return '';
+        if (messages.slice(0, index).filter((item) => item.role === 'user').length !== 1) return '';
+        const run = context.currentRun;
+        const status = String(run?.status || '').toLowerCase();
+        if (run && (actions.isActiveAgentRun?.(run) || ['initializing', 'queued', 'running', 'waiting', 'paused', 'blocked', 'failed', 'error', 'cancelled', 'canceled', 'stopped', 'held'].includes(status))) return '';
+        return `<div class="client-reply-callout-slot" data-client-callout="${index}"></div>`;
     }
 
     function skillIconSvg() {
@@ -478,37 +537,55 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             ['Channel', details.channel], ['From', target.from], ['To', destination],
             ['Cc', join(target.cc)], ['Subject', target.subject || delivery.subject],
             ['Thread', target.thread_id || target.jid || delivery.thread_id],
+            ['Jira issue', details.channel === 'jira' ? delivery.source_url : null],
         ].filter(([, value]) => value !== undefined && value !== null && value !== '');
         const id = `closing-reply-${req.request_id}`;
-        const outcome = details.delivery_outcome;
         return `<table class="dev-approval-diff">${rows.map(([label, value]) => `<tr><th>${actions.escapeHtml(label)}</th><td>${actions.escapeHtml(String(value))}</td></tr>`).join('')}</table>
             <label for="${actions.escapeHtml(id)}">Reply</label>
-            <textarea id="${actions.escapeHtml(id)}" class="dev-closing-reply-body" rows="6" readonly>${actions.escapeHtml(String(details.body || ''))}</textarea>
-            ${outcome?.reason ? `<p class="dev-approval-summary" role="status">${actions.escapeHtml(outcome.reason)}</p>` : ''}`;
+            <textarea id="${actions.escapeHtml(id)}" class="dev-closing-reply-body" rows="6" readonly>${actions.escapeHtml(String(details.body || ''))}</textarea>`;
     }
     function approvalCardHtml(req) {
         const managedReply = req.tool === 'reply_delivery' && req.details?.workflow && typeof req.details.workflow === 'object';
         const reviewUnavailable = managedReply && req.review_unavailable === true;
+        const reason = managedReply && !reviewUnavailable ? req.details.delivery_outcome?.reason : '';
         const status = String(req.status || 'pending').toLowerCase();
         const expires = req.expires_at ? new Date(req.expires_at) : null;
         const expired = status === 'pending' && expires && expires.getTime() < Date.now();
         const shown = expired ? 'expired' : status;
         const labels = { pending: 'Waiting for you', approved: 'Approved', consumed: 'Approved and done', denied: 'Denied', expired: 'Expired' };
         const label = reviewUnavailable ? 'Review unavailable' : (managedReply ? { ...labels, sending: 'Sending reply', sent: 'Reply sent', unconfirmed: 'Send not confirmed', rejected: 'Reply not sent' } : labels)[shown] || shown;
-        const title = managedReply ? `Closing reply · ${{ email: 'Email', mailshot: 'Mailshot', whatsapp: 'WhatsApp', telegram: 'Telegram' }[req.action] || req.action || ''}` : `${req.tool || 'tool'} · ${req.action || ''}`;
+        const title = managedReply ? `Closing reply · ${{ email: 'Email', mailshot: 'Mailshot', whatsapp: 'WhatsApp', telegram: 'Telegram', jira: 'Jira' }[req.action] || req.action || ''}` : `${req.tool || 'tool'} · ${req.action || ''}`;
         const when = expires ? expires.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
         const buttons = shown === 'pending' && !reviewUnavailable
             ? `<div class="dev-approval-actions"><button type="button" class="dev-approval-approve" data-dev-approval-action="approve" data-request-id="${actions.escapeHtml(req.request_id)}">Approve</button><button type="button" class="dev-approval-deny" data-dev-approval-action="deny" data-request-id="${actions.escapeHtml(req.request_id)}">Deny</button><small>Expires ${actions.escapeHtml(when)}</small></div>`
             : '';
-        return `<div class="turn-activity-block dev-approval-card${managedReply ? ' dev-closing-reply' : ''} status-${actions.escapeHtml(shown)}" data-dev-approval="${actions.escapeHtml(req.request_id)}" role="group" aria-label="Approval request">
+        return `<div class="turn-activity-block dev-approval-card${managedReply ? ' dev-closing-reply' : ''} status-${actions.escapeHtml(shown)}" data-dev-approval="${actions.escapeHtml(req.request_id)}"${managedReply && req.action === 'telegram' ? ' data-telegram-closing-reply' : ''} role="group" aria-label="Approval request">
             <div class="dev-approval-head"><strong>${actions.escapeHtml(title)}</strong><span class="dev-approval-status">${actions.escapeHtml(label)}</span></div>
-            <p class="dev-approval-summary">${actions.escapeHtml(req.summary || '')}</p>
+            <p class="dev-approval-summary"${reason ? ' role="status"' : ''}>${actions.escapeHtml(reason || req.summary || '')}</p>
             ${reviewUnavailable ? '<p class="dev-approval-summary" role="status">Complete reply review is unavailable. Refresh before approving.</p>' : managedReply ? workflowReplyDetailsHtml(req) : approvalDiffHtml(req.details)}
             ${buttons}
         </div>`;
     }
     if (!window.__decisionsDevApprovalBound) {
         window.__decisionsDevApprovalBound = true;
+        const internalToken = () => (typeof token === 'function' ? token() : token) || document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+        const refreshing = new Set();
+        window.setInterval(() => {
+            if (document.hidden) return;
+            const cards = document.querySelectorAll('[data-telegram-closing-reply]:is(.status-sending,.status-unconfirmed)');
+            for (const card of cards) {
+                const id = card.dataset.devApproval;
+                if (refreshing.has(id)) continue;
+                refreshing.add(id);
+                fetch(`/api/dev-approvals/${encodeURIComponent(id)}`, {
+                    credentials: 'same-origin', headers: { 'X-DecisionsAI-Internal-Token': internalToken() },
+                }).then(response => response.ok ? response.json() : null).then(data => {
+                    if (card.isConnected && data?.request_id === id && !card.classList.contains(`status-${data.status}`)) {
+                        card.outerHTML = approvalCardHtml(data);
+                    }
+                }).catch(() => {}).finally(() => refreshing.delete(id));
+            }
+        }, 2500);
         document.addEventListener('click', async (e) => {
             const button = e.target.closest?.('[data-dev-approval-action]');
             if (!button) return;
@@ -518,7 +595,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
             const verb = button.dataset.devApprovalAction === 'approve' ? 'approve' : 'deny';
             card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
             const headers = { 'Content-Type': 'application/json', 'X-Decisions-User-Action': 'click' };
-            const tok = (typeof token === 'function' ? token() : token) || document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+            const tok = internalToken();
             if (tok) headers['X-DecisionsAI-Internal-Token'] = tok;
             try {
                 const resp = await fetch(`/api/dev-approvals/${encodeURIComponent(id)}/${verb}`, { method: 'POST', headers, credentials: 'same-origin', body: '{}' });
@@ -750,10 +827,14 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         if (ticketMove) return ticketMoveHtml(message, ticketMove);
         if (message.spoken) return spokenMessageHtml(message);
         const latest = index === latestAssistantIndex;
-        const content = workflowSafeAssistantContent(message.content || '');
+        // Incoming-origin threads: a client message drafted in prose moves to Message Client.
+        const clientDraft = context.currentChat?.has_reply_source
+            ? splitClientDraft(workflowSafeAssistantContent(message.content || ''))
+            : { content: workflowSafeAssistantContent(message.content || ''), draft: '' };
+        const content = clientDraft.content;
         const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
         const canReply = latest && !messages.slice(index + 1).some((item) => item.role === 'user');
-        return `<article class="studio-message assistant"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest, canReply)}</div></article>`;
+        return `<article class="studio-message assistant"${clientDraft.draft ? ` data-client-draft="${actions.escapeHtml(clientDraft.draft)}"` : ''}><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest, canReply)}${clientCalloutHtml(message, index, canReply, messages)}</div></article>`;
     }
 
     // Spoken versions from the Read response button: quiet row, Copy only, never "final".
@@ -948,6 +1029,10 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const interaction = (context.controlState?.interactions || []).find((item) => String(item.run_id || '') === runId) || null;
         const interactionActions = Array.isArray(interaction?.allowed_actions) ? interaction.allowed_actions : [];
         const actionable = interactionActions.filter((action) => action !== 'feedback');
+        const checkpointTitle = {
+            resolving: 'Applying checkpoint decision',
+            unconfirmed: 'Checkpoint decision unconfirmed',
+        }[interaction?.decision_status] || 'Approval required';
         const approval = run?.pending_route_approval || {};
         const budgetApproval = false; // budget gate removed
         const waitingPrompt = budgetApproval
@@ -955,9 +1040,12 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             : interaction?.kind === 'provider_preflight' && (approval.name || approval.model)
             ? `Use ${approval.name || approval.model} for this step and continue the workflow.`
             : run?.worker_question || run?.waiting_prompt || 'Review the pending checkpoint before the workflow continues.';
+        const checkpointNotice = interaction?.decision_status === 'unconfirmed'
+            ? 'The desktop restarted before it could confirm the decision. Review this run before continuing.'
+            : interaction?.decision_status === 'resolving' ? '' : waitingPrompt;
         const checkpoint = ['waiting', 'paused'].includes(runStatus)
-            ? `<section class="thread-workflow-checkpoint" aria-label="Workflow approval required">
-                <div><strong>Approval required</strong><p>${actions.escapeHtml(waitingPrompt)}</p></div>
+            ? `<section class="thread-workflow-checkpoint" aria-label="${interaction?.decision_status ? checkpointTitle : 'Workflow approval required'}">
+                <div><strong>${checkpointTitle}</strong>${checkpointNotice ? `<p>${actions.escapeHtml(checkpointNotice)}</p>` : ''}</div>
                 ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(index === 0 && action !== 'stop' ? (budgetApproval ? 'Raise budget and continue' : 'Approve and continue') : actions.actionLabel(action))}</button>`).join('')}</div>` : ''}
             </section>`
             : '';
@@ -1224,7 +1312,43 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         bindWorkflowStepRails(list);
     }
 
-    function renderConversation(chat) {
+    function renderTelegramUpdateStatus(status) {
+        const delivery = el('thread-telegram-status');
+        if (delivery) {
+            const message = typeof status?.message === 'string' ? status.message : '';
+            if (delivery.textContent !== message) delivery.textContent = message;
+            delivery.dataset.state = status?.state || '';
+            delivery.classList.toggle('hidden', !message);
+        }
+    }
+
+    function renderQueueHandoffStatus(chatId) {
+        const queueNotice = el('thread-queue-handoff');
+        if (queueNotice) {
+            const run = context.currentRun;
+            const ownRun = Number(run?.chat_id) === Number(chatId) ? run : null;
+            const hold = ownRun?.status === 'completed' ? ownRun.queue_handoff_hold : null;
+            const stop = ownRun?.status === 'failed' ? ownRun.queue_scope_stop || ownRun.queue_ide_failure : '';
+            const text = hold ? `Queued ticket #${hold.ticket_id} is on hold. ${hold.reason}` : stop || '';
+            if (queueNotice.textContent !== text) queueNotice.textContent = text;
+            queueNotice.classList.toggle('hidden', !text);
+        }
+    }
+
+    function renderConversation(chat, { preserveReadingPosition = false } = {}) {
+        const conversation = el('conversation');
+        const readingPosition = preserveReadingPosition &&
+            conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight > 24
+            ? conversation.scrollTop : null;
+        renderTelegramUpdateStatus(chat.telegram_proposal_update_status);
+        renderQueueHandoffStatus(chat.id);
+        const warning = el('thread-attachment-warning');
+        if (warning) {
+            const files = Array.isArray(chat.unavailable_attachment_names) ? chat.unavailable_attachment_names : [];
+            const message = files.length ? `Files unavailable: ${files.join(', ')}` : '';
+            if (warning.textContent !== message) warning.textContent = message;
+            warning.classList.toggle('hidden', !message);
+        }
         el('studio-empty').classList.add('hidden');
         const list = el('message-list');
         const focusedKey = captureActivityState(list);
@@ -1270,10 +1394,11 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         list.classList.remove('hidden');
         actions.bindConversationActions(list, messages);
         bindWorkflowStepRails(list);
-        const conversation = el('conversation');
         const runner = list.querySelector('[data-workflow-runner="live"]');
         const runId = runner?.dataset.runId || '';
-        if (runId && list.dataset.workflowFocusRunId !== runId) {
+        if (readingPosition !== null) {
+            conversation.scrollTop = readingPosition;
+        } else if (runId && list.dataset.workflowFocusRunId !== runId) {
             list.dataset.workflowFocusRunId = runId;
             window.setTimeout(() => {
                 if (!runner.isConnected) return;
@@ -1292,6 +1417,8 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         gitStatusEntries,
         messageTime,
         renderConversation,
+        renderQueueHandoffStatus,
+        renderTelegramUpdateStatus,
         skillIconSvg,
         syncDurableTurnActivity
     };

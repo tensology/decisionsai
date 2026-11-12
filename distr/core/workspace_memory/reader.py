@@ -8,11 +8,12 @@ from typing import Any
 from .pickup_handoff import (
     build_pickup_brief,
     load_decisions_json,
+    read_handoff_context,
     read_handoff_preview,
     read_ledger_tail,
     read_text_file,
 )
-from .paths import ACTIVE_FILE, HANDOFF_FILE, companion_memory_file, companion_root
+from .paths import ACTIVE_FILE, companion_memory_file, companion_root
 from .provision import ensure_workspace
 from .router import router_chain, workspace_summary
 
@@ -107,7 +108,7 @@ def load_workspace_context(
     pickup = ""
     if primary:
         entity_type, entity_id = primary
-        handoff_full = read_text_file(companion_memory_file(entity_type, entity_id, HANDOFF_FILE))  # type: ignore[arg-type]
+        handoff_full = read_handoff_context(entity_type, entity_id)
         active_notes = read_text_file(companion_memory_file(entity_type, entity_id, ACTIVE_FILE))  # type: ignore[arg-type]
         references = _references_index(entity_type, entity_id)
         ledger = read_ledger_tail(entity_type, entity_id, limit=20)

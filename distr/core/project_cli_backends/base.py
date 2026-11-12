@@ -94,6 +94,12 @@ class ProjectTask:
     execution_session_id: Optional[int] = None
     required_capabilities: list[str] = field(default_factory=list)
     adapter_options: dict[str, Any] = field(default_factory=dict)
+    turn_id: Optional[int] = None
+    before_launch: Optional[Callable[[str], None]] = field(default=None, repr=False, compare=False)
+
+    def verify_launch_scope(self) -> None:
+        if self.before_launch is not None:
+            self.before_launch(self.folder)
 
     def __post_init__(self) -> None:
         self.required_capabilities = list(self.required_capabilities or [])

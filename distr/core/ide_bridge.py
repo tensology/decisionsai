@@ -92,6 +92,7 @@ def _plugin_session_query(db, project_id: int, source: str):
         .filter(ProjectExecutionSession.project_id == int(project_id))
         .filter(ProjectExecutionSession.route_type == "ide_bridge")
         .filter(ProjectExecutionSession.route_backend == source)
+        .filter(ProjectExecutionSession.origin != "proactive_orchestrator")
         .filter(ProjectExecutionSession.workflow_id.is_(None))
         .filter(ProjectExecutionSession.run_id.is_(None))
     )
@@ -274,10 +275,19 @@ def record_ide_event(
     project_id: int | None = None,
     session_id: int | None = None,
     chat_id: int | None = None,
+    ticket_id: int | None = None,
     payload: dict[str, Any] | None = None,
     evidence: dict[str, Any] | None = None,
     allow_chat_creation: bool = True,
 ) -> dict[str, Any]:
+    if session_id:
+        approved = _record_approved_ide_event(
+            session_id, source=source, cwd=cwd, project_id=project_id, ticket_id=ticket_id, chat_id=chat_id,
+            event_type=event_type,
+            status=status, message=message, output_text=output_text,
+        )
+        if approved is not None:
+            return approved
     external_thread_id = ""
     if isinstance(payload, dict):
         nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
@@ -381,6 +391,42 @@ def record_ide_event(
         pass
 
     return {"project": bridge["project"], "session": latest, "chat_id": chat_id}
+
+
+def _record_approved_ide_event(
+    session_id, *, source, cwd, project_id, ticket_id, chat_id, event_type, status, message, output_text,
+):
+    with get_session() as db:
+        row = db.get(ProjectExecutionSession, session_id)
+        if row is None or row.origin != "proactive_orchestrator":
+            return None
+        project = _project_dict(db.get(Project, row.project_id))
+        if (not cwd or not project or (project_id is not None and project_id != row.project_id)
+                or (ticket_id is not None and ticket_id != row.ticket_id)):
+            raise ValueError("The IDE event does not match the approved project.")
+        source = (_clean(source) or "ide").lower()
+        _assert_session_matches_request(row, project=project, source=source, cwd=cwd)
+        packet = _loads_packet(row.input_packet)
+        candidate_id = packet.get("proactive_candidate_id")
+        if type(candidate_id) is not int or (chat_id is not None and chat_id != packet.get("chat_id")):
+            raise ValueError("The IDE event has no matching approval.")
+        resolved = _event_status(event_type, status)
+        if resolved not in TERMINAL_STATUSES:
+            return {"project": project, "session": {"id": row.id, "status": row.status}, "chat_id": None}
+    from distr.core.orchestrator_proactive import complete_proactive_ide_result
+
+    report = _clean(output_text or message)
+    receipt = complete_proactive_ide_result(
+        candidate_id, session_id, status=resolved, source=source,
+        output=report if resolved == "completed" else "",
+        error="" if resolved == "completed" else report,
+    )
+    with get_session() as db:
+        row = db.get(ProjectExecutionSession, session_id)
+        return {
+            "project": project, "session": serialize_execution_session(row, include_events=True),
+            "chat_id": receipt.get("chat_id"),
+        }
 
 
 def get_ide_progress(*, source: str = "", cwd: str = "", project_id: int | None = None, session_id: int | None = None) -> dict[str, Any]:

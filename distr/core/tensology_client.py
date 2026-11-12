@@ -272,7 +272,8 @@ def fetch_pending_work_requests(*, include_decided: bool = False, strict: bool =
     return list(rows.values())
 
 
-def decide_work_request(proposal_id: int, action: str, *, source: str = "") -> dict[str, Any]:
+def decide_work_request(proposal_id: int, action: str, *, source: str = "", telegram_chat_id: int | str | None = None,
+                        merge_revision: str | None = None) -> dict[str, Any]:
     """Queue, send to Decisions, or dismiss one pending Tensology proposal."""
     normalized = str(action or "").strip().lower()
     aliases = {"run": "send_to_decisions", "ticket": "queue", "queue": "queue",
@@ -281,10 +282,23 @@ def decide_work_request(proposal_id: int, action: str, *, source: str = "") -> d
     if resolved not in {"queue", "send_to_decisions", "dismiss"}:
         raise TensologyApiError("Action must be run, queue, or dismiss.", code="invalid_action")
     client = configured_tensology_client()
+    body = {"action": resolved}
+    if merge_revision is not None:
+        if resolved != "dismiss" or not re.fullmatch(r"[a-f0-9]{64}", merge_revision):
+            raise ValueError("The saved source revision is invalid. Review the merge before retrying.")
+        # An older server must reject the request rather than ignore the guard.
+        body = {"action": "dismiss_merge_source", "merge_revision": merge_revision}
+    if source == "telegram":
+        from distr.core.incoming.telegram_updates import _recipient_id
+
+        body["source"] = "telegram"
+        if recipient := _recipient_id(telegram_chat_id):
+            body["approval_telegram_chat_id"] = recipient
     return client.post(
         f"work-requests/{int(proposal_id)}/action",
-        {"action": resolved, **({"source": "telegram"} if source == "telegram" else {})},
-        idempotency_key=f"work-request-{int(proposal_id)}-{resolved}",
+        body,
+        idempotency_key=(f"merge-dismiss-{int(proposal_id)}-{merge_revision}" if merge_revision
+                         else f"work-request-{int(proposal_id)}-{resolved}"),
     )
 
 
@@ -297,7 +311,7 @@ def create_merged_work_request(payload: dict[str, Any], *, idempotency_key: str 
     return client.post("work-requests", body, idempotency_key=idem[:120])
 
 
-_PROPOSAL_DECISION_RE = re.compile(r"^\s*(create\s+(?:a\s+)?ticket|run|queue|dismiss|send)\s+(all|\d+)\s*$", re.IGNORECASE)
+_PROPOSAL_DECISION_RE = re.compile(r"^\s*(create\s+(?:a\s+)?ticket|run|queue|dismiss|send)\s+(all|#?[0-9]+)\s*$", re.IGNORECASE)
 _PROPOSAL_VERB_ACTION = {
     "run": "send_to_decisions",
     "send": "send_to_decisions",
@@ -311,8 +325,8 @@ _PROPOSAL_ACTION_PHRASE = {
 }
 
 
-def handle_proposal_decision_reply(text: str, *, source: str = "") -> str | None:
-    """Resolve a plain "run 1", "queue 2" or "dismiss all" reply against pending proposals.
+def handle_proposal_decision_reply(text: str, *, source: str = "", telegram_chat_id: int | str | None = None) -> str | None:
+    """Resolve an explicit Telegram reference, or an existing non-Telegram list command.
 
     Returns a short human acknowledgement, or None when the text is not a proposal
     decision (so other handlers keep it).
@@ -323,11 +337,19 @@ def handle_proposal_decision_reply(text: str, *, source: str = "") -> str | None
     verb = match.group(1).lower()
     action = "send_to_decisions" if verb.startswith("create") else _PROPOSAL_VERB_ACTION[verb]
     target = match.group(2).lower()
+    if source == "telegram" and not target.startswith("#"):
+        return "Ask for proposals and use the review buttons, or include the proposal reference, such as run #123."
 
     proposals = fetch_pending_work_requests()
     if not proposals:
         return "There are no Tensology proposals waiting right now."
-    if target == "all":
+    if target.startswith("#"):
+        reference = target[1:].lstrip("0")
+        selected = next((proposal for proposal in proposals if str(proposal.get("id")) == reference), None)
+        if selected is None:
+            return f"Proposal {target} is no longer waiting. Ask for proposals to review the current list."
+        chosen = [selected]
+    elif target == "all":
         chosen = proposals
     else:
         index = int(target)
@@ -353,7 +375,10 @@ def handle_proposal_decision_reply(text: str, *, source: str = "") -> str | None
                 # Shared dismiss: local ledger first, then Tensology, then UI refresh.
                 dismiss_proposal(shaped)
             else:
-                decide_work_request(int(proposal["id"]), action, **({"source": "telegram"} if source == "telegram" else {}))
+                approval = {"source": source} if source == "telegram" else {}
+                if approval and telegram_chat_id is not None:
+                    approval["telegram_chat_id"] = telegram_chat_id
+                decide_work_request(int(proposal["id"]), action, **approval)
                 # Mirror Tensology's decision locally so intake cannot recreate it.
                 record_remote_proposal_decision({
                     "request_id": int(proposal["id"]),
@@ -551,7 +576,11 @@ def _existing_tensology_thread(ticket: dict[str, Any]) -> int | None:
     """Dedupe by Tensology ticket: a thread already claimed for this ticket is never recreated."""
     from distr.core.db import get_session
     from distr.core.db.workflow import DevelopmentWorkItem
+    from distr.core.kanban.proposal_tickets import find_thread_for_tensology_ticket
 
+    reused = find_thread_for_tensology_ticket(ticket)
+    if reused is not None:
+        return int(reused)
     claimed = str(ticket.get("decisions_thread_id") or "").strip()
     if claimed.isdigit():
         return int(claimed)
@@ -983,6 +1012,14 @@ def _ensure_tensology_kanban_ticket(
         elif workflow_id and board.default_workflow_id != int(workflow_id):
             board.default_workflow_id = int(workflow_id)
 
+        proposal_id = None
+        meta = ticket.get("source_metadata") if isinstance(ticket.get("source_metadata"), dict) else {}
+        pack = ticket.get("incoming_proposal") if isinstance(ticket.get("incoming_proposal"), dict) else {}
+        raw_proposal = meta.get("incoming_proposal_id") or pack.get("id")
+        if raw_proposal is not None and str(raw_proposal).strip():
+            from distr.core.incoming.proposals import _tensology_id
+            proposal_id = _tensology_id(raw_proposal) or (int(raw_proposal) if str(raw_proposal).isdigit() else None)
+
         mirrored = (
             db.query(KanbanTicket)
             .filter(
@@ -991,8 +1028,25 @@ def _ensure_tensology_kanban_ticket(
             )
             .first()
         )
+        if mirrored is None and proposal_id is not None:
+            mirrored = (
+                db.query(KanbanTicket)
+                .filter(KanbanTicket.source_external_id.in_([f"tensology:{proposal_id}", str(proposal_id)]))
+                .first()
+            )
         if mirrored is None:
-            lane = (
+            from distr.core.kanban.proposal_tickets import find_existing_ticket_for_proposal, find_thread_for_tensology_ticket
+            shaped = dict(pack)
+            if proposal_id is not None:
+                shaped["id"] = f"tensology:{proposal_id}"
+            thread_id = find_thread_for_tensology_ticket(ticket)
+            reused = find_existing_ticket_for_proposal(db, shaped, int(project["id"]), chat_id=thread_id)
+            if reused is not None:
+                mirrored = reused
+        if mirrored is None:
+            from distr.core.kanban.lifecycle import DELIVERY_SOURCE_LANE, ensure_delivery_lanes
+            lanes = ensure_delivery_lanes(db, int(board.id))
+            lane = lanes.get(DELIVERY_SOURCE_LANE) or (
                 db.query(KanbanLane)
                 .filter(KanbanLane.board_id == int(board.id))
                 .order_by(KanbanLane.position.asc(), KanbanLane.id.asc())
@@ -1027,7 +1081,7 @@ def _ensure_tensology_kanban_ticket(
                 external_id=reference,
                 external_url=str(ticket.get("discussion_url") or ""),
                 source_provider="tensology",
-                source_external_id=reference,
+                source_external_id=(f"tensology:{proposal_id}" if proposal_id is not None else reference),
                 source_url=str(ticket.get("discussion_url") or ""),
                 source_label=f"Tensology {reference}",
                 context_notes=json.dumps(context, ensure_ascii=False),
@@ -1037,6 +1091,14 @@ def _ensure_tensology_kanban_ticket(
             )
             db.add(mirrored)
             db.flush()
+            try:
+                from distr.core.kanban.lane_history import record_lane_change
+                record_lane_change(
+                    db, int(mirrored.id), from_lane=None, to_lane=lane.name,
+                    actor="system", reason="created", source="tensology_mirror",
+                )
+            except Exception:
+                pass
         else:
             if workflow_id:
                 mirrored.linked_workflow_id = int(workflow_id)
@@ -1585,39 +1647,60 @@ def sync_tensology_execution_states(*, force: bool = False) -> int:
     Replaces the state-sync half of the old poll: it reads local thread state every few
     seconds and only calls Tensology (PATCH) when a ticket's status actually changed.
     """
+    import logging
+
+    from sqlalchemy.exc import OperationalError
+    from distr.core.incoming.telegram_updates import flush_execution_updates, sync_local_proposal_outcomes
+
     global _LAST_STATE_SYNC
     now = time.monotonic()
     if not force and now - _LAST_STATE_SYNC < STATE_SYNC_SECONDS:
         return 0
     _LAST_STATE_SYNC = now
-    from distr.core.incoming.telegram_updates import flush_execution_updates
-    flush_execution_updates()
-    with _TENSOLOGY_TICKETS_LOCK:
-        known = [dict(ticket) for ticket in _TENSOLOGY_TICKETS.values()]
-    claimed = [ticket for ticket in known if str(ticket.get("decisions_thread_id") or "").strip()]
-    deferred = [ticket for ticket in known if ticket.get("_deferred_project_id") and not str(ticket.get("decisions_thread_id") or "").strip()]
-    if not claimed and not deferred:
-        return 0
+    log = logging.getLogger(__name__)
+    try:
+        sync_local_proposal_outcomes()
+    except OperationalError:
+        log.warning("Local Telegram proposal outcome sync could not access SQLite. It will retry on the next pass.")
+    try:
+        flush_execution_updates()
+    except OperationalError:
+        log.warning("Telegram delivery sync could not access SQLite. It will retry on the next pass.")
     if _ticket_push_paused():
         return 0  # paused: no ticket status PATCHes to Tensology
     if not _TICKET_PROCESS_LOCK.acquire(blocking=False):
         return 0  # a fetch is running and mirrors state itself
     try:
+        # A push may have updated or removed a ticket before we obtained the lock.
+        with _TENSOLOGY_TICKETS_LOCK:
+            known = [dict(ticket) for ticket in _TENSOLOGY_TICKETS.values()]
+        claimed = [ticket for ticket in known if str(ticket.get("decisions_thread_id") or "").strip()]
+        deferred = [ticket for ticket in known if ticket.get("_deferred_project_id") and not str(ticket.get("decisions_thread_id") or "").strip()]
         client = None
         changed = 0
         for ticket in claimed:
-            chat_id = _existing_tensology_thread(ticket)
-            if chat_id is None or str(ticket.get("decisions_thread_id") or "") != str(chat_id):
-                continue
-            client = client or configured_tensology_client(source="decisionsai-ticket-runner")
-            if _sync_tensology_ticket_state(client, ticket, chat_id):
-                changed += 1
+            try:
+                chat_id = _existing_tensology_thread(ticket)
+                if chat_id is None or str(ticket.get("decisions_thread_id") or "") != str(chat_id):
+                    continue
+                client = client or configured_tensology_client(source="decisionsai-ticket-runner")
+                if _sync_tensology_ticket_state(client, ticket, chat_id):
+                    changed += 1
+            except (OperationalError, TensologyApiError) as exc:
+                # Keep the live snapshot until this ticket's status is acknowledged.
+                log.warning("Tensology ticket %s could not sync (%s). It will retry on the next pass.",
+                            ticket.get("id"), type(exc).__name__)
         # At most one approved pending item per tick, only once its project has
         # no executing workflow. A blocked item generates no HTTP/model calls.
         for ticket in deferred:
             if now < float(ticket.get("_retry_after") or 0):
                 continue
-            if not _tensology_project_slot_free(int(ticket["_deferred_project_id"])):
+            try:
+                if not _tensology_project_slot_free(int(ticket["_deferred_project_id"])):
+                    continue
+            except OperationalError:
+                log.warning("Could not check the project slot for deferred Tensology ticket %s. It will retry on the next pass.",
+                            ticket.get("id"))
                 continue
             try:
                 client = client or configured_tensology_client(source="decisionsai-ticket-runner")
@@ -1643,8 +1726,7 @@ def sync_tensology_execution_states(*, force: bool = False) -> int:
                 if _process_tensology_ticket(client, fresh):
                     changed += 1
             except Exception:
-                import logging
-                logging.getLogger(__name__).warning("Deferred Tensology ticket %s could not start", ticket.get("id"), exc_info=True)
+                log.warning("Deferred Tensology ticket %s could not start", ticket.get("id"), exc_info=True)
                 with _TENSOLOGY_TICKETS_LOCK:
                     if int(ticket['id']) in _TENSOLOGY_TICKETS:
                         _TENSOLOGY_TICKETS[int(ticket['id'])]['_retry_after'] = now + 30

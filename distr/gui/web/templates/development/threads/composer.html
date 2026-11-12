@@ -7,14 +7,23 @@
                         <div class="composer-picker" id="composer-ticket-picker"><span>Ticket</span><button type="button" id="composer-ticket-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-ticket-label">No ticket</strong><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5L11.5 6"></path></svg></button><div class="composer-picker-menu hidden" id="composer-ticket-menu" role="listbox" aria-label="Board ticket"></div></div>
                         <div class="composer-skill-badges hidden" id="composer-skill-badges" aria-label="Skills attached to this prompt"></div>
                         <label class="composer-guidance-target hidden" id="composer-guidance-target" data-tooltip="Workflow steers the active run. Thread queue starts after the workflow finishes."><span>Send to</span><select id="composer-guidance-scope" aria-label="Instruction destination"><option value="workflow">Workflow now</option><option value="thread">Thread queue</option></select></label>
+                        <span class="composer-time-controls" id="composer-chrome-slot" aria-label="Thread run controls">
+                        <button type="button" class="icon-button thread-more-button" id="thread-more-button" aria-label="Thread menu" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                        <div class="board-context-menu thread-header-menu hidden" id="thread-header-menu" role="menu">
+                            <button type="button" id="thread-menu-details" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l1.8 1.2"/></svg><span class="context-menu-label">Activity</span></button>
+                            <button type="button" id="thread-menu-original-source" class="hidden" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M6 4H4v8h8v-2M8 4h4v4m0-4L7 9"/></svg><span class="context-menu-label">View original conversation</span></button>
+                            <button type="button" id="thread-menu-clear-context" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 5.5h8M6.5 5.5V4h3v1.5M5.5 5.5 6 13h4l.5-7.5"/></svg><span class="context-menu-label">Clear Context</span></button>
+                            <button type="button" id="thread-menu-edit-time" role="menuitem"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5.5V8l2 1"/></svg><span class="context-menu-label">Edit Time</span></button>
+                        </div>
+                        <span class="composer-time-controls" id="header-time-controls">
+                            <span class="run-elapsed" id="run-elapsed" aria-label="Thread time">00:00:00</span>
+                            <button type="button" class="time-toggle-button" id="composer-time-toggle" aria-label="Start time tracking" title="Start time tracking" disabled><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m6 4 6 4-6 4z"></path></svg></span></button>
+                        </span>
+                        </span>
                     </div>
                     <div class="composer-context hidden" id="composer-context"></div>
                     <div class="composer-prompt-wrap">
-                        <textarea id="task-prompt" rows="1" placeholder="Describe what you want changed" aria-label="Development instruction" disabled></textarea>
-                            <span class="composer-time-controls">
-                                <span class="run-elapsed" id="run-elapsed" aria-label="Thread time">00:00:00</span>
-                                <button type="button" class="time-toggle-button" id="composer-time-toggle" aria-label="Start time tracking" title="Start time tracking" disabled><span aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m6 4 6 4-6 4z"></path></svg></span></button>
-                            </span>
+                        <textarea id="task-prompt" rows="1" placeholder="Describe the task" aria-label="Development instruction" disabled></textarea>
                     </div>
                     <div class="composer-toolbar">
                         <div class="composer-toolbar-start">

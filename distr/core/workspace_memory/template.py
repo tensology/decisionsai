@@ -73,6 +73,7 @@ def agents_md(*, entity_type: str, name: str, mission: str = "") -> str:
 - Ticket work packets: `.tickets/ticket_{id}_{slug}_{timestamp}_s{step}.md`
 - Pipeline outputs: `pipeline/{brief|spec|build|output}/YYYY-MM-DD_{step}_{slug}.md`
 - Handoff always updates `memory/handoff.md` before switching harnesses
+- Read `memory/worker-handoff.md` for the latest automatic worker update, when present.
 """
     return f"""# DecisionsAI workspace — {entity_type}: {name}
 

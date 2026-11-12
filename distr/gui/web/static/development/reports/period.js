@@ -363,6 +363,65 @@ function coveredSeconds(spans) {
     return total;
 }
 
+// Non-billable work stays in the data (History, block detail, PDF exclusions) but is hidden
+// from the calendar and from the calendar's totals unless the user asks to see it.
+export function isNonBillable(block) {
+    return block?.invoice_status === 'non_billable';
+}
+
+export function billableView(data, showNonBillable = false) {
+    if (!data) return data;
+    const all = data.blocks || [];
+    const hidden = all.filter(isNonBillable);
+    const summary = {
+        blocks: hidden.length,
+        seconds: hidden.reduce((sum, block) => sum + Number(block.seconds || 0), 0),
+        shown: Boolean(showNonBillable),
+    };
+    if (showNonBillable || !hidden.length) return { ...data, non_billable: summary };
+    const blocks = all.filter((block) => !isNonBillable(block));
+    const names = new Map((data.by_project || []).map((row) => [Number(row.project_id), row.name]));
+    const perProject = new Map();
+    const perDay = new Map();
+    for (const block of blocks) {
+        const pid = Number(block.project_id);
+        if (!names.has(pid)) names.set(pid, block.project_name || `Project ${pid}`);
+        const row = perProject.get(pid) || { spans: [], activity: 0, blocks: 0, days: new Set(), first: null };
+        const start = Date.parse(block.start_local + 'Z');
+        const end = Date.parse(block.end_local + 'Z');
+        if (Number.isFinite(start) && Number.isFinite(end)) row.spans.push([start / 1000, end / 1000]);
+        row.activity += Number(block.seconds || 0);
+        row.blocks += 1;
+        if (!row.first || block.start_local < row.first) row.first = block.start_local;
+        for (const seg of segments(block)) {
+            row.days.add(seg.day);
+            const day = perDay.get(seg.day) || { spans: [], projects: new Map() };
+            day.spans.push([seg.start * 60, seg.end * 60]);
+            day.projects.set(pid, [...(day.projects.get(pid) || []), [seg.start * 60, seg.end * 60]]);
+            perDay.set(seg.day, day);
+        }
+        perProject.set(pid, row);
+    }
+    const byProject = [...perProject.entries()].map(([pid, row]) => ({
+        project_id: pid, name: names.get(pid), seconds: coveredSeconds(row.spans), activity_seconds: row.activity,
+        blocks: row.blocks, days: row.days.size, first_start_local: row.first,
+    })).sort((a, b) => b.seconds - a.seconds);
+    const byDay = [...perDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, day]) => ({
+        date,
+        seconds: coveredSeconds(day.spans),
+        projects: Object.fromEntries([...day.projects.entries()].map(([pid, spans]) => [String(pid), coveredSeconds(spans)])),
+    }));
+    const spans = [...perProject.values()].flatMap((row) => row.spans);
+    return {
+        ...data, blocks, by_project: byProject, by_day: byDay, non_billable: summary,
+        totals: {
+            ...data.totals, seconds: coveredSeconds(spans),
+            activity_seconds: blocks.reduce((sum, block) => sum + Number(block.seconds || 0), 0),
+            blocks: blocks.length, projects: byProject.length, active_days: byDay.length,
+        },
+    };
+}
+
 export function selectReportProjects(data, selected) {
     if ((data.projects || []).every((project) => selected.has(Number(project.id)))) return data;
     const includes = (row) => selected.has(Number(row.project_id));
@@ -403,6 +462,16 @@ export function formatSlice(seconds) {
     const value = Math.max(0, Math.round(Number(seconds)));
     if (value < 60) return `${value}s`;
     return formatHours(value);
+}
+
+function estimateTiming(block) {
+    if (block.approved_estimate_seconds == null) return [];
+    const seconds = Math.round(block.recorded_work_seconds);
+    const recorded = block.recorded_work_seconds == null ? 'Unavailable'
+        : [Math.floor(seconds / 3600) && `${Math.floor(seconds / 3600)}h`,
+            Math.floor(seconds / 60) % 60 && `${Math.floor(seconds / 60) % 60}m`,
+            seconds % 60 && `${seconds % 60}s`].filter(Boolean).join(' ') || '0s';
+    return [['Recorded work', recorded], ['Approved billing estimate', formatHours(block.approved_estimate_seconds)]];
 }
 
 export function calendarFocusMinute(blocks, days) {
@@ -470,6 +539,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         options: [],
         projects: new Set((prefs.projects || []).map(Number)),
         calView: prefs.calView || 'month',
+        showNonBillable: prefs.showNonBillable === true,
         hourPx: HOUR_ZOOM_LEVELS.includes(storedHour) ? storedHour : DEFAULT_HOUR_PX,
         weekHourPx: HOUR_ZOOM_LEVELS.includes(storedWeekHour) ? storedWeekHour : WEEK_HOUR_PX,
         cursor: '',
@@ -517,6 +587,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             projects: [...state.projects],
             projectFilterVersion: 2,
             calView: state.calView,
+            showNonBillable: state.showNonBillable,
             hourPx: state.hourPx,
             weekHourPx: state.weekHourPx
         }));
@@ -563,7 +634,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         state.options = data.period_options || state.options;
         const period = data.period || {};
         if (!state.cursor || state.cursor < period.start || state.cursor > period.end) {
-            const busiest = [...(selectReportProjects(data, state.projects).by_day || [])].sort((a, b) => b.seconds - a.seconds)[0];
+            const busiest = [...(selectReportProjects(billableView(data, state.showNonBillable), state.projects).by_day || [])].sort((a, b) => b.seconds - a.seconds)[0];
             state.cursor = busiest?.date || period.start;
         }
         renderPeriodSelect();
@@ -633,7 +704,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         closeBlockDetail();
         renderProjectsButton();
         if (!state.visible) return;
-        const data = state.data && selectReportProjects(state.data, state.projects);
+        const data = state.data && selectReportProjects(billableView(state.data, state.showNonBillable), state.projects);
         buildButton.disabled = state.building || state.projects.size === 0;
         const banner = state.error ? `<p class="reports-error" role="alert">${esc(state.error)}</p>` : '';
         if (!data) {
@@ -804,7 +875,11 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         if (state.calView === 'month') body = monthHtml(data);
         else if (state.calView === 'week') body = timeGridHtml(data, 7, state.weekHourPx, zoomHtml(state.weekHourPx));
         else body = dayShellHtml(data);
-        return `<div class="reports-cal"><div class="reports-cal-head"><div class="reports-segs" role="group" aria-label="Calendar view">${tabs}</div>${nav}</div>${body}</div>`;
+        const nb = data.non_billable || { blocks: 0 };
+        const toggle = nb.blocks || state.showNonBillable
+            ? `<button type="button" class="reports-nonbillable-toggle" data-show-nonbillable aria-pressed="${state.showNonBillable}" title="Non-billable work is hidden from the calendar and its totals by default. It is still recorded and listed in History.">${state.showNonBillable ? 'Hide' : 'Show'} non-billable${nb.blocks ? ` (${nb.blocks})` : ''}</button>`
+            : '';
+        return `<div class="reports-cal"><div class="reports-cal-head">${toggle}<div class="reports-segs" role="group" aria-label="Calendar view">${tabs}</div>${nav}</div>${body}</div>`;
     }
 
     function blockDetailShellHtml() {
@@ -858,8 +933,13 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         const meta = [`<span class="reports-detail-project"><i style="--c:${projectColor(b.project_id)}"></i>${esc(b.project_name || 'Unassigned')}</span>`];
         if (b.calendar_draft_id) meta.push('<span>In progress</span>');
         else if (b.source_label) meta.push(`<span>${esc(b.source_label)}</span>`);
-        if (b.seconds != null) meta.push(`<span>${esc(formatHours(b.seconds))}</span>`);
+        const timing = estimateTiming(b);
+        if (timing.length) facts.push(...timing, ['Calendar block', formatHours(b.seconds)]);
+        else if (b.seconds != null) meta.push(`<span>${esc(formatHours(b.seconds))}</span>`);
         if (!b.calendar_draft_id && (b.description_status === 'needs_review' || b.invoice_status === 'needs_review')) meta.push('<span>Needs review before invoicing</span>');
+        const integrity = b.block_integrity;
+        if (integrity?.folded) facts.push(['Block', `Combines ${integrity.scoped_blocks} separate pieces of work (${integrity.source_intervals} recorded intervals). Proposed split is held for review.`]);
+        else if (integrity?.reconstructed) facts.push(['Placement', 'Allocated time. The recorded work happened at other times this day.']);
         if (b.invoice_status === 'non_billable') facts.push(['Invoice', 'Non-billable activity']);
         else if (b.invoice_status === 'zero_rate') facts.push(['Invoice', 'Tracked at R0 (struck through)']);
         else if (b.invoice_status === 'ready') facts.push(['Invoice', 'Reviewed work']);
@@ -1047,7 +1127,11 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         return laid.bars.map((bar) => {
             const top = (bar.start / 60) * hourPx;
             const height = Math.max(10, ((bar.end - bar.start) / 60) * hourPx);
-            const descriptions = [...new Set((bar.items || []).map((item) => displayWorkTitle(item).shown).filter(Boolean))];
+            const descriptions = [...new Set((bar.items || []).map((item) => {
+                const title = displayWorkTitle(item).shown;
+                const timing = estimateTiming(item).map(([label, value]) => `${label} ${value}`).join(' · ');
+                return [title, timing].filter(Boolean).join(' · ');
+            }).filter(Boolean))];
             const detail = bar.overflow
                 ? `${bar.overflowCount} overlapping`
                 : descriptions.slice(0, 6).join('\n');
@@ -1095,8 +1179,10 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             const slice = daySlice(b, seg.day);
             if (!slice) continue;
             const titles = displayWorkTitle(b);
+            const timing = estimateTiming(b).map(([label, value]) => `${label} ${value}`).join(' · ');
             const full = [
                 titles.original,
+                timing,
                 b.start_local && b.end_local ? `${b.start_local.replace('T', ' ')} – ${b.end_local.replace('T', ' ')}` : '',
                 b.seconds != null ? `Full record ${formatHours(b.seconds)}` : ''
             ].filter(Boolean).join('\n');
@@ -1104,7 +1190,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             if (!groups.has(b.project_id)) groups.set(b.project_id, { name, rows: [] });
             groups.get(b.project_id).rows.push(`<li><button type="button" class="reports-day-item" data-block-id="${esc(b.id)}" title="${esc(full)}">
                 <span class="reports-day-time"><time>${esc(slice.range)}</time><small>${esc(formatSlice(slice.seconds))}</small></span>
-                <span class="reports-day-copy">${esc(titles.shown || 'Unknown')}${b.calendar_draft_id ? '<small>In progress</small>' : ''}</span>
+                <span class="reports-day-copy">${esc(titles.shown || 'Unknown')}${timing ? `<small>${esc(timing)}</small>` : ''}${b.calendar_draft_id ? '<small>In progress</small>' : ''}</span>
             </button></li>`);
         }
         return groups.size ? [...groups.values()].map(({ name, rows }) => `<section class="reports-day-project">
@@ -1180,6 +1266,12 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             const direction = Number(zoom.dataset.hourZoom);
             if (state.calView === 'week') state.weekHourPx = stepHourZoom(state.weekHourPx, direction);
             else state.hourPx = stepHourZoom(state.hourPx, direction);
+            savePrefs();
+            render();
+            return;
+        }
+        if (event.target.closest('[data-show-nonbillable]')) {
+            state.showNonBillable = !state.showNonBillable;
             savePrefs();
             render();
             return;

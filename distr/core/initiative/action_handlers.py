@@ -123,16 +123,14 @@ def run_jira_intake_from_initiative(
 
 
 def move_tickets(payload: dict[str, Any]) -> dict[str, Any]:
-    from sqlalchemy import func
-
     from distr.core.db import get_session
     from distr.core.db.kanban import KanbanLane, KanbanTicket
-    from distr.core.kanban.lifecycle import require_automation_lane
+    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane, require_automation_lane
     from distr.core.kanban.ticket_audit import append_ticket_audit_entry
 
     board_id = int(payload.get("board_id") or 0)
     target_lane_name = require_automation_lane(
-        payload.get("target_lane") or payload.get("lane") or "Current"
+        payload.get("target_lane") or payload.get("lane") or ""
     )
     ticket_ids = _ticket_ids(payload)
     if not board_id or not target_lane_name or not ticket_ids:
@@ -140,28 +138,15 @@ def move_tickets(payload: dict[str, Any]) -> dict[str, Any]:
 
     moved: list[int] = []
     with get_session() as session:
-        target_lane = (
-            session.query(KanbanLane)
-            .filter(KanbanLane.board_id == board_id)
-            .filter(func.lower(KanbanLane.name) == target_lane_name.lower())
-            .first()
-        )
-        if not target_lane:
-            raise ValueError(f"target lane not found: {target_lane_name}")
-        max_pos = (
-            session.query(func.max(KanbanTicket.position))
-            .filter(KanbanTicket.lane_id == target_lane.id)
-            .scalar()
-        )
-        pos = int(max_pos if max_pos is not None else -1)
         for ticket_id in ticket_ids:
             ticket = session.query(KanbanTicket).filter(KanbanTicket.id == ticket_id).first()
             if not ticket:
                 continue
-            pos += 1
-            ticket.lane_id = target_lane.id
-            ticket.position = pos
+            changed = move_ticket_to_delivery_lane(session, ticket.id, target_lane_name)
+            if not changed:
+                continue
             moved.append(ticket.id)
+            current_lane = session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).first()
             append_ticket_audit_entry(
                 session,
                 ticket_id=ticket.id,
@@ -171,7 +156,7 @@ def move_tickets(payload: dict[str, Any]) -> dict[str, Any]:
                 execution_lane="initiative",
                 status="completed",
                 final_verdict="moved",
-                summary=f"Initiative moved ticket to {target_lane.name}",
+                summary=f"Initiative moved ticket to {current_lane.name if current_lane else target_lane_name}",
                 details=f"Payload: {payload}",
             )
         session.commit()

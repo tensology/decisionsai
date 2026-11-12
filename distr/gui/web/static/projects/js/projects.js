@@ -222,8 +222,7 @@
                     });
                     return;
                 }
-                var inUse = (data || []).filter(function(p) { return p.in_use; })[0];
-                if (inUse) selectProject(inUse.id);
+                // No silent auto-select: wait for an explicit project click, or ?project_id=.
             })
             .catch(function() {
                 if (el && el.innerHTML.indexOf("Loading") !== -1) setEmpty(el);
@@ -258,6 +257,8 @@
         document.getElementById("detail-startup").value = project.startup_instructions || "";
         var startTracker = document.getElementById("detail-start-time-tracker");
         if (startTracker) startTracker.checked = project.start_time_tracker !== false;
+        var agentIgnored = document.getElementById("detail-agent-ignored");
+        if (agentIgnored) agentIgnored.checked = project.agent_ignored === true;
         updateStartupTimeTrackerVisibility(project);
         var terminalBackendSel = document.getElementById("terminal-backend-select");
         if (terminalBackendSel) terminalBackendSel.value = project.coding_backend || "pi";
@@ -569,18 +570,14 @@
         var parts = raw.split(":");
         var source = parts[0];
         var id = parts.slice(1).join(":");
-        var href = "/tickets/";
-        if (source === "local") {
-            href += "?board_id=" + encodeURIComponent(id);
-        } else if (source === "trello" || source === "jira") {
-            href += "?source=" + encodeURIComponent(source) + "&board_id=" + encodeURIComponent(id);
-        } else {
-            gotoEl.classList.add("hidden");
-            gotoEl.href = "#";
+        var provider = source === "local" ? "decisions" : source;
+        if ((source === "local" || source === "trello" || source === "jira") && id) {
+            gotoEl.href = "/development/boards/" + encodeURIComponent(provider) + "/" + encodeURIComponent(id) + "/kanban/";
+            gotoEl.classList.remove("hidden");
             return;
         }
-        gotoEl.href = href;
-        gotoEl.classList.remove("hidden");
+        gotoEl.classList.add("hidden");
+        gotoEl.href = "#";
     }
 
     function renderTriggerBadges(words) {
@@ -655,6 +652,7 @@
             additional_trigger_words: JSON.stringify(getTriggerWordsArray()),
             startup_instructions: (document.getElementById("detail-startup").value || "").trim(),
             start_time_tracker: !!(document.getElementById("detail-start-time-tracker") && document.getElementById("detail-start-time-tracker").checked),
+            agent_ignored: !!(document.getElementById("detail-agent-ignored") && document.getElementById("detail-agent-ignored").checked),
             provider: boardFields.provider,
             board_id: boardFields.board_id,
             board_name: boardFields.board_name,

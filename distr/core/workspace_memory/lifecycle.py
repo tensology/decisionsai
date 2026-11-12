@@ -106,11 +106,12 @@ def handoff_cli_session(
     project_id: int | None = None,
     summary: str = "",
     source: str = "cli_completed",
-) -> None:
-    """Persist continuity when an external CLI/IDE session ends."""
-    from .pickup_handoff import perform_handoff
+) -> bool:
+    """Persist continuity and report whether all requested handoffs were written."""
+    from .pickup_handoff import perform_handoff, write_project_worker_handoff
 
     body = (summary or "").strip() or "CLI session completed."
+    saved = bool(ticket_id or project_id)
     if ticket_id:
         try:
             perform_handoff(
@@ -121,18 +122,15 @@ def handoff_cli_session(
                 extra={"project_id": project_id},
             )
         except Exception:
+            saved = False
             logger.debug("handoff_cli_session: ticket failed", exc_info=True)
     if project_id:
         try:
-            perform_handoff(
-                "projects",
-                int(project_id),
-                summary=body,
-                source=source,
-                extra={"ticket_id": ticket_id},
-            )
+            write_project_worker_handoff(int(project_id), body=body, source=source, ticket_id=ticket_id)
         except Exception:
+            saved = False
             logger.debug("handoff_cli_session: project failed", exc_info=True)
+    return saved
 
 
 def handoff_ticket_lane_done(

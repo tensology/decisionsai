@@ -1,16 +1,16 @@
-<div class="mb-6 flex items-start justify-end gap-4">
-    <div id="initiative-health" class="shrink-0" role="status">
-        <div id="initiative-health-badge" class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-gray-300">
-            <span id="initiative-health-dot" class="inline-block h-2.5 w-2.5 rounded-full bg-gray-500 shrink-0" title=""></span>
-            <span id="initiative-health-label">Checking…</span>
-        </div>
-    </div>
-</div>
-
 <!-- Proactivity Level -->
 <div class="mb-8">
-    <label class="block text-sm font-medium text-gray-300 mb-3">Agent posture</label>
-    <div id="initiative-level" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <p class="mb-4 text-sm text-gray-300 leading-relaxed">Your agent is here to help you decide. It brings you the options, its recommendation and what each choice would lead to, then acts as far as the posture below allows.</p>
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <label class="block text-sm font-medium text-gray-300">Agent posture</label>
+        <div id="initiative-health" class="shrink-0" role="status">
+            <div id="initiative-health-badge" class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-gray-300">
+                <span id="initiative-health-dot" class="inline-block h-2.5 w-2.5 rounded-full bg-gray-500 shrink-0" title=""></span>
+                <span id="initiative-health-label">Checking…</span>
+            </div>
+        </div>
+    </div>
+    <div id="initiative-level" class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <button type="button" class="initiative-btn p-5 rounded-lg border border-white/15 text-left transition-all hover:border-white/30" data-level="observe">
             <div class="flex items-start gap-3">
                 <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-white/8 text-[#f8fafc] shrink-0">
@@ -18,18 +18,7 @@
                 </div>
                 <div class="min-w-0">
                     <div class="text-sm font-medium text-white mb-1">Quiet</div>
-                    <div class="text-xs text-gray-300 leading-relaxed">Only respond when you ask. Best when you want manual control and minimal interruption.</div>
-                </div>
-            </div>
-        </button>
-        <button type="button" class="initiative-btn p-5 rounded-lg border border-white/15 text-left transition-all hover:border-white/30" data-level="assist">
-            <div class="flex items-start gap-3">
-                <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-white/8 text-[#60a5fa] shrink-0">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                </div>
-                <div class="min-w-0">
-                    <div class="text-sm font-medium text-white mb-1">Assist</div>
-                    <div class="text-xs text-gray-300 leading-relaxed">Notice patterns and suggest next steps. Useful when you want momentum without automatic execution.</div>
+                    <div class="text-xs text-gray-300 leading-relaxed">Stays out of the way. No messages about new work, but always answers when you ask.</div>
                 </div>
             </div>
         </button>
@@ -39,8 +28,8 @@
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 17v-2a4 4 0 014-4h8m0 0l-3-3m3 3l-3 3M5 7h8a4 4 0 014 4v2"/></svg>
                 </div>
                 <div class="min-w-0">
-                    <div class="text-sm font-medium text-white mb-1">Standup</div>
-                    <div class="text-xs text-gray-300 leading-relaxed">Triage sources, ask decisions in Telegram, and run approved routines while keeping you in the loop.</div>
+                    <div class="text-sm font-medium text-white mb-1">Standard</div>
+                    <div class="text-xs text-gray-300 leading-relaxed">Tells you in Telegram when work comes in, runs it once you accept, and checks with you before anything goes to a client.</div>
                 </div>
             </div>
         </button>
@@ -51,38 +40,67 @@
                 </div>
                 <div class="min-w-0">
                     <div class="text-sm font-medium text-white mb-1">Own outcomes</div>
-                    <div class="text-xs text-gray-300 leading-relaxed">Follow through automatically inside defined boundaries and only surface sensitive or unclear decisions.</div>
+                    <div class="text-xs text-gray-300 leading-relaxed">Picks up new work, runs it end to end and sends clients a friendly update on the channel they used.</div>
                 </div>
             </div>
         </button>
     </div>
-    <input type="hidden" id="initiative_level" value="assist">
+    <input type="hidden" id="initiative_level" value="operate">
 </div>
 
 <div class="mb-6 rounded-lg border border-white/10 bg-black/10 p-4">
-    <div class="flex items-start justify-between gap-4 mb-4">
-        <div>
-            <div class="text-sm font-medium text-white mb-1">Advanced source and safety controls</div>
-            <div class="text-xs text-gray-400">Permissions that define where Initiative can look, act, and when it must ask first.</div>
-        </div>
-    </div>
+    <div class="text-sm font-medium text-white mb-4">Advanced source and safety controls</div>
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">What I watch for you</div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
-        <label class="settings-toggle"><input type="checkbox" id="initiative_allow_telegram" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Telegram conversations</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_allow_routine_tasks" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Routine execution</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_allow_ticket_lane_moves" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Ticket lane moves</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_allow_workflow_start" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Workflow starts</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_allow_project_cli" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Project agent runs</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_scan_boards" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Local boards</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_suggest_backlog_promotion" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Backlog promotion</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_scan_whatsapp" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">WhatsApp</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_scan_telegram" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Telegram</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_scan_external_boards" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Jira/Trello details</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_scan_email" class="settings-toggle__input"><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Email</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_ask_external_comms" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Ask before external sends</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_ask_file_changes" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Ask before file changes</span></label>
-        <label class="settings-toggle"><input type="checkbox" id="initiative_ask_sensitive" class="settings-toggle__input" checked><span class="settings-toggle__switch" aria-hidden="true"></span><span class="settings-toggle__label">Ask before sensitive actions</span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_scan_email" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Notify on incoming email<span class="block text-xs leading-snug text-gray-400">Check Gmail and Mailshot for client requests that need you.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_scan_whatsapp" class="settings-toggle__input" checked><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Notify on incoming WhatsApp messages<span class="block text-xs leading-snug text-gray-400">Spot work requests in linked WhatsApp chats.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_scan_telegram" class="settings-toggle__input" checked><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Notify on incoming Telegram messages<span class="block text-xs leading-snug text-gray-400">Spot work requests sent to the Telegram bot.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_scan_boards" class="settings-toggle__input" checked><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Watch local project boards<span class="block text-xs leading-snug text-gray-400">Notice stuck or waiting tickets on your boards.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_scan_external_boards" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Watch Jira and Trello boards<span class="block text-xs leading-snug text-gray-400">Read linked Jira and Trello cards for new or stuck work.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_suggest_backlog_promotion" class="settings-toggle__input" checked><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Suggest promoting backlog items<span class="block text-xs leading-snug text-gray-400">Point out backlog tickets that look ready to start.</span></span></label>
     </div>
-    <div class="mt-4 flex justify-center">
-        <button type="button" id="initiative-inline-save" class="px-4 py-2 rounded-md bg-[#f97316] hover:bg-[#ea580c] text-white text-sm font-medium transition-colors">Save</button>
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-6">What I may do without asking</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_allow_routine_tasks" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Run routines automatically<span class="block text-xs leading-snug text-gray-400">Carry out routine tasks you've already approved.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_allow_ticket_lane_moves" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Move tickets between lanes<span class="block text-xs leading-snug text-gray-400">Advance tickets on a board when the work moves on.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_allow_workflow_start" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Start workflows on tickets<span class="block text-xs leading-snug text-gray-400">Kick off a ticket's workflow run when it's ready.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_allow_project_cli" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Run project coding agents<span class="block text-xs leading-snug text-gray-400">Launch a project's coding agent on a task.</span></span></label>
     </div>
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-6">How I keep you posted</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_allow_telegram" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Allow Telegram conversations<span class="block text-xs leading-snug text-gray-400">Message you in Telegram and act on your replies there.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_telegram_notify_suggestions" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Send triage updates to Telegram<span class="block text-xs leading-snug text-gray-400">A short note in Telegram when new work has been sorted.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_recommendations" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Be my assistant<span class="block text-xs leading-snug text-gray-400">Helpful suggestions during the day, without interrupting. Follows your projects, incoming messages and calendar, and offers what's useful when it fits. Standard and Own outcomes only.</span></span></label>
+    </div>
+    <div id="initiative-assistant-nudges" class="mt-3 hidden rounded-lg border border-white/10 bg-black/10 p-3" aria-live="polite">
+        <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">From your assistant</div>
+        <ul id="initiative-assistant-nudges-list" class="space-y-2 text-sm text-gray-300"></ul>
+        <div class="mt-2 text-xs text-gray-500">Act on any of these by asking in chat, or let them go. They fade on their own.</div>
+    </div>
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-6">Safety checks</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_ask_external_comms" class="settings-toggle__input" checked><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Ask before messaging clients or others<span class="block text-xs leading-snug text-gray-400">Check with you before anything is sent outside.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_ask_file_changes" class="settings-toggle__input" checked><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Ask before changing files<span class="block text-xs leading-snug text-gray-400">Check with you before files in a project are edited.</span></span></label>
+        <label class="settings-toggle items-start"><input type="checkbox" id="initiative_ask_sensitive" class="settings-toggle__input" checked><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Ask before sensitive actions<span class="block text-xs leading-snug text-gray-400">Check with you before risky or hard-to-undo actions.</span></span></label>
+    </div>
+</div>
+
+<div id="initiative-own-updates" class="mb-6 rounded-lg border border-white/10 bg-black/10 p-4 hidden">
+    <div class="text-sm font-medium text-white mb-1">How Own outcomes keeps you posted</div>
+    <div class="text-xs text-gray-400 mb-3">When I take work on by myself, I tell you what I'm starting, how it's going, and when it's finished or stuck.</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300" role="radiogroup" aria-label="Own outcomes update channel">
+        <label class="flex items-start gap-3 cursor-pointer"><input type="radio" name="initiative_own_channel" value="telegram" class="mt-1"><span>Telegram message<span class="block text-xs leading-snug text-gray-400">Uses Telegram conversations; falls back to the log if that's off.</span></span></label>
+        <label class="flex items-start gap-3 cursor-pointer"><input type="radio" name="initiative_own_channel" value="whatsapp" class="mt-1"><span>WhatsApp to my own number<span class="block text-xs leading-snug text-gray-400">Lands in your "Message yourself" chat.</span></span></label>
+        <label class="flex items-start gap-3 cursor-pointer"><input type="radio" name="initiative_own_channel" value="voice" class="mt-1"><span>Say it out loud<span class="block text-xs leading-snug text-gray-400">Speaks a short update on this computer.</span></span></label>
+        <label class="flex items-start gap-3 cursor-pointer"><input type="radio" name="initiative_own_channel" value="log" class="mt-1"><span>Log silently<span class="block text-xs leading-snug text-gray-400">No messages; everything goes to the activity log.</span></span></label>
+    </div>
+    <div id="initiative-owner-whatsapp-row" class="mt-3 hidden">
+        <label for="initiative_owner_whatsapp" class="block text-sm text-gray-300 mb-1">Your WhatsApp number</label>
+        <input type="tel" id="initiative_owner_whatsapp" placeholder="+27 82 123 4567" autocomplete="tel" class="w-full md:w-80 rounded-md border border-white/15 bg-black/20 px-3 py-2 text-sm text-white">
+        <div class="mt-1 text-xs text-gray-400">With country code. Without it, updates go to Telegram (if it's on) or the log.</div>
+    </div>
+</div>
+
+<div class="flex justify-center">
+    <button type="button" id="initiative-inline-save" class="px-4 py-2 rounded-md bg-[#f97316] hover:bg-[#ea580c] text-white text-sm font-medium transition-colors">Save</button>
 </div>

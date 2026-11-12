@@ -514,6 +514,7 @@ export function createTerminals({ context, actions, el, token }) {
             project.startup_instructions = detail.startup_instructions || '';
             el('terminal-command-lines').value = detail.startup_instructions || '';
             el('terminal-project-name').textContent = detail.name || project.name || 'Project terminals';
+            actions.syncHeader?.();
             renderTerminalCommandRows(detail.startup_instructions || '');
             await refreshTerminalSessions();
             if (options?.updateUrl !== false) actions.setDevelopmentLocation(options?.path || `/development/terminals/${Number(projectId)}/`, options);

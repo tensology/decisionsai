@@ -25,11 +25,60 @@ from typing import Any
 import os
 
 from distr.core.mempalace import hub as _hub
+from distr.core.mempalace import model_cache as _model_cache
 from distr.core.mempalace.bootstrap import last_import_error, try_import_mempalace
 from distr.core.mempalace.mapping import WING_DECISIONS
 from distr.core.mempalace.paths import default_palace_path, ensure_palace_dir
 
 logger = logging.getLogger(__name__)
+
+
+# chromadb's default MiniLM embedder lives here (see ONNXMiniLM_L6_V2). When it
+# is missing, the first in-process search downloads ~80MB inline and blocks the
+# caller until it finishes. That froze agent startup (pipeline never ready, so
+# push-to-talk captured nothing) and every chat turn that recalls memory.
+_MINILM_ONNX_DIR = os.path.join(
+    os.path.expanduser("~"), ".cache", "chroma", "onnx_models", "all-MiniLM-L6-v2", "onnx"
+)
+# All six files chromadb checks; with any one missing it re-downloads inline.
+_MINILM_REQUIRED_FILES = _model_cache.REQUIRED_FILES
+
+
+def _request_model_fetch(reason: str) -> None:
+    """Restore the missing model in the background (never inline). See model_cache."""
+    try:
+        if os.path.realpath(_MINILM_ONNX_DIR) != os.path.realpath(str(_model_cache.onnx_dir())):
+            return  # readiness was checked against a non-default dir (tests/overrides)
+        _model_cache.request_background_fetch(reason)
+    except Exception:
+        logger.debug("mempalace model background fetch not started", exc_info=True)
+
+
+def _palace_uses_minilm(palace_path: str) -> bool:
+    try:
+        import json
+
+        with open(os.path.join(palace_path, "mempalace_embedder.json"), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        names = {
+            str((v or {}).get("model_name") or "").strip().lower()
+            for v in (data.values() if isinstance(data, dict) else [])
+            if isinstance(v, dict)
+        }
+        return not names or bool(names & {"minilm", "all-minilm-l6-v2", "default", ""})
+    except Exception:
+        # No embedder record: MemPalace falls back to the chroma default (MiniLM).
+        return True
+
+
+def embedding_model_ready(palace_path: str) -> bool:
+    """False when a direct read would have to download the embedding model first."""
+    raw = (os.environ.get("DECISIONS_MEMPALACE_ALLOW_INLINE_MODEL_DOWNLOAD") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if not _palace_uses_minilm(palace_path):
+        return True
+    return all(os.path.exists(os.path.join(_MINILM_ONNX_DIR, f)) for f in _MINILM_REQUIRED_FILES)
 
 
 class MemPalaceAdapter:
@@ -168,6 +217,14 @@ class MemPalaceAdapter:
             return {"error": "mempalace hub down", "results": []}
         if not self._import_ok():
             return {"error": self._error or "mempalace unavailable", "results": []}
+        if not embedding_model_ready(self.palace_path):
+            # Optional recall must never wait on an 80MB model download.
+            logger.warning(
+                "MemPalace direct read skipped: embedding model not cached at %s",
+                _MINILM_ONNX_DIR,
+            )
+            _request_model_fetch("search")
+            return {"error": "mempalace embedding model not cached", "results": []}
         try:
             from mempalace.searcher import search_memories
 
@@ -227,6 +284,15 @@ class MemPalaceAdapter:
                 return {"success": False, "error": f"journal failed: {exc}"}
         if not self._import_ok():
             return {"success": False, "error": self._error or "mempalace unavailable"}
+        if not embedding_model_ready(self.palace_path):
+            # In-process write (no hub) would embed and so download ~80MB inline
+            # mid-turn. Legacy stores stay authoritative; skip until the model is back.
+            logger.warning(
+                "MemPalace in-process write skipped: embedding model not cached at %s",
+                _MINILM_ONNX_DIR,
+            )
+            _request_model_fetch("add_drawer")
+            return {"success": False, "error": "mempalace embedding model not cached", "deferred": True}
         try:
             from mempalace.config import sanitize_content, sanitize_name
 

@@ -9,6 +9,7 @@ in wireframes, ERD, and requirements.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -19,15 +20,6 @@ from pathlib import Path
 from typing import Any
 
 _ROUTE_BLOCK = re.compile(r"\{[^{}]+\}", re.DOTALL)
-_ROUTE_PATH = re.compile(
-    r"""(?:path|re_path)\(\s*[f]?[r]?[u]?[b]?['\"]([^'\"]+)['\"]""",
-)
-_CLASS = re.compile(r"^class\s+(\w+)\s*\(([^)]*)\)\s*:", re.MULTILINE)
-_FK = re.compile(
-    r"^\s*(\w+)\s*=\s*models\.(ForeignKey|OneToOneField|ManyToManyField)\(\s*[\"']?([\w\.]+)",
-    re.MULTILINE,
-)
-_SCALAR = re.compile(r"^\s*(\w+)\s*=\s*models\.(\w+)\(", re.MULTILINE)
 _USESTATE_OBJ = re.compile(r"useState\(\s*\{([^}]+)\}", re.DOTALL)
 _LABEL = re.compile(
     r"""(?:label|placeholder|aria-label)=\{?["']([^"']{2,40})["']\}?"""
@@ -65,7 +57,7 @@ _SKIP_DIR = {
     "examples",
 }
 _SKIP_APPS = {"woocommerce", "translatable"}
-_MODEL_BASE = re.compile(r"\b(Model|MPTTModel|TranslatableModel)\b")
+_MODEL_BASES = {"Model", "MPTTModel", "TranslatableModel"}
 _REL_KINDS = {"ForeignKey", "OneToOneField", "ManyToManyField"}
 _MERMAID_TYPE = {
     "CharField": "string",
@@ -105,7 +97,7 @@ _GROUP_RANK = {
 _AUTH_FIELD_TOKENS = {"email", "password", "username", "firstname", "lastname", "rememberme", "confirmpassword"}
 _AUTH_ENTITY_HINTS = {"user", "profile", "account", "customer", "buyer", "seller", "member"}
 _MAX_DEEP_SCREENS = 36
-_MAX_MODEL_FIELDS = 8
+_MAX_ERD_CHARS = 95_000
 _MAX_WIRE_CHARS = 95_000
 _SUBMIT_LITERAL = re.compile(
     r"""type=["']submit["'][\s\S]{0,240}?['\"]([A-Za-z][^'\"]{1,40})['\"]""",
@@ -256,34 +248,42 @@ def scan_frontend_routes(project_root: Path) -> list[dict[str, str]]:
                 return rows
     if rows:
         return rows
-    for path in _iter_files(project_root, ("urls.py",), limit=20):
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for url in _ROUTE_PATH.findall(text):
-            clean = "/" + url.lstrip("^/").rstrip("$")
-            clean = clean.replace("//", "/")
-            if clean in seen or clean in {"/", ""}:
-                continue
-            if "admin" in clean or clean.startswith("/api"):
-                continue
-            if "<" in clean and clean.count("/") > 4:
-                continue
-            seen.add(clean)
-            name = clean.strip("/").replace("/", "_") or "home"
-            rows.append(
-                {
-                    "url": clean if clean.startswith("/") else f"/{clean}",
-                    "name": name,
-                    "view": "",
-                    "title": _title(name),
-                    "group": _group_for_route(clean, name),
-                    "source": str(path.relative_to(project_root)),
-                }
-            )
+    for entry in _parse_url_maps(list(_iter_files(project_root, ("urls.py",), limit=40)), project_root):
+        route = entry["route"]
+        if route in seen:
+            continue
+        seen.add(route)
+        name = entry["url_name"]
+        rows.append({"url": route, "name": name, "view": entry["view"], "title": _title(name),
+                     "group": _group_for_route(route, name), "source": entry["source"]})
+        if len(rows) >= 80:
+            break
             if len(rows) >= 60:
                 break
         if len(rows) >= 60:
             break
     return rows
+
+
+def _python_leaf(node: ast.AST | None) -> str:
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.rsplit(".", 1)[-1]
+    return ""
+
+
+def _django_declarations(node: ast.ClassDef) -> dict[str, ast.AST | None]:
+    declarations = {}
+    for member in node.body:
+        if isinstance(member, (ast.Assign, ast.AnnAssign)):
+            targets = member.targets if isinstance(member, ast.Assign) else [member.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    declarations[target.id] = member.value
+    return declarations
 
 
 def scan_django_models(project_root: Path, *, with_fields: bool = False) -> list[dict[str, Any]]:
@@ -301,15 +301,16 @@ def scan_django_models(project_root: Path, *, with_fields: bool = False) -> list
         if any(part in _SKIP_APPS for part in path.parts):
             continue
         app = path.parent.name
-        text = path.read_text(encoding="utf-8", errors="replace")
-        class_spans = [(match.start(), match.group(1), match.group(2)) for match in _CLASS.finditer(text)]
-        for index, (start, name, bases) in enumerate(class_spans):
-            if not _MODEL_BASE.search(bases):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef) or not any(_python_leaf(base) in _MODEL_BASES for base in node.bases):
                 continue
+            name = node.name
             if name.startswith("_") or name.endswith("Manager"):
                 continue
-            end = class_spans[index + 1][0] if index + 1 < len(class_spans) else len(text)
-            body = text[start:end]
             entity = entities.setdefault(
                 name,
                 {
@@ -320,25 +321,30 @@ def scan_django_models(project_root: Path, *, with_fields: bool = False) -> list
                     "source": str(path.relative_to(project_root)),
                 },
             )
-            for field, kind, target in _FK.findall(body):
-                target_name = target.rsplit(".", 1)[-1]
-                if target_name == "self":
-                    target_name = name
-                entity["relations"].append({"field": field, "kind": kind, "target": target_name})
-            if with_fields:
-                seen_fields = {row["name"] for row in entity["fields"]}
-                for field, kind in _SCALAR.findall(body):
-                    if kind in _REL_KINDS or field in seen_fields:
-                        continue
-                    if field in {"objects", "DoesNotExist", "MultipleObjectsReturned"}:
-                        continue
-                    mermaid = _MERMAID_TYPE.get(kind)
-                    if not mermaid:
-                        continue
-                    entity["fields"].append({"name": field, "kind": kind, "mermaid": mermaid})
-                    seen_fields.add(field)
-                    if len(entity["fields"]) >= _MAX_MODEL_FIELDS:
-                        break
+            seen_fields = {row["name"] for row in entity["fields"]}
+            for field, value in _django_declarations(node).items():
+                if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                        and isinstance(value.func.value, ast.Name) and value.func.value.id == "models"):
+                    continue
+                kind = value.func.attr
+                options = {keyword.arg: keyword.value for keyword in value.keywords}
+                literal = {key: option.value for key, option in options.items()
+                           if isinstance(option, ast.Constant) and type(option.value) is bool}
+                if kind in _REL_KINDS:
+                    target = _python_leaf(value.args[0] if value.args else options.get("to"))
+                    if target:
+                        relation = {"field": field, "kind": kind, "target": name if target == "self" else target}
+                        if "null" in literal:
+                            relation["nullable"] = literal["null"]
+                        entity["relations"].append(relation)
+                    continue
+                mermaid = _MERMAID_TYPE.get(kind)
+                if with_fields and mermaid and field not in seen_fields and field not in {"objects", "DoesNotExist", "MultipleObjectsReturned"}:
+                    definition = {"name": field, "kind": kind, "mermaid": mermaid}
+                    for option, key in (("null", "nullable"), ("primary_key", "primary_key"), ("unique", "unique")):
+                        if option in literal:
+                            definition[key] = literal[option]
+                    entity["fields"].append(definition)
         if len(entities) >= 80:
             break
     return list(entities.values())
@@ -382,7 +388,7 @@ def _inventory_limitations(routes: dict, models: dict) -> list[str]:
     limitations = [
         'Source discovery covers supported React/Django routes, static FastAPI HTML handlers, and Django/SQLAlchemy models. Dynamic registration and other frameworks may be missing.',
         'Discovered implementation is reference material, not approved product requirements or proof of live behavior.',
-        f'ERD fields are limited to {_MAX_MODEL_FIELDS} per model; use the source locations to inspect full definitions.',
+        'The ERD reports any models or relationships omitted to fit the diagram size limit.',
     ]
     for label, inventory in [('Python routes', routes), ('SQLAlchemy models', models)]:
         notes = inventory.get('limitations') or []
@@ -400,8 +406,6 @@ def _inventory_limitations(routes: dict, models: dict) -> list[str]:
             if len(reasons) > 4:
                 examples.append(f'{len(reasons)-4} additional limitation categories omitted from this summary')
             limitations.append(f"{label}: {len(notes)} discovery limitations. " + '; '.join(examples))
-    if len(models['models']) > 60:
-        limitations.append(f"ERD displays 60 of {len(models['models'])} discovered models; remaining models are omitted from the diagram.")
     return limitations
 
 
@@ -457,8 +461,17 @@ def _resolve_page_file(project_root: Path, view: str) -> Path | None:
     return None
 
 
+_TEMPLATE_TRANSLATION = re.compile(
+    r"""{%\s*trans(?:late)?\s+(?P<quote>['"])(?P<label>(?:\\.|(?!(?P=quote))[^\\\r\n])*)(?P=quote)"""
+    r"""(?:\s+context\s+(?:"[^"]*"|'[^']*'))?(?:\s+noop)?\s*%}"""
+)
+_TEMPLATE_EXPRESSION = re.compile(r"{%.*?%}|{{.*?}}|{#.*?#}", re.S)
+
+
 def _clean_cue_text(value: str) -> str:
-    cleaned = re.sub(r"<[^>]+>", " ", value or "")
+    cleaned = _TEMPLATE_TRANSLATION.sub(lambda match: match["label"], value or "")
+    cleaned = _TEMPLATE_EXPRESSION.sub(" ", cleaned)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
     cleaned = (
         cleaned.replace("&amp;", "&")
         .replace("&nbsp;", " ")
@@ -482,7 +495,15 @@ def _extract_screen_cues(source: str) -> dict[str, Any]:
         label = (attrs.get("label") or "").strip()
         name = (attrs.get("name") or "").strip()
         placeholder = (attrs.get("placeholder") or "").strip()
-        kind = (attrs.get("type") or "").lower()
+        kind = (attrs.get("type") or "").strip().lower()
+        if match.group(1).lower() == "input":
+            if kind == "hidden":
+                continue
+            if kind in {"submit", "reset", "button", "image"}:
+                action = _clean_cue_text(attrs.get("aria-label") or label or _title(name))
+                if _usable_label(action) and action.lower() not in _DISMISS_LABELS and action not in buttons:
+                    buttons.append(action)
+                continue
         if kind not in {"email", "password", "number", "tel", "search", "url"} and name.lower() in {"email", "password", "tel", "search", "url", "number"}:
             kind = name.lower()
         shown = label or (_title(name) if name else "")
@@ -824,10 +845,10 @@ def build_prd(*, project_name: str, routes: list[dict[str, str]], models: list[d
         "## Requirements",
         "",
     ]
-    for index, row in enumerate(routes[:45], start=1):
+    for index, row in enumerate(_primary_routes(routes, limit=45), start=1):
         lines.append(f"- FR-{index:03d}: Support `{row['url']}` ({row['title']}, {row['group']})")
     if not routes:
-        lines.append("- FR-001: Inventory the primary user journeys once routes are available.")
+        lines.append("No page routes were discovered. Confirm the primary user journeys before drafting requirements.")
     if models:
         domain_lines = []
         for entity in sorted(models, key=lambda row: row["name"])[:20]:
@@ -850,16 +871,15 @@ def build_frac(
     cues: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     primary = _primary_routes(routes, limit=14)
-    lines = [
-        "# Functional requirements and acceptance criteria",
+    lines = ["# Functional requirements and acceptance criteria", ""]
+    guidance = [
+        "## Global UX and UI acceptance gate",
         "",
         "Interface source of truth: global `ui-ux-principles` skill > `UX Principles` and `UI Principles`.",
         "Completion source of truth: global `completion-protocol` skill.",
         "",
         "Every user-facing screen must include all applicable Given / When / Then criteria from the canonical FRAC template and pass the global Pre-ship Check. The feature is incomplete until they pass.",
         "Every affected surface must appear in the completion coverage ledger with fresh evidence or an explicitly approved exclusion. Negative-space checks and complete end-to-end journeys are mandatory before a complete verdict.",
-        "",
-        "## Global UX and UI acceptance gate",
         "",
         "- UI-AC-001: Given the feature includes an entity list on desktop, when the list loads, then a table provides search, filters, sorting, pagination, and relevant bulk actions.",
         "- UI-AC-002: Given the feature includes an entity list on mobile, when the mobile breakpoint is reached, then the table becomes cards without losing actions or state.",
@@ -910,28 +930,21 @@ def build_frac(
         "",
     ]
     if not primary:
-        lines.extend(
-            [
-                "## FR-001",
-                "",
-                "Capture acceptance criteria after the first project scan finds routes.",
-                "",
-                "- AC-001.1: Given a linked project with routes, when Plan scans, then FRAC entries are generated.",
-                "",
-            ]
-        )
-        return "\n".join(lines)
+        lines.extend(["No page routes were discovered. Review the project route inventory or add the requirements from a reviewed plan.", ""])
+        return "\n".join([*lines, *guidance])
     models = models or []
     cues = _source_cues(cues)
-    for index, row in enumerate(primary, start=1):
+    numbered = list(enumerate(primary, start=1))
+    # Keep the route's requirement ID while bringing sections with control evidence forward.
+    numbered.sort(key=lambda pair: not _has_control_evidence(cues.get(pair[1]["url"], {})))
+    for index, row in numbered:
         cue = cues.get(row["url"]) or {}
         lines.extend(
             [
-                f"## FR-{index:03d}",
+                f"## FR-{index:03d} {row['title']}",
                 "",
-                f"User can complete **{row['title']}** via `{row['url']}`.",
+                f"Route `{row['url']}`",
                 "",
-                f"- AC-{index:03d}.1: Given the intended actor and access rules are confirmed, when `{row['url']}` is opened within those rules, then the {row['title']} experience is available without a server error.",
             ]
         )
         paths = cue.get('paths') or ([cue['path']] if cue.get('path') else [])
@@ -939,9 +952,12 @@ def build_frac(
             lines.extend(['Observed controls: ' + ', '.join(f'`{path}`' for path in paths), ''])
         if cue.get('evidence_conflicts'):
             lines.extend(['Source observations disagree on ' + ', '.join(cue['evidence_conflicts']) + '. Confirm the intended controls before approval.', ''])
+        if not _has_control_evidence(cue):
+            lines.extend(["No form fields or actions were observed for this route.", ""])
         field_count, action_count = len(cue.get('fields') or []), len(cue.get('buttons') or [])
         if field_count > 4 or action_count > 2:
             lines.extend([f'This draft shows {min(4, field_count)} of {field_count} recorded fields and {min(2, action_count)} of {action_count} recorded actions. Review the remaining controls in the cited sources.', ''])
+        lines.append(f"- AC-{index:03d}.1: Given the intended actor and access rules are confirmed, when `{row['url']}` is opened within those rules, then the {row['title']} experience is available without a server error.")
         ac = 2
         for field in (cue.get("fields") or [])[:4]:
             bind = _bind_field(field, models, route_name=row["name"])
@@ -967,7 +983,18 @@ def build_frac(
             )
             ac += 1
         lines.append("")
-    return "\n".join(lines)
+    lines.extend(["## Discovery scope", "",
+                  f"Draft from source discovery. This draft covers {len(primary)} of {len(routes)} routes included in the scan. "
+                  "These observations need product review before approval.", ""])
+    return "\n".join([*lines, *guidance])
+
+
+def _has_control_evidence(cue: dict[str, Any]) -> bool:
+    return bool(cue.get("fields") or cue.get("buttons"))
+
+
+def _project_acceptance_criteria(frac: str) -> list[str]:
+    return re.findall(r"(?m)^- AC-\d+\.(\d+):", frac)
 
 
 def build_erd(models: list[dict[str, Any]]) -> str:
@@ -978,45 +1005,58 @@ def build_erd(models: list[dict[str, Any]]) -> str:
             "        string note\n"
             "    }\n"
         )
-    lines = ["erDiagram"]
-    displayed = sorted(models, key=lambda row: (row["app"], row["name"]))[:60]
-    if len(models) > len(displayed):
-        lines.append(f'    %% Showing {len(displayed)} of {len(models)} discovered models; the diagram is partial.')
-    for entity in displayed:
-        safe = re.sub(r"[^A-Za-z0-9_]", "", entity["name"]) or "Entity"
-        app = re.sub(r"[^A-Za-z0-9_]", "", entity["app"]) or "app"
-        lines.append(f"    {safe} {{")
-        fields = entity.get("fields") or []
-        if fields:
-            for field in fields[:_MAX_MODEL_FIELDS]:
-                fname = re.sub(r"[^A-Za-z0-9_]", "", field["name"]) or "field"
-                lines.append(f"        {field['mermaid']} {fname}")
-        else:
-            lines.append(f"        string app_{app}")
-        lines.append("    }")
-    known = {re.sub(r"[^A-Za-z0-9_]", "", row["name"]) for row in displayed}
-    edges: set[str] = set()
-    for entity in displayed:
-        owner = re.sub(r"[^A-Za-z0-9_]", "", entity["name"])
+    lines = ["erDiagram\n"]
+    remaining = _MAX_ERD_CHARS - len(lines[0]) - 200  # Reserve room for the coverage comment and sidecar envelope.
+    names = {row["name"]: re.sub(r"[^A-Za-z0-9_]", "", row["name"]) or "Entity" for row in models}
+    included = set()
+    table_metadata = {}
+    for entity in sorted(models, key=lambda row: (row["app"], row["name"])):
+        name = entity["name"]
+        fields, field_metadata = [], {}
+        for field in entity.get("fields") or []:
+            field_name = re.sub(r"[^A-Za-z0-9_]", "", field["name"]) or "field"
+            keys = " PK" if field.get("primary_key") is True else " UK" if field.get("unique") is True else ""
+            fields.append(f"        {field['mermaid']} {field_name}{keys}\n")
+            if type(field.get("nullable")) is bool:
+                field_metadata[field_name] = {"nullable": field["nullable"]}
+        block = f"    {names[name]} {{\n{''.join(fields)}    }}\n" if fields else f"    {names[name]} {{}}\n"
+        metadata = {names[name]: {"fields": field_metadata}} if field_metadata else {}
+        size = len(block) + (len(json.dumps(metadata, separators=(",", ":"))) if metadata else 0)
+        if size <= remaining:
+            lines.append(block)
+            remaining -= size
+            included.add(name)
+            table_metadata.update(metadata)
+    edges: dict[str, tuple[str, str]] = {}
+    for entity in models:
+        owner = entity["name"]
         for rel in entity["relations"]:
-            target = re.sub(r"[^A-Za-z0-9_]", "", rel["target"])
-            if target not in known:
+            target = rel["target"]
+            if target not in names:
                 continue
             kind = rel["kind"]
             field = re.sub(r"[^A-Za-z0-9_]", "", rel["field"]) or "rel"
+            target_cardinality = "o|" if rel.get("nullable") is True else "||"
             if kind == "ManyToManyField":
-                edge = f"    {owner} }}o--o{{ {target} : {field}"
+                edge = f"    {names[owner]} }}o--o{{ {names[target]} : {field}\n"
             elif kind == "OneToOneField":
-                edge = f"    {owner} ||--|| {target} : {field}"
+                edge = f"    {names[owner]} ||--{target_cardinality} {names[target]} : {field}\n"
             else:
-                edge = f"    {owner} }}o--|| {target} : {field}"
-            edges.add(edge)
-            if len(edges) >= 140:
-                break
-        if len(edges) >= 140:
-            break
-    lines.extend(sorted(edges))
-    return "\n".join(lines) + "\n"
+                edge = f"    {names[owner]} }}o--{target_cardinality} {names[target]} : {field}\n"
+            edges[edge] = (owner, target)
+    displayed_edges = 0
+    for edge, (owner, target) in sorted(edges.items()):
+        if owner in included and target in included and len(edge) <= remaining:
+            lines.append(edge)
+            remaining -= len(edge)
+            displayed_edges += 1
+    if len(included) < len(models) or displayed_edges < len(edges):
+        lines.insert(1, f"    %% Diagram size limit: showing {len(included)} of {len(models)} discovered models "
+                        f"and {displayed_edges} of {len(edges)} relationships between them.\n")
+    if table_metadata:
+        sidecar = json.dumps({"v": 1, "tables": table_metadata}, separators=(",", ":"), sort_keys=True)
+        lines.append(f"    %% decisions-erd: {sidecar}\n")
+    return "".join(lines)
 
 
 def _emit_links(screen: list[str], links: list[dict[str, str]]) -> None:
@@ -1180,7 +1220,7 @@ def render_artifacts(context: dict[str, Any]) -> dict[str, str]:
             cues=cues,
         ),
     }
-    for kind in ('brief', 'prd', 'frac'):
+    for kind in ('brief', 'prd'):
         heading, _, body = artifacts[kind].partition('\n')
         artifacts[kind] = heading + '\n\n**Draft from source discovery.** These observations need product review before approval.\n' + body
     if context.get('_model_inventory') is not None and context.get('_python_routes') is not None:
@@ -1218,11 +1258,9 @@ def assess_artifacts(artifacts: dict[str, str], context: dict[str, Any]) -> list
             gaps.append({"artifact": "flows", "code": "bindings", "detail": "Deep screens lack ERD bindings"})
 
     frac = artifacts.get("frac") or ""
-    rich_acs = frac.count("AC-") - frac.count("without a server error")
-    if routes and rich_acs < 3 and depth < 2:
-        gaps.append({"artifact": "frac", "code": "page_cues", "detail": "FRAC acceptance criteria are still load-only"})
-    elif routes and cues and rich_acs < 3 and depth < 3:
-        gaps.append({"artifact": "frac", "code": "rich_acs", "detail": "FRAC needs field/button criteria from page cues"})
+    if routes and not any(number != "1" for number in _project_acceptance_criteria(frac)):
+        code = "page_cues" if depth < 2 else "rich_acs"
+        gaps.append({"artifact": "frac", "code": code, "detail": "FRAC needs project-specific field or action criteria"})
 
     prd = artifacts.get("prd") or ""
     if models and "## Domain constraints" not in prd and any(row.get("fields") for row in models) and depth < 2:
@@ -1359,7 +1397,7 @@ def build_plan(
                     "cues": len(_observed_cues(context)),
                     "flow_forms": artifacts["flows"].count("\n    form "),
                     "flow_binds": artifacts["flows"].count(" bind="),
-                    "frac_acs": artifacts["frac"].count("AC-"),
+                    "frac_acs": len(_project_acceptance_criteria(artifacts["frac"])),
                 },
             }
         )
@@ -1429,16 +1467,13 @@ def build_plan(
 # The sitemap never reads React routes or JS page modules.
 # ---------------------------------------------------------------------------
 
-_SITEMAP_VERSION = 2
+_SITEMAP_VERSION = 4
 _SITEMAP_EDGE_KINDS = ("parent", "navigation", "journey", "auth", "redirect", "success", "failure")
 _SITEMAP_STATUSES = ("verified", "inferred", "incomplete", "missing")
 _MAX_SITEMAP_SOURCES = 2800
 _MAX_SITEMAP_NODES = 200
 _MAX_SITEMAP_EDGES = 800
 _SITEMAP_READ_LIMIT = 400_000
-_DJANGO_URL = re.compile(
-    r"""(?:path|re_path)\(\s*(?:[rubfRUBF]{0,2})?['\"](?P<route>[^'\"]*)['\"]\s*,\s*(?P<view>[^,()\n]+(?:\([^)]*\))?)\s*(?:,\s*name\s*=\s*['\"](?P<name>[^'\"]+)['\"])?""",
-)
 _DEF_AT_COLUMN = re.compile(r"(?m)^(?:async\s+)?def\s+(\w+)\s*\(")
 _CLASS_AT_COLUMN = re.compile(r"(?m)^class\s+(\w+)\s*(\([^)]*\))?\s*:")
 _RENDER_TEMPLATE = re.compile(
@@ -1538,45 +1573,94 @@ def _route_matches(pattern: str, concrete: str) -> bool:
     return True
 
 
-def _callable_name(expr: str) -> str:
-    cleaned = expr.strip()
-    cleaned = re.sub(r"\.as_view\s*(\([^)]*\))?\s*$", "", cleaned)
-    cleaned = cleaned.split("(")[0].strip()
-    return cleaned.split(".")[-1].strip()
+def _ast_name(node) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _ast_string(node) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _django_view_name(node) -> str:
+    if not isinstance(node, ast.Call):
+        return _ast_name(node)
+    name = _ast_name(node.func)
+    if name == "as_view" and isinstance(node.func, ast.Attribute):
+        return _ast_name(node.func.value)
+    if name in {"is_logged_in", "login_required", "staff_member_required"} and node.args:
+        return _django_view_name(node.args[0])
+    return ""
 
 
 def _parse_url_maps(files: list[Path], root: Path) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    seen: set[str] = set()
+    declarations = {}
+    includes = {}
     for path in files:
         if path.name != "urls.py":
             continue
-        for match in _DJANGO_URL.finditer(_read_limited(path)):
-            view_expr = match.group("view").strip()
-            if "include(" in view_expr or view_expr.startswith("include"):
+        try:
+            tree = ast.parse(_read_limited(path))
+        except (SyntaxError, ValueError):
+            continue
+        declarations[path] = []
+        includes[path] = []
+        for call in sorted((node for node in ast.walk(tree) if isinstance(node, ast.Call)), key=lambda node: node.lineno):
+            if _ast_name(call.func) not in {"path", "re_path", "url"} or len(call.args) < 2:
                 continue
-            name = _callable_name(view_expr)
-            if not name or name in {"include", "redirect"}:
+            raw = _ast_string(call.args[0])
+            target = call.args[1]
+            if raw is None:
                 continue
-            route = _normalize_route(match.group("route"))
-            if route.startswith("/api") or "/admin" in route or route.startswith("/static"):
+            route = _normalize_route(raw)
+            if any(char in route for char in "[]()^$|*+?"):
                 continue
-            url_name = (match.group("name") or name).strip()
-            key = f"{route}|{url_name}"
-            if key in seen:
+            if isinstance(target, ast.Call) and _ast_name(target.func) == "include":
+                module = _ast_string(target.args[0]) if target.args else None
+                if module:
+                    includes[path].append((route, module))
                 continue
-            seen.add(key)
-            rows.append(
-                {
-                    "route": route,
-                    "url_name": url_name,
-                    "view": name,
-                    "source": path.relative_to(root).as_posix(),
-                }
-            )
+            view = _django_view_name(target)
+            if not view or view in {"redirect", "serve"}:
+                continue
+            name = next((_ast_string(item.value) for item in call.keywords if item.arg == "name"), None)
+            declarations[path].append((route, name or view, view))
+
+    children = {}
+    mounted = set()
+    for path, entries in includes.items():
+        children[path] = []
+        for prefix, module in entries:
+            parts = tuple(module.split("."))
+            matches = [candidate for candidate in declarations if candidate.with_suffix("").parts[-len(parts):] == parts]
+            if len(matches) == 1:
+                child = matches[0]
+                children[path].append((prefix, child))
+                mounted.add(child)
+
+    rows = {}
+
+    def visit(path, prefix, ancestors):
+        if path in ancestors or len(rows) >= _MAX_SITEMAP_NODES:
+            return
+        for route, name, view in declarations[path]:
+            full_route = _normalize_route(prefix.rstrip("/") + route)
+            if full_route.startswith(("/api", "/static")) or "/admin" in full_route:
+                continue
+            rows.setdefault((full_route, name), {"route": full_route, "url_name": name, "view": view,
+                                                 "source": path.relative_to(root).as_posix()})
             if len(rows) >= _MAX_SITEMAP_NODES:
-                return rows
-    return rows
+                return
+        for mount, child in children[path]:
+            visit(child, _normalize_route(prefix.rstrip("/") + mount), {*ancestors, path})
+
+    for path in declarations:
+        if path not in mounted:
+            visit(path, "", set())
+    return list(rows.values())
 
 
 def _parse_views(files: list[Path], root: Path) -> dict[str, dict[str, Any]]:
@@ -2062,7 +2146,7 @@ def _template_links(text: str) -> list[tuple[tuple[str, str], str]]:
     links: list[tuple[tuple[str, str], str]] = []
     seen: set[tuple[str, str]] = set()
     for attrs, inner in _ANCHOR.findall(text):
-        label = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", inner)).strip()
+        label = _clean_cue_text(inner)
         url_match = _URL_TAG.search(attrs) or _URL_TAG.search(inner)
         href_match = _HREF.search(attrs)
         target: tuple[str, str] | None = None
@@ -2084,7 +2168,8 @@ def _template_links(text: str) -> list[tuple[tuple[str, str], str]]:
 
 
 def _write_sitemap_cache(path: Path, project_root: Path, model: dict[str, Any], fingerprint: dict[str, dict[str, int]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    from distr.core.memory.files import atomic_write_text
+
     payload = {
         "version": _SITEMAP_VERSION,
         "project_root": str(project_root),
@@ -2092,9 +2177,7 @@ def _write_sitemap_cache(path: Path, project_root: Path, model: dict[str, Any], 
         "built_at": datetime.now(timezone.utc).isoformat(),
         "model": model,
     }
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _read_sitemap_cache(path: Path, project_root: Path) -> dict[str, Any] | None:

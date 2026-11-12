@@ -1,15 +1,17 @@
 """Threads HTTP boundary. Existing URLs remain compatible."""
-from fastapi import Body, File, Form, UploadFile
+from fastapi import Body, Depends, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
 from typing import Optional
 import os
 import asyncio
+import json
 import uuid
 from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
-from .models import StudioRoutingAssessmentRequest, StudioSkillCaptureRequest, StudioTaskCreateRequest, StudioThreadArchiveRequest, StudioThreadForkRequest, StudioThreadMessageRequest, StudioThreadUpdateRequest
+from .models import StudioCheckpointDecisionRequest, StudioRoutingAssessmentRequest, StudioSkillCaptureRequest, StudioSteeringRequest, StudioTaskCreateRequest, StudioThreadArchiveRequest, StudioThreadForkRequest, StudioThreadMessageRequest, StudioThreadUpdateRequest
+from distr.gui.web.security import require_internal_token_dependency
 
 
 def register_routes(router, templates):
@@ -100,81 +102,51 @@ def register_routes(router, templates):
     @router.post("/workflows/studio/routing-assessment")
     async def workflow_studio_routing_assessment(data: StudioRoutingAssessmentRequest):
         """Assess operational complexity and failure signals before an automatic route is chosen."""
-        from distr.core.kanban.ticket_policy import infer_ticket_complexity, resolve_ticket_cli_route
+        from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
+        from distr.core.workflow.execution_mode import assess_development_request, choose_development_execution_mode
 
         instruction = str(data.instruction or "").strip()
-        # Route the request the user is sending now. Historical assistant prose
-        # must not turn a harmless follow-up into a production-risk workflow.
-        routing_text = "\n".join(
-            [instruction, data.ticket_title or "", data.ticket_description or ""]
+        assessment = await asyncio.to_thread(
+            assess_development_request, instruction, ticket_title=data.ticket_title,
+            ticket_description=data.ticket_description, has_images=data.has_images,
         )
-        combined = routing_text.lower()
-        complexity = infer_ticket_complexity(
-            data.ticket_title or instruction[:160],
-            f"{data.ticket_description}\n{instruction}",
-            file_count=1 if data.has_images else 0,
-        )
-        blocked_terms = ("blocked", "stuck", "cannot continue", "permission denied", "unavailable")
-        failure_terms = ("failed", "failing", "regression", "exception", "traceback", "broken", "error")
-        risk_terms = ("security", "production", "data loss", "migration", "payment", "credential")
-        signals = []
-        if any(term in combined for term in blocked_terms):
-            signals.append("blocked")
-        if any(term in combined for term in failure_terms):
-            signals.append("failure")
-        if any(term in combined for term in risk_terms):
-            signals.append("risk")
-        if data.has_images:
-            signals.append("vision")
-        from distr.core.laya_runtime import assess_request, get_mode
+        complexity, signals = assessment["complexity"], assessment["signals"]
 
-        laya_mode = get_mode()
-        laya_assessment = {"mode": laya_mode, "used": False}
-        if laya_mode != "off":
-            try:
-                candidate = await asyncio.to_thread(assess_request, routing_text)
-                use_candidate = laya_mode == "prefer" or candidate["confidence"] >= 0.60
-                laya_assessment.update(candidate)
-                laya_assessment["used"] = use_candidate
-                if use_candidate:
-                    complexity = candidate["complexity"]
-                    if candidate["is_sensitive"] and "risk" not in signals:
-                        signals.append("risk")
-            except Exception as exc:
-                logger.warning("Laya routing failed; using deterministic fallback: %s", exc)
-                laya_assessment["fallback_reason"] = str(exc)
-        operational_state = "blocked" if "blocked" in signals else "failing" if "failure" in signals else "risk" if "risk" in signals else "neutral"
-        if complexity == "low" and signals:
-            complexity = "medium"
-        if complexity == "medium" and ("risk" in signals or {"blocked", "failure"}.issubset(signals)):
-            complexity = "high"
-        resolved = resolve_ticket_cli_route(None, complexity, board=None)
+        def resolve_route():
+            if data.chat_id is None and data.ticket_id is None and not data.board_key:
+                return resolve_ticket_cli_route(None, complexity)
+            from distr.core.db import Chat, get_session
+            from distr.core.workflow.development_threads import development_board, development_thread_metadata
+
+            with get_session() as db:
+                ticket_id, board_key = data.ticket_id, data.board_key
+                if data.chat_id is not None:
+                    root = db.get(Chat, data.chat_id)
+                    metadata = development_thread_metadata(root) if root and root.parent_id is None else {}
+                    if not metadata:
+                        raise LookupError("Development thread not found.")
+                    ticket_id, board_key = metadata.get("ticket_id"), metadata.get("board_key")
+                board = development_board(db, ticket_id=ticket_id, board_key=board_key)
+                if board is None and data.chat_id is None:
+                    raise LookupError("The selected board or ticket is unavailable.")
+                return resolve_ticket_cli_route(None, complexity, board=board)
+
+        try:
+            resolved = await asyncio.to_thread(resolve_route)
+        except (LookupError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
         route = dict(resolved)
         route.pop("complexity", None)
         if data.has_images and route.get("model") not in {"", "auto"}:
             route["model"] = "auto"
-        from distr.core.workflow.execution_mode import choose_development_execution_mode
-
-        execution_mode = choose_development_execution_mode(
-            instruction,
-            assessment={
-                "complexity": complexity,
-                "operational_state": operational_state,
-                "signals": signals,
-            },
-        )
+        execution_mode = choose_development_execution_mode(instruction, assessment=assessment)
         harness = str(route.get("backend") or "pi")
         return JSONResponse({
-            "complexity": complexity,
-            "operational_state": operational_state,
-            "sentiment": operational_state,
-            "signals": signals,
+            **assessment,
             "route": route,
             "execution_mode": execution_mode["mode"],
             "execution_mode_reason": execution_mode["reason"],
             "execution_mode_signals": execution_mode["signals"],
-            "decision_engine": "laya" if laya_assessment["used"] else "heuristic",
-            "laya": laya_assessment,
             "reason": (
                 f"{complexity.title()} → {harness}"
                 + (f" · {execution_mode['mode']}" if execution_mode.get("mode") else "")
@@ -190,8 +162,12 @@ def register_routes(router, templates):
         if not prompt:
             return JSONResponse({"detail": "A task prompt is required."}, status_code=422)
         route_mode = str(data.route_mode or "auto").strip().lower()
-        from distr.core.workflow.development_threads import normalize_autonomy_level
+        from distr.core.workflow.development_harness import DevelopmentScopeChanged
+        from distr.core.workflow.development_threads import (
+            DevelopmentThreadConflict, normalize_autonomy_level, require_unlinked_local_ticket_scope,
+        )
 
+        local_ticket = data.ticket_id is not None and str(data.board_key or "").startswith("decisions:")
         autonomy_level = normalize_autonomy_level(data.autonomy_level) or str(data.autonomy_level or "").strip().lower()
         execution_profile = str(data.execution_profile or "code").strip().lower()
         if route_mode not in {"auto", "manual"}:
@@ -204,6 +180,7 @@ def register_routes(router, templates):
         if execution_profile not in {"code", "design", "research", "operations"}:
             return JSONResponse({"detail": "Unknown execution profile"}, status_code=422)
         chat_id = None
+        linked_local_ticket = False
         try:
             from distr.core.skills.catalog import filter_known_skill_ids
             from distr.core.chat import ChatService
@@ -220,9 +197,15 @@ def register_routes(router, templates):
                 if data.workflow_id is not None:
                     if db.get(AutoWorkflow, int(data.workflow_id)) is None:
                         return JSONResponse({"detail": "Selected workflow does not exist."}, status_code=422)
-                if data.ticket_id is not None:
-                    if db.get(KanbanTicket, int(data.ticket_id)) is None:
-                        return JSONResponse({"detail": "Selected ticket does not exist."}, status_code=422)
+                if local_ticket:
+                    try:
+                        _, project_id = require_unlinked_local_ticket_scope(db, data.ticket_id, data.board_key)
+                    except LookupError as exc:
+                        raise DevelopmentThreadConflict(str(exc)) from exc
+                    if data.project_id != project_id:
+                        raise DevelopmentThreadConflict("The ticket's project changed. Refresh the board and reopen the ticket.")
+                elif data.ticket_id is not None and db.get(KanbanTicket, int(data.ticket_id)) is None:
+                    return JSONResponse({"detail": "Selected ticket does not exist."}, status_code=422)
 
             settings = load_settings_from_db()
             provider = str(
@@ -279,7 +262,9 @@ def register_routes(router, templates):
                 board_ticket_key=data.board_ticket_key,
                 board_ticket_title=data.board_ticket_title,
                 board_ticket_lane=data.board_ticket_lane,
+                require_current_local_ticket=local_ticket,
             )
+            linked_local_ticket = local_ticket
             if ticket_id is None and str(data.board_key or "").startswith("decisions:"):
                 from distr.core.workflow.development_threads import rebind_development_thread
 
@@ -321,7 +306,7 @@ def register_routes(router, templates):
                 reasoning_effort=str(data.reasoning_effort or "medium").strip().lower(),
                 service_tier=str(data.service_tier or "standard").strip().lower(),
             )
-            if ticket_id is not None:
+            if ticket_id is not None and not local_ticket:
                 with get_session() as db:
                     ticket = db.get(KanbanTicket, int(ticket_id))
                     if ticket is None:
@@ -385,7 +370,7 @@ def register_routes(router, templates):
                         dispatch_development_prompt,
                         int(chat_id),
                         prompt,
-                        routing_assessment=data.routing_assessment or {},
+                        routing_assessment={**data.routing_assessment, "route_source": "studio_preview"} if data.routing_assessment else {},
                         attachments=data.attachments or [],
                         skill_ids=skill_ids,
                         use_playwright=bool(data.use_playwright),
@@ -453,6 +438,8 @@ def register_routes(router, templates):
                 }
             )
         except Exception as e:
+            if isinstance(e, DevelopmentScopeChanged) and linked_local_ticket:
+                return JSONResponse({"detail": str(e), "chat_id": chat_id, "task": None}, status_code=409)
             logger.error("Studio task creation failed: %s", e, exc_info=True)
             if chat_id is not None:
                 # Never leave a half-created thread behind: the UI would
@@ -469,13 +456,19 @@ def register_routes(router, templates):
                     logger.warning("Could not archive orphan Development thread %s", chat_id, exc_info=True)
             return JSONResponse(
                 {"detail": f"The thread could not be started: {e}", "task": None},
-                status_code=422 if isinstance(e, ValueError) else 500,
+                status_code=(
+                    409 if isinstance(e, (DevelopmentThreadConflict, DevelopmentScopeChanged))
+                    else 422 if isinstance(e, ValueError) else 500
+                ),
             )
 
 
     @router.post("/workflows/studio/tasks/{chat_id}/messages")
     async def workflow_studio_message(chat_id: int, data: StudioThreadMessageRequest, wait: bool = False, timeout: Optional[float] = None):
         """Route a Development message directly to its persistent IDE harness."""
+        from distr.core.incoming.proposals import (
+            MergeHandoffPending, ReviewedMergeAttachmentUnavailable, restore_reviewed_thread_merge_attachments,
+        )
         from distr.core.workflow.development_harness import DevelopmentExecutionBusy, require_direct_execution_available
 
         message = str(data.message or "").strip()
@@ -511,6 +504,8 @@ def register_routes(router, templates):
                 existing_execution = metadata.get("execution")
                 if isinstance(existing_execution, dict):
                     require_direct_execution_available(existing_execution)
+            elif workflow_id is not None and autonomy_level != "approval" and project_id is not None:
+                await asyncio.to_thread(restore_reviewed_thread_merge_attachments, int(chat_id), project_id)
             turn_id = None
             if not save_with_claim:
                 turn_id = await asyncio.to_thread(
@@ -579,7 +574,7 @@ def register_routes(router, templates):
                     dispatch_development_prompt,
                     int(chat_id),
                     message,
-                    routing_assessment=data.routing_assessment or {},
+                    routing_assessment={**data.routing_assessment, "route_source": "studio_preview"} if data.routing_assessment else {},
                     attachments=data.attachments or [],
                     skill_ids=skill_ids,
                     use_playwright=bool(data.use_playwright),
@@ -594,7 +589,7 @@ def register_routes(router, templates):
                     int(chat_id),
                     f"Execution could not start: {execution['error']}",
                 )
-                return JSONResponse({"detail": execution["error"]}, status_code=409)
+                return JSONResponse({"detail": execution["error"], **({"code": execution["code"]} if execution.get("code") else {})}, status_code=409)
             from distr.core.workflow.development_control import resume_thread_time
 
             track_time = True
@@ -617,6 +612,10 @@ def register_routes(router, templates):
                     await turn_response_fields(int(chat_id), turn_id=int(turn_id), wait=bool(wait), timeout=timeout)
                 )
             return JSONResponse(response_payload)
+        except ReviewedMergeAttachmentUnavailable as exc:
+            return JSONResponse({"code": "proposal_attachment_unavailable", "detail": str(exc)}, status_code=409)
+        except MergeHandoffPending as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
         except DevelopmentExecutionBusy as exc:
             return JSONResponse({"code": "development_execution_busy", "detail": str(exc)}, status_code=409)
         except Exception as exc:
@@ -627,14 +626,93 @@ def register_routes(router, templates):
     @router.get("/workflows/studio/tasks/{chat_id}/execution")
     async def workflow_studio_execution(chat_id: int):
         try:
-            from distr.core.workflow.development_harness import development_execution_state
+            from distr.core.turn_runtime.service import active_turn_stop_pending, native_steering_available
+            from distr.core.workflow.development_harness import (
+                ACTIVE_EXECUTION_STATUSES, development_execution_state, exact_development_stop_target,
+            )
 
-            return JSONResponse(await asyncio.to_thread(development_execution_state, int(chat_id)))
+            state = await asyncio.to_thread(development_execution_state, int(chat_id))
+            active_turn = state.get("turn_id")
+            if (state.get("runtime_id") in {"native", "cli_harness"} and type(active_turn) is int
+                    and state.get("status") in ACTIVE_EXECUTION_STATUSES and not state.get("completed_at")):
+                state = {**state, "stop_pending": active_turn_stop_pending(chat_id, active_turn)}
+            stop = exact_development_stop_target(state)
+            turn_id = stop.get("turn_id") if stop else None
+            steer = {"turn_id": turn_id} if turn_id and native_steering_available(chat_id, turn_id) else None
+            if state.get("direct") is False and state.get("status") == "waiting" and not state.get("completed_at"):
+                from distr.core.workflow.interactions import pending_interactions, telegram_checkpoint_delivery_status
+
+                pending = await asyncio.to_thread(
+                    pending_interactions, run_id=state["id"], development_chat_id=chat_id, include_decisions=True,
+                )
+                if len(pending) == 1:
+                    item = pending[0]
+                    if item["status"] == "resolving":
+                        state["checkpoint_decision_pending"] = True
+                    elif item["status"] == "unconfirmed":
+                        state["checkpoint_decision_unconfirmed"] = True
+                    else:
+                        try:
+                            allowed = json.loads(item["allowed_actions"] or "[]")
+                        except (TypeError, ValueError):
+                            allowed = []
+                        allowed = [action for action in allowed if isinstance(action, str)] if isinstance(allowed, list) else []
+                        if item["kind"] == "qualification_telegram_voice":
+                            allowed = [action for action in allowed if action != "continue"]
+                        if allowed:
+                            state["checkpoint"] = {
+                                "token": item["token"], "allowed_actions": allowed,
+                                "telegram_delivery": telegram_checkpoint_delivery_status(item),
+                            }
+            return JSONResponse({**state, "stop_pending": state.get("stop_pending") is True,
+                                 "exact_stop": stop, "exact_steer": steer})
         except LookupError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=404)
         except Exception as exc:
             logger.error("Studio execution state failed: %s", exc, exc_info=True)
             return JSONResponse({"detail": str(exc)}, status_code=500)
+
+
+    @router.post("/workflows/studio/tasks/{chat_id}/execution/checkpoint",
+                 dependencies=[Depends(require_internal_token_dependency)])
+    async def workflow_studio_checkpoint_decision(chat_id: int, data: StudioCheckpointDecisionRequest):
+        from distr.core.workflow.development_harness import development_execution_state
+        from distr.core.workflow.interactions import resolve_interaction
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            state = await asyncio.to_thread(development_execution_state, chat_id)
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404, headers=headers)
+        can_claim = (state.get("direct") is False and state.get("id") == data.run_id
+                     and state.get("status") == "waiting" and not state.get("completed_at"))
+        response = data.response_text.strip()
+        if data.action == "feedback" and not response:
+            return JSONResponse({"detail": "Enter revision guidance before submitting."}, status_code=422, headers=headers)
+        result = await asyncio.to_thread(
+            resolve_interaction, token=data.token, action=data.action, response_text=response,
+            source="web", resolver_id="paired-app-view", background=True,
+            development_scope=(chat_id, data.run_id), allow_new_claim=can_claim,
+        )
+        if result.get("error"):
+            error = {"detail": result["error"]}
+            if result.get("code"):
+                error["code"] = result["code"]
+            return JSONResponse(error, status_code=result.get("status_code", 409), headers=headers)
+        return JSONResponse(result, headers=headers)
+
+
+    @router.get("/workflows/studio/tasks/{chat_id}/execution/client-reply",
+                dependencies=[Depends(require_internal_token_dependency)])
+    async def workflow_studio_client_reply_review(chat_id: int, run_id: int = Query(gt=0)):
+        from distr.core.workflow.development_harness import development_client_reply_review
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            review = await asyncio.to_thread(development_client_reply_review, chat_id, run_id)
+            return JSONResponse(review, headers=headers)
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404, headers=headers)
 
 
     @router.post("/workflows/studio/tasks/{chat_id}/execution/stop")
@@ -654,6 +732,71 @@ def register_routes(router, templates):
         except Exception as exc:
             logger.error("Studio execution stop failed: %s", exc, exc_info=True)
             return JSONResponse({"detail": str(exc)}, status_code=500)
+
+    @router.post("/workflows/studio/tasks/{chat_id}/execution/stop-exact")
+    async def workflow_studio_stop_exact_execution(
+        chat_id: int, execution_session_id: Optional[int] = Body(default=None, gt=0),
+        workflow_run_id: Optional[int] = Body(default=None, gt=0),
+        turn_id: Optional[int] = Body(default=None, gt=0),
+    ):
+        from distr.core.workflow.development_harness import stop_development_execution
+
+        options = {name: value for name, value in (
+            ("expected_session_id", execution_session_id),
+            ("expected_workflow_run_id", workflow_run_id),
+            ("expected_turn_id", turn_id),
+        ) if value is not None}
+        if len(options) != 1:
+            return JSONResponse({"detail": "Choose one execution to stop."}, status_code=422)
+        try:
+            result = await asyncio.to_thread(stop_development_execution, int(chat_id), **options)
+            if not result.get("stop_requested"):
+                return JSONResponse({"detail": "This run changed or is no longer available to stop."}, status_code=409)
+            return JSONResponse({"stop_requested": True, "stopped": bool(result.get("stopped"))})
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+        except Exception:
+            logger.exception("Studio exact stop failed for thread %s", chat_id)
+            return JSONResponse({"detail": "The stop request could not be confirmed."}, status_code=500)
+
+
+    @router.post("/workflows/studio/tasks/{chat_id}/execution/steer-exact")
+    async def workflow_studio_steer_exact_execution(chat_id: int, data: StudioSteeringRequest):
+        from distr.core.workflow.development_control import steer_exact_turn
+
+        try:
+            command = await asyncio.to_thread(
+                steer_exact_turn, chat_id, data.turn_id, data.expected_project_id, data.submission_id, data.content,
+            )
+            return JSONResponse({
+                "chat_id": command["chat_id"], "turn_id": data.turn_id, "submission_id": command["source_ref"],
+                "status": command["status"], "summary": command["result_summary"],
+            })
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
+        except Exception:
+            logger.exception("Studio exact steering could not be confirmed for thread %s", chat_id)
+            return JSONResponse({"detail": "The steering request could not be confirmed."}, status_code=503)
+
+
+    @router.get("/workflows/studio/tasks/{chat_id}/execution/steer-exact")
+    async def workflow_studio_steering_receipt(
+        chat_id: int, turn_id: int = Query(gt=0), expected_project_id: int = Query(gt=0),
+        submission_id: str = Query(pattern=r"^[a-f0-9]{32}$"),
+    ):
+        from distr.core.workflow.development_control import exact_steering_receipt
+
+        try:
+            return JSONResponse(await asyncio.to_thread(
+                exact_steering_receipt, chat_id, turn_id, expected_project_id, submission_id,
+            ), headers={"Cache-Control": "no-store"})
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+        except Exception:
+            logger.exception("Studio steering receipt lookup failed for thread %s", chat_id)
+            return JSONResponse({"detail": "The steering receipt could not be checked."}, status_code=503)
 
 
     @router.get("/workflows/studio/tasks/{chat_id}/execution/changes")
@@ -741,8 +884,8 @@ def register_routes(router, templates):
         try:
             from distr.core.workflow.development_threads import rebind_development_thread, update_development_thread_settings
 
-            scope_fields = {"project_id", "board_key", "board_provider", "ticket_id", "board_ticket_key", "board_ticket_title", "board_ticket_lane"}
-            if scope_fields.intersection(data.model_fields_set):
+            scope_fields = {"project_id", "board_key", "board_provider", "ticket_id", "board_ticket_key"} & data.model_fields_set
+            if scope_fields:
                 result = await asyncio.to_thread(
                     rebind_development_thread,
                     chat_id,
@@ -756,6 +899,7 @@ def register_routes(router, templates):
                     board_ticket_lane=data.board_ticket_lane,
                     permission_profile=data.permission_profile,
                     remote_continuation=data.remote_continuation,
+                    _scope_fields=scope_fields,
                 )
             else:
                 result = await asyncio.to_thread(

@@ -60,9 +60,16 @@ export function createThreadCliMode({ el, token, getContext, toast, api }) {
         if (!btn) return;
         const ctx = getContext() || {};
         const hasProject = Boolean(Number(ctx.projectId || 0));
-        const inChat = ctx.workspaceMode === 'chat' && Boolean(Number(ctx.chatId || 0));
+        const hasChat = Boolean(Number(ctx.chatId || 0));
+        const inChat = ctx.workspaceMode === 'chat' && (hasChat || Boolean(ctx.boardScopedDraft));
         btn.classList.toggle('hidden', !inChat);
-        btn.disabled = !hasProject;
+        // Visible on a project-scoped draft, but disabled until the first message creates the thread.
+        const disabled = !hasProject || !hasChat;
+        btn.disabled = disabled;
+        const chatBtn = btn.querySelector && btn.querySelector('.thread-mode-chat, #thread-mode-chat');
+        const cliBtn = btn.querySelector && btn.querySelector('.thread-mode-cli, #thread-mode-cli');
+        if (chatBtn) { chatBtn.disabled = disabled; chatBtn.classList.toggle('active', !mode.on); chatBtn.setAttribute('aria-pressed', mode.on ? 'false' : 'true'); }
+        if (cliBtn) { cliBtn.disabled = disabled; cliBtn.classList.toggle('active', mode.on); cliBtn.setAttribute('aria-pressed', mode.on ? 'true' : 'false'); }
         btn.setAttribute('aria-pressed', mode.on ? 'true' : 'false');
         btn.title = !hasProject
             ? 'Link this thread to a project to open the real Pi CLI'
@@ -980,7 +987,14 @@ export function createThreadCliMode({ el, token, getContext, toast, api }) {
 
     function bind() {
         bindAttach();
-        toggleBtn()?.addEventListener('click', () => toggle());
+        toggleBtn()?.addEventListener('click', (event) => {
+            const target = event.target;
+            const cli = typeof target.closest === 'function' ? target.closest('.thread-mode-cli, #thread-mode-cli') : null;
+            const chat = typeof target.closest === 'function' ? target.closest('.thread-mode-chat, #thread-mode-chat') : null;
+            if (cli) { if (!mode.on) toggle(); return; }
+            if (chat) { if (mode.on) toggle(); return; }
+            if (target === event.currentTarget) toggle();
+        });
         window.addEventListener('resize', () => {
             if (mode.on) scheduleFit(currentSession());
         });

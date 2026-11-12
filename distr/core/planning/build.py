@@ -33,6 +33,57 @@ def _notes(metadata):
     return json.dumps({"plan_build": metadata, "original_digest": digest}, sort_keys=True)
 
 
+def ticket_plan_sources(db, ticket, board):
+    """Compare a generated ticket's retained source revisions without editing it."""
+    from distr.core.planning.prerequisites import _IDENTITY
+
+    identity = _IDENTITY.fullmatch(ticket.source_external_id or "")
+    if ticket.source_provider != "plan" or identity is None:
+        return None
+    unavailable = {"status": "unavailable", "changes": []}
+    try:
+        workspace_id, key = int(identity[1]), identity[2]
+        notes = json.loads(ticket.context_notes or "{}")
+        contract = notes["plan_build"]
+        source_ids = contract["task"]["source_item_ids"]
+        revisions = contract["expected_revisions"]
+        if (not 0 < workspace_id < 2**63 or type(contract["version"]) is not int or contract["version"] != 1
+                or type(contract["workspace_id"]) is not int or contract["workspace_id"] != workspace_id
+                or contract["task"]["key"] != key
+                or not isinstance(source_ids, list) or not 0 < len(source_ids) <= 200
+                or any(type(item_id) is not int or not 0 < item_id < 2**63 for item_id in source_ids)
+                or not isinstance(revisions, dict) or len(revisions) != len(source_ids)
+                or revisions.keys() != {str(item_id) for item_id in source_ids}
+                or any(type(revision) is not int or revision < 0 for revision in revisions.values())):
+            return unavailable
+        digest = hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest()
+        if notes.get("original_digest") not in (None, digest):
+            return unavailable
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return unavailable
+
+    workspace = db.get(PlanWorkspace, workspace_id)
+    if (workspace is None or not workspace.project_id or board is None or board.archived or board.source != "database"
+            or workspace.board_provider != "decisions" or workspace.board_key != f"decisions:{board.id}"
+            or workspace.project_id != board.default_project_id or workspace.project_id != ticket.linked_project_id
+            or workspace.project_id != contract.get("project_id")):
+        return unavailable
+
+    current = {item_id: (title, revision) for item_id, title, revision in db.query(
+        PlanItem.id, PlanItem.title, func.coalesce(func.max(PlanItemRevision.revision), 0),
+    ).outerjoin(PlanItemRevision, PlanItemRevision.item_id == PlanItem.id).filter(
+        PlanItem.workspace_id == workspace_id, PlanItem.status != "archived", PlanItem.id.in_(source_ids),
+    ).group_by(PlanItem.id, PlanItem.title).all()}
+    changes = []
+    for item_id in source_ids:
+        title, revision = current.get(item_id, (None, None))
+        built_revision = revisions[str(item_id)]
+        if revision != built_revision:
+            changes.append({"item_id": item_id, "title": title, "built_revision": built_revision,
+                            "current_revision": revision})
+    return {"status": "changed" if changes else "current", "changes": changes}
+
+
 def _graph(tasks):
     if not isinstance(tasks, list):
         raise ValueError("tasks must be a list")
@@ -190,7 +241,8 @@ def build_tasks(workspace_id: int, *, tasks: list[dict], expected_revisions: dic
                 raise ValueError("Board has no lane")
             lane = next((row for row in lanes if row.name.lower() == "backlog"), lanes[0])
             current_items = db.query(PlanItem).filter(
-                PlanItem.workspace_id == workspace_id, PlanItem.status != 'archived').all()
+                PlanItem.workspace_id == workspace_id, PlanItem.status != 'archived',
+                PlanItem.item_type.notin_(('handover', 'skills'))).all()  # retired types stay stored, outside revision checks
             pending_files = db.query(PlanFileWrite.item_id).join(
                 PlanItem, PlanItem.id == PlanFileWrite.item_id
             ).filter(PlanItem.workspace_id == workspace_id, PlanItem.status != 'archived').all()

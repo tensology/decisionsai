@@ -5,8 +5,11 @@ import hashlib
 import json
 import mimetypes
 import shutil
+import stat
+import tempfile
 import urllib.parse
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -29,10 +32,11 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def _root(project_id: int | None, reference: str) -> Path:
+def _root(project_id: int | None, reference: str, *, create: bool = True) -> Path:
     key = hashlib.sha256(reference.encode()).hexdigest()[:24]
     root = Path.home()/'.decisions/workspaces/projects'/str(project_id or 'inbox')/'attachments/incoming'/key
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if create:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
     return root
 
 
@@ -83,7 +87,9 @@ def list_proposal_attachment_manifest(proposal: dict[str, Any]) -> list[dict[str
                 'kind': str(item.get('kind') or ''),
                 'size': int(item.get('size') or 0) if str(item.get('size') or '').isdigit() or isinstance(item.get('size'), int) else 0,
                 'caption': str(item.get('caption') or ''),
-                'transcript': str(item.get('transcript') or ''),
+                'transcript': str(item.get('transcript') or item.get('extracted_text') or ''),
+                'extracted_text': str(item.get('extracted_text') or item.get('transcript') or ''),
+                'path': str(item.get('path') or ''),
                 'api_path': str(item.get('api_path') or ''),
                 'source_message_id': str(item.get('source_message_id') or ''),
                 'download_status': str(item.get('download_status') or ''),
@@ -177,6 +183,9 @@ def ensure_proposal_attachments(
                     record = _record(destination, name, str(item.get('mime_type') or item.get('type') or ''), identity,
                                      source_message_id=str(item.get('source_message_id') or ''),
                                      transcript=str(item.get('transcript') or (retained or {}).get('transcript') or ''), api_path=location)
+                    if not str(record.get('transcript') or '').strip():
+                        from distr.core.incoming.attachment_text import apply_extraction
+                        record = apply_extraction(record)
                     if retained and retained.get('remote_sha256') == record['sha256']:
                         record['remote_sha256'] = record['sha256']
                     if item.get('sha256') and record['sha256'] != item['sha256']:
@@ -230,6 +239,18 @@ def ensure_proposal_attachments(
                     if 'source WhatsApp messages are unavailable' in err or 'no source conversation' in err:
                         continue
                     failures.append(item)
+        if chat_id is not None and attachments:
+            register_thread_attachments(int(chat_id), attachments)
+        return {'attachments': attachments, 'failures': failures}
+
+    if str(proposal.get('source') or '').lower() in {'gmail', 'mailshot', 'email'}:
+        from distr.core.incoming.mail_attachments import store_proposal_mail_attachments
+        stored, mail_failures = store_proposal_mail_attachments(proposal, project_id, strict=False)
+        attachments.extend(stored)
+        failures.extend(mail_failures)
+        if strict and mail_failures:
+            _fail(str(mail_failures[0].get('name') or 'attachment'),
+                  str(mail_failures[0].get('error') or 'Could not attach mail files.'))
         if chat_id is not None and attachments:
             register_thread_attachments(int(chat_id), attachments)
         return {'attachments': attachments, 'failures': failures}
@@ -469,8 +490,9 @@ def public_thread_attachments(chat_id: int) -> list[dict[str, Any]]:
     out = []
     for item in thread_attachments(chat_id):
         row = {key: value for key, value in item.items() if key != 'path'}
-        if item.get('download_error') or item.get('error'):
-            row['download_error'] = item.get('download_error') or item.get('error')
+        error = thread_attachment_error(item, cached=True)
+        if error:
+            row['download_error'] = error
             row['url'] = ''
         else:
             row['url'] = f'/api/workflows/studio/tasks/{int(chat_id)}/attachments/{item["id"]}'
@@ -502,15 +524,131 @@ def resolve_thread_attachment(chat_id: int, attachment_id: str) -> tuple[Path, d
     record = next((item for item in records if item.get('id') == attachment_id), None)
     if record is None:
         raise FileNotFoundError('Attachment not found in this thread.')
-    path = Path(record['path']).resolve()
+    return verified_thread_attachment_path(record), record
+
+
+def _attachment_stat_key(details):
+    return (details.st_dev, details.st_ino, details.st_size, details.st_mtime_ns, details.st_ctime_ns)
+
+
+@lru_cache(maxsize=512)
+def _display_attachment_digest(path: Path, stat_key: tuple) -> str:
+    digest = _digest(path)
+    if _attachment_stat_key(path.stat()) != stat_key:
+        raise FileNotFoundError('Thread attachment changed while checking it.')
+    return digest
+
+
+def verified_thread_attachment_path(record: dict[str, Any], *, cached: bool = False) -> Path:
+    """Verify a prepared file against the managed roots and its saved bytes."""
+    try:
+        path = Path(str(record.get('path') or '')).resolve()
+    except RuntimeError as exc:
+        raise FileNotFoundError('Thread attachment is unavailable.') from exc
     allowed = (Path.home()/'.decisions/workspaces/projects').resolve()
     boards = (Path.home()/'.decisions/workspaces/boards').resolve()
     is_snapshot = path.is_relative_to(boards) and len(path.relative_to(boards).parts) > 2 and path.relative_to(boards).parts[1] == 'intake'
-    if (not path.is_relative_to(allowed) and not is_snapshot) or not path.is_file():
+    if not path.is_relative_to(allowed) and not is_snapshot:
         raise FileNotFoundError('Thread attachment is unavailable.')
-    if path.stat().st_size != record.get('size') or _digest(path) != record.get('sha256'):
+    try:
+        details = path.stat()
+    except OSError as exc:
+        raise FileNotFoundError('Thread attachment is unavailable.') from exc
+    if not stat.S_ISREG(details.st_mode):
+        raise FileNotFoundError('Thread attachment is unavailable.')
+    if details.st_size != record.get('size'):
         raise FileNotFoundError('Thread attachment changed. Resync source media and retry.')
-    return path, record
+    digest = _display_attachment_digest(path, _attachment_stat_key(details)) if cached else _digest(path)
+    if digest != record.get('sha256'):
+        raise FileNotFoundError('Thread attachment changed. Resync source media and retry.')
+    return path
+
+
+def thread_attachment_error(record: dict, *, cached: bool = False) -> str:
+    if error := record.get('download_error') or record.get('error'):
+        return str(error)
+    try:
+        verified_thread_attachment_path(record, cached=cached)
+    except (OSError, ValueError):
+        return 'The saved attachment is missing or changed. Sync its source and review the file.'
+    return ''
+
+
+def _copy_reviewed_attachment(source: Path, destination: Path, record: dict) -> Path:
+    size = record.get('size')
+    if type(size) is not int or not 0 < size <= MAX_MEDIA_BYTES:
+        raise ValueError('The reviewed attachment has no verified size.')
+    details = source.stat()
+    if not stat.S_ISREG(details.st_mode) or details.st_size != size:
+        raise FileNotFoundError('The cached attachment is unavailable or changed.')
+    root = destination.parent
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=root, prefix='.merge-media-') as temporary:
+        staged = Path(temporary) / 'original'
+        with source.open('rb') as reader, staged.open('wb') as writer:
+            remaining = size + 1
+            while remaining and (chunk := reader.read(min(remaining, 65536))):
+                writer.write(chunk)
+                remaining -= len(chunk)
+        verified_thread_attachment_path({**record, 'path': str(staged)}).replace(destination)
+    return destination
+
+
+def restore_prepared_whatsapp_attachment(record: dict, original: dict, project_id: int) -> Path:
+    """Recover the reviewed copy from its exact original WhatsApp cache row."""
+    from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
+
+    message_id = record['source_message_id']
+    identity = f'whatsapp:{message_id}'
+    if record.get('id') != hashlib.sha256(identity.encode()).hexdigest()[:24]:
+        raise ValueError('The saved attachment does not match its WhatsApp message.')
+    project = (Path.home()/'.decisions/workspaces/projects').resolve() / str(project_id)
+    root = _root(project_id, original['id'], create=False).resolve()
+    destination = _destination(root, identity, str(record.get('name') or 'attachment'))
+    if (not root.is_relative_to(project) or destination.resolve() != destination
+            or record.get('path') != str(destination)):
+        raise ValueError('The saved attachment path does not match its original project location.')
+    with get_session() as db:
+        row = db.query(WhatsAppMessage).filter_by(jid=original['source_thread_id'], message_id=message_id).one_or_none()
+        stored = row.media_local_path if row else None
+    if not stored:
+        raise FileNotFoundError('The original WhatsApp attachment is not cached.')
+    source = Path(resolve_whatsapp_media_disk_path(stored))
+    return _copy_reviewed_attachment(source, destination, record)
+
+
+def refetch_prepared_tensology_attachment(record: dict, proposal: dict, project_id: int, client) -> Path:
+    """Replace a missing prepared original only with its previously verified bytes."""
+    reference = proposal['id']
+    prefix = f"work-requests/{reference.removeprefix('tensology:')}/attachment?"
+    size = record.get('size')
+    checksum = record.get('sha256')
+    if (type(size) is not int or not 0 < size <= MAX_MEDIA_BYTES
+            or not isinstance(checksum, str) or len(checksum) != 64):
+        raise ValueError('The reviewed attachment has no verified size or checksum.')
+    for item in proposal.get('attachments') or []:
+        location = item.get('api_path') or ''
+        identity = f'{reference}:{location}'
+        if (location.startswith(prefix)
+                and hashlib.sha256(identity.encode()).hexdigest()[:24] == record.get('id')):
+            break
+    else:
+        raise FileNotFoundError('The attachment is no longer listed by its original source.')
+
+    project = (Path.home()/'.decisions/workspaces/projects').resolve() / str(project_id)
+    root = _root(project_id, reference, create=False).resolve()
+    destination = _destination(root, identity, item['name'])
+    if (not root.is_relative_to(project) or destination.resolve() != destination
+            or record.get('path') != str(destination)):
+        raise ValueError('The saved attachment path does not match its original project location.')
+
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=root, prefix='.merge-media-') as temporary:
+        staged = Path(temporary) / 'original'
+        client.download(location, staged, max_bytes=size)
+        verified = verified_thread_attachment_path({**record, 'path': str(staged)})
+        verified.replace(destination)
+    return destination
 
 
 # ---- Thread -> ticket Files tab ---------------------------------------------

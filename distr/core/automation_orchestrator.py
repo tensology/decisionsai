@@ -66,7 +66,12 @@ def automation_prompt(automation: dict[str, Any]) -> str:
         "the work through the orchestrator instead of pretending it is complete. "
         "If the instruction contains multiple requested actions, execute them as "
         "an ordered queue and report each unavailable screen, blocker, or failed "
-        "step honestly.\n\n"
+        "step honestly. Start your reply with an honest progress percentage worked "
+        "out from the requested actions you finished out of those requested (100% "
+        "only when everything is done), for example \"50% done.\", then speak in "
+        "complete conversational sentences: the result and what it means first, then "
+        "only what changed, failed, or needs a decision. No preamble, restated "
+        "instruction, raw logs, or closing offers.\n\n"
         f"Automation: {automation.get('name') or 'Untitled Automation'}\n"
         f"Instruction:\n{instruction}"
     )
@@ -630,6 +635,62 @@ def _skip_duplicate_running_response(
     }
 
 
+def initiative_hold_reason(automation: dict[str, Any]) -> str:
+    """Why Initiative holds an automatic (scheduled or event) automation run, or ''.
+
+    * Its project is set aside (projects.agent_ignored).
+    * An incoming-message automation fired for a client the user said not to worry about.
+    * Quiet posture: automations triggered by incoming client messages don't act on their own.
+    Manual runs are never held. Scheduled runs on active projects run in every posture.
+    """
+    try:
+        from distr.core.initiative import attention
+        from distr.core.initiative.outcome_flow import current_level
+
+        pid = automation.get("linked_project_id")
+        if pid is not None and attention.project_ignored(pid):
+            return "its project is set aside"
+        invocation = automation.get("_invocation_context") if isinstance(automation.get("_invocation_context"), dict) else {}
+        if invocation:
+            origin = str(invocation.get("origin_surface") or "")
+            entry = attention.client_ignored(invocation.get("origin_thread_id"), invocation.get("origin_sender"),
+                                             source=origin)
+            if entry:
+                return f"you asked me not to worry about {entry.get('label') or 'that client'}"
+            if str(automation.get("automation_type") or "") == "channel_intake" and current_level() == "observe":
+                return "Initiative is in Quiet, so incoming messages don't start work on their own"
+    except Exception:
+        logger.debug("Initiative hold check unavailable; running the automation", exc_info=True)
+    return ""
+
+
+def _initiative_held_response(automation, reason, *, schedule_metadata, emit_event):
+    summary = f"Held by Initiative: {reason}. Run it yourself if you want it now."
+    waiting = []
+    try:
+        from distr.core.initiative import attention
+
+        pid = automation.get("linked_project_id")
+        waiting = [w for w in attention.waiting_tensions() if pid is not None and w.get("project_id") == pid]
+        if waiting:
+            summary += " " + attention.tension_text(waiting[0])
+        from distr.core.initiative.outcome_flow import audit
+
+        audit("automation_held", automation=automation.get("name"), automation_id=automation.get("id"), reason=reason,
+              status="held", waiting=[w.get("ticket_id") for w in waiting])
+    except Exception:
+        logger.debug("Initiative hold audit unavailable", exc_info=True)
+    emit_event(
+        automation=automation,
+        event_type="worker_skipped",
+        status="skipped",
+        summary=summary,
+        payload={"skip_reason": "initiative_hold", "hold_reason": reason, "manual": False, **(schedule_metadata or {})},
+    )
+    return {"status": "held", "summary": summary, "workflow_run_id": None, "event_ids": [],
+            "skip_reason": "initiative_hold", "hold_reason": reason}
+
+
 def _dispatch_tool_bound_automation(
     automation: dict[str, Any],
     *,
@@ -788,6 +849,10 @@ def dispatch_automation_to_current_chat(
                 "event_ids": [],
             }
     event_fn = emit_event or emit_automation_event
+    if not manual:
+        held = initiative_hold_reason(automation)
+        if held:
+            return _initiative_held_response(automation, held, schedule_metadata=schedule_metadata, emit_event=event_fn)
     invocation = automation.get("_invocation_context")
     has_untrusted_external_input = bool(
         isinstance(invocation, dict) and invocation.get("untrusted_message_text")

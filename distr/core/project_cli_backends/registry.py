@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import uuid
 
@@ -26,12 +26,22 @@ from .timing import ollama_model_loaded, resolve_worker_timing
 
 logger = logging.getLogger(__name__)
 
+
+class _WorkerScopeChanged(RuntimeError):
+    """The reviewed or queued scope no longer permits worker launch."""
+
+    def __init__(self, message: str, reason: str, *, queue_outcome: dict | None = None):
+        super().__init__(message)
+        self.reason = reason
+        self.queue_outcome = queue_outcome
+
 # Pi JSON mode writes one complete event per line. Web/search and browser tool
 # results can legitimately exceed asyncio's 64 KiB StreamReader default. Keep
 # the per-line ceiling bounded, but large enough that transport does not turn a
 # valid tool result into a false model failure.
 PI_JSONL_STREAM_LIMIT = 4 * 1024 * 1024
 PI_WORKFLOW_REPORT_FINALIZATION_TIMEOUT_SECONDS = 300.0
+_QUEUED_WORKER_SCOPE_INTERVAL = 1.0
 
 # Verified against installed @earendil-works/pi-coding-agent CLI and loader.
 # Older Pi versions must advertise every isolation flag or fail closed.
@@ -357,7 +367,7 @@ def _oneshot_key(
 
 
 def _task_execution_id(task: ProjectTask) -> int | None:
-    value = task.execution_session_id if task.origin == "proactive_orchestrator" else (
+    value = task.execution_session_id if _task_execution_kind(task) in {"proactive", "development_session"} else (
         task.run_id or task.chat_id or task.execution_session_id
     )
     return int(value) if value is not None else None
@@ -368,6 +378,8 @@ def _task_execution_kind(task: ProjectTask) -> str | None:
         return "proactive"
     if task.run_id is not None:
         return "workflow"
+    if task.origin == "development" and task.chat_id is not None and task.turn_id is not None and task.execution_session_id:
+        return "development_session"
     if task.chat_id is not None:
         return "development"
     if task.execution_session_id is not None:
@@ -439,13 +451,18 @@ async def abort_backend_process(
         process = _ONE_SHOT_PROCESSES.get(key)
     if not process:
         return False
+    stopped = await _abort_oneshot_process(process)
+    _clear_oneshot_process(
+        project_id, backend_id, process, board_id=board_id,
+        execution_id=execution_id, execution_kind=execution_kind,
+    )
+    return stopped
+
+
+async def _abort_oneshot_process(process: asyncio.subprocess.Process) -> bool:
     try:
         process.terminate()
     except ProcessLookupError:
-        _clear_oneshot_process(
-            project_id, backend_id, process, board_id=board_id,
-            execution_id=execution_id, execution_kind=execution_kind,
-        )
         return False
     except Exception:
         try:
@@ -459,10 +476,6 @@ async def abort_backend_process(
             process.kill()
         except Exception:
             pass
-    _clear_oneshot_process(
-        project_id, backend_id, process, board_id=board_id,
-        execution_id=execution_id, execution_kind=execution_kind,
-    )
     return True
 
 
@@ -939,13 +952,26 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
             "Commands run: <commands or none>\n"
             "Blockers: <details or none>\n"
             "Do not copy the alternatives into Status; choose one exact value. "
-            "Do not omit Status, even when no files changed."
+            "Do not omit Status, even when no files changed. "
+            "Before the contract, start with an honest progress percentage for this step "
+            "(for example \"100% done.\" only when the step is finished), then say the result "
+            "in complete conversational sentences: no preamble, restated request, raw logs, or closing offers."
         )
     if not task.adapter_options.get('disable_tools') and not task.adapter_options.get('read_only_expected'):
         command.extend(['--extension', str(Path(__file__).resolve().parent / 'pi_extensions' / 'checked_bash.ts')])
+    # Development image attachments go in as real image input (pi ``@file``
+    # arguments), so a vision-capable model sees them in the first message
+    # instead of only a path plus an OCR excerpt or a separate vision tool.
+    image_args = []
+    if task.origin == "development":
+        for raw_path in (task.adapter_options.get("development_image_paths") or [])[:8]:
+            image_path = Path(str(raw_path or ""))
+            if image_path.is_absolute() and image_path.is_file():
+                image_args.append("@" + str(image_path))
     command.extend([
         "--append-system-prompt",
         system_prompt,
+        *image_args,
         task.instruction,
     ])
     return command
@@ -1678,11 +1704,14 @@ class PiBackend(ProjectCliBackend):
         tool_phase_expired = False
         process: asyncio.subprocess.Process | None = None
         try:
+            command = _pi_print_command(pi_path, task)
+            env = {**os.environ, **_dev_tool_env(task)} if _dev_tools_enabled(task) else None
+            task.verify_launch_scope()
             process = await asyncio.create_subprocess_exec(
-                *_pi_print_command(pi_path, task),
+                *command,
                 # ``pi -p`` stalls until stdin EOF if stdin is inherited open.
                 stdin=asyncio.subprocess.DEVNULL,
-                env=({**os.environ, **_dev_tool_env(task)} if _dev_tools_enabled(task) else None),
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=task.folder,
@@ -1865,9 +1894,11 @@ class PiBackend(ProjectCliBackend):
                 except asyncio.TimeoutError:
                     process.kill()
                     await process.wait()
+        except _WorkerScopeChanged:
+            raise
         except asyncio.CancelledError:
             if process and process.returncode is None:
-                process.terminate()
+                await _abort_oneshot_process(process)
             raise
         except Exception as exc:
             model_errors.append(str(exc))
@@ -2134,6 +2165,8 @@ class OneShotCliBackend(ProjectCliBackend):
             "cwd": task.folder,
         })
         try:
+            env = self._task_subprocess_env(task)
+            task.verify_launch_scope()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=task.folder,
@@ -2141,7 +2174,7 @@ class OneShotCliBackend(ProjectCliBackend):
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=self._task_subprocess_env(task),
+                env=env,
             )
             _register_oneshot_process(
                 task.project_id,
@@ -2151,6 +2184,8 @@ class OneShotCliBackend(ProjectCliBackend):
                 execution_id=_task_execution_id(task),
                 execution_kind=_task_execution_kind(task),
             )
+        except _WorkerScopeChanged:
+            raise
         except Exception as exc:
             msg = f"Failed to start {self.name}: {exc}"
             _emit(on_event, {"type": "error", "message": msg})
@@ -2231,13 +2266,7 @@ class OneShotCliBackend(ProjectCliBackend):
             # Workflow timeouts and user cancellation must stop the underlying
             # provider process too. Without this, the run can be marked failed
             # while Codex/Pi/Claude continues consuming resources in the background.
-            await abort_backend_process(
-                task.project_id,
-                self.id,
-                board_id=task.board_id,
-                execution_id=_task_execution_id(task),
-                execution_kind=_task_execution_kind(task),
-            )
+            await _abort_oneshot_process(process)
             _emit(on_event, {"type": "error", "message": f"{self.name} execution cancelled."})
             _emit(on_event, {"type": "agent_end", "backend": self.id})
             raise
@@ -2670,6 +2699,7 @@ class IdeHandoffBackend(ProjectCliBackend):
         extra = getattr(task, "loop_context_summary", "") or ""
         if extra:
             loop_summary = str(extra)
+        task.verify_launch_scope()
         try:
             packet_path = write_ide_work_packet(
                 task,
@@ -3405,16 +3435,20 @@ def _update_run_handoff_state(
         return
     try:
         from distr.core.db import get_session
-        from distr.core.db.workflow import AutoWorkflowRun
+        from distr.core.workflow.runtime_contract import lock_step_result_run
 
         with get_session() as db:
-            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-            if not run:
+            run = lock_step_result_run(db, int(run_id))
+            if not run or run.status not in {"running", "waiting"}:
                 return
             try:
                 run_data = json.loads(run.run_data or "{}") or {}
             except Exception:
                 run_data = {}
+            completion = run_data.get("early_ide_completion")
+            if (state == "waiting_ide" and isinstance(completion, dict)
+                    and completion.get("execution_session_id") == packet.get("execution_session_id")):
+                return
             handoff = dict(packet or {})
             if handoff_event_id:
                 handoff["handoff_event_id"] = int(handoff_event_id)
@@ -3454,7 +3488,10 @@ async def run_project_task(
     board_id_override: Optional[int] = None,
     adapter_options: Optional[dict[str, Any]] = None,
     proactive_candidate_id: Optional[int] = None,
+    proactive_scope_error: Optional[Callable[[str, int], str]] = None,
     turn_id: Optional[int] = None,
+    cancel_requested: Optional[Callable[[], bool]] = None,
+    queued_workflow: bool = False,
 ) -> BackendTaskResult:
     from distr.core.db.projects import Project
     if isinstance(project, Project) and project.deleted_at is not None:
@@ -3490,6 +3527,7 @@ async def run_project_task(
         append_execution_event,
         complete_execution_session,
         create_execution_session,
+        execution_session_is_cancelled,
     )
     from distr.core.project_cli_backends.live_sessions import any_live_session_running
 
@@ -3529,6 +3567,7 @@ async def run_project_task(
         codex_service_tier=(codex_service_tier_override or "").strip(),
         adapter_options=adapter_options or {},
         required_capabilities=list((adapter_options or {}).get("required_capabilities") or []),
+        turn_id=turn_id,
     )
     selected_model = task.model or "auto"
     selection_reason = "explicit backend override" if backend_id_override else "project backend setting"
@@ -3617,6 +3656,39 @@ async def run_project_task(
         },
     )
     task.execution_session_id = execution_session_id
+
+    active_scope_stopped = False
+
+    def verify_queue_scope(*, accepting_result: bool = False, running_worker: bool = False) -> None:
+        nonlocal active_scope_stopped
+        from distr.core.workflow.dispatcher import _recheck_queued_run_scope
+
+        failure = _recheck_queued_run_scope(
+            run_id, claimed_step_id=step_id, accepting_result=accepting_result, running_worker=running_worker,
+        )
+        if failure:
+            active_scope_stopped = running_worker
+            reason = "queue_scope_changed"
+            message = failure.get("error")
+            if failure.get("ignored"):
+                if failure.get("status") in ("running", "waiting"):
+                    message = "This step is no longer the current queued step."
+                    reason = "queue_step_superseded"
+                else:
+                    message = "The queued run is no longer active."
+                    reason = "queue_launch_stopped"
+            raise _WorkerScopeChanged(message, reason, queue_outcome=failure)
+
+    if proactive_scope_error is not None or queued_workflow:
+        def verify_scope(folder: str) -> None:
+            if queued_workflow:
+                verify_queue_scope()
+            if proactive_scope_error is not None:
+                message = proactive_scope_error(folder, execution_session_id)
+                if message:
+                    raise _WorkerScopeChanged(message, "proactive_scope_changed")
+
+        task.before_launch = verify_scope
 
     def _normalized_output_packet(raw: Any, **metadata: Any) -> dict[str, Any]:
         from distr.core.project_cli_backends.contracts import normalize_execution_result
@@ -3787,17 +3859,19 @@ async def run_project_task(
             callback=_handoff_callback_metadata(task),
             extra=loop_extra,
         )
+        guarded = task.before_launch is not None
         handoff_event_id = record_backend_handoff(
             packet=handoff_packet,
-            status="dispatched",
-            summary=f"Sent work to {backend.name or backend_id}.",
+            status="prepared" if guarded else "dispatched",
+            summary=(f"Prepared work for {backend.name or backend_id}." if guarded
+                     else f"Sent work to {backend.name or backend_id}."),
         )
         setattr(task, "handoff_event_id", handoff_event_id)
         _update_run_handoff_state(
             run_id=run_id,
             packet=handoff_packet,
             handoff_event_id=handoff_event_id,
-            state="dispatched",
+            state="prepared" if guarded else "dispatched",
         )
     except Exception:
         pass
@@ -3828,7 +3902,7 @@ async def run_project_task(
             )
         except Exception:
             pass
-    append_execution_event(
+    started = append_execution_event(
         execution_session_id,
         "executor_start",
         status="running",
@@ -3841,6 +3915,10 @@ async def run_project_task(
             "handoff_event_id": handoff_event_id,
         },
     )
+    if started is False:
+        return BackendTaskResult(False, backend_id, backend_id,
+                                 error="Execution stopped before the provider started.",
+                                 execution_session_id=execution_session_id)
     try:
         from distr.core.project_cli_backends.live_sessions import mark_live_session_presence, set_live_session_running
 
@@ -3858,6 +3936,8 @@ async def run_project_task(
     progress_state = {"message": "", "at": 0.0}
 
     def _tracked_event(event: dict[str, Any]) -> None:
+        if active_scope_stopped:
+            return
         from distr.core.orchestrator import redact_handoff_payload
 
         safe_event = redact_handoff_payload(event)
@@ -3877,25 +3957,89 @@ async def run_project_task(
         progress_state["at"] = now
         compact_event = _compact_execution_event(safe_event)
         compact_event["execution_session_id"] = int(execution_session_id)
-        try:
-            from distr.core.project_cli_backends.live_sessions import publish_live_session_event
-
-            publish_live_session_event(task.project_id, backend_id, compact_event, board_id=task.board_id)
-        except Exception:
-            pass
-        append_execution_event(
+        saved = append_execution_event(
             execution_session_id,
             str((event or {}).get("type") or "event"),
             status="running",
             message=message,
             payload=compact_event,
         )
+        if saved is False:
+            return
+        try:
+            from distr.core.project_cli_backends.live_sessions import publish_live_session_event
+
+            publish_live_session_event(task.project_id, backend_id, compact_event, board_id=task.board_id)
+        except Exception:
+            pass
         _emit(on_event, compact_event)
 
+    async def run_queued_worker() -> BackendTaskResult:
+        worker = asyncio.create_task(backend.send_task(task, on_event=_tracked_event))
+        try:
+            while not worker.done():
+                done, _ = await asyncio.wait((worker,), timeout=_QUEUED_WORKER_SCOPE_INTERVAL)
+                if not done:
+                    verify_queue_scope(running_worker=True)
+            return worker.result()
+        finally:
+            if not worker.done():
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+    from distr.core.turn_runtime.contracts import TurnCancelled
+
+    result_returned = False
     try:
-        result = await backend.send_task(task, on_event=_tracked_event)
-    except asyncio.CancelledError:
-        message = f"{backend.name or backend_id} execution cancelled."
+        if cancel_requested is not None and cancel_requested():
+            raise TurnCancelled("Turn cancelled by the user.")
+        if _task_execution_kind(task) == "development_session":
+            _emit(on_event, {
+                "type": "executor_start", "message": f"Starting {backend.name or backend_id}.",
+                "execution_session_id": execution_session_id,
+            })
+        task.verify_launch_scope()
+        result = await run_queued_worker() if queued_workflow else await backend.send_task(task, on_event=_tracked_event)
+        result_returned = True
+        if cancel_requested is not None and cancel_requested():
+            raise TurnCancelled("Turn cancelled by the user.")
+        if queued_workflow:
+            verify_queue_scope(accepting_result=True)
+    except _WorkerScopeChanged as exc:
+        message = str(exc)
+        event_type = "active_scope_changed" if active_scope_stopped else "result_withheld" if result_returned else "preflight"
+        append_execution_event(execution_session_id, event_type, status="failed", message=message,
+                               payload={"reason": exc.reason})
+        complete_execution_session(
+            execution_session_id,
+            success=False,
+            output_packet=_normalized_output_packet(
+                {"success": False, "backend_id": backend_id, "engine": backend_id, "error": message},
+                **{exc.reason: True},
+            ),
+            error=message,
+        )
+        if handoff_event_id is not None:
+            try:
+                from distr.core.orchestrator import record_backend_handoff
+
+                record_backend_handoff(
+                    packet=handoff_packet, status="failed", event_type="backend_handoff_updated", summary=message,
+                )
+            except Exception:
+                logger.debug("Could not update the stopped handoff", exc_info=True)
+        return BackendTaskResult(False, backend_id, backend_id, error=message,
+                                 diagnostics={"queue_dispatch_stopped": exc.queue_outcome} if exc.queue_outcome else {},
+                                 execution_session_id=execution_session_id)
+    except (Exception, asyncio.CancelledError) as exc:
+        if isinstance(exc, TurnCancelled) or (cancel_requested is not None and cancel_requested()):
+            from distr.core.kanban.project_execution import cancel_execution_session
+
+            cancel_execution_session(execution_session_id)
+            if isinstance(exc, TurnCancelled):
+                raise
+            raise TurnCancelled("Turn cancelled by the user.") from exc
+        message = f"{backend.name or backend_id} execution cancelled." if isinstance(exc, asyncio.CancelledError) else str(exc)
         complete_execution_session(
             execution_session_id,
             success=False,
@@ -3908,26 +4052,25 @@ async def run_project_task(
             error=message,
         )
         raise
-    except Exception as exc:
-        complete_execution_session(
-            execution_session_id,
-            success=False,
-            output_packet=_normalized_output_packet({
-                "success": False,
-                "backend_id": backend_id,
-                "engine": backend_id,
-                "error": str(exc),
-            }),
-            error=str(exc),
-        )
-        raise
     finally:
         try:
             from distr.core.project_cli_backends.live_sessions import set_live_session_running
 
-            set_live_session_running(task.project_id, backend_id, False, board_id=task.board_id)
+            prefix = _oneshot_key(task.project_id, backend_id, task.board_id)[:3]
+            with _ONE_SHOT_PROCESS_LOCK:
+                sibling_running = active_scope_stopped and any(
+                    key[:3] == prefix and process.returncode is None
+                    for key, process in _ONE_SHOT_PROCESSES.items()
+                )
+            if not sibling_running:
+                set_live_session_running(task.project_id, backend_id, False, board_id=task.board_id)
         except Exception:
             pass
+
+    if execution_session_is_cancelled(execution_session_id):
+        return BackendTaskResult(False, backend_id, result.engine,
+                                 error="Execution stopped before the provider result arrived.",
+                                 execution_session_id=execution_session_id)
 
     # The backend result is returned to the workflow dispatcher and therefore
     # must be redacted as well as the durable execution transcript. A worker
@@ -3978,8 +4121,9 @@ async def run_project_task(
     result.diagnostics = dict(normalized_result.get("diagnostics") or {})
     result.next_actions = dict(normalized_result.get("next_actions") or {})
     result.workspace_state_delta = dict(workspace_state_delta)
+    pending_review = proactive_scope_error is not None
     if getattr(result, "waits_for_human", False) and result.success:
-        append_execution_event(
+        waiting = append_execution_event(
             execution_session_id,
             "ide_handoff_waiting",
             status="waiting",
@@ -3987,9 +4131,11 @@ async def run_project_task(
             payload={
                 "backend_id": backend_id,
                 "work_packet_path": getattr(result, "work_packet_path", "") or "",
-                "output": (result.output or "")[:4000],
+                "output": "" if pending_review else (result.output or "")[:4000],
             },
         )
+        if pending_review and waiting is False:
+            return result
         try:
             from distr.core.orchestrator import record_backend_handoff
 
@@ -3998,35 +4144,36 @@ async def run_project_task(
                 "git_status_after": git_status_after,
                 "work_packet_path": getattr(result, "work_packet_path", "") or "",
             }
-            record_backend_handoff(
-                packet=update_packet,
-                status="waiting",
-                event_type="backend_handoff_updated",
-                summary=f"{backend.name or backend_id} IDE handoff is waiting in the IDE.",
-                evidence={"output": (result.output or "")[:4000]},
-            )
-            _update_run_handoff_state(
-                run_id=run_id,
-                packet=update_packet,
-                handoff_event_id=handoff_event_id,
-                state="waiting_ide",
-                result={
-                    "success": True,
-                    "engine": result.engine,
-                    "output": (result.output or "")[:4000],
-                    "work_packet_path": getattr(result, "work_packet_path", "") or "",
-                },
-            )
+            if waiting is not False:
+                record_backend_handoff(
+                    packet=update_packet,
+                    status="waiting",
+                    event_type="backend_handoff_updated",
+                    summary=f"{backend.name or backend_id} IDE handoff is waiting in the IDE.",
+                    evidence={} if pending_review else {"output": (result.output or "")[:4000]},
+                )
+                _update_run_handoff_state(
+                    run_id=run_id,
+                    packet=update_packet,
+                    handoff_event_id=handoff_event_id,
+                    state="waiting_ide",
+                    result={
+                        "success": True,
+                        "engine": result.engine,
+                        "output": (result.output or "")[:4000],
+                        "work_packet_path": getattr(result, "work_packet_path", "") or "",
+                    },
+                )
         except Exception:
             pass
         if run_id:
             try:
                 from distr.core.db import get_session
-                from distr.core.db.workflow import AutoWorkflowRun
+                from distr.core.workflow.runtime_contract import lock_step_result_run
 
                 with get_session() as db:
-                    run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-                    if run:
+                    run = lock_step_result_run(db, int(run_id))
+                    if run and run.status in {"running", "waiting"}:
                         try:
                             run_data = json.loads(run.run_data or "{}") or {}
                         except Exception:
@@ -4051,14 +4198,15 @@ async def run_project_task(
         }
         record_backend_handoff(
             packet=update_packet,
-            status="completed" if result.success else "failed",
+            status="pending_review" if pending_review else "completed" if result.success else "failed",
             event_type="backend_handoff_updated",
             summary=(
-                f"{backend.name or backend_id} completed the handoff."
+                "The worker returned. Checking the approved scope."
+                if pending_review else f"{backend.name or backend_id} completed the handoff."
                 if result.success
                 else f"{backend.name or backend_id} failed the handoff."
             ),
-            evidence={
+            evidence={} if pending_review else {
                 "output": (result.output or "")[:4000],
                 "error": (result.error or "")[:2000],
                 "engine": result.engine,
@@ -4097,6 +4245,7 @@ async def run_project_task(
             read_only_violation=bool(read_only_expected and workspace_state_delta.get("changed")),
             workspace_state_delta=workspace_state_delta,
             runtime_snapshot=runtime_snapshot,
+            **({"proactive_result_pending_review": True} if pending_review else {}),
         ),
         error=result.error,
     )

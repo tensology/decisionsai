@@ -176,12 +176,25 @@ export function createThreadsInspector({ context, actions, el, token }) {
         const waiting = interaction || (run && (run.worker_question || run.waiting_prompt || Object.keys(run.pending_route_approval || {}).length));
         const interactionActions = interaction ? interaction.allowed_actions || [] : [];
         const checkpointButtons = interactionActions.filter((action) => action !== 'feedback');
+        const decisionNotice = {
+            resolving: 'Applying checkpoint decision.',
+            unconfirmed: 'The desktop restarted before it could confirm the decision. Review this run before continuing.',
+        }[interaction?.decision_status];
+        const checkpointTitle = interaction?.decision_status === 'unconfirmed' ? 'Checkpoint decision unconfirmed'
+            : interaction?.telegram_delivery === 'confirmed' && !decisionNotice ? 'Workflow checkpoint available in web or Telegram'
+            : 'Workflow checkpoint';
+        const telegramNotice = {
+            pending: 'Waiting for Telegram to confirm delivery.',
+            rate_limited: 'The Telegram relay rate limit blocked delivery. You can respond here.',
+            missing_controls: 'Telegram received the message without its controls. You can respond here.',
+            unconfirmed: 'Telegram delivery could not be confirmed. You can respond here.',
+        }[interaction?.telegram_delivery];
         const rows = inspectorConversationActivity(chat);
         return `
             ${inspectorWorkflowHtml()}
             ${learningLedgerHtml()}
             ${automationSectionHtml(chat)}
-            ${waiting ? `<section class="inspect-section"><div class="waiting-card"><strong>Workflow checkpoint${interaction?.telegram_linked ? ' available in web or Telegram' : ''}</strong><p>${actions.escapeHtml(run?.worker_question || run?.waiting_prompt || 'Review the pending development checkpoint.')}</p><div class="waiting-actions">${interaction ? checkpointButtons.map((action) => `<button data-interaction-token="${actions.escapeHtml(interaction.token)}" data-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(actions.actionLabel(action))}</button>`).join('') : '<button data-continue-run="1">Continue</button><button data-focus-steer="1">Add guidance</button>'}</div>${interactionActions.includes('feedback') ? `<form class="checkpoint-feedback" data-checkpoint-feedback="${actions.escapeHtml(interaction.token)}"><label>Revision guidance<textarea required placeholder="Describe what the workflow should change before continuing"></textarea></label><button type="submit">Submit revision</button></form>` : ''}</div></section>` : ''}
+            ${waiting ? `<section class="inspect-section"><div class="waiting-card"><strong>${checkpointTitle}</strong>${!decisionNotice ? `<p>${actions.escapeHtml(run?.worker_question || run?.waiting_prompt || 'Review the pending development checkpoint.')}</p>` : ''}${decisionNotice ? `<p role="status">${decisionNotice}</p>` : ''}${!decisionNotice && telegramNotice ? `<p role="status">${telegramNotice}</p>` : ''}<div class="waiting-actions">${interaction ? checkpointButtons.map((action) => `<button data-interaction-token="${actions.escapeHtml(interaction.token)}" data-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(actions.actionLabel(action))}</button>`).join('') : '<button data-continue-run="1">Continue</button><button data-focus-steer="1">Add guidance</button>'}</div>${interactionActions.includes('feedback') ? `<form class="checkpoint-feedback" data-checkpoint-feedback="${actions.escapeHtml(interaction.token)}"><label>Revision guidance<textarea required placeholder="Describe what the workflow should change before continuing"></textarea></label><button type="submit">Submit revision</button></form>` : ''}</div></section>` : ''}
             <section class="inspect-section inspector-activity-section">
                 <div class="inspect-title">Conversation <span>${rows.length} recent</span></div>
                 <div class="inspector-activity-list">${rows.map(inspectorActivityRowHtml).join('') || '<div class="empty-inspector">No conversation activity yet.</div>'}</div>

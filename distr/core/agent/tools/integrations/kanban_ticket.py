@@ -2378,7 +2378,14 @@ class KanbanTicketTool(BaseTool):
                         KanbanLane.board_id == board_id,
                         KanbanLane.name.ilike(f"%{lane_name}%")
                     ).first()
-                    if new_lane:
+                    if new_lane and int(t.lane_id or 0) != int(new_lane.id):
+                        from distr.core.kanban.lane_history import lane_name, record_lane_change
+                        old_name = lane_name(s, t.lane_id)
+                        record_lane_change(
+                            s, int(t.id),
+                            from_lane=old_name, to_lane=new_lane.name,
+                            actor="tool", reason="tool_update", source="kanban_ticket_tool",
+                        )
                         t.lane_id = new_lane.id
             return voice_then_reference("I saved those ticket changes.", f"Updated ticket #{ticket_id}")
 
@@ -2686,10 +2693,17 @@ class KanbanTicketTool(BaseTool):
                 if row[0] is not None
             ]
             max_pos = max(lane_positions, default=-1)
+            old_lane_name = old_lane.name if old_lane else "unknown"
+            if int(t.lane_id or 0) != int(new_lane.id):
+                from distr.core.kanban.lane_history import record_lane_change
+                record_lane_change(
+                    s, int(t.id),
+                    from_lane=old_lane_name if old_lane else None, to_lane=new_lane.name,
+                    actor="tool", reason="tool_move", source="kanban_ticket_tool",
+                )
             t.lane_id = new_lane.id
             t.position = max_pos + 1
             t.modified_date = datetime.utcnow()
-            old_lane_name = old_lane.name if old_lane else "unknown"
             old_board_name = old_board.name if old_board else "unknown"
             moved_lane_name = new_lane.name
             moved_board_name = target_board.name

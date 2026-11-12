@@ -709,8 +709,8 @@ def register_routes(router, templates):
         try:
             from distr.core.db import get_session
             from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
-            from distr.core.kanban.project_execution import append_execution_event
-            from distr.core.orchestrator import record_human_intervention_memory
+            from distr.core.kanban.project_execution import append_execution_event, complete_execution_session
+            from distr.core.orchestrator import record_human_intervention_memory, redact_handoff_payload
             from distr.core.orchestration_events import (
                 emit_orchestration_event,
                 normalize_orchestration_event_type,
@@ -728,6 +728,7 @@ def register_routes(router, templates):
             if event.mistake_label:
                 payload["mistake_label"] = event.mistake_label
             payload.setdefault("bridge", "codex")
+            resume_checkpoint = None
 
             with get_session() as db:
                 run = (
@@ -738,11 +739,47 @@ def register_routes(router, templates):
                 )
                 if not run:
                     return JSONResponse(_workflow_error_payload("Run not found", "codex_event"), status_code=404)
-                run_data = {}
                 try:
-                    run_data = json.loads(run.run_data or "{}") or {}
-                except Exception:
-                    run_data = {}
+                    run_data = json.loads(run.run_data or "{}")
+                except (TypeError, ValueError):
+                    run_data = None
+                if not isinstance(run_data, dict):
+                    return JSONResponse(_workflow_error_payload("The saved run context is unavailable.", "codex_event"), status_code=409)
+                queued = run_data.get("source_type") == "workflow_queue"
+                if queued:
+                    from distr.core.db.kanban import ProjectExecutionSession
+                    from distr.core.workflow.dispatcher import workflow_accepts_worker_result
+                    from distr.core.workflow.runtime_contract import lock_step_result_run
+
+                    run = lock_step_result_run(db, run_id)
+                    if run is None or run.workflow_id != workflow_id or run.status not in {"running", "waiting"}:
+                        return JSONResponse(_workflow_error_payload("This queued run is no longer active.", "codex_event"), status_code=409)
+                    try:
+                        run_data = json.loads(run.run_data or "{}")
+                    except (TypeError, ValueError):
+                        run_data = None
+                    if not isinstance(run_data, dict) or run_data.get("source_type") != "workflow_queue":
+                        return JSONResponse(_workflow_error_payload("The saved queue scope is unavailable.", "codex_event"), status_code=409)
+                    saved_project = str(run_data.get("project_id") or "")
+                    attempt_id = event.execution_session_id or payload.get("execution_session_id")
+                    saved_attempt = str(run_data.get("execution_session_id") or "")
+                    attempt = db.get(ProjectExecutionSession, int(saved_attempt)) if saved_attempt.isdigit() else None
+                    if (
+                        attempt is None or run.current_step_id is None or str(attempt_id) != saved_attempt
+                        or attempt.status in {"cancelled", "canceled", "failed"}
+                        or (attempt.run_id, attempt.workflow_id, attempt.step_id, attempt.ticket_id)
+                            != (run.id, run.workflow_id, run.current_step_id, run.ticket_id)
+                        or str(attempt.project_id) != saved_project
+                        or (event.step_id is not None and event.step_id != run.current_step_id)
+                        or (event.ticket_id is not None and event.ticket_id != run.ticket_id)
+                        or (event.project_id is not None and str(event.project_id) != saved_project)
+                    ):
+                        return JSONResponse(_workflow_error_payload("This callback does not match the current queued attempt.", "codex_event"), status_code=409)
+                    if not workflow_accepts_worker_result(db, run, attempt.step_id, locked=True):
+                        warning = json.loads(run.run_data or "{}").get("terminal_warning") or "The queued ticket changed."
+                        complete_execution_session(attempt.id, success=False, error=warning,
+                                                   output_packet={"queue_scope_changed": True})
+                        return JSONResponse(_workflow_error_payload(warning, "codex_event"), status_code=409)
                 step_id = event.step_id or run.current_step_id
                 ticket_id = event.ticket_id or run.ticket_id
                 board_id = run.board_id
@@ -759,8 +796,60 @@ def register_routes(router, templates):
                     if bridge_suffix.startswith(prefix):
                         bridge_suffix = bridge_suffix[len(prefix):]
                         break
-                run_status_before = run.status
                 waiting_kind_before = str(run_data.get("waiting_kind") or "").strip()
+                resume_waiting_worker = (
+                    bridge_suffix == "completed" and run.status == "waiting"
+                    and waiting_kind_before in {"ide_handoff", "needs_human_input"}
+                    and not run_data.get("ticket_dispatch")
+                )
+                failed_ide_report = (
+                    queued and bridge_suffix == "failed" and attempt.route_type == "ide_bridge"
+                    and (run.status == "running" or waiting_kind_before in {"ide_handoff", "needs_human_input"})
+                    and not run_data.get("ticket_dispatch")
+                )
+                buffer_ide_completion = failed_ide_report or (
+                    queued and bridge_suffix == "completed" and run.status == "running"
+                    and attempt.route_type == "ide_bridge" and not run_data.get("ticket_dispatch")
+                )
+                if queued and run_data.get("ide_completion_session_id") == attempt.id:
+                    if resume_waiting_worker or buffer_ide_completion:
+                        return JSONResponse({"success": True, "duplicate": True, "auto_continue": None})
+                    return JSONResponse(_workflow_error_payload("This queued attempt already reported completion.", "codex_event"), status_code=409)
+                if queued and resume_waiting_worker:
+                    from distr.core.workflow.interactions import _checkpoint_scope
+
+                    resume_checkpoint = _checkpoint_scope(db.connection(), run_id)
+                    run_data["ide_completion_session_id"] = attempt.id
+                if buffer_ide_completion:
+                    route_failure_now = failed_ide_report and run.status == "waiting"
+                    report = redact_handoff_payload((event.output or event.message or (
+                        "The IDE reported a failure." if failed_ide_report else "IDE work completed."
+                    )).strip())
+                    run_data["ide_completion_session_id"] = attempt.id
+                    run_data["early_ide_completion"] = {
+                        "execution_session_id": attempt.id,
+                        "step_id": attempt.step_id,
+                        "output": report,
+                        "passed": not failed_ide_report,
+                    }
+                    if latest_handoff.get("execution_session_id") == attempt.id:
+                        latest_handoff["state"] = "result_received"
+                    run.run_data = json.dumps(run_data)
+                    db.commit()
+                    if failed_ide_report:
+                        complete_execution_session(attempt.id, success=False, error=report,
+                                                   output_packet={"ide_reported_failure": True})
+                    else:
+                        append_execution_event(
+                            attempt.id, "ide_completion_buffered", status="completed",
+                            message="IDE completion received. Waiting for workflow verification.",
+                        )
+                    if route_failure_now:
+                        from distr.core.workflow.dispatcher import StepDispatcher
+
+                        background_tasks.add_task(StepDispatcher()._record_result_and_route,
+                                                  step_id, run_id, "The IDE reported a failure.", False, True)
+                    return JSONResponse({"success": True, "buffered": True, "auto_continue": None})
                 needs_human = bridge_suffix in {
                     "needs_input",
                     "waiting",
@@ -880,13 +969,13 @@ def register_routes(router, templates):
                         run_data["human_intervention_state"] = "resolved"
                         run_data["worker_status"] = "failed" if "failed" in lower_event_type else "completed"
                     else:
-                        if run.status == "waiting":
+                        if run.status == "waiting" and not resume_waiting_worker:
                             run.status = "running"
-                        if step_id:
+                        if step_id and not resume_waiting_worker:
                             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
                             if step and step.status == "waiting":
                                 step.status = "running"
-                        if run_data.get("waiting_kind") in {"needs_human_input", "worker_needs_input"}:
+                        if not resume_waiting_worker and run_data.get("waiting_kind") in {"needs_human_input", "worker_needs_input"}:
                             run_data.pop("waiting_kind", None)
                         if run_data.get("next_action") == "needs_human_input":
                             run_data.pop("next_action", None)
@@ -1065,17 +1154,23 @@ def register_routes(router, templates):
                 logger.debug("Could not persist bridge feedback to workspace memory", exc_info=True)
 
             auto_continue_result = None
-            if (
-                bridge_suffix == "completed"
-                and run_status_before == "waiting"
-                and waiting_kind_before in {"ide_handoff", "needs_human_input"}
-                and not bool(run_data.get("ticket_dispatch"))
-            ):
+            if resume_waiting_worker:
                 try:
                     from distr.core.workflow.dispatcher import continue_waiting_step
 
                     resume_text = (event.output or event.message or "IDE work completed.").strip()
-                    background_tasks.add_task(continue_waiting_step, int(run_id), resume_text)
+                    if resume_checkpoint is None:
+                        background_tasks.add_task(continue_waiting_step, int(run_id), resume_text)
+                    else:
+                        from distr.core.workflow.interactions import CheckpointScopeChanged
+
+                        def resume_current_checkpoint():
+                            try:
+                                continue_waiting_step(run_id, resume_text, expected_checkpoint=resume_checkpoint)
+                            except CheckpointScopeChanged:
+                                logger.debug("IDE completion arrived for a superseded checkpoint", exc_info=True)
+
+                        background_tasks.add_task(resume_current_checkpoint)
                     auto_continue_result = {"success": True, "status": "starting"}
                 except Exception:
                     logger.debug("IDE bridge auto-continue failed", exc_info=True)

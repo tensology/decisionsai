@@ -235,13 +235,19 @@ def resolve_ticket_cli_route(
                         # Same Kilo handling as the global route: "kilocode"
                         # is Pi with the kilocode provider, not plain Pi.
                         override_backend = normalize_route_backend_id(override["backend"])
-                        route["backend"] = "pi" if override_backend == "kilocode" else normalize_backend_id(override_backend)
+                        backend = "pi" if override_backend == "kilocode" else override_backend
+                        previous_backend = "kilocode" if route.get("model_provider") == "kilocode" else route["backend"]
+                        if override_backend != previous_backend:
+                            route["model"] = "" if is_ide_backend(backend) else "auto"
+                            route.pop("model_provider", None)
+                        route["backend"] = backend
                         if override_backend == "kilocode" and not (
                             override.get("model_provider") or override.get("provider")
                         ):
                             route["model_provider"] = "kilocode"
                     if override.get("model"):
                         route["model"] = str(override["model"]).strip()
+                        route.pop("tier_auto", None)
                     if override.get("model_provider") or override.get("provider"):
                         route["model_provider"] = str(
                             override.get("model_provider") or override.get("provider") or ""

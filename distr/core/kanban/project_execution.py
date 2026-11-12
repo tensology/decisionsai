@@ -27,6 +27,22 @@ def _redact_persisted_execution_value(value: Any) -> Any:
     return redact_handoff_payload(value)
 
 
+def _execution_session_for_write(session, session_id):
+    connection = session.connection()
+    if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+    row = session.get(ProjectExecutionSession, int(session_id), with_for_update=True)
+    return row if row and row.status not in {"cancelled", "canceled"} else None
+
+
+def execution_session_is_cancelled(session_id: int | None) -> bool:
+    if session_id is None:
+        return False
+    with get_session() as session:
+        row = session.get(ProjectExecutionSession, session_id)
+        return bool(row and row.status in {"cancelled", "canceled"})
+
+
 def ensure_project_execution_tables() -> None:
     # Import workflow models so ForeignKey targets are registered in metadata
     # when this helper is used before the full app startup path has run.
@@ -133,17 +149,22 @@ def append_execution_event(
     message: str = "",
     payload: dict[str, Any] | None = None,
     update_session_status: bool = True,
-) -> None:
+) -> bool:
     if not session_id:
-        return
+        return False
     ensure_project_execution_tables()
     safe_message = str(_redact_persisted_execution_value(message or ""))
     safe_payload = _redact_persisted_execution_value(payload or {})
     with get_session() as session:
-        row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
+        row = _execution_session_for_write(session, session_id)
         if not row:
-            return
-        if row and status and update_session_status:
+            return False
+        if event_type in {"ide_handoff_dispatched", "ide_handoff_waiting"} and (
+            row.status in {"completed", "failed", "blocked"}
+            or (row.origin == "proactive_orchestrator" and row.completed_at is not None)
+        ):
+            return False
+        if status and update_session_status:
             row.status = status
             row.updated_at = utc_now_naive()
         session.add(ProjectExecutionEvent(
@@ -178,6 +199,7 @@ def append_execution_event(
             increment_workflow_updated()
         except Exception:
             pass
+    return True
 
 
 def complete_execution_session(
@@ -201,7 +223,7 @@ def complete_execution_session(
     safe_error = str(_redact_persisted_execution_value(error or ""))
     now = utc_now_naive()
     with get_session() as session:
-        row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
+        row = _execution_session_for_write(session, session_id)
         if not row:
             return
         row.status = clean_status
@@ -209,6 +231,7 @@ def complete_execution_session(
             original = json.loads(row.output_packet or '{}')
             safe_output_packet = {**(original if isinstance(original, dict) else {}), **safe_output_packet}
         row.output_packet = _json_dumps(safe_output_packet)
+        pending_review = safe_output_packet.get("proactive_result_pending_review") is True
         row.error = safe_error
         row.completed_at = now
         row.updated_at = now
@@ -235,16 +258,16 @@ def complete_execution_session(
             emit_orchestration_event(
                 source=row.route_backend or "executor",
                 event_type="execution_session_completed",
-                status=clean_status,
+                status="pending_review" if pending_review else clean_status,
                 workflow_id=row.workflow_id,
                 run_id=row.run_id,
                 step_id=row.step_id,
                 ticket_id=row.ticket_id,
                 project_id=row.project_id,
                 execution_session_id=row.id,
-                summary=message,
-                payload=safe_output_packet,
-                evidence={"error": safe_error} if safe_error else {},
+                summary="The worker returned. Checking the approved scope." if pending_review else message,
+                payload={} if pending_review else safe_output_packet,
+                evidence={"error": safe_error} if safe_error and not pending_review else {},
             )
         except Exception:
             pass
@@ -255,27 +278,30 @@ def complete_execution_session(
         except Exception:
             pass
 
-    if clean_status == "completed":
-        try:
-            packet = safe_output_packet
-            summary = str(packet.get("output") or "").strip()
-            if summary:
-                from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+    if clean_status == "completed" and not pending_review:
+        persist_execution_feedback(row, safe_output_packet)
 
-                persist_worker_feedback(
-                    message=summary,
-                    event_type="cli_completed",
-                    source=str(packet.get("backend_id") or row.route_backend or "cli"),
-                    ticket_id=row.ticket_id,
-                    project_id=row.project_id,
-                    workflow_id=row.workflow_id,
-                    run_id=row.run_id,
-                    step_id=row.step_id,
-                    execution_session_id=row.id,
-                    skip_steering_log=bool(row.run_id),
-                )
-        except Exception:
-            pass
+
+def persist_execution_feedback(row: ProjectExecutionSession, packet: dict[str, Any]) -> None:
+    try:
+        summary = str(packet.get("output") or "").strip()
+        if summary:
+            from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+
+            persist_worker_feedback(
+                message=summary,
+                event_type="cli_completed",
+                source=str(packet.get("backend_id") or row.route_backend or "cli"),
+                ticket_id=row.ticket_id,
+                project_id=row.project_id,
+                workflow_id=row.workflow_id,
+                run_id=row.run_id,
+                step_id=row.step_id,
+                execution_session_id=row.id,
+                skip_steering_log=bool(row.run_id),
+            )
+    except Exception:
+        pass
 
 
 def cancel_execution_session(session_id: int | None, *, reason: str = "Stopped by the user.") -> None:
@@ -285,7 +311,7 @@ def cancel_execution_session(session_id: int | None, *, reason: str = "Stopped b
     ensure_project_execution_tables()
     safe_reason = str(_redact_persisted_execution_value(reason or "Stopped by the user."))
     with get_session() as session:
-        row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
+        row = _execution_session_for_write(session, session_id)
         if not row:
             return
         row.status = "cancelled"
@@ -309,16 +335,34 @@ def cancel_execution_session(session_id: int | None, *, reason: str = "Stopped b
 
 
 def list_execution_sessions_for_ticket(ticket_id: int, limit: int = 20) -> list[dict[str, Any]]:
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+    if limit <= 0:
+        return []
     ensure_project_execution_tables()
     with get_session() as session:
+        ticket = session.get(KanbanTicket, int(ticket_id))
+        lane = session.get(KanbanLane, ticket.lane_id) if ticket else None
+        board = session.get(KanbanBoard, lane.board_id) if lane else None
+        project_id = (ticket.linked_project_id if ticket and ticket.linked_project_id is not None
+                      else board.default_project_id if board else None)
         rows = (
             session.query(ProjectExecutionSession)
             .filter(ProjectExecutionSession.ticket_id == int(ticket_id))
             .order_by(ProjectExecutionSession.started_at.desc())
-            .limit(limit)
-            .all()
+            .yield_per(max(20, limit))
         )
-        return [serialize_execution_session(row, include_events=True) for row in rows]
+        results = []
+        for row in rows:
+            if row.origin == "proactive_orchestrator":
+                inputs = _loads(row.input_packet)
+                if (board is None or row.project_id != project_id or not isinstance(inputs, dict)
+                        or inputs.get("board_id") != board.id):
+                    continue
+            results.append(serialize_execution_session(row, include_events=True))
+            if len(results) >= limit:
+                break
+        return results
 
 
 def list_execution_sessions_for_workflow(
@@ -436,6 +480,13 @@ def serialize_execution_session(row: ProjectExecutionSession, *, include_events:
     if row.started_at:
         end = row.completed_at or row.updated_at or utc_now_naive()
         elapsed_seconds = max(0, int((end - row.started_at).total_seconds()))
+    output = _loads(row.output_packet)
+    held = isinstance(output, dict) and output.get("proactive_result_held") is True
+    pending = isinstance(output, dict) and output.get("proactive_result_pending_review") is True
+    if held or pending:
+        from distr.core.orchestrator_proactive import PROACTIVE_RESULT_HELD
+
+        output = {"summary": PROACTIVE_RESULT_HELD if held else "The worker returned. Checking the approved scope."}
     data = {
         "id": row.id,
         "ticket_id": row.ticket_id,
@@ -450,10 +501,10 @@ def serialize_execution_session(row: ProjectExecutionSession, *, include_events:
         "selection_reason": row.selection_reason,
         "complexity": row.complexity,
         "origin": row.origin,
-        "status": row.status,
-        "input_packet": _loads(row.input_packet),
-        "output_packet": _loads(row.output_packet),
-        "error": row.error,
+        "status": "held" if held else "pending_review" if pending else row.status,
+        "input_packet": {} if held or pending else _loads(row.input_packet),
+        "output_packet": output,
+        "error": output["summary"] if held else "" if pending else row.error,
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
@@ -469,6 +520,6 @@ def serialize_execution_session(row: ProjectExecutionSession, *, include_events:
                 "payload": _loads(event.payload),
                 "created_at": event.created_at.isoformat() if event.created_at else None,
             }
-            for event in (row.events or [])
+            for event in (() if held or pending else row.events or [])
         ]
     return data

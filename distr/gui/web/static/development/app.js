@@ -1,34 +1,35 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261110-queue1';
 import { createReports } from './reports/index.js?v=20261111-client-message';
 import { createThreadLiveUpdates } from './threads/live.js?v=20261110-proposal-sounds1';
-import { createThreadSession } from './threads/session.js?v=20261110-queue1';
+import { createThreadSession } from './threads/session.js?v=20261112-queue-handoff';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261111-buildjump';
+import { createPlanning } from './planning/index.js?v=20261112-open-created-outline';
 import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
-import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261102-verify';
-import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261107-nav68';
+import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261111-nav-apply-chrome4';
+import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';
+import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261111-nav-apply-chrome3';
 
-import { createSidebar } from './sidebar/index.js?v=20261110-startup-only1';
+import { createSidebar } from './sidebar/index.js?v=20261111-nav-apply';
 
-import { createAutomations } from './automations/index.js?v=20261030-calendar-groups';
+import { createAutomations } from './automations/index.js?v=20261111-automation-inplace3';
 
-import { createIncoming } from './incoming/index.js?v=20261111-submitted-proposal-source';
+import { createIncoming } from './incoming/index.js?v=20261112-scoped-source-count';
 import { fileDropZoneHtml, proposalThreadToast } from './shared/ticket-modal.js?v=20261111-thread-recovery';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
 
-import { createBoards } from './boards/index.js?v=20261111-ticketlookup';
+import { createBoards } from './boards/index.js?v=20261112-ticket-draft-project';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261111-client-message';
-import { openSourceReply } from './threads/source-reply.js?v=20261111-client-message';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261112-queue-handoff';
+import { openSourceReply } from './threads/source-reply.js?v=20261112-recipient-select';
 
-import { createThreadsComposer } from './threads/composer/index.js?v=20261111-proactive-queue';
+import { createThreadsComposer } from './threads/composer/index.js?v=20261112-human-review';
 
-import { createThreadCliMode } from './threads/cli-mode.js?v=20261106-cli-clean1';
+import { createThreadCliMode } from './threads/cli-mode.js?v=20261111-nav-apply-chrome12';
 
 import { createThreadsInspector } from './threads/inspector/index.js?v=20261110-queue1';
 
@@ -102,6 +103,7 @@ const state = {
     routeLoading: false,
     planOpenToken: 0,
     planBoardView: false,
+    pickingNewThread: false,
     changeReview: null,
     changeReviewLoading: false,
     selectedChangePath: '',
@@ -208,6 +210,11 @@ function developmentRoute() {
         const proposalKey = query.get('proposal_key');
         const path = `/development/incoming/?${new URLSearchParams({ proposal_key: proposalKey })}`;
         return { kind: 'workspace', mode, proposalKey, path };
+    }
+    if ((mode === 'automations' || mode === 'automation_rules') && query.get('automation')) {
+        const automationId = query.get('automation');
+        const path = `${developmentModePaths[mode]}?${new URLSearchParams({ automation: automationId })}`;
+        return { kind: 'workspace', mode, automationId, path };
     }
     return developmentModePaths[mode] ? { kind: 'workspace', mode, path: developmentModePaths[mode] } : { kind: 'home', path: '/development/' };
 }
@@ -373,6 +380,52 @@ function threadIsProcessing(chat) {
     return Boolean(workflow && isProcessingAgentRun(runForWorkflow(workflow.id, chat?.id)));
 }
 
+const READY_REVIEW_STATUSES = ['completed', 'failed', 'blocked'];
+
+function threadRunSnapshot(chat) {
+    const isCurrent = Number(state.currentChat?.id) === Number(chat?.id);
+    const run = (isCurrent && state.currentRun) || directExecutionForChat(chat);
+    if (run?.status) return { status: String(run.status).toLowerCase(), completedAt: run.completed_at || run.completedAt || null };
+    const workflow = workflowForChat(chat?.id);
+    const wfRun = workflow ? runForWorkflow(workflow.id, chat?.id) : null;
+    if (wfRun?.status) return { status: String(wfRun.status).toLowerCase(), completedAt: wfRun.completed_at || wfRun.completedAt || null };
+    const exec = chat?.development_execution || chat?.development?.execution || {};
+    if (exec?.status) return { status: String(exec.status).toLowerCase(), completedAt: exec.completed_at || null };
+    return { status: '', completedAt: null };
+}
+
+function threadIsReadyUnaddressed(chat) {
+    if (!chat || threadIsProcessing(chat)) return false;
+    const { status, completedAt } = threadRunSnapshot(chat);
+    if (!READY_REVIEW_STATUSES.includes(status)) return false;
+    // The running server may not yet serialize ready_acknowledged_at. A missing
+    // field is unknown, not unaddressed — otherwise every completed thread lights
+    // the folder orange. Only an explicit null/older stamp means unaddressed.
+    if (!Object.prototype.hasOwnProperty.call(chat, 'ready_acknowledged_at')) return false;
+    const ack = chat.ready_acknowledged_at;
+    if (!ack) return true;
+    if (!completedAt) return false;
+    const ackMs = Date.parse(ack);
+    const readyMs = Date.parse(completedAt);
+    if (Number.isNaN(ackMs) || Number.isNaN(readyMs)) return !ack;
+    return ackMs < readyMs;
+}
+
+async function acknowledgeReadyThread(chat) {
+    if (!threadIsReadyUnaddressed(chat) || !chat?.id) return;
+    try {
+        const data = await api(`/chats/${Number(chat.id)}/acknowledge-ready`, { method: 'POST', body: {} });
+        const ack = data?.ready_acknowledged_at;
+        if (!ack) return;
+        chat.ready_acknowledged_at = ack;
+        if (Number(state.currentChat?.id) === Number(chat.id)) state.currentChat.ready_acknowledged_at = ack;
+        state.chats = state.chats.map((row) => (Number(row.id) === Number(chat.id) ? { ...row, ready_acknowledged_at: ack } : row));
+        sidebar.renderSidebar();
+    } catch (_) {
+        /* Orange remains until a later successful open. */
+    }
+}
+
 function threadRowContentHtml(chat, pinned = false) {
     const title = escapeHtml(chat?.title || 'New thread');
     const pin = pinned ? '<span class="pin-mark" aria-label="Pinned">●</span>' : '';
@@ -385,6 +438,8 @@ function threadRowContentHtml(chat, pinned = false) {
 
 function statusLabel(status) {
     const value = String(status || 'ready').toLowerCase();
+    if (value === 'waiting' && state.currentRun?.waiting_kind === 'ide_handoff') return 'Waiting for IDE';
+    if (value === 'blocked' && state.currentRun?.waiting_kind === 'human_review') return 'Waiting for review';
     const labels = {
         initializing: 'Working',
         queued: 'Queued',
@@ -395,7 +450,8 @@ function statusLabel(status) {
         blocked: 'Needs input',
         completed: 'Complete',
         cancelled: 'Stopped',
-        ready: 'Ready'
+        ready: 'Ready',
+        draft: 'Draft'
     };
     return labels[value] || value.replace(/_/g, ' ').replace(/^./, (char) => char.toUpperCase());
 }
@@ -405,6 +461,8 @@ function setTaskState(status) {
     const value = String(status || 'ready').toLowerCase();
     node.className = `task-state ${value}`;
     node.classList.toggle('proactive-state', state.currentRun?.origin === 'proactive_orchestrator');
+    node.classList.toggle('ide-waiting', value === 'waiting' && state.currentRun?.waiting_kind === 'ide_handoff');
+    node.classList.toggle('review-waiting', value === 'blocked' && state.currentRun?.waiting_kind === 'human_review');
     node.querySelector('b').textContent =
         value === 'running' && state.currentRun?.work_mode === 'audit' ? 'Assessing' : statusLabel(value);
     const stoppable = isActiveAgentRun(state.currentRun) && state.currentRun?.can_stop !== false;
@@ -471,19 +529,30 @@ const chatBoardKey = (chat) => (boardByKey(chat?.development_board_key) || board
 function syncBoardViewSwitch() {
     const boardKey = state.selectedBoardKey;
     const mode = state.workspaceMode;
-    const current = mode === 'kanban' ? 'kanban' : mode === 'plan' ? 'plan' : mode === 'chat' && state.currentChat ? 'thread' : '';
+    const current = mode === 'kanban' ? 'kanban' : mode === 'plan' ? 'plan' : mode === 'terminals' ? 'terminals' : mode === 'chat' && state.currentChat ? 'thread' : '';
     // Board plan vs plans list comes from the route intent (setWorkspaceMode boardPlan), not from
     // planning.currentView(), which only flips to 'board' after setWorkspaceMode has already synced.
     const planHome = mode === 'plan' && !state.planBoardView;
-    const show = Boolean(boardByKey(boardKey) && current && !planHome);
-    const html = show ? boardViewSwitchHtml(boardViewOptions(current, boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey))) : '';
+    const board = boardByKey(boardKey);
+    // Show whenever a board is selected in a board-scoped shell (including a
+    // new/draft thread with no currentChat). Previously `current` was empty
+    // in that case, which hid the Kanban/Plan/Last thread/Terminals switch.
+    const boardMode = mode === 'kanban' || mode === 'plan' || mode === 'terminals' || mode === 'chat';
+    const show = Boolean(board && boardMode && !planHome);
+    const html = show ? boardViewSwitchHtml(boardViewOptions(current, boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey), { canOpenTerminals: boardHasTerminalProject(board) })) : '';
     document.querySelectorAll('[data-board-view-switch]').forEach((node) => {
         node.classList.toggle('hidden', !show);
         if (node.innerHTML !== html) node.innerHTML = html;
     });
 }
 
+let sidebarBoardNavigation;
 async function switchBoardView(view) {
+    const pending = sidebarBoardNavigation;
+    if (pending) {
+        await pending.ready;
+        if (state.selectedBoardKey !== pending.boardKey || (sidebarBoardNavigation && sidebarBoardNavigation !== pending)) return;
+    }
     const boardKey = state.selectedBoardKey;
     if (!boardByKey(boardKey)) return;
     if (view === 'kanban' && state.workspaceMode !== 'kanban') await openBoardKanban(boardKey);
@@ -492,21 +561,234 @@ async function switchBoardView(view) {
     else if (view === 'thread') {
         const chatId = boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey);
         if (chatId && !(state.workspaceMode === 'chat' && Number(state.currentChat?.id) === chatId)) await loadChat(chatId);
+    } else if (view === 'terminals' && state.workspaceMode !== 'terminals') {
+        // Navigate only: open existing project terminals, do not start them.
+        await openBoardTerminals(boardKey);
     }
     syncBoardViewSwitch();
+}
+
+function isBoardScopedDraft() {
+    return Boolean(state.boardScopedDraft && !state.currentChat && state.selectedBoardKey);
+}
+
+function scopedDraftProjectId() {
+    if (!isBoardScopedDraft()) return null;
+    const id = Number(state.draft.project_id || 0);
+    return id || null;
+}
+
+function setHeaderTaskLabel(text) {
+    const node = el('header-task');
+    if (!node) return;
+    setOverflowLabel(node, text);
+}
+
+function threadTitleLabel(chat, scopedDraft) {
+    const title = String(chat?.title || state.draft?.title || '').trim();
+    if (title) return title;
+    if (chat?.id) return `Thread ${chat.id}`;
+    if (scopedDraft) return 'New thread';
+    // 2026-11-12 header-phone1: an empty composer is a new thread, so say so.
+    return 'New thread';
+}
+
+function syncBoardChrome() {
+    const mode = state.workspaceMode;
+    const header = el('development-task-header');
+    const more = el('thread-more-button');
+    const menu = el('thread-header-menu');
+    const time = el('header-time-controls');
+    const cliDiv = el('chrome-cli-divider');
+    const headerDiv = el('header-controls-divider');
+    const slot = el('chrome-kanban-view-slot');
+    const play = el('thread-terminal-button');
+    const playMenu = el('thread-terminal-menu');
+    const playGroup = el('chrome-play-group');
+    const status = el('task-state');
+    const running = el('terminal-running-count');
+    const composerSlot = el('composer-chrome-slot');
+    const threadCliToggle = el('thread-cli-mode-toggle');
+    const toggle = document.querySelector('#development-kanban-view-board')
+        ?.closest('.development-kanban-view-toggle');
+    const kanbanMore = el('development-kanban-more');
+    // Status badges sit in the header after the crumbs and before the divider
+    // (Thread: ●Needs input; Terminals: ●Stopped). Never in the composer.
+    if (header && headerDiv) {
+        [status, running].filter(Boolean).forEach((node) => {
+            if (node.parentElement !== header || node.nextElementSibling !== headerDiv) {
+                header.insertBefore(node, headerDiv);
+            }
+        });
+        // Keep explicit order: crumbs, task-state, running-count, divider.
+        if (status && running && status.nextElementSibling !== running) {
+            header.insertBefore(status, headerDiv);
+            header.insertBefore(running, headerDiv);
+        }
+    }
+    // 2026-11-12 header-phone1: a brand-new thread with no project picked hides Play, the
+    // project dots and the divider (CSS .no-project) instead of showing them greyed out.
+    if (header) header.classList.toggle('no-project', mode === 'chat' && !state.currentChat && !state.selectedBoardKey && !scopedDraftProjectId());
+    // Divider after the status badge on Thread and Terminals only. No divider on Kanban or Planning.
+    if (headerDiv) {
+        const showDiv = mode === 'chat' || mode === 'terminals';
+        headerDiv.hidden = !showDiv;
+        headerDiv.toggleAttribute('hidden', !showDiv);
+    }
+    // Thread ⋯ and time live in the composer slot (chrome11). The header ⋯ is
+    // the sidebar project context menu, inserted immediately before Play on every section.
+    if (composerSlot) {
+        if (more && time && more.parentElement === composerSlot && more.nextElementSibling !== time && menu) {
+            composerSlot.insertBefore(more, time);
+            composerSlot.insertBefore(menu, time);
+        }
+        if (more && more.parentElement !== composerSlot) composerSlot.insertBefore(more, time || null);
+        if (menu && menu.parentElement !== composerSlot) composerSlot.insertBefore(menu, time || null);
+        if (time && time.parentElement !== composerSlot) composerSlot.appendChild(time);
+    }
+    if (playGroup) {
+        [play, playMenu].filter(Boolean).forEach((node) => {
+            if (node.parentElement !== playGroup) playGroup.appendChild(node);
+        });
+        if (kanbanMore && play) playGroup.insertBefore(kanbanMore, play);
+    }
+    if (mode === 'chat') {
+        if (more) more.classList.remove('hidden');
+        if (time) time.classList.remove('hidden');
+        if (menu && !menu.classList.contains('hidden')) syncOpenThreadHeaderMenu();
+    } else {
+        if (more) more.classList.add('hidden');
+        if (menu && more) closeThreadHeaderMenu();
+        if (time) time.classList.add('hidden');
+    }
+    // Header already has the post-badge divider; do not add a second divider before Chat/CLI.
+    if (cliDiv) {
+        cliDiv.hidden = true;
+        cliDiv.toggleAttribute('hidden', true);
+    }
+    const refresh = el('development-kanban-refresh');
+    if (threadCliToggle && slot && threadCliToggle.parentElement === slot) {
+        const host = (cliDiv && cliDiv.parentElement) || header;
+        if (host && cliDiv) host.insertBefore(threadCliToggle, cliDiv);
+        else if (host && slot) host.insertBefore(threadCliToggle, slot);
+    }
+    if (slot) {
+        if (refresh && refresh.parentElement !== slot) slot.insertBefore(refresh, slot.firstChild);
+        if (toggle && toggle.id !== 'thread-cli-mode-toggle' && toggle.parentElement !== slot) slot.appendChild(toggle);
+    }
+    const showKanban = mode === 'kanban';
+    if (slot) {
+        slot.hidden = !showKanban;
+        slot.toggleAttribute('hidden', !showKanban);
+    }
+    const showProjectMore = mode === 'kanban' || mode === 'plan' || mode === 'terminals' || mode === 'chat';
+    if (kanbanMore) {
+        kanbanMore.classList.toggle('hidden', !showProjectMore);
+        kanbanMore.disabled = !state.selectedBoardKey;
+        kanbanMore.title = state.selectedBoardKey ? 'Project actions' : 'Select a project to open its actions';
+        kanbanMore.setAttribute('aria-label', kanbanMore.title);
+    }
+    if (refresh) refresh.classList.toggle('hidden', !showKanban);
+    // Drop first-paint route classes once the header mode is applied so a leftover
+    // dev-chat-route from a thread URL cannot keep hiding the Kanban ⋯ button.
+    document.documentElement.classList.remove('dev-chat-route', 'dev-board-route', 'dev-new-route');
+}
+
+function placeThreadHeaderMenu() {
+    const button = el('thread-more-button');
+    const menu = el('thread-header-menu');
+    if (!button || !menu) return;
+    menu.style.position = 'fixed';
+    menu.style.zIndex = '80';
+    menu.style.left = 'auto';
+    menu.style.right = 'auto';
+    menu.style.top = 'auto';
+    menu.style.bottom = 'auto';
+    const rect = button.getBoundingClientRect();
+    const width = menu.offsetWidth || 176;
+    const height = menu.offsetHeight || 148;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    // Open upward when the trigger is in the composer (or the lower half), or there is no room below.
+    const inComposer = Boolean(button.closest('#composer-chrome-slot, #studio-composer, .composer-layer'));
+    const openUp = inComposer || rect.top > (window.innerHeight * 0.45) || (spaceBelow < height + 8 && spaceAbove > spaceBelow);
+    menu.dataset.placement = openUp ? 'up' : 'down';
+    if (openUp) {
+        menu.style.top = 'auto';
+        menu.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 6)}px`;
+    } else {
+        menu.style.top = `${rect.bottom + 6}px`;
+        menu.style.bottom = 'auto';
+    }
+    let left = rect.right - width;
+    if (left < 8) left = 8;
+    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+    menu.style.left = `${left}px`;
 }
 
 function syncHeader() {
     threadCliMode.syncFromShell();
     const chat = state.currentChat;
-    const board = boardByKey(state.selectedBoardKey) || boardForProject(chat?.project_id);
+    const board = boardByKey(state.selectedBoardKey) || boardForProject(chat?.project_id || scopedDraftProjectId());
+    const scopedDraft = isBoardScopedDraft();
     const runStatus = String(state.currentRun?.status || 'ready').toLowerCase();
-    el('header-project').textContent = board?.name || 'Development';
-    el('header-task').textContent = chat?.title || state.draft.title || 'No thread selected';
-    setTaskState(['completed', 'cancelled'].includes(runStatus) ? 'ready' : runStatus);
-    el('thread-more-button').classList.toggle('hidden', !chat);
+    const mode = state.workspaceMode;
+    const draftProject = scopedDraft && mode === 'chat' ? projectById(scopedDraftProjectId()) : null;
+    const scopeLabel = draftProject && Number(board?.project_id) !== Number(draftProject.id)
+        ? [board?.name, draftProject.name].filter(Boolean).join(' · ')
+        : board?.name || 'Development';
+    el('header-project').textContent = scopeLabel;
+    const countNode = el('terminal-running-count');
+    if (countNode) {
+        const showCount = mode === 'terminals';
+        countNode.hidden = !showCount;
+        countNode.toggleAttribute('hidden', !showCount);
+    }
+    if (mode === 'terminals') {
+        // One shared breadcrumb: Project / Terminals / <name>. In-page duplicate stays hidden.
+        // List is reached via the sidebar Terminals item (the view-switch is already pressed).
+        const projectName = board?.name || 'Development';
+        const terminalName = (el('terminal-project-name')?.textContent || '').trim();
+        const crumbs = [projectName, 'Terminals'];
+        if (terminalName && terminalName !== projectName && terminalName !== 'Project terminals') crumbs.push(terminalName);
+        renderPlanCrumbs(document, crumbs);
+        el('thread-menu-original-source').classList.add('hidden');
+        el('task-state').classList.add('hidden');
+        syncBoardChrome();
+        syncThreadTerminalButton();
+        syncBoardViewSwitch();
+        return;
+    }
+    if (mode === 'kanban') {
+        clearPlanCrumbs(document);
+        setHeaderTaskLabel('Kanban');
+        el('thread-menu-original-source').classList.add('hidden');
+        el('task-state').classList.add('hidden');
+        const kanbanBoard = el('development-kanban-board');
+        if (kanbanBoard) kanbanBoard.textContent = board?.name || 'Board';
+        syncBoardChrome();
+        syncThreadTerminalButton();
+        syncBoardViewSwitch();
+        return;
+    }
+    if (mode === 'plan') {
+        el('thread-menu-original-source').classList.add('hidden');
+        el('task-state').classList.add('hidden');
+        // Always start from Project / Plan so a previous thread title cannot linger.
+        // Planning's setPlanCrumbs may add a section after the workspace loads.
+        renderPlanCrumbs(document, planCrumbs(board?.name));
+        syncBoardChrome();
+        syncThreadTerminalButton();
+        syncBoardViewSwitch();
+        return;
+    }
+    clearPlanCrumbs(document);
+    setHeaderTaskLabel(threadTitleLabel(chat, scopedDraft));
+    if (scopedDraft) setTaskState('draft');
+    else setTaskState(['completed', 'cancelled'].includes(runStatus) ? 'ready' : runStatus);
     el('thread-menu-original-source').classList.toggle('hidden', !chat?.proposal_source_review_key);
-    el('task-state').classList.toggle('hidden', !chat);
+    el('task-state').classList.toggle('hidden', !chat && !scopedDraft);
+    syncBoardChrome();
     syncThreadTerminalButton();
     syncProjectSelect();
     syncBoardViewSwitch();
@@ -514,7 +796,7 @@ function syncHeader() {
 
 // Thread terminal button: reflects the real PTY state of the thread's project
 // startup terminals via GET /api/threads/{id}/terminal/status.
-const threadTerminal = { chatId: null, canStart: false, running: false, pending: false, timer: null, seq: 0 };
+const threadTerminal = { chatId: null, projectId: null, scopeKey: null, canStart: false, running: false, pending: false, timer: null, seq: 0 };
 
 function hasStartupTerminalCommands(projectId) {
     return String(projectById(projectId)?.startup_instructions || '')
@@ -535,19 +817,33 @@ function renderThreadTerminalButton() {
     button.setAttribute('aria-label', label);
     button.title = label;
     button.innerHTML = terminalProjectActionIcon(action, threadTerminal.pending);
-    button.disabled = threadTerminal.pending;
     button.setAttribute('aria-busy', String(threadTerminal.pending));
-    button.classList.toggle('hidden', !threadTerminal.chatId || (!threadTerminal.running && !threadTerminal.canStart));
+    // The Play icon is part of the shared board-chrome unit and must stay visible
+    // on every view so the unit's position does not change. Disable it when this
+    // board has no project terminals to start.
+    button.classList.remove('hidden');
+    button.disabled = threadTerminal.pending || (!threadTerminal.scopeKey || (!threadTerminal.running && !threadTerminal.canStart));
 }
 
 async function refreshThreadTerminalStatus() {
     const chatId = threadTerminal.chatId;
-    if (!chatId || threadTerminal.pending || document.hidden) return;
+    const projectId = threadTerminal.projectId;
+    const scopeKey = threadTerminal.scopeKey;
+    if (!scopeKey || threadTerminal.pending || document.hidden) return;
     const seq = ++threadTerminal.seq;
     try {
-        const data = await api(`/threads/${chatId}/terminal/status`);
-        if (seq !== threadTerminal.seq || chatId !== threadTerminal.chatId || threadTerminal.pending) return;
-        threadTerminal.running = Boolean(data.running);
+        let running = false;
+        if (chatId) {
+            const data = await api(`/threads/${chatId}/terminal/status`);
+            running = Boolean(data.running);
+        } else if (projectId) {
+            const data = await api(`/projects/terminal-status?project_ids=${projectId}`);
+            // 2026-11-12 playcursor1: Play/Stop controls startup terminals only (same as the thread route and
+            // the Terminals page). pi_cli / cli_shell harness sessions must not flip the icon to Stop.
+            running = Number(data.projects?.[String(projectId)]?.startup_count || 0) > 0;
+        }
+        if (seq !== threadTerminal.seq || scopeKey !== threadTerminal.scopeKey || threadTerminal.pending) return;
+        threadTerminal.running = running;
         renderThreadTerminalButton();
     } catch (_) { /* keep last known state */ }
 }
@@ -557,28 +853,34 @@ function syncThreadTerminalButton() {
     if (!button) return;
     const chat = state.currentChat;
     const chatId = chat?.id && chat?.project_id ? Number(chat.id) : null;
-    threadTerminal.canStart = Boolean(chatId && hasStartupTerminalCommands(chat.project_id));
-    if (chatId === threadTerminal.chatId) {
+    const draftProjectId = scopedDraftProjectId();
+    const board = boardByKey(state.selectedBoardKey) || boardForProject(chat?.project_id || draftProjectId);
+    const projectId = Number(chat?.project_id || draftProjectId || board?.project_id || 0) || null;
+    const inBoardShell = ['chat', 'kanban', 'plan', 'terminals'].includes(state.workspaceMode);
+    const scopeKey = chatId || (inBoardShell && projectId ? `project:${projectId}` : (draftProjectId ? `draft:${draftProjectId}` : null));
+    threadTerminal.canStart = Boolean(projectId && hasStartupTerminalCommands(projectId));
+    threadTerminal.projectId = projectId || null;
+    if (scopeKey && scopeKey === threadTerminal.scopeKey) {
         renderThreadTerminalButton();
         return;
     }
     closeThreadTerminalMenu();
     threadTerminal.chatId = chatId;
+    threadTerminal.scopeKey = scopeKey;
     threadTerminal.running = false;
     threadTerminal.seq++;
     renderThreadTerminalButton();
     clearInterval(threadTerminal.timer);
     threadTerminal.timer = null;
-    if (!chatId) return;
+    if (!scopeKey) return;
     refreshThreadTerminalStatus();
     threadTerminal.timer = setInterval(refreshThreadTerminalStatus, 5000);
 }
 
 async function toggleThreadTerminal() {
-    const chatId = threadTerminal.chatId;
-    if (!chatId || threadTerminal.pending) return;
-    const projectId = Number(state.currentChat?.project_id || 0);
-    if (!projectId) return;
+    const scopeKey = threadTerminal.scopeKey;
+    const projectId = Number(threadTerminal.projectId || state.currentChat?.project_id || scopedDraftProjectId() || 0);
+    if (!scopeKey || !projectId || threadTerminal.pending) return;
     const previous = threadTerminal.running;
     threadTerminal.pending = true;
     threadTerminal.running = !previous; // optimistic
@@ -586,15 +888,15 @@ async function toggleThreadTerminal() {
     renderThreadTerminalButton();
     try {
         const changed = await terminals.setTerminalProjectRunning(projectId, !previous);
-        if (!changed && chatId === threadTerminal.chatId) threadTerminal.running = previous;
+        if (!changed && scopeKey === threadTerminal.scopeKey) threadTerminal.running = previous;
         threadTerminal.pending = false;
         await refreshThreadTerminalStatus();
         // Global "On startup, go to terminals." (default on): play opens that project's terminals.
-        if (!previous && changed && playOpensTerminals() && chatId === threadTerminal.chatId) {
+        if (!previous && changed && playOpensTerminals() && scopeKey === threadTerminal.scopeKey) {
             await goToThreadProjectTerminal();
         }
     } catch (error) {
-        if (chatId === threadTerminal.chatId) threadTerminal.running = previous; // revert
+        if (scopeKey === threadTerminal.scopeKey) threadTerminal.running = previous; // revert
         console.warn(`Thread terminal ${previous ? 'stop' : 'start'} failed:`, error?.message || error);
     } finally {
         threadTerminal.pending = false;
@@ -1037,7 +1339,7 @@ function openThreadTerminalMenu(event) {
 }
 
 async function goToThreadProjectTerminal() {
-    const projectId = Number(state.currentChat?.project_id || 0);
+    const projectId = Number(state.currentChat?.project_id || scopedDraftProjectId() || 0);
     closeThreadTerminalMenu();
     if (!projectId) return;
     const board = boardForProject(projectId);
@@ -1049,20 +1351,32 @@ async function goToThreadProjectTerminal() {
     }
 }
 
-function closeThreadHeaderMenu() {
-    el('thread-header-menu').classList.add('hidden');
-    el('thread-more-button').setAttribute('aria-expanded', 'false');
+function closeThreadHeaderMenu({ restoreFocus = false } = {}) {
+    const menu = el('thread-header-menu');
+    const wasOpen = !menu.classList.contains('hidden');
+    menu.classList.add('hidden');
+    const button = el('thread-more-button');
+    button.setAttribute('aria-expanded', 'false');
+    if (wasOpen && restoreFocus) button.focus();
+}
+
+function syncOpenThreadHeaderMenu() {
+    const hasChat = Boolean(state.currentChat);
+    el('thread-menu-details').disabled = !hasChat;
+    el('thread-menu-clear-context').disabled = !hasChat || isActiveAgentRun(state.currentRun);
+    el('thread-menu-edit-time').disabled = !hasChat;
+    placeThreadHeaderMenu();
 }
 
 function toggleThreadHeaderMenu() {
-    if (!state.currentChat) return;
+    const button = el('thread-more-button');
+    if (!button || button.classList.contains('hidden')) return;
     closeThreadTerminalMenu();
     const menu = el('thread-header-menu');
     const opening = menu.classList.contains('hidden');
     menu.classList.toggle('hidden', !opening);
-    el('thread-more-button').setAttribute('aria-expanded', String(opening));
-    const active = isActiveAgentRun(state.currentRun);
-    el('thread-menu-clear-context').disabled = Boolean(active);
+    button.setAttribute('aria-expanded', String(opening));
+    if (opening) syncOpenThreadHeaderMenu();
 }
 
 async function loadThreadTime() {
@@ -1181,6 +1495,7 @@ async function clearThreadContext() {
 }
 
 function setWorkspaceMode(mode, options) {
+    if (mode !== 'chat') state.pickingNewThread = false;
     if (state.workspaceMode === 'reports' && mode !== 'reports') reports.leave();
     if (state.workspaceMode === 'incoming' && mode !== 'incoming') incoming.leave();
     if (mode !== 'chat') {
@@ -1223,17 +1538,23 @@ function setWorkspaceMode(mode, options) {
                         : reportsMode
                           ? 'reports'
                           : 'chat';
-    // Plan is embedded under the thread header: keep the header, swap its breadcrumb.
-    el('development-task-header').classList.toggle('hidden', alternateMode && !planMode);
+    // Plan and terminal details sit under the shared thread header so the
+    // Kanban/Plan/thread/Terminals switch stays visible and works both ways.
+    const keepSharedHeader = planMode || terminalMode || kanbanMode;
+    el('development-task-header').classList.toggle('hidden', alternateMode && !keepSharedHeader);
     el('development-task-header').classList.toggle('plan-mode', planMode);
+    el('development-task-header').classList.toggle('terminals-mode', terminalMode);
+    el('development-task-header').classList.toggle('kanban-mode', kanbanMode);
+    el('development-task-header').classList.toggle('chat-mode', state.workspaceMode === 'chat');
     el('development-header-context').classList.toggle('hidden', !planMode);
     if (!planMode) {
         clearPlanCrumbs(document);
         syncHeader();
     } else {
-        // Plan keeps the breadcrumb. Still park the Live PTY pane and the
-        // Chat/CLI toggle; syncFromShell does not turn CLI mode off or close the PTY.
+        // Sync crumbs + chrome immediately so Planning never inherits a thread title
+        // or the single-row leftover from the previous view.
         threadCliMode.syncFromShell();
+        syncHeader();
     }
     // CLI mode on + project thread: keep the CLI pane up; never re-reveal the
     // transcript/composer (that was the chat flash when switching projects from CLI).
@@ -1273,7 +1594,7 @@ function setWorkspaceMode(mode, options) {
     }
     sidebar.renderSidebar();
     syncBoardViewSwitch();
-    if (window.innerWidth <= 680) closeDrawers();
+    closeDrawersAfterNavigation();
     const focusTarget = automationMode
         ? el('scheduled-prompt-input')
         : workflowMode
@@ -1313,8 +1634,19 @@ async function waitForRouteReady() {
     while (state.routeLoading) await new Promise((resolve) => window.setTimeout(resolve, 20));
 }
 
-async function openBoardFromSidebar(boardKey) {
+function openBoardFromSidebar(boardKey) {
+    const pending = { boardKey };
+    sidebarBoardNavigation = pending;
+    pending.ready = selectSidebarBoard(pending);
+    return pending.ready.finally(() => {
+        if (sidebarBoardNavigation === pending) sidebarBoardNavigation = null;
+    });
+}
+
+async function selectSidebarBoard(pending) {
     await waitForRouteReady();
+    if (sidebarBoardNavigation !== pending) return;
+    const { boardKey } = pending;
     const board = boardByKey(boardKey);
     if (!board) return;
     // Terminals stay on terminals. CLI opens the clicked project's last thread only
@@ -1328,7 +1660,8 @@ async function openBoardFromSidebar(boardKey) {
         boardSupportsKanban: boardSupportsKanban(board),
         boardHasPlanProject: Boolean(board.project_id && projectById(board.project_id)),
         lastSection: boardLastSection(window.localStorage, boardKey),
-        lastThreadId: boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey)
+        lastThreadId: boardLastThread(window.localStorage, boardKey, state.chats, chatBoardKey),
+        pickingNewThread: Boolean(state.pickingNewThread)
     });
     if (target.action === 'terminals') {
         await openBoardTerminals(board.key);
@@ -1355,8 +1688,10 @@ async function openBoardFromSidebar(boardKey) {
 }
 
 function startBoardDevelopment(boardKey, options) {
+    state.pickingNewThread = false;
     selectBoard(boardKey, {
         boardScoped: true,
+        projectId: options?.projectId,
         skipTicketLoad: Boolean(options?.skipTicketLoad)
     });
 }
@@ -1419,7 +1754,7 @@ function selectBoard(boardKey, options) {
     state.boardScopedDraft = Boolean(options?.boardScoped);
     state.selectedBoardKey = boardKey || '';
     const board = boardByKey(state.selectedBoardKey);
-    const projectId = board?.project_id ? Number(board.project_id) : null;
+    const projectId = options?.projectId === undefined ? Number(board?.project_id) || null : options.projectId;
     state.selectedProjectId = projectId;
     state.draft.project_id = projectId;
     state.attachments = state.attachments.filter((item) => !item.board_ticket_key);
@@ -1432,7 +1767,7 @@ function selectBoard(boardKey, options) {
     showEmptyTask({ preserveProject: true });
     setWorkspaceMode('chat', { focus: false, updateUrl: false });
     el('task-prompt').focus();
-    if (window.innerWidth <= 680) closeDrawers();
+    closeDrawersAfterNavigation();
     if (board && options?.updateUrl !== false) setDevelopmentLocation(developmentBoardPath(board.key), options);
 }
 
@@ -1471,6 +1806,8 @@ function refreshShell(options = {}) {
 
 async function performShellRefresh(options) {
     const preserveConversation = Boolean(options?.preserveConversation);
+    const chatBeforeRefresh = state.currentChat;
+    const boardPinRevision = sidebar.boardPinRevision();
     try {
         const {
             projects,
@@ -1485,7 +1822,6 @@ async function performShellRefresh(options) {
             skillsData,
             errors
         } = await catalogLoader.load();
-        const autoRoute = state.routingAssessment;
         const workflowRows = Array.isArray(workflowSummaries) ? workflowSummaries : [];
         const detailedWorkflows = new Map(
             state.workflows.filter((workflow) => Array.isArray(workflow.steps)).map((workflow) => [Number(workflow.id), workflow])
@@ -1503,7 +1839,7 @@ async function performShellRefresh(options) {
         state.projects = Array.isArray(projects) ? projects : projects.projects || [];
         state.boards = normalizeBoards(Array.isArray(boardRows) ? boardRows : [], externalBoards || {});
         try {
-            await sidebar.applyPinnedBoards(sidebarPins);
+            await sidebar.applyPinnedBoards(sidebarPins, boardPinRevision);
         } catch (_) {
             errors.push('sidebarPins');
         }
@@ -1520,7 +1856,6 @@ async function performShellRefresh(options) {
         state.inbox = inboxData.items || [];
         state.automations = automationData.automations || [];
         state.skills = Array.isArray(skillsData.skills) ? skillsData.skills : [];
-        if (autoRoute?.route) state.routingAssessment = autoRoute;
         threads_composer.renderComposerSkillMenu();
         threads_composer.updateModelLabel();
         sidebar.renderSidebar();
@@ -1536,6 +1871,7 @@ async function performShellRefresh(options) {
             const snapshot = await threadSession.read(chatId, { isCurrent: current });
             if (!snapshot || !current()) return chatsData;
             Object.assign(state, snapshot);
+            if (snapshot.executionAvailable) threads_transcript.renderQueueHandoffStatus(chatId);
             updateElapsedTime();
             const runActive = isActiveAgentRun(state.currentRun);
             const runFinished = runWasActive && !runActive;
@@ -1543,13 +1879,23 @@ async function performShellRefresh(options) {
             const turnMissing = runActive && currentTurnId > 0 && !(state.currentChat.messages || []).some(
                 (message) => message.role === 'user' && Number(message.chat_row_id) === currentTurnId,
             );
-            const reloadTranscript = preserveConversation && (runFinished || turnMissing);
+            const resultTurnId = snapshot.lastProactiveResultTurnId;
+            const resultChanged = Number.isSafeInteger(resultTurnId) && resultTurnId > 0
+                && resultTurnId !== state.currentChat.development?.last_proactive_result_turn_id;
+            const reloadTranscript = preserveConversation && (runFinished || turnMissing || resultChanged);
             if (reloadTranscript) {
                 const updatedChat = await api(`/chats/${chatId}?surface=development`);
                 if (!current()) return chatsData;
                 state.currentChat = updatedChat;
                 state.chats = state.chats.map((chat) => (Number(chat.id) === chatId ? state.currentChat : chat));
-                threads_transcript.renderConversation(state.currentChat);
+                threads_transcript.renderConversation(state.currentChat, { preserveReadingPosition: resultChanged });
+            } else if (preserveConversation && state.currentChat === chatBeforeRefresh && !errors.includes('chatsData')) {
+                const summary = developmentChats.find(chat => Number(chat.id) === chatId);
+                if (summary && Object.hasOwn(summary, 'telegram_proposal_update_status')) {
+                    const status = summary.telegram_proposal_update_status;
+                    state.currentChat.telegram_proposal_update_status = status;
+                    threads_transcript.renderTelegramUpdateStatus(status);
+                }
             }
             if (runFinished) {
                 sidebar.renderSidebar();
@@ -1648,6 +1994,24 @@ async function undoTurnChanges() {
     }
 }
 
+// One live call-out per response, kept across transcript re-renders so a draft is requested once.
+const clientCallouts = new Map();
+
+function mountClientCallout(slot, messages) {
+    const responseId = messages[Number(slot.dataset.clientCallout)]?.chat_row_id;
+    if (responseId == null) return;
+    const key = `${state.currentChat.id}:${responseId}`;
+    const existing = clientCallouts.get(key);
+    if (existing === 'closed') return;
+    if (existing) { slot.replaceChildren(existing); return; }
+    openSourceReply({
+        chatId: state.currentChat.id, responseId, api, toast, mount: slot,
+        onClose: () => clientCallouts.set(key, 'closed')
+    });
+    const callout = slot.querySelector('.client-reply-callout');
+    if (callout) clientCallouts.set(key, callout);
+}
+
 function bindConversationActions(list, messages) {
     list.querySelectorAll('[data-copy-message]').forEach((button) =>
         button.addEventListener('click', () => {
@@ -1664,6 +2028,7 @@ function bindConversationActions(list, messages) {
             api, opener: reply, toast
         }));
     }
+    list.querySelectorAll('[data-client-callout]').forEach((slot) => mountClientCallout(slot, messages));
     list.querySelectorAll('[data-read-response]').forEach((button) =>
         button.addEventListener('click', () => readResponse(button, messages[Number(button.dataset.readResponse)], messages))
     );
@@ -1769,7 +2134,11 @@ async function readResponse(button, message) {
 async function loadChat(chatId, options) {
     if (planning.hasUnsavedChanges() && !(await planning.beforeLeave())) return;
     if (!chatId) return;
-    if (Number(chatId) !== Number(state.currentChat?.id)) incoming.closeSubmittedProposalSource();
+    if (Number(chatId) !== Number(state.currentChat?.id)) {
+        threads_composer.clearRoutingAssessment();
+        closeThreadHeaderMenu();
+        incoming.closeSubmittedProposalSource();
+    }
     const loadToken = ++state.chatLoadToken;
     const stale = () => loadToken !== state.chatLoadToken;
     try {
@@ -1790,7 +2159,7 @@ async function loadChat(chatId, options) {
         state.draft.project_id = chat.project_id || null;
         state.draft.workflow_id = Number(state.currentWorkflow?.id || chat.development_workflow_id || 0) || null;
         state.selectedProjectId = chat.project_id || null;
-        state.selectedBoardKey = (boardByKey(chat.development_board_key) || boardForProject(chat.project_id))?.key || state.selectedBoardKey || '';
+        state.selectedBoardKey = chatBoardKey(chat);
         rememberBoardThread(window.localStorage, chatBoardKey(chat), chat.id);
         rememberBoardSection(window.localStorage, chatBoardKey(chat), 'thread');
         state.draft.title = chat.title || '';
@@ -1820,12 +2189,14 @@ async function loadChat(chatId, options) {
         threads_transcript.renderConversation(chat);
         threads_inspector.renderInspector();
         setWorkspaceMode('chat', { focus: false, updateUrl: false });
+        state.pickingNewThread = false;
+        acknowledgeReadyThread(chat);
         connectLiveUpdates(chat.id);
         if (options?.updateUrl !== false)
             setDevelopmentLocation(`/development/threads/${Number(chat.id)}/`, {
                 replace: options?.replaceUrl
             });
-        if (window.innerWidth <= 680) closeDrawers();
+        closeDrawersAfterNavigation();
     } catch (error) {
         if (!options?.quiet) toast(error.message || 'Could not open task.', 'error');
     }
@@ -1839,6 +2210,8 @@ function formatDateTime(value) {
 }
 
 function showEmptyTask(options) {
+    if (!options?.keepPicking) state.pickingNewThread = false;
+    threads_composer.clearRoutingAssessment();
     state.chatLoadToken += 1;
     const preserveProject = Boolean(options?.preserveProject);
     if (!preserveProject) {
@@ -1866,6 +2239,8 @@ function showEmptyTask(options) {
     state.draft.workflow_id = null;
     disconnectLiveUpdates();
     el('message-list').classList.add('hidden');
+    el('thread-attachment-warning')?.classList.add('hidden');
+    el('thread-telegram-status')?.classList.add('hidden');
     el('studio-empty').classList.remove('hidden');
     syncHeader();
     sidebar.renderSidebar();
@@ -1886,8 +2261,9 @@ function startNewDevelopment(options) {
     threads_composer.renderAttachments();
     showEmptyTask();
     setWorkspaceMode('chat', { updateUrl: false });
+    state.pickingNewThread = true;
     if (options?.updateUrl !== false) setDevelopmentLocation('/development/new/', options);
-    if (window.innerWidth <= 680) closeDrawers();
+    closeDrawersAfterNavigation();
 }
 
 function openRenameThreadDialog(chatId) {
@@ -2133,8 +2509,9 @@ const threadCliMode = createThreadCliMode({
     api,
     getContext: () => {
         const chat = state.currentChat;
-        const board = boardByKey(chat?.development_board_key) || boardForProject(chat?.project_id);
-        const projectId = chat?.project_id || board?.project_id || null;
+        const draftBoard = !chat && state.boardScopedDraft ? boardByKey(state.selectedBoardKey) : null;
+        const board = boardByKey(chat?.development_board_key) || boardForProject(chat?.project_id) || draftBoard;
+        const projectId = chat?.project_id ?? state.selectedProjectId ?? state.draft?.project_id ?? board?.project_id ?? null;
         const project = state.projects.find((item) => Number(item.id) === Number(projectId)) || null;
         const backend =
             state.draft?.backend ||
@@ -2150,7 +2527,8 @@ const threadCliMode = createThreadCliMode({
             backendId: String(backend || 'pi').toLowerCase(),
             projectName: project?.name || chat?.title || 'project',
             folderLabel: folder.split(/[/\\]/).filter(Boolean).pop() || project?.name || 'project',
-            workspaceMode: state.workspaceMode
+            workspaceMode: state.workspaceMode,
+            boardScopedDraft: isBoardScopedDraft()
         };
     }
 });
@@ -2188,6 +2566,11 @@ function closeDrawers() {
     el('drawer-backdrop').classList.add('hidden');
 }
 
+function closeDrawersAfterNavigation() {
+    // Restoring the initial route can finish after the user opens the project drawer.
+    if (state.ready && window.innerWidth <= 680) closeDrawers();
+}
+
 installTooltipPortal();
 
 function resizePrompt() {
@@ -2204,7 +2587,8 @@ function syncMessageClientAction() {
 
 function syncComposerAvailability() {
     const available = state.ready && !state.routeLoading && !state.busy;
-    const awaitingRecovery = state.currentRun?.origin === 'proactive_orchestrator' && state.currentRun.status === 'blocked';
+    const awaitingRecovery = state.currentRun?.origin === 'proactive_orchestrator'
+        && state.currentRun.status === 'blocked' && state.currentRun.waiting_kind !== 'human_review';
     el('task-prompt').disabled = !available;
     el('send-button').disabled = !available || (awaitingRecovery && !state.editingCommandId);
     syncMessageClientAction();
@@ -2235,11 +2619,7 @@ async function openStartupTerminals(projectId, options) {
 async function restoreDevelopmentHome(options) {
     const requested = developmentChatById(options?.lastChatId);
     const initial = requested || state.chats[0] || null;
-    if (playOpensTerminals() && !threadCliMode.isOn()) {
-        const lastBoard = boardByKey(state.selectedBoardKey);
-        const projectId = Number(initial?.project_id || 0) || Number(lastBoard?.project_id || 0);
-        if (await openStartupTerminals(projectId, options)) return;
-    }
+    // "On startup, go to terminals" is only for an explicit Play action, not visiting /development/.
     if (initial) {
         await loadChat(initial.id, {
             quiet: true,
@@ -2356,6 +2736,9 @@ async function restoreDevelopmentLocation(options) {
         if (!options?.fromHistory && window.location.href === requestedLocation) setDevelopmentLocation(route.path, { replace: true });
     } finally {
         state.routeLoading = false;
+        // 2026-11-12 header-phone1: the route has loaded, so the header now knows its mode;
+        // CSS keeps the badge / Play / switches invisible (space reserved) until then.
+        el('development-task-header')?.setAttribute('data-mode-known', '');
         syncComposerAvailability();
     }
 }
@@ -2399,10 +2782,13 @@ async function init() {
         restoreDevelopmentLocation({ fromHistory: true });
     }
     syncComposerAvailability();
+    const initialChatLoad = state.chatLoadToken;
     api('/workflows/studio/routing-assessment', {
         method: 'POST',
         body: {
             instruction: '',
+            chat_id: state.currentChat?.id || undefined,
+            board_key: state.currentChat?.id ? undefined : boardByKey(state.selectedBoardKey)?.key,
             ticket_title: '',
             ticket_description: '',
             has_images: false,
@@ -2410,7 +2796,8 @@ async function init() {
         }
     })
         .then((assessment) => {
-            if (assessment?.route && !state.routingAssessment) {
+            if (assessment?.route && !state.routingAssessment && state.chatLoadToken === initialChatLoad
+                && state.workspaceMode === 'chat' && !state.submittingPrompt && !el('task-prompt').value.trim()) {
                 state.routingAssessment = assessment;
                 threads_composer.updateModelLabel();
             }
@@ -2566,6 +2953,7 @@ function bindEvents() {
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') {
             closeThreadTerminalMenu({ restoreFocus: true });
+            closeThreadHeaderMenu({ restoreFocus: true });
             closePickerMenus();
             automations.closeAutomationImportMenu();
             automations.closeScheduledRowMenu();
@@ -2672,6 +3060,7 @@ const sidebar = createSidebar({
         startNewDevelopmentFromSidebar: (...args) => startNewDevelopmentFromSidebar(...args),
         systemFileManagerLabel: (...args) => systemFileManagerLabel(...args),
         threadIsProcessing: (...args) => threadIsProcessing(...args),
+        threadIsReadyUnaddressed: (...args) => threadIsReadyUnaddressed(...args),
         threadRowContentHtml: (...args) => threadRowContentHtml(...args),
         updateThreadTimer: (...args) => updateSidebarThreadTime(...args),
         toast: (...args) => toast(...args),
@@ -2728,6 +3117,7 @@ const automations = createAutomations({
         refreshShell: (...args) => refreshShell(...args),
         statusLabel: (...args) => statusLabel(...args),
         threadBoard: (...args) => sidebar.threadBoard(...args),
+        setDevelopmentLocation: (...args) => setDevelopmentLocation(...args),
         toast: (...args) => toast(...args)
     },
     el
@@ -2915,6 +3305,7 @@ const terminals = createTerminals({
         renderSidebar: (...args) => sidebar.renderSidebar(...args),
         setDevelopmentLocation: (...args) => setDevelopmentLocation(...args),
         setWorkspaceMode: (...args) => setWorkspaceMode(...args),
+        syncHeader: (...args) => syncHeader(...args),
         terminalActionApi: (...args) => terminalActionApi(...args),
         toast: (...args) => toast(...args)
     },
@@ -3258,7 +3649,7 @@ const planning = createPlanning({
         if (state.workspaceMode !== 'plan') return;
         const board = boardByKey(state.selectedBoardKey);
         const project = board && projectById(board.project_id);
-        const name = planning.currentView() === 'board' ? project?.name || board?.name : '';
+        const name = project?.name || board?.name || '';
         renderPlanCrumbs(document, planCrumbs(name, ...rest));
     },
     pathForBoard: (boardKey) => developmentBoardPath(boardKey, 'plan'),

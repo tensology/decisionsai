@@ -85,6 +85,7 @@ def prefer_read_markdown_context(
             wing=WING_DECISIONS,
             room=ROOM_MARKDOWN_MEMORY,
             n_results=n_results,
+            timeout=ORCHESTRATOR_CONTEXT_TIMEOUT_S,
         )
         return ctx or None
     except Exception:
@@ -271,6 +272,7 @@ def prefer_read_rag_context(
             wing=WING_SEED_CORPUS_PACK,
             room=None,
             n_results=n_results,
+            timeout=ORCHESTRATOR_CONTEXT_TIMEOUT_S,
         )
         if not ctx:
             # 2) Entire palace (includes decisions dual-writes + seed)
@@ -279,6 +281,7 @@ def prefer_read_rag_context(
                 wing=None,
                 room=None,
                 n_results=n_results,
+                timeout=ORCHESTRATOR_CONTEXT_TIMEOUT_S,
             )
         if not ctx:
             ctx = _adapter().format_search_as_context(
@@ -286,6 +289,7 @@ def prefer_read_rag_context(
                 wing=WING_DECISIONS,
                 room=ROOM_RAG,
                 n_results=n_results,
+                timeout=ORCHESTRATOR_CONTEXT_TIMEOUT_S,
             )
         return ctx or None
     except Exception:

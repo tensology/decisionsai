@@ -20,8 +20,13 @@ export async function watchPlanScan({ api, workspaceId, isCurrent, onSettled, in
         if (!isCurrent()) return 'abandoned';
         let status;
         try { status = await api(`${base}/scan-status`); } catch { continue; }
+        if (!isCurrent()) return 'abandoned';
         if (status?.state === 'scanning') continue;
-        const workspace = status?.state === 'done' ? await api(base).catch(() => null) : null;
+        let workspace = null;
+        if (status?.state === 'done') {
+            try { workspace = await api(base); } catch { continue; }
+            if (!workspace) continue;
+        }
         if (!isCurrent()) return 'abandoned';
         onSettled(status || { state: 'idle' }, workspace);
         return status?.state || 'idle';

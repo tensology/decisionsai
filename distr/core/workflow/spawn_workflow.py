@@ -80,6 +80,9 @@ def spawn_workflow_for_ticket(
             linked_selection = select_workflow_for_request(
                 "\n".join(part for part in (ticket_title, ticket_description, project_name) if part),
                 candidates=[wf] if wf else [],
+                project_folder=project_folder or None,
+                project_id=project_id,
+                allow_deploy_steps=True,  # an explicit ticket link is honoured unless it is a mismatched built-in
             )
             if wf and linked_selection.get("selected"):
                 out: dict[str, Any] = {
@@ -114,7 +117,9 @@ def spawn_workflow_for_ticket(
         from distr.core.workflow.selection import select_workflow_for_request
 
         selection = select_workflow_for_request(
-            "\n".join(part for part in (ticket_title, ticket_description, project_name) if part)
+            "\n".join(part for part in (ticket_title, ticket_description, project_name) if part),
+            project_folder=project_folder or None,
+            project_id=project_id,
         )
         selected = selection.get("selected") or {}
         workflow_id = int(selected.get("workflow_id") or 0)
@@ -122,8 +127,9 @@ def spawn_workflow_for_ticket(
             return {
                 "success": False,
                 "error": (
-                    "No existing workflow safely covers this ticket. Workflow creation is a last resort; "
-                    "generate and audit a complete specialized workflow before starting the run."
+                    f"{selection.get('reason') or 'No existing workflow fits this ticket.'} "
+                    "Workflow creation is a last resort; generate and audit a complete specialized "
+                    "workflow before starting the run."
                 ),
                 "selection": selection,
             }
@@ -233,11 +239,18 @@ def _start_ticket_run(
     dispatch_async: bool,
 ) -> dict[str, Any]:
     from distr.core.workflow.work_dispatch import dispatch_work_item
+    from distr.core.workflow.builtin import is_deploy_workflow
+    from distr.core.workflow.service import get_workflow
 
     context = ""
     meta = dict(run_metadata or {})
     meta.setdefault("source_type", "spawn_workflow_for_ticket")
     meta.setdefault("ticket_id", ticket_id)
+    if is_deploy_workflow(get_workflow(int(workflow_id)) or {}):
+        # A deploy always stops at its own approval gate; never skip checkpoints.
+        skip_human_checkpoints = False
+        meta.pop("skip_human_checkpoints", None)
+        meta["deploy_requires_own_approval"] = True
     if skip_human_checkpoints:
         meta["skip_human_checkpoints"] = True
     try:
@@ -257,6 +270,21 @@ def _start_ticket_run(
         ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
         title = ticket.title if ticket else f"Ticket #{ticket_id}"
         project_id = ticket.linked_project_id if ticket else None
+        plan_project_id = project_id
+        if not plan_project_id and board_id:
+            board = db.query(KanbanBoard).filter(KanbanBoard.id == int(board_id)).first()
+            plan_project_id = board.default_project_id if board else None
+    # Attach the project's saved Plan (Interfaces, Data, Documents) to the run with a
+    # fair per-section budget, instead of a Brief-first ~1,500-char slice (2026-11-12).
+    try:
+        from distr.core.planning.sections import plan_context_for_project
+
+        plan_text, plan_summary = plan_context_for_project(plan_project_id)
+        if plan_text:
+            context = f"{context}\n\n{plan_text}" if context else plan_text
+        meta["plan_sections"] = plan_summary
+    except Exception:
+        logger.debug("spawn_workflow: plan sections failed", exc_info=True)
     result = dispatch_work_item(
         workflow_id=int(workflow_id),
         context=context,

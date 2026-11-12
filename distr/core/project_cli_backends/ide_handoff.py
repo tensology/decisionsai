@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,7 +58,9 @@ def _callback_block(backend_id: str, meta: dict[str, Any]) -> str:
     label = "CODEX" if backend_id == "codex_ide" else "CURSOR"
     prefix = "codex" if backend_id == "codex_ide" else "cursor"
     reporter = meta.get("reporter") or _reporter_path(backend_id)
-    bridge_url = meta.get("bridge_url") or ""
+    command = shlex.join([
+        "python3", reporter, "--cwd", str(meta.get("project_folder") or ""), *_proactive_reporter_args(meta),
+    ])
     event_started = f"{prefix}_started"
     event_prompt = f"{prefix}_prompt_submitted"
     return (
@@ -65,8 +68,8 @@ def _callback_block(backend_id: str, meta: dict[str, Any]) -> str:
         f"{json.dumps(meta, ensure_ascii=False, separators=(',', ':'))}\n"
         "When this work is opened, prompted, steered, paused, interrupted, blocked, completed, "
         "or materially updated, report the event back to DecisionsAI if DecisionsAI is reachable. "
-        "Prefer the reporter script when available (meta is auto-discovered from this packet):\n"
-        f"python3 {json.dumps(reporter)} --cwd {json.dumps(meta.get('project_folder') or '')} "
+        "Prefer the reporter script when available:\n"
+        f"{command} "
         f'--turn-output "Status: completed\\nSummary: <what changed>"\n'
         f"Use event_type values: {event_started}, {event_prompt}, user_steer, {prefix}_waiting, "
         f"{prefix}_interrupted, {prefix}_progress, {prefix}_completed, {prefix}_failed, {prefix}_needs_input.\n"
@@ -74,6 +77,19 @@ def _callback_block(backend_id: str, meta: dict[str, Any]) -> str:
         "or adds constraints mid-run.\n"
         f"[/DECISIONS {label} CALLBACK]\n\n"
     )
+
+
+def _proactive_reporter_args(meta: dict[str, Any]) -> list[str]:
+    if meta.get("origin") != "proactive_orchestrator" or not meta.get("execution_session_id"):
+        return []
+    args = [
+        "--callback-url", f"{meta['api_base']}/api/ide/sessions/event",
+        "--execution-session-id", str(meta["execution_session_id"]),
+        "--project-id", str(meta["project_id"]),
+    ]
+    if meta.get("ticket_id") is not None:
+        args.extend(["--ticket-id", str(meta["ticket_id"])])
+    return args
 
 
 def build_ide_callback_meta(task: ProjectTask, *, backend_id: str, handoff_event_id: int | None = None) -> dict[str, Any]:
@@ -91,6 +107,9 @@ def build_ide_callback_meta(task: ProjectTask, *, backend_id: str, handoff_event
         bridge_url = _with_internal_token(
             f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events"
         )
+    proactive = task.origin == "proactive_orchestrator" and task.execution_session_id is not None
+    if proactive:
+        bridge_url = f"{api_base}/api/ide/sessions/event"
     reporter = _reporter_path(backend_id)
     return {
         "project_id": task.project_id,
@@ -105,10 +124,10 @@ def build_ide_callback_meta(task: ProjectTask, *, backend_id: str, handoff_event
         "execution_session_id": task.execution_session_id,
         "handoff_event_id": handoff_event_id,
         "api_base": api_base,
-        "callback_url": continue_url,
+        "callback_url": bridge_url if proactive else continue_url,
         "continue_url": continue_url,
         "bridge_url": bridge_url,
-        "callback_payload_type": "workflow_continue",
+        "callback_payload_type": "ide_session_event" if proactive else "workflow_continue",
         "reporter": reporter,
     }
 
@@ -232,7 +251,7 @@ def write_ide_work_packet(
         "---",
         "mode: append",
         "auto_continue_on_pickup: true",
-        "callback_payload_type: workflow_continue",
+        f"callback_payload_type: {meta.get('callback_payload_type', 'workflow_continue')}",
         "---",
         "",
         f"# {ticket_title}",
@@ -258,6 +277,10 @@ def write_ide_work_packet(
         )
     elif companion_handoff:
         body_parts.extend(["## Workspace memory", "", f"Companion handoff: `{companion_handoff}`", ""])
+    reporter_command = ["python3", meta.get("reporter") or _reporter_path(backend_id)]
+    target_args = _proactive_reporter_args(meta)
+    if target_args:
+        reporter_command.extend(["--cwd", folder, *target_args])
     body_parts.extend(
         [
             "## Instruction",
@@ -273,7 +296,7 @@ def write_ide_work_packet(
             "",
             "The workflow records this on the run. The human reviews via the orchestrator, not in-editor micro-management.",
             "",
-            f"Reporter: python3 {json.dumps(meta.get('reporter') or _reporter_path(backend_id))} "
+            f"Reporter: {shlex.join(reporter_command)} "
             '--turn-output "<paste the Return contract block>"',
         ]
     )
@@ -373,6 +396,7 @@ def start_cursor_harness_agent(task: ProjectTask, packet_path: str) -> dict[str,
                 reporter,
                 "--cwd",
                 folder,
+                *_proactive_reporter_args(build_ide_callback_meta(task, backend_id="cursor_ide")),
                 "--event-type",
                 "cursor_started",
                 "--status",

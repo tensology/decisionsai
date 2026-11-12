@@ -220,20 +220,39 @@ def read_erd(text: str) -> dict:
         r = REL_RE.match(line)
         if r:
             relations.append({"index": i, "from": _unquote(r.group(1)), "to": _unquote(r.group(5)),
+                              "left": r.group(2), "right": r.group(4), "identifying": r.group(3) == "--",
                               "label": _unquote(r.group(6).strip())})
         i += 1
     if not isinstance(sidecar, dict):
         sidecar = {}
+    metadata = sidecar.get("tables")
     for name, t in tables.items():
-        meta = (sidecar.get("tables") or {}).get(name) or {}
+        meta = metadata.get(name) if isinstance(metadata, dict) else None
         t["meta"] = meta if isinstance(meta, dict) else {}
-        extras = t["meta"].get("fields") or {}
+        extras = t["meta"].get("fields")
         for f in t["fields"]:
-            extra = extras.get(f["name"]) or {}
+            extra = extras.get(f["name"]) if isinstance(extras, dict) else None
+            extra = extra if isinstance(extra, dict) else {}
             f["nullable"] = extra.get("nullable")
             if isinstance(extra.get("type"), str) and mermaid_type(extra["type"]) == f["type"]:
                 f["type"] = extra["type"]
     return {"lines": lines, "sidecar": sidecar, "sidecar_index": sidecar_index, "tables": tables, "relations": relations}
+
+
+def erd_read_view(content: str) -> dict | None:
+    if not re.match(r"^\s*(?:%%[^\n]*\n\s*)*erDiagram\b", content or ""):
+        return None
+    erd = read_erd(content)
+    tables = {
+        name: {"name": name, "alias": table["alias"], "fields": table["fields"]}
+        for name, table in erd["tables"].items()
+    }
+    relations = []
+    for relation in erd["relations"]:
+        for name in (relation["from"], relation["to"]):
+            tables.setdefault(name, {"name": name, "alias": None, "fields": []})
+        relations.append({key: value for key, value in relation.items() if key != "index"})
+    return {"tables": list(tables.values()), "relations": relations} if tables else None
 
 
 def _tagged(erd: dict, link_id: int) -> dict[str, str]:

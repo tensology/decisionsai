@@ -30,7 +30,7 @@ from distr.core.workflow.verification import (
     recover_blocked_browser_validation,
     ticket_acceptance_findings,
 )
-from distr.core.workflow.runtime_contract import emit_step_activity, should_pause_after_step
+from distr.core.workflow.runtime_contract import emit_step_activity, lock_step_result_run, should_pause_after_step
 from distr.core.kanban.result_packet import append_workflow_step_to_packet
 from distr.core.kanban.ticket_audit import append_ticket_audit_entry
 from distr.core.workflow.chat_trace import record_workflow_chat_event
@@ -415,6 +415,8 @@ class StepRouter:
         the wait state for a ``wait_for_continue`` step that has already waited.
         Set ``skip_approval=True`` when resuming after a human approval gate.
         """
+        from distr.core.workflow.dispatcher import workflow_accepts_worker_result
+
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(
                 AutoWorkflowStep.id == step_id,
@@ -425,11 +427,25 @@ class StepRouter:
             run = db.query(AutoWorkflowRun).filter(
                 AutoWorkflowRun.id == run_id,
             ).first()
+            if not run or step.workflow_id != run.workflow_id or not workflow_accepts_worker_result(db, run, step_id):
+                return {"action": "ignore", "status": getattr(run, "status", "missing")}
+            pause_after = should_pause_after_step(
+                run_id=run_id, step_wait_for_continue=bool(step.wait_for_continue), skip_wait=skip_wait,
+            )
+            early_ide_completion = None
+            ide_report_failed = False
             if run:
                 try:
                     run_data = json.loads(run.run_data or "{}")
                 except Exception:
                     run_data = {}
+                if pause_after or any(run_data.get(key) for key in (
+                    "ide_handoff_pending", "early_ide_completion", "route_approval_pending", "provider_preflight_pending",
+                )):
+                    run = lock_step_result_run(db, run_id)
+                    if not workflow_accepts_worker_result(db, run, step_id, locked=True):
+                        return {"action": "ignore", "status": getattr(run, "status", "missing")}
+                    run_data = json.loads(run.run_data or "{}")
                 correction_context = run_data.get("last_validation_correction")
                 correction_context = (
                     correction_context if isinstance(correction_context, dict) else {}
@@ -445,11 +461,31 @@ class StepRouter:
                         + "\n\n[VALIDATION CORRECTION SUPPLEMENT]\n"
                         + str(result or "").strip()
                     ).strip()
-                if run_data.pop("ide_handoff_pending", False):
-                    run_data["waiting_kind"] = "ide_handoff"
-                    run.run_data = json.dumps(run_data)
-                    db.flush()
-                    return self._enter_wait_state(db, step, run_id, result, passed)
+                completion = run_data.get("early_ide_completion")
+                if run_data.get("ide_handoff_pending") or (
+                    isinstance(completion, dict) and completion.get("passed") is False
+                    and run_data.get("waiting_kind") in {"ide_handoff", "needs_human_input"}
+                ):
+                    if (run_data.get("source_type") == "workflow_queue"
+                            and isinstance(completion, dict)
+                            and completion.get("execution_session_id") == run_data.get("execution_session_id")
+                            and completion.get("step_id") == step_id
+                            and isinstance(completion.get("output"), str)):
+                        early_ide_completion = completion
+                        result = completion["output"]
+                        ide_report_failed = completion.get("passed") is False
+                        if ide_report_failed:
+                            passed = False
+                        pause_after = False
+                        # Release the writer lock while verification runs. The
+                        # exact receipt is consumed under the final write lock.
+                        db.commit()
+                    else:
+                        run_data.pop("ide_handoff_pending", None)
+                        run_data["waiting_kind"] = "ide_handoff"
+                        run.run_data = json.dumps(run_data)
+                        db.flush()
+                        return self._enter_wait_state(db, step, run_id, result, passed)
                 # power_budget_pending gating removed; meters are informational only.
                 if run_data.pop("route_approval_pending", False):
                     from distr.core.workflow.control_policy import decide_interruption
@@ -502,11 +538,7 @@ class StepRouter:
 
             # ── wait_for_continue gate ──
             # Skip when resuming from feedback (the step has already waited)
-            if should_pause_after_step(
-                run_id=run_id,
-                step_wait_for_continue=bool(step.wait_for_continue),
-                skip_wait=skip_wait,
-            ):
+            if pause_after:
                 return self._enter_wait_state(db, step, run_id, result, passed)
 
             # ── verify ──
@@ -567,7 +599,7 @@ class StepRouter:
             except Exception:
                 logger.debug("Could not build verification context", exc_info=True)
 
-            verified_passed = _run_verification(
+            verified_passed = not ide_report_failed and _run_verification(
                 step,
                 result,
                 passed,
@@ -688,7 +720,7 @@ class StepRouter:
                     )
                     release_hold_findings = []
             orchestrator_overlay = None
-            if not objective_acceptance_passed:
+            if not ide_report_failed and not objective_acceptance_passed:
                 try:
                     from distr.core.orchestrator_validator import apply_orchestrator_validator_overlay
                     orchestrator_overlay = apply_orchestrator_validator_overlay(
@@ -774,6 +806,35 @@ class StepRouter:
                         validation_snapshot["correction_hint"] = hint
             if standards_context:
                 validation_snapshot["standards_context"] = standards_context
+
+            # Verification may outlive cancellation or a move to the next step.
+            run = lock_step_result_run(db, run_id)
+            if not workflow_accepts_worker_result(db, run, step_id, locked=True):
+                return {"action": "ignore", "status": getattr(run, "status", "missing")}
+            if early_ide_completion is not None:
+                from distr.core.db.kanban import ProjectExecutionSession
+
+                current_data = json.loads(run.run_data or "{}")
+                execution_id = early_ide_completion["execution_session_id"]
+                attempt = db.get(ProjectExecutionSession, execution_id, with_for_update=True)
+                if (current_data.get("early_ide_completion") != early_ide_completion
+                        or current_data.get("execution_session_id") != execution_id
+                        or attempt is None or (attempt.run_id, attempt.step_id) != (run_id, step_id)
+                        or attempt.route_type != "ide_bridge"
+                        or attempt.status in {"cancelled", "canceled"}
+                        or (attempt.status == "failed" and not ide_report_failed)):
+                    return {"action": "ignore", "status": run.status}
+                current_data.pop("early_ide_completion", None)
+                current_data.pop("ide_handoff_pending", None)
+                handoff = current_data.get("latest_backend_handoff")
+                if isinstance(handoff, dict) and handoff.get("execution_session_id") == execution_id:
+                    handoff["state"] = "failed" if ide_report_failed else "completed"
+                if ide_report_failed:
+                    current_data["ide_reported_failure"] = {"step_id": step_id, "output": result}
+                for key in ("waiting_kind", "waiting_prompt", "waiting_result", "waiting_passed"):
+                    current_data.pop(key, None)
+                run.status = "running"
+                run.run_data = json.dumps(current_data)
 
             # ── approval gate (after verify, before marking passed) ──
             if step.require_approval and verified_passed and not skip_approval:
@@ -867,7 +928,7 @@ class StepRouter:
                         passed=bool(verified_passed),
                         reason=(
                             validation_snapshot.get("correction_hint")
-                            or f"{step.name or f'Step {step_id}'} failed validation; use a different viable worker for correction."
+                            or f"{step.name or f'Step {step_id}'} failed validation."
                         ),
                         settings=load_settings_from_db(),
                         actual_route=(
@@ -1152,6 +1213,8 @@ class StepRouter:
         *, expected_checkpoint: dict | None = None,
     ) -> Dict[str, Any]:
         """Resume a waiting step with user/main-agent feedback."""
+        from distr.core.workflow.dispatcher import workflow_accepts_worker_result
+
         with get_session() as db:
             from distr.core.workflow.interactions import guard_workflow_checkpoint
             guard_workflow_checkpoint(db,run_id,expected_checkpoint)
@@ -1173,6 +1236,13 @@ class StepRouter:
 
             # Recover stored result/passed from run_data
             run_data = json.loads(run.run_data or "{}")
+            if run_data.get("source_type") == "workflow_queue":
+                run = lock_step_result_run(db, run_id)
+                if run is None or run.status != "waiting" or not workflow_accepts_worker_result(
+                    db, run, step_id, locked=True,
+                ):
+                    return {"action": "ignore", "status": getattr(run, "status", "missing")}
+                run_data = json.loads(run.run_data or "{}")
             stored_result = run_data.get("waiting_result", "")
             stored_passed = run_data.get("waiting_passed", True)
 
@@ -2230,6 +2300,8 @@ class StepRouter:
                 warning = str(run_data.get("terminal_warning"))
         run.status = status
         run.completed_at = utc_now_naive()
+        if run_data.get("source_type") == "workflow_queue":
+            run_data["queue_terminal_pending"] = status
         try:
             from distr.core.workflow.blueprint_adherence import update_drift_metrics
 

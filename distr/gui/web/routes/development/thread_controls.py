@@ -1,4 +1,5 @@
 """Thread controls HTTP boundary. Existing URLs remain compatible."""
+from fastapi import Path
 from fastapi.responses import JSONResponse
 from typing import Optional
 import json
@@ -7,6 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from .models import StudioCommandRequest, StudioCommandUpdateRequest, StudioInteractionResolveRequest, StudioModelRouteRequest, StudioPlanTransitionRequest, StudioThreadControlsRequest, StudioTimeUpdateRequest
+from .models import StudioFollowupRequest, StudioFollowupRevision
 
 
 def register_routes(router, templates):
@@ -28,9 +30,22 @@ def register_routes(router, templates):
 
     @router.put('/workflows/studio/sidebar/pins')
     async def update_development_sidebar_pins(data: dict):
-        from distr.core.workflow.development_sidebar import save_pinned_boards
+        from distr.core.workflow.development_sidebar import save_pinned_boards, seed_pinned_boards
         try:
-            keys = await asyncio.to_thread(save_pinned_boards, data.get('board_keys'))
+            only_if_unset = data.get('only_if_unset', False)
+            if type(only_if_unset) is not bool:
+                raise ValueError('Only-if-unset must be true or false.')
+            save = seed_pinned_boards if only_if_unset else save_pinned_boards
+            keys = await asyncio.to_thread(save, data.get('board_keys'))
+            return JSONResponse({'board_keys': keys})
+        except ValueError as exc:
+            return JSONResponse({'detail': str(exc)}, status_code=400)
+
+    @router.patch('/workflows/studio/sidebar/pins')
+    async def set_development_sidebar_board_pin(data: dict):
+        from distr.core.workflow.development_sidebar import set_board_pin
+        try:
+            keys = await asyncio.to_thread(set_board_pin, data.get('board_key'), data.get('pinned'))
             return JSONResponse({'board_keys': keys})
         except ValueError as exc:
             return JSONResponse({'detail': str(exc)}, status_code=400)
@@ -116,6 +131,8 @@ def register_routes(router, templates):
 
     @router.post("/workflows/studio/tasks/{chat_id}/commands")
     async def workflow_studio_enqueue_command(chat_id: int, data: StudioCommandRequest):
+        from distr.core.workflow.development_threads import DevelopmentThreadConflict
+
         try:
             from distr.core.skills.catalog import filter_known_skill_ids
             from distr.core.workflow.development_control import dispatch_command, enqueue_command, resume_thread_time
@@ -124,7 +141,7 @@ def register_routes(router, templates):
             metadata["skill_ids"] = filter_known_skill_ids(list(metadata.get("skill_ids") or []))[:12]
             from distr.core.workflow.development_control import is_duplicate_instruction
 
-            if await asyncio.to_thread(is_duplicate_instruction, int(chat_id), data.content):
+            if await asyncio.to_thread(is_duplicate_instruction, int(chat_id), data.content, data.expected_scope):
                 logger.info("Studio command ignored: identical pending instruction for thread %s", chat_id)
                 return JSONResponse({"status": "duplicate", "summary": "Already sent; waiting for the reply.", "next_actions": [], "artifacts": [], "delivery": {"dispatched": False, "duplicate": True}})
             command = await asyncio.to_thread(
@@ -135,6 +152,7 @@ def register_routes(router, templates):
                 source_ref=data.source_ref,
                 command_type=data.command_type,
                 metadata=metadata,
+                expected_scope=data.expected_scope,
             )
             await asyncio.to_thread(resume_thread_time, chat_id)
             delivery = ({'dispatched': False, 'command': command} if data.command_type == 'followup'
@@ -151,6 +169,8 @@ def register_routes(router, templates):
             )
         except LookupError as e:
             return JSONResponse({"detail": str(e)}, status_code=404)
+        except DevelopmentThreadConflict as e:
+            return JSONResponse({"detail": str(e)}, status_code=409)
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=422)
         except Exception as e:
@@ -173,6 +193,66 @@ def register_routes(router, templates):
             logger.error("Studio command update failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.get("/workflows/studio/tasks/{chat_id}/followups/{submission_id}/receipt")
+    async def app_view_get_followup_receipt(chat_id: int, submission_id: str = Path(pattern=r"^[a-f0-9]{32}$")):
+        from distr.core.workflow.development_control import app_view_followup_receipt
+
+        try:
+            receipt = await asyncio.to_thread(app_view_followup_receipt, chat_id, submission_id)
+        except LookupError:
+            receipt = None
+        if receipt is None:
+            return JSONResponse({"detail": "Follow-up receipt not found."}, status_code=404)
+        return JSONResponse(receipt)
+
+    @router.post("/workflows/studio/tasks/{chat_id}/followups")
+    async def app_view_enqueue_followup(chat_id: int, data: StudioFollowupRequest):
+        from distr.core.workflow.development_control import FollowupThreadIdentityConflict, enqueue_command
+
+        try:
+            command = await asyncio.to_thread(
+                enqueue_command, chat_id, data.content, source="app_view", source_ref=data.submission_id,
+                command_type="followup", idempotent=True, expected_project_id=data.expected_project_id,
+                expected_scope=data.expected_scope, expected_thread_identity=data.expected_thread_identity,
+            )
+            return JSONResponse(command)
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+        except FollowupThreadIdentityConflict as exc:
+            return JSONResponse({"detail": str(exc), "code": "followup_thread_changed"}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @router.post("/workflows/studio/tasks/{chat_id}/followups/{command_id}/start")
+    async def app_view_start_followup(chat_id: int, command_id: int, data: StudioFollowupRevision):
+        from distr.core.workflow.queued_submissions import start_next_followup
+
+        try:
+            result = await asyncio.to_thread(start_next_followup, chat_id, command_id, data.expected_modified_at)
+            return JSONResponse(result)
+        except LookupError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
+        except Exception:
+            logger.exception("Could not confirm App View follow-up start")
+            return JSONResponse({"detail": "Could not confirm whether the follow-up started. Refresh the queue."}, status_code=503)
+
+    @router.post("/workflows/studio/tasks/{chat_id}/followups/{command_id}/cancel")
+    async def app_view_cancel_followup(chat_id: int, command_id: int, data: StudioFollowupRevision):
+        from distr.core.workflow.development_control import update_command
+
+        try:
+            command = await asyncio.to_thread(
+                update_command, command_id, cancel=True, expected_modified_at=data.expected_modified_at,
+                followup_chat_id=chat_id,
+            )
+            if command is None:
+                return JSONResponse({"detail": "Queued follow-up not found."}, status_code=404)
+            return JSONResponse(command)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
+
 
     @router.post("/workflows/studio/tasks/{chat_id}/commands/dispatch")
     async def workflow_studio_dispatch_commands(chat_id: int):
@@ -188,14 +268,18 @@ def register_routes(router, templates):
     async def run_queued_submission(command_id: int, data: dict):
         from distr.core.workflow.queued_submissions import run_submission
         try:
-            return JSONResponse(await asyncio.to_thread(run_submission, command_id, new_thread=data.get('new_thread') is True))
+            return JSONResponse(await asyncio.to_thread(
+                run_submission, command_id, new_thread=data.get('new_thread') is True,
+                revision=data.get('expected_modified_at'),
+                **({'expected_stop': data['expected_stop']} if 'expected_stop' in data else {}),
+            ))
         except LookupError as exc:
             return JSONResponse({'detail': str(exc)}, status_code=404)
         except ValueError as exc:
             return JSONResponse({'detail': str(exc)}, status_code=409)
         except Exception:
             logger.exception('Queued submission failed')
-            return JSONResponse({'detail': 'Could not start this item. It remains queued.'}, status_code=503)
+            return JSONResponse({'detail': 'Could not confirm startup. Check the queue before retrying.'}, status_code=503)
 
     @router.get('/workflows/studio/commands/{command_id}/attachments/{index}')
     async def queued_attachment(command_id: int, index: int):
@@ -210,6 +294,8 @@ def register_routes(router, templates):
 
     @router.patch("/workflows/studio/tasks/{chat_id}/controls")
     async def workflow_studio_thread_controls(chat_id: int, data: StudioThreadControlsRequest):
+        from distr.core.workflow.development_threads import DevelopmentThreadConflict
+
         try:
             from distr.core.workflow.development_control import update_thread_controls
 
@@ -217,6 +303,8 @@ def register_routes(router, templates):
             return JSONResponse({**controls, "status": "updated", "summary": "Thread controls saved.", "next_actions": [], "artifacts": [controls]})
         except LookupError as e:
             return JSONResponse({"detail": str(e)}, status_code=404)
+        except DevelopmentThreadConflict as e:
+            return JSONResponse({"detail": str(e)}, status_code=409)
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=422)
         except Exception as e:
@@ -320,7 +408,7 @@ def register_routes(router, templates):
         """Return safe cross-surface status and pending controls for Development."""
         try:
             from distr.core.settings import load_settings_from_db
-            from distr.core.workflow.interactions import pending_interactions
+            from distr.core.workflow.interactions import pending_interactions, telegram_checkpoint_delivery_status
 
             settings = await asyncio.to_thread(load_settings_from_db)
             accounts = settings.get("connected_accounts") or []
@@ -344,19 +432,24 @@ def register_routes(router, templates):
                     telegram_connected = bool(manager and manager.is_connected())
                 except Exception:
                     telegram_connected = False
-            interactions = await asyncio.to_thread(pending_interactions)
-            if run_id is not None:
-                interactions = [item for item in interactions if int(item.get("run_id") or 0) == int(run_id)]
+            interactions = []
+            if run_id is not None or chat_id is not None:
+                interactions = await asyncio.to_thread(
+                    pending_interactions, run_id=run_id, development_chat_id=chat_id, include_decisions=True,
+                )
             safe_interactions = [
                 {
                     "token": item.get("token"),
                     "run_id": item.get("run_id"),
                     "step_id": item.get("step_id"),
                     "kind": item.get("kind"),
-                    "allowed_actions": json.loads(item.get("allowed_actions") or "[]"),
+                    "allowed_actions": json.loads(item.get("allowed_actions") or "[]")
+                    if item.get("status", "pending") == "pending" else [],
                     "expires_at": item.get("expires_at"),
                     "error": item.get("error"),
                     "telegram_linked": bool(item.get("telegram_chat_id")),
+                    "telegram_delivery": telegram_checkpoint_delivery_status(item),
+                    **({"decision_status": item["status"]} if item.get("status") in {"resolving", "unconfirmed"} else {}),
                 }
                 for item in interactions
             ]

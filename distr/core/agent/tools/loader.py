@@ -206,6 +206,7 @@ def _get_tool_definitions(
         ("IdeThreadTool", {}),
         ("ProactiveOrchestratorTool", {}),
         ("WorkOpsTool", {}),
+        ("InitiativeAttentionTool", {}),
         ("MemorySearchTool", {}),
         ("MemoryReadTool", {}),
         (
@@ -572,6 +573,7 @@ TOOL_REGISTRY = {
     "IdeThreadTool":           ("system.ide_thread", "IdeThreadTool"),
     "ProactiveOrchestratorTool": ("system.proactive_orchestrator", "ProactiveOrchestratorTool"),
     "WorkOpsTool": ("system.work_ops_tool", "WorkOpsTool"),
+    "InitiativeAttentionTool": ("system.initiative_attention_tool", "InitiativeAttentionTool"),
     "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
     "MemoryReadTool":          ("system.memory_tools", "MemoryReadTool"),
     "MemoryAddTool":           ("system.memory_tools", "MemoryAddTool"),
@@ -738,6 +740,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Operate the work loop: intake Jira/email batches onto the Ticket Board, run tickets via project CLI or workflow, "
         "check lifecycle status, show humanized client drafts, and approve client sends. "
         "Telegram remains Send/Revise/Leave. Prefer this over inventing a chat-stream CLI."
+    ),
+    "InitiativeAttentionTool": (
+        "Durably ignore or un-ignore a client or project, set a focus, or link an email address/account to a project; "
+        "lists what is set aside and which clients are still waiting."
     ),
     "MemorySearchTool": "Search distilled long-term MEMORY.md sections for facts and preferences using keyword relevance.",
     "MemoryReadTool": "Read line ranges from cross-chat AGENT.md, USER.md, MEMORY.md, or EVENTS.md persistent files.",

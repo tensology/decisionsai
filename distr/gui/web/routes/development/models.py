@@ -155,6 +155,9 @@ class StudioTaskCreateRequest(BaseModel):
 
 class StudioRoutingAssessmentRequest(BaseModel):
     instruction: str
+    chat_id: Optional[int] = None
+    ticket_id: Optional[int] = None
+    board_key: Optional[str] = None
     ticket_title: str = ""
     ticket_description: str = ""
     has_images: bool = False
@@ -175,6 +178,7 @@ class StudioCommandRequest(BaseModel):
     source_ref: str = ""
     command_type: str = "instruction"
     metadata: Optional[dict] = None
+    expected_scope: tuple[int, str, str, int | None, str] | None = None
 
 
 class StudioCommandUpdateRequest(BaseModel):
@@ -183,6 +187,25 @@ class StudioCommandUpdateRequest(BaseModel):
     metadata: Optional[dict] = None
     editing: Optional[bool] = None
     expected_modified_at: Optional[str] = None
+
+
+class StudioFollowupRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=48000)
+    submission_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    expected_project_id: Optional[int] = Field(gt=0)
+    expected_scope: tuple[int, str, str, int | None, str] | None = None
+    expected_thread_identity: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class StudioFollowupRevision(BaseModel):
+    expected_modified_at: str = Field(min_length=1, max_length=64)
+
+
+class StudioSteeringRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=12000)
+    turn_id: int = Field(gt=0, strict=True)
+    expected_project_id: int = Field(gt=0, strict=True)
+    submission_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
 class StudioThreadControlsRequest(BaseModel):
@@ -238,6 +261,13 @@ class StudioSkillCaptureRequest(BaseModel):
 class StudioInteractionResolveRequest(BaseModel):
     action: str
     response_text: str = ""
+
+
+class StudioCheckpointDecisionRequest(BaseModel):
+    run_id: int = Field(gt=0, strict=True)
+    token: str = Field(pattern=r"^[A-Za-z0-9_-]{16}$")
+    action: str = Field(min_length=1, max_length=32)
+    response_text: str = Field(default="", max_length=8000)
 
 
 class StudioArtifactCreateRequest(BaseModel):

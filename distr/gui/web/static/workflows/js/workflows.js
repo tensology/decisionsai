@@ -12802,7 +12802,7 @@
         status = String(status || "").toLowerCase();
         if (status === "completed" || status === "passed") return "text-green-300 border-green-500/30 bg-green-500/10";
         if (status === "failed" || status === "error") return "text-red-300 border-red-500/30 bg-red-500/10";
-        if (status === "waiting" || status === "queued") return "text-amber-300 border-amber-500/30 bg-amber-500/10";
+        if (status === "waiting" || status === "queued" || status === "held") return "text-amber-300 border-amber-500/30 bg-amber-500/10";
         if (status === "cancelled") return "text-gray-300 border-white/15 bg-white/5";
         return "text-blue-300 border-blue-500/30 bg-blue-500/10";
     }
@@ -12837,6 +12837,19 @@
             var meta = orchestratorMetaText(event);
             var payload = event.payload && typeof event.payload === "object" ? event.payload : {};
             var evidence = event.evidence && typeof event.evidence === "object" ? event.evidence : {};
+            if (event.event_type === "outcome_workflow_queue_held") {
+                return '<div class="rounded border border-white/10 bg-[#10183f] px-3 py-2">' +
+                    '<div class="wf-queue-hold-heading items-center text-xs text-gray-300">' +
+                        '<span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ' + orchestratorStatusClass(status) + '">Held</span>' +
+                        '<span>Queue handoff</span>' +
+                    '</div>' +
+                    '<p class="mt-1 text-sm text-white font-medium break-words">' + esc(payload.reason || event.summary || "The next ticket is on hold.") + '</p>' +
+                    '<div class="wf-queue-hold-meta mt-1 text-[11px] text-gray-400">' +
+                        (meta ? '<span>' + esc(meta) + '</span>' : '') +
+                        (when ? '<time datetime="' + esc(event.created_at) + '">' + esc(when) + '</time>' : '') +
+                    '</div>' +
+                '</div>';
+            }
             var detailLines = [];
             if (payload.decision && typeof payload.decision === "object") {
                 if (payload.decision.backend) detailLines.push("Route backend: " + payload.decision.backend);

@@ -2,11 +2,11 @@
 // .erd-viewport (dot grid, drag to pan, Command+wheel zooms, plain wheel pans) > transformed
 // .erd-stage, bottom-left edit dock, bottom-right zoom dock, top-right call-out, selection panel.
 // Pages are cards (screenshot or placeholder, title, route) on lanes. No saving here: the host passes actions.
-import { SHAPE_KIND, layoutIface } from './iface-model.js?v=20261103-ifaceradial1';
+import { SHAPE_KIND, layoutIface } from './iface-model.js?v=20261112-readable-map';
 import { shapeGlyph } from './flow-nodes.js?v=20261103-ifaces3';
 import { esc, availableBottom } from './canvas-chrome.js?v=20261103-ifaces3';
 
-const MIN_ZOOM = 0.15, MAX_ZOOM = 2;
+const MIN_ZOOM = 0.05, MAX_ZOOM = 2;
 const icon = (d) => `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 // opts: { model, aspect, view, selectedKey, canUndo, canRedo, onAddPage, onUndo, onRedo, onRebuild, onOpen(node),
@@ -19,7 +19,7 @@ export function createIfaceCanvas(opts) {
     const el = document.createElement('div');
     el.className = 'erd-editor iface-canvas';
     el.innerHTML = `<div class="erd-body">
-        <div class="erd-viewport iface-viewport" tabindex="0" role="application" aria-label="Interfaces canvas: arrow keys pan, plus and minus zoom, Tab to the pages">
+        <div class="erd-viewport iface-viewport" tabindex="0" role="application" aria-label="Interfaces canvas: arrow keys pan, plus and minus zoom, Tab to the pages${layout.large ? ', then use arrow keys to browse' : ''}">
             <div class="erd-stage"><svg class="erd-lines iface-lines" aria-hidden="true"></svg><div class="iface-lanes"></div><div class="erd-nodes iface-nodes" role="list" aria-label="Pages"></div></div>
         </div>
         <div class="erd-dock erd-dock-left iface-dock" role="toolbar" aria-label="Edit pages">
@@ -44,14 +44,19 @@ export function createIfaceCanvas(opts) {
 
     // ---- nodes, lanes, edges ---------------------------------------------------------
     lanesEl.innerHTML = layout.lanes.map((l) => `<section class="iface-lane" data-lane="${esc(l.id)}" style="transform: translate(${l.x}px, ${l.y - 4}px); width: ${l.w}px; height: ${l.h}px"><h3>${esc(l.label)} <small>${l.count}</small></h3></section>`).join('');
-    nodesEl.innerHTML = model.nodes.map((n) => {
+    const orderedNodes = layout.large
+        ? [...model.nodes].sort((a, b) => a.y - b.y || a.x - b.x)
+        : model.nodes;
+    const lastCardBottom = orderedNodes.reduce((bottom, node) => Math.max(bottom, node.y + node.h), 0);
+    let activeKey = selectedKey || orderedNodes[0]?.key;
+    nodesEl.innerHTML = orderedNodes.map((n) => {
         const part = n.lane === 'ajax';
         const comment = n.note ? `<small class="iface-note" title="${esc(n.note)}">${esc(n.note)}</small>` : '';
-        const thumb = part || n.quiet || n.lane === 'guidance' ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" src="${esc(n.shot.image)}">`
+        const thumb = part || n.quiet || n.lane === 'guidance' || (layout.large && !n.screenId && !n.shot?.image && n.route) ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" src="${esc(n.shot.image)}">`
             : `<span class="iface-shot iface-shot-missing" aria-hidden="true"${n.shot?.reason ? ` title="${esc(n.shot.reason)}"` : ''}><i></i><i></i><i></i></span>`);
         const method = part && n.method ? `<span class="iface-part-method">${esc(n.method)}</span>` : '';
         const kind = part ? 'Part' : (SHAPE_KIND[n.shape] || 'Page');
-        return `<div class="erd-table iface-node${part ? ' iface-part' : ''}${n.quiet ? ' iface-node-quiet' : ''}${n.key === selectedKey ? ' selected' : ''}" role="listitem" tabindex="0" data-node="${esc(n.key)}" data-shape="${esc(n.shape)}" data-shape-source="${n.shapeSource}" data-lane="${esc(n.lane)}" data-outline="${n.screenId ? 'yes' : 'no'}"
+        return `<div class="erd-table iface-node${part ? ' iface-part' : ''}${n.quiet ? ' iface-node-quiet' : ''}${n.key === selectedKey ? ' selected' : ''}" role="listitem" tabindex="${layout.large && n.key !== activeKey ? -1 : 0}" data-node="${esc(n.key)}" data-shape="${esc(n.shape)}" data-shape-source="${n.shapeSource}" data-lane="${esc(n.lane)}" data-outline="${n.screenId ? 'yes' : 'no'}"
             aria-label="${esc(`${n.label}${n.method ? `, ${n.method}` : ''}${n.route ? `, ${n.route}` : ''}${n.note ? `. ${n.note}` : ''}. ${kind}${n.screenId ? '' : ', no page outline yet'}. Enter opens.`)}"
             style="transform: translate(${n.x}px, ${n.y}px); width: ${n.w}px; height: ${n.h}px">
             <header class="erd-table-head iface-node-head"><span class="iface-glyph" title="${esc(kind)}${n.shapeSource === 'default' ? ' (default)' : ''}">${shapeGlyph(n.shape)}</span><strong title="${esc(n.label)}">${esc(n.label)}</strong></header>
@@ -59,6 +64,13 @@ export function createIfaceCanvas(opts) {
         </div>`;
     }).join('');
     const byKeyEl = new Map([...nodesEl.querySelectorAll('[data-node]')].map((n) => [n.dataset.node, n]));
+    function setActivePage(key) {
+        if (!layout.large || key === activeKey) return;
+        const previous = byKeyEl.get(activeKey);
+        if (previous) previous.tabIndex = -1;
+        byKeyEl.get(key).tabIndex = 0;
+        activeKey = key;
+    }
     const port = (n, tx, ty) => {
         const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
         const dx = tx - cx, dy = ty - cy;
@@ -73,8 +85,14 @@ export function createIfaceCanvas(opts) {
             if (!a || !b) return '';
             const [x1, y1] = port(a, b.x + b.w / 2, b.y + b.h / 2);
             const [x2, y2] = port(b, a.x + a.w / 2, a.y + a.h / 2);
-            return `<g class="iface-edge" data-kind="${esc(e.kind)}"><path class="erd-line" d="M${x1},${y1} L${x2},${y2}" marker-end="url(#iface-arrow)"/>${e.label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}">${esc(e.label)}</text>` : ''}</g>`;
+            return `<g class="iface-edge" data-kind="${esc(e.kind)}" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><path class="erd-line" d="M${x1},${y1} L${x2},${y2}" marker-end="url(#iface-arrow)"/>${e.label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}">${esc(e.label)}</text>` : ''}</g>`;
         }).join('');
+    const edges = [...lines.querySelectorAll('.iface-edge')];
+    const canFilterLinks = layout.large && edges.length > 0;
+    function setAllLinks(show) {
+        lines.classList.toggle('selected-links-only', canFilterLinks && !show);
+    }
+    setAllLinks(opts.showAllLinks);
 
     // Keep reciprocal and dense-hub captions distinct without changing navigation paths.
     let labelsPlaced = false;
@@ -128,6 +146,36 @@ export function createIfaceCanvas(opts) {
         view = { zoom, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k };
         applyView();
     }
+    function readableHeight() {
+        const dockHeight = Math.max(...[...el.querySelectorAll('.erd-dock')].map((dock) => dock.offsetHeight), 0);
+        return Math.max(1, viewport.clientHeight - dockHeight - 20);
+    }
+    function panTo(x, y) {
+        if (layout.large) {
+            const height = readableHeight();
+            const margin = 16;
+            const clamp = (position, extent, available) => {
+                const trailing = available - extent - margin;
+                return Math.max(Math.min(margin, trailing), Math.min(Math.max(margin, trailing), position));
+            };
+            const mapHeight = lastCardBottom * view.zoom;
+            y = clamp(y, mapHeight, height);
+            const atBottom = mapHeight > height - margin * 2 && y === height - mapHeight - margin;
+            const lastRow = orderedNodes.at(-1)?.y;
+            // A short lane at the bottom may have far fewer columns than the one above.
+            const rowWidth = orderedNodes.reduce((right, node) => {
+                const top = node.y * view.zoom + y;
+                if (atBottom && node.y !== lastRow) return right;
+                if (top >= height || top + node.h * view.zoom <= 0) return right;
+                return Math.max(right, (node.x + node.w) * view.zoom);
+            }, 0);
+            x = clamp(x, rowWidth || layout.width * view.zoom, viewport.clientWidth);
+        }
+        if (x === view.x && y === view.y) return;
+        fitted = null;
+        view = { ...view, x, y };
+        applyView();
+    }
     // 100% is the default zoom. Keep the point under the viewport centre fixed.
     function resetZoom() {
         if (!view) view = { zoom: 1, x: 0, y: 0 };
@@ -154,10 +202,14 @@ export function createIfaceCanvas(opts) {
     function select(key, { focus = false } = {}) {
         selectedKey = key && model.byKey.has(key) ? key : null;
         byKeyEl.forEach((node, k) => node.classList.toggle('selected', k === selectedKey));
+        lines.classList.toggle('has-selected-page', Boolean(selectedKey));
+        edges.forEach(edge => edge.classList.toggle('related',
+            edge.dataset.from === selectedKey || edge.dataset.to === selectedKey));
         const node = selectedKey ? model.byKey.get(selectedKey) : null;
         panel.hidden = !node;
         panel.dataset.mode = node ? 'edit' : '';
         if (node) {
+            setActivePage(node.key);
             panel.innerHTML = `<button type="button" class="erd-callout-close iface-panel-close" aria-label="Close page details" title="Close (Esc)">${icon('M4.5 4.5l7 7M11.5 4.5l-7 7')}</button>${opts.panelHtml ? opts.panelHtml(node) : `<h4>${esc(node.label)}</h4>`}`;
             panel.querySelector('.iface-panel-close').onclick = () => { select(null); byKeyEl.get(node.key)?.focus({ preventScroll: true }); };
             opts.onPanel?.(panel, node);
@@ -168,9 +220,12 @@ export function createIfaceCanvas(opts) {
     function reveal(key, { readable = false } = {}) {
         const n = model.byKey.get(key);
         if (!n) return;
-        const vw = viewport.clientWidth;
-        const dockHeight = Math.max(...[...el.querySelectorAll('.erd-dock')].map((dock) => dock.offsetHeight), 0);
-        const vh = Math.max(1, viewport.clientHeight - dockHeight - 20);
+        let vw = viewport.clientWidth;
+        if (readable && key === selectedKey && !panel.hidden && getComputedStyle(panel).position === 'absolute') {
+            const unobstructed = panel.getBoundingClientRect().left - viewport.getBoundingClientRect().left - 12;
+            if (unobstructed >= n.w) vw = unobstructed;
+        }
+        const vh = readableHeight();
         // Fit remains an overview. Keyboard navigation makes the focused page
         // readable, while preserving a user's deliberate magnification above 100%.
         const zoom = readable ? Math.max(1, view.zoom) : view.zoom;
@@ -184,6 +239,9 @@ export function createIfaceCanvas(opts) {
 
     // ---- pointer: pan, click selects, double-click opens ------------------------------
     let gesture = null, raf = 0;
+    function panGesture() {
+        if (gesture?.last) panTo(gesture.origin[0] + gesture.last[0], gesture.origin[1] + gesture.last[1]);
+    }
     viewport.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         const node = e.target.closest('[data-node]');
@@ -197,9 +255,10 @@ export function createIfaceCanvas(opts) {
         gesture.moved = true;
         gesture.last = [dx, dy];
         if (raf) return;
-        raf = requestAnimationFrame(() => { raf = 0; if (!gesture?.last) return; view = { ...view, x: gesture.origin[0] + gesture.last[0], y: gesture.origin[1] + gesture.last[1] }; applyView(); });
+        raf = requestAnimationFrame(() => { raf = 0; panGesture(); });
     });
     const end = () => {
+        panGesture();
         const g = gesture; gesture = null;
         if (!g || g.moved) return;
         select(g.node);
@@ -215,19 +274,36 @@ export function createIfaceCanvas(opts) {
         const r = viewport.getBoundingClientRect();
         // Command+scroll zooms (up in, down out). Control and a plain scroll pan. Chrome also sets ctrlKey for Command+scroll, so the check is Meta only.
         if (e.metaKey || e.getModifierState?.('Meta')) zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
-        else { view = { ...view, x: view.x - e.deltaX, y: view.y - e.deltaY }; applyView(); }
+        else panTo(view.x - e.deltaX, view.y - e.deltaY);
     }, { passive: false });
     viewport.addEventListener('focusin', (e) => {
         const node = e.target.closest?.('[data-node]');
-        if (node) reveal(node.dataset.node, { readable: node.matches(':focus-visible') });
+        if (node) {
+            setActivePage(node.dataset.node);
+            reveal(node.dataset.node, { readable: node.matches(':focus-visible') });
+        }
     });
     viewport.addEventListener('keydown', (e) => {
         const node = e.target.closest?.('[data-node]');
         if (node && e.key === 'Enter') { e.preventDefault(); opts.onOpen?.(model.byKey.get(node.dataset.node)); return; }
         if (node && e.key === ' ') { e.preventDefault(); select(node.dataset.node, { focus: true }); return; }
+        if (node && layout.large) {
+            const index = orderedNodes.findIndex((page) => page.key === node.dataset.node);
+            const next = {
+                ArrowLeft: index - 1, ArrowUp: index - 1,
+                ArrowRight: index + 1, ArrowDown: index + 1,
+                Home: 0, End: orderedNodes.length - 1,
+            }[e.key];
+            if (next !== undefined) {
+                e.preventDefault();
+                const page = orderedNodes[Math.max(0, Math.min(next, orderedNodes.length - 1))];
+                byKeyEl.get(page.key).focus({ preventScroll: true });
+                return;
+            }
+        }
         const step = e.shiftKey ? 160 : 60;
         const pan = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
-        if (pan && !node) { e.preventDefault(); view = { ...view, x: view.x + pan[0], y: view.y + pan[1] }; applyView(); return; }
+        if (pan && !node) { e.preventDefault(); panTo(view.x + pan[0], view.y + pan[1]); return; }
         if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomAt(1.2); }
         else if (e.key === '-') { e.preventDefault(); zoomAt(1 / 1.2); }
         else if (e.key === '0') { e.preventDefault(); fit(); }
@@ -278,14 +354,15 @@ export function createIfaceCanvas(opts) {
     }
 
     return {
-        el, dock, layout, fit, zoomAt, resetZoom, reveal, select, setHistory, setShot,
+        el, dock, layout, fit, zoomAt, resetZoom, reveal, select, setHistory, setShot, canFilterLinks, setAllLinks,
         get view() { return view; },
         get selectedKey() { return selectedKey; },
         mounted() {
             sizeToWindow();
-            if (!view) fit({ floor: layout.focus === 'hub' ? 0.55 : 0 }); else applyView();
+            if (!view && layout.large) view = { zoom: 1, x: 26, y: 16 };
+            if (view) applyView(); else fit({ floor: layout.focus === 'hub' ? 0.55 : 0 });
             if (selectedKey) select(selectedKey);
         },
-        destroy() { resizeObserver?.disconnect(); window.removeEventListener('resize', onResize); cancelAnimationFrame(frame); el.remove(); },
+        destroy() { resizeObserver?.disconnect(); window.removeEventListener('resize', onResize); cancelAnimationFrame(frame); cancelAnimationFrame(raf); el.remove(); },
     };
 }

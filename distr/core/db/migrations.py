@@ -6,6 +6,7 @@ and updating existing tables.
 """
 import logging
 import json
+import re
 from sqlalchemy import text, inspect
 from . import engine, Session, Base, Settings
 from datetime import datetime
@@ -1098,6 +1099,10 @@ def run_migrations():
 
     ensure_plan_db_links_table(engine)
     ensure_incoming_dismissal_snapshot_columns(engine)
+    ensure_source_reply_claim_scope_columns(engine)
+    ensure_ticket_lane_history_table(engine)
+    from distr.core.workflow.thread_ready_ack import ensure_chat_ready_acknowledged_at
+    ensure_chat_ready_acknowledged_at(engine)
 
     logger.info("Database migrations completed")
 
@@ -1240,6 +1245,10 @@ def run_migrations():
                     conn.execute(text("ALTER TABLE projects ADD COLUMN notes TEXT"))
                     conn.commit()
                     logger.info("Added notes column to projects table")
+                if "agent_ignored" not in existing:
+                    conn.execute(text("ALTER TABLE projects ADD COLUMN agent_ignored BOOLEAN DEFAULT 0"))
+                    conn.commit()
+                    logger.info("Added agent_ignored column to projects table")
     except Exception as e:
         logger.warning(f"Could not add project notes/start_time_tracker columns: {e}")
 
@@ -1789,7 +1798,7 @@ def run_migrations():
 
     # Initiative settings columns
     initiative_columns = [
-        ("initiative_level", "VARCHAR DEFAULT 'assist'"),
+        ("initiative_level", "VARCHAR DEFAULT 'operate'"),
         ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
         ("initiative_allow_routine_tasks", "BOOLEAN DEFAULT 0"),
         ("initiative_scan_boards", "BOOLEAN DEFAULT 1"),
@@ -1804,6 +1813,10 @@ def run_migrations():
         ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
         ("initiative_ask_file_changes", "BOOLEAN DEFAULT 1"),
         ("initiative_ask_sensitive", "BOOLEAN DEFAULT 1"),
+        ("initiative_telegram_notify_suggestions", "BOOLEAN DEFAULT 0"),
+        ("initiative_recommendations", "BOOLEAN DEFAULT 0"),
+        ("initiative_own_channel", "VARCHAR DEFAULT ''"),
+        ("initiative_owner_whatsapp", "VARCHAR DEFAULT ''"),
     ]
     for col_name, col_type in initiative_columns:
         try:
@@ -1818,6 +1831,27 @@ def run_migrations():
                 except Exception as e:
                     if "duplicate column" not in str(e).lower():
                         logger.warning(f"Could not add {col_name} column: {e}")
+
+    # Older installs created initiative_level with SQL DEFAULT 'assist' (Assist was folded into
+    # Standard on 11 Nov 2026). SQLite can't change a column default without rebuilding the
+    # settings table, so store the canonical value instead: legacy aliases and blanks become
+    # 'operate' (Standard), exactly what migrate_initiative_level() already reads them as.
+    # observe/operate/own are never touched.
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "UPDATE settings SET initiative_level='operate' "
+                "WHERE initiative_level IS NULL OR TRIM(initiative_level)='' "
+                "OR LOWER(TRIM(initiative_level)) IN ('assist','assistive','proactive')"))
+            conn.commit()
+            if getattr(result, "rowcount", 0):
+                logger.info("Normalized legacy initiative_level to 'operate' (Standard) on %s row(s)", result.rowcount)
+    except Exception as e:
+        logger.debug(f"Initiative level normalization skipped: {e}")
+
+    # The value is canonical now; align the SQL column DEFAULT too (12 Nov 2026), so a fresh
+    # row can never be created as 'assist'. Rebuilds only the settings table, keeps every row.
+    align_initiative_level_default(engine)
 
     # Migrate always_confirm_file_operations value to initiative_ask_file_changes
     try:
@@ -2788,6 +2822,80 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
 
 
 
+_LEGACY_INITIATIVE_DEFAULTS = {"'assist'", "'assistive'", "'proactive'", '"assist"'}
+_INITIATIVE_DEFAULT_RE = re.compile(
+    r"""(\binitiative_level\s+VARCHAR\s+DEFAULT\s+)(?:'assist'|'assistive'|'proactive'|"assist")""", re.I)
+
+
+def align_initiative_level_default(engine) -> dict:
+    """Make the settings.initiative_level SQL DEFAULT 'operate' (Standard), matching the code.
+
+    SQLite can't ALTER a column default, so the settings table is rebuilt inside one
+    transaction: create a copy whose CREATE statement differs only in that DEFAULT, copy every
+    row column-for-column, check the copy is identical, swap it in. Any mismatch rolls back and
+    leaves the table untouched. Idempotent: does nothing once the default is not a legacy alias.
+    """
+    raw = engine.raw_connection()
+    try:
+        conn = raw.driver_connection if hasattr(raw, "driver_connection") else raw.connection
+        info = conn.execute("PRAGMA table_info(settings)").fetchall()
+        column = next((row for row in info if row[1] == "initiative_level"), None)
+        if column is None or str(column[4] or "").strip() not in _LEGACY_INITIATIVE_DEFAULTS:
+            return {"changed": False, "default": column[4] if column else None}
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='settings'").fetchone()
+        create_sql = str(row[0] or "") if row else ""
+        new_sql, hits = _INITIATIVE_DEFAULT_RE.subn(lambda m: m.group(1) + "'operate'", create_sql)
+        head = re.match(r'\s*CREATE\s+TABLE\s+("settings"|settings|`settings`|\[settings\])\s*\(', new_sql, re.I)
+        if hits != 1 or head is None:
+            logger.warning("initiative_level default left as %s: unexpected settings schema", column[4])
+            return {"changed": False, "default": column[4], "reason": "unexpected schema"}
+        others = conn.execute("SELECT type, name FROM sqlite_master WHERE tbl_name='settings' AND name!='settings'").fetchall()
+        temp_sql = "CREATE TABLE settings__initiative_default" + new_sql[head.end() - 1:]
+        names = [r[1] for r in info]
+        cols = ", ".join('"' + n.replace('"', '""') + '"' for n in names)
+        fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+        previous_isolation = conn.isolation_level
+        conn.isolation_level = None  # explicit transaction control below
+        try:
+            if fk:
+                conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                before = conn.execute(f"SELECT {cols} FROM settings ORDER BY rowid").fetchall()
+                conn.execute("DROP TABLE IF EXISTS settings__initiative_default")
+                conn.execute(temp_sql)
+                conn.execute(f"INSERT INTO settings__initiative_default ({cols}) SELECT {cols} FROM settings ORDER BY rowid")
+                copied = conn.execute(f"SELECT {cols} FROM settings__initiative_default ORDER BY rowid").fetchall()
+                if copied != before:
+                    raise RuntimeError("settings copy differs from the original")
+                for kind, name in others:
+                    if kind in ("index", "trigger") and not str(name).startswith("sqlite_autoindex"):
+                        raise RuntimeError(f"settings has a {kind} ({name}); not rebuilding automatically")
+                conn.execute("DROP TABLE settings")
+                conn.execute("ALTER TABLE settings__initiative_default RENAME TO settings")
+                after_info = conn.execute("PRAGMA table_info(settings)").fetchall()
+                after = conn.execute(f"SELECT {cols} FROM settings ORDER BY rowid").fetchall()
+                expected_info = [tuple(r) if r[1] != "initiative_level" else (*tuple(r)[:4], "'operate'", r[5])
+                                 for r in info]
+                if after != before or [tuple(r) for r in after_info] != expected_info:
+                    raise RuntimeError("settings changed beyond the initiative_level default")
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            if fk:
+                conn.execute("PRAGMA foreign_keys=ON")
+            conn.isolation_level = previous_isolation
+        logger.info("Aligned settings.initiative_level SQL default %s -> 'operate' (%d row(s) kept)", column[4], len(before))
+        return {"changed": True, "from": column[4], "default": "'operate'", "rows": len(before)}
+    except Exception as e:
+        logger.warning("Could not align the initiative_level default (left as is): %s", e)
+        return {"changed": False, "error": str(e)}
+    finally:
+        raw.close()
+
+
 def _drop_settings_columns(engine, columns) -> None:
     """Idempotently drop columns from the settings table (SQLite >= 3.35 DROP COLUMN, else rebuild)."""
     import sqlite3 as _sqlite3
@@ -2847,3 +2955,31 @@ def ensure_incoming_dismissal_snapshot_columns(engine) -> None:
             conn.commit()
     except Exception as e:
         logger.warning("Could not ensure incoming_proposal_dismissals snapshot columns: %s", e)
+
+def ensure_source_reply_claim_scope_columns(engine) -> None:
+    """Keep the identity of outbound claims readable independently of their payload."""
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(source_reply_drafts)"))}
+        if not columns:
+            return  # Fresh databases get both columns from the model.
+        if "claimed_response_id" not in columns:
+            conn.execute(text("ALTER TABLE source_reply_drafts ADD COLUMN claimed_response_id INTEGER"))
+        if "claimed_source_key" not in columns:
+            conn.execute(text("ALTER TABLE source_reply_drafts ADD COLUMN claimed_source_key VARCHAR"))
+
+
+def ensure_ticket_lane_history_table(engine) -> None:
+    """Additive, idempotent: CREATE TABLE / INDEX IF NOT EXISTS for kanban_ticket_lane_history.
+
+    created_at is naive UTC (see distr.core.db.time.utc_now_naive).
+    """
+    from sqlalchemy.schema import CreateIndex, CreateTable
+    from distr.core.db.kanban import KanbanTicketLaneHistory
+    try:
+        with engine.connect() as conn:
+            conn.execute(CreateTable(KanbanTicketLaneHistory.__table__, if_not_exists=True))
+            for index in KanbanTicketLaneHistory.__table__.indexes:
+                conn.execute(CreateIndex(index, if_not_exists=True))
+            conn.commit()
+    except Exception as e:
+        logger.warning("Could not ensure kanban_ticket_lane_history table: %s", e)

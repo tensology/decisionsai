@@ -81,10 +81,13 @@
 .reports-seg { flex: 1 1 0; border: 0; background: transparent; color: var(--studio-muted); padding: 8px 12px; font-size: 14px; line-height: 1.25; cursor: pointer; text-align: center; white-space: nowrap; }
 .reports-seg.is-active { background: var(--studio-accent-soft); color: var(--studio-text); }
 .reports-cal-nav { grid-column: 3; justify-self: end; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.reports-nonbillable-toggle { grid-column: 1; grid-row: 1; justify-self: start; border: 1px solid var(--studio-line); border-radius: 6px; padding: 6px 10px; background: var(--studio-panel); color: var(--studio-muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.reports-nonbillable-toggle[aria-pressed="true"] { background: var(--studio-accent-soft); color: var(--studio-text); }
 @container (max-width: 740px) {
     .reports-cal-head { grid-template-columns: minmax(0, 1fr); justify-items: center; }
     .reports-segs { grid-column: 1; width: min(100%, 360px); }
     .reports-cal-nav { grid-column: 1; justify-self: center; }
+    .reports-nonbillable-toggle { grid-row: auto; justify-self: center; }
 }
 .reports-month { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-template-rows: auto repeat(var(--weeks, 5), minmax(64px, 1fr)); gap: 3px; align-content: start; }
 .reports-dow { font-size: 10.5px; color: var(--studio-muted); text-align: left; padding: 0 4px 2px; }

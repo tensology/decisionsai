@@ -158,7 +158,9 @@ from distr.core.chat_title_auto import (
     _title_auto_meta,
 )
 from distr.core.planning.chats import is_plan_chat
-from distr.core.workflow.development_threads import is_development_thread
+from distr.core.workflow.development_threads import (
+    development_scope_identity, development_thread_metadata, development_thread_receipt_identity, is_development_thread,
+)
 from distr.gui.web.security import (
     is_allowed_local_origin,
     websocket_has_valid_internal_token,
@@ -1133,6 +1135,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
     @router.get("/chats")
     async def get_chats(include_archived: bool = False, surface: str = "chat"):
         """Get root conversations for exactly one owning surface."""
+        from distr.core.incoming.telegram_updates import public_proposal_update_status
+
         try:
             normalized_surface = str(surface or "chat").strip().lower()
             if normalized_surface not in {"chat", "development"}:
@@ -1184,6 +1188,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                             "development_board_ticket_title": development.get("board_ticket_title"),
                             "development_board_ticket_lane": development.get("board_ticket_lane"),
                             "development_execution": development.get("execution") or {},
+                            **({"telegram_proposal_update_status": public_proposal_update_status(_safe_json_obj(chat.params))}
+                               if owned_by_development else {}),
+                            "ready_acknowledged_at": (
+                                chat.ready_acknowledged_at.isoformat()
+                                if getattr(chat, "ready_acknowledged_at", None) is not None
+                                and hasattr(chat.ready_acknowledged_at, "isoformat")
+                                else (str(getattr(chat, "ready_acknowledged_at", None) or "") or None)
+                            ),
                             "development_time_running": bool(development.get("time_running")),
                             "development_time_seconds": max(0, int(development.get("time_seconds") or 0)),
                             "pinned": bool(development.get("pinned")),
@@ -1341,10 +1353,16 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 rows = session.execute(thread_query, {"root_id": root_id}).fetchall()
 
                 messages = _merge_thread_rows_with_tool_and_workflow_events(rows, root_chat)
+                unavailable_attachments = []
+                telegram_update_status = None
                 if owned_by_development:
                     from distr.core.incoming.media import public_thread_attachments
+                    from distr.core.incoming.proposals import unavailable_thread_attachment_names
+                    from distr.core.incoming.telegram_updates import public_proposal_update_status
 
-                    media = public_thread_attachments(int(root_chat.id))
+                    media = await asyncio.to_thread(public_thread_attachments, int(root_chat.id))
+                    unavailable_attachments = unavailable_thread_attachment_names(root_chat, media)
+                    telegram_update_status = public_proposal_update_status(_safe_json_obj(root_chat.params))
                     first_user = next((message for message in messages if message.get('role') == 'user'), None)
                     if media and first_user is not None:
                         first_user['attachments'] = media
@@ -1453,19 +1471,41 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 additional_context = _chat_additional_context(root_chat.additional_context)
                 compact_checkpoint = additional_context.get("compact_checkpoint")
                 model_route = development.get("model_route") if isinstance(development.get("model_route"), dict) else {}
-                from distr.core.incoming.source_reply import has_reply_source
+                from distr.core.incoming.source_reply import (
+                    has_reply_source, proactive_internal_response_ids, sent_reply_response_ids,
+                )
                 from distr.core.incoming.proposal_conversation import submitted_proposal_source_key
+                from distr.core.db.projects import Project
+                development_project = session.get(Project, root_chat.project_id) if owned_by_development and root_chat.project_id else None
+                if owned_by_development:
+                    sent_response_ids = sent_reply_response_ids(session, root_chat.id)
+                    internal_notice_ids = proactive_internal_response_ids(session, root_chat.id)
+                    for message in messages:
+                        if message.get("role") != "assistant" or message.get("spoken"):
+                            continue
+                        response_id = message.get("chat_row_id")
+                        if response_id in internal_notice_ids:
+                            message["source_reply_eligible"] = False
+                        if response_id in sent_response_ids:
+                            message["source_reply_sent"] = True
                 return JSONResponse(
                     {
                         "id": root_chat.id,
                         "title": header_payload["title"],
                         **sidebar,
                         "messages": messages,
+                        "unavailable_attachment_names": unavailable_attachments,
+                        "telegram_proposal_update_status": telegram_update_status,
                         "has_reply_source": has_reply_source(root_chat),
                         "proposal_source_review_key": submitted_proposal_source_key(root_chat),
                         "provider": provider,
                         "model_name": model_name,
                         "project_id": root_chat.project_id,
+                        "development_scope": development_scope_identity(
+                            root_chat.project_id, development_thread_metadata(root_chat), chat_id=root_chat.id,
+                        ) if owned_by_development else None,
+                        "development_thread_receipt_identity": development_thread_receipt_identity(root_chat) if owned_by_development else None,
+                        "development_project_name": development_project.name if development_project else None,
                         "route_mode": root_chat.route_mode or "auto",
                         "execution_profile": root_chat.execution_profile or "code",
                         "autonomy_level": root_chat.autonomy_level or "full",
@@ -1482,6 +1522,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         "service_tier": model_route.get("service_tier") or "standard",
                         "backend": model_route.get("backend") or "",
                         "archived": bool(root_chat.is_archived),
+                        "ready_acknowledged_at": (
+                            root_chat.ready_acknowledged_at.isoformat()
+                            if getattr(root_chat, "ready_acknowledged_at", None) is not None
+                            and hasattr(root_chat.ready_acknowledged_at, "isoformat")
+                            else (str(getattr(root_chat, "ready_acknowledged_at", None) or "") or None)
+                        ),
                         "voice_provider": voice_provider,
                         # Keep runtime/raw voice ID for agent swapping, and provide a
                         # display label separately for the UI.

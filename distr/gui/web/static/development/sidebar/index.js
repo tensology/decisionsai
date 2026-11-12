@@ -1,4 +1,5 @@
 import { isStartupTerminal } from '../terminals/session-policy.js';
+import { createReadySeen } from './ready_seen.js';
 
 // Owns sidebar rendering, interactions, and private view state.
 // Filled folder = board has threads underneath; outline = none.
@@ -11,6 +12,12 @@ export function createSidebar({ context, actions, el }) {
         pinnedBoardKeys: [],
         collapsedBoardKeys: new Set(),
         expandedThreadBoards: new Set(),
+        // Folders opened only to show a thread: they go back to collapsed once the user moves on.
+        revealedBoardKeys: new Set(),
+        // Collapsed folders the user opened by hand; opening a thread from one makes it a reveal.
+        peekBoardKeys: new Set(),
+        // Thread being revealed while the app is still switching into the thread view.
+        revealPending: null,
         boardsCollapsed: false,
         boardsExpanded: false,
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
@@ -20,6 +27,8 @@ export function createSidebar({ context, actions, el }) {
         pendingTerminalBoards: new Set(),
         primedTerminalProjects: new Set()
     };
+    // Finished threads this browser has shown; the folder's ready colour ignores them.
+    const readySeen = createReadySeen(window.localStorage);
     try {
         const pinned = JSON.parse(window.localStorage.getItem('decisions-development-pinned-boards') || '[]');
         const collapsed = JSON.parse(window.localStorage.getItem('decisions-development-collapsed-boards') || '[]');
@@ -32,21 +41,41 @@ export function createSidebar({ context, actions, el }) {
     function threadRowHtml(chat, active, pinned = false) {
         return `<div class="task-row-wrap${active ? ' active' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}>${actions.threadRowContentHtml(chat, pinned)}</button></div>`;
     }
-    async function applyPinnedBoards(payload) {
-        if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'board_keys')) return;
-        if (payload.board_keys === null) {
-            // Server already migrated hover-panel project pins; seed only this browser's old local pins.
-            const keys = Array.from(new Set(state.pinnedBoardKeys));
-            if (!keys.length) payload = { board_keys: [] };
-            else payload = await actions.api('/workflows/studio/sidebar/pins', {
-                method: 'PUT', body: { board_keys: keys }
-            });
-        }
-        if (!Array.isArray(payload.board_keys)) return;
-        state.pinnedBoardKeys = payload.board_keys;
+    let pinRevision = 0;
+    let pinWritePending = false;
+
+    function storePinnedBoards(keys) {
+        state.pinnedBoardKeys = keys;
         try {
             window.localStorage.setItem('decisions-development-pinned-boards', JSON.stringify(state.pinnedBoardKeys));
         } catch (_) { /* The server remains authoritative without browser storage. */ }
+    }
+
+    async function savePinnedBoards(method, body) {
+        pinWritePending = true;
+        pinRevision += 1;
+        el('board-context-pin').disabled = true;
+        try {
+            const payload = await actions.api('/workflows/studio/sidebar/pins', { method, body });
+            if (!Array.isArray(payload?.board_keys)) throw new Error('Board pins could not be confirmed.');
+            storePinnedBoards(payload.board_keys);
+        } finally {
+            pinWritePending = false;
+            pinRevision += 1;
+            el('board-context-pin').disabled = false;
+        }
+    }
+
+    async function applyPinnedBoards(payload, readRevision) {
+        if (pinWritePending || readRevision !== pinRevision) return;
+        if (payload?.board_keys === null) {
+            // Server already migrated hover-panel project pins; seed only this browser's old local pins.
+            const keys = Array.from(new Set(state.pinnedBoardKeys));
+            if (keys.length) await savePinnedBoards('PUT', { board_keys: keys, only_if_unset: true });
+            else storePinnedBoards([]);
+        } else if (Array.isArray(payload?.board_keys)) {
+            storePinnedBoards(payload.board_keys);
+        }
     }
     function isThreadActive(chat) {
         const currentId = Number(context.currentChat?.id || 0);
@@ -60,7 +89,62 @@ export function createSidebar({ context, actions, el }) {
         }
         return false;
     }
+    function storeCollapsedBoards() {
+        // Revealed folders are stored collapsed, so a reload also comes back to the normal state.
+        const keys = new Set([...state.collapsedBoardKeys, ...state.revealedBoardKeys]);
+        try {
+            window.localStorage.setItem('decisions-development-collapsed-boards', JSON.stringify([...keys]));
+        } catch (_) {
+            /* local preference only */
+        }
+    }
+    function activeThreadBoardKey() {
+        const chat = context.currentChat;
+        if (!chat) return '';
+        const pending = state.revealPending;
+        // openChat reveals before it switches to the chat view; keep the folder until that lands.
+        if (pending && pending.mode !== context.workspaceMode) state.revealPending = null;
+        const landing = state.revealPending && Number(state.revealPending.chatId) === Number(chat.id);
+        return landing || isThreadActive(chat) ? threadBoard(chat)?.key || '' : '';
+    }
+    function settleRevealedBoards() {
+        // 2026-11-12: a folder opened for a thread returns to normal once that thread is no longer open.
+        const keep = activeThreadBoardKey();
+        state.revealedBoardKeys.forEach((key) => {
+            if (key === keep) return;
+            state.revealedBoardKeys.delete(key);
+            state.collapsedBoardKeys.add(key);
+            state.expandedThreadBoards.delete(key);
+        });
+    }
+    function isBoardViewSelected(boardKey) {
+        // Highlight a project row only while the board itself is the view (board, plan, or the
+        // board's new-thread page). An open thread highlights its own row instead of the folder.
+        if (!boardKey || context.selectedBoardKey !== boardKey) return false;
+        if (['kanban', 'plan'].includes(context.workspaceMode)) return true;
+        return context.workspaceMode === 'chat' && !context.currentChat;
+    }
+    function threadNeedsReview(chat) {
+        return Boolean(actions.threadIsReadyUnaddressed?.(readySeen.withSeen(chat)));
+    }
+
+    // A thread open in the chat view is being read: once its replies are on screen it no
+    // longer counts toward its folder's ready (orange) state.
+    function noteOpenThreadSeen() {
+        const chat = context.currentChat;
+        if (!chat?.id) return;
+        // openChat renders the sidebar just before it switches into the chat view.
+        const landing = state.revealPending && Number(state.revealPending.chatId) === Number(chat.id);
+        if (context.workspaceMode !== 'chat' && !landing) return;
+        // The sidebar row (list payload) is what paints the folder; judge both copies.
+        const row = context.chats.find((item) => Number(item.id) === Number(chat.id));
+        if (threadNeedsReview(chat) || (row && threadNeedsReview(row))) readySeen.markSeen(chat);
+    }
+
     function renderSidebar() {
+        settleRevealedBoards();
+        readySeen.prune(context.chats);
+        noteOpenThreadSeen();
         const pinnedBoards = context.boards.filter((board) => state.pinnedBoardKeys.includes(board.key));
         const pinnedThreads = context.chats.filter((chat) => chat.pinned);
         const unpinned = context.boards.filter((board) => !state.pinnedBoardKeys.includes(board.key));
@@ -166,6 +250,12 @@ export function createSidebar({ context, actions, el }) {
                 openBoardContextMenu(event, button.dataset.boardSelect);
             });
         });
+        document.querySelectorAll('[data-board-kanban]').forEach((button) => {
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                actions.openBoardKanban(button.dataset.boardKanban);
+            });
+        });
         document.querySelectorAll('[data-board-new-chat]').forEach((button) => {
             button.addEventListener('click', async (event) => {
                 event.stopPropagation();
@@ -201,6 +291,7 @@ export function createSidebar({ context, actions, el }) {
         const board = actions.boardByKey(boardKey);
         state.contextBoardKey = boardKey;
         pinButton.querySelector('.context-menu-label').textContent = state.pinnedBoardKeys.includes(boardKey) ? 'Unpin Board' : 'Pin Board';
+        pinButton.disabled = pinWritePending;
         el('board-context-plan').disabled = !board?.project_id || !actions.projectById(board.project_id);
         el('board-context-list').disabled =
             context.workspaceMode === 'kanban' && actions.getKanbanViewMode() === 'list' && context.selectedBoardKey === boardKey;
@@ -540,14 +631,22 @@ export function createSidebar({ context, actions, el }) {
         const showMore = orderedChats.length > 4
             ? `<button type="button" class="project-threads-more" data-project-threads-more="${actions.escapeHtml(board.key)}" aria-expanded="${expanded}">${expanded ? 'Show less' : 'Show more'}</button>` : '';
         const running = context.chats.some(chat => threadBoard(chat)?.key === board.key && actions.threadIsProcessing?.(chat));
-        const busyIcon = running ? `<span class="folder-running-glow" aria-hidden="true">${boardFolderIconHtml(true)}</span>` : '';
-        const selected = !['terminals', 'terminals_home'].includes(context.workspaceMode) && context.selectedBoardKey === board.key;
+        const ready = !running && context.chats.some(chat => threadBoard(chat)?.key === board.key && threadNeedsReview(chat));
+        const busyIcon = running
+            ? `<span class="folder-running-glow" aria-hidden="true">${boardFolderIconHtml(true)}</span>`
+            : ready
+                ? `<span class="folder-ready-alert" aria-hidden="true">${boardFolderIconHtml(true)}</span>`
+                : '';
+        const selected = isBoardViewSelected(board.key);
+        const kanbanButton = actions.boardSupportsKanban?.(board)
+            ? `<button class="board-row-action board-kanban" type="button" data-board-kanban="${actions.escapeHtml(board.key)}" aria-label="Open board for ${actions.escapeHtml(board.name || 'board')}" title="Open board"><svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3" width="3" height="10" rx=".8"/><rect x="6.5" y="3" width="3" height="7" rx=".8"/><rect x="10.5" y="3" width="3" height="5" rx=".8"/></svg></button>`
+            : '';
         const projectRow = `<div class="project-row${selected ? ' active' : ''}">
             ${hasTasks ? `<button class="project-toggle project-folder${collapsed ? '' : ' expanded'}" type="button" data-board-toggle="${actions.escapeHtml(board.key)}" aria-expanded="${String(!collapsed)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${actions.escapeHtml(board.name || 'board')} threads"><span class="folder-icon">${boardFolderIconHtml(true)}${busyIcon}</span></button>` : `<span class="project-toggle project-folder empty" aria-hidden="true"><span class="folder-icon">${boardFolderIconHtml(false)}</span></span>`}
             <button class="project-select" type="button" data-board-select="${actions.escapeHtml(board.key)}"${selected ? ' aria-current="true"' : ''}><span>${actions.escapeHtml(board.name || 'Ticket board')}</span></button>
-            <div class="board-row-tail${hasTasks ? ' has-threads' : ''}">${boardTerminalActionHtml(board)}<button class="board-row-action board-new-chat" type="button" data-board-new-chat="${actions.escapeHtml(board.key)}" aria-label="New thread in ${actions.escapeHtml(board.name || 'board')}" title="New thread in board"><span aria-hidden="true">+</span></button></div>
+            <div class="board-row-tail${hasTasks ? ' has-threads' : ''}">${kanbanButton}${boardTerminalActionHtml(board)}<button class="board-row-action board-new-chat" type="button" data-board-new-chat="${actions.escapeHtml(board.key)}" aria-label="New thread in ${actions.escapeHtml(board.name || 'board')}" title="New thread in board"><span aria-hidden="true">+</span></button></div>
         </div>`;
-        return `<section class="project-group${running ? ' has-running-thread' : ''}" data-board-group="${actions.escapeHtml(board.key)}">
+        return `<section class="project-group${running ? ' has-running-thread' : ''}${ready ? ' has-ready-thread' : ''}" data-board-group="${actions.escapeHtml(board.key)}">
             ${projectRow}
             <div class="task-list${hasTasks && !collapsed ? '' : ' hidden'}">${rows}${showMore}</div>
         </section>`;
@@ -562,35 +661,33 @@ export function createSidebar({ context, actions, el }) {
             const closing = !list.classList.contains('hidden');
             const boardKey = String(button.dataset.boardToggle || '');
             const boardName = group.querySelector('[data-board-select] span')?.textContent?.trim() || 'board';
-            if (closing) { state.collapsedBoardKeys.add(boardKey); state.expandedThreadBoards.delete(boardKey); }
-            else state.collapsedBoardKeys.delete(boardKey);
-            try {
-                window.localStorage.setItem('decisions-development-collapsed-boards', JSON.stringify(Array.from(state.collapsedBoardKeys)));
-            } catch (_) {
-                /* local preference only */
+            state.revealedBoardKeys.delete(boardKey);
+            if (closing) {
+                state.collapsedBoardKeys.add(boardKey);
+                state.expandedThreadBoards.delete(boardKey);
+                state.peekBoardKeys.delete(boardKey);
+            } else {
+                if (state.collapsedBoardKeys.has(boardKey)) state.peekBoardKeys.add(boardKey);
+                state.collapsedBoardKeys.delete(boardKey);
             }
+            storeCollapsedBoards();
             renderSidebar();
             document.querySelector(`[data-board-toggle="${CSS.escape(boardKey)}"]`)?.focus({ preventScroll: true });
         });
     }
 
     async function toggleBoardPin(boardKey) {
-        const set = new Set(state.pinnedBoardKeys);
-        const pinning = !set.has(boardKey);
-        if (pinning) set.add(boardKey);
-        else set.delete(boardKey);
+        if (pinWritePending) return;
+        const pinning = !state.pinnedBoardKeys.includes(boardKey);
         try {
-            const payload = await actions.api('/workflows/studio/sidebar/pins', {
-                method: 'PUT', body: { board_keys: Array.from(set) }
-            });
-            await applyPinnedBoards(payload);
+            await savePinnedBoards('PATCH', { board_key: boardKey, pinned: pinning });
         } catch (error) {
             actions.toast(error.message || 'Board pins could not be saved.', 'error');
             return;
         }
         renderSidebar();
         actions.toast(pinning ? 'Board pinned.' : 'Board unpinned.');
-        closeBoardContextMenu();
+        if (state.contextBoardKey === boardKey) closeBoardContextMenu();
     }
 
     // Desktop sidebar collapse: one toggle in the New Thread row; when collapsed only that
@@ -818,6 +915,7 @@ export function createSidebar({ context, actions, el }) {
             else actions.toast('This action is unavailable for this project.', 'error');
         },
         applyPinnedBoards,
+        boardPinRevision: () => pinRevision,
         pinnedProjectIds() {
             return [...new Set(context.boards
                 .filter((board) => [board.key, ...(board.aliases || [])].some((key) => state.pinnedBoardKeys.includes(key)))
@@ -838,13 +936,19 @@ export function createSidebar({ context, actions, el }) {
         revealThread(chat) {
             const board = threadBoard(chat);
             if (!board) return;
+            // Open a collapsed folder only while its thread is being viewed (see settleRevealedBoards).
+            if (state.collapsedBoardKeys.has(board.key) || state.peekBoardKeys.has(board.key) || state.revealedBoardKeys.has(board.key)) {
+                state.revealedBoardKeys.add(board.key);
+            }
+            state.revealPending = { chatId: Number(chat.id), mode: context.workspaceMode };
+            state.peekBoardKeys.delete(board.key);
             state.collapsedBoardKeys.delete(board.key);
             state.expandedThreadBoards.delete(board.key);
             state.boardsCollapsed = false;
             const unpinned = context.boards.filter(row => !state.pinnedBoardKeys.includes(row.key));
             if (unpinned.findIndex(row => row.key === board.key) >= 6) state.boardsExpanded = true;
+            storeCollapsedBoards();
             try {
-                window.localStorage.setItem('decisions-development-collapsed-boards', JSON.stringify([...state.collapsedBoardKeys]));
                 window.localStorage.setItem('decisions-development-boards-collapsed', 'false');
             } catch (_) {}
         },

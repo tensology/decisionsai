@@ -1,5 +1,5 @@
-import { createPlanConversation } from './conversation.js?v=20261111-buildjump';
-import { scanHint, watchPlanScan } from './scan-watch.js?v=20261102-plan-scan-bg';
+import { createPlanConversation } from './conversation.js?v=20261112-open-created-outline';
+import { scanHint, watchPlanScan } from './scan-watch.js?v=20261112-scan-refresh';
 import { createLoadGuard, isAbort } from './load-guard.js?v=20261102-verify';
 
 export function createPlanning(host, root = document.getElementById('plan-root')) {

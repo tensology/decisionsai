@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun, AutoWorkflowStepResult
 from distr.core.workflow.verification import _run_verification
-from distr.core.workflow.runtime_contract import should_pause_after_step
+from distr.core.workflow.runtime_contract import lock_step_result_run, should_pause_after_step
 from distr.core.workflow.chat_trace import record_workflow_chat_event
 from distr.gui.web.workflow_events import increment_workflow_updated
 
@@ -297,6 +297,12 @@ class PostExecutionMixin:
         advance the workflow to the next step. Without this, the workflow stalls
         after every async step.
         """
+        if run_id is not None:
+            from distr.core.workflow.dispatcher import workflow_accepts_worker_result
+
+            with get_session() as db:
+                if not workflow_accepts_worker_result(db, db.get(AutoWorkflowRun, run_id), step_id):
+                    return
         # Guard against double-routing the same step
         with self._routed_lock:
             if step_id in self._routed_steps:
@@ -328,14 +334,16 @@ class PostExecutionMixin:
             try:
                 from distr.core.workflow.router import StepRouter
                 from distr.core.workflow.dispatcher import StepDispatcher, complete_run, _update_workflow_thread_step
+                router = StepRouter()
+                decision = router.route(step_id, result_text, passed, run_id, skip_wait=skip_wait)
+                if decision.get("action") == "ignore":
+                    return
                 self._persist_compact_step_memory(
                     step_id=step_id,
                     run_id=run_id,
                     result_text=result_text,
                     passed=passed,
                 )
-                router = StepRouter()
-                decision = router.route(step_id, result_text, passed, run_id, skip_wait=skip_wait)
                 self._append_workflow_step_audit(step_id, run_id, result_text, passed)
                 # The worker's raw success flag is not authoritative after
                 # deterministic/LLM verification. Read-only routing must use
@@ -352,6 +360,7 @@ class PostExecutionMixin:
                     prior_verified_passed = bool(
                         verified_row and str(verified_row.status or "").lower() == "passed"
                     )
+                    verified_result_text = verified_row.agent_response if verified_row is not None else result_text
 
                 if decision.get("action") == "next_step":
                     next_step_id = decision["step_id"]
@@ -439,8 +448,8 @@ class PostExecutionMixin:
                         if maybe_pause_before_next_step(
                             run_id=run_id,
                             completed_step_id=step_id,
-                            passed=passed,
-                            result_text=result_text,
+                            passed=prior_verified_passed,
+                            result_text=verified_result_text,
                             next_step_id=int(next_step_id),
                         ):
                             return
@@ -639,6 +648,7 @@ class PostExecutionMixin:
     ) -> bool:
         """Pause any direct worker that returns the structured needs-input status."""
         from distr.core.workflow.control_policy import decide_interruption
+        from distr.core.workflow.dispatcher import workflow_accepts_worker_result
         from distr.core.workflow.step_iteration import parse_harness_step_report
 
         report = parse_harness_step_report(result_text or "")
@@ -652,8 +662,8 @@ class PostExecutionMixin:
 
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
-            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-            if not step or not run:
+            run = lock_step_result_run(db, run_id)
+            if not step or not run or step.workflow_id != run.workflow_id or not workflow_accepts_worker_result(db, run, step_id, locked=True):
                 return False
             try:
                 run_data = json.loads(run.run_data or "{}") or {}

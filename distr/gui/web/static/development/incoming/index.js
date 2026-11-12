@@ -52,6 +52,62 @@ export function compareIncomingProposalsNewestFirst(left, right) {
 }
 
 // Owns incoming rendering, interactions, and private view state.
+// 2026-11-11 attachment icons: one shared file-type icon for the Gmail/Mailshot attachment bar and the preview title.
+const FILE_TYPE_STYLES = {
+    pdf: ['PDF', '#e5484d'],
+    word: ['DOC', '#2b6fd6'],
+    sheet: ['XLS', '#1f9d55'],
+    slides: ['PPT', '#e8702a'],
+    image: ['IMG', '#8b5cf6'],
+    audio: ['AUD', '#d946ef'],
+    video: ['VID', '#0ea5e9'],
+    archive: ['ZIP', '#b7791f'],
+    code: ['CODE', '#0d9488'],
+    text: ['TXT', '#64748b'],
+    file: ['FILE', '#6b7280'],
+};
+const FILE_TYPE_EXTENSIONS = {
+    word: ['doc', 'docx', 'docm', 'dot', 'dotx', 'odt', 'rtf', 'pages'],
+    sheet: ['xls', 'xlsx', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv', 'numbers'],
+    slides: ['ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'odp', 'key'],
+    image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'heic', 'heif', 'bmp', 'tif', 'tiff', 'svg', 'ico'],
+    audio: ['mp3', 'm4a', 'wav', 'ogg', 'oga', 'opus', 'aac', 'flac', 'amr', 'weba'],
+    video: ['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', '3gp', 'wmv'],
+    archive: ['zip', '7z', 'rar', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst'],
+    code: ['js', 'mjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'php', 'java', 'kt', 'swift', 'go', 'rs', 'c', 'h', 'cpp', 'cs', 'sh', 'sql', 'html', 'htm', 'css', 'xml', 'json', 'yaml', 'yml', 'toml', 'ini'],
+    text: ['txt', 'md', 'log', 'eml', 'vcf', 'ics'],
+};
+
+export function attachmentFileKind(item) {
+    const mime = String(item?.mime_type || item?.type || '').toLowerCase().split(';', 1)[0].trim();
+    const name = String(item?.filename || item?.name || '').toLowerCase().trim();
+    const ext = (name.match(/\.([a-z0-9]+)$/) || ['', ''])[1];
+    const byExt = (kind) => FILE_TYPE_EXTENSIONS[kind].includes(ext);
+    if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
+    if (/msword|wordprocessingml|opendocument\.text|\/rtf$/.test(mime) || byExt('word')) return 'word';
+    if (/ms-excel|spreadsheetml|opendocument\.spreadsheet|^text\/(csv|tab-separated-values)$/.test(mime) || byExt('sheet')) return 'sheet';
+    if (/ms-powerpoint|presentationml|opendocument\.presentation/.test(mime) || byExt('slides')) return 'slides';
+    if (mime.startsWith('image/') || byExt('image')) return 'image';
+    if (mime.startsWith('audio/') || byExt('audio')) return 'audio';
+    if (mime.startsWith('video/') || byExt('video')) return 'video';
+    if (/zip|x-7z|x-rar|vnd\.rar|x-tar|gzip|x-bzip|x-xz/.test(mime) || byExt('archive')) return 'archive';
+    if (/javascript|json|xml|x-python|x-sh|typescript|^text\/(html|css|x-)/.test(mime) || byExt('code')) return 'code';
+    if (mime.startsWith('text/') || byExt('text')) return 'text';
+    return 'file';
+}
+
+export function fileTypeIconSvg(kind, size = 28) {
+    const key = Object.prototype.hasOwnProperty.call(FILE_TYPE_STYLES, kind) ? kind : 'file';
+    const [label, color] = FILE_TYPE_STYLES[key];
+    const height = Number(size) || 28;
+    const width = Math.round(height * 24 / 28);
+    return `<svg class="file-type-icon file-type-${key}" data-file-kind="${key}" width="${width}" height="${height}" viewBox="0 0 24 28" aria-hidden="true" focusable="false">`
+        + '<path d="M3.5 1h11.5l6.5 6.5V25.5a1.5 1.5 0 0 1-1.5 1.5h-16.5A1.5 1.5 0 0 1 2 25.5v-23A1.5 1.5 0 0 1 3.5 1z" fill="#f8fafc" stroke="#cbd5e1"/>'
+        + '<path d="M15 1v5a1.5 1.5 0 0 0 1.5 1.5h5" fill="#e2e8f0" stroke="#cbd5e1"/>'
+        + `<rect x="0.5" y="14.5" width="20" height="8.5" rx="1.75" fill="${color}"/>`
+        + `<text x="10.5" y="20.6" text-anchor="middle" font-family="Quicksand, system-ui, sans-serif" font-size="${label.length > 3 ? 5.2 : 6}" font-weight="700" fill="#fff">${label}</text></svg>`;
+}
+
 export function createIncoming({ context, actions, el, shared: { fileDropZoneHtml, proposalThreadToast } }) {
     let dismissExpiredBusy = false;
     const proposalMutations = new Set();
@@ -132,6 +188,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         incomingLinks: [],
         incomingChannels: {},
         incomingProposals: [],
+        incomingPendingMerges: [],
         incomingProposalsError: '',
         incomingProposalSync: null,
         incomingError: '',
@@ -311,8 +368,114 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         });
     }
 
+    // 2026-11-12 WhatsApp voice-note Transcribe: same endpoint, labels and states as the Kanban
+    // WhatsApp Transcribe action and the phone remote app. POST .../analyze-media (no body) saves
+    // "[Transcription] text" into the message caption, so later loads show the text without a button.
+    const WA_VOICE_PLACEHOLDER = /^(?:voice|audio|ptt) attachment$/i;
+    const WA_TRANSCRIPT_PREFIX = /^\[(?:Transcription|Transcript)\]\s*/i;
+    const whatsappTranscribeJobs = new Map();
+
+    function isWhatsAppVoiceItem(item) {
+        const type = String(item?.media_type || '').toLowerCase();
+        const mime = String(item?.media_mime_type || '').toLowerCase();
+        return ['audio', 'voice', 'ptt'].includes(type) || mime.startsWith('audio/');
+    }
+
+    function splitWhatsAppTranscript(item) {
+        const raw = String(item?.text || '').trim();
+        const lines = raw ? raw.split(/\r?\n/) : [];
+        const at = lines.findIndex(line => WA_TRANSCRIPT_PREFIX.test(line.trim()));
+        let body = raw;
+        let transcript = '';
+        if (at >= 0) {
+            transcript = [lines[at].trim().replace(WA_TRANSCRIPT_PREFIX, ''), ...lines.slice(at + 1)].join('\n').trim();
+            body = lines.slice(0, at).join('\n').trim();
+        }
+        const job = whatsappTranscribeJobs.get(Number(item?.database_id));
+        if (!transcript && job?.text) transcript = job.text;
+        return { body, transcript };
+    }
+
+    function whatsappTranscribeErrorText(error) {
+        const status = Number(error?.status || 0);
+        if (status === 409) return 'The audio isn\'t downloaded yet. Play the voice note once, then tap Retry.';
+        if (status === 404) return 'The voice note file couldn\'t be found on this computer.';
+        if (status === 422) return 'No speech was found in this voice note.';
+        if (status >= 500) return 'Transcription failed. Try again.';
+        return error?.message || 'Transcription failed. Try again.';
+    }
+
+    function whatsappVoiceTranscriptHtml(item, transcript) {
+        const id = Number(item.database_id);
+        return `<div class="incoming-wa-transcript" data-wa-transcript="${id}"><div class="incoming-wa-transcript-head"><span>Transcription</span><button type="button" class="incoming-wa-transcribe-btn" data-wa-transcript-copy="${id}" aria-label="Copy transcription">Copy</button></div><p>${actions.escapeHtml(transcript)}</p></div>`;
+    }
+
+    function whatsappVoiceTranscribeHtml(item) {
+        const id = Number(item.database_id);
+        const job = whatsappTranscribeJobs.get(id) || {};
+        const label = job.pending ? 'Transcribing\u2026' : job.error ? 'Retry' : 'Transcribe';
+        const error = job.error && !job.pending ? `<p class="incoming-wa-transcribe-error" role="status">${actions.escapeHtml(job.error)}</p>` : '';
+        return `<div class="incoming-wa-transcribe"><button type="button" class="incoming-wa-transcribe-btn${job.pending ? ' is-loading' : ''}" data-wa-transcribe="${id}" aria-label="${job.error ? 'Retry transcription' : 'Transcribe voice note'}"${job.pending ? ' disabled aria-busy="true"' : ''}>${label}</button>${error}</div>`;
+    }
+
     function whatsappMessageBubbleHtml(item, conversation) {
-        return `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-wa-mid="${actions.escapeHtml(item.source_message_id || '')}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${item.text ? `<p>${actions.escapeHtml(item.text)}</p>` : ''}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div>`;
+        let textHtml = item.text ? `<p>${actions.escapeHtml(item.text)}</p>` : '';
+        let voiceHtml = '';
+        if (isWhatsAppVoiceItem(item) && Number(item.database_id) > 0) {
+            const { body, transcript } = splitWhatsAppTranscript(item);
+            if (transcript) {
+                textHtml = body && !WA_VOICE_PLACEHOLDER.test(body) ? `<p>${actions.escapeHtml(body)}</p>` : '';
+                voiceHtml = whatsappVoiceTranscriptHtml(item, transcript);
+            } else if (!body || WA_VOICE_PLACEHOLDER.test(body)) {
+                voiceHtml = whatsappVoiceTranscribeHtml(item);
+            }
+        }
+        return `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-wa-mid="${actions.escapeHtml(item.source_message_id || '')}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${textHtml}${voiceHtml}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div>`;
+    }
+
+    function applyWhatsAppTranscript(conversation, id, text) {
+        const block = `[Transcription] ${text}`;
+        const patch = (item) => {
+            if (!item || Number(item.database_id) !== id) return;
+            const current = String(item.text || '').trim();
+            const kept = WA_VOICE_PLACEHOLDER.test(current) ? '' : current.split(/\r?\n/).filter(line => !WA_TRANSCRIPT_PREFIX.test(line.trim())).join('\n').trim();
+            item.text = kept ? `${kept}\n${block}` : block;
+        };
+        (state.incoming || []).forEach(patch);
+        whatsappReaderState(conversation.key).items.forEach(patch);
+        (conversation.messages || []).forEach(patch);
+    }
+
+    async function transcribeWhatsAppVoice(conversation, id) {
+        if (!(id > 0)) return;
+        const job = whatsappTranscribeJobs.get(id) || {};
+        if (job.pending) return;
+        whatsappTranscribeJobs.set(id, { pending: true, error: '', text: '' });
+        repaintSelectedWhatsApp(conversation.key);
+        try {
+            const result = await actions.api(`/tickets/whatsapp/messages/${encodeURIComponent(id)}/analyze-media`, { method: 'POST' });
+            const text = String(result?.text || '').trim();
+            if (!result || result.success !== true || !text) throw new Error(result?.error || result?.detail || 'Transcription failed. Try again.');
+            whatsappTranscribeJobs.set(id, { pending: false, error: '', text });
+            applyWhatsAppTranscript(conversation, id, text);
+        } catch (error) {
+            whatsappTranscribeJobs.set(id, { pending: false, error: whatsappTranscribeErrorText(error), text: '' });
+        } finally {
+            repaintSelectedWhatsApp(conversation.key);
+        }
+    }
+
+    async function copyWhatsAppTranscript(conversation, id) {
+        const view = whatsappReaderState(conversation.key);
+        const item = [...view.items.values(), ...(conversation.messages || [])].find(row => Number(row.database_id) === id);
+        const text = item ? splitWhatsAppTranscript(item).transcript : (whatsappTranscribeJobs.get(id)?.text || '');
+        if (!text) return;
+        try {
+            await navigator.clipboard.writeText(text);
+            actions.toast('Transcription copied.');
+        } catch (_) {
+            actions.toast('Could not copy the transcription. Check clipboard permissions and try again.', 'error');
+        }
     }
 
     function whatsappProposalMarkerHtml(kind, proposal) {
@@ -382,6 +545,17 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         template.innerHTML = String(html || '');
         const blocked = new Set(['script', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form']);
         const dropNodes = [];
+        // 2026-11-12 nov11-audit-4: the preview frame inherits the app CSP (font-src/style-src 'self'), so
+        // remote web fonts and remote @import sheets in email <style> blocks can never load there and only
+        // log CSP errors. Drop just those rules; the text already falls back to the next font in the stack.
+        const remoteUrl = /url\(\s*['"]?\s*(?:https?:)?\/\//i;
+        template.content.querySelectorAll('style').forEach((style) => {
+            const css = String(style.textContent || '');
+            const cleaned = css
+                .replace(/@font-face\s*\{[^}]*\}/gi, (rule) => (remoteUrl.test(rule) ? '' : rule))
+                .replace(/@import\s+(?:url\(\s*)?['"]?\s*(?:https?:)?\/\/[^;]*;?/gi, '');
+            if (cleaned !== css) style.textContent = cleaned;
+        });
         template.content.querySelectorAll('*').forEach((node) => {
             const tag = node.tagName.toLowerCase();
             if (blocked.has(tag)) {
@@ -449,39 +623,13 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         return `<div class="incoming-gmail-body incoming-gmail-body-plain">${actions.escapeHtml(plain)}</div>`;
     }
 
-    function mailAttachmentsHtml(item) {
-        const attachments = Array.isArray(item.attachments) ? item.attachments : [];
-        if (!attachments.length) return '';
-        const cards = attachments.map((attachment) => {
-            const name = attachment.filename || attachment.name || 'Attachment';
-            const mime = String(attachment.mime_type || attachment.type || '');
-            const size = formatAttachmentBytes(attachment.size);
-            const url = attachment.preview_url || attachment.url || '';
-            const label = proposalAttachmentLabel({ name, mime_type: mime, kind: attachment.kind || '' });
-            const meta = [size, mime.split(';', 1)[0]].filter(Boolean).join(' · ');
-            const payload = actions.escapeHtml(JSON.stringify({
-                url,
-                name: label,
-                filename: name,
-                mime_type: mime,
-                caption: '',
-            }));
-            const isImage = mime.toLowerCase().startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(name);
-            if (url && isImage) {
-                return `<button type="button" class="incoming-mail-attachment incoming-mail-attachment-image" data-file-preview="${payload}" title="${actions.escapeHtml(name)}"><img src="${actions.escapeHtml(url)}" alt="${actions.escapeHtml(label)}" loading="lazy"><span>${actions.escapeHtml(label)}</span></button>`;
-            }
-            return `<button type="button" class="incoming-mail-attachment" data-file-preview="${payload}" ${url ? '' : 'disabled'} title="${actions.escapeHtml(name)}"><span class="incoming-mail-attachment-icon" aria-hidden="true">▣</span><span class="incoming-mail-attachment-meta"><strong>${actions.escapeHtml(label)}</strong><small>${actions.escapeHtml(meta || name)}</small></span></button>`;
-        }).join('');
-        return `<div class="incoming-mail-attachments" aria-label="Attachments">${cards}</div>`;
-    }
-
     function mailMessageCardHtml(item) {
         const from = item.sender || 'Unknown sender';
         const when = actions.formatDateTime(item.created_at);
         const to = item.recipient
             ? `<div class="incoming-mail-header-row"><span class="incoming-mail-header-label">To</span><span>${actions.escapeHtml(item.recipient)}</span></div>`
             : '';
-        return `<section class="incoming-gmail-message" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-mail-key="${actions.escapeHtml(item.key || '')}" data-mail-id="${actions.escapeHtml(item.source_message_id || '')}" data-mail-sender="${actions.escapeHtml(from)}" data-mail-subject="${actions.escapeHtml(item.subject || '')}"><header class="incoming-mail-headers"><div class="incoming-mail-header-row"><span class="incoming-mail-header-label">From</span><strong>${actions.escapeHtml(from)}</strong></div>${to}<div class="incoming-mail-header-row"><span class="incoming-mail-header-label">Date</span><time>${actions.escapeHtml(when)}</time></div></header>${mailBodyHtml(item)}${mailAttachmentsHtml(item)}</section>`;
+        return `<section class="incoming-gmail-message" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-mail-key="${actions.escapeHtml(item.key || '')}" data-mail-id="${actions.escapeHtml(item.source_message_id || '')}" data-mail-sender="${actions.escapeHtml(from)}" data-mail-subject="${actions.escapeHtml(item.subject || '')}"><header class="incoming-mail-headers"><div class="incoming-mail-header-row"><span class="incoming-mail-header-label">From</span><strong>${actions.escapeHtml(from)}</strong></div>${to}<div class="incoming-mail-header-row"><span class="incoming-mail-header-label">Date</span><time>${actions.escapeHtml(when)}</time></div></header>${mailBodyHtml(item)}</section>`;
     }
 
     function mailReplySubject(conversation) {
@@ -592,6 +740,20 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             }
         }
         reader.querySelector('[data-wa-older]')?.addEventListener('click', () => loadOlderWhatsApp(conversation));
+        bindWhatsAppVoiceButtons(reader, conversation);
+    }
+
+    // Also used for voice notes appended live (patchIncomingInPlace), which skip paintWhatsAppReader.
+    function bindWhatsAppVoiceButtons(root, conversation) {
+        root?.querySelectorAll('[data-wa-transcribe]:not([data-wa-bound]), [data-wa-transcript-copy]:not([data-wa-bound])').forEach(button => {
+            button.dataset.waBound = '1';
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (button.dataset.waTranscribe) transcribeWhatsAppVoice(conversation, Number(button.dataset.waTranscribe));
+                else copyWhatsAppTranscript(conversation, Number(button.dataset.waTranscriptCopy));
+            });
+        });
     }
 
     function repaintSelectedWhatsApp(key, scroll) {
@@ -794,11 +956,12 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             }));
             const thumb = (url && isImage)
                 ? `<img class="incoming-mail-attach-thumb" src="${actions.escapeHtml(url)}" alt="" loading="lazy">`
-                : `<span class="incoming-mail-attach-icon" aria-hidden="true">${isImage ? '▣' : (mime.includes('pdf') ? 'PDF' : '◉')}</span>`;
+                : `<span class="incoming-mail-attach-icon" aria-hidden="true">${fileTypeIconSvg(attachmentFileKind({ mime_type: mime, filename: name }))}</span>`;
             const disabled = url ? '' : ' disabled';
             return `<button type="button" class="incoming-mail-attach-chip"${disabled} data-file-preview="${payload}" title="${actions.escapeHtml(name)}">${thumb}<span class="incoming-mail-attach-name">${actions.escapeHtml(name)}</span></button>`;
         }).join('');
-        return `<div class="incoming-mail-attachment-bar" aria-label="Attachments"><div class="incoming-mail-attachment-bar-track">${items}</div></div>`;
+        // Up to three rows of full-name chips; more columns scroll horizontally.
+        return `<div class="incoming-mail-attachment-bar" aria-label="Attachments"><div class="incoming-mail-attachment-bar-track" style="--attach-rows:${Math.min(attachments.length, 3)}">${items}</div></div>`;
     }
 
     function restoreQuickReply(key) {
@@ -1133,19 +1296,25 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         return proposal?.needs_project === true || !proposal?.project_id;
     }
 
+    const mergeReservationNotice = 'Reserved for a merge. Retry with its original partner.';
+
     function incomingProposalRowHtml(proposal) {
         const expired = proposalIsExpired(proposal);
         const needsProject = proposalNeedsProject(proposal);
+        const reserved = proposal.merge_source_reserved === true;
         const source = String(proposal.source_label || proposal.source || '').trim();
         const project = String(proposal.project_name || (proposal.project_id ? `Project ${proposal.project_id}` : '')).trim();
         const origin = proposal.origin === 'tensology' ? 'Synced from Tensology' : 'Detected here';
         const description = String(proposal.description || proposal.rationale || '').trim();
         const proposalId = actions.escapeHtml(proposal.id || '');
         const tooltip = proposalFirstMessage(proposal) || `${origin} · ${source}`;
-        const push = !needsProject
+        const retry = reserved && proposal.merge_retry;
+        const push = retry
+            ? `<button type="button" class="proposal-btn primary" data-incoming-retry-merge="${proposalId}"${incomingOperation || proposalMutations.size || dismissExpiredBusy ? ' disabled' : ''}>Retry merge</button>`
+            : reserved ? '' : !needsProject
             ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}" title="Creates the thread and hands it to Decisions, like Send to Decisions.">Create Thread</button>`
             : `<button type="button" class="proposal-btn primary" data-incoming-proposal-confirm="${proposalId}">Confirm project</button>`;
-        const dismiss = `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
+        const dismiss = reserved ? '' : `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
         const preparing = proposalReadRequest?.key === String(proposal.id);
         const read = `<button type="button" class="proposal-btn ghost${preparing ? ' is-loading' : ''}" data-incoming-proposal-read="${proposalId}" title="Read this proposal aloud"${proposalReadRequest ? ' disabled' : ''}${preparing ? ' aria-busy="true"' : ''}>${preparing ? 'Preparing...' : 'Read to me'}</button>`;
         const projectKey = actions.escapeHtml(String(proposal.project_id || ''));
@@ -1157,6 +1326,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 <span class="proposal-source" title="${actions.escapeHtml(tooltip)}" data-incoming-proposal-open="${proposalId}">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span>
             </div>
             ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
+            ${reserved ? `<p class="proposal-desc">${mergeReservationNotice}</p>` : ''}
             <div class="proposal-actions">${push}${dismiss}${read}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"></path></svg></button>${needsProject ? '' : '<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span>'}</span></div>
         </article>`;
     }
@@ -1326,27 +1496,30 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         return { update, finish() { close(); incomingOperation = ''; status?.classList.add('hidden'); } };
     }
 
-    async function mergeProposalCards(targetId, sourceId) {
-        if (dismissExpiredBusy || proposalMutations.size) return;
+    async function mergeProposalCards(targetId, sourceId, retry = null) {
+        if (dismissExpiredBusy || proposalMutations.size || incomingOperation) return;
         const first = proposalById(sourceId);
         const second = proposalById(targetId);
-        if (!first || !second || String(first.id) === String(second.id)) return;
-        if (proposalNeedsProject(first) || proposalNeedsProject(second) || String(first.project_id) !== String(second.project_id)) {
+        if (!retry && (!first || !second || String(first.id) === String(second.id))) return;
+        if (!retry && (proposalNeedsProject(first) || proposalNeedsProject(second) || String(first.project_id) !== String(second.project_id))) {
             actions.toast('Only proposals on the same project can be merged.', 'error');
             return;
         }
         proposalMutations.add(String(sourceId));
         proposalMutations.add(String(targetId));
-        const progress = showIncomingProgress('Merging proposals...', 'Combining the requests, source files and transcripts.');
+        const progress = retry
+            ? showIncomingProgress('Retrying merge...', 'Recovering the saved proposal and its original sources.')
+            : showIncomingProgress('Merging proposals...', 'Combining the requests, source files and transcripts.');
         renderIncomingWorkspace();
         try {
             const result = await actions.api('/workflows/studio/incoming/proposals/merge', {
                 method: 'POST',
-                body: { first, second }
+                body: retry ? { retry } : { first, second }
             });
             if (!result?.chat_id) throw new Error(result?.error || 'The proposals could not be merged.');
             if (result && result.chat_id) {
-                actions.toast('Merged into one thread.', 'success');
+                const missingFiles = Boolean(result.failed_attachments?.length);
+                actions.toast(missingFiles ? proposalThreadToast(result) : 'Merged into one thread.', missingFiles ? 'error' : 'success');
                 state.incomingProposals = (state.incomingProposals || []).filter(
                     (row) => String(row.id) !== String(sourceId) && String(row.id) !== String(targetId)
                 );
@@ -1362,6 +1535,42 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             proposalMutations.delete(String(targetId));
             progress.finish();
             renderIncomingWorkspace();
+            if (retry && context.workspaceMode === 'incoming') {
+                el('incoming-proposals-list')?.querySelector(`[data-incoming-retry-merge="${CSS.escape(sourceId)}"]`)?.focus();
+            }
+        }
+    }
+
+    async function resumeIncomingMerge(key) {
+        const saved = state.incomingPendingMerges.find(row => row.merge_key === key);
+        if (!saved || dismissExpiredBusy || proposalMutations.size || incomingOperation) return;
+        const progress = showIncomingProgress('Resuming merge...', saved.local_recovery
+            ? 'Recovering the saved proposals.' : 'Confirming dismissal of the remaining originals.');
+        renderIncomingWorkspace();
+        try {
+            const endpoint = '/workflows/studio/incoming/proposals/merge';
+            const result = await actions.api(saved.local_recovery ? endpoint : `${endpoint}/${Number(saved.chat_id)}/resume`, {
+                method: 'POST', body: saved.local_recovery ? { local_recovery: key } : { merge_key: key }
+            });
+            const chatId = Number(result?.chat_id);
+            if (!Number.isSafeInteger(chatId) || chatId <= 0 || (!saved.local_recovery && chatId !== Number(saved.chat_id))) {
+                throw new Error('The saved merge could not be confirmed.');
+            }
+            state.incomingPendingMerges = state.incomingPendingMerges.filter(row => row.merge_key !== key);
+            const missingFiles = Boolean(result.failed_attachments?.length);
+            actions.toast(missingFiles ? proposalThreadToast(result) : 'Merged into one thread.', missingFiles ? 'error' : 'success');
+            if (context.workspaceMode === 'incoming') {
+                if (actions.loadChat) await actions.loadChat(Number(result.chat_id));
+                else if (actions.openThreadDialog) actions.openThreadDialog(result.chat_id);
+            }
+        } catch (error) {
+            actions.toast(error.data?.error || error.message || 'The merge could not resume.', 'error');
+        } finally {
+            progress.finish();
+            renderIncomingWorkspace();
+            if (context.workspaceMode === 'incoming') {
+                el('incoming-proposals-list')?.querySelector(`[data-incoming-resume-merge="${CSS.escape(key)}"]`)?.focus();
+            }
         }
     }
 
@@ -1387,6 +1596,15 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
 
     function proposalSourceChunk(proposal) {
         const messageIds = Array.isArray(proposal.message_ids) ? proposal.message_ids.map(String).filter(Boolean) : [];
+        const scopedMessages = new Set();
+        for (const ref of Array.isArray(proposal.source_scope) ? proposal.source_scope : []) {
+            const channel = String(ref?.source || ref?.channel || ref?.source_conversation?.channel || '').toLowerCase();
+            const thread = String(ref?.source_thread_id || ref?.source_conversation?.thread_id || '');
+            if (!channel || !thread || thread.startsWith('merged:') || !Array.isArray(ref.message_ids)) continue;
+            for (const id of ref.message_ids) {
+                if (id) scopedMessages.add(JSON.stringify([channel, thread, String(id)]));
+            }
+        }
         const wanted = new Set(messageIds);
         const source = String(proposal.source || '').toLowerCase();
         const whatsapp = source === 'whatsapp';
@@ -1398,6 +1616,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             return {
                 messages: ordered,
                 count: ordered.length,
+                sourceCount: scopedMessages.size || ordered.length,
                 start: ordered[0],
                 end: ordered[ordered.length - 1],
                 messageIds: ordered.map((ev) => String(ev.id || '')).filter(Boolean),
@@ -1429,10 +1648,10 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             matched.sort((a, b) => String(a.sent_at || '').localeCompare(String(b.sent_at || '')));
         }
 
-        if (!matched.length && messageIds.length) {
+        if (!matched.length && (scopedMessages.size || messageIds.length)) {
             return {
                 messages: [],
-                count: messageIds.length,
+                count: scopedMessages.size || messageIds.length,
                 start: null,
                 end: null,
                 messageIds,
@@ -1463,15 +1682,21 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const endLabel = chunk.end
             ? `${actions.formatDateTime(chunk.end.sent_at)}${chunk.end.sender_name ? `, ${chunk.end.sender_name}` : ''}`
             : 'end';
-        const summary = !chunk.count ? '' : chunk.idsOnly
-            ? `<p class="proposal-source-summary">${chunk.count === 1 ? 'The source message text is unavailable.' : `The text of ${chunk.count} source messages is unavailable.`}</p>`
-            : chunk.count === 1 ? '' : `<p class="proposal-source-summary">From <strong>${actions.escapeHtml(startLabel)}</strong> to <strong>${actions.escapeHtml(endLabel)}</strong>, ${chunk.count} messages</p>`;
+        let summary = '';
+        if (chunk.idsOnly) {
+            const messages = chunk.count === 1 ? 'the source message' : `the ${chunk.count} source messages`;
+            summary = merged
+                ? `Open an original conversation to look up ${messages}.`
+                : `The text of ${messages} is unavailable.`;
+        } else if (chunk.count > 1) {
+            summary = `From <strong>${actions.escapeHtml(startLabel)}</strong> to <strong>${actions.escapeHtml(endLabel)}</strong>, ${chunk.count} messages`;
+        }
         const jump = proposalSourceControlsHtml('proposal-source-picker', proposal.id);
         const messages = (chunk.messages || []).map((ev) => `<article class="proposal-message" data-source-message-id="${actions.escapeHtml(ev.id || '')}">
             <header><strong>${actions.escapeHtml(ev.sender_name || ev.sender_address || 'Unknown')}</strong><time>${actions.escapeHtml(actions.formatDateTime(ev.sent_at))}</time></header>
             ${ev.body ? `<p>${actions.escapeHtml(ev.body)}</p>` : '<p class="muted">(no text)</p>'}
         </article>`).join('');
-        return `<div data-proposal-source-evidence>${summary}${jump}${messages}</div>
+        return `<div data-proposal-source-evidence>${summary ? `<p class="proposal-source-summary">${summary}</p>` : ''}${jump}${messages}</div>
             <div data-proposal-source-reader hidden></div>`;
     }
 
@@ -1611,16 +1836,15 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         return stripTranscriptionPrefix(hit.text || hit.snippet || '');
     }
 
-    function loadProposalTaskDone(proposalId) {
-        const proposal = proposalById(proposalId);
+    function loadProposalTaskDone(proposal) {
         const indexes = proposal?.task_completed_indexes;
         return new Set(Array.isArray(indexes) ? indexes.filter((n) => Number.isInteger(n) && n >= 0 && n < (proposal.tasks || []).length) : []);
     }
 
-    function proposalTasksHtml(tasks, proposalId) {
-        const items = Array.isArray(tasks) ? tasks : [];
+    function proposalTasksHtml(proposal) {
+        const items = Array.isArray(proposal.tasks) ? proposal.tasks : [];
         if (!items.length) return '<p class="proposal-empty">No tasks listed.</p>';
-        const done = loadProposalTaskDone(proposalId);
+        const done = loadProposalTaskDone(proposal);
         const cards = items.map((raw, index) => {
             const task = normalizeProposalTask(raw, index);
             const isDone = done.has(index);
@@ -1649,7 +1873,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 ${body}
             </li>`;
         }).join('');
-        return `<p class="proposal-task-save-status" role="status" aria-live="polite" data-proposal-task-save-status></p><ol class="proposal-task-list" data-proposal-tasks-for="${actions.escapeHtml(String(proposalId || ''))}">${cards}</ol>`;
+        return `<p class="proposal-task-save-status" role="status" aria-live="polite" data-proposal-task-save-status></p><ol class="proposal-task-list" data-proposal-tasks-for="${actions.escapeHtml(String(proposal.id || ''))}">${cards}</ol>`;
     }
 
     // Proposals have no local file storage yet, so the shared drop zone is shown read-only.
@@ -1762,7 +1986,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const mime = String(meta.mime_type || '').toLowerCase();
         const filename = meta.filename || meta.name || 'Attachment';
         const name = meta.display_name || meta.name || 'Attachment';
-        let body, playable = false;
+        let body, playable = false, isPdf = false;
         if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(filename) || isImageAttachment({ mime_type: mime, name: filename })) {
             body = `<img class="file-preview-image" src="${actions.escapeHtml(meta.url)}" alt="${actions.escapeHtml(filename)}">`;
         } else if (mime.startsWith('audio/') || isAudioAttachment({ mime_type: mime, name: filename, kind: meta.kind })) {
@@ -1772,6 +1996,8 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             playable = true;
             body = `<video class="file-preview-image" controls autoplay playsinline preload="metadata" src="${actions.escapeHtml(meta.url)}"></video>`;
         } else if (mime === 'application/pdf' || /\.pdf$/i.test(filename)) {
+            // 2026-11-11: the embedded PDF viewer has its own download, so no footer button or generic "PDF" title.
+            isPdf = true;
             body = `<iframe class="file-preview-frame" title="${actions.escapeHtml(filename)}" src="${actions.escapeHtml(meta.url)}"></iframe>`;
         } else if (mime.startsWith('text/') || mime === 'application/json' || /\.(txt|md|csv|json|log)$/i.test(filename)) {
             body = '<pre class="file-preview-text" data-file-preview-text>Loading...</pre>';
@@ -1784,13 +2010,15 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         overlay._previousOverflow = document.body.style.overflow;
         overlay._returnFocus = returnFocus;
         overlay._releaseFileUrl = meta.releaseUrl;
+        // Title: file-type icon plus the complete file name (wraps, never truncated).
+        const titleIcon = fileTypeIconSvg(attachmentFileKind({ mime_type: mime, filename }), 24);
         overlay.innerHTML = `<div class="proposal-modal file-preview-modal${playable ? ' has-transcript' : ''}" role="dialog" aria-modal="true" aria-label="${actions.escapeHtml(name)}">
-            <header><div class="proposal-modal-title"><h3 title="${actions.escapeHtml(filename)}">${actions.escapeHtml(name)}</h3>${meta.caption ? `<p class="proposal-modal-desc">${actions.escapeHtml(meta.caption)}</p>` : ''}</div><button type="button" class="proposal-modal-close" aria-label="Close" data-file-preview-close>×</button></header>
+            <header><div class="proposal-modal-title"><h3 class="file-preview-title" title="${actions.escapeHtml(filename)}">${titleIcon}<span class="file-preview-title-name">${actions.escapeHtml(filename)}</span></h3>${meta.caption ? `<p class="proposal-modal-desc">${actions.escapeHtml(meta.caption)}</p>` : ''}</div><button type="button" class="proposal-modal-close" aria-label="Close" data-file-preview-close>×</button></header>
             <div class="proposal-modal-body file-preview-body">${body}
                 <p class="file-preview-error hidden" data-media-error role="alert">This media could not be played. Download the original to open it in another player.</p>
                 ${playable ? '<section class="file-preview-transcript" aria-label="Transcript"><h4>Transcript</h4><div data-media-transcript role="status" aria-live="polite"></div><button class="proposal-btn ghost hidden" type="button" data-transcript-retry>Retry transcription</button></section>' : ''}
             </div>
-            <footer><a class="proposal-btn ghost" href="${actions.escapeHtml(meta.url)}" download="${actions.escapeHtml(filename)}">Download</a></footer>
+            ${isPdf ? '' : `<footer><a class="proposal-btn ghost" href="${actions.escapeHtml(meta.url)}" download="${actions.escapeHtml(filename)}">Download</a></footer>`}
         </div>`;
         document.body.style.overflow = 'hidden';
         document.body.appendChild(overlay);
@@ -1847,7 +2075,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 const linkedProposal = url.pathname.startsWith('/api/workflows/studio/incoming/proposals/files/')
                     && url.searchParams.has('review_key');
                 if (linkedProposal && response.status === 404) {
-                    overlay.querySelector('footer').classList.add('hidden');
+                    overlay.querySelector('footer')?.classList.add('hidden');
                     textNode.setAttribute('role', 'status');
                     return 'This attachment is no longer available on the linked proposal. Reopen the proposal to check its files.';
                 }
@@ -1858,12 +2086,11 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             .catch(() => { textNode.textContent = 'Could not load the file.'; });
     }
 
-    function bindProposalTaskToggles(root, proposalId, onSaved) {
+    function bindProposalTaskToggles(root, getReviewed, onSaved) {
         if (!root) return;
         const list = root.querySelector('[data-proposal-tasks-for]');
         if (!list) return;
         renderCheckStatus();
-        let currentProposalId = proposalId;
         let saving = false;
         const status = root.querySelector('[data-proposal-task-save-status]');
         const apply = (card, index, isDone) => {
@@ -1883,10 +2110,9 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 if (!Number.isFinite(index)) return;
                 const card = button.closest('.proposal-task-card');
                 if (!card) return;
-                const current = proposalById(currentProposalId);
-                if (!current) return;
+                const current = getReviewed();
                 const restoreFocus = document.activeElement === button;
-                const done = loadProposalTaskDone(currentProposalId);
+                const done = loadProposalTaskDone(current);
                 if (done.has(index)) done.delete(index);
                 else done.add(index);
                 saving = true;
@@ -1896,17 +2122,17 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 try {
                     const result = await actions.api('/workflows/studio/incoming/proposals/details', {
                         method: 'PUT', body: {
-                            proposal_id: currentProposalId,
+                            proposal_id: current.id,
                             message_ids: current.message_ids || [],
                             expected_updated_at: current.updated_at || '',
+                            ...(current.review_key ? { reviewed_proposal: current } : {}),
                             task_completed_indexes: [...done].sort((a, b) => a - b),
                         },
                     });
                     if (!result?.success || !result.proposal) throw new Error(result?.error || 'Could not save task completion.');
-                    state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(currentProposalId) ? result.proposal : row);
-                    currentProposalId = result.proposal.id;
+                    state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(current.id) ? result.proposal : row);
                     onSaved?.(result.proposal);
-                    const saved = loadProposalTaskDone(currentProposalId);
+                    const saved = loadProposalTaskDone(getReviewed());
                     list.querySelectorAll('[data-proposal-task-index]').forEach((node) => {
                         const taskIndex = Number(node.getAttribute('data-proposal-task-index'));
                         apply(node, taskIndex, saved.has(taskIndex));
@@ -2011,7 +2237,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const chunk = proposalSourceChunk(proposal);
         sourcePane.innerHTML = proposalEvidenceHtml(proposal);
         sourcePane.querySelectorAll('[data-proposal-jump-source]').forEach((button) => {
-            button.addEventListener('click', () => jumpProposalSource(button.getAttribute('data-proposal-jump-source') || ''));
+            button.addEventListener('click', () => jumpProposalSource(proposal));
         });
         if (sourceTab) {
             const count = chunk.count || 0;
@@ -2121,7 +2347,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         dialog.setAttribute('aria-labelledby', 'submitted-proposal-source-title');
         dialog.innerHTML = `<form method="dialog">
             <header><div><h2 id="submitted-proposal-source-title">Original conversation</h2></div>
-                <button type="submit" class="proposal-btn ghost">Close</button></header>
+                <button type="button" class="proposal-btn ghost" data-submitted-source-close>Close</button></header>
             <div class="submitted-proposal-source-body" data-proposal-pane="source">
                 <div data-proposal-source-evidence>${proposalSourceControlsHtml('submitted-proposal-source-picker')}</div>
                 <div data-proposal-source-reader hidden></div>
@@ -2136,6 +2362,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             if (opener?.getClientRects().length) opener.focus({ preventScroll: true });
         }, { once: true });
         document.body.appendChild(dialog);
+        dialog.querySelector('[data-submitted-source-close]').addEventListener('click', () => dialog.close());
         dialog.showModal();
         const button = dialog.querySelector('[data-proposal-jump-source]');
         const read = () => loadProposalSource(button, sourceKey => {
@@ -2147,9 +2374,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         void read();
     }
 
-    async function jumpProposalSource(proposalId) {
-        const proposal = proposalById(proposalId);
-        if (!proposal) return;
+    async function jumpProposalSource(proposal) {
         if (context.embeddedProposalReview || proposal.source_scope?.length || proposal.merged_from?.length) {
             const overlay = el('incoming-proposal-modal');
             const button = overlay?.querySelector('[data-proposal-jump-source]');
@@ -2205,9 +2430,11 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
     function openProposalDetail(proposalId, { reviewKey = '' } = {}) {
         const proposal = (state.incomingProposals || []).find((row) => String(row.id) === String(proposalId));
         if (!proposal) return;
+        let reviewed = proposal;
         closeProposalDetail();
         const source = String(proposal.source_label || proposal.source || '').trim();
         const project = String(proposal.project_name || 'Confirm project').trim();
+        const reserved = proposal.merge_source_reserved === true;
         const conversation = proposal.source_conversation || {};
         const tasks = proposal.tasks || [];
         const files = proposal.attachments || [];
@@ -2225,15 +2452,16 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const projectOptions = '<option value="">Choose linked project</option>' + projects
             .sort((a, b) => String(a.name).localeCompare(String(b.name)))
             .map((p) => `<option value="${Number(p.id)}"${Number(p.id) === Number(proposal.project_id) ? ' selected' : ''}>${actions.escapeHtml(p.name)}</option>`).join('');
-        const details = `<div class="proposal-project-field"><label for="proposal-project-select">Project</label>
-            <select id="proposal-project-select" aria-describedby="proposal-project-status">${projectOptions}</select>
+        const details = `${reserved ? `<p class="proposal-modal-desc">${mergeReservationNotice}</p>` : ''}
+            <div class="proposal-project-field"><label for="proposal-project-select">Project</label>
+            <select id="proposal-project-select" aria-describedby="proposal-project-status"${reserved ? ' disabled' : ''}>${projectOptions}</select>
             <span id="proposal-project-status" role="status" aria-live="polite"></span></div>
             <dl class="proposal-modal-meta">${meta.map(([k, v]) => `<div><dt>${actions.escapeHtml(k)}</dt><dd>${actions.escapeHtml(v)}</dd></div>`).join('')}</dl>
             ${proposal.description ? `<p class="proposal-modal-desc">${actions.escapeHtml(proposal.description)}</p>` : ''}
             ${proposal.rationale ? `<p class="proposal-modal-rationale"><span>Why</span> ${actions.escapeHtml(proposal.rationale)}</p>` : ''}`;
-        const tasksPane = proposalTasksHtml(tasks, proposal.id);
+        const tasksPane = proposalTasksHtml(proposal);
         const sourceChunk = proposalSourceChunk(proposal);
-        const tabs = [['details', 'Details', 0], ['tasks', 'Tasks', tasks.length], ['files', 'Files', files.length], ['source', 'Source', sourceChunk.count]];
+        const tabs = [['details', 'Details', 0], ['tasks', 'Tasks', tasks.length], ['files', 'Files', files.length], ['source', 'Source', sourceChunk.sourceCount ?? sourceChunk.count]];
         const tabBar = tabs.map(([id, label, count], i) => `<button type="button" role="tab" class="proposal-tab${i === 0 ? ' active' : ''}" aria-selected="${i === 0}" data-proposal-tab="${id}">${label}${count ? `<span class="proposal-tab-count">${count}</span>` : ''}</button>`).join('');
         const pane = (id, html, active) => `<div class="proposal-pane${active ? '' : ' hidden'}" role="tabpanel" data-proposal-pane="${id}">${html}</div>`;
         const overlay = document.createElement('div');
@@ -2258,12 +2486,14 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             <footer>
                 ${proposal.review_key && !context.embeddedProposalReview ? '<p class="proposal-review-copy-status hidden" data-proposal-copy-status role="status"></p><button type="button" class="proposal-btn ghost proposal-copy-review" data-proposal-copy-review>Copy review link</button>' : ''}
                 <button type="button" class="proposal-btn ghost" data-proposal-close>Close</button>
-                <button type="button" class="proposal-btn primary" data-proposal-thread="${actions.escapeHtml(proposal.id || '')}"${proposalNeedsProject(proposal) ? ' disabled' : ''}>Create Thread</button>
+                <button type="button" class="proposal-btn primary" data-proposal-thread="${actions.escapeHtml(proposal.id || '')}"${reserved || proposalNeedsProject(proposal) ? ' disabled' : ''}>Create Thread</button>
             </footer>
         </div>`;
         document.body.appendChild(overlay);
         bindProposalFilePreview(overlay);
-        bindProposalTaskToggles(overlay, proposal.id, (updated) => {
+        bindProposalTaskToggles(overlay, () => reviewed, (updated) => {
+            reviewed = { ...reviewed, id: updated.id, review_key: updated.review_key || reviewed.review_key,
+                updated_at: updated.updated_at, task_completed_indexes: updated.task_completed_indexes };
             proposalId = updated.id;
             overlay.dataset.proposalId = String(proposalId);
             if (overlay.dataset.reviewKey && updated.review_key) overlay.dataset.reviewKey = updated.review_key;
@@ -2272,7 +2502,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 .find((node) => node.dataset.incomingProposalOpen === String(proposalId)) || overlay._returnFocus;
         });
         overlay.querySelectorAll('[data-proposal-jump-source]').forEach((button) => {
-            button.addEventListener('click', () => jumpProposalSource(button.getAttribute('data-proposal-jump-source') || ''));
+            button.addEventListener('click', () => jumpProposalSource(reviewed));
         });
         const filesPane = overlay.querySelector('[data-proposal-pane="files"]');
         const filesTab = overlay.querySelector('[data-proposal-tab="files"]');
@@ -2290,14 +2520,13 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         });
         if (!context.embeddedProposalReview) ensureIncomingRowsLoaded().then(() => {
             if (!overlay.isConnected) return;
-            refreshProposalSourcePane(overlay, proposalById(proposalId) || proposal);
+            refreshProposalSourcePane(overlay, reviewed);
         });
         const projectSelect = overlay.querySelector('#proposal-project-select');
         const projectStatus = overlay.querySelector('#proposal-project-status');
         const threadButton = overlay.querySelector('[data-proposal-thread]');
         projectSelect.addEventListener('change', async () => {
-            const current = proposalById(proposalId);
-            if (!current) return;
+            const current = reviewed;
             const selectedId = Number(projectSelect.value);
             if (!selectedId) { projectSelect.value = String(current.project_id || ''); return; }
             if (Array.isArray(current.candidate_projects) && !current.candidate_projects.some((item) => Number(item.id) === selectedId)) {
@@ -2312,9 +2541,16 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             projectStatus.classList.remove('error');
             try {
                 const result = await actions.api('/workflows/studio/incoming/proposals/project', {
-                    method: 'PUT', body: { proposal_id: proposalId, project_id: selectedId, message_ids: current.message_ids || [], expected_updated_at: current.updated_at || '' }
+                    method: 'PUT', body: { proposal_id: proposalId, project_id: selectedId,
+                        message_ids: current.message_ids || [], expected_updated_at: current.updated_at || '',
+                        ...(current.review_key ? { reviewed_proposal: current } : {}) }
                 });
                 if (!result?.success || !result.proposal) throw new Error(result?.error || 'Could not save the project.');
+                const updated = result.proposal;
+                reviewed = { ...reviewed, id: updated.id, review_key: updated.review_key || reviewed.review_key,
+                    updated_at: updated.updated_at, project_id: updated.project_id,
+                    project_name: updated.project_name, needs_project: updated.needs_project,
+                    can_push_to_thread: updated.can_push_to_thread };
                 state.incomingProposals = state.incomingProposals.map((row) => String(row.id) === String(proposalId) ? result.proposal : row);
                 proposalId = result.proposal.id;
                 overlay.dataset.proposalId = String(proposalId);
@@ -2331,7 +2567,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 projectStatus.classList.add('error');
             } finally {
                 projectSelect.disabled = false;
-                threadButton.disabled = proposalNeedsProject(proposalById(proposalId));
+                threadButton.disabled = proposalNeedsProject(reviewed);
                 projectSelect.focus();
             }
         });
@@ -2355,7 +2591,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 notice.textContent = message;
                 notice.classList.remove('hidden');
             };
-            const current = proposalById(proposalId);
+            const current = reviewed;
             if (!current?.review_key) {
                 show('The proposal changed. Reopen it to copy its review link.');
                 return;
@@ -2373,7 +2609,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             overlay.querySelectorAll('[data-proposal-tab]').forEach((b) => { b.classList.toggle('active', b === button); b.setAttribute('aria-selected', String(b === button)); });
             overlay.querySelectorAll('[data-proposal-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.proposalPane !== button.dataset.proposalTab));
             if (button.dataset.proposalTab === 'source' && !context.embeddedProposalReview) {
-                const current = proposalById(proposalId) || proposal;
+                const current = reviewed;
                 ensureIncomingRowsLoaded().then(() => {
                     if (!overlay.isConnected) return;
                     refreshProposalSourcePane(overlay, current);
@@ -2381,14 +2617,8 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             }
         }));
         overlay.querySelectorAll('[data-proposal-thread]').forEach((b) => b.addEventListener('click', () => {
-            const reviewed = proposalById(proposalId);
-            if (!reviewed) {
-                projectStatus.textContent = 'This proposal changed. Reopen the link before starting work.';
-                projectStatus.classList.add('error');
-                return;
-            }
             closeProposalDetail();
-            pushProposalToThread(proposalId, b, reviewed, reviewKey ? overlay.dataset.reviewKey : '');
+            pushProposalToThread(proposalId, b, reviewed);
         }));
         document.addEventListener('keydown', onProposalDetailKey);
     }
@@ -2427,7 +2657,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
 
     async function dismissExpiredProposals() {
         if (dismissExpiredBusy || proposalMutations.size) return;
-        const targets = (state.incomingProposals || []).filter(proposalIsExpired).map(row => String(row.id));
+        const targets = (state.incomingProposals || []).filter(row => !row.merge_source_reserved && proposalIsExpired(row)).map(row => String(row.id));
         if (!targets.length) return;
         dismissExpiredBusy = true;
         ++incomingLoadSeq;
@@ -2598,10 +2828,11 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         if (open) loadDismissedList();
     }
 
-    async function pushProposalToThread(proposalId, button, reviewed = null, reviewKey = '') {
+    async function pushProposalToThread(proposalId, button, reviewed = null) {
         if (button?.disabled || dismissExpiredBusy || proposalMutations.size) return;
         const proposal = reviewed || proposalById(proposalId);
         if (!proposal) return;
+        const reviewKey = proposal.review_key || '';
         if (proposalNeedsProject(proposal)) {
             openProposalDetail(proposalId);
             return;
@@ -2637,6 +2868,10 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 ? 'Connection interrupted. Retry to open the proposal thread.'
                 : error.data?.error || error.message || 'Could not open the proposal thread.';
             actions.toast(message, 'error');
+            if (error.data?.code === 'proposal_review_changed' && !context.embeddedProposalReview) {
+                state.incomingLoadedAt = 0;
+                void refreshIncomingData();
+            }
         } finally {
             proposalMutations.delete(String(proposalId));
             progress.finish();
@@ -2672,7 +2907,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const proposalsPanel = el('incoming-panel-proposals');
         if (proposalsPanel) proposalsPanel.classList.toggle('hidden', state.incomingFilter !== 'proposals');
         const proposalsCount = el('incoming-proposals-count');
-        if (proposalsCount) proposalsCount.textContent = String((state.incomingProposals || []).length);
+        if (proposalsCount) proposalsCount.textContent = String(state.incomingProposals.length + state.incomingPendingMerges.length);
         const syncStatus = el('incoming-proposal-sync-status');
         if (syncStatus) {
             const sync = state.incomingProposalSync;
@@ -2692,13 +2927,15 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         }
         const dismissExpiredButton = el('incoming-dismiss-expired');
         if (dismissExpiredButton) {
-            dismissExpiredButton.disabled = dismissExpiredBusy || proposalMutations.size > 0 || !(state.incomingProposals || []).some(proposalIsExpired);
+            dismissExpiredButton.disabled = dismissExpiredBusy || proposalMutations.size > 0
+                || !(state.incomingProposals || []).some(row => !row.merge_source_reserved && proposalIsExpired(row));
             dismissExpiredButton.textContent = dismissExpiredBusy ? 'Dismissing...' : 'Dismiss expired';
             dismissExpiredButton.setAttribute('aria-busy', String(dismissExpiredBusy));
         }
         const proposalsList = el('incoming-proposals-list');
         if (proposalsList) {
-            const hasProposals = (state.incomingProposals || []).length > 0;
+            const merges = state.incomingPendingMerges;
+            const hasProposals = state.incomingProposals.length + merges.length > 0;
             const loading = state.incomingProposalsLoading;
             proposalsList.classList.toggle('proposal-cards-status', !hasProposals || !!state.incomingProposalsError);
             proposalsList.setAttribute('aria-busy', loading ? 'true' : 'false');
@@ -2709,6 +2946,26 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                   : hasProposals
                     ? [...(state.incomingProposals || [])].sort(compareIncomingProposalsNewestFirst).map(incomingProposalRowHtml).join('')
                     : '<div class="proposal-list-status" role="status">No proposals waiting for review.</div>';
+            proposalsList.insertAdjacentHTML('afterbegin', merges.map(row => `<article class="proposal-card">
+                <div class="proposal-head">
+                    <p class="proposal-project">${actions.escapeHtml(row.project_name || '')}</p>
+                    <h3 class="proposal-title">${actions.escapeHtml(row.title || 'Merged proposal')}</h3>
+                </div>
+                <p class="proposal-desc">${row.local_recovery ? 'Merge interrupted before the thread was saved.' : 'Waiting for dismissal confirmation.'}</p>
+                <div class="proposal-actions">
+                    <button type="button" class="proposal-btn primary" data-incoming-resume-merge="${actions.escapeHtml(row.merge_key)}"
+                        ${dismissExpiredBusy || incomingOperation || proposalMutations.size ? 'disabled' : ''}>Resume merge</button>
+                </div>
+            </article>`).join(''));
+            proposalsList.querySelectorAll('[data-incoming-resume-merge]').forEach(button =>
+                button.addEventListener('click', () => resumeIncomingMerge(button.dataset.incomingResumeMerge)));
+            proposalsList.querySelectorAll('[data-incoming-retry-merge]').forEach(button =>
+                button.addEventListener('click', () => {
+                    const sourceId = button.dataset.incomingRetryMerge;
+                    const retry = proposalById(sourceId)?.merge_retry;
+                    const partnerId = retry?.original_ids.find(id => `tensology:${id}` !== sourceId);
+                    if (partnerId) mergeProposalCards(`tensology:${partnerId}`, sourceId, retry);
+                }));
             proposalsList.querySelectorAll('[data-incoming-proposal-thread]').forEach((button) =>
                 button.addEventListener('click', () => pushProposalToThread(button.dataset.incomingProposalThread, button))
             );
@@ -2730,7 +2987,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             );
             proposalsList.querySelectorAll('[data-incoming-proposal-open]').forEach((node) =>
                 node.addEventListener('click', (event) => {
-                    if (event.target.closest('[data-incoming-proposal-thread],[data-incoming-proposal-confirm],[data-incoming-proposal-dismiss],[data-incoming-proposal-copy],[data-incoming-proposal-read]')) return;
+                    if (event.target.closest('[data-incoming-retry-merge],[data-incoming-proposal-thread],[data-incoming-proposal-confirm],[data-incoming-proposal-dismiss],[data-incoming-proposal-copy],[data-incoming-proposal-read]')) return;
                     openProposalDetail(node.dataset.incomingProposalOpen);
                 })
             );
@@ -3279,6 +3536,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                         });
                         if (conversation.key === state.selectedIncomingConversationKey) {
                             appendMessagesInPlace(el('incoming-whatsapp-reader')?.querySelector('.incoming-whatsapp-messages'), oldestFirst(conversation.messages), (item) => whatsappMessageBubbleHtml(item, conversation));
+                            bindWhatsAppVoiceButtons(el('incoming-whatsapp-reader'), conversation);
                         }
                         return;
                     }
@@ -3423,6 +3681,14 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         state.incomingLinks = data.links || [];
         state.incomingChannels = data.channels || {};
         state.incomingError = '';
+        // 2026-11-11 stale-error: a channel that now loads cleanly drops its earlier Resync error line.
+        ['gmail', 'mailshot'].forEach((source) => {
+            const line = el(`incoming-${source}-resync-status`);
+            if (line?.classList.contains('error') && !state.incomingChannels[source]?.error) {
+                line.classList.remove('error');
+                line.textContent = '';
+            }
+        });
         actions.renderSidebar();
         if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
     }
@@ -3448,8 +3714,9 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             const channelSeq = channelLoadSeq;
             const data = await actions.api('/workflows/studio/incoming?limit=150', { cache: 'no-store' });
             if (channelSeq !== channelLoadSeq) return;
-            if (source === 'gmail' && data.channels?.gmail?.error) throw new Error(data.channels.gmail.error);
+            // Paint first so the lists reflect this response even when Gmail reports an error.
             paintIncomingChannels(data);
+            if (source === 'gmail' && data.channels?.gmail?.error) throw new Error(data.channels.gmail.error);
             state.incomingLoadedAt = Date.now();
             if (source === 'mailshot' && data.channels?.mailshot?.error) return;
             const issue = sync?.warning || sync?.error;
@@ -3504,6 +3771,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             const paintProposals = proposalsReq.then((result) => {
                 if (seq !== incomingLoadSeq) return;
                 state.incomingProposals = result.proposals || [];
+                state.incomingPendingMerges = result.pending_merges || [];
                 state.incomingProposalsError = result.error || '';
                 state.incomingProposalSync = result.sync || null;
                 const autoAccept = el('incoming-auto-accept');

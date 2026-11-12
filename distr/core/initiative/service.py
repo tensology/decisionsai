@@ -44,6 +44,25 @@ from distr.core.human_engagement import (
 
 logger = logging.getLogger("distr.core.initiative.service")
 
+# Concrete action types that a ``sensitive`` proposal may name in
+# ``payload.proposed_action_type``. Each one routes to the same executor an
+# approved ``initiative_action`` draft uses (``execute_initiative_action``).
+# Anything else stays notice-only when auto-executed.
+DECISION_SUPPORT_PURPOSE = (
+    "Your purpose is to help the user make good decisions: surface the options, your recommendation "
+    "and the likely consequences of each in plain language, then act only as far as the posture allows "
+    "(Quiet: answer when asked; Standard: ask before acting; Own outcomes: act within the boundaries "
+    "and report back)."
+)
+
+SENSITIVE_AUTO_EXECUTABLE_ACTIONS = frozenset({
+    "ticket_lane_move",
+    "workflow_start",
+    "development_thread_control",
+    "project_cli_task",
+    "jira_intake",
+})
+
 
 def _is_development_chat(chat_id: int) -> bool:
     from distr.core.db import Chat, get_session
@@ -189,6 +208,25 @@ def _derive_initiative_action_context(action: ProposedAction) -> dict[str, Any]:
             pass
 
     return context
+
+
+_INTERNAL_PROMPT_RE = re.compile(
+    r"\[DECISIONS [A-Z ]+\]|\bDECISIONS DEVELOPMENT THREAD\b|\bWork as the active IDE coding agent\b|"
+    r"\bUse the project tools directly\b|\bCompletion evidence:", re.I)
+_USER_INSTRUCTION_RE = re.compile(r"Current user instruction:\s*\n(.*?)(?:\n\s*\nAttached files for this turn:|\Z)", re.S)
+
+
+def _user_facing_instruction(raw: Any) -> str:
+    """The user's own words from a harness prompt; never the internal preamble (audit 12 Nov, event 300185)."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    match = _USER_INSTRUCTION_RE.search(text)
+    if match:
+        return match.group(1).strip()
+    if _INTERNAL_PROMPT_RE.search(text):
+        return ""
+    return text
 
 
 def _initiative_context_line(context: dict[str, Any]) -> str:
@@ -406,8 +444,15 @@ class InitiativeService:
             from distr.core.utils import load_settings_from_db
             from distr.core.initiative.policy import migrate_initiative_level
             settings = load_settings_from_db()
-            level = settings.get("initiative_level", "assist")
-            migrate_initiative_level(level)
+            level = settings.get("initiative_level", "operate")
+            migrated = migrate_initiative_level(level)
+            # Persisted: legacy values (incl. removed ``assist``) become their
+            # current posture once, on the first start after upgrade.
+            if migrated != level and migrated in ("observe", "operate", "own"):
+                from distr.core.utils import save_settings_to_db
+
+                save_settings_to_db({"initiative_level": migrated})
+                logger.info("InitiativeService: migrated initiative_level %r -> %r", level, migrated)
         except Exception:
             logger.error("InitiativeService: failed to run settings migration on init", exc_info=True)
 
@@ -539,7 +584,9 @@ class InitiativeService:
             logger.error("InitiativeService: failed to load settings on idle timer expiry", exc_info=True)
             return
         level = self._get_level(settings)
-        # observe: cycle still runs; policy gates proposals (rubric can surface drafts).
+        if level == "observe":
+            # Quiet: only respond when asked — no proactive cycle, no LLM call.
+            return
         # assist level: run cycle to generate suggestions (SUGGEST_ONLY)
         # operate/own: run full cycle
         with self._cycle_lock:
@@ -616,6 +663,12 @@ class InitiativeService:
             maybe_suggest_automation_from_initiative(self, settings)
         except Exception:
             logger.debug("automation recommendation suggestion skipped", exc_info=True)
+        try:
+            from distr.core.initiative.outcome_flow import maybe_send_recommendations
+
+            maybe_send_recommendations(settings)
+        except Exception:
+            logger.debug("daily recommendations round-up skipped", exc_info=True)
         level = self._get_level(settings)
         if level not in ("operate", "own"):
             return
@@ -692,7 +745,7 @@ class InitiativeService:
     @staticmethod
     def _get_level(settings: dict) -> str:
         from distr.core.initiative.policy import migrate_initiative_level
-        return migrate_initiative_level(settings.get("initiative_level", "assist"))
+        return migrate_initiative_level(settings.get("initiative_level", "operate"))
 
     @staticmethod
     def _initiative_boundaries(settings: dict) -> dict:
@@ -768,17 +821,16 @@ class InitiativeService:
         ]
         if not candidates:
             return None
-        ordered = sorted(candidates, key=lambda p: priority.get(p.get("action_type"), 99))
+        # Pinned projects first, then by action priority (stable within each).
+        ordered = sorted(
+            candidates,
+            key=lambda p: (0 if p.get("pinned") else 1, priority.get(p.get("action_type"), 99)),
+        )
         actions = []
         for chosen in ordered:
             action_type = chosen.get("action_type") or "suggestion"
             payload = chosen.get("payload") if isinstance(chosen.get("payload"), dict) else {}
             description = chosen.get("description") or "Initiative found actionable work."
-            if level == "assist" and action_type not in (
-                "message_triage", "board_triage", "email_triage", "jira_intake"
-            ):
-                action_type = "board_triage"
-                payload = {**payload, "proposed_action_type": chosen.get("action_type")}
             action = ProposedAction(
                 action_type=action_type,
                 description=description,
@@ -823,7 +875,12 @@ class InitiativeService:
                 self._last_cycle_error = "load_settings_from_db failed"
                 return
 
-            level = migrate_initiative_level(settings.get("initiative_level", "assist"))
+            level = migrate_initiative_level(settings.get("initiative_level", "operate"))
+            if level == "observe":
+                # Quiet: never assemble context or call the LLM proactively.
+                self._last_cycle_error = None
+                cycle_ok = True
+                return
 
             # Expire old drafts
             self._draft_queue.expire_old()
@@ -1300,14 +1357,6 @@ class InitiativeService:
                 "Prefer action_type 'none' unless something clearly warrants user review — "
                 "then include a rubric so important items can become pending approvals."
             )
-        elif level == "assist":
-            role_instruction = (
-                "Your role is to SUGGEST helpful next steps based on the context. "
-                "You should NOT propose executing anything — only surface observations "
-                "and recommendations the user might find useful. "
-                "Prefer action_type 'suggestion' or 'none'. "
-                "Include a rubric (see below) so higher-impact items can be queued for approval."
-            )
         elif level == "operate":
             role_instruction = (
                 "Your role is to follow up on stuck work, run approved routine tasks, "
@@ -1321,6 +1370,9 @@ class InitiativeService:
             role_instruction = (
                 "Your role is to manage outcomes end-to-end. You can propose any action type. "
                 "The boundary settings determine which actions need confirmation. "
+                "When proposing action_type 'sensitive', set payload.proposed_action_type to the "
+                "concrete action (ticket_lane_move, workflow_start, development_thread_control, "
+                "project_cli_task, or jira_intake) plus that action's payload fields. "
                 "Be proactive but respect the boundaries."
             )
 
@@ -1363,6 +1415,7 @@ class InitiativeService:
 
         return (
             f"You are DecisionsAI Initiative. Level: {level}.\n"
+            f"{DECISION_SUPPORT_PURPOSE}\n"
             f"Current datetime: {bundle.current_datetime}\n"
             f"Boundary settings: {boundary_info}\n\n"
             f"{situational_block}"
@@ -1444,6 +1497,25 @@ class InitiativeService:
         if self._recommend_oversight_only(action, settings, tier_override):
             return
 
+        if self._sensitive_auto_execute_enabled(action, settings, decision, boundaries):
+            # Own outcomes with "Ask before sensitive actions" OFF: the user has
+            # explicitly opted out of the approval gate for sensitive actions.
+            self._auto_execute_sensitive(action, settings)
+            return
+
+        if self._own_work_action_auto_execute(action, settings, decision):
+            # Own outcomes: the per-capability allow toggle already gated this to
+            # EXECUTE in policy; do not re-impose the approval floor.
+            from distr.core.initiative.tiers import PermissionTier as _Tier
+
+            logger.warning(
+                "InitiativeService: OWN AUTO-EXECUTE audit %s",
+                json.dumps({"action_type": action.action_type, "description": action.description}, default=str),
+            )
+            self._announce_own_start(action, settings)
+            self._execute_action(action, settings, tier=_Tier.NOTIFY)
+            return
+
         tier = (
             tier_override
             if tier_override is not None
@@ -1474,6 +1546,122 @@ class InitiativeService:
             return
 
         self._execute_action(action, settings, tier=tier)
+
+    @staticmethod
+    def _announce_own_start(action, settings: dict) -> None:
+        """Own outcomes: say what is starting and how, before it runs."""
+        try:
+            from distr.core.initiative.outcome_flow import announce_own_start
+
+            plan = action.draft if action.draft and action.draft != action.description else ""
+            announce_own_start(
+                action.description,
+                plan or "I'll run it now under Own outcomes and let you know how it goes.",
+                settings,
+                action_type=action.action_type,
+            )
+        except Exception:
+            logger.debug("InitiativeService: Own-outcomes announcement failed", exc_info=True)
+
+    OWN_AUTO_WORK_ACTIONS = frozenset({
+        "ticket_lane_move",
+        "workflow_start",
+        "project_cli_task",
+        "development_thread_control",
+    })
+
+    def _own_work_action_auto_execute(self, action, settings: dict, decision) -> bool:
+        from distr.core.initiative.policy import PolicyDecision
+
+        return (
+            decision == PolicyDecision.EXECUTE
+            and action.action_type in self.OWN_AUTO_WORK_ACTIONS
+            and self._get_level(settings or {}) == "own"
+        )
+
+    def _sensitive_auto_execute_enabled(self, action, settings: dict, decision, boundaries: dict) -> bool:
+        """True only for EXECUTE + ``sensitive`` + level ``own`` + ask-sensitive OFF."""
+        from distr.core.initiative.policy import PolicyDecision
+
+        if decision != PolicyDecision.EXECUTE or action.action_type != "sensitive":
+            return False
+        if self._get_level(settings or {}) != "own":
+            return False
+        ask = (boundaries or {}).get(
+            "initiative_ask_sensitive",
+            (settings or {}).get("initiative_ask_sensitive", True),
+        )
+        return ask is False or str(ask).strip().lower() == "false"
+
+    def _auto_execute_sensitive(self, action: ProposedAction, settings: dict) -> dict:
+        """Run a sensitive action without approval via the existing draft executor.
+
+        Routes ``payload.proposed_action_type`` to ``execute_initiative_action`` (the
+        code an approved ``initiative_action`` draft runs). Types without an existing
+        executor stay notice-only. Every outcome is audited and surfaced.
+        """
+        payload = action.payload if isinstance(action.payload, dict) else {}
+        target = str(payload.get("proposed_action_type") or "").strip().lower()
+        audit: dict[str, Any] = {
+            "action_type": "sensitive",
+            "target_action_type": target or None,
+            "description": action.description,
+            "level": "own",
+            "ask_sensitive": False,
+        }
+        if target in SENSITIVE_AUTO_EXECUTABLE_ACTIONS:
+            self._announce_own_start(action, settings)
+        if target not in SENSITIVE_AUTO_EXECUTABLE_ACTIONS:
+            audit["status"] = "notice_only"
+            audit["reason"] = "no existing executor for this sensitive action"
+            notice = f"[Auto] sensitive (notice only, no executor): {action.description}"
+        else:
+            try:
+                from distr.core.initiative.action_handlers import execute_initiative_action
+
+                result = execute_initiative_action(
+                    action_type=target,
+                    description=action.description,
+                    payload=payload,
+                    draft=action.draft,
+                    settings=settings,
+                )
+                message = result.get("message") if isinstance(result, dict) else ""
+                audit["status"] = "executed"
+                audit["result_message"] = str(message or "")[:500]
+                notice = f"[Auto] sensitive {target} executed without approval: {message or action.description}"
+            except Exception as e:
+                logger.error("InitiativeService: sensitive auto-execute %s failed: %s", target, e, exc_info=True)
+                audit["status"] = "failed"
+                audit["error"] = str(e)[:500]
+                notice = f"[Auto] sensitive {target} could not run: {e}"
+        logger.warning("InitiativeService: SENSITIVE AUTO-EXECUTE audit %s", json.dumps(audit, default=str))
+        try:
+            from distr.core.orchestrator import emit_event
+
+            emit_event(
+                source="initiative",
+                event_type="sensitive_action_auto_executed",
+                status=audit["status"],
+                summary=notice[:300],
+                payload=audit,
+            )
+        except Exception:
+            logger.debug("InitiativeService: sensitive audit event not recorded", exc_info=True)
+        self._log_to_chat(notice, settings)
+        human = {
+            "executed": f"Finished, without asking as Own outcomes allows: {action.description}",
+            "notice_only": f"Noted but not run, because nothing can carry this out automatically yet: {action.description}",
+            "failed": f"I'm blocked: I couldn't finish this on my own: {action.description}",
+        }.get(audit["status"], action.description)
+        self._send_telegram_if_allowed(
+            action.telegram_message or human,
+            settings,
+            kind="initiative_update",
+            subject_type="initiative_sensitive",
+            subject_id=target or "sensitive",
+        )
+        return audit
 
     def _execute_action(self, action: ProposedAction, settings: dict, tier=None) -> None:
         """Execute an approved action."""
@@ -1512,7 +1700,9 @@ class InitiativeService:
             self._deliver_suggestion(action, settings, tier=tier)
             return
 
-        if action.action_type in ("ticket_lane_move", "workflow_start", "project_cli_task", "jira_intake"):
+        if action.action_type in (
+            "ticket_lane_move", "workflow_start", "project_cli_task", "jira_intake", "development_thread_control",
+        ):
             try:
                 from distr.core.initiative.action_handlers import execute_initiative_action
 
@@ -1901,7 +2091,21 @@ class InitiativeService:
         action_context = _derive_initiative_action_context(action)
         allow_telegram = settings.get("initiative_allow_telegram", False)
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
-        if allow_telegram and uid and uid > 0:
+        prior_ask = None
+        try:
+            # Audit 12 Nov: the same approval (Merrypak ticket 290) was asked again at 00:48 as if new.
+            # Remember asks; within the repeat window the draft stays in the app without a new ping.
+            from distr.core.initiative import attention as _attention
+
+            prior_ask = _attention.recent_ask(action_hash)
+            if prior_ask is None:
+                _attention.record_ask(action_hash, action.description)
+        except Exception:
+            logger.debug("InitiativeService: ask memory unavailable", exc_info=True)
+        if prior_ask is not None:
+            logger.info("InitiativeService: approval already asked on %s; not asking again: %s",
+                        prior_ask.get("first"), action.description)
+        if allow_telegram and uid and uid > 0 and prior_ask is None:
             msg = _initiative_approval_text(
                 action,
                 entry,
@@ -2000,6 +2204,15 @@ class InitiativeService:
                     return
             except Exception:
                 logger.debug("engagement gate check failed", exc_info=True)
+        try:
+            # Own outcomes: progress goes through the chosen channel (WhatsApp,
+            # voice or log). Telegram and questions keep using this sender.
+            from distr.core.initiative.outcome_flow import route_own_update
+
+            if route_own_update(text, settings, kind=kind, requires_response=requires_response):
+                return
+        except Exception:
+            logger.debug("InitiativeService: Own-outcomes update routing failed", exc_info=True)
         allow_telegram = settings.get("initiative_allow_telegram", False)
         service = HumanEngagementService(
             telegram_manager=self.telegram_manager,
@@ -2277,15 +2490,15 @@ class InitiativeService:
         from distr.core.agent.services.llm.text_utils import spoken_task_summary
 
         spoken = spoken_task_summary(
-            str(input_packet.get("instruction") or ""),
+            _user_facing_instruction(input_packet.get("instruction")),
             ticket_title=str(input_packet.get("ticket_title") or input_packet.get("ticket_name") or ""),
             max_len=150,
         )
         if spoken:
             return spoken
         for key in ("prompt", "user_request", "request", "task", "message"):
-            summary = self._clean_summary_fragment(input_packet.get(key, ""))
-            if summary:
+            summary = self._clean_summary_fragment(_user_facing_instruction(input_packet.get(key, "")))
+            if summary and not _INTERNAL_PROMPT_RE.search(summary):
                 return summary
         return ""
 
@@ -2405,6 +2618,8 @@ class InitiativeService:
 
     def _maybe_send_execution_nudges(self, settings: dict) -> None:
         if not settings.get("initiative_allow_telegram", False):
+            return
+        if self._get_level(settings) == "observe":
             return
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
         if not uid or uid <= 0:

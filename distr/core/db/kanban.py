@@ -211,6 +211,24 @@ class KanbanTicketAuditEntry(Base):
     created_date = Column(DateTime, default=utc_now_naive)
 
 
+class KanbanTicketLaneHistory(Base):
+    """Every ticket lane change, including creation. created_at is naive UTC."""
+
+    __tablename__ = "kanban_ticket_lane_history"
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("kanban_tickets.id"), nullable=False, index=True)
+    from_lane = Column(String, nullable=True)
+    to_lane = Column(String, nullable=True)
+    actor = Column(String, nullable=False, default="system")
+    reason = Column(String, nullable=True)
+    source = Column(String, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+
+    ticket = relationship("KanbanTicket")
+
+
+
 class ProjectExecutionSession(Base):
     __tablename__ = "project_execution_sessions"
 

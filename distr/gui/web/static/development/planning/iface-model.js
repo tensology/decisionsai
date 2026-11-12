@@ -145,6 +145,7 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
 }
 
 const HUB_LINKS = 3;
+const MAX_RADIAL_PAGES = 40;
 
 function cardHeight(node) {
     if (node.lane === 'guidance') return NODE.guideH;
@@ -302,17 +303,21 @@ function flowChains(rows, edges) {
 // Pages with no flow stay in a wrapped grid. Compact "not found" cards start a new row. `aspect` is canvas
 // width / height so the board fits the viewport about right.
 export function layoutIface(model, { aspect = 1.6 } = {}) {
-    const hub = hubNode(model.nodes, model.edges || []);
+    const large = model.nodes.length > MAX_RADIAL_PAGES;
+    const hub = large ? null : hubNode(model.nodes, model.edges || []);
     if (hub) return layoutRadial(model, hub);
     const lanes = [];
     let y = 0, width = NODE.w;
     const counts = LANES.map((l) => model.nodes.filter((n) => n.lane === l.id).length);
     const total = counts.reduce((a, b) => a + b, 0) || 1;
-    const cols = Math.max(2, Math.min(8, Math.round(Math.sqrt(total * aspect * (NODE.h + NODE.gapY) / (NODE.w + NODE.gapX)))));
+    const idealColumns = Math.round(Math.sqrt(total * aspect * (NODE.h + NODE.gapY) / (NODE.w + NODE.gapX)));
+    const cols = Math.max(2, large ? idealColumns : Math.min(8, idealColumns));
     const linkStep = NODE.w + NODE.gapX + NODE.linkGap;
     const gridStep = NODE.w + NODE.gapX;
     const place = (node, x) => {
-        const h = cardHeight(node);
+        const h = large && !node.screenId && !node.shot?.image && node.route && node.lane !== 'ajax'
+            ? Math.min(cardHeight(node), 80)
+            : cardHeight(node);
         node.x = x;
         node.y = y;
         node.w = NODE.w;
@@ -324,7 +329,7 @@ export function layoutIface(model, { aspect = 1.6 } = {}) {
         const rows = model.nodes.filter((n) => n.lane === lane.id)
             .sort((a, b) => Number(a.quiet) - Number(b.quiet) || a.label.localeCompare(b.label) || a.route.localeCompare(b.route));
         if (!rows.length) continue;
-        const { chains, rest } = flowChains(rows, model.edges || []);
+        const { chains, rest } = large ? { chains: [], rest: rows } : flowChains(rows, model.edges || []);
         const top = y;
         y += NODE.laneHead;
         for (const chain of chains) {
@@ -349,7 +354,7 @@ export function layoutIface(model, { aspect = 1.6 } = {}) {
         y += NODE.laneGap - NODE.gapY;
     }
     for (const lane of lanes) lane.w = width + 28;
-    return { lanes, width, height: Math.max(NODE.h, y - NODE.laneGap + NODE.gapY), cols };
+    return { lanes, width, height: Math.max(NODE.h, y - NODE.laneGap + NODE.gapY), cols, large };
 }
 
 // Stable page id for a new screen (same rule as flow-meta slugId: letters first, 64 max).

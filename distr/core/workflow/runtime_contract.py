@@ -65,6 +65,17 @@ def get_session():
     return db_module.get_session()
 
 
+def accepts_step_result(run, step_id: int) -> bool:
+    return bool(run and run.status in {"running", "waiting"} and run.current_step_id in (None, step_id))
+
+
+def lock_step_result_run(session, run_id: int):
+    connection = session.connection()
+    if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+    return session.get(AutoWorkflowRun, run_id, populate_existing=True, with_for_update=True)
+
+
 def _json_dict(raw: str | None) -> dict[str, Any]:
     try:
         data = json.loads(raw or "{}") or {}

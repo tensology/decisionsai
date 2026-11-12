@@ -212,10 +212,10 @@ def register_routes(router, templates):
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}")
     async def workflow_studio_plan_workspace(workspace_id: int, board_id: int | None = None,
-                                             project_id: int | None = None):
+                                             project_id: int | None = None, include_data_model: bool = False):
         from distr.core.planning.service import get_workspace
 
-        return await _plan_call(_read_scoped_plan, get_workspace, workspace_id, board_id, project_id)
+        return await _plan_call(_read_scoped_plan, get_workspace, workspace_id, board_id, project_id, include_data_model)
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/scan-status")
     async def workflow_studio_plan_scan_status(workspace_id: int):
@@ -278,6 +278,32 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=404)
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=409)
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/requirements-pack")
+    async def workflow_studio_plan_requirements_pack(workspace_id: int):
+        def read(wid):
+            from distr.core.planning.requirements_pack import PACK_TYPE, PROPOSED_PATH, ledger_from_items
+            from distr.core.planning.service import get_workspace
+
+            detail = get_workspace(wid)
+            if detail is None:
+                raise LookupError("Plan workspace not found.")
+            items = detail.get("items") or []
+            pack = next((item for item in items if item.get("item_type") == PACK_TYPE), None)
+            return {"item": pack, "ledger": ledger_from_items(items), "proposed_path": PROPOSED_PATH, "written_to_repo": False}
+
+        return await _plan_call(read, workspace_id)
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/requirements-pack")
+    async def workflow_studio_plan_requirements_pack_generate(workspace_id: int, request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        from distr.core.planning.requirements_pack import generate_requirements_pack
+
+        new_instructions = str(body.get("new_instructions") or "") if isinstance(body, dict) else ""
+        return await _plan_call(generate_requirements_pack, workspace_id, new_instructions=new_instructions)
 
     @router.post("/workflows/studio/plan-workspaces/{workspace_id}/instructions")
     async def workflow_studio_plan_instruction(workspace_id: int, data: PlanInstructionRequest):

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -195,8 +196,10 @@ from distr.core.workflow.step_validator import build_step_config, validate_befor
 from distr.core.workflow.step_executor import StepExecutorMixin
 from distr.core.workflow.post_execution import PostExecutionMixin
 from distr.core.workflow.runtime_contract import (
+    accepts_step_result,
     build_step_preflight,
     emit_step_activity,
+    lock_step_result_run,
     should_pause_after_step,
 )
 
@@ -751,6 +754,17 @@ def _cleanup_orphaned_runs_on_startup() -> None:
                 "failed",
                 "cancelled",
             }:
+                try:
+                    metadata = json.loads(latest_run.run_data or "{}")
+                except (TypeError, ValueError):
+                    metadata = None
+                if isinstance(metadata, dict):
+                    if "queue_handoff_pending" in metadata or metadata.get("queue_handoff_finished") is True:
+                        continue
+                    if (metadata.get("source_type") == "workflow_queue"
+                            and (metadata.get("queue_terminal_pending") or metadata.get("queue_scope_changed")
+                                 or _queued_run_scope_error(db, latest_run, metadata))):
+                        continue
                 ticket.workflow_status = str(latest_run.status)
         execution_ids = _cancel_linked_execution_sessions(
             db,
@@ -801,13 +815,87 @@ def _cleanup_orphaned_runs_on_startup() -> None:
             )
 
 
-def _auto_resume_interrupted_runs(*, background: bool = True) -> None:
+def _saved_queued_ide_report(db, run, data):
+    from distr.core.db.kanban import ProjectExecutionSession
+
+    recovery = data.get("restart_recovery")
+    interrupted_kind = recovery.get("interrupted_waiting_kind") if isinstance(recovery, dict) else None
+    if (data.get("waiting_kind") not in ("restart_recovery", "ide_handoff", "needs_human_input")
+            or interrupted_kind not in (None, "", "ide_handoff", "needs_human_input", "restart_recovery")
+            or data.get("pending_route_approval")):
+        return None
+    report = data.get("early_ide_completion")
+    if (not isinstance(report, dict) or not isinstance(report.get("output"), str)
+            or type(report.get("passed")) is not bool):
+        return None
+    attempt_id = report.get("execution_session_id")
+    if type(attempt_id) is not int or attempt_id != data.get("execution_session_id"):
+        return None
+    attempt = db.get(ProjectExecutionSession, attempt_id)
+    if (attempt is None or attempt.route_type != "ide_bridge"
+            or (attempt.run_id, attempt.workflow_id, attempt.step_id, attempt.ticket_id)
+                != (run.id, run.workflow_id, run.current_step_id, run.ticket_id)
+            or report.get("step_id") != run.current_step_id
+            or str(attempt.project_id) != str(data.get("project_id"))
+            or attempt.status not in {"queued", "running", "waiting", "completed", "failed"}
+            or (attempt.status == "failed" and report.get("passed") is not False)):
+        return None
+    return report
+
+
+def _recover_queued_ide_report(run_id: int, step_id: int) -> None:
+    with get_session() as db:
+        run = lock_step_result_run(db, run_id)
+        if run is None or run.status != "waiting" or run.current_step_id != step_id:
+            return
+        try:
+            data = json.loads(run.run_data or "{}")
+        except (TypeError, ValueError):
+            return
+        if not isinstance(data, dict) or data.get("source_type") != "workflow_queue":
+            return
+        report = _saved_queued_ide_report(db, run, data)
+        if report is None:
+            return
+        if not workflow_accepts_worker_result(db, run, step_id, locked=True):
+            return
+        data["ide_handoff_pending"] = True
+        run.run_data = json.dumps(data)
+        db.commit()
+    StepDispatcher()._record_result_and_route(
+        step_id, run_id, "IDE report recovered after restart.", report["passed"], skip_wait=True,
+    )
+
+
+def _auto_resume_interrupted_runs(
+    *, background: bool = True, unconfirmed_checkpoint_steps: set[tuple[int, int | None]] | None = None,
+) -> None:
     """Run only after startup reconciliation, never across an approval gate."""
+    from sqlalchemy import and_, case, func, or_
+
     from distr.core.workflow.run_prompts import auto_resume_decision, restart_prompt, run_label
 
     eligible = []
+    queued_outcomes = []
+    unconfirmed = unconfirmed_checkpoint_steps or set()
     with get_session() as db:
-        runs = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.status == "waiting").all()
+        valid_data = case((func.json_valid(AutoWorkflowRun.run_data) == 1, AutoWorkflowRun.run_data), else_="{}")
+        runs = db.query(AutoWorkflowRun).filter(or_(
+            AutoWorkflowRun.status == "waiting",
+            and_(
+                AutoWorkflowRun.status.in_(("completed", "failed")),
+                func.json_extract(valid_data, "$.source_type") == "workflow_queue",
+                func.json_extract(valid_data, "$.queue_terminal_pending") == AutoWorkflowRun.status,
+            ),
+            and_(
+                AutoWorkflowRun.status == "completed",
+                func.json_type(valid_data, "$.queue_handoff_pending").is_not(None),
+            ),
+            and_(
+                AutoWorkflowRun.status.in_(("completed", "failed", "cancelled")),
+                func.json_extract(valid_data, "$.terminal_receipt_pending") == AutoWorkflowRun.status,
+            ),
+        )).all()
         for run in runs:
             try:
                 data = json.loads(run.run_data or "{}")
@@ -815,13 +903,37 @@ def _auto_resume_interrupted_runs(*, background: bool = True) -> None:
                 continue
             if not isinstance(data, dict):
                 continue
+            if data.get("terminal_receipt_pending") == run.status and run.status in {"completed", "failed", "cancelled"}:
+                if not data.get("queue_terminal_pending") and (run.id, run.current_step_id) not in unconfirmed:
+                    queued_outcomes.append((_recover_terminal_receipt, (
+                        int(run.id), int(run.workflow_id), run.status, "queue_handoff_pending" in data,
+                    )))
+                continue
+            if run.status == "completed" and "queue_handoff_pending" in data:
+                if not data.get("queue_terminal_pending") and (run.id, run.current_step_id) not in unconfirmed:
+                    queued_outcomes.append((_complete_ticket_queue_handoff, (int(run.id), int(run.workflow_id))))
+                continue
+            if data.get("source_type") == "workflow_queue":
+                if run.status in {"completed", "failed"} and data.get("queue_terminal_pending") == run.status:
+                    if (run.id, run.current_step_id) not in unconfirmed:
+                        queued_outcomes.append((complete_run, (int(run.id), run.status)))
+                    continue
+                if "early_ide_completion" in data:
+                    if (run.status == "waiting" and run.current_step_id and (run.id, run.current_step_id) not in unconfirmed
+                            and _saved_queued_ide_report(db, run, data)):
+                        queued_outcomes.append((_recover_queued_ide_report, (int(run.id), int(run.current_step_id))))
+                    continue
+            if run.status != "waiting":
+                continue
             if data.get("waiting_kind") != "restart_recovery":
                 continue
             recovery = dict(data.get("restart_recovery") or {})
             step = db.get(AutoWorkflowStep, run.current_step_id) if run.current_step_id else None
             allowed, attempts = auto_resume_decision(data, run.current_step_id or 0)
             reason = ""
-            if step is None or step.workflow_id != run.workflow_id:
+            if (run.id, run.current_step_id) in unconfirmed:
+                reason = "A checkpoint decision for this step could not be confirmed"
+            elif step is None or step.workflow_id != run.workflow_id:
                 reason = "No valid saved step"
             elif not allowed:
                 reason = "Automatic recovery retry limit reached"
@@ -876,11 +988,11 @@ def _auto_resume_interrupted_runs(*, background: bool = True) -> None:
                 data["restart_recovery"] = recovery
                 run.run_data = json.dumps(data)
                 db.commit()
-    for run_id in eligible:
+    for target, args in queued_outcomes + [(resume, (run_id,)) for run_id in eligible]:
         if background:
-            threading.Thread(target=resume, args=(run_id,), name=f"restart-recovery-{run_id}", daemon=True).start()
+            threading.Thread(target=target, args=args, name=f"restart-recovery-{args[0]}", daemon=True).start()
         else:
-            resume(run_id)
+            target(*args)
     increment_workflow_updated()
 
 
@@ -971,7 +1083,9 @@ def _finalize_development_chat_turn(
         report = WorkflowAgentBridge._generate_report(run_result)
         terminal_status = (status or "failed").strip().lower()
         if terminal_status == "completed":
-            complete_turn(chat_id, turn_id=turn_id, display_text=report, transcript_notice=report)
+            run_id = run_result.get("run_id")
+            provenance = {"transcript_workflow_run_id": run_id} if type(run_id) is int and run_id > 0 else {}
+            complete_turn(chat_id, turn_id=turn_id, display_text=report, transcript_notice=report, **provenance)
         else:
             terminal_turn(
                 chat_id,
@@ -987,7 +1101,7 @@ def _finalize_development_chat_turn(
 def _deliver_run_reply(ticket_id: int, result_text: str | list[str], *, previous_packets: list[str] | None = None,
                        run_id: int | None = None,
                        workflow_id: int | None = None, chat_id: int | None = None,
-                       turn_id: int | None = None) -> dict:
+                       turn_id: int | None = None, recovering: bool = False) -> dict:
     """Send the ticket's closing reply when the worker returned one.
 
     Deterministic and idempotent: the reply phase is contracted to return a
@@ -998,6 +1112,8 @@ def _deliver_run_reply(ticket_id: int, result_text: str | list[str], *, previous
             deliver_ticket_reply,
             extract_reply_text,
             recover_prior_reply,
+            recover_reply_review,
+            terminal_reply_scope,
         )
 
         reply_text = extract_reply_text(result_text)
@@ -1013,10 +1129,19 @@ def _deliver_run_reply(ticket_id: int, result_text: str | list[str], *, previous
                 prior_reply = data.get('reply_delivery')
                 if isinstance(prior_reply, dict) and (
                     prior_reply.get('delivered') is True or prior_reply.get('unconfirmed') is True
+                    or (prior_reply.get('pending_approval') is True
+                        and (prior_reply.get('approval_request_id') or prior_reply.get('telegram_flow_key')))
                 ):
                     # A parser change can produce a new body and therefore a
                     # different delivery key. Keep the run's prior send outcome.
                     return prior_reply
+                if reply_text and 'terminal_reply_scope' in data:
+                    from distr.core.db.kanban import KanbanTicket
+
+                    expected = data['terminal_reply_scope']
+                    if not expected or expected != terminal_reply_scope(db, db.get(KanbanTicket, ticket_id)):
+                        return {'delivered': False, 'scope_changed': True,
+                                'reason': 'The ticket or reply source changed after workflow completion.'}
                 if 'development_turn_id' in data:
                     # Use the launch turn even if the user has already moved
                     # on to another instruction in this Development thread.
@@ -1026,10 +1151,14 @@ def _deliver_run_reply(ticket_id: int, result_text: str | list[str], *, previous
                     if any(retained_context.get(key) != context[key] for key in ('run_id', 'workflow_id', 'chat_id')):
                         return {'delivered': False, 'reason': 'Closing reply review scope changed.'}
                     context = retained_context
-                    if isinstance(result_text, list):
-                        recovered = recover_prior_reply(db, run, previous_packets or result_text, reply_text, workflow=context)
-                        if recovered is not None:
-                            return recovered
+                    packets = previous_packets or (result_text if isinstance(result_text, list) else [])
+                    recovered = recover_prior_reply(db, run, packets, reply_text, workflow=context)
+                    if recovered is not None:
+                        return recovered
+                    if recovering:
+                        review = recover_reply_review(db, run, context)
+                        if review is not None:
+                            return review
                 elif reply_text:
                     data['closing_reply_context'] = context
                     run.run_data = json.dumps(data, default=str)
@@ -1065,10 +1194,13 @@ def _deliver_run_reply(ticket_id: int, result_text: str | list[str], *, previous
         return {'delivered': False, 'reason': 'Closing reply delivery could not be prepared.'}
 
 
-def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
-    """Clean up resources and notify the bridge when a run reaches terminal status."""
-    _cleanup_run(run_id)
+def _terminal_reply_review_unavailable(receipt: dict) -> bool:
+    reply = receipt.get("reply_delivery")
+    return bool(isinstance(reply, dict) and reply.get("pending_approval") is True
+                and not (reply.get("approval_request_id") or reply.get("telegram_flow_key")))
 
+
+def _record_terminal_receipt(run_id: int, workflow_id: int, status: str, *, recovering=False):
     steps_summary: List[dict] = []
     board_id: Optional[int] = None
     ticket_id: Optional[int] = None
@@ -1079,9 +1211,13 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     validation_records: List[dict] = []
     worker_output: List[str] = []
     previous_packets: List[str] = []
+    approval_definition_changed = False
+    ticket_lifecycle_committed = False
     try:
         with get_session() as db:
             run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            if recovering and (run_rec is None or run_rec.workflow_id != workflow_id or run_rec.status != status):
+                return None
             if run_rec:
                 board_id = run_rec.board_id
                 ticket_id = run_rec.ticket_id
@@ -1091,9 +1227,15 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 except Exception:
                     run_data = {}
                 if isinstance(run_data, dict):
+                    approval_definition_changed = run_data.get("approval_definition_changed") is True
+                    ticket_lifecycle_committed = (
+                        "queue_handoff_pending" in run_data or run_data.get("queue_handoff_finished") is True
+                    )
                     launch_turn = run_data.get("development_turn_id")
                     if type(launch_turn) is int and launch_turn > 0:
                         turn_id = launch_turn
+                if recovering and (not isinstance(run_data, dict) or run_data.get("terminal_receipt_pending") != status):
+                    return None
                 project_id_raw = run_data.get("project_id") if isinstance(run_data, dict) else None
                 project_id = int(project_id_raw) if str(project_id_raw or "").isdigit() else None
                 result_packet = dict(run_data.get("result_packet") or {}) if isinstance(run_data, dict) else {}
@@ -1116,13 +1258,15 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 })
     except Exception:
         logger.debug("Could not load step results for run %d", run_id)
+        if recovering:
+            return None
 
     # Close the loop with the person who raised the ticket, exactly once.
     reply_outcome = None
     if str(status or "").lower() == "completed" and ticket_id:
         reply_outcome = _deliver_run_reply(int(ticket_id), worker_output,
             previous_packets=previous_packets,
-            run_id=run_id, workflow_id=workflow_id, chat_id=chat_id, turn_id=turn_id)
+            run_id=run_id, workflow_id=workflow_id, chat_id=chat_id, turn_id=turn_id, recovering=recovering)
 
     try:
         from distr.core.orchestrator import list_validation_records
@@ -1157,6 +1301,9 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                     run_data = {}
                 if not isinstance(run_data, dict):
                     run_data = {}
+                if recovering and (run_rec.workflow_id != workflow_id or run_rec.status != status
+                                   or run_data.get("terminal_receipt_pending") != status):
+                    return None
                 # A user can approve immediately while finalization is still
                 # building the receipt. Keep that newer, matching decision.
                 latest_reply = run_data.get('reply_delivery')
@@ -1172,10 +1319,42 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 if 'reply_delivery' in run_result:
                     run_data['reply_delivery'] = run_result['reply_delivery']
                 run_data["terminal_receipt"] = run_result
+                if (run_data.get("terminal_receipt_pending") == status
+                        and not _terminal_reply_review_unavailable(run_result)):
+                    run_data.pop("terminal_receipt_pending")
                 run_rec.run_data = json.dumps(run_data, default=str)
                 db.commit()
     except Exception:
         logger.debug("Could not persist terminal receipt for run %d", run_id, exc_info=True)
+        if recovering:
+            return None
+
+    return run_result, chat_id, turn_id, approval_definition_changed, ticket_lifecycle_committed
+
+
+def _recover_terminal_receipt(run_id: int, workflow_id: int, status: str, resume_queue: bool) -> None:
+    # The local approval endpoint may still be starting. Retry only a review
+    # without a durable request, never a claimed or unconfirmed delivery.
+    for delay in (0, 0.25, 1):
+        if delay:
+            time.sleep(delay)
+        result = _record_terminal_receipt(run_id, workflow_id, status, recovering=True)
+        if result is None or not _terminal_reply_review_unavailable(result[0]):
+            break
+    if result is not None:
+        receipt, chat_id, turn_id, _, _ = result
+        if turn_id is not None:
+            _finalize_development_chat_turn(chat_id, status, receipt, turn_id=turn_id)
+    if resume_queue:
+        _complete_ticket_queue_handoff(run_id, workflow_id)
+
+
+def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
+    """Clean up resources and notify the bridge when a run reaches terminal status."""
+    _cleanup_run(run_id)
+    run_result, chat_id, turn_id, approval_definition_changed, ticket_lifecycle_committed = (
+        _record_terminal_receipt(run_id, workflow_id, status)
+    )
 
     _finalize_development_chat_turn(chat_id, status, run_result, turn_id=turn_id)
 
@@ -1187,7 +1366,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     try:
         with get_session() as db:
             run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
-            if run_rec and run_rec.ticket_id:
+            if run_rec and run_rec.ticket_id and not ticket_lifecycle_committed:
                 from distr.core.db.kanban import KanbanTicket
                 ticket = db.query(KanbanTicket).filter(
                     KanbanTicket.id == run_rec.ticket_id
@@ -1339,8 +1518,8 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
         logger.error("WorkflowAgentBridge notification failed for run %d", run_id, exc_info=True)
 
     if status == "completed":
-        _maybe_auto_start_next_queued_ticket(run_id, workflow_id)
-    if chat_id:
+        _complete_ticket_queue_handoff(run_id, workflow_id)
+    if chat_id and not approval_definition_changed:
         try:
             from distr.core.workflow.development_harness import _start_next_queued_instruction
 
@@ -1374,23 +1553,162 @@ def _queue_already_advanced(db, workflow_id: int, predecessor_id: int) -> bool:
     ).limit(1))
 
 
-def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
+def _ticket_queue_handoff_scope(ticket):
+    lane = ticket.lane if ticket is not None else None
+    if lane is None or lane.board is None:
+        return None
+    return {
+        "ticket_id": ticket.id,
+        "board_id": lane.board_id,
+        "project_id": ticket.linked_project_id or lane.board.default_project_id,
+        "linked_workflow_id": ticket.linked_workflow_id,
+        "queue_position": int(ticket.workflow_queue_position or 0),
+    }
+
+
+def _queue_handoff_matches(ticket, data):
+    scope = data.get("queue_handoff_pending")
+    return (isinstance(scope, dict) and scope == _ticket_queue_handoff_scope(ticket)
+            and ticket.workflow_status == "completed")
+
+
+def _complete_ticket_queue_handoff(run_id: int, workflow_id: int) -> None:
+    # The successor is deduplicated under the admission writer transaction.
+    # Keep the marker until the handoff returns so a crash can retry it.
+    if _maybe_auto_start_next_queued_ticket(run_id, workflow_id) is False:
+        return
+    with get_session() as db:
+        run = lock_step_result_run(db, run_id)
+        if run is None or run.workflow_id != workflow_id or run.status != "completed":
+            return
+        try:
+            data = json.loads(run.run_data or "{}")
+        except (TypeError, ValueError):
+            return
+        if isinstance(data, dict) and "queue_handoff_pending" in data:
+            data.pop("queue_handoff_pending")
+            data["queue_handoff_finished"] = True
+            run.run_data = json.dumps(data)
+            db.commit()
+
+
+def _queued_run_scope_error(db, run, metadata, *, lock_ticket=False):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.workflow.ticket_dispatch import implicit_queue_ticket_error, ticket_group_scope_error
+
+    if not isinstance(metadata, dict) or metadata.get("source_type") != "workflow_queue":
+        return "The saved queue scope is unavailable."
+    ticket = db.get(KanbanTicket, run.ticket_id, with_for_update=lock_ticket,
+                    populate_existing=lock_ticket) if run.ticket_id is not None else None
+    scope = metadata.get("ticket_group_scope")
+    if isinstance(scope, dict):
+        return ticket_group_scope_error(ticket, run.workflow_id, scope, automatic=True)
+    return implicit_queue_ticket_error(ticket, run.workflow_id, run.board_id, metadata.get("project_id"))
+
+
+def _stop_queued_run_if_scope_changed(
+    db, run, metadata, *, claimed_step_id=None, accepting_result=False, running_worker=False,
+):
+    reason = _queued_run_scope_error(db, run, metadata, lock_ticket=True)
+    if not reason:
+        return None
+    if not isinstance(metadata, dict) or metadata.get("source_type") != "workflow_queue":
+        metadata = {"source_type": "workflow_queue"}
+    if running_worker:
+        warning = f"The queued run stopped while its worker was active. {reason}"
+    elif accepting_result:
+        warning = f"The queued worker result was withheld. {reason}"
+    else:
+        warning = f"The queued run stopped before dispatching its next step. {reason}"
+    metadata.update(queue_scope_changed=True, terminal_warning=warning)
+    metadata.pop("early_ide_completion", None)
+    metadata.pop("queue_terminal_pending", None)
+    run.run_data = json.dumps(metadata)
+    run.status = "failed"
+    run.completed_at = utc_now_naive()
+    run_id = run.id
+    if claimed_step_id is not None:
+        # The same step definition can be active in another run.
+        step = db.get(AutoWorkflowStep, claimed_step_id, with_for_update=True)
+        other_run = db.query(AutoWorkflowRun.id).filter(
+            AutoWorkflowRun.id != run_id,
+            AutoWorkflowRun.current_step_id == claimed_step_id,
+            AutoWorkflowRun.status.in_(("running", "waiting")),
+        ).first()
+        if step and step.status == "running" and other_run is None:
+            step.status = "failed" if accepting_result or running_worker else "pending"
+    db.commit()
+    _cleanup_run(run_id)
+    increment_workflow_updated()
+    return {"status": "failed", "error": warning}
+
+
+def _recheck_queued_run_scope(
+    run_id: int, *, claimed_step_id: int | None = None, accepting_result: bool = False,
+    running_worker: bool = False,
+) -> dict | None:
+    with get_session() as db:
+        if running_worker:
+            current = db.get(AutoWorkflowRun, run_id)
+            if (current is not None and current.current_step_id == claimed_step_id
+                    and accepts_step_result(current, claimed_step_id)):
+                try:
+                    metadata = json.loads(current.run_data or "{}")
+                except (TypeError, ValueError):
+                    metadata = None
+                if not _queued_run_scope_error(db, current, metadata):
+                    return None
+        run = lock_step_result_run(db, run_id)
+        if run is None or run.status not in {"running", "waiting"}:
+            return {"success": False, "status": run.status if run else "missing", "ignored": True}
+        if claimed_step_id is not None and run.current_step_id != claimed_step_id:
+            return {"success": False, "status": run.status, "ignored": True}
+        try:
+            metadata = json.loads(run.run_data or "{}")
+        except (TypeError, ValueError):
+            metadata = None
+        return _stop_queued_run_if_scope_changed(
+            db, run, metadata, claimed_step_id=claimed_step_id, accepting_result=accepting_result,
+            running_worker=running_worker,
+        )
+
+
+def _record_ticket_queue_hold(
+    workflow_id: int, run_id: int, ticket_id: int, reason: str, *, board_id=None, project_id=None,
+) -> None:
+    logger.info("Queue auto-advance held for workflow %s after run %s: ticket %s (%s)",
+                workflow_id, run_id, ticket_id, reason)
+    try:
+        from distr.core.initiative.outcome_flow import audit
+
+        scope = {"workflow_id": workflow_id, "run_id": run_id, "ticket_id": ticket_id}
+        if board_id is not None:
+            scope["board_id"] = int(board_id)
+        if project_id is not None:
+            scope["project_id"] = int(project_id)
+        audit("workflow_queue_held", orchestrator_scope=scope, previous_run_id=run_id,
+              reason=reason, summary=reason, status="held")
+    except Exception:
+        logger.debug("Could not record queue hold for run %s", run_id, exc_info=True)
+
+
+def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> bool | None:
     """In sequential mode, start the next queued ticket after a successful run."""
     from sqlalchemy import and_, func, or_
-    from distr.core.workflow.ticket_dispatch import IMPLICIT_QUEUE_TERMINAL, hydrate_ticket_run_ref
+    from distr.core.workflow.ticket_dispatch import IMPLICIT_QUEUE_TERMINAL, compact_ticket_run_ref, hydrate_ticket_run_ref
 
     try:
         with get_session() as db:
             run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
             wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
-            if not run_rec or not wf or not run_rec.ticket_id:
+            if not run_rec or run_rec.status != "completed" or not wf or not run_rec.ticket_id:
                 return
             run_settings = _workflow_run_settings(wf)
             if run_settings.get("execution_mode") != "sequential":
                 return
             if _queue_already_advanced(db, workflow_id, run_id):
                 return
-            from distr.core.db.kanban import KanbanLane, KanbanTicket
+            from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 
             current_ticket = db.query(KanbanTicket).filter(
                 KanbanTicket.id == int(run_rec.ticket_id)
@@ -1401,6 +1719,12 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                 run_data = json.loads(run_rec.run_data or "{}")
             except Exception:
                 run_data = {}
+            if (not isinstance(run_data, dict) or run_data.get("skip_ticket_queue_advance") is True
+                    or run_data.get("queue_handoff_finished") is True):
+                return
+            if "queue_handoff_pending" in run_data and not _queue_handoff_matches(current_ticket, run_data):
+                logger.info("Queue handoff from run %s stopped because its completed ticket changed", run_id)
+                return
             group_items = (
                 run_data.get("ticket_group_items")
                 if isinstance(run_data.get("ticket_group_items"), list)
@@ -1413,7 +1737,12 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                 next_item = group_items[group_index + 1]
                 if not isinstance(next_item, dict) or next_item.get("ticket_id") is None:
                     return
-                hydrated = hydrate_ticket_run_ref(next_item, workflow_id)
+                try:
+                    hydrated = hydrate_ticket_run_ref(next_item, workflow_id, automatic=True)
+                except ValueError as exc:
+                    _record_ticket_queue_hold(workflow_id, run_id, int(next_item["ticket_id"]), str(exc),
+                                              board_id=next_item.get("board_id"), project_id=next_item.get("project_id"))
+                    return
                 next_ticket_id = int(hydrated["ticket_id"])
                 board_id = hydrated.get("board_id")
                 run_metadata = dict(hydrated.get("run_metadata") or {})
@@ -1421,6 +1750,7 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                 run_metadata.update(common_metadata)
                 run_metadata.update({
                     "ticket_group_id": run_data.get("ticket_group_id"),
+                    "ticket_group_scope": compact_ticket_run_ref(next_item),
                     "ticket_group_index": group_index + 1,
                     "ticket_group_size": len(group_items),
                     "ticket_group_items": group_items,
@@ -1446,6 +1776,7 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                 next_ticket = (
                     db.query(KanbanTicket)
                     .join(KanbanLane, KanbanTicket.lane_id == KanbanLane.id)
+                    .join(KanbanBoard, KanbanLane.board_id == KanbanBoard.id)
                     .filter(
                         KanbanTicket.linked_workflow_id == workflow_id,
                         or_(position > current_pos,
@@ -1457,6 +1788,10 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                         ),
                     )
                     .order_by(position.asc(), KanbanTicket.id.asc())
+                    .with_entities(
+                        KanbanTicket.id,
+                        func.coalesce(KanbanTicket.linked_project_id, KanbanBoard.default_project_id).label("project_id"),
+                    )
                     .first()
                 )
             if next_group_item is None and not next_ticket:
@@ -1469,13 +1804,42 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
             else:
                 next_ticket_id = int(next_ticket.id)
                 board_id = int(queue_board_id)
+                selected_project_id = next_ticket.project_id
 
         if next_group_item is None:
-            hydrated = hydrate_ticket_run_ref({"ticket_id": next_ticket_id, "board_id": board_id}, workflow_id)
+            audit_scope = {"board_id": board_id, "project_id": selected_project_id}
+            try:
+                hydrated = hydrate_ticket_run_ref({
+                    "ticket_id": next_ticket_id, "board_id": board_id, "project_id": selected_project_id,
+                }, workflow_id)
+            except ValueError as exc:
+                _record_ticket_queue_hold(workflow_id, run_id, next_ticket_id, str(exc), **audit_scope)
+                return
             if hydrated.get("board_id") != board_id:
+                _record_ticket_queue_hold(workflow_id, run_id, next_ticket_id,
+                                          "The queued ticket is no longer on its selected board.", **audit_scope)
                 return
             group_context = hydrated.get("context") or None
             run_metadata = {**(hydrated.get("run_metadata") or {}), "auto_queued_from_run_id": run_id}
+            if str(run_metadata.get("project_id") or "") != str(selected_project_id or ""):
+                _record_ticket_queue_hold(workflow_id, run_id, next_ticket_id,
+                                          "The queued ticket is no longer assigned to its selected project.", **audit_scope)
+                return
+        else:
+            group_scope = run_metadata["ticket_group_scope"]
+            audit_scope = {"board_id": group_scope.get("board_id", board_id),
+                           "project_id": group_scope.get("project_id", run_metadata.get("project_id"))}
+
+        try:
+            # Initiative: the queue doesn't start set-aside work on its own (ignored project or client).
+            from distr.core.initiative.attention import ticket_hold_reason
+
+            held = ticket_hold_reason(int(next_ticket_id))
+        except Exception:
+            held = ""
+        if held:
+            _record_ticket_queue_hold(workflow_id, run_id, next_ticket_id, held, **audit_scope)
+            return
 
         from distr.core.workflow.work_dispatch import dispatch_work_item
 
@@ -1491,13 +1855,16 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
             _session_provider=get_session,
         )
         if result.get("error"):
+            if result.get("status") == "blocked":
+                _record_ticket_queue_hold(workflow_id, run_id, next_ticket_id, str(result["error"]), **audit_scope)
+                return
             logger.info(
                 "Queue auto-advance skipped for workflow %s after run %s: %s",
                 workflow_id,
                 run_id,
                 result.get("error"),
             )
-            return
+            return None if result.get("status") == "already_dispatched" else False
         try:
             from distr.gui.web.kanban_events import increment_kanban_updated
 
@@ -1515,6 +1882,7 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
             logger.debug("Could not emit queue_auto_advance kanban event", exc_info=True)
     except Exception:
         logger.debug("Queue auto-advance failed for run %s", run_id, exc_info=True)
+        return False
 
 
 def start_workflow_ticket_group(
@@ -1541,6 +1909,10 @@ def start_workflow_ticket_group(
     if not normalized:
         return {"error": "No valid tickets were supplied"}
 
+    from distr.core.workflow.ticket_dispatch import hydrate_ticket_run_ref, snapshot_ticket_group_ref
+
+    group_refs: List[tuple[int, Dict[str, Any]]] = []
+    errors: List[Dict[str, Any]] = []
     with get_session() as db:
         workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
         if not workflow:
@@ -1549,20 +1921,20 @@ def start_workflow_ticket_group(
         error = workflow_start_error(workflow)
         if error:
             return {"error": error}
-        run_settings = _workflow_run_settings(workflow)
+        mode = _workflow_run_settings(workflow)["execution_mode"]
+        for index, item in enumerate(normalized):
+            try:
+                group_refs.append((index, snapshot_ticket_group_ref(db, item, int(workflow_id))))
+            except ValueError as exc:
+                if mode == "sequential":
+                    return {"error": str(exc)}
+                errors.append({"ticket_id": item["ticket_id"], "error": str(exc)})
 
     group_id = uuid4().hex
-    mode = run_settings["execution_mode"]
-    from distr.core.workflow.ticket_dispatch import compact_ticket_run_ref
-
-    group_refs = [compact_ticket_run_ref(item) for item in normalized]
-    to_start = normalized if mode == "parallel" else normalized[:1]
+    to_start = group_refs if mode == "parallel" else group_refs[:1]
     started: List[Dict[str, Any]] = []
-    errors: List[Dict[str, Any]] = []
     common_metadata = _ticket_group_common_metadata(run_metadata)
-    from distr.core.workflow.ticket_dispatch import hydrate_ticket_run_ref
-
-    for index, ref in enumerate(to_start):
+    for index, ref in to_start:
         try:
             item = hydrate_ticket_run_ref(ref, int(workflow_id))
         except ValueError as exc:
@@ -1572,9 +1944,10 @@ def start_workflow_ticket_group(
         metadata.update(common_metadata)
         metadata.update({
             "ticket_group_id": group_id,
+            "ticket_group_scope": ref,
             "ticket_group_index": index,
             "ticket_group_size": len(normalized),
-            "ticket_group_items": group_refs if mode == "sequential" else [],
+            "ticket_group_items": [item for _, item in group_refs] if mode == "sequential" else [],
             "ticket_group_common_metadata": common_metadata,
         })
         from distr.core.workflow.work_dispatch import dispatch_work_item
@@ -1660,10 +2033,14 @@ def append_workflow_ticket_group(
                 "board_id": int(run.board_id) if run.board_id is not None else None,
             })
             existing_ids.add(int(run.ticket_id))
-        from distr.core.workflow.ticket_dispatch import compact_ticket_run_ref
+        from distr.core.workflow.ticket_dispatch import compact_ticket_run_ref, snapshot_ticket_group_ref
 
         group_items = [compact_ticket_run_ref(item) for item in group_items if isinstance(item, dict) and item.get("ticket_id") is not None]
-        appended = [compact_ticket_run_ref(item) for item in normalized if item["ticket_id"] not in existing_ids]
+        try:
+            appended = [snapshot_ticket_group_ref(db, item, int(run.workflow_id))
+                        for item in normalized if item["ticket_id"] not in existing_ids]
+        except ValueError as exc:
+            return {"error": str(exc)}
         group_items.extend(appended)
         run_data["ticket_group_id"] = run_data.get("ticket_group_id") or uuid4().hex
         run_data["ticket_group_items"] = group_items
@@ -1724,6 +2101,39 @@ def start_workflow_run(
         if _approval_session is None and db.get_bind().dialect.name == "sqlite":
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         metadata_scope = run_metadata if isinstance(run_metadata, dict) else {}
+        group_scope = metadata_scope.get("ticket_group_scope")
+        if metadata_scope.get("source_type") in {"ticket_group", "workflow_queue"} and isinstance(group_scope, dict):
+            from distr.core.db.kanban import KanbanTicket
+            from distr.core.workflow.ticket_dispatch import ticket_group_scope_error
+
+            if group_scope.get("ticket_id") != ticket_id:
+                return {"status": "blocked", "error": "The queued ticket identity changed."}
+            if group_scope.get("board_id", board_id) != board_id or (
+                "project_id" in group_scope
+                and str(group_scope["project_id"] or "") != str(metadata_scope.get("project_id") or "")
+            ):
+                return {"status": "blocked", "error": "The queued launch does not match its selected board or project."}
+            queued_ticket = db.get(KanbanTicket, ticket_id, with_for_update=True) if ticket_id is not None else None
+            error = ticket_group_scope_error(
+                queued_ticket, workflow_id, group_scope, automatic=metadata_scope["source_type"] == "workflow_queue",
+            )
+            if error:
+                return {"status": "blocked", "error": error}
+        if metadata_scope.get('chat_id') is not None:
+            from distr.core.chat import _chat_params
+            from distr.core.db import Chat
+            from distr.core.incoming.proposals import (
+                MergeHandoffPending, ReviewedMergeAttachmentUnavailable, require_ready_merge_handoff,
+            )
+
+            thread = db.get(Chat, int(metadata_scope['chat_id']))
+            if thread is not None:
+                try:
+                    require_ready_merge_handoff(_chat_params(thread.params), thread.project_id, db=db, verify_attachments=True)
+                except MergeHandoffPending as exc:
+                    return {'success': False, 'status': 'blocked', 'error': str(exc)}
+                except ReviewedMergeAttachmentUnavailable as exc:
+                    return {'success': False, 'status': 'blocked', 'code': 'proposal_attachment_unavailable', 'error': str(exc)}
         if metadata_scope.get("source_type") == "workflow_queue":
             predecessor_id = metadata_scope.get("auto_queued_from_run_id")
             if type(predecessor_id) is not int or predecessor_id <= 0:
@@ -1733,6 +2143,20 @@ def start_workflow_run(
                 return {"error": "The queue predecessor is not a completed run for this workflow."}
             if _queue_already_advanced(db, workflow_id, predecessor_id):
                 return {"status": "already_dispatched", "error": "This completed run already advanced the queue."}
+            try:
+                predecessor_data = json.loads(predecessor.run_data or "{}")
+            except (TypeError, ValueError):
+                return {"status": "blocked", "error": "The completed ticket scope could not be verified."}
+            if not isinstance(predecessor_data, dict):
+                return {"status": "blocked", "error": "The completed ticket scope could not be verified."}
+            if predecessor_data.get("queue_handoff_finished") is True:
+                return {"status": "already_dispatched", "error": "The completed run's queue handoff has already been processed."}
+            if "queue_handoff_pending" in predecessor_data:
+                from distr.core.db.kanban import KanbanTicket
+
+                predecessor_ticket = db.get(KanbanTicket, predecessor.ticket_id, with_for_update=True)
+                if not _queue_handoff_matches(predecessor_ticket, predecessor_data):
+                    return {"status": "blocked", "error": "The completed ticket changed before queue handoff."}
             if not metadata_scope.get("ticket_group_items"):
                 from distr.core.db.kanban import KanbanTicket
                 from distr.core.workflow.ticket_dispatch import implicit_queue_ticket_error
@@ -2452,6 +2876,27 @@ def start_workflow_run(
         return None
 
     def _initialize_then_continue() -> Dict[str, Any]:
+        queued_run = normalized_metadata.get("source_type") == "workflow_queue"
+        if queued_run:
+            failure = _recheck_queued_run_scope(run_id)
+            if failure:
+                return failure
+        revision = normalized_metadata.get("approved_workflow_revision")
+        if revision:
+            with get_session() as db:
+                run = db.get(AutoWorkflowRun, run_id)
+                if not run or run.status not in {"running", "waiting"}:
+                    return {"success": False, "error": "The approved workflow is no longer active."}
+                try:
+                    approval_scope = json.loads(run.run_data or "{}")
+                except (TypeError, ValueError):
+                    approval_scope = None
+                failure = _stop_approved_workflow_if_scope_changed(db, run, approval_scope)
+                if failure:
+                    return failure
+                changed = not _approved_workflow_matches(db, workflow_id, revision)
+            if changed:
+                return _stop_changed_approved_workflow(run_id)
         if normalized_metadata.get("qualification_remote_control_probe"):
             from distr.core.workflow.interactions import start_telegram_qualification_probe
 
@@ -2473,10 +2918,18 @@ def start_workflow_run(
                     workflow_id,
                     exc_info=True,
                 )
+            if queued_run:
+                failure = _recheck_queued_run_scope(run_id)
+                if failure:
+                    return failure
         _enrich_run_context()
         init_error = _initialize_run_context()
         if init_error:
             return init_error
+        if queued_run:
+            failure = _recheck_queued_run_scope(run_id)
+            if failure:
+                return failure
         waiting = _enter_briefing_wait()
         if waiting:
             return waiting
@@ -2507,15 +2960,23 @@ def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
     return dispatcher.run_isolated(step_id)
 
 
-def cancel_run(run_id: int, *, workflow_id: Optional[int] = None, expected_checkpoint: dict | None = None) -> bool:
+def cancel_run(run_id: int, *, workflow_id: Optional[int] = None, expected_checkpoint: dict | None = None,
+               expected_chat_id: int | None = None) -> bool:
     """Cancel an active workflow run, optionally bound to its workflow."""
     active_execution_info = None
     with get_session() as db:
         from distr.core.workflow.interactions import guard_workflow_checkpoint
         guard_workflow_checkpoint(db,run_id,expected_checkpoint)
+        if expected_chat_id is not None and expected_checkpoint is None and db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         query = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id)
         if workflow_id is not None:
             query = query.filter(AutoWorkflowRun.workflow_id == workflow_id)
+        if expected_chat_id is not None:
+            query = query.filter(
+                AutoWorkflowRun.chat_id == expected_chat_id,
+                AutoWorkflowRun.status.in_(["initializing", "queued", "running", "waiting", "paused"]),
+            )
         run = query.first()
         if not run:
             return False
@@ -2672,7 +3133,9 @@ def approve_pre_execution_step(
     }
 
 
-def _handle_run_briefing_response(run_id: int, optional_input: str, *, expected_checkpoint: dict | None = None) -> Dict[str, Any]:
+def _handle_run_briefing_response(
+    run_id: int, optional_input: str, *, expected_checkpoint: dict | None = None, literal_feedback: bool = False,
+) -> Dict[str, Any]:
     from distr.core.workflow.run_briefing import (
         build_run_briefing_message,
         classify_human_workflow_response,
@@ -2680,7 +3143,7 @@ def _handle_run_briefing_response(run_id: int, optional_input: str, *, expected_
         gather_run_briefing_context,
     )
 
-    action = classify_human_workflow_response(optional_input, waiting_kind="run_briefing")
+    action = "steer" if literal_feedback else classify_human_workflow_response(optional_input, waiting_kind="run_briefing")
     if action == "stop":
         cancel_run(run_id,expected_checkpoint=expected_checkpoint)
         return {"success": True, "action": "end_run", "status": "cancelled"}
@@ -2766,11 +3229,13 @@ def _handle_run_briefing_response(run_id: int, optional_input: str, *, expected_
     }
 
 
-def _handle_step_review_response(run_id: int, optional_input: str, *, expected_checkpoint: dict | None = None) -> Dict[str, Any]:
+def _handle_step_review_response(
+    run_id: int, optional_input: str, *, expected_checkpoint: dict | None = None, literal_feedback: bool = False,
+) -> Dict[str, Any]:
     from distr.core.workflow.run_briefing import classify_human_workflow_response
     from distr.core.workflow.router import StepRouter
 
-    action = classify_human_workflow_response(optional_input, waiting_kind="step_review")
+    action = "steer" if literal_feedback else classify_human_workflow_response(optional_input, waiting_kind="step_review")
     if action == "stop":
         cancel_run(run_id,expected_checkpoint=expected_checkpoint)
         return {"success": True, "action": "end_run", "status": "cancelled"}
@@ -2944,9 +3409,12 @@ def _resume_worker_needs_input(run_id: int, feedback: str, *, expected_checkpoin
     }
 
 
-def continue_waiting_step(run_id: int, optional_input: str = "", *, expected_checkpoint: dict | None = None) -> Dict[str, Any]:
+def continue_waiting_step(
+    run_id: int, optional_input: str = "", *, expected_checkpoint: dict | None = None, literal_feedback: bool = False,
+) -> Dict[str, Any]:
     """Resume a workflow run that is in 'waiting' status."""
     waiting_kind = ""
+    queued = False
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
         if not run:
@@ -2959,12 +3427,24 @@ def continue_waiting_step(run_id: int, optional_input: str = "", *, expected_che
                 if not isinstance(resume_scope, dict):
                     raise ValueError('Invalid run context')
                 waiting_kind = resume_scope.get('waiting_kind') or ''
+                queued = resume_scope.get("source_type") == "workflow_queue"
             except Exception:
                 return {'success':False, 'status':'waiting', 'status_code':409,
                         'error':'The paused workflow context is invalid. Review its ticket assignment before continuing.'}
+            if resume_scope.get("approved_workflow_revision") or resume_scope.get("source_type") == "proactive_workflow_draft":
+                failure = _stop_approved_workflow_if_scope_changed(db, run, resume_scope)
+                if failure:
+                    return failure
+
+    if queued:
+        failure = _recheck_queued_run_scope(run_id, accepting_result=True)
+        if failure:
+            return failure
 
     if waiting_kind == "run_briefing":
-        return _handle_run_briefing_response(run_id, optional_input,expected_checkpoint=expected_checkpoint)
+        return _handle_run_briefing_response(
+            run_id, optional_input, expected_checkpoint=expected_checkpoint, literal_feedback=literal_feedback,
+        )
     if waiting_kind == 'plan_prerequisites':
         from distr.core.planning.prerequisites import PlanPrerequisiteError, require_plan_prerequisites
         with get_session() as db:
@@ -2996,12 +3476,14 @@ def continue_waiting_step(run_id: int, optional_input: str = "", *, expected_che
             db.commit()
         return StepDispatcher().run_in_workflow(int(step_id), int(run_id))
     if waiting_kind == "step_review":
-        return _handle_step_review_response(run_id, optional_input,expected_checkpoint=expected_checkpoint)
+        return _handle_step_review_response(
+            run_id, optional_input, expected_checkpoint=expected_checkpoint, literal_feedback=literal_feedback,
+        )
     if waiting_kind == "worker_needs_input":
         return _resume_worker_needs_input(run_id, optional_input,expected_checkpoint=expected_checkpoint)
     if waiting_kind == "restart_recovery":
         clean = (optional_input or "").strip()
-        if clean.lower() in {"stop", "cancel", "abort"}:
+        if not literal_feedback and clean.lower() in {"stop", "cancel", "abort"}:
             cancel_run(run_id,expected_checkpoint=expected_checkpoint)
             return {"success": True, "action": "end_run", "status": "cancelled"}
         with get_session() as db:
@@ -3097,10 +3579,12 @@ def continue_waiting_step(run_id: int, optional_input: str = "", *, expected_che
         clean = (optional_input or "").strip()
         lowered = clean.lower()
         resume_completed_step = False
-        if lowered in {"stop", "cancel", "abort"} or lowered.startswith("stop "):
+        if not literal_feedback and (lowered in {"stop", "cancel", "abort"} or lowered.startswith("stop ")):
             cancel_run(run_id,expected_checkpoint=expected_checkpoint)
             return {"success": True, "action": "end_run", "status": "cancelled"}
-        if any(token in lowered for token in ("change worker", "swap model", "use cursor", "use codex", "use claude")):
+        if not literal_feedback and any(
+            token in lowered for token in ("change worker", "swap model", "use cursor", "use codex", "use claude")
+        ):
             try:
                 from distr.core.workflow.service import apply_run_harness_steer
 
@@ -3182,6 +3666,8 @@ def continue_waiting_step(run_id: int, optional_input: str = "", *, expected_che
 
     router = StepRouter()
     decision = router.resume_from_feedback(step_id, run_id, optional_input,expected_checkpoint=expected_checkpoint)
+    if decision.get("action") == "ignore":
+        return {"success": False, "ignored": True, "status": decision.get("status")}
     record_workflow_chat_event(
         run_id,
         "resumed",
@@ -3325,7 +3811,142 @@ def continue_waiting_step(run_id: int, optional_input: str = "", *, expected_che
     return decision
 
 
-def complete_run(run_id: int, status: str = "completed") -> bool:
+def _approved_workflow_matches(db, workflow_id, revision):
+    from distr.core.workflow.draft_launch import workflow_definition_revision
+
+    workflow = db.get(AutoWorkflow, workflow_id)
+    return workflow is not None and workflow_definition_revision(db, workflow) == revision
+
+
+def _stop_changed_approved_workflow(run_id):
+    from distr.core.workflow.draft_launch import WORKFLOW_DEFINITION_CHANGED
+
+    complete_run(run_id, "failed", approval_definition_changed=True)
+    return {"success": False, "status": "failed", "error": WORKFLOW_DEFINITION_CHANGED}
+
+
+def _stop_approved_workflow_if_scope_changed(db, run, metadata):
+    from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.workflow.draft_launch import (
+        WORKFLOW_APPROVAL_FOLDER_CHANGED, WORKFLOW_APPROVAL_SCOPE_CHANGED,
+        approved_draft_folder_matches, approved_draft_owns_scope,
+    )
+
+    event = db.query(OrchestratorEvent).filter_by(
+        run_id=run.id, workflow_id=run.workflow_id, source="proactive_orchestrator",
+        event_type="proactive_work_candidate", status="workflow_launched",
+    ).first()
+    owns_scope = approved_draft_owns_scope(db, run, event, metadata)
+    if owns_scope and approved_draft_folder_matches(db, event, metadata):
+        return None
+    run_id = run.id
+    reason = WORKFLOW_APPROVAL_FOLDER_CHANGED if owns_scope else WORKFLOW_APPROVAL_SCOPE_CHANGED
+    warning = {"success": False, "status": "failed", "error": reason}
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata.pop("waiting_kind", None)
+    metadata.pop("waiting_prompt", None)
+    metadata.pop("phase", None)
+    metadata.update(approval_scope_changed=True, terminal_warning=reason)
+    if owns_scope:
+        metadata["approval_project_folder_changed"] = True
+    if isinstance(metadata.get("result_packet"), dict):
+        risk = metadata.get("risk_profile")
+        packet = _finalize_result_packet_for_terminal_run(
+            metadata["result_packet"], run_id=run_id, status="failed", risk_profile=risk if isinstance(risk, dict) else {},
+        )
+        metadata["result_packet"] = {**packet, "summary": reason}
+    stopped = db.query(AutoWorkflowRun).filter(
+        AutoWorkflowRun.id == run_id, AutoWorkflowRun.status == run.status,
+        AutoWorkflowRun.run_data == run.run_data, AutoWorkflowRun.current_step_id == run.current_step_id,
+    ).update({
+        AutoWorkflowRun.run_data: json.dumps(metadata),
+        AutoWorkflowRun.status: "failed",
+        AutoWorkflowRun.completed_at: utc_now_naive(),
+    }, synchronize_session=False)
+    if not stopped:
+        return {**warning, "status": "unconfirmed"}
+    if owns_scope:
+        # Re-read ticket ownership under the terminal write transaction.
+        db.expire_all()
+        if approved_draft_owns_scope(db, run, event, metadata):
+            latest_run = db.query(AutoWorkflowRun.id).filter_by(ticket_id=run.ticket_id).order_by(AutoWorkflowRun.id.desc()).first()
+            ticket = db.get(KanbanTicket, run.ticket_id)
+            if latest_run and latest_run.id == run_id and ticket.workflow_status in {"running", "waiting"}:
+                ticket.workflow_status = "failed"
+    if event:
+        event.status = "workflow_review_invalidated"
+    active_routes = db.query(ProjectExecutionSession.project_id, ProjectExecutionSession.route_backend).filter(
+        ProjectExecutionSession.run_id == run_id,
+        ProjectExecutionSession.status.in_(("queued", "running", "waiting")),
+    ).distinct().all()
+    _cancel_linked_execution_sessions(db, [run_id], reason=reason,
+                                      event_type="approval_scope_changed")
+    # A reassigned ticket belongs to its new scope. Keep its status and chat intact.
+    board_id = run.board_id
+    db.commit()
+    if active_routes:
+        from distr.core.project_cli_backends.registry import terminate_backend_process
+
+        for project_id, backend in active_routes:
+            try:
+                terminate_backend_process(project_id, backend, board_id=board_id, execution_id=run_id,
+                                          execution_kind="workflow")
+            except Exception:
+                logger.debug("Could not stop the provider process for workflow run %d", run_id, exc_info=True)
+    _cleanup_run(run_id)
+    increment_workflow_updated()
+    return warning
+
+
+def workflow_accepts_worker_result(db, run, step_id: int, *, locked: bool = False) -> bool:
+    if not accepts_step_result(run, step_id):
+        return False
+    try:
+        metadata = json.loads(run.run_data or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("approved_workflow_revision") or metadata.get("source_type") == "proactive_workflow_draft":
+        return _stop_approved_workflow_if_scope_changed(db, run, metadata) is None
+    if metadata.get("source_type") == "workflow_queue":
+        if not locked and not _queued_run_scope_error(db, run, metadata):
+            return True
+        if not locked:
+            run = lock_step_result_run(db, run.id)
+            if not accepts_step_result(run, step_id):
+                return False
+            try:
+                metadata = json.loads(run.run_data or "{}")
+            except (TypeError, ValueError):
+                metadata = None
+        return _stop_queued_run_if_scope_changed(
+            db, run, metadata, claimed_step_id=step_id, accepting_result=True,
+        ) is None
+    return True
+
+
+def _recheck_approved_step_dispatch(run_id: int, step_id: int, revision: str | None) -> dict | None:
+    with get_session() as db:
+        run = db.get(AutoWorkflowRun, run_id)
+        if not run or run.status not in {"running", "waiting"}:
+            return {"success": False, "status": run.status if run else "missing"}
+        try:
+            scope = json.loads(run.run_data or "{}")
+        except (TypeError, ValueError):
+            scope = None
+        failure = _stop_approved_workflow_if_scope_changed(db, run, scope)
+        if failure:
+            return failure
+        if not accepts_step_result(run, step_id):
+            return {"success": False, "status": run.status, "ignored": True}
+        if scope.get("approved_workflow_revision") == revision and _approved_workflow_matches(db, run.workflow_id, revision):
+            return None
+    return _stop_changed_approved_workflow(run_id)
+
+
+def complete_run(run_id: int, status: str = "completed", *, approval_definition_changed: bool = False) -> bool:
     """Mark a run as terminal and clean up resources."""
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
@@ -3335,6 +3956,49 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             run_data = json.loads(run.run_data or "{}")
         except Exception:
             run_data = {}
+        if any(run_data.get(flag) for flag in (
+            "approval_definition_changed", "approval_scope_changed", "queue_scope_changed",
+        )):
+            return False
+        if run_data.get("source_type") == "workflow_queue":
+            run = lock_step_result_run(db, run_id)
+            if run is None:
+                return False
+            try:
+                run_data = json.loads(run.run_data or "{}")
+            except (TypeError, ValueError):
+                run_data = None
+            if (run.status not in ("running", "waiting")
+                    and (not isinstance(run_data, dict) or run_data.get("queue_terminal_pending") != status
+                         or run.status != status)):
+                return False
+            if _stop_queued_run_if_scope_changed(db, run, run_data, accepting_result=True):
+                return False
+            run_data.pop("queue_terminal_pending", None)
+        revision = run_data.get("approved_workflow_revision")
+        if ((revision or run_data.get("source_type") == "proactive_workflow_draft")
+                and run.status in {"running", "waiting"}):
+            failure = _stop_approved_workflow_if_scope_changed(db, run, run_data)
+            if failure:
+                return failure["status"] == "failed"
+        if status == "completed" and revision and not _approved_workflow_matches(db, run.workflow_id, revision):
+            status = "failed"
+            approval_definition_changed = True
+        if approval_definition_changed:
+            if run.status not in {"running", "waiting"}:
+                return False
+            from distr.core.db.orchestrator import OrchestratorEvent
+            from distr.core.workflow.draft_launch import WORKFLOW_DEFINITION_CHANGED
+
+            run_data["approval_definition_changed"] = True
+            run_data["terminal_warning"] = WORKFLOW_DEFINITION_CHANGED
+            run.run_data = json.dumps(run_data)
+            event = db.query(OrchestratorEvent).filter_by(
+                run_id=run.id, workflow_id=run.workflow_id, source="proactive_orchestrator",
+                event_type="proactive_work_candidate", status="workflow_launched",
+            ).first()
+            if event:
+                event.status = "workflow_review_invalidated"
         # A terminal run cannot still be waiting for a provider or approval.
         # Keep that history in events, but clear the actionable current-state
         # fields so Mission Control and Telegram do not show a stale question.
@@ -3496,6 +4160,7 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                 ticket.workflow_status = status
                 if status == "completed":
                     from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+                    from distr.core.workflow.reply_delivery import terminal_reply_scope
 
                     current_lane = db.query(KanbanLane).filter(
                         KanbanLane.id == int(ticket.lane_id)
@@ -3506,8 +4171,22 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                     if current_lane_name not in {"In Progress", "QA"}:
                         move_ticket_to_delivery_lane(db, int(ticket_id), "In Progress")
                     move_ticket_to_delivery_lane(db, int(ticket_id), "QA")
+                    if isinstance(ticket, KanbanTicket):
+                        run_data["terminal_reply_scope"] = terminal_reply_scope(db, ticket)
+                    if (isinstance(ticket, KanbanTicket) and run.workflow is not None
+                            and _workflow_run_settings(run.workflow)["execution_mode"] == "sequential"
+                            and run_data.get("skip_ticket_queue_advance") is not True):
+                        scope = _ticket_queue_handoff_scope(ticket)
+                        if scope is not None and (board_id is None or board_id == scope["board_id"]):
+                            run_data["queue_handoff_pending"] = scope
+                            run.run_data = json.dumps(run_data)
         run.status = status
         run.completed_at = None if auto_retry else utc_now_naive()
+        if isinstance(run, AutoWorkflowRun) and status in {"completed", "failed", "cancelled"}:
+            run_data["terminal_receipt_pending"] = status
+            run.run_data = json.dumps(run_data)
+        elif run_data.get("source_type") == "workflow_queue":
+            run.run_data = json.dumps(run_data)
         db.commit()
     increment_workflow_updated()
     if auto_retry:
@@ -3523,6 +4202,12 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             except Exception:
                 pass
         return True
+
+    # Publish the committed outcome before optional artifact and audit work.
+    summary = run_data.get("terminal_warning") if approval_definition_changed else None
+    summary = summary or f"Workflow run finished with status: {status}."
+    record_workflow_chat_event(run_id, "completed", status=status, summary=summary)
+
     try:
         if status == "completed" and workflow_id and isinstance(run_data, dict):
             from distr.core.workspace_memory.demo_artifact import write_demo_artifact
@@ -3568,7 +4253,7 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
     except Exception:
         logger.debug("demo artifact / playwright follow-up failed for run %s", run_id, exc_info=True)
     try:
-        if workflow_id and isinstance(run_data, dict):
+        if workflow_id and isinstance(run_data, dict) and not approval_definition_changed:
             from distr.core.db.projects import Project
             from distr.core.db.workflow import AutoWorkflow
             from distr.core.workflow.skill_provision import provision_workflow_skills
@@ -3607,12 +4292,6 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         # Qualification evidence must never interfere with customer workflow
         # finalization. The release report will show the missing run instead.
         logger.debug("Could not record qualification evidence for run %s", run_id, exc_info=True)
-    record_workflow_chat_event(
-        run_id,
-        "completed",
-        status=status,
-        summary=f"Workflow run finished with status: {status}.",
-    )
     try:
         from distr.core.orchestration_events import emit_orchestration_event
 
@@ -3624,7 +4303,7 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             run_id=run_id,
             ticket_id=ticket_id,
             board_id=board_id,
-            summary=f"Workflow run finished with status: {status}.",
+            summary=summary,
         )
         increment_workflow_updated()
     except Exception:
@@ -3725,6 +4404,9 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
     def run_in_workflow(self, step_id: int, run_id: int) -> Dict[str, Any]:
         """Execute step within a workflow run, then hand off to StepRouter."""
         from distr.core.planning.prerequisites import PlanPrerequisiteError, require_plan_prerequisites
+        approved_step = None
+        definition_changed = False
+        queued_run = False
         with get_session() as db:
             current_run = db.get(AutoWorkflowRun, int(run_id))
             if current_run is not None and current_run.status in {'running', 'waiting'}:
@@ -3733,6 +4415,16 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                     run_scope = json.loads(current_run.run_data or '{}')
                     if not isinstance(run_scope, dict):
                         raise ValueError('Invalid run context')
+                    queued_run = run_scope.get("source_type") == "workflow_queue"
+                    revision = run_scope.get("approved_workflow_revision")
+                    approved = revision or run_scope.get("source_type") == "proactive_workflow_draft"
+                    if approved:
+                        connection = db.connection()
+                        if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+                            connection.exec_driver_sql("BEGIN")
+                        failure = _stop_approved_workflow_if_scope_changed(db, current_run, run_scope)
+                        if failure:
+                            return failure
                     require_plan_prerequisites(current_run.ticket_id, run_id=current_run.id,
                         project_id=run_scope.get('project_id'), board_id=current_run.board_id, session=db)
                 except (ValueError, TypeError, AttributeError) as exc:
@@ -3745,6 +4437,18 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                     # for diagnosis/repair; do not replace it with an empty map.
                     db.commit()
                     return {'success':False, 'status':'waiting', 'status_code':409, 'waiting_kind':'plan_prerequisites', 'error':message}
+                if approved:
+                    if _approved_workflow_matches(db, current_run.workflow_id, revision):
+                        approved_step = self._load_step(step_id, db=db)
+                        definition_changed = approved_step.get("workflow_id") != current_run.workflow_id
+                    else:
+                        definition_changed = True
+        if definition_changed:
+            return _stop_changed_approved_workflow(run_id)
+        if queued_run:
+            failure = _recheck_queued_run_scope(run_id)
+            if failure:
+                return failure
         # Idempotency guard: if this exact run/step is already actively executing,
         # treat duplicate dispatches as no-ops (UI double-click, duplicate callback,
         # or concurrent orchestration paths).
@@ -3777,7 +4481,7 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
 
         self._consume_pending_coordination_replan(run_id=run_id, step_id=step_id)
 
-        step_data = self._load_step(step_id)
+        step_data = approved_step if approved_step is not None else self._load_step(step_id)
         if "error" in step_data:
             return step_data
         if self._enter_requested_pre_execution_gate(step_data, run_id):
@@ -3822,6 +4526,16 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
             )
             return {"error": errors}
         preflight = build_step_preflight(step_data, run_id)
+        if queued_run:
+            failure = _recheck_queued_run_scope(run_id)
+            if failure:
+                return failure
+        if approved_step is not None:
+            # Preflight can outlive the ownership and definition checks that
+            # loaded this step. Recheck before applying the result or starting work.
+            failure = _recheck_approved_step_dispatch(run_id, step_id, revision)
+            if failure:
+                return failure
         emit_step_activity(
             run_id=run_id,
             step_id=step_id,
@@ -3884,6 +4598,11 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
             notify_ticket_workflow_step_started(run_id, step_id)
         except Exception:
             logger.debug("Could not send ticket workflow step-start engagement", exc_info=True)
+        if approved_step is not None:
+            # Step-start activity and engagement can outlive the prior check.
+            failure = _recheck_approved_step_dispatch(run_id, step_id, revision)
+            if failure:
+                return failure
         if _enter_controlled_restart_recovery(run_id, step_id):
             return {
                 "success": True,
@@ -3892,12 +4611,17 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                 "step_id": int(step_id),
             }
         try:
+            if approved_step is not None:
+                step_data = {**step_data, "_approved_workflow_revision": revision}
             result = self._execute(step_data, run_id=run_id)
         except Exception as exc:
             # A backend adapter bug must become a terminal step result. Letting it
             # escape leaves the run and ticket marked "running" until restart,
             # which presents as a forever spinner in mission control.
             error_text = f"Step execution failed unexpectedly: {exc}"
+            with get_session() as db:
+                if not workflow_accepts_worker_result(db, db.get(AutoWorkflowRun, run_id), step_id):
+                    return {"success": False, "ignored": True}
             logger.exception("Workflow step crashed run_id=%s step_id=%s", run_id, step_id)
             record_workflow_chat_event(
                 run_id,
@@ -3923,16 +4647,22 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                 skip_wait=True,
             )
             return {"error": error_text, "status": "failed", "passed": False}
+        if "dispatch_stopped" in result:
+            return result["dispatch_stopped"]
         if result.get("async"):
             return {"success": True, "message": result.get("message", "Step dispatched.")}
-        record_workflow_chat_event(
-            run_id,
-            "step_completed" if result.get("passed") else "step_failed",
-            status="passed" if result.get("passed") else "failed",
-            step_id=step_id,
-            step_name=step_data.get("name"),
-            summary=result.get("output", "") or ("Step completed." if result.get("passed") else "Step failed."),
-        )
+        with get_session() as db:
+            if not workflow_accepts_worker_result(db, db.get(AutoWorkflowRun, run_id), step_id):
+                return {"success": False, "ignored": True}
+        if not queued_run:
+            record_workflow_chat_event(
+                run_id,
+                "step_completed" if result.get("passed") else "step_failed",
+                status="passed" if result.get("passed") else "failed",
+                step_id=step_id,
+                step_name=step_data.get("name"),
+                summary=result.get("output", "") or ("Step completed." if result.get("passed") else "Step failed."),
+            )
         self._record_result_and_route(
             step_id,
             run_id=run_id,
@@ -3942,6 +4672,14 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
         )
         # If step entered waiting state, return early — routing handled by wait state
         with get_session() as db:
+            if queued_run:
+                run = db.get(AutoWorkflowRun, run_id)
+                try:
+                    run_data = json.loads(run.run_data or "{}") if run else {}
+                except (TypeError, ValueError):
+                    run_data = None
+                if isinstance(run_data, dict) and run_data.get("queue_scope_changed") is True:
+                    return {"success": False, "status": "failed", "error": run_data.get("terminal_warning")}
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
             if step and should_pause_after_step(
                 run_id=run_id,
@@ -4005,13 +4743,13 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
 
     # ── Step loading ────────────────────────────────────────────────
 
-    def _load_step(self, step_id: int) -> Dict[str, Any]:
+    def _load_step(self, step_id: int, *, db=None) -> Dict[str, Any]:
         """Load step data from the database."""
-        with get_session() as db:
-            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+        with (get_session() if db is None else nullcontext(db)) as session:
+            step = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
             if not step:
                 return {"error": "Step not found"}
-            return {
+            data = {
                 "id": step.id, "name": step.name,
                 "description": step.description or "",
                 "position": step.position,
@@ -4036,6 +4774,11 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                 "on_fail_goto": step.on_fail_goto,
                 "wait_before_next": step.wait_before_next or 0,
             }
+            if db is not None and step.action_type in {"decision_action", "play_recording"}:
+                from distr.core.workflow.draft_launch import workflow_step_action
+
+                data["approved_action"] = workflow_step_action(session, step)
+            return data
 
     def _enter_requested_pre_execution_gate(
         self,

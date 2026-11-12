@@ -22,11 +22,12 @@ from distr.core.chat import ChatService, _append_user_turn, _chat_params, record
 from distr.core.db import Chat, get_session
 from distr.core.db.projects import Project
 from distr.core.db.time import utc_now_naive
-from distr.core.workflow.development_threads import development_scope_identity, development_thread_metadata
+from distr.core.workflow.development_threads import development_board, development_scope_identity, development_thread_metadata
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_EXECUTION_STATUSES = {"initializing", "queued", "running", "waiting"}
+_FOLLOWUP_STARTUP_PROCESS = uuid.uuid4().hex
 CLI_BACKENDS = {"pi", "cursor", "codex", "claude_code"}
 # Local Ollama workers appear beside Pi/Cursor/Codex. The picker source of truth
 # is the live installed catalog (ollama list /api/tags) — not a hard-coded list.
@@ -301,6 +302,9 @@ def _turn_outcome(
     return payload
 
 
+_RUN_CONTINUITY_PARAGRAPH = re.compile(r"(?:^|\n)[ \t]*run continuity:.*?(?=\n[ \t]*\n|\Z)", re.IGNORECASE | re.DOTALL)
+
+
 def _prompt_expects_project_change(prompt: str, *, autonomy_level: str) -> bool:
     """Conservatively identify direct implementation requests.
 
@@ -309,10 +313,18 @@ def _prompt_expects_project_change(prompt: str, *, autonomy_level: str) -> bool:
     """
     if str(autonomy_level or "").strip().lower() == "plan":
         return False
-    clean = re.sub(r"\s+", " ", str(prompt or "").split('\n\nRetained proposal conversation evidence', 1)[0]).strip().lower()
+    # 2026-11-12 merrypak-1114: automation boilerplate ("Run continuity: read and update
+    # the retained Decisions automation memory ...") names bookkeeping outside the
+    # project, not project work. Its "update" made every scheduled run change-expected,
+    # so a clean run with no recorded test receipt was blocked as "Verification incomplete".
+    task = _RUN_CONTINUITY_PARAGRAPH.sub("\n\n", str(prompt or "").split('\n\nRetained proposal conversation evidence', 1)[0])
+    clean = re.sub(r"\s+", " ", task).strip().lower()
     if not clean or _audit_only_request(clean):
         return False
     if re.match(r"^(?:what|why|how|where|when|who|explain|describe|tell me)\b", clean):
+        return False
+    # 2026-11-12 fluid1: "without editing any files, ..." is a question, not an implementation request.
+    if re.search(r"\b(?:without|no)\s+(?:editing|changing|modifying|touching)\b", clean):
         return False
     return bool(
         re.search(
@@ -780,6 +792,10 @@ class DevelopmentExecutionBusy(ValueError):
     """The current thread state prevents the direct run from starting."""
 
 
+class DevelopmentScopeChanged(DevelopmentExecutionBusy):
+    """The work no longer belongs to the scope captured by this thread."""
+
+
 def require_direct_execution_available(execution: dict[str, Any]) -> None:
     status = str(execution.get("status") or "").lower()
     # A finished turn may be waiting for a human reply.
@@ -794,20 +810,39 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
                       new_prompt: str | None = None, new_prompt_metadata: dict | None = None,
                       expected_autonomy: str | None = None,
                       queued_followup: dict | None = None,
-                      **changes: Any) -> dict[str, Any]:
+                      telegram_proposal_approval: tuple[str, int] | None = None,
+                      scope_lost: bool = False, startup_scope: tuple | None = None,
+                      runtime_scope: tuple | None = None, output_delta: str = "",
+                      turn_response: str | None = None,
+                      start_followup: bool = False, **changes: Any) -> dict[str, Any]:
     with get_session() as db:
-        if (expected_scope is not None or reconcile_from is not None) and db.get_bind().dialect.name == 'sqlite':
+        # Execution updates replace the root parameters, which also hold delivery receipts.
+        if db.get_bind().dialect.name == 'sqlite':
             db.connection().exec_driver_sql('BEGIN IMMEDIATE')
         root = db.get(Chat, int(chat_id))
         if root is None or root.parent_id is not None:
             raise LookupError("Development thread not found.")
         if expected_scope is not None:
-            if development_scope_identity(root.project_id,development_thread_metadata(root),chat_id=root.id) != expected_scope:
-                raise ValueError('The Development project, board or ticket changed before work started. Review its scope and retry.')
+            _require_direct_dispatch_scope(db, root, expected_scope, changes.get('board_id'))
         params = _chat_params(root.params)
         development = dict(params.get("development") or {})
         execution = dict(development.get("execution") or {})
+        if start_followup and not execution.get("followup_start"):
+            return {}
+        if scope_lost or startup_scope is not None or runtime_scope is not None:
+            if execution.get("job_id") != job_id or execution.get("status") not in ACTIVE_EXECUTION_STATUSES:
+                return execution
+            if startup_scope is not None:
+                _require_direct_dispatch_scope(db, root, startup_scope, execution.get("board_id"))
+            if runtime_scope is not None:
+                try:
+                    _require_direct_dispatch_scope(db, root, runtime_scope, execution.get("board_id"))
+                except DevelopmentScopeChanged as exc:
+                    raise DevelopmentScopeChanged(_DIRECT_RESULT_HELD) from exc
         if expected_scope is not None:
+            from distr.core.incoming.proposals import require_ready_merge_handoff
+
+            require_ready_merge_handoff(params, root.project_id, db=db, verify_attachments=True)
             if development.get("proactive_dispatch"):
                 raise DevelopmentExecutionBusy("Approved proactive work is already running in this Development thread.")
             require_direct_execution_available(execution)
@@ -815,18 +850,40 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
                 raise DevelopmentExecutionBusy("The interrupted turn changed before it could be resumed.")
             if new_prompt is not None:
                 autonomy = str(root.autonomy_level or "full").strip().lower()
-                if (autonomy != expected_autonomy or autonomy == "approval" or development.get("workflow_id")
+                manual_token = (queued_followup or {}).get("manual_token")
+                if (autonomy != expected_autonomy or autonomy == "approval"
+                        or (development.get("workflow_id") and not manual_token)
                         or str(development.get("source_type") or "").lower() == "automation"):
                     raise DevelopmentExecutionBusy(
                         "The Development thread settings changed. Review the thread before sending again."
                     )
                 if queued_followup is not None:
-                    command_id = _accept_proactive_followup(db, root, development, queued_followup)
+                    if manual_token:
+                        from .queued_submissions import _manual_start_matches, _require_manual_source
+                        from distr.core.db.workflow import AutoWorkflowRun, DevelopmentCommand
+
+                        command_id = queued_followup["command_id"]
+                        command = db.get(DevelopmentCommand, command_id)
+                        if not _manual_start_matches(command, root, manual_token):
+                            raise DevelopmentExecutionBusy("The queued item changed before startup.")
+                        _require_manual_source(db, command, _json(command.metadata_json)["manual_start"])
+                        if db.query(AutoWorkflowRun.id).filter_by(chat_id=root.id).filter(
+                            AutoWorkflowRun.status.in_(["initializing", "queued", "running", "waiting", "paused"]),
+                        ).first():
+                            raise DevelopmentExecutionBusy("A workflow is still running. The item remains queued.")
+                    else:
+                        accept = _accept_next_followup if queued_followup.get("next_followup") else _accept_proactive_followup
+                        command_id = accept(db, root, development, queued_followup)
                     new_prompt_metadata = {**(new_prompt_metadata or {}), "queued_command_id": command_id}
+                    changes["followup_start"] = {"command_id": command_id, "process": _FOLLOWUP_STARTUP_PROCESS}
+                    if manual_token:
+                        changes["followup_start"]["manual_token"] = manual_token
                 changes["turn_id"] = _append_user_turn(db, root, params, new_prompt, new_prompt_metadata)
         if reconcile_from is not None:
             scope, saved_execution = reconcile_from
             if execution != saved_execution or _development_execution_scope(db, root, development) != scope:
+                return execution
+            if not scope_lost and not _direct_record_owns_scope(db, root, development, execution):
                 return execution
         existing_job_id = execution.get("job_id")
         starts_new_turn = bool(
@@ -838,10 +895,29 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
         if job_id and existing_job_id not in {None, job_id} and not starts_new_turn:
             return execution
         if starts_new_turn or expected_scope is not None:
-            execution = {}
+            # 2026-11-12 fluid1: keep the previous turn's edited-files list (display only) so the
+            # thread can keep showing it while the next prompt runs, like Codex. Undo still only
+            # targets the current turn's own "changes".
+            prior_changes = execution.get("changes") if isinstance(execution.get("changes"), dict) else {}
+            if not (prior_changes.get("files") and not prior_changes.get("undone")):
+                prior_changes = execution.get("last_changes") if isinstance(execution.get("last_changes"), dict) else {}
+            carried = (
+                {key: prior_changes.get(key) for key in ("files", "additions", "deletions", "undone")}
+                if starts_new_turn and prior_changes.get("files") and not prior_changes.get("undone") else None
+            )
+            execution = {"last_changes": carried} if carried else {}
         execution.update({key: value for key, value in changes.items() if value is not None})
+        if output_delta:
+            execution["streamed_output"] = (str(execution.get("streamed_output") or "") + output_delta)[-24_000:]
         if job_id:
             execution["job_id"] = job_id
+        if turn_response is not None and execution.get("turn_id") is not None:
+            turn = db.get(Chat, execution["turn_id"])
+            if turn is not None and turn.parent_id == root.id:
+                turn.response = turn_response
+                turn.modified_date = utc_now_naive()
+        if start_followup or changes.get("status") in {"failed", "cancelled", "blocked"}:
+            _settle_followup_start(db, root, execution, started=start_followup)
         if changes.get("route_receipt") is not None:
             try:
                 _remember_turn_route(db, int(chat_id), development, changes.get("route_receipt"), turn_id=execution.get("turn_id"))
@@ -849,6 +925,28 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
                 logger.debug("Could not record the per-turn route for chat %s", chat_id, exc_info=True)
         development["execution"] = execution
         params["development"] = development
+        if telegram_proposal_approval is not None:
+            from distr.core.incoming.telegram_updates import _recipient_id, retain_previous_proposal_approval
+
+            proposal_key, recipient = telegram_proposal_approval
+            recipient = _recipient_id(recipient)
+            handoff = params.get("incoming_proposal_handoff")
+            if (not isinstance(handoff, dict) or handoff.get("key") != proposal_key
+                    or not handoff.get("start_pending") or not job_id or recipient is None):
+                raise ValueError("The Telegram approval no longer matches this proposal. Review it again.")
+            prior = handoff.get("telegram_approval")
+            if prior is not None and (not isinstance(prior, dict) or prior.get("chat_id") != recipient):
+                raise ValueError("This proposal is bound to a different Telegram approval chat.")
+            retain_previous_proposal_approval(handoff, prior, job_id)
+            handoff["telegram_approval"] = {"chat_id": recipient, "job_id": job_id, "project_id": root.project_id}
+        publish_status = bool(changes.get("status") and not scope_lost)
+        if publish_status and not any(scope is not None for scope in (expected_scope, startup_scope, runtime_scope)):
+            publish_status = _direct_record_owns_scope(db, root, development, execution)
+        publish_proposal_outcome = publish_status and "incoming_proposal_handoff" in params
+        if publish_proposal_outcome:
+            from distr.core.incoming.telegram_updates import retain_local_proposal_outcome
+
+            retain_local_proposal_outcome(params, execution)
         root.params = json.dumps(params, ensure_ascii=False, default=str)
         root.modified_date = utc_now_naive()
         from distr.core.db.kanban import KanbanTicket
@@ -857,38 +955,22 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
         work_item = db.query(DevelopmentWorkItem).filter(DevelopmentWorkItem.chat_id == int(chat_id)).first()
         ticket = db.get(KanbanTicket, int(work_item.local_ticket_id)) if work_item and work_item.local_ticket_id else None
         next_status = str(execution.get("status") or "").strip().lower()
-        if ticket is not None and next_status in {
+        if publish_status and ticket is not None and next_status in {
             "initializing", "queued", "running", "waiting", "paused",
             "completed", "completed_noop", "failed", "blocked", "cancelled",
         }:
             ticket.workflow_status = "completed" if next_status == "completed_noop" else next_status
         db.commit()
+    if publish_proposal_outcome:
+        try:
+            from distr.core.incoming.telegram_updates import queue_local_proposal_outcome
+
+            queue_local_proposal_outcome(chat_id, params)
+        except Exception:
+            logger.warning("Could not queue the Telegram proposal outcome for thread %s. It will retry.", chat_id,
+                           exc_info=True)
     _notify()
     return execution
-
-
-def _append_streamed_output(chat_id: int, *, job_id: str, delta: str) -> str:
-    clean = str(delta or "")
-    if not clean:
-        return ""
-    with get_session() as db:
-        root = db.get(Chat, int(chat_id))
-        if root is None or root.parent_id is not None:
-            return ""
-        params = _chat_params(root.params)
-        development = dict(params.get("development") or {})
-        execution = dict(development.get("execution") or {})
-        if execution.get("job_id") != job_id or str(execution.get("status") or "").lower() == "cancelled":
-            return str(execution.get("streamed_output") or "")
-        output = (str(execution.get("streamed_output") or "") + clean)[-24_000:]
-        execution["streamed_output"] = output
-        development["execution"] = execution
-        params["development"] = development
-        root.params = json.dumps(params, ensure_ascii=False, default=str)
-        root.modified_date = utc_now_naive()
-        db.commit()
-    _notify()
-    return output
 
 
 def _execution_record_id(value: Any) -> int | None:
@@ -931,6 +1013,53 @@ def _session_matches_development(row, scope, *, chat_id, turn_id):
     return True
 
 
+def _unreported_cli_session(db, scope, chat_id, execution):
+    if (scope is None or execution.get("runtime_id") != "cli_harness" or execution.get("completed_at")
+            or str(execution.get("status") or "").lower() not in ACTIVE_EXECUTION_STATUSES):
+        return None
+    turn_id = _execution_record_id(execution.get("turn_id"))
+    board_id = _execution_record_id(execution.get("board_id"))
+    if turn_id is None or (execution.get("board_id") is not None and board_id is None):
+        return None
+
+    from sqlalchemy import case, func
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.project_cli_backends.registry import backend_process_registered
+
+    project_id, ticket_id = scope
+    packet = case(
+        (func.json_valid(ProjectExecutionSession.input_packet) == 1, ProjectExecutionSession.input_packet),
+        else_="{}",
+    )
+    candidates = db.query(ProjectExecutionSession).filter(
+        ProjectExecutionSession.project_id == project_id,
+        ProjectExecutionSession.ticket_id.is_not_distinct_from(ticket_id),
+        ProjectExecutionSession.origin == "development",
+        ProjectExecutionSession.route_type == "project_cli",
+        ProjectExecutionSession.workflow_id.is_(None),
+        ProjectExecutionSession.run_id.is_(None),
+        ProjectExecutionSession.step_id.is_(None),
+        ProjectExecutionSession.status.in_(ACTIVE_EXECUTION_STATUSES),
+        ProjectExecutionSession.completed_at.is_(None),
+        func.json_type(packet, "$.chat_id") == "integer",
+        func.json_extract(packet, "$.chat_id") == chat_id,
+        func.json_type(packet, "$.turn_id") == "integer",
+        func.json_extract(packet, "$.turn_id") == turn_id,
+        func.json_type(packet, "$.board_id") == ("null" if board_id is None else "integer"),
+        func.json_extract(packet, "$.board_id").is_not_distinct_from(board_id),
+    )
+    # The session row precedes the best-effort startup event. A quiet CLI can
+    # still be stopped when exactly one scoped session owns a live process.
+    active = [
+        row for row in candidates
+        if backend_process_registered(
+            project_id, row.route_backend, board_id=board_id,
+            execution_id=row.id, execution_kind="development_session",
+        )
+    ]
+    return active[0] if len(active) == 1 else None
+
+
 def _scoped_development_runs(db, chat_id, scope):
     from sqlalchemy import and_, case, cast, func, or_, String
     from distr.core.db.workflow import AutoWorkflowRun
@@ -950,6 +1079,155 @@ def _scoped_development_runs(db, chat_id, scope):
     )
 
 
+def _client_reply_approval(db, run, request_id):
+    from distr.core.db import DevApprovalRequest
+    from distr.core.workflow.dev_approvals import args_hash
+
+    if not isinstance(request_id, str) or not request_id:
+        return None, {}
+    approval = db.query(DevApprovalRequest).filter_by(
+        request_id=request_id, tool="reply_delivery", chat_id=run.chat_id,
+    ).one_or_none()
+    if approval is None:
+        return None, {}
+    details = _json(approval.details_json)
+    details.pop("delivery_outcome", None)
+    context = details.get("workflow")
+    if (isinstance(context, dict) and context.get("run_id") == run.id
+            and context.get("workflow_id") == run.workflow_id and context.get("chat_id") == run.chat_id
+            and context.get("turn_id") == approval.turn_id and details.get("ticket_id") == run.ticket_id
+            and details.get("channel") == approval.action and args_hash(details) == approval.args_hash):
+        return approval, details
+    return None, {}
+
+
+def development_client_reply_review(chat_id, run_id):
+    """Read the currently selected run's exact pending approval."""
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.reply_channel import resolve_reply_target
+    from distr.core.workflow.reply_delivery import _delivery_envelope, _validate_workflow_context
+
+    unavailable = "The client reply review is no longer available. Check the current run."
+    with get_session() as db:
+        root = db.get(Chat, chat_id)
+        if root is None or root.parent_id is not None:
+            raise LookupError(unavailable)
+        metadata = development_thread_metadata(root)
+        if metadata.get("execution") or metadata.get("proactive_dispatch"):
+            raise LookupError(unavailable)
+        scope = _development_execution_scope(db, root, metadata)
+        run = _scoped_development_runs(db, chat_id, scope).order_by(AutoWorkflowRun.id.desc()).first()
+        if run is None or run.id != run_id or run.status != "completed":
+            raise LookupError(unavailable)
+        outcome = _json(run.run_data).get("reply_delivery")
+        if not isinstance(outcome, dict) or outcome.get("pending_approval") is not True or outcome.get("telegram_flow_key"):
+            raise LookupError(unavailable)
+        approval, details = _client_reply_approval(db, run, outcome.get("approval_request_id"))
+        if approval is None or approval.status != "pending" or approval.expires_at < utc_now_naive():
+            raise LookupError(unavailable)
+        try:
+            envelope, body = details["delivery"], details["body"]
+            if not isinstance(body, str) or not body.strip():
+                raise ValueError(unavailable)
+            _validate_workflow_context(db, details["workflow"], envelope, run.ticket_id)
+            ticket = db.get(KanbanTicket, run.ticket_id)
+            target = resolve_reply_target(ticket) if ticket is not None else None
+            if (target is None or not target.can_send
+                    or _delivery_envelope(db, ticket, target, envelope["subject"], envelope.get("resolved_target")) != envelope):
+                raise ValueError(unavailable)
+            prepared = envelope.get("resolved_target") or {}
+            return {
+                "run_id": run.id, "channel": details["channel"], "body": body,
+                "from": prepared.get("from"), "to": prepared.get("to") or [envelope["recipient"]],
+                "cc": prepared.get("cc") or [], "subject": envelope["subject"],
+            }
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise LookupError(unavailable) from exc
+
+
+def _client_reply_status(db, run, outcome):
+    """Project the closing reply state without returning its body or destination."""
+    if run.status != "completed" or not isinstance(outcome, dict):
+        return None
+    if outcome.get("delivery_key"):
+        from distr.core.workflow.telegram_reply_receipts import run_status
+
+        status = run_status(db, run, outcome["delivery_key"])
+        if status:
+            return status
+    if outcome.get("delivered") is True:
+        return "sent"
+    if outcome.get("unconfirmed") is True:
+        return "unconfirmed"
+    if outcome.get("pending_approval") is True:
+        flow_key = outcome.get("telegram_flow_key")
+        if flow_key:
+            from distr.core.initiative.outcome_flow import get_flow
+
+            flow = get_flow(flow_key) if isinstance(flow_key, str) else None
+            if not isinstance(flow, dict) or not isinstance(flow.get("status"), str):
+                return "review_unavailable"
+            context = flow.get("approval_context")
+            if (flow.get("kind") != "reply" or flow.get("ticket_id") != run.ticket_id
+                    or not isinstance(context, dict) or context.get("run_id") != run.id
+                    or context.get("workflow_id") != run.workflow_id or context.get("chat_id") != run.chat_id):
+                return "review_unavailable"
+            if flow.get("delivery_key"):
+                from distr.core.workflow.telegram_reply_receipts import run_status
+
+                status = run_status(db, run, flow["delivery_key"])
+                if status:
+                    return status
+            return {
+                "awaiting_decision": "telegram_review", "confirming": "telegram_review",
+                "checking": "telegram_review", "continuing": "telegram_review",
+                "sending": "sending", "unconfirmed": "unconfirmed", "sent": "sent",
+                "send_failed": "not_sent",
+            }.get(flow.get("status"), "review_unavailable")
+        approval, _ = _client_reply_approval(db, run, outcome.get("approval_request_id"))
+        if approval is not None:
+            from distr.core.workflow.dev_approvals import request_view
+
+            status = request_view(approval, receipt_session=db)["status"]
+            if status == "pending" and approval.expires_at < utc_now_naive():
+                return "not_sent"
+            return {
+                "pending": "desktop_review", "sending": "sending", "sent": "sent",
+                "unconfirmed": "unconfirmed", "rejected": "not_sent", "denied": "not_sent",
+                "expired": "not_sent",
+            }.get(status, "review_unavailable")
+        return "review_unavailable"
+    if outcome.get("approval_status") in {"denied", "expired"} or any(
+        outcome.get(field) is True for field in ("preflight_failed", "scope_changed", "duplicate", "unsupported", "blocked")
+    ):
+        return "not_sent"
+    return None
+
+
+def _unresolved_queue_handoff(db, run, project_id):
+    if run.status != "completed" or run.board_id is None or run.ticket_id is None:
+        return None
+    from distr.core.chat_turns import redact_text
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.workflow.dispatcher import _queue_already_advanced
+
+    event = db.query(OrchestratorEvent).filter_by(
+        event_type="outcome_workflow_queue_held", status="held", workflow_id=run.workflow_id,
+        run_id=run.id, board_id=run.board_id, project_id=project_id,
+    ).order_by(OrchestratorEvent.id.desc()).first()
+    if event is None or event.ticket_id is None:
+        return None
+    predecessor = db.get(KanbanTicket, run.ticket_id)
+    if predecessor is None or predecessor.lane is None or predecessor.lane.board_id != run.board_id:
+        return None
+    if _queue_already_advanced(db, run.workflow_id, run.id):
+        return None
+    reason = redact_text(event.summary, limit=300).strip()
+    return {"ticket_id": event.ticket_id, "reason": reason} if reason else None
+
+
 def development_execution_state(chat_id: int) -> dict[str, Any]:
     terminal_reconciliation: dict[str, Any] | None = None
     workflow_execution: dict[str, Any] | None = None
@@ -962,6 +1240,8 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
         execution = dict(metadata.get("execution") or {})
         saved_execution = dict(execution)
         turn_routes = dict(metadata.get("turn_routes") or {})
+        result_turn_id = _execution_record_id(metadata.get("last_proactive_result_turn_id"))
+        result_marker = {"last_proactive_result_turn_id": result_turn_id} if result_turn_id else {}
         scope = _development_execution_scope(db, root, metadata)
         if metadata.get("proactive_dispatch"):
             from distr.core.orchestrator_proactive import proactive_development_execution
@@ -972,9 +1252,10 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                     "origin": "proactive_orchestrator", "direct": True, "status": "blocked", "can_stop": False,
                     "summary": "The previous approval no longer matches this thread. Review its outcome before continuing.",
                 }
-            return {**proactive, "turn_routes": turn_routes}
+            return {**proactive, **result_marker, "turn_routes": turn_routes}
         if not execution:
             from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
+            from distr.core.workflow.draft_launch import approved_workflow_stop_reason
 
             run = (
                 _scoped_development_runs(db, int(chat_id), scope)
@@ -1007,21 +1288,64 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                     "started_at": run.started_at.isoformat() if run.started_at else None,
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
                     "waiting_kind": str(run_data.get("waiting_kind") or ""),
-                    "summary": str(result_packet.get("summary") or ""),
+                    "summary": approved_workflow_stop_reason(run.status, run_data) or str(result_packet.get("summary") or ""),
                     "verification": audit,
                     "output_packet": result_packet,
                     "execution_mode_decision": run_data.get("execution_mode_decision") or {},
                     "route_receipt": route_receipt,
                 }
+                if run.status == "waiting" and run.completed_at is None:
+                    from distr.core.chat_turns import redact_text
+
+                    approval = run_data.get("pending_route_approval")
+                    approval = approval if isinstance(approval, dict) else {}
+                    model = approval.get("name") or approval.get("model")
+                    question = run_data.get("waiting_prompt")
+                    if run_data.get("waiting_kind") == "provider_preflight" and model:
+                        question = f"Use {model} for this step and continue the workflow."
+                    workflow_execution["waiting_prompt"] = redact_text(question or "", limit=12000)
+                client_reply_status = _client_reply_status(db, run, run_data.get("reply_delivery"))
+                if client_reply_status:
+                    workflow_execution["client_reply_status"] = client_reply_status
+                queue_hold = _unresolved_queue_handoff(db, run, root.project_id)
+                if queue_hold:
+                    workflow_execution["queue_handoff_hold"] = queue_hold
+                if (run.status == "failed" and run_data.get("source_type") == "workflow_queue"
+                        and run_data.get("queue_scope_changed") is True):
+                    from distr.core.chat_turns import redact_text
+
+                    warning = redact_text(run_data.get("terminal_warning"), limit=300).strip()
+                    if warning:
+                        workflow_execution["queue_scope_stop"] = warning
+                elif run.status == "failed" and run_data.get("source_type") == "workflow_queue":
+                    from distr.core.chat_turns import redact_text
+
+                    failure = run_data.get("ide_reported_failure")
+                    if isinstance(failure, dict) and failure.get("step_id") == run.current_step_id:
+                        report = redact_text(failure.get("output"), limit=300).strip()
+                        workflow_execution["queue_ide_failure"] = report or "The IDE reported a failure."
+        if result_turn_id and workflow_execution is None:
+            from distr.core.orchestrator_proactive import proactive_waiting_review_state
+
+            review = proactive_waiting_review_state(db, root, scope, result_turn_id)
+            if review is not None:
+                return {**review, **result_marker, "turn_routes": turn_routes}
         persisted_status = str(execution.get("status") or "").lower()
-        if execution.get("execution_session_id") is not None:
+        if execution.get("execution_session_id") is None:
+            row = _unreported_cli_session(db, scope, root.id, execution)
+            if row is not None:
+                execution["execution_session_id"] = row.id
+        else:
             from distr.core.db.kanban import ProjectExecutionSession
 
             session_id = _execution_record_id(execution["execution_session_id"])
             row = db.get(ProjectExecutionSession, session_id) if session_id is not None else None
+        if execution.get("execution_session_id") is not None:
             if not _session_matches_development(row, scope, chat_id=root.id, turn_id=execution.get("turn_id")):
                 session_rejected = True
-            elif execution.get("status") != "cancelled" and not execution.get("interrupted"):
+            elif (execution.get("status") != "cancelled" and not execution.get("interrupted")
+                  and not execution.get("result_held")
+                  and _direct_record_owns_scope(db, root, metadata, execution)):
                 row_status = str(row.status or "").lower()
                 interrupted = row_status == "interrupted"
                 if interrupted:
@@ -1056,15 +1380,38 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                         "error": row.error or execution.get("error") or "",
                         "activity_status": row_status,
                     }
+            if (not session_rejected and execution.get("runtime_id") == "cli_harness"
+                    and row.origin == "development" and row.route_type == "project_cli"):
+                packet = _json(row.input_packet)
+                turn_id = _execution_record_id(execution.get("turn_id"))
+                if (turn_id is not None and _execution_record_id(packet.get("turn_id")) == turn_id
+                        and _execution_record_id(packet.get("chat_id")) == root.id):
+                    from distr.core.project_cli_backends.registry import backend_process_registered
+
+                    board_id = _execution_record_id(packet.get("board_id"))
+                    execution["cli_stop_available"] = backend_process_registered(
+                        row.project_id, row.route_backend, board_id=board_id,
+                        execution_id=row.id, execution_kind="development_session",
+                    )
+                    execution["project_id"] = row.project_id
+                    execution["board_id"] = board_id
     if workflow_execution is not None:
         workflow_execution["turn_routes"] = turn_routes
-        return workflow_execution
+        return {**workflow_execution, **result_marker}
     if terminal_reconciliation is not None:
         _update_execution(
             int(chat_id),
             job_id=str(execution.get("job_id") or "") or None,
             reconcile_from=(scope, saved_execution),
             **terminal_reconciliation,
+        )
+    followup_start = execution.get("followup_start")
+    if isinstance(followup_start, dict) and followup_start.get("process") != _FOLLOWUP_STARTUP_PROCESS:
+        message = "Decisions restarted before the follow-up reached the worker."
+        execution = _update_execution(
+            int(chat_id), job_id=execution.get("job_id"), reconcile_from=(scope, saved_execution),
+            scope_lost=True, status="failed", completed_at=utc_now_naive().isoformat(),
+            activity_status="failed", summary=message, error=message,
         )
     if (
         execution.get("runtime_id") == "native"
@@ -1094,7 +1441,8 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
     execution["direct"] = True
     execution["id"] = execution.get("execution_session_id") or execution.get("job_id")
     execution["turn_routes"] = turn_routes
-    return execution
+    execution.pop("followup_start", None)
+    return {**execution, **result_marker}
 
 
 def development_execution_active(chat_id: int) -> bool:
@@ -1115,6 +1463,75 @@ def _organized_work_folder(name: str) -> Path:
     return folder.resolve()
 
 
+_DIRECT_SCOPE_CHANGED = "The Development project, board or ticket changed before work started. Review its scope and retry."
+_DIRECT_RESULT_HELD = ("The Development project, board or ticket changed while the worker was running. "
+                       "Review the original project for any changes before retrying.")
+
+
+def _direct_scope_board(db, root, metadata):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.workflow import DevelopmentWorkItem
+    from distr.core.workflow.development_sidebar import board_key_for
+
+    ticket_id = metadata.get("ticket_id")
+    board = development_board(db, ticket_id=ticket_id, board_key=metadata.get("board_key"))
+    if root.is_archived or (board and board.archived):
+        raise DevelopmentScopeChanged(_DIRECT_SCOPE_CHANGED)
+    item = db.query(DevelopmentWorkItem).filter_by(chat_id=root.id).first()
+    ticket = db.get(KanbanTicket, ticket_id) if ticket_id is not None else None
+    keys = (metadata.get("board_key"), item.board_key if item else None)
+    board_key = board_key_for(board)
+    local_scope = any(str(key or "").startswith("decisions:") for key in keys)
+    if not local_scope:
+        # Older unbound ticket references may inform routing but do not own the thread.
+        local_scope = bool(str(board_key or "").startswith("decisions:") and (
+            (item and item.local_ticket_id is not None) or (ticket and ticket.source_chat_id == root.id)
+        ))
+    if not local_scope or (ticket_id is None and (item is None or item.local_ticket_id is None)):
+        return board
+    if (not ticket or not board_key or not board_key.startswith("decisions:")
+            or any(key and key != board_key for key in keys)
+            or ticket.source_chat_id != root.id
+            or (item is not None and (item.local_ticket_id != ticket.id or item.project_id != root.project_id))):
+        raise DevelopmentScopeChanged(_DIRECT_SCOPE_CHANGED)
+    effective_project = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
+    if effective_project != root.project_id:
+        raise DevelopmentScopeChanged(_DIRECT_SCOPE_CHANGED)
+    return board
+
+
+def _direct_record_owns_scope(db, root, metadata, execution):
+    try:
+        board = _direct_scope_board(db, root, metadata)
+    except (TypeError, ValueError):
+        return False
+    return "board_id" not in execution or execution["board_id"] == (board.id if board else None)
+
+
+def _require_direct_dispatch_scope(db, root, expected_scope, board_id):
+    metadata = development_thread_metadata(root)
+    if development_scope_identity(root.project_id, metadata, chat_id=root.id) != expected_scope:
+        raise DevelopmentScopeChanged(_DIRECT_SCOPE_CHANGED)
+    board = _direct_scope_board(db, root, metadata)
+    project = db.get(Project, root.project_id) if root.project_id is not None else None
+    if (board.id if board else None) != board_id or (
+        root.project_id is not None and (project is None or project.deleted_at is not None)
+    ):
+        raise DevelopmentScopeChanged(_DIRECT_SCOPE_CHANGED)
+
+
+def _direct_job_can_start(chat_id, job_id, expected_scope, board_id):
+    with get_session() as db:
+        root = db.get(Chat, chat_id)
+        if root is None or root.parent_id is not None:
+            return False
+        execution = development_thread_metadata(root).get("execution") or {}
+        if execution.get("job_id") != job_id or execution.get("status") not in ACTIVE_EXECUTION_STATUSES:
+            return False
+        _require_direct_dispatch_scope(db, root, expected_scope, board_id)
+        return True
+
+
 def _project_and_scope(chat_id: int) -> tuple[Any, dict[str, Any], int | None, int | None]:
     project_snapshot = None
     with get_session() as db:
@@ -1123,14 +1540,11 @@ def _project_and_scope(chat_id: int) -> tuple[Any, dict[str, Any], int | None, i
             raise LookupError("Development thread not found.")
         metadata = dict(development_thread_metadata(root))
         ticket_id = int(metadata["ticket_id"]) if metadata.get("ticket_id") is not None else None
-        board_id = None
-        if ticket_id is not None:
-            from distr.core.db.kanban import KanbanLane, KanbanTicket
-
-            ticket = db.get(KanbanTicket, ticket_id)
-            lane = db.get(KanbanLane, int(ticket.lane_id)) if ticket and ticket.lane_id else None
-            board_id = int(lane.board_id) if lane else None
+        board = _direct_scope_board(db, root, metadata)
+        board_id = int(board.id) if board else None
         project = db.get(Project, int(root.project_id)) if root.project_id is not None else None
+        if root.project_id is not None and (project is None or project.deleted_at is not None):
+            raise DevelopmentScopeChanged(_DIRECT_SCOPE_CHANGED)
         title = root.title or "Development"
         if project is not None:
             configured_folder = str(project.folder_location or "").strip()
@@ -1164,7 +1578,9 @@ def _project_and_scope(chat_id: int) -> tuple[Any, dict[str, Any], int | None, i
     )
 
 
-def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -> tuple[str, str, dict[str, Any], str]:
+def _route(
+    project: Any, metadata: dict[str, Any], assessment: dict[str, Any], *, board_id: int | None = None,
+) -> tuple[str, str, dict[str, Any], str]:
     from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
     from distr.core.project_cli_backends import normalize_backend_id
 
@@ -1216,8 +1632,15 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
         model = hosted_cli_model_or_auto(pinned_backend, provider, model) or "auto"
         return pinned_backend, model, adapter_options, complexity
 
-    assessed = assessment.get("route") if isinstance(assessment.get("route"), dict) else {}
-    resolved = resolve_ticket_cli_route(project, complexity, board=None)
+    studio_preview = assessment.get("route_source") == "studio_preview"
+    assessed = assessment.get("route") if not studio_preview and isinstance(assessment.get("route"), dict) else {}
+    if board_id is None:
+        resolved = resolve_ticket_cli_route(project, complexity)
+    else:
+        from distr.core.db.kanban import KanbanBoard
+
+        with get_session() as db:
+            resolved = resolve_ticket_cli_route(project, complexity, board=db.get(KanbanBoard, board_id))
     backend = str(
         assessed.get("backend") or resolved.get("backend") or project.coding_backend or "pi"
     ).strip().lower()
@@ -1225,6 +1648,9 @@ def _route(project: Any, metadata: dict[str, Any], assessment: dict[str, Any]) -
     model = str(
         assessed.get("model") or resolved.get("model") or project.coding_backend_model or "auto"
     ).strip() or "auto"
+    signals = assessment.get("signals")
+    if not assessed and isinstance(signals, list) and "vision" in signals:
+        model = "auto"
     if assessed.get("model_provider"):
         adapter_options["model_provider"] = str(assessed["model_provider"]).strip().lower()
     elif resolved.get("model_provider"):
@@ -1306,10 +1732,18 @@ def _route_receipt(
         "provider": str(adapter_options.get("fallback_model_provider") or "").strip().lower(),
         "model": str(adapter_options.get("fallback_model") or "").strip(),
     }
+    reason = str(assessment.get("reason") or "")
+    studio_preview = assessment.get("route_source") == "studio_preview"
+    preview_route = assessment.get("route")
+    preview_backend = preview_route.get("backend") if isinstance(preview_route, dict) else None
+    if route_mode == "manual" and (studio_preview or not reason):
+        reason = f"This thread is pinned to {selected['backend']}."
+    elif (studio_preview and preview_backend != backend) or (not reason and assessment.get("decision_engine")):
+        reason = f"The current routing policy selected {selected['backend']} for {complexity} complexity."
     return {
         "complexity": complexity,
         "decision_engine": str(assessment.get("decision_engine") or "heuristic"),
-        "decision_reason": str(assessment.get("reason") or ""),
+        "decision_reason": reason,
         "laya": {
             "mode": str(laya.get("mode") or "off"),
             "used": bool(laya.get("used")),
@@ -1374,6 +1808,30 @@ def _runtime_identity_text(metadata: dict[str, Any]) -> str:
     )
 
 
+
+def _ticket_lane_scope_line(metadata: dict[str, Any]) -> str:
+    ticket_id = metadata.get("ticket_id")
+    try:
+        ticket_id = int(ticket_id) if ticket_id is not None else None
+    except (TypeError, ValueError):
+        ticket_id = None
+    if ticket_id is None:
+        return ""
+    from distr.core.kanban.lane_history import current_ticket_lane, recent_lane_history_for_ticket
+
+    lane = current_ticket_lane(ticket_id) or metadata.get("board_ticket_lane") or ""
+    if not lane:
+        return ""
+    history = recent_lane_history_for_ticket(ticket_id, limit=5)
+    recent = "; ".join(
+        f"{(row.get('from_lane') or 'created')}→{row.get('to_lane')}"
+        for row in history
+        if isinstance(row, dict)
+    )
+    suffix = f" Recent lane history: {recent}." if recent else ""
+    return f"Ticket lane: {lane}.{suffix}"
+
+
 def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, autonomy_level: str) -> str:
     from distr.core.chat_agents import agent_instructions
     from distr.core.incoming.source_context import thread_source_instructions
@@ -1395,6 +1853,7 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
     scope = [
         f"Board: {metadata.get('board_key')}" if metadata.get("board_key") else "",
         f"Thread ticket: {metadata.get('board_ticket_key') or metadata.get('ticket_id')}" if metadata.get("board_ticket_key") or metadata.get("ticket_id") else "",
+        _ticket_lane_scope_line(metadata),
         (
             f"Automation control: {metadata.get('source_ref')}. This thread owns that scheduled task. "
             "Treat requests referring to this schedule or this automation as targeting that exact automation, "
@@ -1432,6 +1891,16 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
         )
     else:
         skill_instruction = ""
+    attachments = []
+    for item in metadata.get("turn_attachments") or []:
+        attachment = (
+            f"- {item.get('name') or Path(str(item.get('path') or '')).name} "
+            f"({item.get('mime_type') or 'application/octet-stream'}): {item.get('path')}"
+        )
+        excerpt = str(item.get("extracted_text") or item.get("transcript") or "").strip()[:1500]
+        if excerpt:
+            attachment += f"\n  extracted_text: {excerpt}"
+        attachments.append(attachment)
     return "\n\n".join(
         part
         for part in (
@@ -1455,13 +1924,34 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
             "\n".join(item for item in scope if item),
             "Conversation context since the latest context checkpoint:\n" + "\n\n".join(transcript) if transcript else "",
             "Current user instruction:\n" + prompt,
-            "Attached files for this turn:\n" + "\n".join(
-                f"- {item.get('name') or Path(str(item.get('path') or '')).name} ({item.get('mime_type') or 'application/octet-stream'}): {item.get('path')}"
-                for item in metadata.get("turn_attachments") or []
-            ) if metadata.get("turn_attachments") else "",
+            "Attached files for this turn:\n" + "\n".join(attachments) if attachments else "",
         )
         if part
     )
+
+
+def _ticket_file_extracted_text(record) -> str:
+    """Return stored extracted text for a ticket file from record.json or a sibling transcript."""
+    path = Path(str(getattr(record, "file_path", "") or "")).expanduser()
+    if not path.is_file():
+        return ""
+    sidecar = path.with_name(path.name + ".record.json")
+    try:
+        if sidecar.is_file():
+            import json
+            payload = json.loads(sidecar.read_text())
+            text = str(payload.get("extracted_text") or payload.get("transcript") or "").strip()
+            if text:
+                return text[:1500]
+    except (OSError, ValueError, TypeError):
+        pass
+    transcript = path.with_name(path.name + ".transcript.txt")
+    try:
+        if transcript.is_file():
+            return transcript.read_text(encoding="utf-8", errors="replace").strip()[:1500]
+    except OSError:
+        return ""
+    return ""
 
 
 def _linked_ticket_attachments(ticket_id: int | None) -> list[dict[str, Any]]:
@@ -1482,6 +1972,11 @@ def _linked_ticket_attachments(ticket_id: int | None) -> list[dict[str, Any]]:
                 "size": Path(str(record.file_path or "")).expanduser().stat().st_size
                 if Path(str(record.file_path or "")).expanduser().is_file()
                 else 0,
+                **(
+                    {"extracted_text": extracted}
+                    if (extracted := _ticket_file_extracted_text(record))
+                    else {}
+                ),
             }
             for record in ticket.files
             if str(record.file_path or "").strip()
@@ -1517,6 +2012,7 @@ def _safe_turn_attachments(
                 "size": int(raw.get("size") or path.stat().st_size),
                 "trust": str(raw.get("trust") or "")[:80],
                 **({"transcript": str(raw["transcript"])} if raw.get("transcript") else {}),
+                **({"extracted_text": str(raw["extracted_text"])} if raw.get("extracted_text") else {}),
             }
         )
     return attachments
@@ -1537,18 +2033,10 @@ def _write_response(chat_id: int, turn_id: int | None, response: str) -> None:
         db.commit()
 
 
-def _queue_head(db, chat_id: int):
-    from distr.core.db.workflow import DevelopmentCommand
+def _queue_head(db, root: Chat):
+    from distr.core.workflow.development_control import _ordered_pending_commands
 
-    return (
-        db.query(DevelopmentCommand)
-        .filter(
-            DevelopmentCommand.chat_id == int(chat_id),
-            DevelopmentCommand.status.in_(['queued', 'editing', 'dispatching']),
-        )
-        .order_by(DevelopmentCommand.position.asc(), DevelopmentCommand.id.asc())
-        .first()
-    )
+    return _ordered_pending_commands(db, root).first()
 
 
 def _accept_proactive_followup(db, root, development, followup) -> int:
@@ -1573,24 +2061,105 @@ def _accept_proactive_followup(db, root, development, followup) -> int:
     previous = db.query(Chat).filter(
         Chat.parent_id == root.id, Chat.input.isnot(None), Chat.input != "",
     ).order_by(Chat.id.desc()).first()
-    command = _queue_head(db, root.id)
+    command = _queue_head(db, root)
     if (previous is None or previous.id != followup["turn_id"] or not previous.response
             or command is None or command.id != followup["command_id"] or command.status != "queued"
             or command.command_type != "followup" or command.workflow_id is not None or command.run_id is not None
             or command.modified_at != followup["modified_at"] or command.created_at > previous.modified_date
             or command.modified_at > previous.modified_date):
         raise DevelopmentExecutionBusy("The follow-up or its preceding turn changed. The follow-up remains queued.")
-    command.status = "delivered"
-    command.delivered_at = utc_now_naive()
-    command.result_summary = "Started after the approved work completed."
+    _require_saved_followup_scope(command, root)
+    command.status = "dispatching"
+    command.result_summary = "Starting after the approved work completed."
     return command.id
+
+
+def _require_saved_followup_scope(command, root) -> None:
+    from .development_control import command_scope_status
+
+    status = command_scope_status(command, root)
+    if status == "earlier":
+        raise DevelopmentExecutionBusy("The queued item belongs to an earlier project or board. It remains queued.")
+    if status == "unknown":
+        raise DevelopmentExecutionBusy("The queued item's original project could not be verified. Queue it again from the intended thread.")
+
+
+def _accept_next_followup(db, root, development, followup) -> int:
+    from distr.core.workflow.development_threads import _scope_execution_active
+
+    command = _queue_head(db, root)
+    if (command is None or command.id != followup["command_id"] or command.status != "queued"
+            or command.command_type != "followup" or command.workflow_id is not None or command.run_id is not None
+            or command.modified_at.isoformat() != followup["modified_at"]):
+        raise DevelopmentExecutionBusy("The next queued item changed. Refresh the queue.")
+    project = db.get(Project, root.project_id) if root.project_id is not None else None
+    if root.is_archived or (root.project_id is not None and (project is None or project.deleted_at is not None)):
+        raise DevelopmentExecutionBusy("This thread is unavailable for execution. The item remains queued.")
+    _require_saved_followup_scope(command, root)
+    execution = development.get("execution") or {}
+    scope_metadata = development
+    if execution.get("status") == "waiting" and execution.get("completed_at"):
+        scope_metadata = {**development, "execution": {**execution, "status": "completed"}}
+    if _scope_execution_active(db, root, scope_metadata):
+        raise DevelopmentExecutionBusy("The thread already has active work. The item remains queued.")
+    command.status = "dispatching"
+    command.result_summary = "Starting in this Development thread."
+    return command.id
+
+
+def _settle_followup_start(db, root, execution, *, started):
+    from distr.core.db.workflow import DevelopmentCommand
+
+    claim = execution.get("followup_start")
+    if not isinstance(claim, dict):
+        return
+    command = db.get(DevelopmentCommand, claim.get("command_id")) if claim.get("command_id") else None
+    manual_token = claim.get("manual_token")
+    if manual_token:
+        from .queued_submissions import _manual_start_matches, _release_manual_start, _require_manual_source
+
+        matches = _manual_start_matches(command, root, manual_token)
+    else:
+        matches = bool(command and command.chat_id == root.id and command.command_type == "followup"
+                       and command.status == "dispatching")
+    if not matches:
+        if started:
+            raise DevelopmentExecutionBusy("The follow-up changed before it reached the worker.")
+        execution.pop("followup_start", None)
+        return
+    if started:
+        if manual_token:
+            metadata = _json(command.metadata_json)
+            _require_manual_source(db, command, metadata.pop("manual_start"))
+            command.metadata_json = json.dumps(metadata, ensure_ascii=False)
+        command.status = "delivered"
+        command.delivered_at = utc_now_naive()
+        command.result_summary = "Handed to the Development runtime."
+    else:
+        if manual_token:
+            _release_manual_start(command)
+        else:
+            command.status = "queued"
+            command.delivered_at = None
+            command.result_summary = "Startup stopped. The follow-up remains queued for review."
+            command.metadata_json = json.dumps({**_json(command.metadata_json), "review_after_startup_failure": True})
+        turn = db.get(Chat, execution.get("turn_id")) if execution.get("turn_id") else None
+        if turn is not None and turn.parent_id == root.id and not turn.response:
+            turn.response = execution.get("error") or execution.get("summary") or command.result_summary
+            turn.modified_date = utc_now_naive()
+    execution.pop("followup_start", None)
 
 
 def _start_next_queued_instruction(chat_id: int, *, after_proactive: dict | None = None, _session_provider=None) -> None:
     from distr.core.db.workflow import DevelopmentCommand
 
     with (_session_provider or get_session)() as db:
-        command = _queue_head(db, chat_id)
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        root = db.get(Chat, int(chat_id))
+        if root is None:
+            return
+        command = _queue_head(db, root)
         if command is None or command.status != 'queued':
             return
         if after_proactive is not None and (
@@ -1602,14 +2171,35 @@ def _start_next_queued_instruction(chat_id: int, *, after_proactive: dict | None
         if not content:
             return
         command_metadata = _json(command.metadata_json)
-        if after_proactive is None:
+        if command_metadata.get("review_after_startup_failure") is True:
+            return
+        direct_followup = (
+            after_proactive is None and command.command_type == "followup"
+            and command.workflow_id is None and command.run_id is None
+        )
+        source = command.source
+        revision = command.modified_at.isoformat()
+        if after_proactive is not None:
+            after_proactive = {**after_proactive, "command_id": command_id, "modified_at": command.modified_at}
+        elif not direct_followup:
             if not db.query(DevelopmentCommand).filter_by(id=command.id, status='queued').update(
                 {'status': 'dispatching'}, synchronize_session=False,
             ):
                 return
             db.commit()
+    if direct_followup:
+        from .queued_submissions import start_next_followup
+
+        try:
+            start_next_followup(chat_id, command_id, revision)
+        except (ValueError, LookupError):
+            logger.info("Follow-up %s remains queued for thread %s", command_id, chat_id)
         else:
-            after_proactive = {**after_proactive, "command_id": command_id, "modified_at": command.modified_at}
+            if source != "app_view":
+                from distr.core.workflow.development_control import resume_thread_time
+
+                resume_thread_time(chat_id)
+        return
     skill_ids = command_metadata.get("skill_ids")
     composer = command_metadata.get("composer")
     options = {
@@ -1656,6 +2246,7 @@ async def _run_execution(
     board_id: int | None,
     prompt: str,
     assessment: dict[str, Any],
+    selected_route: tuple[str, str, dict[str, Any], str],
     attachments: list[dict[str, Any]],
     skill_ids: list[str],
     skill_recommendation: str,
@@ -1676,7 +2267,7 @@ async def _run_execution(
         select_turn_runtime_id,
     )
 
-    backend, model, adapter_options, complexity = _route(project, metadata, assessment)
+    backend, model, adapter_options, complexity = selected_route
     if assessment.get("bounded_automation") == "email_action_items":
         from distr.core.automation.execution_policy import email_triage_options
 
@@ -1696,13 +2287,32 @@ async def _run_execution(
     worker_identity: dict[str, str] = {}
     from distr.core.turn_runtime.verification import VerificationReceipts
     verification_receipts = VerificationReceipts(prompt)
+    # 2026-11-12 agent-conversational: mid-task updates lead with a monotonic percent.
+    mid_task_progress: dict[str, int] = {}
     audit_only = _audit_only_request(prompt) or development_execution_state(chat_id).get('work_mode') == 'audit'
     metadata = {**metadata, 'work_mode': 'audit' if audit_only else 'implementation'}
     runtime_metadata['work_mode'] = 'audit' if audit_only else 'implementation'
+    expected_scope = development_scope_identity(project.id, metadata, chat_id=chat_id)
+    runtime_started = False
+    scope_changed = False
 
     def on_event(event: TurnEvent) -> None:
-        verification_receipts.observe(event)
+        nonlocal scope_changed
+        if scope_changed:
+            return
         summary = str(event.summary or "Working")[:1000]
+        try:
+            state = _update_execution(
+                chat_id, job_id=job_id, runtime_scope=expected_scope, status="running",
+                runtime_id=event.runtime_id, execution_session_id=event.execution_session_id,
+                output_delta=str(event.output_delta or ""), activity=summary, activity_status=event.status.value,
+            )
+        except DevelopmentScopeChanged:
+            scope_changed = True
+            return
+        if state.get("job_id") != job_id or state.get("status") != "running":
+            return
+        verification_receipts.observe(event)
         call_id = str(event.details.get("call_id") or "")
         merged_worker = (
             bool(tool_event_id)
@@ -1719,17 +2329,6 @@ async def _run_execution(
                     "model": str(event.details.get("model") or model or ""),
                 }
             )
-        if event.output_delta:
-            _append_streamed_output(chat_id, job_id=job_id, delta=event.output_delta)
-        _update_execution(
-            chat_id,
-            job_id=job_id,
-            status="running",
-            runtime_id=event.runtime_id,
-            execution_session_id=event.execution_session_id,
-            activity=summary,
-            activity_status=event.status.value,
-        )
         if merged_worker:
             pass
         elif event.kind.value == "tool_started" and event.tool_name:
@@ -1771,10 +2370,18 @@ async def _run_execution(
                     metadata=event.details,
                 )
         elif event.kind.value == "progress":
+            from distr.core.conversational_progress import conversational_mid_task
+
+            # Stage 1 of 4 (dispatched) is done while the agent works: floor 25%.
+            progress_text, progress_pct = conversational_mid_task(
+                summary, floor_percent=25, previous_percent=mid_task_progress.get("pct"),
+            )
+            mid_task_progress["pct"] = progress_pct
             create_event(
                 int(chat_id), "tool_completed", turn_id=turn_id, status="completed",
-                title="Progress update", summary=summary,
-                metadata={"source": "native_development", "tool_name": "model_progress", **event.details},
+                title="Progress update", summary=progress_text,
+                metadata={"source": "native_development", "tool_name": "model_progress",
+                          **event.details, "progress_percent": progress_pct},
             )
         elif event.kind.value == "context_compacted":
             native_event_id, _, _ = start_tool(
@@ -1790,7 +2397,25 @@ async def _run_execution(
         if tool_event_id:
             update_event(tool_event_id, status="running", summary=summary)
 
+    def hold_result(message: str) -> None:
+        state = _update_execution(
+            chat_id, job_id=job_id, scope_lost=True, status="failed",
+            result_held=runtime_started, streamed_output="", turn_response=message,
+            completed_at=utc_now_naive().isoformat(), error=message,
+            summary="Result held for scope review." if runtime_started else message,
+            activity_status="failed",
+        )
+        if state.get("job_id") != job_id or state.get("status") != "failed" or state.get("error") != message:
+            return
+        if state.get("turn_id") is None:
+            _write_response(chat_id, None, message)
+        if tool_event_id:
+            finish_tool(tool_event_id, success=False, summary=message, detail=message)
+        terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=message)
+
     try:
+        if not _direct_job_can_start(chat_id, job_id, expected_scope, board_id):
+            return
         if autonomy_level != 'plan':
             from distr.core.planning.prerequisites import require_plan_prerequisites
             require_plan_prerequisites(ticket_id, chat_id=chat_id, project_id=project.id, board_id=board_id)
@@ -1870,9 +2495,10 @@ async def _run_execution(
             ),
             metadata={**request.metadata, "active_runtime_identity": runtime_metadata["active_runtime_identity"]},
         )
-        _update_execution(
+        startup = _update_execution(
             chat_id,
             job_id=job_id,
+            startup_scope=expected_scope,
             status="initializing",
             backend_id=backend,
             model=model,
@@ -1890,6 +2516,8 @@ async def _run_execution(
                 actual={"runtime": runtime_id},
             ),
         )
+        if startup.get("job_id") != job_id or startup.get("status") != "initializing":
+            return
         local_preset = str((adapter_options or {}).get("local_harness_preset") or "").strip()
         local_tag = parse_local_ollama_worker(local_preset) or (
             str(model or "").strip() if local_preset else ""
@@ -1907,10 +2535,10 @@ async def _run_execution(
                     f"(expected tag `{tag}`). Install the model locally or pick another worker. "
                     "Decisions will not pull models automatically."
                 )
-                _write_response(chat_id, turn_id, message)
-                _update_execution(
+                state = _update_execution(
                     chat_id,
                     job_id=job_id,
+                    startup_scope=expected_scope,
                     status="failed",
                     backend_id=backend,
                     model=model,
@@ -1928,6 +2556,9 @@ async def _run_execution(
                         "summary": message[:2000],
                     },
                 )
+                if state.get("job_id") != job_id or state.get("status") != "failed" or state.get("error") != message:
+                    return
+                _write_response(chat_id, turn_id, message)
                 if tool_event_id:
                     finish_tool(tool_event_id, success=False, summary=message[:1000], detail=message)
                 terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=message)
@@ -1944,10 +2575,10 @@ async def _run_execution(
                     or f"{backend} is not ready."
                 ).strip()
                 message = f"Pinned harness `{backend}` is not ready: {reason}"
-                _write_response(chat_id, turn_id, message)
-                _update_execution(
+                state = _update_execution(
                     chat_id,
                     job_id=job_id,
+                    startup_scope=expected_scope,
                     status="failed",
                     backend_id=backend,
                     runtime_id=runtime_id,
@@ -1964,15 +2595,27 @@ async def _run_execution(
                         "summary": message[:2000],
                     },
                 )
+                if state.get("job_id") != job_id or state.get("status") != "failed" or state.get("error") != message:
+                    return
+                _write_response(chat_id, turn_id, message)
                 if tool_event_id:
                     finish_tool(tool_event_id, success=False, summary=message[:1000], detail=message)
                 terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=message)
                 return
+        if startup.get("followup_start"):
+            handed_off = _update_execution(chat_id, job_id=job_id, startup_scope=expected_scope, start_followup=True)
+            if handed_off.get("job_id") != job_id or handed_off.get("status") != "initializing":
+                return
+        elif not _direct_job_can_start(chat_id, job_id, expected_scope, board_id):
+            return
+        runtime_started = True
         result = await execute_turn(
             request,
             on_event=on_event,
             runtime_id=runtime_id,
         )
+        if scope_changed:
+            raise DevelopmentScopeChanged(_DIRECT_RESULT_HELD)
         current = development_execution_state(chat_id)
         if current.get("job_id") != job_id or current.get("status") == "cancelled":
             return
@@ -2019,6 +2662,19 @@ async def _run_execution(
             success = False
             error = 'Audit-only scope was violated: project files changed. Review the changes before proceeding.'
             response = error + '\n\nAgent report:\n' + response
+        # 2026-11-12 agent-conversational: Paul sees "<pct>% done." then conversational
+        # prose, never the raw harness banner. The technical error stays in `error`.
+        from distr.core.conversational_progress import conversational_development_reply
+
+        response = conversational_development_reply(
+            response,
+            status=status,
+            success=success,
+            change_expected=change_expected,
+            changed_files=git_change_count,
+            verification=verification,
+            audit_violation=bool(audit_only and git_change_count),
+        )
         outcome = _turn_outcome(
             backend_id=str(result.backend_id or backend),
             runtime_id=str(result.runtime_id or runtime_id),
@@ -2031,10 +2687,6 @@ async def _run_execution(
         outcome.update(verification=verification, work_mode='audit' if audit_only else 'implementation',
                        implementation_status='changed' if git_change_count else 'unchanged',
                        deployment_status='not_verified')
-        if not waiting and result.execution_session_id:
-            from distr.core.kanban.project_execution import complete_execution_session
-            complete_execution_session(result.execution_session_id, success=success, status=status,
-                error=error, output_packet={'completion_review': outcome}, merge_output_packet=True)
         actual_provider = str(adapter_options.get("model_provider") or "").strip().lower()
         if (
             str(result.backend_id or "").strip().lower() == str(adapter_options.get("fallback_backend") or "").strip().lower()
@@ -2042,10 +2694,11 @@ async def _run_execution(
         ):
             actual_provider = str(adapter_options.get("fallback_model_provider") or actual_provider).strip().lower()
         actual_backend = str(result.backend_id or backend).strip().lower()
-        _write_response(chat_id, turn_id, response)
-        _update_execution(
+        state = _update_execution(
             chat_id,
             job_id=job_id,
+            runtime_scope=expected_scope,
+            turn_response=response,
             status=status,
             runtime_id=result.runtime_id,
             backend_id=result.backend_id,
@@ -2082,6 +2735,14 @@ async def _run_execution(
                 },
             ),
         )
+        if state.get("job_id") != job_id or state.get("status") != status:
+            return
+        if state.get("turn_id") is None:
+            _write_response(chat_id, None, response)
+        if not waiting and result.execution_session_id:
+            from distr.core.kanban.project_execution import complete_execution_session
+            complete_execution_session(result.execution_session_id, success=success, status=status,
+                error=error, output_packet={'completion_review': outcome}, merge_output_packet=True)
         if tool_event_id:
             finish_tool(
                 tool_event_id,
@@ -2098,7 +2759,7 @@ async def _run_execution(
         if success:
             complete_turn(chat_id, turn_id=turn_id, display_text=response)
         else:
-            terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=error or response)
+            terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=response.split("\n\n", 1)[0] or error)
         if (
             bool((adapter_options or {}).get("unload_when_done"))
             and str((adapter_options or {}).get("model_provider") or "").lower() == "ollama"
@@ -2106,21 +2767,19 @@ async def _run_execution(
             _unload_ollama_model(model)
         if not waiting and success and not audit_only:
             _start_next_queued_instruction(chat_id)
-    except TurnCancelled:
-        return
+    except DevelopmentScopeChanged as exc:
+        hold_result(str(exc))
     except Exception as exc:
-        current = development_execution_state(chat_id)
-        if current.get("job_id") != job_id or current.get("status") == "cancelled":
+        if scope_changed:
+            hold_result(_DIRECT_RESULT_HELD)
             return
-        message = str(exc) or "The development agent failed to start."
-        _write_response(chat_id, turn_id, message)
-        _update_execution(
-            chat_id,
-            job_id=job_id,
-            status="failed",
-            completed_at=utc_now_naive().isoformat(),
-            error=message,
-            outcome={
+        cancelled = isinstance(exc, TurnCancelled)
+        status = "cancelled" if cancelled else "failed"
+        message = "Stopped by the user." if cancelled else str(exc) or "The development agent failed to start."
+        details = {} if cancelled else {
+            "error": message,
+            "turn_response": message,
+            "outcome": {
                 "backend_id": backend,
                 "runtime_id": "",
                 "success": False,
@@ -2128,7 +2787,27 @@ async def _run_execution(
                 "git_change_count": 0,
                 "summary": message[:2000],
             },
-        )
+        }
+        try:
+            state = _update_execution(
+                chat_id, job_id=job_id, startup_scope=expected_scope if not runtime_started else None,
+                runtime_scope=expected_scope if runtime_started else None,
+                status=status, completed_at=utc_now_naive().isoformat(), summary=message,
+                activity_status=status, **details,
+            )
+        except DevelopmentScopeChanged as scope_error:
+            hold_result(str(scope_error))
+            return
+        if state.get("job_id") != job_id or state.get("status") != status:
+            return
+        if cancelled:
+            if tool_event_id:
+                update_event(tool_event_id, status="cancelled", summary=message)
+            if turn_id is not None:
+                terminal_turn(chat_id, "turn_cancelled", turn_id=turn_id, summary=message)
+            return
+        if state.get("turn_id") is None:
+            _write_response(chat_id, None, message)
         if tool_event_id:
             finish_tool(tool_event_id, success=False, summary=message, detail=message)
         terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=message)
@@ -2343,13 +3022,16 @@ def dispatch_development_prompt(
     dispatch_async: bool = True,
     save_prompt: bool = False,
     queued_followup: dict | None = None,
+    telegram_proposal_approval: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
     clean = str(prompt or "").strip()
     if not clean:
         raise ValueError("A development instruction is required.")
     project, metadata, ticket_id, board_id = _project_and_scope(int(chat_id))
     from distr.core.incoming.media import required_thread_attachments
+    from distr.core.incoming.proposals import restore_reviewed_thread_merge_attachments
 
+    restore_reviewed_thread_merge_attachments(int(chat_id), int(project.id))
     source_attachments = required_thread_attachments(int(chat_id))
     if metadata.get("source_type") == "plan_workspace":
         raise ValueError("Use the Plan conversation for planning edits. Plan threads cannot dispatch application code changes.")
@@ -2422,7 +3104,18 @@ def dispatch_development_prompt(
         control_result = _handle_owned_automation_control(int(chat_id), clean, metadata, assessment=assessment)
         if control_result is not None:
             return control_result
-    from distr.core.workflow.execution_mode import choose_development_execution_mode
+    from distr.core.workflow.execution_mode import assess_development_request, choose_development_execution_mode
+
+    persistent_attachments = _linked_ticket_attachments(ticket_id)
+    persistent_attachments.extend(source_attachments)
+    turn_attachments = _safe_turn_attachments(
+        [*(attachments or []), *persistent_attachments],
+        project_folder=str(project.folder_location or ""),
+    )
+    if not assessment and not recovery:
+        assessment = assess_development_request(
+            clean, has_images=any(str(item.get("mime_type") or "").startswith("image/") for item in turn_attachments),
+        )
 
     # Workflows only run when the caller already chose a named workflow_id
     # (threads/studio → dispatch_work_item). Auto-wrap into managed class
@@ -2433,12 +3126,6 @@ def dispatch_development_prompt(
         assessment["complexity"] = execution_mode["complexity"]
     assessment["execution_mode_decision"] = execution_mode
 
-    persistent_attachments = _linked_ticket_attachments(ticket_id)
-    persistent_attachments.extend(source_attachments)
-    turn_attachments = _safe_turn_attachments(
-        [*(attachments or []), *persistent_attachments],
-        project_folder=str(project.folder_location or ""),
-    )
     # Skills are auto-matched from the original prompt at submit; any failure means "no skill", never a blocked turn.
     explicit_skill_ids: list[str] = []
     turn_skill_ids: list[str] = []
@@ -2467,7 +3154,8 @@ def dispatch_development_prompt(
         logger.debug("Skill auto-match failed for chat %s; continuing without skills", chat_id, exc_info=True)
         turn_skill_ids = list(explicit_skill_ids)
         skill_recommendation = ""
-    backend, model, adapter_options, complexity = _route(project, metadata, assessment)
+    selected_route = _route(project, metadata, assessment, board_id=board_id)
+    backend, model, adapter_options, complexity = selected_route
     folder = str(project.folder_location or "")
     git_status_before = previous.get("git_status_before") if recovery else _git_status_snapshot(folder)
     git_untracked_before = previous.get("git_untracked_before") if recovery else _git_untracked_fingerprints(folder, git_status_before)
@@ -2480,6 +3168,7 @@ def dispatch_development_prompt(
         new_prompt_metadata={"skill_ids": explicit_skill_ids} if save_prompt and explicit_skill_ids else None,
         expected_autonomy=str(raw_autonomy).strip().lower() if save_prompt else None,
         queued_followup=queued_followup,
+        telegram_proposal_approval=telegram_proposal_approval,
         status="initializing",
         backend_id=backend,
         model=model,
@@ -2518,43 +3207,53 @@ def dispatch_development_prompt(
             "turn_skills_auto": not explicit_skill_ids,
         },
     )
-    if save_prompt:
-        turn_id = execution["turn_id"]
-        record_chat_audit_event(chat_id=int(chat_id), chat_row_id=turn_id, role="user", content=original_request)
-    tool_event_id, _, _ = start_tool(
-        int(chat_id),
-        "development_agent",
-        turn_id=turn_id,
-        title="Working",
-        summary="Starting the development agent.",
-        metadata={"source": "development", "job_id": job_id},
-    )
-    kwargs = {
-        "chat_id": int(chat_id),
-        "turn_id": turn_id,
-        "job_id": job_id,
-        "project": project,
-        "metadata": metadata,
-        "ticket_id": ticket_id,
-        "board_id": board_id,
-        "prompt": clean,
-        "assessment": assessment,
-        "attachments": turn_attachments,
-        "skill_ids": turn_skill_ids,
-        "skill_recommendation": skill_recommendation,
-        "use_playwright": bool(use_playwright),
-        "autonomy_level": autonomy_level,
-        "tool_event_id": tool_event_id,
-    }
-    if recovery:
-        kwargs["recovery"] = recovery
-    if dispatch_async:
-        threading.Thread(
-            target=lambda: asyncio.run(_run_execution(**kwargs)),
-            name=f"development-agent-{chat_id}",
-            daemon=True,
-        ).start()
-    else:
+    try:
+        if save_prompt:
+            turn_id = execution["turn_id"]
+            record_chat_audit_event(chat_id=int(chat_id), chat_row_id=turn_id, role="user", content=original_request)
+        tool_event_id, _, _ = start_tool(
+            int(chat_id),
+            "development_agent",
+            turn_id=turn_id,
+            title="Working",
+            summary="Starting the development agent.",
+            metadata={"source": "development", "job_id": job_id},
+        )
+        kwargs = {
+            "chat_id": int(chat_id),
+            "turn_id": turn_id,
+            "job_id": job_id,
+            "project": project,
+            "metadata": metadata,
+            "ticket_id": ticket_id,
+            "board_id": board_id,
+            "prompt": clean,
+            "assessment": assessment,
+            "selected_route": selected_route,
+            "attachments": turn_attachments,
+            "skill_ids": turn_skill_ids,
+            "skill_recommendation": skill_recommendation,
+            "use_playwright": bool(use_playwright),
+            "autonomy_level": autonomy_level,
+            "tool_event_id": tool_event_id,
+        }
+        if recovery:
+            kwargs["recovery"] = recovery
+        if dispatch_async:
+            threading.Thread(
+                target=lambda: asyncio.run(_run_execution(**kwargs)),
+                name=f"development-agent-{chat_id}",
+                daemon=True,
+            ).start()
+    except Exception as exc:
+        if not execution.get("followup_start"):
+            raise
+        message = "Could not start the Development worker."
+        _update_execution(chat_id, job_id=job_id, scope_lost=True, status="failed",
+                          completed_at=utc_now_naive().isoformat(), summary=message,
+                          error=message, activity_status="failed")
+        raise DevelopmentExecutionBusy(message) from exc
+    if not dispatch_async:
         asyncio.run(_run_execution(**kwargs))
         execution = development_execution_state(int(chat_id))
     return {**execution, "direct": True, "id": execution.get("execution_session_id") or job_id}
@@ -2582,12 +3281,58 @@ def _record_proactive_stop(chat_id: int, expected_session_id: int, turn_id: int)
         return True
 
 
-def stop_development_execution(chat_id: int, *, expected_session_id: int | None = None) -> dict[str, Any]:
+def exact_development_stop_target(state: dict[str, Any]) -> dict[str, int] | None:
+    active = ACTIVE_EXECUTION_STATUSES | {"paused"} if state.get("direct") is False else ACTIVE_EXECUTION_STATUSES
+    if (str(state.get("status") or "").lower() not in active or state.get("completed_at")
+            or state.get("stop_pending") is True or state.get("can_stop") is False):
+        return None
+    if state.get("direct") is False:
+        field, value = "workflow_run_id", state.get("id")
+    elif state.get("origin") == "proactive_orchestrator" and state.get("can_stop"):
+        field, value = "execution_session_id", state.get("execution_session_id")
+    elif state.get("runtime_id") == "cli_harness" and state.get("cli_stop_available") is True:
+        field, value = "execution_session_id", state.get("execution_session_id")
+    elif state.get("runtime_id") == "native":
+        field, value = "turn_id", state.get("turn_id")
+    else:
+        return None
+    return {field: value} if type(value) is int and value > 0 else None
+
+
+def stop_development_execution(chat_id: int, *, expected_session_id: int | None = None,
+                               expected_workflow_run_id: int | None = None,
+                               expected_turn_id: int | None = None) -> dict[str, Any]:
     state = development_execution_state(int(chat_id))
+    if expected_workflow_run_id is not None:
+        from distr.core.workflow.dispatcher import cancel_run
+
+        stopped = bool(
+            exact_development_stop_target(state) == {"workflow_run_id": expected_workflow_run_id}
+            and cancel_run(expected_workflow_run_id, workflow_id=state["workflow_id"], expected_chat_id=chat_id)
+        )
+        return {"stopped": stopped, "stop_requested": stopped}
+    if expected_turn_id is not None:
+        from distr.core.turn_runtime import cancel_active_turn
+
+        requested = bool(
+            exact_development_stop_target(state) == {"turn_id": expected_turn_id}
+            and cancel_active_turn(chat_id, expected_turn_id=expected_turn_id)
+        )
+        return {"stopped": False, "stop_requested": requested}
     if state.get("origin") == "proactive_orchestrator" or expected_session_id is not None:
         from distr.core.project_cli_backends.registry import terminate_backend_process
+        from distr.core.turn_runtime import cancel_active_turn
 
         requested = False
+        if (state.get("runtime_id") == "cli_harness" and state.get("cli_stop_available") is True
+                and exact_development_stop_target(state) == {"execution_session_id": expected_session_id}):
+            requested = cancel_active_turn(chat_id, expected_turn_id=state["turn_id"])
+            if requested:
+                terminate_backend_process(
+                    state["project_id"], state["backend_id"], board_id=state["board_id"],
+                    execution_id=expected_session_id, execution_kind="development_session",
+                )
+            return {"stop_requested": requested, "stopped": False}
         if (state.get("origin") == "proactive_orchestrator" and state.get("can_stop")
                 and expected_session_id == state.get("execution_session_id")
                 and _record_proactive_stop(int(chat_id), expected_session_id, state["turn_id"])):
@@ -2631,12 +3376,13 @@ def stop_development_execution(chat_id: int, *, expected_session_id: int | None 
     from distr.core.turn_runtime import cancel_active_turn
 
     cooperative_stop = cancel_active_turn(int(chat_id))
+    scoped_cli = state.get("cli_stop_available") is True
     process_stop = terminate_backend_process(
         int(state.get("project_id") or -int(chat_id)),
         str(state.get("backend_id") or "pi"),
         board_id=int(state["board_id"]) if state.get("board_id") is not None else None,
-        execution_id=int(chat_id),
-        execution_kind="development",
+        execution_id=state["execution_session_id"] if scoped_cli else int(chat_id),
+        execution_kind="development_session" if scoped_cli else "development",
     )
     session_id = state.get("execution_session_id")
     if session_id:

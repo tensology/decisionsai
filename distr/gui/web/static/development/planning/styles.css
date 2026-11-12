@@ -77,13 +77,14 @@
 .plan-message button, #plan-operation-status button { max-width: 100%; margin: 8px 6px 0 0; padding: 4px 8px; border: 1px solid var(--studio-line); border-radius: 5px; background: transparent; color: var(--studio-text); font-size: 12px; overflow-wrap: anywhere; }
 .plan-conversation-empty { margin: 0 auto; width: min(820px, 100%); color: var(--studio-muted); font-size: 13px; }
 .plan-composer-wrap { flex-shrink: 0; min-width: 0; padding: 8px 20px 16px; }
-.plan-language textarea {
+.studio-composer.plan-language textarea {
     font: inherit;
     font-size: 13px;
     line-height: 1.5;
     caret-color: var(--studio-accent);
     field-sizing: content;
     min-height: calc(2lh + 20px);
+    padding-inline: 14px;
 }
 .plan-language textarea::placeholder { color: var(--studio-muted); }
 .plan-language .composer-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
@@ -121,7 +122,7 @@
 .plan-build-results small { display: block; color: var(--studio-muted); }
 .plan-artifacts { display: flex; min-width: 0; min-height: 0; flex-direction: column; border-right: 1px solid var(--studio-line-soft); }
 .plan-artifact-picker { display: flex; padding: 10px 16px 0; }
-.plan-artifact-picker select { width: 100%; min-width: 0; height: 30px; border: 1px solid var(--studio-line); border-radius: 5px; padding: 0 8px; background: var(--studio-raised); color: var(--studio-text); font-size: 12px; }
+.plan-artifact-picker select { width: 100%; min-width: 0; height: 30px; border: 1px solid var(--studio-line); border-radius: 5px; padding: 0 2.5rem 0 8px; background-color: var(--studio-raised); color: var(--studio-text); font-size: 12px; }
 .plan-artifact-revision { padding: 8px 16px 0; color: var(--studio-muted); font-size: 11px; }
 .plan-preview-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px 0; }
 .plan-preview-toolbar select, .plan-preview-toolbar button { min-width: 0; max-width: 100%; min-height: 30px; padding: 4px 8px; border: 1px solid var(--studio-line); border-radius: 5px; background: var(--studio-raised); color: var(--studio-text); font-size: 12px; }
@@ -258,14 +259,16 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
     .plan-tabs { order: 5; width: 100%; margin: 0; }
     .plan-tabs button { flex: 1; }
     .plan-header-actions { order: 3; }
-    .plan-detail-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(368px, 1.2fr) minmax(320px, .8fr); overflow-y: auto; }
+    .plan-detail-body { --plan-chat-min-height: 368px; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(368px, 1.2fr) minmax(var(--plan-chat-min-height), .8fr); overflow-y: auto; }
     .plan-artifacts { border-right: 0; border-bottom: 1px solid var(--studio-line-soft); }
     .plan-messages { padding: 12px 12px 4px; }
     .plan-conversation-empty { min-height: 0; padding: 8px; }
     .plan-composer-wrap { padding: 8px 12px 12px; }
     .plan-assets { max-height: 100px; }
+    .plan-detail-body:has(.iface-canvas) { grid-template-rows: minmax(424px, 1.2fr) minmax(var(--plan-chat-min-height), .8fr); }
     /* Keep canvas controls above attachments; the existing body scroll reaches chat below. */
-    .plan-detail-body:has(.plan-assets > *) { grid-template-rows: minmax(440px, 1.2fr) minmax(320px, 1fr); }
+    .plan-detail-body:has(.plan-assets > *) { grid-template-rows: minmax(440px, 1.2fr) minmax(var(--plan-chat-min-height), 1fr); }
+    .plan-detail-body:has(.iface-canvas):has(.plan-assets > *) { grid-template-rows: minmax(476px, 1.2fr) minmax(var(--plan-chat-min-height), 1fr); }
     .plan-asset img { height: 40px; }
 }
 @media (max-width: 760px) {
@@ -296,79 +299,135 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .plan-file-dialog footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 @media (max-width: 680px) { .plan-file-comparison { grid-template-columns: 1fr; } }
 
-/* Embedded under the thread header (#development-task-header.plan-mode): thread-only controls hide,
-   the project name lives in the shared breadcrumb. */
-#development-task-header.plan-mode > :not(.task-breadcrumb):not(.header-context):not(.board-view-switch) { display: none !important; }
+/* Single-row Planning header: crumbs + Interfaces/Data/Documents tabs vertically centered
+   in the same 56px row, Play + view switches on the right. No invented Planning ⋯. */
+#development-task-header.plan-mode {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 56px;
+    min-height: 56px;
+}
+#development-task-header.plan-mode > :not(.task-breadcrumb):not(.header-context):not(#board-chrome-unit) { display: none !important; }
+#development-task-header.plan-mode > .task-breadcrumb {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0;
+}
+#development-task-header.plan-mode #header-task { flex: 0 0 auto; }
+#development-task-header.plan-mode .task-breadcrumb > i { display: block; }
+#development-task-header.plan-mode > #header-controls-divider { display: none !important; }
+#development-task-header.plan-mode > .header-context {
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    min-width: 0;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0;
+}
+#development-task-header.plan-mode > #board-chrome-unit {
+    margin-left: auto;
+    position: relative;
+    right: auto;
+    height: 100%;
+    padding: 0;
+}
+#development-task-header.plan-mode .plan-context-controls .plan-tabs {
+    position: static;
+    top: auto;
+    left: auto;
+    transform: none;
+    align-self: center;
+}
+
 .plan-detail-header .plan-project { display: none; }
-/* Plan content is a section under the thread header row (56px, .studio-main grid row 1). */
+/* Plan content is a section under the shared header. */
 .development-workspace.plan-workspace { position: relative; inset: auto; grid-row: 2; height: auto; min-height: 0; z-index: auto; }
 .plan-scan-hint { flex: 0 0 auto; color: var(--studio-muted); font-size: 11px; white-space: nowrap; }
 .plan-scan-hint[data-kind="error"] { color: var(--studio-danger, #f87171); }
 
-/* Plan toolbar mounted in the thread header (.header-context > .plan-context-controls):
-   tabs (segmented, view-switch tokens, centred on the header) | Build tickets | view switcher.
-   Rebuild sits at the top right of the interfaces canvas. Reset zoom is the 100 magnifier on the zoom dock.
-   The old .plan-detail #plan-* button rules no longer match once the bar leaves .plan-detail. */
-.header-context .plan-context-controls { display: flex; flex: 1 1 auto; min-width: 0; height: 100%; align-items: center; gap: 8px; flex-wrap: nowrap; }
-.plan-context-controls .plan-tabs { display: inline-flex; flex: 0 0 auto; min-width: 0; margin: 0; align-self: center; gap: var(--segment-gap); padding: var(--segment-pad); border: var(--segment-border); border-radius: var(--segment-radius); overflow-x: auto; scrollbar-width: none; }
-/* Same segment look as .board-view-switch (shared --segment-* tokens); labels kept. */
+/* Plan toolbar mounted in the shared header row (.header-context > .plan-context-controls). */
+.header-context .plan-context-controls { display: flex; flex: 1 1 auto; min-width: 0; height: auto; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.plan-context-controls .plan-tabs { display: inline-flex; flex: 0 1 auto; min-width: 0; margin: 0; align-self: center; gap: var(--segment-gap); padding: var(--segment-pad); border: var(--segment-border); border-radius: var(--segment-radius); overflow-x: auto; scrollbar-width: none; }
 .plan-context-controls .plan-tabs button { position: relative; flex: 0 0 auto; height: var(--segment-item-height); min-height: var(--segment-item-height); padding: 0 10px; border: 0; border-radius: var(--segment-item-radius); background: transparent; color: var(--studio-muted); font: inherit; font-size: var(--studio-tab-font-size); font-weight: var(--studio-tab-font-weight); }
 .plan-context-controls .plan-tabs button:hover { background: var(--segment-hover-bg); color: var(--studio-text); }
 .plan-context-controls .plan-tabs button[aria-pressed="true"] { border-bottom-color: transparent; background: var(--segment-active-bg); color: var(--segment-active-color); }
 .plan-context-controls .plan-tabs button + button::before { position: absolute; top: 6px; bottom: 6px; left: calc(-1px - var(--segment-gap) / 2); width: 1px; background: var(--segment-divider); content: ""; }
 .plan-context-controls .plan-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; width: auto; margin-left: auto; }
 .plan-header-menu { width: max-content; min-width: 220px; }
-/* Interfaces canvas: Rebuild, top-right, same 10px inset as the zoom dock. */
+/* Interfaces canvas: Rebuild stays top-right on the canvas. */
 .plan-iface-actions { position: absolute; z-index: 6; top: 10px; right: 10px; display: flex; align-items: center; }
 .plan-iface-actions .header-button { min-height: 28px; }
 .erd-body > .plan-iface-actions { grid-row: 2; grid-column: 1; }
 .plan-context-controls .plan-scan-hint { order: 2; }
 .plan-context-controls .plan-header-actions { order: 3; }
-/* Breadcrumb: project and earlier segments muted, single emphasised current segment; truncates. */
-#development-task-header.plan-mode > .task-breadcrumb { min-width: 0; max-width: 34%; }
 #development-task-header [data-plan-crumb-parent] { color: var(--studio-muted); font-weight: 400; }
-/* Wide headers: the segmented tabs sit on the header's true horizontal centre (.task-header is
-   position: relative and is the containing block); the breadcrumb and the right cluster are capped
-   so they never reach the group. Narrower: normal flow, the controls row scrolls. */
-@media (min-width: 1400px) {
-    #development-task-header.plan-mode { --plan-tabs-half: 125px; }
-    #development-task-header.plan-mode .plan-context-controls .plan-tabs { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
-    #development-task-header.plan-mode > .task-breadcrumb { max-width: calc(50% - var(--plan-tabs-half) - 22px); }
-    #development-task-header.plan-mode > .header-context { justify-content: flex-end; }
-}
-@media (max-width: 1100px) {
-    #development-task-header.plan-mode > .task-breadcrumb { max-width: 24%; }
-}
-@media (max-width: 980px) {
-    /* Header height stays 56px: the controls row scrolls sideways instead of wrapping. */
-    #development-task-header.plan-mode { gap: 4px; padding-inline: 8px; }
-    #development-task-header.plan-mode > .header-context { overflow: hidden; }
-    .header-context .plan-context-controls { gap: 4px; }
-    .plan-context-controls .plan-tabs { flex: 1 1 auto; min-width: 84px; }
-    .plan-context-controls .plan-header-actions .header-button { padding-inline: 6px; white-space: nowrap; }
-    .plan-context-controls .plan-tabs button { height: var(--segment-item-height); min-height: var(--segment-item-height); padding: 0 6px; }
-    #development-task-header.plan-mode > .task-breadcrumb { flex: 0 0 auto; max-width: none; }
-    /* Like the thread header on phones (threads/styles.css:907), only the current segment ("Plan") shows. */
+
+@media (max-width: 900px) {
+    .studio-main:has(> #development-task-header.plan-mode .plan-context-controls) {
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+    #development-task-header.plan-mode:has(.plan-context-controls) {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: minmax(44px, auto) minmax(44px, auto);
+        height: auto;
+        padding-inline: 8px;
+        gap: 0 6px;
+    }
+    #development-task-header.plan-mode > .task-breadcrumb { grid-column: 1; grid-row: 1; }
+    .studio-main > #development-task-header.plan-mode .task-breadcrumb > #header-project {
+        flex: 0 1 auto;
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    #development-task-header.plan-mode .task-breadcrumb > #header-task {
+        flex: 0 0 auto;
+        min-width: max-content;
+        max-width: none;
+    }
+    #development-task-header.plan-mode [data-plan-crumb-parent] {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    #development-task-header.plan-mode > #board-chrome-unit { grid-column: 2; grid-row: 1; }
+    #development-task-header.plan-mode > .header-context { grid-column: 1 / -1; grid-row: 2; }
+    .plan-context-controls .plan-tabs { flex: 1 1 auto; width: auto; }
+    .plan-context-controls .plan-tabs button { flex: 1 1 auto; min-height: 36px; }
+    .plan-context-controls .plan-scan-hint { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
 }
 
-@media (max-width: 620px) {
-    .studio-main:has(> #development-task-header.plan-mode) { grid-template-rows: 100px minmax(0, 1fr); }
-    #development-task-header.plan-mode {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto;
-        grid-template-rows: 48px 44px;
+@media (max-width: 520px) {
+    #development-task-header.plan-mode:has(.plan-context-controls) {
+        display: flex;
+        flex-wrap: wrap;
+        column-gap: 4px;
     }
-    #development-task-header.plan-mode > .header-context,
-    #development-task-header.plan-mode .plan-context-controls { display: contents; }
-    #development-task-header.plan-mode > .task-breadcrumb { grid-area: 1 / 1; }
-    #development-task-header.plan-mode .plan-header-actions { grid-area: 1 / 2; }
-    #development-task-header.plan-mode > .board-view-switch { grid-area: 1 / 3; }
-    #development-task-header.plan-mode .plan-tabs {
-        grid-area: 2 / 1 / 3 / -1;
-        width: 100%;
-        min-width: 0;
+    #development-task-header.plan-mode:has(.plan-context-controls) > .task-breadcrumb {
+        flex: 1 1 max-content;
+        max-width: 100%;
+        min-height: 32px;
+        padding-block: 4px;
+        gap: 4px;
     }
-    #development-task-header.plan-mode .plan-tabs button { flex: 1 1 0; min-height: 36px; }
+    #development-task-header.plan-mode > #board-chrome-unit {
+        order: 1;
+        height: auto;
+        min-height: 44px;
+        gap: 2px;
+    }
+    #development-task-header.plan-mode > .header-context {
+        order: 2;
+        flex: 0 0 100%;
+        height: auto;
+        min-height: 44px;
+    }
 }
 
 /* ERD editor (Data tab, erd/*.js). Shared studio + segment tokens; app font inherited. */
@@ -505,6 +564,7 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .erd-alert .erd-status { overflow: hidden; color: var(--studio-danger, #f87171); text-overflow: ellipsis; white-space: nowrap; }
 .erd-panel[data-mode="hint"] { display: none; }
 .erd-panel[data-mode="edit"] { bottom: 52px; }
+.erd-host .erd-panel[data-mode="edit"] { top: 8px; max-height: none; }
 .erd-toolbar { display: none; }
 /* Narrow canvases use icon-only docks to conserve space. */
 @container (max-width: 460px) {
@@ -515,11 +575,12 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
     .erd-dock-right { right: 8px; }
     .erd-dock .erd-zoom { min-width: 34px; }
     .erd-callout { width: 100%; margin-bottom: 6px; }
+    .erd-host .erd-panel[data-mode="edit"] { bottom: 60px; }
 }
 
 @container (max-width: 310px) {
     .erd-body > .erd-dock-left { bottom: 64px; }
-    .erd-body > .erd-panel[data-mode="edit"] {
+    .erd-body > .erd-panel[data-mode="edit"], .erd-host .erd-panel[data-mode="edit"] {
         bottom: 120px;
         max-width: calc(100% - 16px);
     }
@@ -551,8 +612,10 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 
 /* ERD table panel: ⋯ actions menu + TYPE dropdown (?v=20261102-verify) */
 .erd-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.erd-panel-more { display: inline-grid; width: var(--segment-item-height, 26px); height: var(--segment-item-height, 26px); place-items: center; padding: 0; border: 1px solid var(--segment-border, var(--studio-line)); border-radius: var(--segment-item-radius, 5px); background: transparent; color: var(--studio-muted); }
-.erd-panel-more:hover, .erd-panel-more[aria-expanded="true"] { background: var(--segment-hover-bg, rgba(255,255,255,.06)); color: var(--studio-text); }
+.erd-host .erd-panel-head { position: sticky; top: -8px; z-index: 1; background: var(--studio-panel); }
+.erd-panel-head > div { display: flex; gap: 6px; }
+.erd-panel-more, .erd-selection-close { display: inline-grid; width: var(--segment-item-height, 26px); height: var(--segment-item-height, 26px); place-items: center; padding: 0; border: 1px solid var(--segment-border, var(--studio-line)); border-radius: var(--segment-item-radius, 5px); background: transparent; color: var(--studio-muted); }
+.erd-panel-more:hover, .erd-panel-more[aria-expanded="true"], .erd-selection-close:hover { background: var(--segment-hover-bg, rgba(255,255,255,.06)); color: var(--studio-text); }
 .erd-menu { z-index: 1000; }
 .erd-menu button:hover, .erd-menu button:focus-visible { background: var(--segment-hover-bg, rgba(255,255,255,.08)); outline: none; }
 .erd-menu button.danger, .erd-menu button.danger svg { color: var(--studio-danger, #f87171); }
@@ -868,12 +931,15 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .iface-part-method { margin: 8px 10px 0; color: var(--studio-muted); font-size: 11px; font-weight: 650; letter-spacing: .04em; }
 .iface-part .iface-note { flex: 1 1 auto; max-height: 48px; -webkit-line-clamp: 3; }
 .iface-part .iface-route { color: var(--studio-text); }
-.iface-shot-eye { position: absolute; z-index: 6; top: 10px; left: 10px; grid-row: 2; grid-column: 1; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #f0b44c; cursor: help; }
+.iface-shot-eye { position: relative; order: -1; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #f0b44c; cursor: help; }
 .iface-shot-eye span { position: absolute; left: 0; top: calc(100% + 6px); display: none; width: max-content; max-width: 260px; padding: 8px 10px; border: 1px solid var(--studio-line); border-radius: 8px; background: var(--studio-panel, #111827); color: var(--studio-text); font-size: 12px; font-weight: 500; line-height: 1.35; text-align: left; white-space: normal; box-shadow: 0 4px 14px rgba(0,0,0,.28); }
 .iface-shot-eye:hover span, .iface-shot-eye:focus-visible span { display: block; }
 .iface-shot-eye:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
-.erd-body > .plan-find-page { position: absolute; z-index: 5; grid-row: 2; grid-column: 1; top: 10px; left: 10px; min-height: 28px; }
-.erd-body:has(> .iface-shot-eye) > .plan-find-page { left: 44px; }
+.iface-map-header { position: relative; z-index: 8; min-width: 0; }
+.iface-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-bottom: 8px; }
+.iface-navigation > .plan-find-page, .iface-navigation > .iface-all-links { min-height: 32px; }
+.iface-all-links[aria-pressed="true"] { border-color: var(--studio-accent); color: var(--studio-accent); }
+.iface-navigation > .plan-iface-actions { position: static; margin-left: auto; }
 .plan-page-picker[open] { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; max-height: min(560px, calc(100dvh - 24px)); }
 .plan-page-picker header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .plan-page-picker header h2, .plan-page-picker-status { margin: 0; }
@@ -881,7 +947,9 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .plan-page-picker-status { color: var(--studio-muted); font-size: 12px; }
 .plan-page-picker ul { min-height: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }
 .plan-page-picker li + li { border-top: 1px solid var(--studio-line-soft); }
-.plan-page-picker li button { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; width: 100%; min-height: 40px; padding: 8px; border: 0; border-radius: var(--segment-item-radius); background: transparent; color: var(--studio-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.plan-page-picker li button { display: grid; gap: 4px; width: 100%; min-height: 44px; padding: 8px; border: 0; border-radius: var(--segment-item-radius); background: transparent; color: var(--studio-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.plan-page-picker-meta { display: flex; flex-wrap: wrap; gap: 3px 10px; }
+.plan-page-picker-meta small { min-width: 0; }
 .plan-page-picker li button:hover { background: var(--segment-hover-bg); }
 .plan-page-picker li button:focus-visible, .plan-page-picker input:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
 .plan-page-picker li small { color: var(--studio-muted); font-size: 12px; }
@@ -891,9 +959,24 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .iface-node-quiet { opacity: .75; }
 .iface-lines { color: var(--studio-muted); }
 .iface-lines .iface-edge path { fill: none; }
+.iface-lines.selected-links-only .iface-edge:not(.related) { visibility: hidden; pointer-events: none; }
+.iface-lines.has-selected-page .iface-edge:not(.related) { opacity: .13; pointer-events: none; }
+.iface-lines.has-selected-page .iface-edge:not(.related) text { visibility: hidden; }
+.iface-lines .iface-edge.related path { stroke: var(--studio-accent); }
 .iface-panel[hidden] { display: none; }
 .iface-panel { z-index: 7; padding-top: 10px; }
+.iface-panel[data-mode="edit"] { top: 8px; }
 .iface-panel h4 { margin: 0 26px 8px 0; font-size: 13px; overflow-wrap: anywhere; }
+.iface-panel h4:has(+ .iface-selected-route) { margin-bottom: 2px; }
+.iface-selected-route { margin: 0 0 8px; color: var(--studio-muted); font-size: 11px; overflow-wrap: anywhere; }
+.iface-page-links { margin: 0 0 10px; }
+.iface-page-links h5 { margin: 0 0 4px; color: var(--studio-muted); font-size: 12px; font-weight: 600; }
+.iface-page-links ul { margin: 0; padding: 0; list-style: none; }
+.iface-page-links li + li { border-top: 1px solid var(--studio-line-soft); }
+.iface-page-links button { display: grid; gap: 2px; box-sizing: border-box; width: 100%; min-height: 44px; padding: 5px 8px; border: 0; border-radius: var(--segment-item-radius); background: var(--studio-bg); color: var(--studio-text); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.iface-page-links button:hover { background: var(--segment-hover-bg); }
+.iface-page-links button:focus-visible, .iface-panel h4:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
+.iface-page-links small { color: var(--studio-muted); font-size: 11px; }
 .iface-panel-close { position: absolute; top: 6px; right: 6px; }
 .iface-panel-shot { display: block; width: 100%; max-height: 160px; margin-bottom: 8px; border: 1px solid var(--studio-line-soft); border-radius: 6px; object-fit: cover; object-position: top center; }
 .iface-facts { display: grid; gap: 4px; margin: 0 0 8px; font-size: 11px; }
@@ -901,12 +984,81 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .iface-facts dt { color: var(--studio-muted); }
 .iface-facts dd { margin: 0; overflow-wrap: anywhere; }
 .iface-note { margin: 0 0 8px; color: var(--studio-text); font-size: 11px; white-space: pre-wrap; }
-.iface-panel-actions { flex-wrap: wrap; }
+.iface-panel-actions { flex-wrap: wrap; margin-bottom: 8px; }
 .iface-panel-actions .header-button { min-height: 28px; }
 .iface-add-form { display: grid; gap: 10px; padding: 12px 16px; }
 .iface-add-form label { display: grid; gap: 4px; color: var(--studio-muted); font-size: 12px; }
 .iface-add-form input { height: 30px; padding: 0 8px; border: 1px solid var(--studio-line); border-radius: 6px; background: transparent; color: var(--studio-text); font: inherit; }
 .plan-preview-toolbar .iface-back { margin-right: 6px; }
 @container (max-width: 460px) {
-    .iface-panel { top: auto; left: 8px; right: 8px; width: auto; max-height: 55%; }
+    .iface-panel[data-mode="edit"] { left: 8px; right: 8px; width: auto; }
+}
+@container (max-width: 560px) {
+    .erd-body > .iface-panel[data-mode="edit"]:has([data-iface-results]) {
+        grid-row: 1;
+        position: relative;
+        inset: auto;
+        width: auto;
+        max-width: none;
+        max-height: min(420px, 55dvh);
+        margin-bottom: 8px;
+        box-shadow: none;
+    }
+}
+
+/* ---- 2026-11-12 plan-tabs1: Interfaces / Data / Documents ----
+   Same look as the Board/List and Chat/CLI toggle (.development-kanban-view-toggle):
+   32px box, 2px padding, 7px radius, 5px items, 9px text, hover brightens the text,
+   selected = raised background with the orange inset underline. Desktop: the tabs sit
+   in the right-hand group just before the project dots, like Board/List on Kanban. */
+#development-task-header .plan-context-controls .plan-tabs {
+    height: 32px;
+    align-items: stretch;
+    gap: 0;
+    padding: 2px;
+    border: 1px solid var(--studio-line-soft);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, .025);
+}
+#development-task-header .plan-context-controls .plan-tabs button {
+    height: auto;
+    min-height: 0;
+    min-width: 52px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--studio-muted);
+    font: inherit;
+    font-size: 9px;
+    font-weight: 400;
+}
+#development-task-header .plan-context-controls .plan-tabs button:hover {
+    background: transparent;
+    color: var(--studio-text);
+}
+#development-task-header .plan-context-controls .plan-tabs button[aria-pressed="true"] {
+    background: var(--studio-raised-2);
+    color: var(--studio-text);
+    box-shadow: inset 0 -1px 0 var(--studio-accent);
+}
+#development-task-header .plan-context-controls .plan-tabs button + button::before { display: none; }
+#development-task-header .plan-context-controls .plan-tabs button:focus-visible {
+    outline: 2px solid var(--studio-accent);
+    outline-offset: -2px;
+}
+@media (min-width: 901px) {
+    #development-task-header.plan-mode > .header-context {
+        flex: 0 1 auto;
+        margin-left: auto;
+    }
+    /* Only when the tabs are present; while the plan loads the empty slot is hidden and the
+       controls keep their usual right alignment. */
+    #development-task-header.plan-mode:has(> .header-context:not(:empty)) > #board-chrome-unit { margin-left: 0; }
+    #development-task-header.plan-mode .header-context .plan-context-controls { flex: 0 1 auto; }
+}
+@media (max-width: 980px) {
+    #development-task-header .plan-context-controls .plan-tabs { height: 44px; }
+    #development-task-header .plan-context-controls .plan-tabs button { min-width: 48px; }
 }

@@ -63,13 +63,7 @@ def project_oversight_prompt_view(snapshot, *, max_chars=12_000):
                   'total_threads': p.get('total_threads', len(p.get('threads') or []) if isinstance(p.get('threads'), list) else 0),
                   'read_model_omitted_threads': p.get('omitted_threads', 0),
                   'attention_count': p.get('attention_count', 0)} for p in groups]
-    complete_inventory_fits = size({**view, 'projects': inventory}) <= budget
-    if complete_inventory_fits:
-        view['projects'] = inventory
-        view['inventory_omitted_count'] = 0
-    else:
-        # If even the inventory cannot fit, reserve room for the most important
-        # thread evidence and explicitly count the missing project identities.
+    def fill_partial_inventory():
         for item in inventory:
             shortened = len(item['project_name']) > 160
             item = {**item, 'project_name': item['project_name'][:160]}
@@ -78,16 +72,39 @@ def project_oversight_prompt_view(snapshot, *, max_chars=12_000):
                 view['projects'].append(item)
                 view['inventory_omitted_count'] -= 1
                 view['inventory_names_truncated_count'] += int(shortened)
+
+    complete_inventory_fits = size({**view, 'projects': inventory}) <= budget
+    if complete_inventory_fits:
+        view['projects'] = inventory
+        view['inventory_omitted_count'] = 0
+    else:
+        fill_partial_inventory()
     priorities = {'delivery_unconfirmed': 0, 'delivery_blocked': 0, 'delivery_invalid': 0, 'failed': 1, 'needs_input': 1, 'invalid_state': 2, 'stale_observation': 3}
     def attention(row):
         entries = row.get('attention')
         return sorted((item for item in entries if isinstance(item, dict)),
                       key=lambda item: priorities.get(item.get('kind'), 2)) if isinstance(entries, list) else []
-    records.sort(key=lambda pair: (min((priorities.get(a.get('kind'), 2) for a in attention(pair[1])), default=9),
-                                   -len(attention(pair[1])), str(pair[0].get('project_id')), str(pair[1].get('chat_id'))))
-    named_projects = {p['project_id'] for p in view['projects']}
-    for project, thread in records:
-        reasons = attention(thread)
+    ranked = [(project, thread, attention(thread)) for project, thread in records]
+
+    def severity(reasons):
+        return priorities.get(reasons[0].get('kind'), 2) if reasons else 9
+
+    ranked.sort(key=lambda row: (severity(row[2]), -len(row[2]), str(row[0].get('project_id')), str(row[1].get('chat_id'))))
+    project_slots = {}
+
+    def coverage_key(row):
+        key = (severity(row[2]), row[0].get('project_id'))
+        slot = project_slots.get(key, 0)
+        project_slots[key] = slot + 1
+        return key[0], slot
+
+    ranked.sort(key=coverage_key)
+
+    def compact(item):
+        return {key: value for key, value in item.items()
+                if key not in {'scope', 'summary', 'acceptance_tasks', 'tasks_omitted_count'}}
+
+    def detail(project, thread, reasons, named_projects):
         item = {key: thread.get(key) for key in ('chat_id', 'project_id', 'url', 'status', 'status_source', 'observed_at')}
         if thread.get('observation_source') == 'worker_heartbeat':
             item['observation_source'] = 'worker_heartbeat'
@@ -120,17 +137,40 @@ def project_oversight_prompt_view(snapshot, *, max_chars=12_000):
                    or len(str(_mapping(thread.get('telegram_delivery')).get('reason') or '')) > 180
                    or len(tasks) > 4 or any(len(str(task)) > 160 for task in tasks[:4]) or len(reasons) > 4
                    or any(len(str(a.get('question') or '')) > 300 for a in reasons))
-        candidate = {**view, 'attention_threads': [*view['attention_threads'], item]}
-        if size(candidate) > budget - 32:
-            # Keep the highest-priority identity/question when full source
-            # context cannot fit, rather than filling the space with quiet work.
-            item = {key: value for key, value in item.items() if key not in {'scope', 'summary', 'acceptance_tasks', 'tasks_omitted_count'}}
-            clipped = True
-            candidate = {**view, 'attention_threads': [*view['attention_threads'], item]}
-        if size(candidate) <= budget - 32:
-            view['attention_threads'].append(item)
+        return item, clipped
+
+    if ranked and ranked[0][2] and complete_inventory_fits:
+        project, thread, reasons = ranked[0]
+        first, _ = detail(project, thread, reasons, {p['project_id'] for p in view['projects']})
+        if size({**view, 'attention_threads': [compact(first)]}) > budget - 32:
+            # A nearly full inventory must leave room for the finding it summarizes.
+            view['projects'] = []
+            view['inventory_omitted_count'] = len(groups)
+            fill_partial_inventory()
+
+    named_projects = {p['project_id'] for p in view['projects']}
+    def add_details(rows):
+        selected = view['attention_threads']
+        expansions = []
+        for project, thread, reasons in rows:
+            item, clipped = detail(project, thread, reasons, named_projects)
+            selected.append(compact(item))
+            if size(view) > budget - 32:
+                selected.pop()
+                continue
+            expansions.append((len(selected) - 1, item, clipped))
             view['thread_details_omitted_count'] -= 1
+        for index, item, clipped in expansions:
+            condensed = selected[index]
+            selected[index] = item
+            if size(view) > budget - 32:
+                selected[index] = condensed
+                clipped = True
             view['detail_fields_truncated_count'] += int(clipped)
+
+    # Fit attention across projects before adding its full context or quiet work.
+    add_details(row for row in ranked if row[2])
+    add_details(row for row in ranked if not row[2])
     # Defensive final accounting protects the bound if omission counters grow
     # to another digit. The read model is never modified by this renderer.
     while size(view) > budget and view['attention_threads']:
@@ -220,7 +260,7 @@ def _thread(work, chat, project, run, session, session_scope_invalid, heartbeat_
         thread['attention'].append({'kind': 'failed', 'recommendation': 'Inspect failure evidence and the last accepted command before recommending a retry.'})
     elif status in _ACTIVE and age is not None and age > _STALE_AFTER_SECONDS:
         thread['attention'].append({'kind': 'stale_observation', 'recommendation': 'Refresh runtime evidence. An old observation alone does not prove the worker stalled.'})
-    from distr.core.incoming.telegram_updates import valid_delivery_receipt
+    from distr.core.incoming.telegram_updates import ACK_TIMEOUT_SECONDS, valid_delivery_receipt
 
     receipt = params.get('telegram_proposal_update', {})
     if not valid_delivery_receipt(receipt):
@@ -235,9 +275,16 @@ def _thread(work, chat, project, run, session, session_scope_invalid, heartbeat_
     if blocked:
         thread['telegram_delivery'] = {'status': 'blocked', 'reason': clean_user_text(blocked[0])[:600]}
         thread['attention'].append({'kind': 'delivery_blocked', 'recommendation': 'Check the configured Telegram owner and retained delivery reason. Reconcile the original conversation before choosing any retry; do not resend automatically.'})
-    elif any(_mapping(row.get('awaiting')).get('state') == 'unconfirmed' for row in deliveries):
+        return thread
+    attempts = [_mapping(row.get('awaiting')) for row in deliveries]
+    expired = any(attempt.get('state') == 'sending'
+                  and attempt.get('at', 0) < now.timestamp() - ACK_TIMEOUT_SECONDS for attempt in attempts)
+    if expired or any(attempt.get('state') == 'unconfirmed' for attempt in attempts):
         thread['telegram_delivery'] = {'status': 'unconfirmed', 'reason': 'Telegram delivery was not confirmed.'}
-        thread['attention'].append({'kind': 'delivery_unconfirmed', 'recommendation': 'Reconcile the original Telegram conversation before sending the result again.'})
+        recommendation = 'Reconcile the original Telegram conversation before sending the result again.'
+        if expired:
+            recommendation = 'Telegram did not confirm this send in time. ' + recommendation
+        thread['attention'].append({'kind': 'delivery_unconfirmed', 'recommendation': recommendation})
     return thread
 
 
@@ -248,8 +295,10 @@ def build_project_oversight(*, limit=60, now=None):
     from distr.core.db.projects import Project
     from distr.core.db.workflow import DevelopmentWorkItem, AutoWorkflowRun
     from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+    from distr.core.incoming.telegram_updates import ACK_TIMEOUT_SECONDS
 
     now = _stamp(now) or datetime.now(timezone.utc)
+    telegram_cutoff = now.timestamp() - ACK_TIMEOUT_SECONDS
     try:
         limit = max(1, min(int(limit), 200))
     except (TypeError, ValueError, OverflowError):
@@ -329,7 +378,12 @@ def build_project_oversight(*, limit=60, now=None):
                            func.json_type(safe, '$.development.execution.status').notin_(['text', 'null'])),
                       and_(sid.is_not(None), ~valid_sid),
                       session_scope_invalid)
-        unknown = func.json_extract(safe, '$.telegram_proposal_update.pending.awaiting.state') == 'unconfirmed'
+        def delivery_unconfirmed(document, path):
+            state = func.json_extract(document, path + '.awaiting.state')
+            attempted_at = func.coalesce(func.json_extract(document, path + '.awaiting.at'), 0)
+            return or_(state == 'unconfirmed', and_(state == 'sending', attempted_at < telegram_cutoff))
+
+        unknown = delivery_unconfirmed(safe, '$.telegram_proposal_update.pending')
         pending_error_path = '$.telegram_proposal_update.pending.delivery_error'
         blocked = and_(func.json_type(safe, pending_error_path) == 'text',
                        func.trim(func.json_extract(safe, pending_error_path)) != '')
@@ -338,7 +392,7 @@ def build_project_oversight(*, limit=60, now=None):
         backlog_rows = func.json_each(backlog_json).table_valued('value', 'type').alias('delivery_backlog')
         backlog_value = case((func.json_valid(backlog_rows.c.value) == 1, backlog_rows.c.value), else_='{}')
         backlog_attention = select(1).select_from(backlog_rows).where(and_(backlog_rows.c.type == 'object', or_(
-            func.json_extract(backlog_value, '$.awaiting.state') == 'unconfirmed',
+            delivery_unconfirmed(backlog_value, '$'),
             and_(func.json_type(backlog_value, '$.delivery_error') == 'text',
                  func.trim(func.json_extract(backlog_value, '$.delivery_error')) != ''),
         ))).correlate(Chat).exists()

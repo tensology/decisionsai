@@ -264,6 +264,10 @@ export function createWorkflows({ context, actions, el }) {
                 else runManagedWorkflow(workflowId);
             })
         );
+        list.querySelectorAll('[data-workflow-card-action="delete"]').forEach((button) => {
+            const row = context.workflows.find((item) => Number(item.id) === Number(button.dataset.workflowId));
+            if (row?.automation_backed || builtinSlugOf(row)) button.remove();
+        });
         list.querySelectorAll('[data-workflow-card-action]').forEach((button) =>
             button.addEventListener('click', () => {
                 const workflowId = Number(button.dataset.workflowId);
@@ -447,7 +451,7 @@ export function createWorkflows({ context, actions, el }) {
         const memory = state.workflowMemory[String(workflow.id)] || null;
         const viewMode = state.workflowViewMode === 'list' ? 'list' : 'loop';
         detail.innerHTML = `<header class="workflow-editor-header"><nav><button type="button" class="workflow-editor-back" aria-label="Back to workflows"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M12.5 4.5 7 10l5.5 5.5"></path></svg><span>Workflows</span></button><i>/</i><strong>${actions.escapeHtml(workflow.name || 'Workflow')}</strong></nav><div class="workflow-editor-actions"><button type="button" class="workflow-icon-action" data-workflow-duplicate aria-label="Duplicate workflow" data-wf-tip="Duplicate workflow">${workflowEditorIcon('duplicate')}</button><button type="button" class="workflow-icon-action" data-workflow-settings-open aria-label="Workflow settings" data-wf-tip="Workflow settings">${workflowEditorIcon('edit')}</button></div></header>
-            <div class="workflow-editor-scroll"><div class="workflow-builder-layout"><section class="workflow-step-section"><div class="workflow-canvas-meta"><div class="workflow-toolbar-left"><strong class="workflow-toolbar-count">${steps.length} step${steps.length === 1 ? '' : 's'}</strong>${workflowViewSwitchHtml(viewMode)}</div>${viewMode === 'loop' ? workflowStepNumbersSectionHtml(workflow, steps) : ''}<div class="workflow-step-header-actions"><button type="button" class="primary-button workflow-add-step-bar" data-workflow-add-step>Add step</button></div></div><div class="workflow-step-stage" data-view="${viewMode}">${viewMode === 'loop' ? workflowLoopHtml(steps, active, definitionIssue(workflow)) : `<div class="workflow-step-stack">${workflowStepListHtml(steps)}</div>`}</div>${workflowStepDrawerHtml(workflow, steps)}</section></div></div><dialog class="studio-dialog workflow-settings-modal" data-workflow-settings-modal aria-label="Workflow settings"><header class="workflow-settings-modal-header"><strong>Workflow settings</strong><button type="button" class="workflow-icon-action" data-workflow-settings-close aria-label="Close workflow settings" data-wf-tip="Close">${workflowEditorIcon('delete')}</button></header><details class="workflow-advanced-section"><summary><span><strong>Workflow settings</strong><small>Name, objective, and run configuration</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><form class="workflow-settings-form"><div class="workflow-settings-grid"><label>Name<input data-workflow-name value="${actions.escapeHtml(workflow.name || '')}" required></label><label>Project<select data-workflow-project><option value="">Shared workflow</option>${context.projects.map((project) => `<option value="${Number(project.id)}"${Number(project.id) === projectId ? ' selected' : ''}>${actions.escapeHtml(project.name || 'Untitled project')}</option>`).join('')}</select></label></div><label>Description<textarea data-workflow-description rows="3">${actions.escapeHtml(workflow.description || '')}</textarea></label><label>Workflow objective and input<textarea data-workflow-objective rows="4">${actions.escapeHtml(metadata.objective || metadata.instruction || (typeof workflow.workflow_input === 'string' && !Object.keys(metadata).length ? workflow.workflow_input : ''))}</textarea></label><label>Context and memory rules<textarea data-workflow-context rows="4" placeholder="What should every step remember, preserve, and learn?">${actions.escapeHtml(typeof workflow.context_rules === 'string' ? workflow.context_rules : JSON.stringify(workflow.context_rules || '', null, 2).replace(/^"|"$/g, ''))}</textarea></label><details class="workflow-technical-settings"><summary>Advanced run settings</summary><label>Run settings<textarea data-workflow-run-settings rows="6" placeholder='{"max_parallel": 1}'>${actions.escapeHtml(JSON.stringify(workflow.run_settings || {}, null, 2))}</textarea></label></details><div class="workflow-settings-actions"><button type="submit" class="primary-button">Save settings</button><button type="button" class="danger-text-button" data-workflow-delete>Delete workflow</button></div></form></details>
+            <div class="workflow-editor-scroll"><div class="workflow-builder-layout"><section class="workflow-step-section"><div class="workflow-canvas-meta"><div class="workflow-toolbar-left"><strong class="workflow-toolbar-count">${steps.length} step${steps.length === 1 ? '' : 's'}</strong>${workflowViewSwitchHtml(viewMode)}</div>${viewMode === 'loop' ? workflowStepNumbersSectionHtml(workflow, steps) : ''}<div class="workflow-step-header-actions"><button type="button" class="primary-button workflow-add-step-bar" data-workflow-add-step>Add step</button></div></div><div class="workflow-step-stage" data-view="${viewMode}">${viewMode === 'loop' ? workflowLoopHtml(steps, active, definitionIssue(workflow)) : `<div class="workflow-step-stack">${workflowStepListHtml(steps)}</div>`}</div>${workflowStepDrawerHtml(workflow, steps)}</section></div></div><dialog class="studio-dialog workflow-settings-modal" data-workflow-settings-modal aria-label="Workflow settings"><header class="workflow-settings-modal-header"><strong>Workflow settings</strong><button type="button" class="workflow-icon-action" data-workflow-settings-close aria-label="Close workflow settings" data-wf-tip="Close">${workflowEditorIcon('delete')}</button></header><details class="workflow-advanced-section"><summary><span><strong>Workflow settings</strong><small>Name, objective, and run configuration</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><form class="workflow-settings-form"><div class="workflow-settings-grid"><label>Name<input data-workflow-name value="${actions.escapeHtml(workflow.name || '')}" required></label><label>Project<select data-workflow-project><option value="">Shared workflow</option>${context.projects.map((project) => `<option value="${Number(project.id)}"${Number(project.id) === projectId ? ' selected' : ''}>${actions.escapeHtml(project.name || 'Untitled project')}</option>`).join('')}</select></label></div><label>Description<textarea data-workflow-description rows="3">${actions.escapeHtml(workflow.description || '')}</textarea></label><label>Workflow objective and input<textarea data-workflow-objective rows="4">${actions.escapeHtml(metadata.objective || metadata.instruction || (typeof workflow.workflow_input === 'string' && !Object.keys(metadata).length ? workflow.workflow_input : ''))}</textarea></label><label>Context and memory rules<textarea data-workflow-context rows="4" placeholder="What should every step remember, preserve, and learn?">${actions.escapeHtml(typeof workflow.context_rules === 'string' ? workflow.context_rules : JSON.stringify(workflow.context_rules || '', null, 2).replace(/^"|"$/g, ''))}</textarea></label><details class="workflow-technical-settings"><summary>Advanced run settings</summary><label>Run settings<textarea data-workflow-run-settings rows="6" placeholder='{"max_parallel": 1}'>${actions.escapeHtml(JSON.stringify(workflow.run_settings || {}, null, 2))}</textarea></label></details><div class="workflow-settings-actions"><button type="submit" class="primary-button">Save settings</button>${workflow.automation_backed ? '<small class="workflow-automation-note">Managed from Automations</small>' : workflow.builtin_slug ? '<small class="workflow-automation-note">Built-in workflow</small><button type="button" class="secondary-button" data-workflow-reset>Reset to built-in</button>' : '<button type="button" class="danger-text-button" data-workflow-delete>Delete workflow</button>'}</div></form></details>
             <details class="workflow-advanced-section workflow-memory-section"><summary><span><strong>Memory</strong><small>Handoffs and learned context</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><div class="workflow-memory-panel"><button type="button" class="secondary-button" data-workflow-load-memory>${memory ? 'Refresh memory' : 'Load memory'}</button><div class="workflow-memory-content">${memory ? workflowMemoryHtml(memory) : '<p>Load the workflow memory to inspect handoffs, routing, and learned context.</p>'}</div></div></details></dialog>`;
         detail.querySelector('.workflow-editor-back').addEventListener('click', () => {
             state.selectedWorkflowId = '';
@@ -478,7 +482,8 @@ export function createWorkflows({ context, actions, el }) {
         settingsModal.addEventListener('close', () => (state.settingsOpen = false));
         if (state.settingsOpen && !settingsModal.open) settingsModal.showModal();
         detail.querySelector('.workflow-settings-form').addEventListener('submit', (event) => saveWorkflowSettings(event, Number(workflow.id)));
-        detail.querySelector('[data-workflow-delete]').addEventListener('click', () => deleteManagedWorkflow(Number(workflow.id)));
+        detail.querySelector('[data-workflow-delete]')?.addEventListener('click', () => deleteManagedWorkflow(Number(workflow.id)));
+        detail.querySelector('[data-workflow-reset]')?.addEventListener('click', () => resetBuiltinWorkflow(Number(workflow.id)));
         detail.querySelector('[data-workflow-add-step]').addEventListener('click', () => addInlineWorkflowStep(Number(workflow.id)));
         bindInlineStepEditor(detail, Number(workflow.id));
         detail.querySelector('[data-workflow-load-memory]').addEventListener('click', () => loadWorkflowMemory(Number(workflow.id)));
@@ -968,6 +973,36 @@ export function createWorkflows({ context, actions, el }) {
         }
     }
 
+    // Built-in workflows (seeded from bundles) carry workflow_input.builtin_slug; they reset instead of delete.
+    function builtinSlugOf(row) {
+        try {
+            const data = typeof row?.workflow_input === 'string' ? JSON.parse(row.workflow_input || '{}') : row?.workflow_input || {};
+            return data && typeof data === 'object' ? String(data.builtin_slug || '') : '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    async function resetBuiltinWorkflow(workflowId) {
+        const workflow = context.workflows.find((item) => Number(item.id) === Number(workflowId));
+        if (
+            !(await actions.confirmAction({
+                title: 'Reset built-in workflow',
+                message: `Restore “${workflow?.name || 'this workflow'}” to its built-in steps? Step edits are replaced; run history is kept.`,
+                confirmLabel: 'Reset'
+            }))
+        )
+            return;
+        try {
+            await actions.api(`/workflows/${workflowId}`, { method: 'DELETE' });
+            await actions.refreshShell({ preserveConversation: true });
+            await selectWorkflow(workflowId);
+            actions.toast('Built-in workflow restored.');
+        } catch (error) {
+            actions.toast(error.message || 'Could not reset the workflow.', 'error');
+        }
+    }
+
     async function deleteManagedWorkflow(workflowId) {
         const workflow = context.workflows.find((item) => Number(item.id) === Number(workflowId));
         if (
@@ -1036,7 +1071,60 @@ export function createWorkflows({ context, actions, el }) {
         if (!modal) return;
         modal.classList.toggle('hidden', !open);
         el('workflow-add-toggle')?.setAttribute('aria-expanded', open ? 'true' : 'false');
-        if (open) el('workflow-prompt-input')?.focus();
+        if (open) {
+            el('workflow-prompt-input')?.focus();
+            renderWorkflowPresets();
+        }
+    }
+
+    // Built-in presets offered beside the prompt in "+ Add workflow".
+    async function renderWorkflowPresets() {
+        const dialog = el('workflow-add-modal')?.querySelector('.workflow-add-dialog');
+        if (!dialog) return;
+        let host = dialog.querySelector('#workflow-preset-list');
+        if (!host) {
+            host = document.createElement('section');
+            host.id = 'workflow-preset-list';
+            host.className = 'workflow-preset-list';
+            host.setAttribute('aria-label', 'Start from a preset');
+            dialog.append(host);
+        }
+        if (!Array.isArray(state.workflowPresets)) {
+            try {
+                state.workflowPresets = (await actions.api('/workflows/development-presets'))?.presets || [];
+            } catch (error) {
+                host.innerHTML = '';
+                return;
+            }
+        }
+        const esc = actions.escapeHtml;
+        host.innerHTML = state.workflowPresets.length
+            ? `<h3>Or start from a preset</h3><div class="workflow-preset-options">${state.workflowPresets
+                  .map((preset) => `<button type="button" class="secondary-button workflow-preset-option" data-workflow-preset="${esc(preset.slug)}"><strong>${esc(preset.name)}</strong><small>${Number(preset.step_count) || 0} steps${preset.description ? ` \u00b7 ${esc(preset.description)}` : ''}</small></button>`)
+                  .join('')}</div>`
+            : '';
+        host.querySelectorAll('[data-workflow-preset]').forEach((button) =>
+            button.addEventListener('click', () => addWorkflowFromPreset(button.dataset.workflowPreset, button))
+        );
+    }
+
+    async function addWorkflowFromPreset(slug, button) {
+        if (!slug || state.addingWorkflowPreset) return;
+        state.addingWorkflowPreset = true;
+        if (button) button.disabled = true;
+        try {
+            const workflow = await actions.api('/workflows/from-preset', { method: 'POST', body: { slug } });
+            setWorkflowComposerOpen(false);
+            await actions.refreshShell({ preserveConversation: true });
+            state.selectedWorkflowId = String(workflow.id);
+            await selectWorkflow(workflow.id);
+            actions.toast(`Added ${workflow.name || 'workflow'} from preset.`);
+        } catch (error) {
+            actions.toast(error.message || 'Could not add the preset.', 'error');
+        } finally {
+            state.addingWorkflowPreset = false;
+            if (button) button.disabled = false;
+        }
     }
 
     // The composer lives inside the workflow home panel, so drop any open workflow detail first.

@@ -135,6 +135,25 @@ def _app_version_label(project_root: Path) -> str:
     return _APP_VERSION_CACHE
 
 
+# 2026-11-11 pdf-preview: only these attachment preview responses may be framed by the app itself
+# (the in-app PDF preview uses an <iframe>). Every other response stays DENY / frame-ancestors 'none'.
+_SAME_ORIGIN_FRAME_PATHS = frozenset({
+    "/api/workflows/studio/incoming/mail/attachment",
+    "/api/workflows/studio/incoming/proposals/attachment",
+})
+_SAME_ORIGIN_FRAME_FILE_PREFIX = "/api/workflows/studio/incoming/proposals/files/"
+
+
+def _allows_same_origin_framing(path: str) -> bool:
+    """True only for the Incoming attachment preview routes (exact paths, one file-id segment)."""
+    if path in _SAME_ORIGIN_FRAME_PATHS:
+        return True
+    if path.startswith(_SAME_ORIGIN_FRAME_FILE_PREFIX):
+        tail = path[len(_SAME_ORIGIN_FRAME_FILE_PREFIX):]
+        return bool(tail) and "/" not in tail and tail != "ensure"
+    return False
+
+
 def _mount_static(app: FastAPI, url_path: str, directory: Path, name: str):
     """Mount a static directory if it exists (no-op otherwise)."""
     if directory.exists():
@@ -320,8 +339,9 @@ def create_app() -> FastAPI:
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         response = await call_next(request)
+        same_origin_frame = _allows_same_origin_framing(path)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN" if same_origin_frame else "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
@@ -331,7 +351,7 @@ def create_app() -> FastAPI:
             "img-src 'self' data: https: http:; "
             "media-src 'self' blob:; "
             "connect-src 'self' ws: wss:; "
-            "frame-ancestors 'none';"
+            + ("frame-ancestors 'self';" if same_origin_frame else "frame-ancestors 'none';")
         )
         return response
 
@@ -1087,14 +1107,25 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.error("Failed to load Ticket Board routes: %s", e, exc_info=True)
 
-    # Automations
+    def _legacy_automation_destination(request: Request) -> str:
+        """Fold the standalone Automations page into the Development surface."""
+        from urllib.parse import quote
+
+        automation = (request.query_params.get("automation") or "").strip()
+        dest = "/development/automations/"
+        if automation:
+            dest += f"?automation={quote(automation, safe='')}"
+        return dest
+
+    # The standalone Automations page has been folded into Development. Preserve
+    # these routes only as compatibility redirects for old bookmarks and tools.
     @app.get("/automations/", response_class=HTMLResponse)
     async def automations_page(request: Request):
-        return page_templates.TemplateResponse(request, "automations/automations.html", _template_context(request, "/automations"))
+        return RedirectResponse(url=_legacy_automation_destination(request), status_code=302)
 
     @app.get("/automations", response_class=HTMLResponse)
-    async def automations_redirect():
-        return RedirectResponse(url="/automations/", status_code=302)
+    async def automations_redirect(request: Request):
+        return RedirectResponse(url=_legacy_automation_destination(request), status_code=302)
 
     try:
         from distr.gui.web.routes.automations import create_routes as create_automation_routes
@@ -1154,9 +1185,12 @@ def create_app() -> FastAPI:
     async def _cancel_orphaned_workflow_runs():
         try:
             from distr.core.workflow.dispatcher import _cleanup_orphaned_runs_on_startup
+            from distr.core.workflow.interactions import recover_interrupted_checkpoint_decisions
+
             _cleanup_orphaned_runs_on_startup()
+            unconfirmed = recover_interrupted_checkpoint_decisions()
             from distr.core.workflow.dispatcher import _auto_resume_interrupted_runs
-            _auto_resume_interrupted_runs()
+            _auto_resume_interrupted_runs(unconfirmed_checkpoint_steps=unconfirmed)
         except Exception as e:
             logger.warning("Orphaned workflow run cleanup could not run: %s", e)
 

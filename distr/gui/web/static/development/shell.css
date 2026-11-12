@@ -359,6 +359,8 @@ kbd {
 .board-row-action.board-terminal { width: 28px; min-width: 28px; height: 28px; border-radius: 8px; }
 
 .board-row-action.board-terminal svg { width: 14px; height: 14px; }
+.board-row-action.board-kanban svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
+
 
 .board-row-action.board-edit-commands { color: var(--studio-green); }
 

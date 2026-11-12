@@ -1,4 +1,4 @@
-// Per-board view switcher shown inside the shared .task-breadcrumb: Kanban / Plan / last thread.
+// Per-board view switcher shown inside the shared .task-breadcrumb: Kanban / Plan / last thread / terminals.
 // The last thread per board is browser UI state (localStorage), never a server setting.
 
 export const LAST_THREAD_STORE = 'development_board_last_thread';
@@ -44,18 +44,23 @@ export function boardLastThread(storage, boardKey, chats, boardOf) {
 }
 
 // Same 16px stroke icon style as .icon-button; the Plan glyph is the old Kanban-header Plan icon.
+// Terminals uses the same glyph as the board context-menu "Open" terminals item.
 export const VIEW_ICONS = {
     kanban: '<svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3" width="3" height="10" rx=".8"/><rect x="6.5" y="3" width="3" height="7" rx=".8"/><rect x="10.5" y="3" width="3" height="5" rx=".8"/></svg>',
     plan: '<svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.5 4h7M4.5 8h7M4.5 12h4.5"/><path d="M3 4h.5M3 8h.5M3 12h.5"/></svg>',
     thread: '<svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg>',
+    terminals: '<svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M5 7l2 1.5L5 10M8.5 10.5h2.5"/></svg>',
 };
 
-export function boardViewOptions(current, threadId) {
+export function boardViewOptions(current, threadId, options = {}) {
+    const canOpenTerminals = options.canOpenTerminals !== false;
     return [
         { view: 'kanban', label: 'Kanban', active: current === 'kanban', disabled: false, title: 'Kanban' },
-        { view: 'plan', label: 'Plan', active: current === 'plan', disabled: false, title: 'Plan' },
+        { view: 'plan', label: 'Plan', active: current === 'plan', disabled: false, title: 'Planning' },
         { view: 'thread', label: 'Last thread', active: current === 'thread', disabled: !threadId,
-          title: threadId ? 'Last thread' : 'No threads on this board yet' },
+          title: threadId ? 'Thread' : 'No threads on this board yet' },
+        { view: 'terminals', label: 'Terminals', active: current === 'terminals', disabled: !canOpenTerminals,
+          title: canOpenTerminals ? 'Terminal' : 'Add a project folder to this board first' },
     ];
 }
 
@@ -68,6 +73,8 @@ export function boardViewSwitchHtml(options) {
 // Terminals stay on terminals. CLI priority applies only while a thread is open,
 // so Kanban and Plan keep that section. Otherwise the current section, or the
 // section last viewed on the clicked board.
+// pickingNewThread: New Thread in the sidebar is waiting for a project; that
+// click starts a scoped draft instead of falling through to Kanban.
 export function projectClickTarget({
     workspaceMode = '',
     planBoardView = false,
@@ -77,8 +84,10 @@ export function projectClickTarget({
     boardSupportsKanban = false,
     boardHasPlanProject = false,
     lastSection = '',
-    lastThreadId = 0
+    lastThreadId = 0,
+    pickingNewThread = false
 } = {}) {
+    if (pickingNewThread) return { action: 'draft' };
     const current = workspaceMode === 'kanban'
         ? 'kanban'
         : workspaceMode === 'plan' && planBoardView

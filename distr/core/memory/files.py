@@ -272,6 +272,54 @@ def _last_sections(text: str, max_sections: int) -> str:
     return SECTION_JOIN.join(tail)
 
 
+STANDING_MAX_SECTIONS: Final = 6
+STANDING_MAX_BYTES: Final = 2 * 1024
+_STANDING_RE = re.compile(
+    r"\b(ignore|don'?t worry about|do not worry about|set (?:it |them |that )?aside|stop following|not a priority|"
+    r"never (?:message|reply|contact)|always|from now on|standing instruction|focus on)\b", re.I)
+
+
+def _standing_instructions(mem_raw: str, recent: str) -> str:
+    """Standing instructions that must not age out of context (Initiative audit, 12 Nov 2026).
+
+    MEMORY.md context keeps only the last few sections, so "don't worry about that client"
+    vanished after five newer notes. Older sections that read like a standing instruction are
+    kept, plus the durable Initiative attention store (ignored clients/projects, focus).
+    """
+    lines: list[str] = []
+    try:
+        from distr.core.initiative.attention import load as _load_attention
+
+        data = _load_attention()
+        clients = [c.get("label") for c in (data.get("clients") or {}).values() if c.get("label")]
+        projects = [p.get("name") for p in (data.get("projects") or {}).values() if p.get("name")]
+        focus = [f.get("subject") for f in (data.get("focus") or {}).values() if f.get("subject")]
+        if clients:
+            lines.append("Clients I was asked not to worry about (no proactive work or automatic replies; still flag "
+                         "them if they are waiting): " + ", ".join(clients))
+        if projects:
+            lines.append("Projects set aside (same rule): " + ", ".join(projects))
+        if focus:
+            lines.append("Focus on: " + ", ".join(focus))
+    except Exception:
+        logger.debug("attention store unavailable for memory context", exc_info=True)
+    older: list[str] = []
+    s = (mem_raw or "").strip()
+    if s:
+        parts = SECTION_SPLIT_RE.split(s)
+        recent_set = {p.strip() for p in SECTION_SPLIT_RE.split((recent or "").strip())}
+        for part in parts[:-CTX_MEMORY_MAX_SECTIONS] if len(parts) > CTX_MEMORY_MAX_SECTIONS else []:
+            if part.strip() and part.strip() not in recent_set and _STANDING_RE.search(part):
+                older.append(part.strip())
+        older = older[-STANDING_MAX_SECTIONS:]
+    if not lines and not older:
+        return ""
+    block = "## Standing instructions (kept in context)\n" + "\n".join(f"- {line}" for line in lines)
+    if older:
+        block += ("\n" if lines else "") + SECTION_JOIN.join(older)
+    return block.encode("utf-8")[:STANDING_MAX_BYTES].decode("utf-8", "ignore").strip()
+
+
 def load_context_snippets_for_llm(*, root: Path | None = None) -> dict[str, str]:
     """
     Trimmed snippets for initiative / supplemental context (not full files).
@@ -291,16 +339,25 @@ def load_context_snippets_for_llm(*, root: Path | None = None) -> dict[str, str]
     mem_raw = _read_utf8(paths["memory"])
     mem = _last_sections(mem_raw, CTX_MEMORY_MAX_SECTIONS)
     mem = prune_suffix_bytes(mem, CTX_MEMORY_MAX_BYTES)
+    standing = _standing_instructions(mem_raw, mem)
+    # Standing instructions sit in front and are never pruned away; the rest shares what is left.
+    body_budget = max(CTX_MEMORY_MAX_BYTES - len(standing.encode("utf-8")) - len(SECTION_JOIN), 1024)
 
-    out = {"agent": agent.strip(), "user": user.strip(), "memory": mem.strip()}
+    def _with_standing(body: str) -> str:
+        body = prune_suffix_bytes(body.strip(), body_budget) if standing else body.strip()
+        if not standing:
+            return body
+        return (standing + SECTION_JOIN + body) if body else standing
+
+    out = {"agent": agent.strip(), "user": user.strip(), "memory": _with_standing(mem).strip()}
     # When mempalace_memory_backend is ON, prepend semantic recall (legacy files stay).
     try:
         from distr.core.mempalace.wiring import prefer_read_markdown_context
 
         mp = prefer_read_markdown_context("agent user preferences long-term memory")
         if mp:
-            merged = (out["memory"] + "\n\n" + mp).strip() if out["memory"] else mp
-            out["memory"] = prune_suffix_bytes(merged, CTX_MEMORY_MAX_BYTES)
+            merged = (mem.strip() + "\n\n" + mp).strip() if mem.strip() else mp
+            out["memory"] = _with_standing(prune_suffix_bytes(merged, CTX_MEMORY_MAX_BYTES)).strip()
     except Exception:
         logger.debug("mempalace prefer-read markdown skipped", exc_info=True)
     return out

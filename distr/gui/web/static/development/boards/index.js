@@ -14,7 +14,9 @@ export function createBoards({ context, actions, el }) {
         noteJson: null,
         noteMode: 'text',
         runningTicketActions: new Set(),
-        workflowDraftRequest: null
+        workflowDraftRequest: null,
+        ticketThreadRequest: null,
+        planSourceRequest: null
     };
     function kanbanLanes() {
         return context.boardDetails[context.selectedBoardKey]?.lanes || [];
@@ -647,7 +649,7 @@ export function createBoards({ context, actions, el }) {
             if (result.status !== 'launched' || !Number.isSafeInteger(chatId) || chatId < 1) return false;
             const label = result.run_status === 'running' && result.phase === 'initializing'
                 ? 'Starting' : actions.statusLabel(result.run_status || 'running');
-            status.textContent = `Workflow run #${result.run_id} · ${label}`;
+            status.textContent = result.warning || `Workflow run #${result.run_id} · ${label}`;
             steps.replaceChildren();
             thread.href = `/development/threads/${chatId}/`;
             thread.classList.remove('hidden');
@@ -660,18 +662,29 @@ export function createBoards({ context, actions, el }) {
             if (result.status === 'awaiting_review') {
                 const draft = result.draft;
                 status.textContent = `Awaiting review for ${result.project_name}.`;
-                steps.innerHTML = `<p>${actions.escapeHtml(draft.reason)}</p><ol>${draft.steps.map(
-                    step => `<li>${actions.escapeHtml(step.instruction)}</li>`
-                ).join('')}</ol><p>Record the check and result for each step.</p>`;
+                const assigned = Boolean(draft.workflow_id);
+                const name = assigned ? `<strong>${actions.escapeHtml(draft.name)}</strong>` : '';
+                const evidence = assigned ? '' : '<p>Record the check and result for each step.</p>';
+                steps.innerHTML = `${name}<p>${actions.escapeHtml(draft.reason)}</p><ol>${draft.steps.map(
+                    (step, index) => {
+                        const start = assigned && index === draft.start_step_position && index > 0 ? ' (Starts here)' : '';
+                        const detail = step.detail && step.detail !== step.instruction
+                            ? `<p>${actions.escapeHtml(step.detail)}</p>` : '';
+                        return `<li>${actions.escapeHtml(step.instruction)}${start}${detail}</li>`;
+                    }
+                ).join('')}</ol>${evidence}`;
                 if (draft.omitted_steps > 0) {
                     const remaining = document.createElement('p');
                     remaining.textContent = `${draft.omitted_steps} additional checklist items are outside this draft.`;
                     steps.append(remaining);
                 } else if (result.candidate_id && draft.checklist_revision) {
+                    approve.disabled = false;
+                    approve.textContent = 'Approve and launch';
                     approve.classList.remove('hidden');
                     approve.onclick = async () => {
-                        if (!stillSelected() || approve.classList.contains('hidden')) return;
-                        approve.classList.add('hidden');
+                        if (!stillSelected() || approve.disabled || approve.classList.contains('hidden')) return;
+                        approve.disabled = true;
+                        approve.textContent = 'Launching…';
                         retry.setAttribute('aria-disabled', 'true');
                         status.textContent = 'Launching approved workflow…';
                         try {
@@ -686,7 +699,10 @@ export function createBoards({ context, actions, el }) {
                                     ? error.message : 'Launch could not be confirmed. Refresh the draft to check its status.';
                             }
                         } finally {
-                            if (stillSelected()) retry.removeAttribute('aria-disabled');
+                            if (stillSelected()) {
+                                approve.classList.add('hidden');
+                                retry.removeAttribute('aria-disabled');
+                            }
                         }
                     };
                 }
@@ -694,6 +710,8 @@ export function createBoards({ context, actions, el }) {
                 status.textContent = 'A workflow was approved, but its run could not be confirmed.';
             } else if (result.status === 'stale') {
                 status.textContent = 'This draft is out of date. Ask the orchestrator to scan this board again.';
+            } else if (result.status === 'blocked') {
+                status.textContent = result.error;
             } else if (result.status === 'unavailable') {
                 status.textContent = 'Link this ticket to an active project to review a workflow draft.';
             } else {
@@ -709,6 +727,56 @@ export function createBoards({ context, actions, el }) {
         }
     }
 
+    async function showTicketPlanSources(board, ticket) {
+        const panel = el('kanban-ticket-plan-sources');
+        const status = panel.querySelector('[role="status"]');
+        const list = panel.querySelector('ul');
+        const link = panel.querySelector('a');
+        const request = {};
+        state.planSourceRequest = request;
+        panel.hidden = board.provider !== 'decisions' || ticket?.raw?.source_provider !== 'plan'
+            || !/^plan:[1-9][0-9]*:task:.+$/.test(ticket.raw.source_external_id || '');
+        if (panel.hidden) return;
+        status.textContent = 'Checking Plan revisions…';
+        list.replaceChildren();
+        list.hidden = true;
+        link.hidden = true;
+        const selected = () => el('kanban-ticket-dialog').open
+            && state.planSourceRequest === request && context.selectedBoardKey === board.key;
+        try {
+            const detail = await actions.api(`/tickets/tickets/${ticket.ticket_id}`);
+            if (!selected()) return;
+            const sources = detail.plan_sources;
+            if (Number(detail.id) !== Number(ticket.ticket_id) || Number(detail.board_id) !== Number(board.id)
+                || !sources || !['current', 'changed'].includes(sources.status)) {
+                status.textContent = 'The saved Plan revisions could not be verified.';
+                return;
+            }
+            status.textContent = sources.status === 'changed'
+                ? 'Plan sources changed since this ticket was built.'
+                : 'This ticket uses the current saved Plan revisions.';
+            for (const source of sources.changes.slice(0, 5)) {
+                const row = document.createElement('li');
+                row.textContent = source.current_revision === null
+                    ? `Source item #${source.item_id} is unavailable (built from revision ${source.built_revision}).`
+                    : `${source.title}: revision ${source.built_revision} to ${source.current_revision}`;
+                list.append(row);
+            }
+            if (sources.changes.length > 5) {
+                const row = document.createElement('li');
+                row.textContent = `${sources.changes.length - 5} more changed sources`;
+                list.append(row);
+            }
+            list.hidden = !list.children.length;
+            if (sources.status === 'changed') {
+                link.href = `/development/boards/decisions/${Number(board.id)}/plan/`;
+                link.hidden = false;
+            }
+        } catch (_) {
+            if (selected()) status.textContent = 'Could not check Plan revisions. Reopen this ticket to try again.';
+        }
+    }
+
     function openKanbanTicketDialog(ticketKey, laneId) {
         const board = actions.boardByKey(context.selectedBoardKey);
         if (!board) return;
@@ -720,6 +788,7 @@ export function createBoards({ context, actions, el }) {
         const form = el('kanban-ticket-form');
         form.dataset.ticketKey = ticket?.key || '';
         form.dataset.creating = String(creating);
+        state.ticketThreadRequest = null;
         el('kanban-ticket-action-status').textContent = '';
         el('kanban-ticket-action-status').classList.add('hidden');
         el('kanban-ticket-run-agent').disabled = state.runningTicketActions.has(`${context.selectedBoardKey}:${ticket?.ticket_id}`);
@@ -778,6 +847,7 @@ export function createBoards({ context, actions, el }) {
         const detail = context.boardDetails[board.key] || {};
         el('kanban-ticket-run-agent').classList.toggle('hidden', !localExisting || !(raw.linked_project_id || detail.default_project_id || board.project_id));
         el('kanban-ticket-dialog').showModal();
+        void showTicketPlanSources(board, ticket);
         if (!externalExisting || externalEditable) window.setTimeout(() => el('kanban-ticket-title').focus(), 0);
     }
 
@@ -1037,28 +1107,57 @@ export function createBoards({ context, actions, el }) {
         const ticket = kanbanTicketByKey(el('kanban-ticket-form').dataset.ticketKey);
         const boardKey = context.selectedBoardKey;
         const board = actions.boardByKey(boardKey);
-        if (!ticket) return;
-        if (ticket.source_chat_id && context.chats.some((chat) => Number(chat.id) === Number(ticket.source_chat_id))) {
+        if (!ticket || !board || state.ticketThreadRequest) return;
+        if (board.provider !== 'decisions' && ticket.source_chat_id
+                && context.chats.some((chat) => Number(chat.id) === Number(ticket.source_chat_id))) {
             el('kanban-ticket-dialog').close();
             await actions.loadChat(Number(ticket.source_chat_id));
             return;
         }
         const button = el('kanban-ticket-create-thread');
+        const dialog = el('kanban-ticket-dialog');
+        const request = {};
+        state.ticketThreadRequest = request;
+        const stillSelected = () => state.ticketThreadRequest === request && dialog.open
+            && context.selectedBoardKey === boardKey && el('kanban-ticket-form').dataset.ticketKey === ticket.key;
+        const report = el('kanban-ticket-action-status');
+        report.textContent = '';
+        report.classList.add('hidden');
+        report.classList.remove('error');
+        report.setAttribute('role', 'status');
         button.disabled = true;
-        button.textContent = 'Preparing...';
+        button.textContent = ticket.source_chat_id && board.provider === 'decisions' ? 'Checking thread…' : 'Preparing...';
         try {
+            if (board.provider === 'decisions') {
+                const expected = ticket.source_chat_id ? `?expected_chat_id=${Number(ticket.source_chat_id)}` : '';
+                const boardId = Number(board.local_id || board.id);
+                const thread = await actions.api(`/tickets/boards/${boardId}/tickets/${Number(ticket.id)}/development-thread${expected}`);
+                if (!stillSelected()) return;
+                if (Number.isSafeInteger(thread?.chat_id) && thread.chat_id > 0
+                        && (!expected || thread.chat_id === Number(ticket.source_chat_id))) {
+                    dialog.close();
+                    await actions.loadChat(thread.chat_id);
+                    return;
+                }
+                if (expected || thread?.chat_id !== null) throw new Error('The ticket’s thread link could not be confirmed.');
+            }
+            const local = board.provider === 'decisions';
+            const projectId = local
+                ? ticket.raw?.linked_project_id ?? context.boardDetails[boardKey]?.default_project_id ?? board.project_id
+                : board.project_id;
             const draft = await actions.api('/tickets/thread-draft', {
                 method: 'POST',
                 body: {
                     provider: board.provider,
                     board_id: String(board.external_id || board.local_id || board.id),
                     ticket_id: String(ticket.id),
-                    project_id: board.project_id || undefined
+                    project_id: projectId || undefined
                 }
             });
+            if (!stillSelected()) return;
             context.attachments = [];
-            el('kanban-ticket-dialog').close();
-            actions.startBoardDevelopment(boardKey);
+            dialog.close();
+            actions.startBoardDevelopment(boardKey, local ? { projectId: draft.project_id } : undefined);
             context.attachments.unshift({
                 ...ticket,
                 label: ticket.ticket_title,
@@ -1087,9 +1186,19 @@ export function createBoards({ context, actions, el }) {
             el('task-prompt').focus();
             if ((draft.warnings || []).length) actions.toast(draft.warnings[0], 'error');
         } catch (error) {
-            button.disabled = false;
-            button.textContent = kanbanThreadActionLabel(ticket);
-            actions.toast(error.message || 'Could not prepare the ticket thread.', 'error');
+            if (stillSelected()) {
+                report.textContent = error.message || 'Could not prepare the ticket thread.';
+                report.setAttribute('role', 'alert');
+                report.classList.remove('hidden');
+                report.classList.add('error');
+            }
+        } finally {
+            if (stillSelected()) {
+                button.disabled = false;
+                button.textContent = kanbanThreadActionLabel(ticket);
+                button.focus({ preventScroll: true });
+            }
+            if (state.ticketThreadRequest === request) state.ticketThreadRequest = null;
         }
     }
 

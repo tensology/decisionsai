@@ -16,7 +16,8 @@ from distr.core.tensology_client import TensologyApiError, configured_tensology_
 
 class TensologyWorkspaceInput(BaseModel):
     action: Literal[
-        "capabilities", "list_mail", "read_mail", "read_latest_mail", "list_drafts", "save_draft", "send_mail",
+        "capabilities", "list_mail", "read_mail", "read_latest_mail", "download_mail_attachment",
+        "list_drafts", "save_draft", "send_mail",
         "list_customers", "list_projects", "sync_project", "list_time_entries",
         "create_time_entry", "update_time_entry", "list_invoices", "get_invoice",
         "create_invoice", "update_invoice",
@@ -41,7 +42,9 @@ class TensologyWorkspaceTool(BaseTool):
         "active project is linked to Tensology. Reading and drafting are safe. Never send mail unless the user "
         "explicitly instructed sending the exact content or approved a recipient, subject, and body preview; "
         "otherwise save a draft and ask. Use read_latest_mail for the complete body of the newest matching message; "
-        "set params.include_thread=true when the user asks for the complete conversation thread."
+        "set params.include_thread=true when the user asks for the complete conversation thread. "
+        "Use download_mail_attachment to save a Mailshot attachment locally (params: message_id, attachment_id, "
+        "optional filename and destination_dir; default is ~/Downloads)."
     )
     args_schema: type[BaseModel] = TensologyWorkspaceInput
 
@@ -56,6 +59,9 @@ class TensologyWorkspaceTool(BaseTool):
         "draft_email": "save_draft",
         "create_draft": "save_draft",
         "send_email": "send_mail",
+        "download_attachment": "download_mail_attachment",
+        "download_email_attachment": "download_mail_attachment",
+        "download_mailshot_attachment": "download_mail_attachment",
     }
 
     @classmethod
@@ -105,6 +111,27 @@ class TensologyWorkspaceTool(BaseTool):
                         raise ValueError("Latest mail summary did not include a message ID.")
                     query = {"include_thread": "true"} if include_thread else None
                     result = client.get(f"mail/messages/{message_id}", query)
+            elif action == "download_mail_attachment":
+                from distr.core.incoming.mailshot_media import fetch_mailshot_attachment_bytes
+
+                message_id = str(params.get("message_id") or "").strip()
+                attachment_id = str(params.get("attachment_id") or "").strip()
+                filename_hint = str(params.get("filename") or params.get("name") or "").strip()
+                dest = Path(str(params.get("destination_dir") or Path.home() / "Downloads")).expanduser()
+                dest.mkdir(parents=True, exist_ok=True)
+                data, mime, filename = fetch_mailshot_attachment_bytes(
+                    message_id, attachment_id, filename_hint=filename_hint,
+                )
+                target = dest / Path(filename or filename_hint or "attachment").name
+                target.write_bytes(data)
+                result = {
+                    "path": str(target),
+                    "filename": target.name,
+                    "mime_type": mime,
+                    "size": len(data),
+                    "message_id": message_id,
+                    "attachment_id": attachment_id,
+                }
             elif action == "list_drafts":
                 result = client.get("mail/drafts", params)
             elif action == "save_draft":

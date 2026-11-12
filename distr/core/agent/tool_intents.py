@@ -17,6 +17,16 @@ except Exception:  # pragma: no cover - routing should never fail on import nois
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "initiative_attention",
+        (
+            r"\b(ignore|stop\s+worrying\s+about|don'?t\s+worry\s+about|set\s+aside|forget\s+about|park)\b.{0,40}\b(client|customer|project|sender|contact)\b",
+            r"\b(client|customer|project)\b.{0,40}\b(ignore|set\s+aside|on\s+hold|not\s+a\s+priority)\b",
+            r"\blink\b.{0,40}\b(e-?mail|address|inbox|account|mailbox)\b.{0,40}\bproject\b",
+            r"\b(e-?mail|address|inbox|account|mailbox)\b.{0,40}\b(to|with)\b.{0,20}\bproject\b.{0,10}\blink",
+            r"\b(who|which\s+clients?)\b.{0,30}\b(waiting|set\s+aside|ignored)\b",
+        ),
+    ),
+    (
         "whatsapp_toolkit",
         (
             r"\b(whats\s*app|whatsapp)\b.*\b(messages?|chat|thread|contact|screenshots?|photos?|media|read|search|find|ingest|analy[sz]e|draft|reply|send|status|stories)\b",

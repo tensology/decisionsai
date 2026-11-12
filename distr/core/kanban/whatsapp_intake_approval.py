@@ -410,6 +410,25 @@ def _parse_added(row: dict[str, Any]) -> list[str]:
 def notify_telegram_approval(pending: dict[str, Any]) -> bool:
     """Send the yes/no/add card to the operator's Telegram DM."""
     try:
+        # Quiet: stays in Incoming. Standard: humanized Accept/Decline card.
+        # Own outcomes: auto-accepted and run end to end (audited).
+        from distr.core.initiative.outcome_flow import on_intake_staged
+
+        routed = on_intake_staged(pending)
+        if routed is not None:
+            return bool(routed)
+    except Exception:
+        logger.warning("Posture-aware intake routing failed; using the standard card", exc_info=True)
+    try:
+        from distr.core.utils import load_settings_from_db
+
+        if not bool((load_settings_from_db() or {}).get("initiative_allow_telegram", False)):
+            logger.info("Linked intake approval staged; Telegram card not sent (Telegram conversations is off)")
+            return False
+    except Exception:
+        logger.debug("Could not read Telegram conversations toggle; not sending intake card", exc_info=True)
+        return False
+    try:
         from distr.core.kanban.ticket_workflow_engagement import _telegram_manager_from_app
 
         manager = _telegram_manager_from_app()

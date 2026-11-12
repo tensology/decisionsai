@@ -8,6 +8,25 @@ import logging
 
 from .review_document import development_review_document
 
+
+def _inline_content_disposition(name: str) -> str:
+    """Inline disposition with an ASCII fallback plus RFC 5987 filename* for non-ASCII names."""
+    from urllib.parse import quote
+
+    clean = "".join(ch for ch in str(name or "") if ch >= " " and ch not in '"\\\x7f') or "attachment"
+    fallback = clean.encode("ascii", "ignore").decode("ascii").strip() or "attachment"
+    if fallback == clean:
+        return f'inline; filename="{clean}"'
+    return f"inline; filename=\"{fallback}\"; filename*=UTF-8''{quote(clean, safe='')}"
+
+
+def _preview_filename(resolved_name: str, filename_hint: str) -> str:
+    """Provider name unless it is the generic default; then the link's filename (basename only)."""
+    resolved = str(resolved_name or "").strip()
+    if resolved.lower() in {"", "attachment"}:
+        resolved = str(filename_hint or "").strip()
+    return Path(resolved or "attachment").name.replace('"', "") or "attachment"
+
 logger = logging.getLogger(__name__)
 PROPOSAL_READ_TIMEOUT_SECONDS = 60
 
@@ -80,12 +99,13 @@ def register_routes(router, templates):
         Cached in-process; pass refresh=1 (Resync) to rebuild from Tensology/local sources.
         """
         try:
-            from distr.core.incoming.proposals import list_incoming_proposals, proposal_review_key
+            from distr.core.incoming.proposals import incoming_merge_recovery, list_incoming_proposals, proposal_review_key
             from distr.core.incoming.source_context import scope_whatsapp_proposal
 
             payload = await asyncio.to_thread(
                 list_incoming_proposals, limit=limit, force=bool(refresh),
             )
+            payload = await asyncio.to_thread(incoming_merge_recovery, payload)
             return JSONResponse({
                 **payload,
                 "proposals": [{**scope_whatsapp_proposal(row), "review_key": proposal_review_key(row)}
@@ -337,6 +357,7 @@ def register_routes(router, templates):
                         message_id,
                         attachment_id,
                         content_id=content_id,
+                        filename_hint=filename_hint,
                     )
                     if not result:
                         raise FileNotFoundError("Attachment could not be loaded.")
@@ -344,13 +365,13 @@ def register_routes(router, templates):
 
                 data, mime, resolved_name = await asyncio.to_thread(_run_gmail)
             media_type = (mime or "application/octet-stream").split(";", 1)[0].strip() or "application/octet-stream"
-            safe_name = Path(resolved_name or filename_hint or "attachment").name.replace('"', "")
+            safe_name = _preview_filename(resolved_name, filename_hint)
             return Response(
                 content=data,
                 media_type=media_type,
                 headers={
                     "Cache-Control": "private, max-age=600",
-                    "Content-Disposition": f'inline; filename="{safe_name}"',
+                    "Content-Disposition": _inline_content_disposition(safe_name),
                 },
             )
         except FileNotFoundError as e:
@@ -366,7 +387,7 @@ def register_routes(router, templates):
             body = await request.json()
             if not isinstance(body, dict) or not isinstance(body.get('proposal_id'), str) or not isinstance(body.get('message_ids'), list):
                 raise ValueError('A proposal and exact source messages are required.')
-            from distr.core.incoming.proposals import list_incoming_proposals, proposal_review_key
+            from distr.core.incoming.proposals import list_incoming_proposals, proposal_review_key, require_same_proposal_review
             from distr.core.incoming.proposal_sync import update_proposal
             listing = await asyncio.to_thread(list_incoming_proposals, refresh_local=False)
             proposal = next((row for row in listing['proposals'] if row['id'] == body['proposal_id']), None)
@@ -374,7 +395,12 @@ def register_routes(router, templates):
                 return JSONResponse({'error': 'The proposal is no longer available. Refresh Incoming.'}, status_code=404)
             if sorted(map(str, body['message_ids'])) != sorted(map(str, proposal.get('message_ids') or [])):
                 return JSONResponse({'error': 'The source snapshot changed. Reload Incoming.'}, status_code=409)
-            changes = {key: value for key, value in body.items() if key not in {'proposal_id', 'message_ids', 'expected_updated_at'}}
+            if 'reviewed_proposal' in body:
+                if not isinstance(body['reviewed_proposal'], dict):
+                    raise ValueError('Reopen the proposal before editing.')
+                require_same_proposal_review(body['reviewed_proposal'], proposal)
+            changes = {key: value for key, value in body.items()
+                       if key not in {'proposal_id', 'message_ids', 'expected_updated_at', 'reviewed_proposal'}}
             updated = await asyncio.to_thread(update_proposal, proposal, changes, expected_updated_at=body.get('expected_updated_at'))
             return JSONResponse({'success': True, 'proposal': {**updated, 'review_key': proposal_review_key(updated)}})
         except ValueError as exc:
@@ -394,7 +420,10 @@ def register_routes(router, templates):
                 or type(body.get('project_id')) is not int
                 or not isinstance(body.get('message_ids'), list)):
             return JSONResponse({'error': 'A proposal and project are required.'}, status_code=422)
-        from distr.core.incoming.proposals import list_incoming_proposals, proposal_review_key, reassign_proposal_project
+        from distr.core.incoming.proposals import (
+            ProposalReviewChanged, list_incoming_proposals, proposal_review_key,
+            reassign_proposal_project, require_same_proposal_review,
+        )
 
         listing = await asyncio.to_thread(list_incoming_proposals, refresh_local=False)
         proposal = next((row for row in listing['proposals'] if row['id'] == body['proposal_id']), None)
@@ -405,34 +434,88 @@ def register_routes(router, templates):
         if sorted(str(v) for v in body['message_ids']) != sorted(str(v) for v in proposal.get('message_ids', [])):
             return JSONResponse({'error': 'The proposal has changed. Refresh Incoming before changing its project.'}, status_code=409)
         try:
+            if 'reviewed_proposal' in body:
+                if not isinstance(body['reviewed_proposal'], dict):
+                    return JSONResponse({'error': 'Reopen the proposal before editing.'}, status_code=422)
+                require_same_proposal_review(body['reviewed_proposal'], proposal)
             updated = await asyncio.to_thread(reassign_proposal_project, proposal, body['project_id'])
+        except ProposalReviewChanged as exc:
+            return JSONResponse({'error': str(exc)}, status_code=409)
         except ValueError as exc:
             return JSONResponse({'error': str(exc)}, status_code=422)
         return JSONResponse({'success': True, 'proposal': {**updated, 'review_key': proposal_review_key(updated)}})
 
 
+    @router.post("/workflows/studio/incoming/proposals/merge/{chat_id}/resume")
+    async def workflow_studio_resume_proposal_merge(chat_id: int, request: Request):
+        from distr.core.incoming.proposals import proposal_review_key, resume_proposal_merge
+
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        merge_key = body.get("merge_key") if isinstance(body, dict) else None
+        if not isinstance(merge_key, str) or not re.fullmatch(r"merge:[a-f0-9]{64}", merge_key):
+            return JSONResponse({"error": "The saved merge reference is invalid."}, status_code=422)
+        try:
+            result = await asyncio.to_thread(resume_proposal_merge, chat_id, merge_key)
+        except LookupError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except Exception:
+            logger.warning("Could not resume Incoming merge %s", chat_id, exc_info=True)
+            return JSONResponse({"error": "The merge could not resume. Try again."}, status_code=503)
+        return JSONResponse({"success": True, "chat_id": result["chat_id"],
+                             "review_key": proposal_review_key(result["merged"]),
+                             "failed_attachments": result.get("failed_attachments", [])})
+
     @router.post("/workflows/studio/incoming/proposals/merge")
     async def workflow_studio_proposal_merge(request: Request):
         """Rebuild two same-project proposals into one ticket (AI merge)."""
+        from distr.core.incoming.proposals import (
+            merge_proposals, merge_retry_reference, proposal_review_key, resume_mixed_proposal_merge,
+            retry_upstream_proposal_merge,
+        )
+
         try:
             body = await request.json()
         except Exception:
             body = {}
         first = (body or {}).get("first") if isinstance(body, dict) else None
         second = (body or {}).get("second") if isinstance(body, dict) else None
-        if not (isinstance(first, dict) and isinstance(second, dict)):
+        retry = merge_retry_reference(body.get("retry")) if isinstance(body, dict) else None
+        local_recovery = body.get("local_recovery") if isinstance(body, dict) else None
+        if isinstance(body, dict) and "retry" in body and not retry:
+            return JSONResponse({"success": False, "error": "The saved merge reference is invalid."}, status_code=422)
+        if isinstance(body, dict) and "local_recovery" in body and (
+                not isinstance(local_recovery, str) or not re.fullmatch(r"merge:[a-f0-9]{64}", local_recovery) or retry):
+            return JSONResponse({"success": False, "error": "The saved merge reference is invalid."}, status_code=422)
+        if not (retry or local_recovery) and not (isinstance(first, dict) and isinstance(second, dict)):
             return JSONResponse({"success": False, "error": "Two proposals are required."}, status_code=422)
-        if not first.get("project_id") or str(first.get("project_id")) != str(second.get("project_id")):
+        if not (retry or local_recovery) and (not first.get("project_id") or str(first.get("project_id")) != str(second.get("project_id"))):
             return JSONResponse(
                 {"success": False, "error": "Only proposals on the same project can be merged."},
                 status_code=422,
             )
         try:
-            from distr.core.incoming.proposals import merge_proposals
-
+            if retry or local_recovery:
+                result = (await asyncio.to_thread(resume_mixed_proposal_merge, local_recovery) if local_recovery
+                          else await asyncio.to_thread(retry_upstream_proposal_merge, retry))
+                return JSONResponse({"success": True, "chat_id": result["chat_id"],
+                                     "review_key": proposal_review_key(result["merged"]),
+                                     "failed_attachments": result.get("failed_attachments", [])})
             result = await asyncio.to_thread(merge_proposals, first, second)
             return JSONResponse({"success": True, **result})
+        except LookupError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=409)
         except Exception as e:
+            from distr.core.tensology_client import TensologyApiError
+
+            if isinstance(e, TensologyApiError) and e.status == 409:
+                return JSONResponse({"success": False, "error": str(e)}, status_code=409)
             logger.error("Proposal merge failed: %s", e, exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -447,8 +530,12 @@ def register_routes(router, templates):
         proposal = (body or {}).get("proposal") if isinstance(body, dict) else None
         if not isinstance(proposal, dict) or not str(proposal.get("title") or "").strip():
             return JSONResponse({"success": False, "error": "A proposal with a title is required."}, status_code=422)
+        from distr.core.incoming.proposals import (
+            MergeHandoffPending, ProposalReviewChanged, ReviewedMergeAttachmentUnavailable, create_proposal_thread,
+            proposal_thread_attachment_report, require_same_proposal_review, resolve_proposal_review,
+        )
+
         try:
-            from distr.core.incoming.proposals import create_proposal_thread, proposal_thread_attachment_report, resolve_proposal_review
 
             review_key = body.get("review_key")
             if review_key is not None:
@@ -462,15 +549,20 @@ def register_routes(router, templates):
                     status = 503 if resolved["status"] == "unconfirmed" else 409
                     return JSONResponse({"error": "The linked proposal could not be confirmed. Reopen the link before starting work."}, status_code=status)
                 current = resolved["proposal"]
-                if any(proposal.get(field) != current.get(field)
-                       for field in ("project_id", "updated_at", "title", "description")):
-                    return JSONResponse({"error": "The linked proposal changed. Reopen the link before starting work."}, status_code=409)
+                require_same_proposal_review(proposal, current)
                 proposal = current
 
-            chat_id = await asyncio.to_thread(create_proposal_thread, proposal, start_work=True)
-            # Files that could not be fetched never block the thread; report them.
+            chat_id = await asyncio.to_thread(create_proposal_thread, proposal, start_work=True,
+                                              **({"require_review": True} if review_key is not None else {}))
+            # Report files that were unavailable during initial preparation.
             report = await asyncio.to_thread(proposal_thread_attachment_report, chat_id)
             return JSONResponse({"success": True, "chat_id": chat_id, **report})
+        except ProposalReviewChanged as exc:
+            return JSONResponse({"success": False, "code": "proposal_review_changed", "error": str(exc)}, status_code=409)
+        except MergeHandoffPending as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=409)
+        except ReviewedMergeAttachmentUnavailable as exc:
+            return JSONResponse({"success": False, "code": "proposal_attachment_unavailable", "error": str(exc)}, status_code=409)
         except Exception as e:
             logger.error("Proposal thread creation failed: %s", e, exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -565,6 +657,8 @@ def register_routes(router, templates):
                 "key": receipt_keys[0], "receipt_keys": receipt_keys,
                 "upstream_dismissed": any(k.startswith("tensology:") for k in receipt_keys),
             })
+        except ValueError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=409)
         except Exception as e:
             logger.error("Proposal dismiss failed: %s", e, exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -584,6 +678,8 @@ def register_routes(router, templates):
 
             result = await asyncio.to_thread(undismiss_proposal, key)
             return JSONResponse({"success": True, **result})
+        except ValueError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=409)
         except Exception as e:
             logger.error("Proposal restore failed: %s", e, exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -686,6 +782,7 @@ def register_routes(router, templates):
                 board_hint=str((body or {}).get("board_hint") or ""),
                 project_hint=str((body or {}).get("project_hint") or ""),
                 force_ticket=bool((body or {}).get("force_ticket", True)),
+                attachments=(body or {}).get("attachments") or [],
             )
             return JSONResponse({"success": True, "decision": decision})
         except Exception as e:

@@ -2271,15 +2271,17 @@ def _prepare_local_ticket_thread_draft(body: TicketThreadDraftRequest) -> dict:
         ticket_id = int(body.ticket_id)
     except (TypeError, ValueError):
         raise HTTPException(400, "A valid local board and ticket are required")
+    from distr.core.workflow.development_threads import DevelopmentThreadConflict, require_unlinked_local_ticket_scope
+
     with get_session() as session:
-        ticket = (
-            session.query(KanbanTicket)
-            .join(KanbanLane, KanbanLane.id == KanbanTicket.lane_id)
-            .filter(KanbanTicket.id == ticket_id, KanbanLane.board_id == board_id)
-            .first()
-        )
-        if not ticket:
-            raise HTTPException(404, "Ticket not found")
+        try:
+            ticket, project_id = require_unlinked_local_ticket_scope(session, ticket_id, f"decisions:{board_id}")
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except DevelopmentThreadConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if body.project_id is not None and body.project_id != project_id:
+            raise HTTPException(409, "The ticket's project changed. Refresh the board and reopen the ticket.")
         title = ticket.title or f"Ticket {ticket.id}"
         description = ticket.description or ""
         file_rows = [
@@ -2287,7 +2289,7 @@ def _prepare_local_ticket_thread_draft(body: TicketThreadDraftRequest) -> dict:
             for record in ticket.files
         ]
 
-    root = _ticket_thread_attachment_root(body.project_id, "decisions", body.board_id, body.ticket_id)
+    root = _ticket_thread_attachment_root(project_id, "decisions", str(board_id), str(ticket_id))
     attachments: list[dict] = []
     warnings: list[str] = []
     used_names: set[str] = set()
@@ -2320,6 +2322,7 @@ def _prepare_local_ticket_thread_draft(body: TicketThreadDraftRequest) -> dict:
         "attachments": attachments,
         "comments_count": 0,
         "warnings": warnings,
+        "project_id": project_id,
     }
 
 
@@ -3783,6 +3786,16 @@ def create_routes():
             _apply_ticket_source_fields(ticket, payload)
             s.add(ticket)
             s.flush()
+            try:
+                from distr.core.kanban.lane_history import record_lane_change
+
+                record_lane_change(
+                    s, int(ticket.id),
+                    from_lane=None, to_lane=lane.name,
+                    actor="system", reason="created", source="http_create",
+                )
+            except Exception:
+                pass
             if ticket.source_chat_id:
                 from distr.core.workflow.development_threads import synchronize_linked_ticket_title
 
@@ -3796,8 +3809,48 @@ def create_routes():
                 pass
             return JSONResponse({"success": True, "id": ticket.id, "lane_id": ticket.lane_id})
 
+    @router.get("/tickets/boards/{board_id}/tickets/{ticket_id}/development-thread")
+    async def get_ticket_development_thread(board_id: int, ticket_id: int, expected_chat_id: int | None = None):
+        from distr.core.db import Chat
+        from distr.core.db.workflow import DevelopmentWorkItem
+        from distr.core.workflow.development_sidebar import board_key_for
+        from distr.core.workflow.development_threads import development_board, development_thread_metadata
+
+        with get_session() as s:
+            ticket = s.get(KanbanTicket, ticket_id)
+            board = development_board(s, ticket_id=ticket_id) if ticket else None
+            board_key = f"decisions:{board_id}"
+            if not board or board.archived or board_key_for(board) != board_key:
+                raise HTTPException(404, "This ticket is no longer on the selected board.")
+            chat_id = ticket.source_chat_id
+            if expected_chat_id is not None and chat_id != expected_chat_id:
+                raise HTTPException(409, "The ticket's thread link changed. Refresh the board and reopen the ticket.")
+            owners = s.query(DevelopmentWorkItem.chat_id).filter_by(local_ticket_id=ticket_id).all()
+            if any(owner_id != chat_id for (owner_id,) in owners):
+                raise HTTPException(409, "The ticket has conflicting Development thread links.")
+            if chat_id is None:
+                return {"chat_id": None}
+            project_id = ticket.linked_project_id if ticket.linked_project_id is not None else board.default_project_id
+            project = s.get(Project, project_id) if project_id is not None else None
+            root = s.get(Chat, chat_id)
+            if not project or project.deleted_at is not None or not root or root.parent_id is not None or root.project_id != project_id:
+                raise HTTPException(409, "The linked Development thread is outside the ticket's current project.")
+            item = s.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).first()
+            if item:
+                owner_matches = item.local_ticket_id == ticket_id and item.project_id == project_id
+                thread_board = item.board_key
+            else:
+                metadata = development_thread_metadata(root)
+                owner_matches = metadata.get("ticket_id") == ticket_id
+                thread_board = metadata.get("board_key")
+            if not owner_matches or thread_board not in (None, "", board_key):
+                raise HTTPException(409, "The linked Development thread belongs to a different board or ticket.")
+            return {"chat_id": chat_id}
+
     @router.get("/tickets/tickets/{ticket_id}")
     async def get_ticket(ticket_id: int):
+        from distr.core.planning.build import ticket_plan_sources
+
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
@@ -3830,6 +3883,7 @@ def create_routes():
                 "board_name": board.name if board else None,
                 "board_default_project_id": board.default_project_id if board else None,
                 **_project_context_payload(board_project, "board_default"),
+                "plan_sources": ticket_plan_sources(s, t, board),
                 "workflow_status": t.workflow_status,
                 "linked_snippet_id": t.linked_snippet_id,
                 "linked_action_id": t.linked_action_id,
@@ -4217,6 +4271,7 @@ def create_routes():
             raise HTTPException(422, "Invalid time_estimate format. Use values like '30m', '2h', or '1d 3h'.")
         if not _is_valid_time_tracking_value(payload.time_spent):
             raise HTTPException(422, "Invalid time_spent format. Use values like '30m', '2h', or '1d 3h'.")
+        update_notify = None
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
@@ -4316,6 +4371,27 @@ def create_routes():
             if payload.time_spent is not None:
                 t.time_spent = payload.time_spent.strip() if isinstance(payload.time_spent, str) else payload.time_spent
             if payload.lane_id is not None:
+                from distr.core.kanban.lane_history import (
+                    is_complete_lane_name,
+                    lane_name,
+                    record_lane_change,
+                )
+                new_lane = orm_get_by_id(s, KanbanLane, payload.lane_id)
+                if not new_lane:
+                    raise HTTPException(404, "Lane not found")
+                if is_complete_lane_name(new_lane.name):
+                    raise HTTPException(
+                        403,
+                        "Tickets can only be moved to Complete from the board. Drag the card into Complete there.",
+                    )
+                old_name = lane_name(s, t.lane_id)
+                if int(t.lane_id or 0) != int(payload.lane_id):
+                    record_lane_change(
+                        s, int(t.id),
+                        from_lane=old_name, to_lane=new_lane.name,
+                        actor="system", reason="ticket_update", source="http_update",
+                    )
+                    update_notify = {"from_lane": old_name, "to_lane": new_lane.name}
                 t.lane_id = payload.lane_id
             if payload.position is not None:
                 t.position = payload.position
@@ -4346,10 +4422,24 @@ def create_routes():
                 hook_ensure_workspace("tickets", ticket_id, reason="update_ticket")
             except Exception:
                 pass
-            return JSONResponse({"success": True, "id": response_ticket_id})
+            result = JSONResponse({"success": True, "id": response_ticket_id})
+        if update_notify:
+            try:
+                from distr.core.kanban.ticket_chat_notify import notify_source_chat_ticket_moved
+
+                notify_source_chat_ticket_moved(
+                    ticket_id,
+                    board_name="",
+                    to_lane_name=update_notify["to_lane"],
+                    from_lane_name=update_notify["from_lane"],
+                    reason="automation",
+                )
+            except Exception:
+                logger.debug("update_ticket: chat notify failed", exc_info=True)
+        return result
 
     @router.put("/tickets/tickets/{ticket_id}/move")
-    async def move_ticket(ticket_id: int, payload: TicketMove):
+    async def move_ticket(ticket_id: int, payload: TicketMove, request: Request):
         notify_ctx = None
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
@@ -4358,6 +4448,11 @@ def create_routes():
             lane = orm_get_by_id(s, KanbanLane,payload.lane_id)
             if not lane:
                 raise HTTPException(404, "Lane not found")
+            from distr.core.kanban.lane_history import (
+                is_complete_lane_name,
+                record_lane_change,
+                request_is_human_board_ui,
+            )
             old_lane_id = t.lane_id
             old_lane = orm_get_by_id(s, KanbanLane,old_lane_id)
             old_lane_name = old_lane.name if old_lane else ""
@@ -4366,12 +4461,24 @@ def create_routes():
                 bd = orm_get_by_id(s, KanbanBoard,old_lane.board_id)
                 board_name = bd.name if bd else ""
             new_lane_name = lane.name
+            if is_complete_lane_name(new_lane_name) and not request_is_human_board_ui(request):
+                raise HTTPException(
+                    403,
+                    "Only you can move a ticket to Complete. Drag the card into Complete on the board.",
+                )
             if old_lane_id != payload.lane_id:
                 notify_ctx = {
                     "board_name": board_name,
                     "from_lane_name": old_lane_name or None,
                     "to_lane_name": new_lane_name,
                 }
+                record_lane_change(
+                    s, int(t.id),
+                    from_lane=old_lane_name or None, to_lane=new_lane_name,
+                    actor="user" if request_is_human_board_ui(request) else "system",
+                    reason="board_move" if request_is_human_board_ui(request) else "http_move",
+                    source="http_move",
+                )
             t.lane_id = payload.lane_id
             t.position = payload.position
             # Reorder siblings
@@ -4409,6 +4516,20 @@ def create_routes():
         except Exception:
             pass
         return JSONResponse({"success": True})
+
+
+    @router.get("/tickets/tickets/{ticket_id}/lane-history")
+    async def ticket_lane_history(ticket_id: int, limit: int = 50):
+        """Read-only history of lane changes for one ticket. created_at is UTC."""
+        from distr.core.kanban.lane_history import list_lane_history
+
+        with get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+            entries = list_lane_history(s, int(ticket_id), limit=limit)
+            return JSONResponse({"success": True, "ticket_id": int(ticket_id), "entries": entries})
+
 
     @router.delete("/tickets/tickets/{ticket_id}")
     async def delete_ticket(ticket_id: int, delete_thread: bool = False):

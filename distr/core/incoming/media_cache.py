@@ -30,7 +30,7 @@ def verified(path, identity, item):
     path = Path(path)
     try:
         record = json.loads(path.with_name(path.name + '.record.json').read_text())
-        if record.get('id') != hashlib.sha256(identity.encode()).hexdigest()[:24]:
+        if not isinstance(record, dict) or record.get('id') != hashlib.sha256(identity.encode()).hexdigest()[:24]:
             return None
         if path.stat().st_size != record['size'] or digest(path) != record['sha256']:
             return None

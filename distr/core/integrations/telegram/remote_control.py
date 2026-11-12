@@ -34,9 +34,66 @@ _PROPOSAL_SOURCE_PATH = re.compile(
     r"/api/workflows/studio/incoming/proposals/source\?review_key=[a-f0-9]{64}"
     r"(?:&chat_id=[1-9][0-9]*)?(?:&source_key=[a-f0-9]{32})?"
 )
+# The unified Incoming list reads WhatsApp, Gmail and Mailshot in one call; it
+# takes ~6.5s unloaded (measured 12 Nov 2026), so the generic 8s GET budget
+# timed out under load and the phone showed a raw HTTPConnectionPool error.
+_INCOMING_LIST_PATH = re.compile(r"/api/workflows/studio/incoming(?:\?limit=[1-9][0-9]{0,2})?")
+# Reports -> Report/Stats period read (phone Reports section) takes ~10-12 s on the desktop
+# (measured 10.1-10.6 s at 13:10 SAST, 12 Nov 2026), so the generic 8 s GET budget always
+# timed out and the phone showed "took too long". Same 25 s budget as the Incoming list.
+_REPORTS_PERIOD_PATH = re.compile(r"/api/workflows/studio/reports/period(?:\?[A-Za-z0-9_=&%,.-]{0,300})?")
 _REVIEWED_PROPOSAL_MEDIA_PATH = re.compile(
     r"/api/workflows/studio/incoming/proposals/files/[a-f0-9]{24}\?review_key=[a-f0-9]{64}"
 )
+# Phone parity (12 Nov 2026). "Read to me" waits on a spoken-summary model call, so it gets
+# 28 s instead of the generic 15 s POST budget (the relay server gives each api_relay 35 s).
+_PROPOSAL_READ_PATH = re.compile(r"/api/workflows/studio/incoming/proposals/read")
+# WhatsApp voice-note Transcribe on the phone: speech-to-text on the cached audio takes longer than
+# the generic 15 s POST budget, so it gets the same 28 s as Read to me.
+_WHATSAPP_ANALYZE_MEDIA_PATH = re.compile(r"/api/tickets/whatsapp/messages/[1-9][0-9]{0,15}/analyze-media")
+# "Check incoming" forces a fresh proposals read (refresh=1): same 25 s budget as the Incoming list.
+_PROPOSAL_REFRESH_PATH = re.compile(r"/api/workflows/studio/incoming/proposals\?limit=[1-9][0-9]{0,2}&refresh=1")
+# Project file upload from the phone: the only path allowed to use the api_relay `multipart`
+# option. The phone sends base64; the desktop rebuilds the multipart POST to its own endpoint.
+_PROJECT_FILE_UPLOAD_PATH = re.compile(r"/api/projects/[1-9][0-9]{0,9}/files")
+RELAY_MULTIPART_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _relay_multipart_post(http, url, headers, method, path, spec, timeout):
+    """POST one phone file to an allow-listed local multipart endpoint. Fails closed."""
+    import base64
+    import binascii
+
+    if method != "POST" or not _PROJECT_FILE_UPLOAD_PATH.fullmatch(path):
+        raise ValueError("File upload from the phone is only available for project files.")
+    if not isinstance(spec, dict) or (spec.get("field") or "file") != "file":
+        raise ValueError("The file upload request was not valid.")
+    encoded = spec.get("data_base64")
+    if not isinstance(encoded, str) or not encoded:
+        raise ValueError("The uploaded file is empty.")
+    if len(encoded) > (RELAY_MULTIPART_MAX_BYTES * 4) // 3 + 8:
+        raise ValueError("The file is larger than 8 MB. Add it from the desktop instead.")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("The uploaded file could not be read.") from None
+    if not content:
+        raise ValueError("The uploaded file is empty.")
+    if len(content) > RELAY_MULTIPART_MAX_BYTES:
+        raise ValueError("The file is larger than 8 MB. Add it from the desktop instead.")
+    filename = os.path.basename(str(spec.get("filename") or "").replace("\\", "/"))[:255] or "file"
+    content_type = str(spec.get("content_type") or "application/octet-stream")[:200]
+    fields = spec.get("fields") if isinstance(spec.get("fields"), dict) else {}
+    form = {}
+    description = fields.get("description")
+    if isinstance(description, str) and description.strip():
+        form["description"] = description.strip()[:2000]
+    # requests sets the multipart Content-Type (with boundary) itself.
+    plain_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+    return http.post(url, files={"file": (filename, content, content_type)}, data=form,
+                     headers=plain_headers, timeout=timeout)
+
+
 REMOTE_STT_DIRECT_MIME_PREFIXES = (
     "audio/wav",
     "audio/x-wav",
@@ -156,8 +213,19 @@ class TelegramRemoteControlMixin:
                 headers["Range"] = f"bytes={media_offset}-{media_offset + RELAY_MEDIA_CHUNK_BYTES - 1}"
             reply_write = api_method == "POST" and _SOURCE_REPLY_WRITE_PATH.fullmatch(api_path)
             source_read = api_method == "GET" and _PROPOSAL_SOURCE_PATH.fullmatch(api_path)
-            timeout = 90 if reply_write else 25 if incoming_media or source_read else (8 if api_method == "GET" else 15)
-            if api_method == "GET":
+            incoming_list = api_method == "GET" and _INCOMING_LIST_PATH.fullmatch(api_path)
+            period_read = api_method == "GET" and _REPORTS_PERIOD_PATH.fullmatch(api_path)
+            proposal_read = api_method == "POST" and (
+                _PROPOSAL_READ_PATH.fullmatch(api_path) or _WHATSAPP_ANALYZE_MEDIA_PATH.fullmatch(api_path)
+            )
+            proposal_refresh = api_method == "GET" and _PROPOSAL_REFRESH_PATH.fullmatch(api_path)
+            multipart = command_data.get("multipart")
+            timeout = (90 if reply_write else 28 if proposal_read or multipart is not None
+                       else 25 if incoming_media or source_read or incoming_list or period_read or proposal_refresh
+                       else (8 if api_method == "GET" else 15))
+            if multipart is not None:
+                resp = _relay_multipart_post(_req, url, headers, api_method, api_path, multipart, timeout)
+            elif api_method == "GET":
                 resp = _req.get(url, headers=headers, timeout=timeout)
             elif api_method == "POST":
                 resp = _req.post(url, json=api_body, headers=headers, timeout=timeout)
@@ -198,12 +266,19 @@ class TelegramRemoteControlMixin:
         except Exception as e:
             if marked_remote_context:
                 self._discard_remote_agent_response_context(request_id)
-            logger.error(f"API relay error: {e}", exc_info=True)
+            logger.error(f"API relay error ({api_method} {api_path.split('?', 1)[0]}): {e}", exc_info=True)
+            # Never ship raw requests/urllib3 text (host, port, pool) to the phone.
+            if requests is not None and isinstance(e, requests.exceptions.Timeout):
+                relay_error = "Decisions on your computer took too long to answer. Try again."
+            elif requests is not None and isinstance(e, requests.exceptions.ConnectionError):
+                relay_error = "Decisions on your computer is not answering right now. Try again."
+            else:
+                relay_error = str(e)
             self._send_websocket_message({
                 "type": "remote_control_response",
                 "command": "api_relay",
                 "request_id": request_id,
-                "error": str(e),
+                "error": relay_error,
                 "data": {},
             })
 

@@ -32,6 +32,7 @@ class Project(Base):
     coding_backend_model = Column(String, nullable=True)  # Optional per-project model/alias for the selected CLI backend
     position = Column(Integer, default=0)  # Manual order in the Projects sidebar
     deleted_at = Column(DateTime, nullable=True, index=True)
+    agent_ignored = Column(Boolean, default=False)  # Hidden from Initiative scans, intake, recommendations
 
     created_date = Column(DateTime, default=utc_now_naive)
     modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)

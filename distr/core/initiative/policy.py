@@ -11,8 +11,9 @@ Precedence (documented for TASK 3–4):
   6. Rubric (when present): merged with legacy operate/own outcomes by taking the
      *more restrictive* decision (SKIP > SUGGEST_ONLY > DRAFT_AND_ASK > EXECUTE).
      Rubric never upgrades past a blocked capability (e.g. routine_task without allow).
-  7. observe / assist without rubric: legacy passive behaviour (SKIP / SUGGEST_ONLY).
-  8. observe / assist with rubric: rubric thresholds only (DESIGN §2.1).
+  7. observe (Quiet): always SKIP for proactive proposals; direct asks are answered elsewhere.
+  8. Postures are observe (Quiet), operate (Standard) and own (Own outcomes).
+     Legacy ``assist`` / ``assistive`` migrate to ``operate``.
 """
 
 from enum import Enum
@@ -266,14 +267,9 @@ def evaluate(action, level: str, boundaries: dict, policy_context: dict | None =
     rubric_score = _extract_rubric(action)
 
     if level == "observe":
-        if rubric_score is None:
-            return PolicyDecision.SKIP
-        return rubric_score.policy_decision("observe")
-
-    if level == "assist":
-        if rubric_score is None:
-            return PolicyDecision.SUGGEST_ONLY
-        return rubric_score.policy_decision("assist")
+        # Quiet: only respond when asked. No rubric can promote a proactive
+        # proposal into a pending approval or notification.
+        return PolicyDecision.SKIP
 
     if level == "operate":
         classic = _evaluate_operate(action, boundaries)
@@ -292,12 +288,13 @@ def evaluate(action, level: str, boundaries: dict, policy_context: dict | None =
 
 _MIGRATION_MAP = {
     "passive": "observe",
-    "assistive": "assist",
+    "assistive": "operate",
+    "assist": "operate",
     "proactive": "operate",
     "autonomous": "own",
 }
 
-_CURRENT_VALUES = {"observe", "assist", "operate", "own"}
+_CURRENT_VALUES = {"observe", "operate", "own"}
 
 
 def migrate_initiative_level(old_value: str) -> str:
@@ -305,11 +302,12 @@ def migrate_initiative_level(old_value: str) -> str:
     Migrate a legacy initiative_level string to the current vocabulary.
 
     passive    → observe
-    assistive  → assist
+    assistive  → operate
+    assist     → operate   (Assist posture removed 2026-11-11)
     proactive  → operate
     autonomous → own
 
-    Already-current values (observe/assist/operate/own) are returned unchanged.
+    Already-current values (observe/operate/own) are returned unchanged.
     Unknown values are returned unchanged.
     """
     if old_value in _CURRENT_VALUES:

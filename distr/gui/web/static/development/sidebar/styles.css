@@ -111,6 +111,8 @@
 .project-threads-more:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
 .project-folder .folder-icon { position: relative; display: inline-flex; }
 .folder-running-glow { display: none; position: absolute; inset: 0; color: var(--studio-warning); filter: drop-shadow(0 0 4px currentColor); pointer-events: none; }
-.project-group.has-running-thread .project-folder:not(.expanded) .folder-running-glow { display: inline-flex; animation: project-folder-working 1.8s cubic-bezier(.4,0,.2,1) infinite; }
+.project-group.has-running-thread .project-folder .folder-running-glow { display: inline-flex; animation: project-folder-working 1.8s cubic-bezier(.4,0,.2,1) infinite; }
+.folder-ready-alert { display: none; position: absolute; inset: 0; color: var(--studio-warning); pointer-events: none; }
+.project-group.has-ready-thread:not(.has-running-thread) .project-folder .folder-ready-alert { display: inline-flex; }
 @keyframes project-folder-working { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .project-group.has-running-thread .project-folder:not(.expanded) .folder-running-glow { animation: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .project-group.has-running-thread .project-folder .folder-running-glow { animation: none; opacity: 1; } }

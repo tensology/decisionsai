@@ -12,6 +12,13 @@ class ProjectHandoffService:
         from distr.core.project_cli_backends.registry import run_project_task
 
         adapter_options = dict(getattr(context, "adapter_options", None) or {})
+        turn_scope: dict[str, Any] = {}
+        if getattr(context, "turn_id", None) is not None:
+            turn_scope["turn_id"] = context.turn_id
+        if getattr(context, "cancel_requested", None) is not None:
+            turn_scope["cancel_requested"] = context.cancel_requested
+        if getattr(context, "queued_workflow", False):
+            turn_scope["queued_workflow"] = True
 
         result = await run_project_task(
             context.project,
@@ -38,6 +45,7 @@ class ProjectHandoffService:
             ),
             adapter_options=adapter_options,
             on_event=context.on_event,
+            **turn_scope,
         )
         self._emit_handoff_event(context, result)
         return result

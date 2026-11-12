@@ -84,6 +84,18 @@ transport: Transport = _http
 MANAGED_REPLY_SENT_SUMMARY = 'The approved closing reply was sent.'
 
 
+def telegram_managed_reply(session, row, details):
+    from distr.core.workflow.telegram_reply_receipts import reviewed_outcome
+
+    reviewed = {key: value for key, value in details.items() if key != 'delivery_outcome'} if isinstance(details, dict) else {}
+    workflow = reviewed.get('workflow')
+    if (row.tool == 'reply_delivery' and row.action == reviewed.get('channel') == 'telegram'
+            and isinstance(workflow, dict) and row.chat_id == workflow.get('chat_id')
+            and row.turn_id == workflow.get('turn_id') and row.args_hash == args_hash(reviewed)):
+        return reviewed_outcome(session, reviewed)
+    return None
+
+
 def confirmed_managed_reply(session, row, details):
     from distr.core.workflow.reply_delivery import recover_sent_workflow_reply
 
@@ -105,9 +117,14 @@ def request_view(row: Any, *, with_secret: Optional[str] = None, receipt_session
     out = {'request_id': row.request_id, 'chat_id': row.chat_id, 'turn_id': row.turn_id,
            'tool': row.tool, 'action': row.action, 'summary': row.summary, 'details': details,
            'status': row.status, 'expires_at': row.expires_at.isoformat() + 'Z'}
-    if row.status == 'sending' and receipt_session is not None:
-        receipt = confirmed_managed_reply(receipt_session, row, details)
-        if receipt:
+    if row.status in {'sending', 'unconfirmed'} and receipt_session is not None:
+        telegram = telegram_managed_reply(receipt_session, row, details)
+        if telegram:
+            status = telegram['delivery_status']
+            out.update(status='rejected' if status == 'not_sent' else status,
+                       summary=telegram['reason'] or MANAGED_REPLY_SENT_SUMMARY,
+                       details={**details, 'delivery_outcome': telegram})
+        elif row.status == 'sending' and (receipt := confirmed_managed_reply(receipt_session, row, details)):
             out.update(status='sent', summary=MANAGED_REPLY_SENT_SUMMARY,
                        details={**details, 'delivery_outcome': receipt})
     if with_secret:

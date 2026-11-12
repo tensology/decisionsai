@@ -300,7 +300,7 @@ class AdvancedSettings(BaseModel):
 
 
 class InitiativeSettings(BaseModel):
-    initiative_level: str = "assist"
+    initiative_level: str = "operate"
     initiative_allow_telegram: bool = False
     initiative_allow_routine_tasks: bool = False
     initiative_scan_boards: bool = True
@@ -406,6 +406,7 @@ class ProjectUpdate(BaseModel):
     board_name: Optional[str] = None
     kanban_board_id: Optional[int] = None
     start_time_tracker: Optional[bool] = None
+    agent_ignored: Optional[bool] = None
 
 
 class ContextItemCreate(BaseModel):

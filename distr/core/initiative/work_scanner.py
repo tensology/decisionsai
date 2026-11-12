@@ -126,11 +126,9 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             scan["unavailable_sources"].append({"source": "telegram", "reason": str(exc)})
 
-    scan_email = (
-        bool(settings.get("initiative_scan_email", False))
-        or _gmail_connected()
-        or _tensology_mail_configured(settings)
-    )
+    # The Email toggle is authoritative: a connected Gmail/Tensology mailbox no
+    # longer silently enables scanning when the user turned Email off.
+    scan_email = bool(settings.get("initiative_scan_email", False))
     if scan_email:
         try:
             _scan_email(scan)
@@ -142,7 +140,68 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         scan["unavailable_sources"].append({"source": "advanced_connectors", "reason": str(exc)})
 
+    _apply_project_scope(scan)
     return scan
+
+
+def _apply_project_scope(scan: dict[str, Any]) -> None:
+    """Drop work for projects hidden from the agent; put pinned boards first."""
+    try:
+        from distr.core.initiative.outcome_flow import ignored_project_ids, pinned_board_ids
+
+        ignored = ignored_project_ids()
+        pinned = set(pinned_board_ids())
+        ignored_boards = _ignored_board_ids(ignored)
+    except Exception:
+        return
+
+    def _ids(payload: dict[str, Any], *keys: str) -> set[int]:
+        out = set()
+        for key in keys:
+            try:
+                if payload.get(key) is not None:
+                    out.add(int(payload[key]))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    kept = []
+    for proposal in scan.get("proposals") or []:
+        payload = proposal.get("payload") if isinstance(proposal, dict) else None
+        payload = payload if isinstance(payload, dict) else {}
+        if _ids(payload, "project_id", "linked_project_id") & ignored:
+            continue
+        if _ids(payload, "board_id", "linked_board_id") & ignored_boards:
+            continue
+        try:
+            if payload.get("board_id") is not None and int(payload["board_id"]) in pinned:
+                proposal["pinned"] = True
+        except (TypeError, ValueError):
+            pass
+        kept.append(proposal)
+    kept.sort(key=lambda p: 0 if p.get("pinned") else 1)
+    scan["proposals"] = kept
+
+
+def _ignored_board_ids(ignored_projects: set[int]) -> set[int]:
+    """Boards that belong to projects hidden from the agent."""
+    if not ignored_projects:
+        return set()
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.projects import Project
+
+    with get_session() as session:
+        ids = {
+            int(p.kanban_board_id)
+            for p in session.query(Project).filter(Project.id.in_(list(ignored_projects))).all()
+            if p.kanban_board_id
+        }
+        ids |= {
+            int(b.id)
+            for b in session.query(KanbanBoard).filter(KanbanBoard.default_project_id.in_(list(ignored_projects))).all()
+        }
+    return ids
 
 
 def _has_connected_provider(settings: dict[str, Any], providers: set[str]) -> bool:
@@ -253,6 +312,25 @@ def _scan_local_boards(scan: dict[str, Any], settings: dict[str, Any]) -> None:
             .order_by(KanbanBoard.position.asc(), KanbanBoard.id.asc())
             .all()
         )
+        try:
+            from distr.core.db.projects import Project
+            from distr.core.initiative.outcome_flow import ignored_project_ids, pinned_board_ids
+
+            ignored = ignored_project_ids()
+            if ignored:
+                ignored_boards = {
+                    int(p.kanban_board_id)
+                    for p in session.query(Project).filter(Project.id.in_(list(ignored))).all()
+                    if p.kanban_board_id
+                }
+                boards = [
+                    b for b in boards
+                    if b.default_project_id not in ignored and int(b.id) not in ignored_boards
+                ]
+            pinned = set(pinned_board_ids())
+            boards = sorted(boards, key=lambda b: 0 if int(b.id) in pinned else 1)
+        except Exception:
+            pass
         for board in boards:
             lanes = list(board.lanes or [])
             lane_rows = []
@@ -722,7 +800,7 @@ def _scan_email_uncached(scan: dict[str, Any]) -> None:
     messages: list[dict[str, Any]] = []
     sources_tried: list[str] = []
 
-    mailshot_rows = fetch_mailshot_intake_messages(jira_only=False, max_pages=3)
+    mailshot_rows = fetch_mailshot_intake_messages(jira_only=False, max_pages=3, hydrate=True)
     if mailshot_rows:
         sources_tried.append("mailshot")
         messages.extend(mailshot_rows)
@@ -756,6 +834,22 @@ def _scan_email_uncached(scan: dict[str, Any]) -> None:
         subject = str(msg.get("subject") or "").strip()
         snippet = str(msg.get("snippet") or msg.get("body") or "").strip()
         combined = f"{subject}\n{snippet}".strip()
+        attachments = [
+            {
+                "name": str(row.get("filename") or row.get("name") or "attachment"),
+                "mime_type": str(row.get("mime_type") or row.get("content_type") or ""),
+                "size": row.get("size") or 0,
+                "attachment_id": str(row.get("attachment_id") or ""),
+                "extracted_text": str(row.get("extracted_text") or row.get("transcript") or "")[:8000],
+            }
+            for row in (msg.get("attachments") or [])
+            if isinstance(row, dict)
+        ]
+        attachment_text = " ".join(
+            f"{row['name']} {row.get('extracted_text') or ''}" for row in attachments
+        ).strip()
+        if attachment_text:
+            combined = f"{combined}\n{attachment_text}".strip()
         item = {
             "id": mid,
             "thread_id": msg.get("thread_id") or msg.get("threadId") or "",
@@ -767,6 +861,7 @@ def _scan_email_uncached(scan: dict[str, Any]) -> None:
             "work_related": _looks_work_related(combined),
             "body": str(msg.get("body") or "")[:2000],
             "source": msg.get("source") or ("mailshot" if "mailshot" in sources_tried else "gmail"),
+            "attachments": attachments,
         }
         link = resolve_email_link(item["from"])
         if item["work_related"] or is_jira_notification_email(

@@ -72,6 +72,47 @@ def _walk_gmail_parts(part: Dict[str, Any]) -> List[Dict[str, Any]]:
     return parts
 
 
+
+def _gmail_attachment_ids_equal(left, right) -> bool:
+    """True when Gmail attachment ids match exactly, after URL-decoding, or as a unique prefix."""
+    from urllib.parse import unquote
+    a = unquote(str(left or "")).strip()
+    b = unquote(str(right or "")).strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return len(a) >= 20 and len(b) >= 20 and (a.startswith(b) or b.startswith(a))
+
+
+def _resolve_gmail_attachment_part(
+    attachments,
+    *,
+    attachment_id: str = "",
+    content_id: str = "",
+    filename_hint: str = "",
+):
+    """Pick the MIME-part metadata row for an attachment id, content id, or filename."""
+    items = [item for item in (attachments or []) if isinstance(item, dict)]
+    if attachment_id:
+        for item in items:
+            if _gmail_attachment_ids_equal(item.get("attachment_id"), attachment_id):
+                return item
+    cid = str(content_id or "").strip().strip("<>").lower()
+    if cid:
+        for item in items:
+            if str(item.get("content_id") or "").strip().strip("<>").lower() == cid:
+                return item
+    hint = str(filename_hint or "").strip().lower()
+    if hint:
+        named = [item for item in items if str(item.get("filename") or "").strip().lower() == hint]
+        if len(named) == 1:
+            return named[0]
+    if len(items) == 1 and (filename_hint or content_id or attachment_id):
+        return items[0]
+    return None
+
+
 def _safe_attachment_filename(filename: str) -> str:
     """Return a filesystem-safe attachment filename while preserving extension."""
     name = os.path.basename(filename or "").strip() or "attachment"
@@ -322,7 +363,7 @@ class GoogleWorkspaceConnector:
         except Exception as e:
             logger.error(f"Failed to save tokens to database: {e}", exc_info=True)
     
-    def _make_request(self, method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
+    def _make_request(self, method: str, url: str, *, before_send=None, **kwargs) -> Optional[Dict[str, Any]]:
         """Make authenticated API request"""
         if not self._ensure_valid_token():
             return None
@@ -333,6 +374,8 @@ class GoogleWorkspaceConnector:
         gmail_send = method.upper() == "POST" and url == GMAIL_SEND_URL
         if gmail_send:
             kwargs["allow_redirects"] = False
+            if before_send is not None:
+                before_send()
         
         try:
             response = requests.request(method, url, **kwargs)
@@ -517,7 +560,7 @@ class GoogleWorkspaceConnector:
                 attachment_id = part.get('body', {}).get('attachmentId')
                 part_headers = _part_headers(part)
                 content_id = str(part_headers.get('content-id') or '').strip().strip('<>')
-                if attachment_id and (filename or content_id):
+                if attachment_id:
                     attachments.append({
                         'message_id': message_id,
                         'attachment_id': attachment_id,
@@ -593,43 +636,38 @@ class GoogleWorkspaceConnector:
         attachment_id: str = "",
         *,
         content_id: str = "",
+        filename_hint: str = "",
     ) -> Optional[tuple[bytes, str, str]]:
         """Return ``(bytes, mime_type, filename)`` for a Gmail attachment.
 
         Prefer ``attachment_id``. When only ``content_id`` is known, resolve it via
-        ``get_email`` metadata. Used by the Incoming mail preview route.
+        ``get_email`` metadata. Filename falls back to the matching MIME part or
+        ``filename_hint`` so previews are not served as "attachment".
         """
         if not self._ensure_valid_token():
             return None
         message_id = str(message_id or "").strip()
         attachment_id = str(attachment_id or "").strip()
         content_id = str(content_id or "").strip().strip("<>")
+        filename_hint = str(filename_hint or "").strip()
         if not message_id:
             return None
         mime_type = "application/octet-stream"
-        filename = "attachment"
-        if not attachment_id and content_id:
-            detail = self.get_email(message_id) or {}
-            for item in detail.get("attachments") or []:
-                if not isinstance(item, dict):
-                    continue
-                cid = str(item.get("content_id") or "").strip().strip("<>")
-                if cid.lower() == content_id.lower():
-                    attachment_id = str(item.get("attachment_id") or "").strip()
-                    mime_type = str(item.get("mime_type") or mime_type)
-                    filename = str(item.get("filename") or filename)
-                    break
+        filename = filename_hint or "attachment"
+        detail = self.get_email(message_id) or {}
+        matched = _resolve_gmail_attachment_part(
+            detail.get("attachments") or [],
+            attachment_id=attachment_id,
+            content_id=content_id,
+            filename_hint=filename_hint,
+        )
+        if matched:
             if not attachment_id:
-                return None
-        elif attachment_id:
-            detail = self.get_email(message_id) or {}
-            for item in detail.get("attachments") or []:
-                if not isinstance(item, dict):
-                    continue
-                if str(item.get("attachment_id") or "").strip() == attachment_id:
-                    mime_type = str(item.get("mime_type") or mime_type)
-                    filename = str(item.get("filename") or filename)
-                    break
+                attachment_id = str(matched.get("attachment_id") or "").strip()
+            elif _gmail_attachment_ids_equal(matched.get("attachment_id"), attachment_id):
+                attachment_id = str(matched.get("attachment_id") or attachment_id).strip()
+            mime_type = str(matched.get("mime_type") or mime_type)
+            filename = str(matched.get("filename") or filename)
         if not attachment_id:
             return None
         url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}"

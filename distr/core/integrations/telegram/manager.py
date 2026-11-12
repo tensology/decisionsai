@@ -11,6 +11,7 @@ from datetime import datetime
 import platform
 import subprocess
 from collections import deque
+from functools import partial
 from urllib.parse import quote
 
 # Qt Imports
@@ -38,10 +39,14 @@ logger = logging.getLogger(__name__)
 from distr.core.integrations.telegram.utils import relay_internal_token
 
 from distr.core.integrations.telegram.messages import TelegramMessagesMixin
+from distr.core.integrations.telegram.receipt_writes import (
+    checkpoint_delivery_error_message, persist_or_defer_receipt_write,
+)
 from distr.core.integrations.telegram.sender import TelegramSenderMixin
 from distr.core.integrations.telegram.remote_control import TelegramRemoteControlMixin
 from distr.core.integrations.base import IntegrationReconnectMixin
 from distr.core.log_retention import rotate_oversize_file
+from distr.core.workflow.interactions import TELEGRAM_CHECKPOINT_RECEIPT_PREFIX
 
 # How often to repeat the same "not connected" summary in the main log.
 _CONNECT_FAILURE_LOG_INTERVAL_S = 300.0
@@ -209,6 +214,7 @@ class TelegramWebSocketManager(
         pyqtSignal()
     )  # Signal to request screen info update on main thread
     _ws_token_ready_signal = pyqtSignal(int, object)
+    _group_links_ready = pyqtSignal(object, object)
 
     def __init__(self, server_url: str = "wss://decisions.tensology.com/ws/telegram"):
         super().__init__()
@@ -269,6 +275,7 @@ class TelegramWebSocketManager(
         # Connect screen update signal
         self._request_screen_update_signal.connect(self._refresh_qt_screens)
         self._ws_token_ready_signal.connect(self._finish_ws_token_request)
+        self._group_links_ready.connect(self._publish_group_links)
 
         # Identity / State
         self.short_code: Optional[str] = None
@@ -331,6 +338,12 @@ class TelegramWebSocketManager(
         self._send_timer = QTimer()
         self._send_timer.timeout.connect(self._process_message_queue)
         self._send_timer.start(100)  # Check queue every 100ms
+        self._closing_recovery_timer = QTimer()
+        self._closing_recovery_timer.timeout.connect(self._recover_closing_reply_receipts)
+        self._closing_recovery_timer.start(30_000)
+        self._group_link_timer = QTimer()
+        self._group_link_timer.timeout.connect(self._sync_group_links)
+        self._group_link_timer.start(60_000)
 
         # Group Message Storage (for messages from groups/channels - stored for later processing)
         self._group_message_queue = (
@@ -826,6 +839,13 @@ class TelegramWebSocketManager(
 
     def _on_connected(self):
         """Called when valid connection is established."""
+        self._proposal_receipt_recovery = False
+        self._closing_reply_receipts = None
+        self._closing_reply_receipt_recovery = False
+        self._closing_recovery_cursor = 0
+        self._group_link_generation = object()
+        self._group_links_supported = False
+        self._group_link_sync_running = False
         is_auto_reconnect = self._is_auto_reconnecting
 
         # CRITICAL: Load telegram_user_id from settings if not already set
@@ -1161,6 +1181,7 @@ class TelegramWebSocketManager(
         try:
             data = json.loads(message)
             msg_type = data.get("type")
+            from distr.core.workflow import telegram_reply_receipts as closing
 
             # Log ALL incoming messages for debugging
             # logger.info(f"[Telegram WebSocket] 📥 Received message type: {msg_type}") # Reduced noise
@@ -1172,40 +1193,65 @@ class TelegramWebSocketManager(
                 )
                 client_message_id = str(data.get("client_message_id") or "").strip()
                 if client_message_id:
-                    if client_message_id.startswith('proposal-update:'):
-                        from distr.core.incoming.telegram_updates import record_delivery
-                        record_delivery(client_message_id, telegram_message_id=data.get('telegram_message_id'),
-                                        telegram_chat_id=data.get('chat_id'))
-                    try:
-                        from distr.core.workflow.interactions import record_telegram_delivery
+                    if client_message_id.startswith(closing.PREFIX) and data.get('closing_reply_verified') is True:
+                        closing.accept_receipt(client_message_id, telegram_chat_id=data.get('chat_id'),
+                                               telegram_message_id=data.get('telegram_message_id'))
+                    elif client_message_id.startswith('proposal-update:'):
+                        from distr.core.incoming.telegram_updates import accept_relay_receipt
+                        accept_relay_receipt(client_message_id, telegram_message_id=data.get('telegram_message_id'),
+                                             telegram_chat_id=data.get('chat_id'))
+                    else:
+                        try:
+                            from distr.core.incoming.telegram_updates import _recipient_id
+                            from distr.core.workflow.interactions import (
+                                parse_telegram_checkpoint_receipt_id,
+                                record_telegram_delivery,
+                            )
 
-                        record_telegram_delivery(
-                            token=client_message_id,
-                            telegram_chat_id=data.get("chat_id"),
-                            telegram_message_id=data.get("telegram_message_id"),
-                            reply_markup_sent=data.get("reply_markup_sent") is True,
-                        )
-                    except Exception:
-                        logger.warning("Could not persist Telegram workflow delivery acknowledgment", exc_info=True)
+                            receipt = parse_telegram_checkpoint_receipt_id(client_message_id)
+                            chat_id = _recipient_id(data.get("chat_id"))
+                            message_id = _recipient_id(data.get("telegram_message_id"))
+                            if receipt and chat_id is not None and message_id is not None:
+                                token, attempt = receipt
+                                controls_sent = data.get("reply_markup_sent") is True
+                                persist = partial(record_telegram_delivery, token=token, telegram_chat_id=chat_id,
+                                                  telegram_message_id=message_id, reply_markup_sent=controls_sent,
+                                                  attempt=attempt)
+                                acknowledgment = (token, message_id, chat_id, attempt)
+                                if not controls_sent:
+                                    acknowledgment = (*acknowledgment, False)
+                                if persist_or_defer_receipt_write(persist, journal_entry=acknowledgment) is None:
+                                    logger.warning("Telegram workflow delivery acknowledgment will be saved again on sync.")
+                        except Exception:
+                            logger.warning("Could not persist Telegram workflow delivery acknowledgment", exc_info=True)
             elif msg_type == "error":
                 logger.error(f"[Telegram WebSocket] ❌ Server returned ERROR: {data}")
                 client_message_id = str(data.get("client_message_id") or "").strip()
                 if client_message_id:
-                    if client_message_id.startswith('proposal-update:'):
-                        from distr.core.incoming.telegram_updates import defer_rate_limited_delivery, record_delivery
-                        if data.get('reason') == 'relay_rate_limited':
-                            defer_rate_limited_delivery(client_message_id)
-                        else:
-                            record_delivery(client_message_id, error=str(data.get('message') or 'Telegram delivery failed'))
-                    try:
-                        from distr.core.workflow.interactions import record_telegram_delivery_error
+                    if client_message_id.startswith(closing.PREFIX):
+                        closing.accept_receipt(client_message_id, uncertain=True)
+                    elif client_message_id.startswith('proposal-update:'):
+                        from distr.core.incoming.telegram_updates import accept_relay_receipt
+                        accept_relay_receipt(client_message_id, rate_limited=data.get('reason') == 'relay_rate_limited',
+                                             error=str(data.get('message') or 'Telegram delivery failed'))
+                    else:
+                        try:
+                            from distr.core.workflow.interactions import (
+                                parse_telegram_checkpoint_receipt_id,
+                                record_telegram_delivery_error,
+                            )
 
-                        record_telegram_delivery_error(
-                            token=client_message_id,
-                            error=str(data.get("message") or "Telegram delivery failed"),
-                        )
-                    except Exception:
-                        logger.warning("Could not persist Telegram workflow delivery failure", exc_info=True)
+                            receipt = parse_telegram_checkpoint_receipt_id(client_message_id)
+                            if receipt:
+                                token, attempt = receipt
+                                rate_limited = data.get("reason") == "relay_rate_limited"
+                                persist = partial(record_telegram_delivery_error, token=token, attempt=attempt,
+                                                  error=checkpoint_delivery_error_message(rate_limited=rate_limited))
+                                entry = ("checkpoint-error", token, attempt, rate_limited)
+                                if persist_or_defer_receipt_write(persist, journal_entry=entry) is None:
+                                    logger.warning("Telegram workflow delivery failure will be saved again on sync.")
+                        except Exception:
+                            logger.warning("Could not persist Telegram workflow delivery failure", exc_info=True)
             else:
                 pass  # Too noisy to print every type
 
@@ -1224,6 +1270,15 @@ class TelegramWebSocketManager(
             elif msg_type == "connection":
                 # Connection status update from server (polling/confirmation)
                 status = data.get("status")
+                if status == "connected":
+                    self._proposal_receipt_recovery = data.get("proposal_receipt_recovery") is True
+                    self._closing_reply_receipts = data.get("closing_reply_receipts") is True
+                    self._closing_reply_receipt_recovery = data.get("closing_reply_receipt_recovery") is True
+                    if self._closing_reply_receipt_recovery:
+                        self._recover_closing_reply_receipts()
+                    self._group_links_supported = data.get("telegram_group_links") is True
+                    if self._group_links_supported:
+                        self._sync_group_links()
                 # Only log if status actually changed or it's a new connection
                 if status == "connected" and not hasattr(
                     self, "_last_connection_status"
@@ -1327,22 +1382,69 @@ class TelegramWebSocketManager(
             "message_id": message_id,
         })
 
+    def request_proposal_receipt(self, token: str):
+        if getattr(self, '_proposal_receipt_recovery', False) is True:
+            self._send_websocket_message({"type": "proposal_receipt_lookup", "token": token})
+
+    def _sync_group_links(self):
+        if (not getattr(self, "_group_links_supported", False) or self._group_link_sync_running
+                or not self.is_connected()):
+            return
+        from threading import Thread
+        from distr.core.incoming.project_links import telegram_group_snapshot
+
+        generation = self._group_link_generation
+        self._group_link_sync_running = True
+
+        def fetch():
+            try:
+                groups = telegram_group_snapshot()
+            except Exception:
+                logger.debug("Telegram group link snapshot unavailable", exc_info=True)
+                groups = None
+            self._group_links_ready.emit(generation, groups)
+
+        Thread(target=fetch, name="telegram-group-links", daemon=True).start()
+
+    def _publish_group_links(self, generation, groups):
+        if generation is not self._group_link_generation:
+            return
+        self._group_link_sync_running = False
+        if groups is not None and self._group_links_supported and self.is_connected():
+            self._send_websocket_message({"type": "group_links", "chat_ids": groups})
+
+    def _recover_closing_reply_receipts(self):
+        if not getattr(self, '_closing_reply_receipt_recovery', False) or not self.is_connected():
+            return
+        from sqlalchemy.exc import OperationalError
+        from distr.core.workflow.telegram_reply_receipts import recovery_page
+
+        try:
+            cursor, tokens = recovery_page(getattr(self, '_closing_recovery_cursor', 0))
+            for token in tokens:
+                self._send_websocket_message({'type': 'closing_reply_receipt_lookup', 'token': token})
+            self._closing_recovery_cursor = cursor
+        except (OperationalError, OSError):
+            logger.debug("Telegram closing reply receipt lookup will retry.", exc_info=True)
+
     def _send_websocket_message(self, message: dict):
         """Send a message via WebSocket (thread-safe)."""
         if self.socket and self.is_connected():
             import threading
+            from distr.core.workflow.telegram_reply_receipts import PREFIX as CLOSING_RECEIPT_PREFIX
 
             payload = json.dumps(message)
-            durable_proposal = str(message.get('client_message_id') or '').startswith('proposal-update:')
+            correlation = str(message.get('client_message_id') or '')
+            durable_delivery = correlation.startswith(('proposal-update:', TELEGRAM_CHECKPOINT_RECEIPT_PREFIX, CLOSING_RECEIPT_PREFIX))
 
             if threading.current_thread() is threading.main_thread():
                 written = self.socket.sendTextMessage(payload)
-                if durable_proposal and written != len(payload.encode('utf-8')):
+                if durable_delivery and written != len(payload.encode('utf-8')):
                     # Qt can write a frame header before reporting zero payload bytes.
                     # The queue retains this outcome for reconciliation rather than replaying it.
-                    raise OSError('Telegram WebSocket did not accept the full proposal update.')
+                    raise OSError('Telegram WebSocket did not accept the full message.')
             else:
-                if durable_proposal:
+                if durable_delivery:
                     # The main-thread queue needs the actual write result, which a signal cannot return.
                     return False
                 self._send_ws_text_signal.emit(payload)

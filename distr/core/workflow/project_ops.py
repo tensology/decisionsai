@@ -231,7 +231,7 @@ def build_execution_plan(
         "steps": steps,
         "requires_approval": risky or route == "clarification",
         "human_status": human_status_label(steps[0]["phase"] if steps else "planning"),
-        "redirect_to": "/automations/" if route == "automation" else "",
+        "redirect_to": "/development/automations/" if route == "automation" else "",
         "context": {
             "project_id": context.get("project_id"),
             "project_name": context.get("project_name"),
@@ -384,7 +384,7 @@ def execute_project_ops_plan(
     if route == "automation":
         return {
             "status": "redirect",
-            "redirect_to": "/automations/",
+            "redirect_to": "/development/automations/",
             "message": "This belongs in Automations. Open Automations to save or schedule this action.",
             "human_status": "Planning",
         }

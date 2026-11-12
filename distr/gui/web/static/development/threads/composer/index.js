@@ -1,7 +1,7 @@
 import { encodedVariant, displayModelName, shortModelName } from '../../../shared/model_variant.js?v=20261022-composer6';
 import { providerLabel as lookupProviderLabel, catalogModels as lookupCatalogModels } from '../../shared/models.js';
-import { loadInstalledHarnesses } from '../../../shared/harnesses.js?v=20261022-harnesssrc';
-import { createSubmissionQueue } from './queue.js?v=20261111-proactive-queue';
+import { harnessLabel as displayHarnessLabel, loadInstalledHarnesses } from '../../../shared/harnesses.js?v=20261022-harnesssrc';
+import { createSubmissionQueue } from './queue.js?v=20261112-queued-scope';
 // Owns threads composer rendering, interactions, and private view state.
 export function createThreadsComposer({ context, actions, el, token }) {
     const HARNESS_OPTIONS = [
@@ -21,8 +21,11 @@ export function createThreadsComposer({ context, actions, el, token }) {
         rows.forEach((row) => BASE_HARNESS_IDS.add(row.id));
     });
     let routePreviewTimer = null;
+    let routeAssessmentRevision = 0;
+    let composerSelectionRevision = 0;
     let editedCommand = null;
     let previousDraft = null;
+    let attachmentBlockedChatId = null;
     const queue = createSubmissionQueue({ context, actions, el, edit: restoreQueuedDraft });
     el('queued-edit-cancel')?.addEventListener('click', cancelQueuedEdit);
 
@@ -89,7 +92,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         const wanted = knownHarnessId(id);
         const match = harnessOptions().find((item) => item.id === wanted || item.id.toLowerCase() === String(wanted || '').toLowerCase());
         if (match?.label) return match.label;
-        return wanted ? wanted.replace(/_/g, ' ') : 'Auto';
+        return wanted ? displayHarnessLabel(wanted) : 'Auto';
     }
 
     function selectedHarnessId() {
@@ -215,10 +218,6 @@ export function createThreadsComposer({ context, actions, el, token }) {
         const effort = String(context.draft.reasoning_effort || 'medium')
             .replace(/^./, (char) => char.toUpperCase())
             .replace('Xhigh', 'Extra high');
-        const autoRoute = context.routingAssessment?.route || {};
-        const assessedHarness = knownHarnessId(autoRoute.backend);
-        const complexity = String(context.routingAssessment?.complexity || '').toLowerCase();
-        const autoModel = String(autoRoute.model || 'auto').replace(/:free$/i, '');
         const manualEffort = modelOptionValues('effort').length && !encodedVariant(context.draft.model_name).effort ? ` · ${effort}` : '';
         const speed = context.draft.service_tier === 'priority' && modelOptionValues('speed').length ? ' · Fast' : '';
         // 2026-10-22 selector: Auto and a fixed harness/model are mutually exclusive. Auto shows only
@@ -238,22 +237,15 @@ export function createThreadsComposer({ context, actions, el, token }) {
             fullLabel = `${harness} · ${pretty}${speed}`;
             tooltip = `${harness} · ${pretty}${manualEffort}${speed}`;
         }
-        // Auto's pick for the message being typed, visible before send: "Auto: Medium, Codex gpt-x".
+        // Footer shows Auto OR the pinned model name, never both. The last
+        // automatic pick stays on the button tooltip (see tooltip above).
         const chip = el('model-auto-chip');
         if (chip) {
-            const route = context.routingAssessment?.route || {};
-            const tierHarness = knownHarnessId(route.backend);
-            const tierModel = String(route.model || '').replace(/:free$/i, '');
-            const tier = String(context.routingAssessment?.complexity || '');
-            const show = mode === 'auto' && Boolean(context.routingAssessment) && Boolean(tierHarness);
-            chip.hidden = !show;
-            const catalogRow = (cliModels(tierHarness) || []).find((m) => String(m.id || '').toLowerCase() === String(route.model || '').toLowerCase());
-            const shortModel = tierModel && tierModel.toLowerCase() !== 'auto' ? shortModelName(route.model, catalogRow?.name || '') : '';
-            const tierLabel = tier ? tier[0].toUpperCase() + tier.slice(1) : 'Medium';
-            chip.textContent = show ? `${tierLabel}, ${harnessLabel(tierHarness)}${shortModel ? `, ${shortModel}` : ''}` : '';
+            chip.hidden = true;
+            chip.textContent = '';
             chip.removeAttribute('title');
             delete chip.dataset.tooltip;
-            chip.dataset.tooltipIfTruncated = '';
+            delete chip.dataset.tooltipIfTruncated;
         }
         el('model-label').textContent = fullLabel;
         el('model-label').title = '';
@@ -299,39 +291,71 @@ export function createThreadsComposer({ context, actions, el, token }) {
         text.textContent = `Would use: ${autoDecisionText()}`;
     }
 
+    function composerScope() {
+        const draft = context.draft;
+        return JSON.stringify([
+            composerSelectionRevision, actions.developmentRoute().path, context.workspaceMode, context.currentChat?.id,
+            context.selectedBoardKey, draft.project_id, draft.workflow_id, context.editingCommandId,
+            draft.route_mode, draft.backend, draft.provider, draft.model_name, draft.reasoning_effort,
+            draft.service_tier, draft.autonomy_level, draft.permission_mode, draft.execution_profile,
+            el('task-prompt').value.trim(), context.usePlaywright,
+            context.attachments.map(item => [item.key, item.reference]),
+        ]);
+    }
+
+    function clearRoutingAssessment() {
+        window.clearTimeout(routePreviewTimer);
+        ++routeAssessmentRevision;
+        ++composerSelectionRevision;
+        context.routingAssessment = null;
+        updateModelLabel();
+    }
+
     async function refreshRoutingAssessment(instruction, options) {
         const prompt = String(instruction || el('task-prompt')?.value || '').trim();
         if (context.draft.route_mode !== 'auto' && !options?.force) return null;
+        const revision = ++routeAssessmentRevision;
+        const scope = composerScope();
         if (!prompt) {
             context.routingAssessment = null;
             updateModelLabel();
             return null;
         }
+        let assessment = null;
         try {
             const ticket = context.attachments.find((item) => item.ticket_id || item.board_ticket_key) || {};
+            const chatId = context.currentChat?.id;
+            const board = actions.boardByKey(context.selectedBoardKey);
             const hasImages = context.attachments.some(
                 (item) => item.sourceLabel === 'Image' || String(item.text || '').includes('MIME type: image/')
             );
-            context.routingAssessment = await actions.api('/workflows/studio/routing-assessment', {
+            assessment = await actions.api('/workflows/studio/routing-assessment', {
                 method: 'POST',
                 body: {
                     instruction: prompt,
+                    chat_id: chatId || undefined,
+                    ticket_id: chatId ? undefined : context.attachments.find((item) => item.ticket_id)?.ticket_id,
+                    board_key: chatId ? undefined : board?.key,
                     ticket_title: ticket.ticket_title || ticket.label || '',
                     ticket_description: ticket.text || '',
                     has_images: hasImages,
                     recent_messages: (context.currentChat?.messages || []).slice(-6).map((message) => message.content || message.text || '')
                 }
             });
-            updateModelLabel();
-            return context.routingAssessment;
         } catch (_) {
-            return context.routingAssessment;
+            // The server can select a route for this submission without a preview.
         }
+        if (revision === routeAssessmentRevision && scope === composerScope()) {
+            context.routingAssessment = assessment;
+            updateModelLabel();
+        }
+        return assessment;
     }
 
     function scheduleRoutePreview() {
         window.clearTimeout(routePreviewTimer);
-        if (context.draft.route_mode !== 'auto') {
+        ++routeAssessmentRevision;
+        if (context.draft.route_mode !== 'auto' || context.submittingPrompt) {
             syncRoutePreview();
             return;
         }
@@ -380,7 +404,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         return context.attachments.filter((item) => item.kind === 'skill' && item.skill_id).map((item) => String(item.skill_id));
     }
 
-    async function createTask(prompt) {
+    async function createTask(prompt, assessment) {
         const ticket = context.attachments.find((item) => item.ticket_id) || null;
         const boardTicket = context.attachments.find((item) => item.board_ticket_key) || null;
         const board = actions.boardByKey(context.selectedBoardKey);
@@ -404,7 +428,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
             permission_mode: context.draft.permission_mode,
             reasoning_effort: context.draft.route_mode === 'manual' && encodedVariant(context.draft.model_name).effort ? undefined : context.draft.reasoning_effort,
             service_tier: context.draft.route_mode === 'manual' && encodedVariant(context.draft.model_name).speed ? undefined : context.draft.service_tier,
-            routing_assessment: context.routingAssessment || undefined,
+            routing_assessment: assessment || undefined,
             attachments: attachedFilesPayload(),
             skill_ids: selectedSkillIds(),
             use_playwright: Boolean(context.usePlaywright)
@@ -425,7 +449,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         actions.toast(result.message || 'Task created.');
     }
 
-    async function shouldConfirmWorkflowPush() {
+    function shouldConfirmWorkflowPush(assessment) {
         if (context.editingCommandId) return false;
         if ((context.controlState.interactions || []).length) return false;
         if (actions.isActiveAgentRun(context.currentRun)) return false;
@@ -433,7 +457,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         if (autonomy === 'plan' || autonomy === 'approval') return false;
         if (context.draft.workflow_id || context.currentWorkflow) return false;
         if (Number(context.currentChat?.development_workflow_id || 0)) return false;
-        return String(context.routingAssessment?.execution_mode || '') === 'workflow';
+        return assessment?.execution_mode === 'workflow';
     }
 
     function activeWorkflowRun() {
@@ -453,8 +477,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
         if (!active) {
             context.guidanceRunId = null;
             if (!context.editingCommandId) {
-                const recovering = context.currentRun?.origin === 'proactive_orchestrator' && context.currentRun.status === 'blocked';
-                el('task-prompt').placeholder = recovering ? 'Draft your follow-up' : 'Describe what you want changed';
+                const recovering = context.currentRun?.origin === 'proactive_orchestrator'
+                    && context.currentRun.status === 'blocked' && context.currentRun.waiting_kind !== 'human_review';
+                el('task-prompt').placeholder = recovering ? 'Draft your follow-up' : 'Describe the task';
             }
             return;
         }
@@ -470,7 +495,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
     }
 
     async function sendPrompt(event) {
+        if (event.target !== el('studio-composer')) return;
         event.preventDefault();
+        if (event.submitter && event.submitter !== el('send-button')) return;
         if (context.busy || !context.ready || context.routeLoading || el('send-button').disabled) return;
         const route = actions.developmentRoute();
         if (route.kind === 'thread' && Number(context.currentChat?.id || 0) !== Number(route.chatId)) {
@@ -486,15 +513,46 @@ export function createThreadsComposer({ context, actions, el, token }) {
         const prompt = el('task-prompt').value.trim();
         if (!prompt) return;
         if (context.submittingPrompt) return; // double submit (held Enter / repeat click) during routing checks
+        window.clearTimeout(routePreviewTimer);
+        ++routeAssessmentRevision;
         context.submittingPrompt = true;
+        // 2026-11-12 fluid1: Codex-style instant echo. Show the sent prompt in the transcript at once
+        // (display only) instead of waiting ~1s for routing + POST + refresh; the real render replaces it.
+        const optimistic = optimisticUserMessage(prompt);
         try {
             await sendPromptOnce(prompt);
         } finally {
             context.submittingPrompt = false;
+            if (optimistic?.isConnected) optimistic.remove();
+            // Keep typing flow like Codex: the composer stays focused after a send.
+            const active = document.activeElement;
+            if (!active || active === document.body || active === el('send-button')) el('task-prompt')?.focus({ preventScroll: true });
+        }
+    }
+
+    function optimisticUserMessage(prompt) {
+        try {
+            const list = el('message-list');
+            if (!list || !context.currentChat || context.editingCommandId || context.workspaceMode !== 'chat') return null;
+            if (activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun)) return null;
+            const node = document.createElement('article');
+            node.className = 'studio-message user optimistic-user-message';
+            node.setAttribute('aria-busy', 'true');
+            node.innerHTML = `<div class="user-message">${actions.escapeHtml(prompt)}</div>`;
+            node.style.opacity = '0.75';
+            list.__lastRenderedHtml = null; // in-place insert: the next full render must rebuild
+            list.appendChild(node);
+            node.scrollIntoView({ block: 'end' });
+            return node;
+        } catch (_error) {
+            return null;
         }
     }
 
     async function sendPromptOnce(prompt) {
+        const scope = composerScope();
+        const isCurrent = () => !context.routeLoading && composerScope() === scope;
+        const changed = () => actions.toast('The thread or draft changed while preparing to send. Review the draft and send again.', 'error');
         const wasEditing = Boolean(context.editingCommandId);
         if (activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun)) context.guidanceScope = 'thread';
         if (editedCommand && Number(editedCommand.chat_id) !== Number(context.currentChat?.id)) {
@@ -505,28 +563,27 @@ export function createThreadsComposer({ context, actions, el, token }) {
             actions.toast('This pinned model is not image-capable. Choose Auto or an image-capable model before sending.', 'error');
             return;
         }
+        let assessment = null;
         if (!context.editingCommandId && !activeWorkflowRun()) {
-            try {
-                await refreshRoutingAssessment(prompt, { force: true });
-            } catch (_) {
-                context.routingAssessment = null;
-            }
+            assessment = await refreshRoutingAssessment(prompt, { force: true });
         }
+        if (!isCurrent()) { changed(); return; }
         if ((context.controlState.interactions || []).length && context.guidanceScope !== 'thread') {
             actions.toast('This workflow is waiting for a checkpoint decision. Open Details to approve, revise, or stop it.', 'error');
             actions.openInspector();
             return;
         }
-        if (await shouldConfirmWorkflowPush()) {
+        if (shouldConfirmWorkflowPush(assessment)) {
             const accepted = await actions.confirmAction({
                 title: 'Multi-stage workflow suggested',
                 message: 'This request appears to need coordinated planning, implementation, review, and end-to-end verification. Use a workflow, or send it directly as one agent turn?',
                 confirmLabel: 'Use workflow',
                 cancelLabel: 'Send directly'
             });
+            if (!isCurrent()) { changed(); return; }
             if (!accepted) {
-                context.routingAssessment = {
-                    ...(context.routingAssessment || {}),
+                assessment = {
+                    ...assessment,
                     execution_mode: 'direct',
                     execution_mode_override: 'direct'
                 };
@@ -549,7 +606,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 actions.toast('Queued guidance updated.');
                 await actions.refreshShell({ preserveConversation: true });
             } else if (!context.currentChat) {
-                await createTask(fullPrompt);
+                await createTask(fullPrompt, assessment);
             } else if (activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun)) {
                 const result = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/commands`, {
                     method: 'POST',
@@ -557,6 +614,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
                         content: fullPrompt,
                         source: 'web',
                         command_type: 'followup',
+                        expected_scope: context.currentChat.development_scope,
                         metadata: queuedMetadata
                     }
                 });
@@ -565,16 +623,20 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 queue.render();
                 await actions.refreshShell({ preserveConversation: true });
             } else {
-                await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/messages`, {
+                const result = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/messages`, {
                     method: 'POST',
                     body: {
                         message: fullPrompt,
-                        routing_assessment: context.routingAssessment || null,
+                        routing_assessment: assessment,
                         attachments: attachedFilesPayload(),
                         skill_ids: selectedSkillIds(),
                         use_playwright: Boolean(context.usePlaywright)
                     }
                 });
+                if (result?.started === true && attachmentBlockedChatId === submissionChatId) {
+                    attachmentBlockedChatId = null;
+                    actions.toast('Work started.', 'success');
+                }
                 await actions.refreshShell({ preserveConversation: false });
             }
             if (!wasEditing) {
@@ -585,6 +647,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         } catch (error) {
             el('task-prompt').value = prompt;
             actions.resizePrompt();
+            if (error.data?.code === 'proposal_attachment_unavailable') attachmentBlockedChatId = submissionChatId;
             if (error.data?.code === 'development_execution_busy' && context.currentChat?.id === submissionChatId) {
                 await actions.refreshShell({ preserveConversation: true });
             }
@@ -2219,6 +2282,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
         bindComposerDrop,
         catalogModels,
         changeGuidanceScope,
+        clearRoutingAssessment,
         closeComposerActionMenu,
         closeModelPane,
         continueRun,

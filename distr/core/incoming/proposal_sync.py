@@ -309,7 +309,8 @@ def _thread_receipts():
 def reconcile_decisions(remote_rows):
     """Retry durable local decisions, and import decisions missed while offline."""
     from . import proposals as incoming
-    from distr.core.tensology_client import configured_tensology_client
+    from .project_links import proposal_in_scope
+    from distr.core.tensology_client import TensologyApiError, configured_tensology_client
     receipts = _thread_receipts()
     rows, errors = [], []
     client = None
@@ -323,9 +324,23 @@ def reconcile_decisions(remote_rows):
             incoming.record_remote_proposal_decision({**shaped, 'request_id': row['id'], 'status': row.get('status')})
             rows.append(row)
             continue
+        if shaped.get('merge_source_reserved'):
+            incoming.clear_rejected_merge_dismissal(shaped)
+            rows.append(row)
+            continue
         thread_id = None
         for chat_id, receipt in receipts:
             match = receipt.get('key') == incoming._proposal_handoff_key(shaped)
+            if shaped.get('requires_merge_receipt'):
+                if not match or not receipt.get('merge_ack_ready') or receipt.get('start_pending'):
+                    continue
+                merge = incoming._thread_merge_receipt(chat_id, shaped)
+                try:
+                    incoming._require_complete_merge(merge, shaped.get('project_id'))
+                except incoming.MergeHandoffPending:
+                    continue
+                if not proposal_in_scope(merge['merged']):
+                    continue
             if not match and receipt.get('proposal'):
                 try:
                     match = source_identity(receipt['proposal']) == source_identity(row)
@@ -343,6 +358,13 @@ def reconcile_decisions(remote_rows):
                                     idempotency_key=f"proposal-decision-{row['id']}-{action}-{thread_id or ''}")
                 row['status'] = saved['status']
                 row['stored_status'] = saved['status']
+            except TensologyApiError as exc:
+                if action == 'dismiss' and exc.status == 409 and exc.code in {'merge_source_reserved', 'merge_handoff_pending'}:
+                    incoming.clear_rejected_merge_dismissal(shaped)
+                    if exc.code == 'merge_source_reserved':
+                        row['merge_source_reserved'] = True
+                else:
+                    errors.append(f"{row['id']}: {str(exc)[:100]}")
             except Exception as exc:
                 errors.append(f"{row['id']}: {str(exc)[:100]}")
         rows.append(row)

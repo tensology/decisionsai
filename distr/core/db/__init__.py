@@ -48,12 +48,22 @@ class IncomingProposalSnapshot(Base):
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
 
 
+class IncomingMixedMergeIntent(Base):
+    """Retain the local half of a merge before contacting Tensology."""
+    __tablename__ = 'incoming_mixed_merge_intents'
+
+    key = Column(String, primary_key=True)
+    snapshot = Column(Text, nullable=False)
+
+
 class SourceReplyDraft(Base):
     """Reviewed outbound messages, independent of engine-owned thread parameters."""
     __tablename__ = 'source_reply_drafts'
     id = Column(String, primary_key=True)
     chat_id = Column(Integer, ForeignKey('chats.id', ondelete='CASCADE'), nullable=False, index=True)
     payload = Column(Text, nullable=False)
+    claimed_response_id = Column(Integer, nullable=True)
+    claimed_source_key = Column(String, nullable=True)
     status = Column(String, nullable=False, default='draft')
     created_at = Column(DateTime, nullable=False, default=utc_now_naive)
     modified_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
@@ -351,7 +361,7 @@ class Settings(Base):
     # Individual columns removed to support multiple accounts
     
     # Initiative Settings
-    initiative_level = Column(String, default='assist')
+    initiative_level = Column(String, default='operate')
     initiative_allow_telegram = Column(Boolean, default=False)
     initiative_allow_routine_tasks = Column(Boolean, default=False)
     initiative_scan_boards = Column(Boolean, default=True)
@@ -366,6 +376,10 @@ class Settings(Base):
     initiative_ask_external_comms = Column(Boolean, default=True)
     initiative_ask_file_changes = Column(Boolean, default=True)
     initiative_ask_sensitive = Column(Boolean, default=True)
+    initiative_telegram_notify_suggestions = Column(Boolean, default=False)
+    initiative_recommendations = Column(Boolean, default=False)
+    initiative_own_channel = Column(String, default='')  # '' = Telegram if allowed, else log only
+    initiative_owner_whatsapp = Column(String, default='')  # owner's own number for Own-outcomes updates
     
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
@@ -413,6 +427,7 @@ class Chat(Base):
     voice_model = Column(String, nullable=True)  # Store the voice/speaker used (e.g., 'af_sky', 'alloy')
     created_date = Column(DateTime, default=utc_now_naive)
     modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    ready_acknowledged_at = Column(DateTime, nullable=True)
 
     children = relationship("Chat", 
                           backref=backref("parent", remote_side=[id]),
@@ -808,7 +823,7 @@ try:
                 ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
                 ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
                 # Initiative settings
-        ("initiative_level", "VARCHAR DEFAULT 'assist'"),
+        ("initiative_level", "VARCHAR DEFAULT 'operate'"),
         ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
         ("initiative_allow_routine_tasks", "BOOLEAN DEFAULT 0"),
         ("initiative_scan_boards", "BOOLEAN DEFAULT 1"),
@@ -823,6 +838,10 @@ try:
         ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
                 ("initiative_ask_file_changes", "BOOLEAN DEFAULT 1"),
                 ("initiative_ask_sensitive", "BOOLEAN DEFAULT 1"),
+                ("initiative_telegram_notify_suggestions", "BOOLEAN DEFAULT 0"),
+                ("initiative_recommendations", "BOOLEAN DEFAULT 0"),
+                ("initiative_own_channel", "VARCHAR DEFAULT ''"),
+                ("initiative_owner_whatsapp", "VARCHAR DEFAULT ''"),
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),

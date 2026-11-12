@@ -1,0 +1,364 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "existing-project-to-plan",
+  "name": "Existing Project: Reverse-engineer to Plan",
+  "role": "solution_architect",
+  "category": "Engineering",
+  "archetype": "review_cleanup",
+  "description": "Fetch everything already in an existing project (routes, pages, models, migrations, README, recent threads and tickets) and build the Plan's ERD, pages and requirements from it, with a Requirements Pack separating derived from new.",
+  "kickoff": "Start the \"Existing Project: Reverse-engineer to Plan\" loop.\nGoal: the Plan reflects the existing project with evidence-backed requirements.\nExit when: scan, ERD, interfaces and Requirements Pack are refreshed and Paul has reviewed the conflicts.",
+  "loop_contract": {
+    "name": "Existing Project: Reverse-engineer to Plan",
+    "goal": "plan derived from the existing project with provenance",
+    "exit_when": "scan, ERD, interfaces and Requirements Pack refreshed and reviewed",
+    "check_command": "plan_snapshot validation_warnings empty",
+    "max_iterations": 3,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass the design or plan approval gate",
+      "If stuck after several iterations, stop and report blockers instead of inventing content"
+    ]
+  },
+  "expected_check_command": "plan_snapshot shows the expected artifacts with validation_warnings empty",
+  "tags": [
+    "existing-project",
+    "plan",
+    "erd",
+    "reverse-engineer",
+    "requirements-pack"
+  ],
+  "run_settings": {
+    "execution_mode": "sequential",
+    "human_checkpoints": true,
+    "concurrency_scope": "project",
+    "max_parallel_tickets": 1,
+    "branch_per_ticket": false,
+    "auto_route_models": true,
+    "adaptive_multi_model_enabled": true,
+    "max_parallel_evaluators": 2,
+    "prefer_free_local": true,
+    "ui_local_first": true,
+    "hosted_ui_escalation_after_failures": 2,
+    "independent_validation": true,
+    "allow_provider_failover": false,
+    "memory_enabled": true,
+    "load_workflow_memory": true,
+    "load_project_memory": true,
+    "capture_memory_deltas": true,
+    "capture_failures_and_lessons": true
+  },
+  "steps": [
+    {
+      "name": "Scan the existing project",
+      "instruction": "Call plan_scan_project to inventory the linked repository deterministically (routes, views/templates, ORM models, sitemap, file structure) and fill the Plan's Brief, PRD, FRAC, Flows, and Architecture from what already exists. Read README, AGENTS.md and docs read-only to understand intent. Report scan limitations honestly (unsupported frameworks, thin signal).",
+      "skills": [
+        "product-lens",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Scan not run",
+        "Limitations hidden",
+        "Repository files were edited"
+      ],
+      "validation_prompt": "The scan ran, the Plan sections it owns were refreshed, and limitations or thin-signal areas are listed.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "planning",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "project",
+          "board",
+          "plan_snapshot"
+        ],
+        "expected_outputs": [
+          "scan_summary",
+          "scan_limitations",
+          "refreshed_sections"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Map the data model and ERD",
+      "instruction": "Read the data layer read-only: ORM models, migrations (Django/Alembic/Prisma/SQL), and schema files. Compare with the Plan Architecture ERD from plan_snapshot and correct missing entities, keys, and relationships with plan_write_artifacts (architecture, mermaid erDiagram). Never connect to a live database or read data rows; schema only.",
+      "skills": [
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli",
+        "shell",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Entities found in migrations are missing",
+        "Data rows were read",
+        "ERD fails validation"
+      ],
+      "validation_prompt": "The Architecture ERD covers the entities and relationships found in models/migrations, with any gaps listed.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "planning",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "scan_summary",
+          "plan_snapshot"
+        ],
+        "expected_outputs": [
+          "architecture_erd",
+          "data_gaps"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Rebuild pages and interfaces from the code",
+      "instruction": "Review the generated Interfaces wire against the real routes and templates. Add missing screens (route, id, #| description of what the page does) and navigation in the decisions-flow sidecar with plan_write_artifacts; keep hand-edited screens and scan markers intact. Mark pages that exist in code but are unreachable.",
+      "skills": [
+        "ui-ux-principles"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Primary route without a screen",
+        "Hand-edited screens overwritten",
+        "Wire diagnostics remain"
+      ],
+      "validation_prompt": "Every primary route has a validated screen with a #| description, and unreachable or stale pages are flagged.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "implementation",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "scan_summary",
+          "plan_snapshot"
+        ],
+        "expected_outputs": [
+          "interfaces_wire",
+          "unreachable_pages"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Capture history as a Requirements Pack",
+      "instruction": "Call plan_requirements_pack to reverse-engineer what has been asked so far from the README, Plan documents, the project's Development threads and tickets from the last 90 days. Review the pack: derived requirements must cite evidence (file, ticket, thread); new forward-looking instructions from the linked ticket go in 'New instructions' marked new; contradictions go in 'Conflicts'. The pack is stored in Decisions only.",
+      "skills": [
+        "product-lens",
+        "completion-protocol"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Derived items lack evidence",
+        "New and derived mixed",
+        "Secrets or personal data copied"
+      ],
+      "validation_prompt": "A Requirements Pack exists with derived and new requirements separated, evidence on derived items, and conflicts listed.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "planning",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "plan_snapshot",
+          "ticket",
+          "project"
+        ],
+        "expected_outputs": [
+          "requirements_pack",
+          "requirements_ledger",
+          "conflicts"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Reconcile the plan",
+      "instruction": "Cross-check Brief, PRD, FRAC, ERD, Interfaces and the Requirements Pack for contradictions and gaps. Update FRAC so every derived behaviour that must not regress has an FR, keep FR keys stable, and list the conflicts Paul must decide. Use Playwright only read-only for screenshots of running pages when a dev server is already up.",
+      "skills": [
+        "completion-protocol",
+        "qa-tester"
+      ],
+      "tools": [
+        "cli",
+        "playwright",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Conflicts silently resolved",
+        "FR keys renumbered"
+      ],
+      "validation_prompt": "A reconciliation note lists resolved gaps and open conflicts, and FRAC covers the derived behaviours.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "review",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "requirements_ledger",
+          "plan_snapshot"
+        ],
+        "expected_outputs": [
+          "reconciliation_note",
+          "open_conflicts"
+        ],
+        "output_token_budget": 2000
+      },
+      "on_fail_goto_position": 4
+    },
+    {
+      "name": "Plan review approval",
+      "instruction": "Stop for Paul's review of the generated plan. Summarise what was derived, the conflicts that need a decision, and where to review (Development > Plan). Do not build tickets unless Paul asks for them.",
+      "skills": [
+        "completion-protocol"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Approval requested without conflicts listed"
+      ],
+      "validation_prompt": "Paul approved the generated plan, or the run is paused waiting for approval with the conflicts listed.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": true,
+      "require_approval": true,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "release",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "reconciliation_note",
+          "open_conflicts"
+        ],
+        "expected_outputs": [
+          "approval_summary",
+          "approval_decision"
+        ],
+        "output_token_budget": 2000
+      }
+    },
+    {
+      "name": "Report and compact memory",
+      "instruction": "Report the refreshed Plan sections, ERD coverage, interface coverage, Requirements Pack counts (derived, new, conflicts), and recommended next tickets. Compact into workspace memory. Do not edit project files.",
+      "skills": [
+        "completion-protocol"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Do not edit, create, or delete files in the project repository; write planning output only through the Decisions Plan tools\n- Never copy credentials, .env values, database contents, or personal data into plan artifacts\n- Keep every requirement traceable: derived requirements cite their evidence, new requirements say they are new",
+      "failure_checklist": [
+        "Counts missing",
+        "Conflicts dropped"
+      ],
+      "validation_prompt": "A compact report exists with section coverage, requirement counts, conflicts, and next steps.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "require_approval": false,
+      "other_tool": "Decisions Plan tools (MCP): plan_snapshot, plan_scan_project, plan_write_artifacts, plan_derive_from_design, plan_requirements_pack, plan_build_tickets",
+      "action_type": "send_to_project_cli",
+      "timeout_seconds": 900,
+      "max_retries": 1,
+      "config": {
+        "execution_scope": "ticket",
+        "step_role": "reporting",
+        "read_only": true,
+        "model_policy": {
+          "auto_route_models": true,
+          "prefer_local": true
+        },
+        "required_context": [
+          "approval_decision",
+          "requirements_ledger"
+        ],
+        "expected_outputs": [
+          "run_report",
+          "memory_delta"
+        ],
+        "output_token_budget": 2000
+      }
+    }
+  ],
+  "references": {
+    "source": "decisionsai_builtin_workflows",
+    "proposal": "builtin-workflows-planning-proposal.md (2026-11-11)"
+  }
+}

@@ -22,7 +22,12 @@ from distr.core.workspace_memory.pickup_handoff import (
 class WorkspaceMemoryTests(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
-        wm_paths.WORKSPACES_ROOT = Path(self._tmpdir.name) / "workspaces"
+        root = patch.object(wm_paths, "WORKSPACES_ROOT", Path(self._tmpdir.name) / "workspaces")
+        root.start()
+        self.addCleanup(root.stop)
+        mempalace = patch("distr.core.mempalace.wiring.dual_write_workspace_event")
+        mempalace.start()
+        self.addCleanup(mempalace.stop)
 
     def tearDown(self):
         self._tmpdir.cleanup()

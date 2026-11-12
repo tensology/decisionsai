@@ -10,11 +10,16 @@
             </div>
             <div class="kanban-ticket-panels">
                 <section class="kanban-ticket-panel" id="kanban-ticket-details-panel" role="tabpanel" aria-labelledby="kanban-ticket-details-tab">
+                    <aside class="kanban-ticket-plan-sources" id="kanban-ticket-plan-sources" aria-label="Plan sources" hidden>
+                        <p role="status"></p>
+                        <ul hidden></ul>
+                        <a target="_blank" rel="noopener" hidden>Open Plan in a new tab</a>
+                    </aside>
                     <label>Title<input id="kanban-ticket-title" type="text" autocomplete="off" required></label>
                     <label id="kanban-ticket-complexity-field">Complexity<select id="kanban-ticket-complexity"><option value="trivial">Trivial</option><option value="simple">Simple</option><option value="moderate">Moderate</option><option value="complex">Complex</option><option value="very_complex">Very complex</option></select></label>
                     <label>Description<textarea id="kanban-ticket-description" rows="7"></textarea></label>
                     <details id="kanban-ticket-workflow-draft" class="kanban-ticket-workflow-draft" hidden>
-                        <summary>Workflow draft</summary>
+                        <summary>Workflow review</summary>
                         <p id="kanban-ticket-workflow-draft-status" role="status"></p>
                         <div id="kanban-ticket-workflow-draft-steps"></div>
                         <div class="kanban-ticket-workflow-draft-actions">

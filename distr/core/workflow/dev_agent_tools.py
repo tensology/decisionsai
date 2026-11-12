@@ -298,6 +298,12 @@ TOOL_SCHEMAS["open_thread"] = {
 DISPATCH["select_thread"] = _thread_tool("select_thread", "select_thread")
 DISPATCH["open_thread"] = _thread_tool("open_thread", "open_thread")
 
+# Plan tools for the built-in workflows (2026-11-11): validated Plan edits only, never repo writes.
+from distr.core.planning.plan_tools import DISPATCH as _PLAN_DISPATCH, TOOL_SCHEMAS as _PLAN_SCHEMAS  # noqa: E402
+
+TOOL_SCHEMAS.update(_PLAN_SCHEMAS)
+DISPATCH.update(_PLAN_DISPATCH)
+
 # Never exposed to agents (computer_use is a disabled scaffold).
 HIDDEN_TOOLS = {"computer_use"}
 
