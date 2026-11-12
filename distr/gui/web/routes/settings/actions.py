@@ -148,6 +148,20 @@ def register_routes(router, templates):
             signal_manager.play_action_by_name.emit(name)
         return JSONResponse({"success": True})
 
+    @router.post("/actions/stop")
+    @route_handler("stop action")
+    async def stop_action_api():
+        """Stop any action currently playing (mirrors the StopAction tool)."""
+        from distr.core.signals import get_agent_event_queue
+        queue = get_agent_event_queue()
+        if queue is None:
+            raise HTTPException(status_code=503, detail="Action playback service is unavailable")
+        try:
+            queue.put(('stop_action', {}), block=False)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Could not stop the action: {exc}")
+        return JSONResponse({"success": True})
+
     @router.delete("/actions/{action_id}")
     @route_handler("delete action")
     async def delete_action(action_id: int):
