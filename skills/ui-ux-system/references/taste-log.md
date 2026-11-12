@@ -201,3 +201,7 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-11-10 | Did: Required a literal project name in a shared contact's request to accept its routing | Wanted: Infer the project from relevant conversation/email context, developer replies, product details and linked-project information; ask for confirmation only when still ambiguous | Why: The AI should understand the thread, while all sources remain explicitly project-linked
 
 2026-11-10 | Did: Put the Incoming proposal source-evidence JSON directly in the visible Development message | Wanted: Keep the readable brief and media cards visible, with full source messages available behind a collapsed readable Source context section | Why: Paul asked to keep machine-readable evidence in the background without depriving the engine of the voice note or chat context
+
+2026-11-11 | Did: Voyager Add Device put the title, subtitle, and close icon in one crowded row | Wanted: Title above subtitle with enough space for the header and form | Why: Paul explicitly said the existing panel looked bunched up
+
+2026-11-11 | Did: Wrapped only the Breakdown date controls and left list date controls in a scrolling strip | Wanted: One compact Period, From and To widget with labels in the borders across Finance tabs | Why: Paul asked for consistent controls in Documents, Adjustments and the other tabs
