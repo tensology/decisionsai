@@ -2552,3 +2552,9 @@ html.dev-chat-route #chrome-cli-divider { display: none !important; }
 .client-reply-callout { margin-top: 12px; border: 1px solid var(--studio-accent, var(--studio-line)); border-radius: 10px; max-width: 720px; }
 .client-reply-callout header button[data-close] { width: auto; padding: 0 10px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; }
 .client-reply-callout textarea { width: 100%; box-sizing: border-box; }
+
+/* 2026-11-13 response footer: [actions] ... [status chip] [time · duration], one row per reply. */
+.message-footer-meta { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-left: auto; }
+.message-status-chip { display: inline-flex; min-height: 18px; align-items: center; padding: 0 7px; border-radius: 999px; background: rgba(34,197,94,.12); color: #86efac; font-size: 10px; font-weight: 650; letter-spacing: .02em; text-transform: capitalize; }
+.message-status-chip.warn { background: rgba(245,158,11,.14); color: #fcd34d; }
+.message-status-chip.bad { background: rgba(239,68,68,.14); color: #fca5a5; }

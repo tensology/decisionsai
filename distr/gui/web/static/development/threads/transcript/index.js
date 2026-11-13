@@ -21,10 +21,42 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         });
         focusTarget?.focus({ preventScroll: true });
     }
+    // The server stores UTC; some fields (turn_started_at) come without a zone suffix, which
+    // the browser read as local time (a 14:49 SAST run showed "12:49 PM"). Treat them as UTC.
+    function serverDate(timestamp) {
+        if (!timestamp) return new Date(NaN);
+        const text = String(timestamp);
+        return new Date(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text) ? `${text}Z` : text);
+    }
+    // Instant notices (e.g. "Ticket created in Backlog.", zero-duration assistant rows) are saved as
+    // their own row after the run's reply row, so they listed below a reply that finished minutes
+    // later. Move each one up to its real time; every other row keeps the server order.
+    function chronologicalNotices(messages) {
+        const out = messages.slice();
+        const at = (message) => serverDate(message?.timestamp).getTime();
+        for (let i = 1; i < out.length; i += 1) {
+            const message = out[i];
+            if ((message.role || 'assistant') !== 'assistant' || message.spoken) continue;
+            if (message.turn_duration_seconds === undefined || Number(message.turn_duration_seconds) !== 0) continue;
+            const time = at(message);
+            if (!Number.isFinite(time)) continue;
+            let target = i;
+            while (target > 0) {
+                const previous = at(out[target - 1]);
+                if (!Number.isFinite(previous) || previous <= time) break;
+                target -= 1;
+            }
+            if (target < i) {
+                out.splice(i, 1);
+                out.splice(target, 0, message);
+            }
+        }
+        return out;
+    }
     function messageTime(timestamp) {
         if (!timestamp) return '';
-        const date = new Date(timestamp);
-        return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const date = serverDate(timestamp);
+        return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     }
 
     function turnTimingHtml(message) {
@@ -337,7 +369,21 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return `<button type="button" class="read-response-button play-spoken-button" data-play-spoken="${index}" aria-label="Play spoken version" title="Play spoken version">${playIcon}</button>`;
     }
 
-    function messageActionsHtml(message, index, latestAssistant, canReply) {
+    // A reply that ends with a bare "Status: <word>" line: show it as a chip in the footer.
+    const STATUS_MARKER = /\n+\s*\**Status:\**\s*(completed|complete|done|failed|blocked|cancelled|canceled|partial|in progress|needs review)\s*\.?\s*$/i;
+    function splitStatusMarker(content) {
+        const text = String(content || '');
+        const match = text.match(STATUS_MARKER);
+        if (!match) return { content: text, status: '' };
+        return { content: text.slice(0, match.index).trimEnd(), status: match[1].toLowerCase() };
+    }
+    function statusChipHtml(status) {
+        if (!status) return '';
+        const tone = /fail|block|cancel/.test(status) ? 'bad' : /partial|progress|review/.test(status) ? 'warn' : 'ok';
+        const label = status === 'complete' || status === 'done' ? 'completed' : status;
+        return `<span class="message-status-chip ${tone}" role="status">${actions.escapeHtml(label)}</span>`;
+    }
+    function messageActionsHtml(message, index, latestAssistant, canReply, status = '') {
         const copyIcon =
             '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5"></rect><path d="M3 10V4.5A1.5 1.5 0 0 1 4.5 3H10"></path></svg>';
         const forkIcon =
@@ -353,7 +399,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const readButton = latestAssistant && !message.spoken && !playButton
             ? `<button type="button" class="read-response-button" data-read-response="${index}" aria-label="Read response aloud" title="Read response: speak a short spoken version and add it to this thread">${mouthIcon}</button>`
             : playButton;
-        return `<footer class="message-footer"><div class="message-actions" aria-label="Response actions"><button type="button" data-copy-message="${index}" aria-label="Copy response" title="Copy response to clipboard">${copyIcon}</button>${readButton}${latestAssistant ? `<button type="button" data-fork-current aria-label="Fork thread" title="Continue from this transcript in a new independent thread. This does not create a Git branch.">${forkIcon}</button>` : ''}${replyButton}</div>${turnTimingHtml(message)}</footer>`;
+        return `<footer class="message-footer"><div class="message-actions" aria-label="Response actions"><button type="button" data-copy-message="${index}" aria-label="Copy response" title="Copy response to clipboard">${copyIcon}</button>${readButton}${latestAssistant ? `<button type="button" data-fork-current aria-label="Fork thread" title="Continue from this transcript in a new independent thread. This does not create a Git branch.">${forkIcon}</button>` : ''}${replyButton}</div><div class="message-footer-meta">${statusChipHtml(status)}${turnTimingHtml(message)}</div></footer>`;
     }
 
     // Incoming threads end with a "ready to send this?" call-out, but only once all work is done:
@@ -393,7 +439,9 @@ export function createThreadsTranscript({ context, actions, el, token }) {
 
     function ticketMovePresentation(message) {
         const content = String(message?.content || '').trim();
-        let match = content.match(/^Ticket moved:\s*(.+?)\s+to\s+(.+?)\.$/i);
+        let match = content.match(/^Ticket created in\s+(.+?)\.$/i);
+        if (match) return { from: '', to: match[1], created: true };
+        match = content.match(/^Ticket moved:\s*(.+?)\s+to\s+(.+?)\.$/i);
         if (match) return { from: match[1], to: match[2] };
         match = content.match(/^Ticket moved to\s+(.+?)(?:\s+after workflow completion)?\.$/i);
         if (match) return { from: '', to: match[1] };
@@ -404,7 +452,9 @@ export function createThreadsTranscript({ context, actions, el, token }) {
     }
 
     function ticketMoveHtml(message, move) {
-        const label = move.from
+        const label = move.created
+            ? `<span>Ticket created in</span> <strong>${actions.escapeHtml(move.to)}</strong>`
+            : move.from
             ? `<span>Moved:</span> <strong>${actions.escapeHtml(move.from)}</strong> <span aria-hidden="true">→</span> <strong>${actions.escapeHtml(move.to)}</strong>`
             : `<span>Moved to</span> <strong>${actions.escapeHtml(move.to)}</strong>`;
         const timestamp = messageTime(message.timestamp);
@@ -831,10 +881,11 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const clientDraft = context.currentChat?.has_reply_source
             ? splitClientDraft(workflowSafeAssistantContent(message.content || ''))
             : { content: workflowSafeAssistantContent(message.content || ''), draft: '' };
-        const content = clientDraft.content;
+        const statusMarker = splitStatusMarker(clientDraft.content);
+        const content = statusMarker.content;
         const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
         const canReply = latest && !messages.slice(index + 1).some((item) => item.role === 'user');
-        return `<article class="studio-message assistant"${clientDraft.draft ? ` data-client-draft="${actions.escapeHtml(clientDraft.draft)}"` : ''}><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest, canReply)}${clientCalloutHtml(message, index, canReply, messages)}</div></article>`;
+        return `<article class="studio-message assistant"${clientDraft.draft ? ` data-client-draft="${actions.escapeHtml(clientDraft.draft)}"` : ''}><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest, canReply, statusMarker.status)}${clientCalloutHtml(message, index, canReply, messages)}</div></article>`;
     }
 
     // Spoken versions from the Read response button: quiet row, Copy only, never "final".
@@ -1357,8 +1408,8 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         el('studio-empty').classList.add('hidden');
         const list = el('message-list');
         const focusedKey = captureActivityState(list);
-        const messages = (chat.messages || [])
-            .filter((message) => !isDevelopmentConversationNoise(message, chat))
+        const messages = chronologicalNotices((chat.messages || [])
+            .filter((message) => !isDevelopmentConversationNoise(message, chat)))
             .slice(-140);
         spokenBySource = new Map();
         let previousReplyRowId = null;
