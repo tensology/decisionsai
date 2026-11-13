@@ -129,3 +129,7 @@
 .sidebar-section-label .sidebar-section-toggle .sidebar-section-count { margin-left: auto; }
 .sidebar-running-automations .sidebar-section-label { color: var(--studio-warning); }
 .sidebar-no-project.has-running-thread #no-project-toggle .chevron { color: var(--studio-warning); }
+/* No project is its own section, visibly apart from Pinned below it. */
+.sidebar-no-project { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--studio-line-soft); }
+.sidebar-no-project .sidebar-section-label .sidebar-section-toggle { min-height: 34px; }
+.sidebar-running-automations { padding-bottom: 6px; border-bottom: 1px solid var(--studio-line-soft); }

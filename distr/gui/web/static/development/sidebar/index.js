@@ -22,6 +22,9 @@ export function createSidebar({ context, actions, el }) {
         boardsExpanded: false,
         // "No project" is its own folder (threads with no board or project), never a project entry.
         noProjectExpanded: false,
+        // Thread the No project folder last auto-opened for. Auto-open happens once per thread, so a
+        // user collapse while that thread stays open sticks (also across reloads).
+        noProjectRevealedFor: 0,
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
         showAllRecents: new URLSearchParams(window.location.search).get('recent') === '1',
         contextBoardKey: '',
@@ -38,6 +41,7 @@ export function createSidebar({ context, actions, el }) {
         state.collapsedBoardKeys = new Set(Array.isArray(collapsed) ? collapsed : []);
         state.boardsCollapsed = window.localStorage.getItem('decisions-development-boards-collapsed') === 'true';
         state.noProjectExpanded = window.localStorage.getItem('decisions-development-no-project-expanded') === 'true';
+        state.noProjectRevealedFor = Number(window.localStorage.getItem('decisions-development-no-project-revealed') || 0);
     } catch (_) {
         /* Keep default preferences if storage is unavailable. */
     }
@@ -166,8 +170,12 @@ export function createSidebar({ context, actions, el }) {
             + '<div class="task-list hidden" id="no-project-content"></div></section>');
         document.getElementById('no-project-toggle').addEventListener('click', () => {
             state.noProjectExpanded = !state.noProjectExpanded;
+            // The open thread's one-time auto-open is used up: the user's choice wins from here.
+            const open = context.currentChat?.id ? Number(context.currentChat.id) : 0;
+            if (open) state.noProjectRevealedFor = open;
             try {
                 window.localStorage.setItem('decisions-development-no-project-expanded', String(state.noProjectExpanded));
+                window.localStorage.setItem('decisions-development-no-project-revealed', String(state.noProjectRevealedFor || 0));
             } catch (_) { /* keep the in-memory choice */ }
             renderSidebar();
             document.getElementById('no-project-toggle')?.focus({ preventScroll: true });
@@ -186,8 +194,17 @@ export function createSidebar({ context, actions, el }) {
         document.getElementById('running-automations-count').textContent = running.length ? String(running.length) : '';
         document.getElementById('running-automations-group').innerHTML = running.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join('');
         const loose = context.chats.filter((chat) => !chat.pinned && !threadBoard(chat)).sort(byNewest);
-        // Open while one of its threads is the open thread, so the highlighted row stays visible.
-        const expanded = state.noProjectExpanded || loose.some((chat) => isThreadActive(chat));
+        // Auto-open once when the user lands on one of its threads; never override an explicit collapse.
+        const activeLoose = loose.find((chat) => isThreadActive(chat));
+        if (activeLoose && Number(activeLoose.id) !== Number(state.noProjectRevealedFor)) {
+            state.noProjectRevealedFor = Number(activeLoose.id);
+            state.noProjectExpanded = true;
+            try {
+                window.localStorage.setItem('decisions-development-no-project-expanded', 'true');
+                window.localStorage.setItem('decisions-development-no-project-revealed', String(state.noProjectRevealedFor));
+            } catch (_) { /* keep the in-memory choice */ }
+        }
+        const expanded = state.noProjectExpanded;
         noProjectSection.classList.toggle('hidden', !loose.length);
         noProjectSection.classList.toggle('has-running-thread', loose.some((chat) => actions.threadIsProcessing?.(chat)));
         const toggle = document.getElementById('no-project-toggle');
