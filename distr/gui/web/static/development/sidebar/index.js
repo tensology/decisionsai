@@ -25,6 +25,8 @@ export function createSidebar({ context, actions, el }) {
         // Thread the No project folder last auto-opened for. Auto-open happens once per thread, so a
         // user collapse while that thread stays open sticks (also across reloads).
         noProjectRevealedFor: 0,
+        // Whole Pinned section collapsed (its header toggle). Pinned folders keep their own collapse.
+        pinnedSectionCollapsed: false,
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
         showAllRecents: new URLSearchParams(window.location.search).get('recent') === '1',
         contextBoardKey: '',
@@ -42,6 +44,7 @@ export function createSidebar({ context, actions, el }) {
         state.boardsCollapsed = window.localStorage.getItem('decisions-development-boards-collapsed') === 'true';
         state.noProjectExpanded = window.localStorage.getItem('decisions-development-no-project-expanded') === 'true';
         state.noProjectRevealedFor = Number(window.localStorage.getItem('decisions-development-no-project-revealed') || 0);
+        state.pinnedSectionCollapsed = window.localStorage.getItem('decisions-development-pinned-section-collapsed') === 'true';
     } catch (_) {
         /* Keep default preferences if storage is unavailable. */
     }
@@ -181,7 +184,33 @@ export function createSidebar({ context, actions, el }) {
             document.getElementById('no-project-toggle')?.focus({ preventScroll: true });
         });
     }
+    // Pinned gets its own ▶/▼ header toggle (the template ships a plain label). Built once.
+    function ensurePinnedToggle() {
+        const section = el('pinned-board-section');
+        const label = section?.querySelector(':scope > .sidebar-section-label');
+        if (!label || document.getElementById('pinned-section-toggle')) return;
+        label.innerHTML = '<button class="sidebar-section-toggle" type="button" id="pinned-section-toggle" aria-expanded="true" aria-controls="pinned-board-tree">'
+            + '<span class="chevron" aria-hidden="true">▼</span><span>Pinned</span></button>';
+        document.getElementById('pinned-section-toggle').addEventListener('click', () => {
+            state.pinnedSectionCollapsed = !state.pinnedSectionCollapsed;
+            try {
+                window.localStorage.setItem('decisions-development-pinned-section-collapsed', String(state.pinnedSectionCollapsed));
+            } catch (_) { /* keep the in-memory choice */ }
+            renderSidebar();
+            document.getElementById('pinned-section-toggle')?.focus({ preventScroll: true });
+        });
+    }
+    function paintPinnedToggle() {
+        ensurePinnedToggle();
+        const toggle = document.getElementById('pinned-section-toggle');
+        if (!toggle) return;
+        const collapsed = state.pinnedSectionCollapsed;
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        toggle.querySelector('.chevron').textContent = collapsed ? '▶' : '▼';
+        el('pinned-board-tree').classList.toggle('hidden', collapsed);
+    }
     function renderExtraSections() {
+        paintPinnedToggle();
         ensureExtraSections();
         const runningSection = document.getElementById('running-automations-section');
         const noProjectSection = document.getElementById('no-project-section');

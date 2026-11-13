@@ -133,3 +133,5 @@
 .sidebar-no-project { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--studio-line-soft); }
 .sidebar-no-project .sidebar-section-label .sidebar-section-toggle { min-height: 34px; }
 .sidebar-running-automations { padding-bottom: 6px; border-bottom: 1px solid var(--studio-line-soft); }
+/* Pinned section header toggle (same look as No project / Recent). */
+#pinned-board-section .sidebar-section-label .sidebar-section-toggle { min-height: 34px; }
