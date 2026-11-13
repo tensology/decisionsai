@@ -960,3 +960,34 @@ def test_sections_match_web_order_and_each_collapse_independently(monkeypatch):
         widget.close()
         widget.deleteLater()
     app.processEvents()
+
+
+def test_panel_pin_is_remembered_across_restarts_and_reopens_on_launch(monkeypatch):
+    app = _app()
+    monkeypatch.setattr("distr.gui.development_hot_corner.load_development_groups", lambda _p: [])
+    first = DevelopmentHotCornerPanel(enabled=False)
+    assert not first.panel_pin.isChecked()
+    first.panel_pin.click()
+    assert first.panel_pin.isChecked()
+    # A new panel (app restart) comes back pinned, with the pinned tooltip.
+    second = DevelopmentHotCornerPanel(enabled=False)
+    assert second.panel_pin.isChecked()
+    assert second.panel_pin.accessibleName() == "Allow sidebar to hide"
+    shown = []
+    monkeypatch.setattr(second, "_show_for_screen", lambda screen: shown.append(screen))
+    second._enabled = True
+    second._restore_pinned_open()
+    assert len(shown) == 1 and shown[0] is not None
+    # Unpinning saves false: the next launch stays hidden until the corner dwell.
+    second.panel_pin.click()
+    third = DevelopmentHotCornerPanel(enabled=False)
+    assert not third.panel_pin.isChecked()
+    opened = []
+    monkeypatch.setattr(third, "_show_for_screen", lambda screen: opened.append(screen))
+    third._enabled = True
+    third._restore_pinned_open()
+    assert opened == []
+    for panel in (first, second, third):
+        panel.close()
+        panel.deleteLater()
+    app.processEvents()

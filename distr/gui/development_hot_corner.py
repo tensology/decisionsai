@@ -301,6 +301,10 @@ SECTION_SETTINGS = {
 }
 
 
+PANEL_PINNED_SETTING = "sidebar/panelPinned"
+PANEL_PINNED_SCREEN_SETTING = "sidebar/panelPinnedScreen"
+
+
 def section_title_text(title: str, expanded: bool) -> str:
     return f"{'▾' if expanded else '▸'} {title}"
 
@@ -600,6 +604,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._timer.timeout.connect(self._tick)
         if self._enabled:
             self._timer.start()
+            # Pinned open when the app last closed: open it again on launch.
+            if self.panel_pin.isChecked():
+                QtCore.QTimer.singleShot(0, self._restore_pinned_open)
 
     @property
     def selected_chat_id(self) -> int | None:
@@ -753,6 +760,12 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self.panel_pin.setCheckable(True)
         self.panel_pin.setAccessibleName("Keep sidebar open")
         self.panel_pin.setToolTip("Keep sidebar open")
+        # Remembered across app restarts (same app settings as the section collapse states).
+        restored_pin = self._view_settings.value(PANEL_PINNED_SETTING, False, type=bool)
+        self.panel_pin.setChecked(restored_pin)
+        if restored_pin:
+            self.panel_pin.setToolTip("Allow sidebar to hide")
+            self.panel_pin.setAccessibleName("Allow sidebar to hide")
         self.panel_pin.toggled.connect(self._set_panel_pinned)
         header.addWidget(self.panel_pin)
         layout.addLayout(header)
@@ -903,6 +916,25 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self.panel_pin.setToolTip("Allow sidebar to hide" if pinned else "Keep sidebar open")
         self.panel_pin.setAccessibleName(self.panel_pin.toolTip())
         self._last_inside_at = time.monotonic()
+        self._view_settings.setValue(PANEL_PINNED_SETTING, bool(pinned))
+        # Qt aborts on an exception escaping a slot, so the screen name is best effort.
+        screen_name = getattr(self._open_screen, "name", None)
+        if pinned and callable(screen_name):
+            try:
+                self._view_settings.setValue(PANEL_PINNED_SCREEN_SETTING, str(screen_name()))
+            except Exception:
+                pass
+
+    def _restore_pinned_open(self) -> None:
+        """Show the panel pinned open on the screen it was pinned on (primary if that is gone)."""
+        if not self._enabled or not self.panel_pin.isChecked() or self.isVisible():
+            return
+        wanted = str(self._view_settings.value(PANEL_PINNED_SCREEN_SETTING, "", type=str) or "")
+        screens = QtGui.QGuiApplication.screens()
+        screen = next((item for item in screens if wanted and item.name() == wanted), None)
+        screen = screen or QtGui.QGuiApplication.primaryScreen()
+        if screen is not None:
+            self._show_for_screen(screen)
 
     def _hide_panel(self) -> None:
         if not self.isVisible() or self._hiding:
