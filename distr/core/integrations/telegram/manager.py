@@ -841,6 +841,7 @@ class TelegramWebSocketManager(
         """Called when valid connection is established."""
         self._proposal_receipt_recovery = False
         self._closing_reply_receipts = None
+        self._closing_reply_topics = False
         self._closing_reply_receipt_recovery = False
         self._closing_recovery_cursor = 0
         self._group_link_generation = object()
@@ -1195,7 +1196,8 @@ class TelegramWebSocketManager(
                 if client_message_id:
                     if client_message_id.startswith(closing.PREFIX) and data.get('closing_reply_verified') is True:
                         closing.accept_receipt(client_message_id, telegram_chat_id=data.get('chat_id'),
-                                               telegram_message_id=data.get('telegram_message_id'))
+                                               telegram_message_id=data.get('telegram_message_id'),
+                                               message_thread_id=data.get('message_thread_id'))
                     elif client_message_id.startswith('proposal-update:'):
                         from distr.core.incoming.telegram_updates import accept_relay_receipt
                         accept_relay_receipt(client_message_id, telegram_message_id=data.get('telegram_message_id'),
@@ -1273,6 +1275,7 @@ class TelegramWebSocketManager(
                 if status == "connected":
                     self._proposal_receipt_recovery = data.get("proposal_receipt_recovery") is True
                     self._closing_reply_receipts = data.get("closing_reply_receipts") is True
+                    self._closing_reply_topics = data.get("closing_reply_topics") is True
                     self._closing_reply_receipt_recovery = data.get("closing_reply_receipt_recovery") is True
                     if self._closing_reply_receipt_recovery:
                         self._recover_closing_reply_receipts()

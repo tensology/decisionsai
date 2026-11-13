@@ -1,4 +1,6 @@
 """Proposal review and navigation must use the same source identity."""
+import json
+import os
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -19,8 +21,106 @@ EVIDENCE = Path('/tmp/decisions-proposal-source-navigation')
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
-def test_merged_telegram_sources_with_the_same_message_id_open_their_own_groups(
-    page, fixture_base, monkeypatch, intake_db, width,
+@pytest.mark.parametrize('surface', ['desktop', 'paired'])
+def test_proposal_links_reopen_distinct_telegram_groups_with_the_same_message_number(
+    page, fixture_base, monkeypatch, intake_db, width, surface,
+):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.incoming import project_links
+
+    app_view = os.environ.get('DECISIONS_REMOTE_APP_TEST_URL')
+    if surface == 'paired' and not app_view:
+        pytest.skip('Set DECISIONS_REMOTE_APP_TEST_URL to the local App View development server.')
+    session, template, projects = intake_db
+    project = projects[0]
+    groups = {'-100777': 'Dispatch handoff', '-100888': 'Operations handoff'}
+    monkeypatch.setattr(project_links, 'source_project_index', lambda: {('telegram', group): {project} for group in groups})
+    chats, links = {}, {}
+    for group, title in groups.items():
+        proposal = {**template, 'id': f'local:telegram:{group}', 'source': 'telegram', 'source_thread_id': group,
+                    'message_ids': ['55'], 'title': title}
+        chat_id = intake.create_proposal_thread(proposal)
+        chats[chat_id] = {'id': chat_id, 'title': title, 'project_id': project, 'messages': [], 'development': True}
+        links[intake.proposal_review_key(proposal)] = (chat_id, title)
+        if len(links) == 1:
+            with session() as db:
+                legacy = db.query(KanbanTicket).filter_by(source_chat_id=chat_id).one()
+                legacy.source_provider, legacy.source_thread_id, legacy.source_external_id = 'telegram', group, '55'
+                db.commit()
+    assert len(chats) == 2
+
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router, prefix='/api')
+    client = TestClient(app)
+
+    def review(path):
+        response = client.get(path)
+        assert response.status_code == 200
+        return response.json()
+
+    if surface == 'paired':
+        queue_reads = []
+
+        def relay(socket):
+            def handle(raw):
+                request = json.loads(raw)['body']
+                if request['type'] == 'ping':
+                    socket.send(json.dumps({'type': 'pong'}))
+                    return
+                command, payload = request['command'], {'screens': []}
+                if command == 'api_relay':
+                    path = request['data']['path']
+                    result = {}
+                    if path.startswith('/api/workflows/studio/incoming/proposals/review?'):
+                        result = review(path)
+                    elif path.startswith('/api/chats/'):
+                        result = chats.get(int(urlparse(path).path.split('/')[3]), {})
+                    elif urlparse(path).path.endswith('/commands'):
+                        queue_reads.append(int(urlparse(path).path.split('/')[-2]))
+                        result = {'items': []}
+                    payload = {'status': 200, 'response': result}
+                socket.send(json.dumps({'type': 'remote_control_response', 'command': command,
+                                        'request_id': request['request_id'], 'data': payload}))
+            socket.on_message(handle)
+        page.route_web_socket('**/ws/telegram?*', relay)
+    else:
+        _install_api(page, [])
+        page.route('**/api/workflows/studio/incoming/proposals/review?*',
+                   lambda route: route.fulfill(json=review(route.request.url)))
+
+        def chat_route(route):
+            identifier = urlparse(route.request.url).path.rsplit('/', 1)[-1]
+            if identifier.isdigit() and (chat := chats.get(int(identifier))) is not None:
+                route.fulfill(json=chat)
+            else:
+                route.fallback()
+
+        page.route('**/api/chats/*?*', chat_route)
+        page.route('**/api/workflows/studio/tasks/*/*', lambda route: route.fulfill(json={'items': []}))
+
+    page.set_viewport_size({'width': width, 'height': 900})
+    EVIDENCE.mkdir(exist_ok=True)
+    for index, (key, (chat_id, title)) in enumerate(links.items()):
+        url = (f'{app_view}?channel=paired-test&proposal_key={key}' if surface == 'paired'
+               else f'{fixture_base}/development/incoming/?proposal_key={key}')
+        page.goto(url)
+        if surface == 'desktop':
+            expect(page).to_have_url(f'{fixture_base}/development/threads/{chat_id}/')
+            expect(page.locator('#header-task')).to_have_text(title)
+        else:
+            expect(page.get_by_text(title, exact=True).first).to_be_visible()
+            expect(page.get_by_text('Checking the queue…', exact=True)).to_have_count(0)
+            expect(page.get_by_text('Could not load the queue.', exact=True)).to_have_count(0)
+            assert chat_id in queue_reads
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.screenshot(path=EVIDENCE / f'{width}-{surface}-telegram-handoff-{index}.png', animations='disabled')
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+@pytest.mark.parametrize(('scope', 'surface'), [('group', 'desktop'), ('topic', 'desktop'), ('topic', 'paired')])
+def test_merged_telegram_sources_open_their_own_conversations(
+    page, fixture_base, monkeypatch, intake_db, width, scope, surface,
 ):
     from distr.core.incoming import proposal_conversation
     from distr.core.integrations.telegram import third_party_intake
@@ -29,17 +129,28 @@ def test_merged_telegram_sources_with_the_same_message_id_open_their_own_groups(
     session, _, _ = intake_db
     monkeypatch.setattr(proposal_conversation, 'get_session', session)
     monkeypatch.setattr(third_party_intake, 'handle_group_inbound', lambda *args, **kwargs: None)
-    first = {'id': f'local:telegram:{GROUP}:dispatch', 'source': 'telegram', 'source_thread_id': GROUP,
-             'message_ids': ['42'], 'participant': 'Dispatch', 'title': 'Review delivery'}
-    second = {**first, 'id': f'local:telegram:{OTHER_GROUP}:operations', 'source_thread_id': OTHER_GROUP,
-              'participant': 'Operations', 'title': 'Review capacity'}
+    app_view = os.environ.get('DECISIONS_REMOTE_APP_TEST_URL')
+    if surface == 'paired' and not app_view:
+        pytest.skip('Set DECISIONS_REMOTE_APP_TEST_URL to the local App View development server.')
     desktop = GroupHarness()
     texts = {'Dispatch': 'Dispatch confirmed the shipping change.',
              'Operations': 'Operations requested a capacity review.'}
-    for original in (first, second):
-        name = original['participant']
-        frame = msg(chat=int(original['source_thread_id']), mid=42, text=texts[name])
-        desktop._handle_telegram_message({'data': {**frame, 'chat': {**frame['chat'], 'title': name}}})
+    originals = []
+    for index, (name, title) in enumerate(zip(texts, ('Review delivery', 'Review capacity'))):
+        group = GROUP if index == 0 or scope == 'topic' else OTHER_GROUP
+        message_id = 42 + index if scope == 'topic' else 42
+        frame = msg(chat=int(group), mid=message_id, text=texts[name])
+        frame['chat']['title'] = name if scope == 'group' else 'Client group'
+        thread = group
+        if scope == 'topic':
+            topic_id = 101 + index
+            frame['chat']['is_forum'] = True
+            frame.update(is_topic_message=True, message_thread_id=topic_id)
+            thread = f'{group}~topic~{topic_id}'
+        desktop._handle_telegram_message({'data': frame})
+        originals.append({'id': f'local:telegram:{thread}', 'source': 'telegram', 'source_thread_id': thread,
+                          'message_ids': [str(message_id)], 'participant': name, 'title': title})
+    first, second = originals
     merged = intake._combine_frac_proposals(first, second)
     key = intake.proposal_review_key(merged)
     proposal = {**merged, 'review_key': key}
@@ -54,32 +165,62 @@ def test_merged_telegram_sources_with_the_same_message_id_open_their_own_groups(
         response = client.get(route.request.url)
         route.fulfill(status=response.status_code, json=response.json())
 
-    _install_api(page, [])
-    page.route('**/api/workflows/studio/incoming/proposals?*',
-               lambda route: route.fulfill(json={'proposals': [proposal]}))
-    page.route('**/api/workflows/studio/incoming/proposals/source?*', source)
     page.set_viewport_size({'width': width, 'height': 900})
-    page.goto(f'{fixture_base}/development/incoming/')
-    page.get_by_role('button', name='Open evidence for Review delivery + Review capacity').press('Enter')
-    dialog = page.get_by_role('dialog', name='Review delivery + Review capacity')
+    if surface == 'paired':
+        def relay(socket):
+            def handle(raw):
+                request = json.loads(raw)['body']
+                if request['type'] == 'ping':
+                    socket.send(json.dumps({'type': 'pong'}))
+                    return
+                command = request['command']
+                status, payload = 200, {'screens': []}
+                if command == 'api_relay':
+                    call = request['data']
+                    response = client.request(call['method'], call['path'], json=call.get('body'))
+                    status, payload = response.status_code, response.json()
+                socket.send(json.dumps({'type': 'remote_control_response', 'command': command,
+                                        'request_id': request['request_id'], 'data': {'status': status, 'response': payload}}))
+            socket.on_message(handle)
+        page.route_web_socket('**/ws/telegram?*', relay)
+        page.goto(f'{app_view}?channel=paired-test&proposal_key={key}')
+        panel = page.frame_locator('iframe[title="Development proposal review"]')
+    else:
+        _install_api(page, [])
+        page.route('**/api/workflows/studio/incoming/proposals?*',
+                   lambda route: route.fulfill(json={'proposals': [proposal]}))
+        page.route('**/api/workflows/studio/incoming/proposals/source?*', source)
+        page.goto(f'{fixture_base}/development/incoming/')
+        page.get_by_role('button', name='Open evidence for Review delivery + Review capacity').press('Enter')
+        panel = page
+    dialog = panel.get_by_role('dialog', name='Review delivery + Review capacity')
     source_tab = dialog.get_by_role('tab', name='Source')
     expect(source_tab.locator('.proposal-tab-count')).to_have_text('2')
     source_tab.click()
     expect(dialog.locator('.proposal-source-summary')).to_have_text('Open an original conversation to look up the 2 source messages.')
     EVIDENCE.mkdir(exist_ok=True)
-    page.screenshot(path=EVIDENCE / f'{width}-telegram-shared-id-summary.png', animations='disabled')
+    prefix = f'{width}-{surface}-telegram-{scope}'
+    page.screenshot(path=EVIDENCE / f'{prefix}-summary.png', animations='disabled')
     jump = dialog.get_by_role('button', name='View in conversation')
     jump.click()
     picker = dialog.get_by_label('Original conversation', exact=True)
-    for name, other in (('Operations', 'Dispatch'), ('Dispatch', 'Operations')):
+    for index, (name, other) in enumerate((('Operations', 'Dispatch'), ('Dispatch', 'Operations'))):
+        if surface == 'paired' and index:
+            expect(source_tab).to_have_attribute('aria-selected', 'true')
+            jump.click()
         picker.select_option(label=f'Telegram · {name}')
         jump.click()
-        anchor = dialog.locator('[data-original-message]')
+        reader = dialog if surface == 'desktop' else page
+        anchor = (dialog.locator('[data-original-message]') if surface == 'desktop'
+                  else page.locator('article').filter(has_text='Original message'))
         expect(anchor).to_contain_text(texts[name])
         expect(anchor).to_be_focused()
-        expect(dialog.get_by_text(texts[other], exact=True)).to_have_count(0)
-        page.screenshot(path=EVIDENCE / f'{width}-telegram-shared-id-{name.lower()}.png', animations='disabled')
-        dialog.get_by_role('button', name='Back to source evidence').click()
+        expect(reader.get_by_text(texts[other], exact=True)).to_have_count(0)
+        page.screenshot(path=EVIDENCE / f'{prefix}-{name.lower()}.png', animations='disabled')
+        if surface == 'desktop':
+            dialog.get_by_role('button', name='Back to source evidence').click()
+        else:
+            page.get_by_role('button', name='Back', exact=True).click()
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
 

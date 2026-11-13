@@ -5,6 +5,7 @@
 // pages sit on rings by hop. Otherwise each layer keeps its own band. A page comment is the sidecar
 // note, or the first `#|` line under that screen. Nothing here invents links or writes content.
 import { connectedSitemap } from './sitemap.js?v=20261028-responsive';
+import { hideJunkPages } from './page-filter.js?v=20261112-skip';
 
 export const NODE = { w: 200, h: 168, guideH: 96, partH: 120, quietH: 56, gapX: 64, gapY: 56, laneGap: 88, laneHead: 34, linkGap: 48 };
 export const LANES = [
@@ -105,6 +106,7 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         const base = { key: `w:${screen.id}`, sitemapId: '', label: String(screen.label || screen.attrs?.id || 'Page').slice(0, 80), route, template: screen.attrs?.uses || '', view: '', status: '', auth: false };
         add(base, screen);
     }
+    const hidden = hideJunkPages(nodes);
     const byKey = new Map(nodes.map((n) => [n.key, n]));
     const bySitemap = new Map(nodes.filter((n) => n.sitemapId).map((n) => [n.sitemapId, n]));
     const byScreenKey = new Map(nodes.filter((n) => n.screenKey).map((n) => [n.screenKey, n]));
@@ -141,7 +143,9 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         walkLinks(screen, found);
         for (const link of found) addEdge(from.key, byRoute.get(link.route)?.key, 'link', link.label);
     }
-    return { nodes, edges, byKey, coverage: graph.coverage, note: graph.note, outlined: nodes.filter((n) => n.screenId).length };
+    // Outlined counts pages only, like the page count beside it (guidance cards are not pages).
+    return { nodes, edges, byKey, coverage: graph.coverage, note: graph.note, hidden,
+        outlined: nodes.filter((n) => n.screenId && n.lane !== 'guidance').length };
 }
 
 const HUB_LINKS = 3;

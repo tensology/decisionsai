@@ -11,7 +11,7 @@ import { userDocumentsEnabled, USER_DOCUMENT_TYPE } from './documents-config.js?
 import { mountErdItem, isErdMermaid, erdIsDirty } from './erd/mount.js?v=20261112-readable-data';
 import { availableBottom, fillToWindow, createCallout, advancedButton, pinDock, openDrawer } from './canvas-chrome.js?v=20261103-ifaces3';
 import { readSidecar, nodeIds, writeSidecar, slugId } from './flow-meta.js?v=20261103-ifaces3';
-import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261112-readable-map';
+import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261112-skip';
 import { createIfaceCanvas } from './iface-canvas.js?v=20261112-map-pan';
 import { mountPagePicker } from './page-picker.js?v=20261112-route-details';
 import { decorateNode, nodeButton, openNodePopover, openNodePicker, closeNodePopover, warningsNotice } from './flow-nodes.js?v=20261103-ifaces3';
@@ -46,6 +46,28 @@ export function createPlanConversation(host, root) {
     const conversationPath = (session, chatId = session.chatId) => path(session, '/conversation') + (chatId ? `?chat_id=${encodeURIComponent(chatId)}` : '');
     const current = (session) => active === session && Boolean(root.querySelector('.plan-detail'));
     const tabStore = () => { try { return window.sessionStorage; } catch { return null; } };
+    // Provenance ("Generated from the project · date") is metadata: shown as a tooltip, not as a line of content.
+    const provenanceText = (item) => (item && !item.is_starter && item.origin_label)
+        ? `${item.origin_label}${item.last_generated_at ? ` · ${new Date(`${item.last_generated_at}Z`).toLocaleString()}` : ''}` : '';
+    // Collapsible plan chat: starts open; hiding it is remembered while this page stays open (in memory only,
+    // plan UI state is never written to browser storage).
+    let chatCollapseChoice = null;
+    const storedChatCollapse = () => chatCollapseChoice;
+    function setChatCollapsed(session, collapsed, { remember = false } = {}) {
+        session.chatCollapsed = Boolean(collapsed);
+        if (remember) chatCollapseChoice = Boolean(collapsed);
+        const body = root.querySelector('.plan-detail-body');
+        const toggle = root.querySelector('#plan-chat-toggle');
+        if (!body || !toggle) return;
+        const was = body.classList.contains('plan-chat-collapsed');
+        body.classList.toggle('plan-chat-collapsed', session.chatCollapsed);
+        toggle.setAttribute('aria-expanded', String(!session.chatCollapsed));
+        toggle.title = session.chatCollapsed ? 'Show chat' : 'Hide chat';
+        toggle.setAttribute('aria-label', toggle.title);
+        toggle.querySelector('.plan-chat-toggle-icon').textContent = session.chatCollapsed ? '‹' : '›';
+        if (!session.chatCollapsed) toggle.classList.remove('has-activity');
+        if (was !== session.chatCollapsed) requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
     const items = (session) => (session.tab === 'requirements' ? orderDocuments(session.workspace.items) : (session.workspace.items || []).filter((item) => TABS[session.tab].types.includes(item.item_type)));
     const selected = (session) => (session.tab === 'requirements' ? openDocument(items(session), session.selection.requirements)
         : session.tab === 'wireframes' && session.selection.wireframes === DISCOVERED_PAGES ? null
@@ -187,14 +209,11 @@ export function createPlanConversation(host, root) {
     // Interfaces: existing page / sitemap content on the gridded, window-filling canvas surface with the
     // summary call-out. The wire renderers below replace the preview's contents (innerHTML), so the call-out
     // is re-attached whenever it is wiped; the observer and fill-height go away with previewCleanup.
-    function interfacesSurface(preview, stats, hint) {
+    function interfacesSurface(preview) {
+        // The old summary call-out banner was removed (it repeated what Find page and the map already show).
         preview.classList.add('plan-canvas-surface');
-        const callout = createCallout({ key: 'interfaces', label: 'Interfaces summary', stats, hint });
-        preview.prepend(callout);   // first child: the sticky, floated call-out pins to the surface's top right
-        const keep = new MutationObserver(() => { if (preview.firstElementChild !== callout) preview.prepend(callout); });
-        keep.observe(preview, { childList: true });
         const unfill = fillToWindow(preview);
-        return () => { keep.disconnect(); unfill?.(); };
+        return () => { unfill?.(); };
     }
 
     // ---- Documents tab: tab bar (role=tablist), Editor / Markdown, Print PDF ------------------
@@ -352,7 +371,8 @@ export function createPlanConversation(host, root) {
             </header>
             <div class="plan-detail-body">
                 <section class="plan-artifacts" id="plan-artifacts" aria-label="Artifacts"></section>
-                <section class="plan-conversation" aria-label="Plan conversation">
+                <section class="plan-conversation" id="plan-conversation" aria-label="Plan conversation">
+                    <button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide chat" aria-label="Hide chat"><span class="plan-chat-toggle-icon" aria-hidden="true">›</span><span class="plan-chat-toggle-label">Chat</span></button>
                     <header class="plan-chat-header" id="plan-chat-header" aria-label="Chat"></header>
                     <div class="composer-drop-overlay plan-drop-overlay" id="plan-drop-overlay" hidden><strong>Drop images to attach</strong><span>PNG, JPEG or WebP, up to 10 MB each</span></div>
                     <div class="plan-messages" id="plan-messages" role="log" aria-label="Messages" aria-live="polite"></div>
@@ -376,6 +396,11 @@ export function createPlanConversation(host, root) {
                 </section>
             </div>
         </div>`;
+        root.querySelector('#plan-chat-toggle').addEventListener('click', () => {
+            setChatCollapsed(session, !session.chatCollapsed, { remember: true });
+            if (!session.chatCollapsed) root.querySelector('#plan-language-input')?.focus({ preventScroll: true });
+        });
+        setChatCollapsed(session, storedChatCollapse() ?? session.chatCollapsed ?? false);
         const input = root.querySelector('#plan-language-input');
         input.value = session.draft;
         input.addEventListener('input', () => { session.draft = input.value; session.draftVersion++; controls(session); });
@@ -394,7 +419,13 @@ export function createPlanConversation(host, root) {
         ifaceActions.setAttribute('aria-label', 'Interface actions');
         ifaceActions.innerHTML = `<button type="button" class="header-button" id="plan-rebuild-sitemap">Rebuild</button>`;
         ifaceActions.querySelector('#plan-rebuild-sitemap').onclick = () => { closePlanMenu(); rebuildSitemap(session); };
-        // Build tickets was retired from Plan (2026-11-11); the build route remains for existing tooling.
+        // Plan -> gaps -> tickets (restored 12 Nov 2026): the existing build turn reads the plan and the sitemap's
+        // outstanding pages, asks when a decision is open, and creates or reuses tickets on this project's board.
+        const buildActions = document.createElement('span');
+        buildActions.className = 'plan-header-actions';
+        buildActions.innerHTML = `<button type="button" class="header-button primary" id="plan-build">Build tickets</button>`;
+        (bar || root.querySelector('.plan-detail-header'))?.append(buildActions);
+        planBar().querySelector('#plan-build').onclick = () => { closePlanMenu(); build(session); };
         root.querySelector('#plan-provider').onchange = async (event) => {
             session.provider = event.target.value;
             session.model = '';
@@ -472,6 +503,7 @@ export function createPlanConversation(host, root) {
             error.textContent = session.error || session.planSaveWarning;
             status.append(error);
         }
+        root.querySelector('#plan-chat-toggle')?.classList.toggle('has-alert', Boolean(session.error || session.planSaveWarning || session.scanHint?.kind === 'error'));
         const persistedStatus = ['running', 'pending', 'processing'].includes(session.conversation.status) ? 'Assistant is working...' : '';
         const note = session.pending || session.pollError || (!session.loaded && !session.error ? 'Loading conversation...' : '') || session.outcome || persistedStatus;
         if (note) {
@@ -534,10 +566,15 @@ export function createPlanConversation(host, root) {
         }).join('')}${isAssistant ? toolCardsHtml(message, session.workspace.items, esc, session.dismissedCards || new Set()) : ''}${isAssistant && message.memory_used ? `<p class="plan-memory-hint">Used ${esc(message.memory_used)} note${message.memory_used === 1 ? '' : 's'} from earlier chats</p>` : ''}${isAssistant ? buildResultsHtml(message.build_result, esc, { boardKey: session.workspace.board_key }) : ''}</article>`;
         }).join('') || (session.loaded
             ? `<div class="plan-conversation-empty">${allStarters(session)
-                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Read the sitemap in Public, Account, and Signed in</li><li>Tighten requirements, then ask for build tickets</li></ol><p class="plan-empty-hint">Planning is the rapid-sense hub: pages → production.</p>`
+                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Open a page on the sitemap (or use Find page) to see and edit its outline</li><li>Ask here to change pages, data or documents</li></ol>`
                 : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Start with the pages, then define requirements and data before building tasks.</p>`}</div>`
             : '');
         wireToolCards(session, log);
+        const messageCount = (session.conversation.messages || []).length;
+        if (session.pending && session.chatCollapsed) setChatCollapsed(session, false);
+        // Chat starts open; it collapses only when the person hides it (remembered per browser).
+        if (session.chatCollapsed && messageCount > (session.chatSeenCount ?? messageCount)) root.querySelector('#plan-chat-toggle')?.classList.add('has-activity');
+        session.chatSeenCount = messageCount;
         if (host.openPlanTicket) log.querySelectorAll('[data-plan-ticket]').forEach((link) => {
             link.onclick = async (event) => {
                 if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -950,11 +987,17 @@ export function createPlanConversation(host, root) {
         const hint = root.querySelector('#plan-context-hint');
         if (hint) { hint.hidden = !(docsTab && item); hint.textContent = docsTab && item ? `Context: ${documentLabel(item, choices)}` : ''; }
         panel.innerHTML = `${docsTab ? documentsBarHtml(session, choices, item) : choices.length > 1 || showDiscoveryChoice ? `<label class="plan-artifact-picker"><select id="plan-artifact-select" aria-label="Select artifact">${choices.map((choice) => `<option value="${esc(choice.id)}"${String(choice.id) === String(item?.id) ? ' selected' : ''}>${esc(choice.title)}${choice.is_starter ? ' · needs content' : ''}</option>`).join('')}${discoveryOption}</select></label>` : ''}
-            ${item && !session.viewedAsset && (item.is_starter || item.origin_label) ? `<div class="plan-artifact-revision" data-plan-provenance="${esc(item.origin || '')}">${item.is_starter ? 'Not generated yet · Plan fills this from the project scan or the approved design' : esc(`${item.origin_label}${item.last_generated_at ? ` · ${new Date(`${item.last_generated_at}Z`).toLocaleString()}` : ''}${item.db_only ? ' · stored in Decisions only' : ''}`)}</div>` : ''}
+            ${item && !session.viewedAsset && (item.is_starter || item.db_only) ? `<div class="plan-artifact-revision" data-plan-provenance="${esc(item.origin || '')}"${provenanceText(item) ? ` title="${esc(provenanceText(item))}"` : ''}>${item.is_starter ? 'Not generated yet · Plan fills this from the project scan or the approved design' : 'Stored in Decisions only'}</div>` : ''}
             ${item?.file_sync_error ? `<div class="plan-file-status" role="alert">${esc(item.file_sync_error)}<button type="button" id="plan-review-file">Review file changes</button></div>` : ''}
             <div class="plan-preview" id="plan-preview"></div>
             ${assets.length ? `<div class="plan-assets" aria-label="Assets">${assetsHtml(assets)}</div>` : ''}`;
         if (docsTab) wireDocumentsBar(session, panel, choices, item);
+        document.querySelectorAll('[data-plan-tab]').forEach((tab) => {
+            const info = TABS[tab.dataset.planTab];
+            if (!info) return;
+            const origin = tab.dataset.planTab === session.tab && !session.viewedAsset ? provenanceText(item) : '';
+            tab.title = `${info.help || info.label}${origin ? ` — ${origin}` : ''}`;
+        });
         panel.querySelector('#plan-artifact-select')?.addEventListener('change', (event) => { session.viewedAsset = null; session.selection[session.tab] = event.target.value; renderArtifacts(session); });
         panel.querySelectorAll('[data-view-asset]').forEach(button => {
             button.onclick = () => { session.viewedAsset = button.dataset.viewAsset; renderArtifacts(session); };
@@ -1013,15 +1056,7 @@ export function createPlanConversation(host, root) {
             panel.append(ifaceTools);
         }
         if (session.tab === 'wireframes') {
-            let pages = 0, guidance = 0;
-            try {
-                const screens = item.content_format === 'wire' ? (parseWireframe(item.content).screens || []) : [];
-                guidance = screens.filter(screen => String(screen.attrs.layer || '').toLowerCase() === 'guidance').length;
-                pages = screens.length - guidance;
-            } catch { pages = 0; }
-            const stats = `${pages} ${pages === 1 ? 'page' : 'pages'}${guidance ? ` · ${guidance} guidance ${guidance === 1 ? 'item' : 'items'}` : ''}, ${choices.length} ${choices.length === 1 ? 'document' : 'documents'}`;
-            const opened = Boolean(session.openPage?.[item.id]);
-            const surfaceCleanup = interfacesSurface(preview, opened ? 'Page outline' : stats, opened ? 'Switch perspective with Preview / Planning / Development, or go back with All pages.' : 'Switch perspective with Preview / Planning / Development above the page.');
+            const surfaceCleanup = interfacesSurface(preview);
             const dockCleanup = ifaceTools ? pinDock(ifaceTools, preview) : null;
             session.previewCleanup = () => { surfaceCleanup?.(); dockCleanup?.(); };
         }
@@ -1048,7 +1083,7 @@ export function createPlanConversation(host, root) {
                        </div>`;
                     toolbar.innerHTML = `${openId ? '<button type="button" class="iface-back" data-iface-back aria-label="Back to all pages">← All pages</button>' : ''}
                         ${openId && session.ifacePicker?.[item.id]?.hasSelection ? '<button type="button" data-iface-page-results>Back to results</button>' : ''}
-                        ${layer === 'preview' ? `<button type="button" aria-pressed="${session.previewModes[item.id] === 'html'}">${session.previewModes[item.id] === 'html' ? 'Interactive' : 'Stencil'}</button>` : ''}${layerButtons}`;
+                        ${layerButtons}${layer === 'preview' ? `<button type="button" class="plan-preview-mode" data-preview-mode="${session.previewModes[item.id]}" title="Switch the preview rendering">${session.previewModes[item.id] === 'html' ? 'Show stencil' : 'Show interactive'}</button>` : ''}`;
                     panel.insertBefore(toolbar, preview);
                     const ctx = nodeCtx(session, item);
                     (ifaceTools || toolbar).append(nodeButton(page.label || 'Page', (opener) => openNodePopover(opener, screenNode(page), ctx), ifaceTools ? 'erd-dock-button erd-dock-wide' : ''));
@@ -1077,7 +1112,8 @@ export function createPlanConversation(host, root) {
                     toolbar.querySelectorAll('[data-layer]').forEach(button => {
                         button.onclick = () => { session.pageLayers[item.id] = button.dataset.layer; renderArtifacts(session); };
                     });
-                    const htmlToggle = toolbar.querySelector('button[aria-pressed]:not([data-layer])');
+                    // Preview is the one selected perspective; the rendering switch is an action, never a second pressed tab.
+                    const htmlToggle = toolbar.querySelector('[data-preview-mode]');
                     if (htmlToggle) htmlToggle.onclick = () => { session.previewModes[item.id] = session.previewModes[item.id] === 'html' ? 'svg' : 'html'; renderArtifacts(session); };
                 }
 
@@ -1608,15 +1644,20 @@ export function createPlanConversation(host, root) {
         const docs = choices.length;
         const guidance = model.nodes.filter(node => node.lane === 'guidance').length;
         const pages = model.nodes.length - guidance;
-        const callout = createCallout({ key: 'interfaces', label: 'Interfaces summary',
-            stats: `${pages} ${pages === 1 ? 'page' : 'pages'}${guidance ? ` · ${guidance} guidance ${guidance === 1 ? 'item' : 'items'}` : ''} · ${model.outlined} with outlines · ${docs} ${docs === 1 ? 'document' : 'documents'}`,
-            hint: `Use Find page to search by name, route or template.${model.note ? ' Route discovery is partial.' : ''}` });
-        if (model.note) callout.title = model.note;
+        // Quiet one-line status instead of the old summary banner; the detail lives in its tooltip.
+        const summary = document.createElement('span');
+        summary.className = 'iface-map-status';
+        summary.textContent = `${pages} ${pages === 1 ? 'page' : 'pages'} · ${model.outlined} outlined`;
+        summary.title = [
+            `${pages} ${pages === 1 ? 'page' : 'pages'}${guidance ? ` · ${guidance} guidance ${guidance === 1 ? 'item' : 'items'}` : ''} · ${model.outlined} with outlines · ${docs} ${docs === 1 ? 'document' : 'documents'}`,
+            model.hidden?.length ? `${model.hidden.length} placeholder, example or stale ${model.hidden.length === 1 ? 'page' : 'pages'} hidden` : '',
+            model.note || '', provenanceText(item), 'Find page searches by name, route or template.'
+        ].filter(Boolean).join('\n');
         const header = document.createElement('div');
         header.className = 'iface-map-header';
         const navigation = document.createElement('div');
         navigation.className = 'iface-navigation';
-        header.append(callout, navigation);
+        header.append(navigation);
         canvas.el.prepend(header);
         const openPicker = mountPagePicker(navigation, model.nodes, (node) => {
             pickerState.hasSelection = true;
@@ -1641,6 +1682,8 @@ export function createPlanConversation(host, root) {
             });
             navigation.append(links);
         }
+        navigation.append(summary);
+        syncMapWarning(session);
         preview.classList.add('plan-erd', 'plan-iface');
         const hostEl = document.createElement('div');
         hostEl.className = 'erd-host';
@@ -2494,10 +2537,30 @@ export function createPlanConversation(host, root) {
     }
     // Background refresh of an already-open plan: update artifacts without rebuilding the shell.
     // Scan hint lives in the plan toolbar (contextual header area).
+    // Red/amber line beside the map status. Redrawn whenever the scan settles, not only on map render.
+    function syncMapWarning(session) {
+        const navigation = root.querySelector('.iface-navigation');
+        if (!navigation) return;
+        const problem = session?.scanHint && ['error', 'warning'].includes(session.scanHint.kind) ? session.scanHint : null;
+        let warning = navigation.querySelector('.iface-map-warning');
+        if (!problem) { warning?.remove(); return; }
+        if (!warning) {
+            warning = document.createElement('span');
+            warning.className = 'iface-map-warning';
+            warning.setAttribute('role', 'status');
+        }
+        const status = navigation.querySelector('.iface-map-status');
+        if (status) status.after(warning); else navigation.append(warning);   // beside the count, before Rebuild
+        warning.dataset.kind = problem.kind;
+        warning.textContent = problem.kind === 'error' ? 'Last scan failed — showing the previous scan' : 'Map is partial';
+        warning.title = problem.text || '';
+    }
+
     function setScanHint(hint) {
         const bar = planBar().querySelector('.plan-detail-header') || planBar();
         let node = bar.querySelector?.('.plan-scan-hint');
         if (active) active.scanHint = hint;
+        if (active) syncMapWarning(active);
         if (hint?.kind !== 'scanning') {
             node?.remove();
             if (active) controls(active);

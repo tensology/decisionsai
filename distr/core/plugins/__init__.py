@@ -27,6 +27,8 @@ from distr.core.plugins.paths import (
     visual_plan_skills_dir,
     builderio_skills_reference_dir,
     open_design_reference_dir,
+    open_pencil_reference_dir,
+    open_pencil_cli_dir,
 )
 
 __all__ = [
@@ -56,4 +58,6 @@ __all__ = [
     "visual_plan_skills_dir",
     "builderio_skills_reference_dir",
     "open_design_reference_dir",
+    "open_pencil_reference_dir",
+    "open_pencil_cli_dir",
 ]

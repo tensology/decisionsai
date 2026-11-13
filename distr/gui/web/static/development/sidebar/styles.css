@@ -116,3 +116,16 @@
 .project-group.has-ready-thread:not(.has-running-thread) .project-folder .folder-ready-alert { display: inline-flex; }
 @keyframes project-folder-working { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .project-group.has-running-thread .project-folder .folder-running-glow { animation: none; opacity: 1; } }
+/* Unread pin slot: the row's left gutter (.task-row padding-left: 21px) belongs to the pin.
+   The pin is absolutely placed in that gutter so row padding, the selected/hover background
+   (painted on .task-row-wrap, below the button) and the title column never push or cover it.
+   pointer-events: none lets the click land on the row button, which opens the thread. */
+.task-list .task-row { padding-left: 21px; }
+.task-row .task-row-unread-pin { position: absolute; z-index: 1; top: 50%; left: 8px; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--studio-accent); box-shadow: 0 0 0 2px rgba(249,115,22,.22); pointer-events: none; }
+.task-row-wrap.unread .task-row { color: var(--studio-text); }
+
+/* 2026-11-13 Running automations + No project: their own sections above Pinned/Boards, not project entries. */
+.sidebar-section-label .sidebar-section-count { margin-left: auto; padding-left: 8px; color: var(--studio-dim); font-size: 11px; font-weight: 600; letter-spacing: 0; }
+.sidebar-section-label .sidebar-section-toggle .sidebar-section-count { margin-left: auto; }
+.sidebar-running-automations .sidebar-section-label { color: var(--studio-warning); }
+.sidebar-no-project.has-running-thread #no-project-toggle .chevron { color: var(--studio-warning); }

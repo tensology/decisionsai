@@ -43,6 +43,15 @@ class CalendarEntryBody(BaseModel):
     project_id: int | None
 
 
+class CalendarEntryDeleteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entry_id: int | None = None
+    draft_id: str | None = None
+    version: str | None = None
+    original_start: datetime | None = None
+    original_end: datetime | None = None
+
+
 async def _calendar_call(operation, *args, **kwargs):
     from fastapi import HTTPException
     from distr.core.reports.calendar_sync import CalendarEditError
@@ -163,6 +172,13 @@ def register_routes(router, templates):
         return JSONResponse(await _calendar_call(save_entry, **data.model_dump()),
                             headers={"Cache-Control": "no-store"})
 
+    @router.post("/workflows/studio/reports/calendar-entry/delete")
+    async def development_delete_calendar_entry(data: CalendarEntryDeleteBody):
+        from distr.core.reports.calendar_sync import delete_entry
+
+        return JSONResponse(await _calendar_call(delete_entry, **data.model_dump()),
+                            headers={"Cache-Control": "no-store"})
+
     @router.get("/workflows/studio/reports/period")
     async def development_period_report(
         month: str | None = Query(None, description="YYYY-MM calendar month"),
@@ -171,13 +187,15 @@ def register_routes(router, templates):
         projects: str | None = Query(None, description="Comma-separated project ids; empty = all; 0 = unassigned"),
         saved_projects: str | None = Query(None, description="Project selection for the last built report"),
         include_automations: bool = Query(False),
+        calendar_only: bool = Query(False, description="Live time-entry refresh: reuse recent local collation, re-read Tensology"),
     ):
         from distr.core.reports.month import get_period_report
 
         period, project_ids = _period_args(month, start, end, projects)
         _, saved_project_ids = _period_args(month, start, end, saved_projects) if saved_projects is not None else (period, None)
         return JSONResponse(await _calendar_call(
-            get_period_report, period, project_ids, saved_project_ids=saved_project_ids, include_automations=include_automations),
+            get_period_report, period, project_ids, saved_project_ids=saved_project_ids, include_automations=include_automations,
+            calendar_only=calendar_only),
             headers={"Cache-Control": "no-store"})
 
     @router.post("/workflows/studio/reports/period/build")

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 STREAM_PATH = "/ws/decisions"
 TICKET_EVENT_TYPE = "decisions_ticket"
 WORK_REQUEST_EVENT_TYPE = "decisions_work_request"
+TIME_ENTRY_EVENT_TYPE = "decisions_time_entry"
 PING_INTERVAL_SECONDS = 20
 PING_TIMEOUT_SECONDS = 20
 BACKOFF_INITIAL_SECONDS = 1.0
@@ -163,6 +164,24 @@ def handle_work_request_signal(event: Any) -> None:
             ChatService.append_assistant_notice(int(chat_id), summary, hidden=True)
     except Exception:
         logger.debug("Tensology work-request chat notice failed", exc_info=True)
+
+
+def handle_time_entry_signal(event: Any) -> dict[str, Any] | None:
+    """A Tensology time entry changed (or the stream reconnected): refresh open Reports.
+
+    Only ids travel; Reports re-reads ``GET /api/integrations/v1/time-entries``. Not
+    gated by ``tensology_push_paused`` (that pause covers ticket push only). An echo of
+    this machine's own write is still published, flagged ``echo`` for the UI to skip.
+    """
+    from distr.core.reports.calendar_sync import is_local_echo, notify_time_entry_changed
+
+    if not isinstance(event, dict):
+        event = {}
+    entry_id = event.get("entry_id")
+    return notify_time_entry_changed(
+        entry_id=entry_id, event=str(event.get("event") or "updated"), origin="tensology",
+        echo=is_local_echo(entry_id) if entry_id is not None else False,
+    )
 
 
 def tensology_stream_url(settings: dict[str, Any]) -> str:
@@ -361,6 +380,11 @@ async def run_tensology_ticket_stream(
                 STREAM_STATE.update(connected=True, url=url, connected_at=time.time(), last_error="")
                 last_logged_error = ""
                 logger.info("Tensology ticket stream connected: %s", url)
+                try:
+                    # Time entries changed while disconnected are caught up by one refresh.
+                    handle_time_entry_signal({"event": "resync"})
+                except Exception:
+                    logger.debug("Tensology time-entry resync notice failed", exc_info=True)
                 dispatcher = TicketEventDispatcher(catch_up, handle_events)
                 worker = asyncio.create_task(dispatcher.run())
                 pause_state["tickets_paused"] = await _is_paused()
@@ -375,6 +399,23 @@ async def run_tensology_ticket_stream(
                         )
                     else:
                         dispatcher.request_catch_up()
+                    # Work-request handlers (e.g. reconcile_requested) can take seconds. Run them
+                    # one at a time off the reader so time-entry and ticket events never queue behind.
+                    work_lock = asyncio.Lock()
+                    work_tasks: set[asyncio.Task] = set()
+
+                    async def _run_work_request(work_event):
+                        async with work_lock:
+                            try:
+                                import inspect as _inspect
+
+                                if _inspect.iscoroutinefunction(handle_work_request):
+                                    await handle_work_request(work_event)
+                                else:
+                                    await asyncio.to_thread(handle_work_request, work_event)
+                            except Exception:
+                                logger.debug("Tensology work-request handler failed", exc_info=True)
+
                     async for raw in websocket:
                         event = parse_event(raw)
                         if not event:
@@ -398,19 +439,26 @@ async def run_tensology_ticket_stream(
                                 "Tensology work-request stream event received: request %s (%s)",
                                 event.get("request_id"), event.get("event") or "update",
                             )
+                            work_task = asyncio.create_task(_run_work_request(event))
+                            work_tasks.add(work_task)
+                            work_task.add_done_callback(work_tasks.discard)
+                        elif kind == TIME_ENTRY_EVENT_TYPE:
+                            STREAM_STATE["last_event_at"] = time.time()
+                            STREAM_STATE["events"] = int(STREAM_STATE.get("events") or 0) + 1
+                            logger.info(
+                                "Tensology time-entry stream event received: entry %s (%s)",
+                                event.get("entry_id"), event.get("event") or "updated",
+                            )
                             try:
-                                import inspect as _inspect
-
-                                if _inspect.iscoroutinefunction(handle_work_request):
-                                    await handle_work_request(event)
-                                else:
-                                    await asyncio.to_thread(handle_work_request, event)
+                                handle_time_entry_signal(event)
                             except Exception:
-                                logger.debug("Tensology work-request handler failed", exc_info=True)
+                                logger.debug("Tensology time-entry handler failed", exc_info=True)
                         elif kind == "ping":
                             await websocket.send(json.dumps({"type": "pong", "timestamp": event.get("timestamp")}))
                     # Let an event that arrived just before a clean close finish.
                     await asyncio.sleep(EVENT_DEBOUNCE_SECONDS + 0.05)
+                    if work_tasks:
+                        await asyncio.wait(set(work_tasks), timeout=30)
                 finally:
                     for task in (pause_watch, worker):
                         task.cancel()

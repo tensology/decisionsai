@@ -109,6 +109,14 @@ class WorkflowOrchestrationMixin:
                     automation,
                     event_queue=getattr(self, "agent_event_queue", None),
                 )
+            try:
+                from distr.core.workflow.development_control import sweep_idle_thread_timers
+
+                swept = sweep_idle_thread_timers()
+                if swept:
+                    logger.info("Auto-paused %d idle thread timer(s): %s", len(swept), swept)
+            except Exception as sweep_err:
+                logger.warning("Thread timer sweep failed: %s", sweep_err)
             # Recompute the next wake time after runs advance next_run_at (or when idle).
             apply_workflow_scheduler_timer_interval(
                 getattr(self, "workflow_scheduler_timer", None),

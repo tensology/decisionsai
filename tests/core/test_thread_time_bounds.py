@@ -112,3 +112,175 @@ def test_resume_inside_continuous_work_keeps_one_segment(development_db, monkeyp
     with session() as db:
         assert db.query(DevelopmentTimeEntry).filter_by(chat_id=chat_id).count() == 0
         assert db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).one().time_started_at == START
+
+
+# ── Finished automation runs and the background sweep ─────────────────────────
+import json as _json  # noqa: E402
+
+from distr.core.db.automation import AutomationRun  # noqa: E402,F401 - registers the table
+from distr.core.db.workflow import AutoWorkflowRun  # noqa: E402
+
+
+def _idle_agent(monkeypatch, active=False):
+    monkeypatch.setattr(
+        "distr.core.workflow.development_harness.development_execution_active", lambda _: active
+    )
+
+
+def _entries(session, chat_id):
+    with session() as db:
+        return [(r.source, r.started_at, r.ended_at, r.seconds)
+                for r in db.query(DevelopmentTimeEntry).filter_by(chat_id=chat_id).all()]
+
+
+def _item(session, chat_id):
+    with session() as db:
+        return db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).one()
+
+
+def test_sweep_pauses_an_unattended_finished_automation_timer_at_its_work_end(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    now = START + timedelta(hours=7)               # nobody opened the thread for hours
+    monkeypatch.setattr(control, "utc_now_naive", lambda: now)
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)
+    _turn(session, chat_id, START, START + timedelta(minutes=4))
+    assert control.sweep_idle_thread_timers(_session_provider=session) == [chat_id]
+    end = START + timedelta(minutes=4, seconds=2)
+    assert _entries(session, chat_id) == [("auto_pause", START, end, 242)]
+    item = _item(session, chat_id)
+    assert item.time_paused is True and item.time_started_at is None
+
+
+def test_sweep_pauses_a_tool_run_timer_with_no_reply_turn(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    now = START + timedelta(hours=6, minutes=43)
+    monkeypatch.setattr(control, "utc_now_naive", lambda: now)
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)        # tool runs post to the root, no child turn
+    assert control.sweep_idle_thread_timers(_session_provider=session) == [chat_id]
+    assert _entries(session, chat_id) == [("auto_pause", START, START + timedelta(seconds=2), 2)]
+
+
+def test_sweep_leaves_a_live_agent_alone(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    monkeypatch.setattr(control, "utc_now_naive", lambda: START + timedelta(hours=2))
+    _idle_agent(monkeypatch, active=True)
+    _running_since(session, chat_id, START)
+    assert control.sweep_idle_thread_timers(_session_provider=session) == []
+    assert _item(session, chat_id).time_paused is False
+
+
+def test_sweep_leaves_a_live_workflow_run_alone(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    monkeypatch.setattr(control, "utc_now_naive", lambda: START + timedelta(hours=2))
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)
+    with session() as db:
+        db.add(AutoWorkflowRun(workflow_id=1, chat_id=chat_id, status="waiting", started_at=START))
+        db.commit()
+    assert control.sweep_idle_thread_timers(_session_provider=session) == []
+    assert _item(session, chat_id).time_paused is False
+
+
+def test_sweep_does_not_race_a_run_that_just_started(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    monkeypatch.setattr(control, "utc_now_naive", lambda: START + timedelta(minutes=1))
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)
+    assert control.sweep_idle_thread_timers(_session_provider=session) == []
+    assert _item(session, chat_id).time_paused is False
+
+
+def test_sweep_skips_when_execution_state_is_unreadable(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    monkeypatch.setattr(control, "utc_now_naive", lambda: START + timedelta(hours=2))
+
+    def boom(_):
+        raise RuntimeError("state unavailable")
+
+    monkeypatch.setattr("distr.core.workflow.development_harness.development_execution_active", boom)
+    _running_since(session, chat_id, START)
+    assert control.sweep_idle_thread_timers(_session_provider=session) == []
+
+
+def test_finished_run_settles_the_timer_at_its_finish_time(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    now = START + timedelta(seconds=30)
+    monkeypatch.setattr(control, "utc_now_naive", lambda: now)
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)
+    finished = START + timedelta(seconds=5)
+    assert control.settle_finished_thread_time(chat_id, finished_at=finished, _session_provider=session) is True
+    assert _entries(session, chat_id) == [("auto_pause", START, finished, 5)]
+    # Never ends before the segment started, never in the future.
+    assert control.settle_finished_thread_time(chat_id, _session_provider=session) is False
+
+
+def test_finished_run_keeps_the_timer_while_another_automation_run_is_live(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    now = START + timedelta(minutes=10)
+    monkeypatch.setattr(control, "utc_now_naive", lambda: now)
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)
+    with session() as db:
+        db.add(AutomationRun(automation_id=1, status="running", started_at=START,
+                             run_data=_json.dumps({"chat_id": chat_id})))
+        db.commit()
+    assert control.settle_finished_thread_time(chat_id, _session_provider=session) is False
+    assert _item(session, chat_id).time_paused is False
+
+
+def test_a_dead_automation_run_row_does_not_hold_the_timer_forever(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    now = START + timedelta(hours=7)
+    monkeypatch.setattr(control, "utc_now_naive", lambda: now)
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)
+    with session() as db:
+        db.add(AutomationRun(automation_id=1, status="running", started_at=START,
+                             run_data=_json.dumps({"chat_id": chat_id})))
+        db.commit()
+    assert control.sweep_idle_thread_timers(_session_provider=session) == [chat_id]
+
+
+def test_finished_run_leaves_a_live_agent_timer_running(development_db, monkeypatch):  # noqa: F811
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    monkeypatch.setattr(control, "utc_now_naive", lambda: START + timedelta(minutes=1))
+    _idle_agent(monkeypatch, active=True)
+    _running_since(session, chat_id, START)
+    assert control.settle_finished_thread_time(chat_id, _session_provider=session) is False
+    assert _item(session, chat_id).time_paused is False
+
+
+def test_tool_automation_worker_settles_its_thread_timer_when_it_ends(monkeypatch):
+    from distr.core import automation_subagent as subagent
+
+    settled = []
+    monkeypatch.setattr(subagent, "_execute_tool_automation",
+                        lambda automation, manual: (False, "Skipped: nothing new", ""))
+    monkeypatch.setattr(subagent, "update_automation_run", lambda *a, **k: None)
+    monkeypatch.setattr(subagent, "_orchestrator_delivery_ack", lambda **k: None)
+    monkeypatch.setattr(subagent, "release_workflow_run", lambda _wid: None)
+    monkeypatch.setattr(control, "settle_finished_thread_time", lambda chat_id, **k: settled.append(chat_id))
+    subagent._automation_worker(
+        automation={"name": "WhatsApp Status", "action_config": {"tool": "whatsapp_status"}},
+        run_id=1, manual=False, chat_id=564, speak=False, schedule_metadata=None, emit_event=None,
+    )
+    assert settled == [564]
+
+
+def test_instruction_automation_worker_does_not_settle_on_handoff(monkeypatch):
+    from distr.core import automation_subagent as subagent
+
+    settled = []
+    monkeypatch.setattr(subagent, "_execute_instruction_automation",
+                        lambda automation, **k: (True, "Handed off.", ""))
+    monkeypatch.setattr(subagent, "update_automation_run", lambda *a, **k: None)
+    monkeypatch.setattr(subagent, "release_workflow_run", lambda _wid: None)
+    monkeypatch.setattr(control, "settle_finished_thread_time", lambda chat_id, **k: settled.append(chat_id))
+    subagent._automation_worker(
+        automation={"name": "Daily plan", "action_config": {}},
+        run_id=2, manual=False, chat_id=574, speak=False, schedule_metadata=None, emit_event=None,
+    )
+    assert settled == []

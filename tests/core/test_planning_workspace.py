@@ -40,7 +40,58 @@ def plan_workspace_db(tmp_path, monkeypatch):
         return {"project_id": project.id, "folder": project_folder, "session": get_session}
 
 
-def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_workspace_db, monkeypatch):
+@pytest.fixture
+def scoped_outline_plan(plan_workspace_db, monkeypatch):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.gui.web.routes.development.planning import register_routes
+    from distr.gui.web.security import INTERNAL_AUTH_HEADER
+
+    project_id = plan_workspace_db["project_id"]
+    with plan_workspace_db["session"]() as db:
+        board = KanbanBoard(name="Phone plan", default_project_id=project_id)
+        db.add(board)
+        db.commit()
+        board_id = board.id
+    workspace = planning_workspace.ensure_workspace(
+        board_key=f"decisions:{board_id}", board_provider="decisions", board_name="Phone plan", project_id=project_id,
+    )
+    app, router = FastAPI(), APIRouter(prefix="/api")
+    register_routes(router, None)
+    app.include_router(router)
+    monkeypatch.setattr("distr.gui.web.security.get_internal_api_token", lambda: "outline-fixture")
+    with TestClient(app) as client:
+        yield (client, f"/api/workflows/studio/plan-workspaces/{workspace['id']}",
+               {"board_id": board_id, "project_id": project_id}, {INTERNAL_AUTH_HEADER: "outline-fixture"})
+
+
+def test_remote_outline_scope_revision_and_creation_are_enforced(scoped_outline_plan, plan_workspace_db):
+    client, path, scope, headers = scoped_outline_plan
+    source = 'screen "Devices" id=devices route="/devices"\n  heading "Devices"\n'
+    create = dict(params=scope, headers=headers, json={"content": source})
+    assert client.post(path + "/outlines", params=scope, json={"content": source}).status_code == 401
+    created = client.post(path + "/outlines", **create)
+    assert created.status_code == 200, created.json()
+    item = created.json()
+    assert client.post(path + "/outlines", **create).status_code == 409
+    edit = path + f"/outlines/{item['id']}"
+    revision = item["revision_count"]
+    changed = source.replace('heading "Devices"', 'heading "Available devices"')
+    assert client.patch(edit, params=scope, headers=headers, json={"content": changed}).status_code == 422
+    assert client.patch(edit, params=scope, headers=headers, json={"content": "bad", "expected_revision": revision}).status_code == 422
+    saved = client.patch(edit, params=scope, headers=headers, json={"content": changed, "expected_revision": revision})
+    assert saved.status_code == 200, saved.json()
+    assert saved.json()["revision_count"] == revision + 1
+    assert client.patch(edit, params=scope, headers=headers, json={"content": source, "expected_revision": revision}).status_code == 409
+    with plan_workspace_db["session"]() as db:
+        db.get(KanbanBoard, scope["board_id"]).default_project_id = None
+        db.commit()
+    assert client.patch(edit, params=scope, headers=headers, json={"content": source, "expected_revision": revision + 1}).status_code == 409
+    persisted = planning_workspace.get_workspace(int(path.rsplit("/", 1)[1]))["items"][0]
+    assert (persisted["revision_count"], persisted["content"]) == (revision + 1, changed)
+
+
+def test_scoped_plan_reads_and_outline_writes_over_relay(plan_workspace_db, monkeypatch):
     import json
     import socket
     import threading
@@ -87,10 +138,10 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
     responses = []
     relay = SimpleNamespace(_send_websocket_message=responses.append)
 
-    def read(path, *, include_data_model=False):
+    def exchange(path, *, include_data_model=False, method="GET", body=None):
         query = scope + ("&include_data_model=true" if include_data_model else "")
         TelegramRemoteControlMixin._dispatch_api_relay(relay, {
-            "request_id": path, "data": {"method": "GET", "path": f"{path}?{query}"},
+            "request_id": path, "data": {"method": method, "path": f"{path}?{query}", "body": body},
         })
         frame = responses.pop()
         assert frame["request_id"] == path
@@ -112,11 +163,12 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
             while not server.started and thread.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert server.started, "The isolated Planning API did not start."
-            detail = read(root)
+            detail = exchange(root)
             assert detail["status"] == 200
             assert detail["response"]["id"] == workspace["id"]
+            assert detail["response"]["outline_editing"] is True
             assert all("data_model" not in entry for entry in detail["response"]["items"])
-            structured = read(root, include_data_model=True)
+            structured = exchange(root, include_data_model=True)
             assert structured["status"] == 200
             artifacts = {entry["id"]: entry for entry in structured["response"]["items"]}
             assert artifacts[item["id"]]["content"] == erd
@@ -132,14 +184,25 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
                 ],
             }
             assert "data_model" not in artifacts[unsupported["id"]]
-            chat = read(root + "/conversation")
+            chat = exchange(root + "/conversation")
             assert chat["status"] == 200, chat["response"]
             assert chat["response"]["messages"][0]["content"] == "Scoped evidence"
+            source = 'screen "Devices" id=devices route="/devices"\n  heading "Devices"\n'
+            created = exchange(root + "/outlines", method="POST", body={"content": source})
+            assert created["status"] == 200, created
+            outline = created["response"]
+            outline_path = root + f"/outlines/{outline['id']}"
+            revised = source.replace('heading "Devices"', 'heading "Available devices"')
+            update = {"content": revised, "expected_revision": outline["revision_count"]}
+            saved = exchange(outline_path, method="PATCH", body=update)
+            assert saved["status"] == 200, saved
+            assert saved["response"]["content"] == revised
+            assert exchange(outline_path, method="PATCH", body=update)["status"] == 409
             with plan_workspace_db["session"]() as db:
                 db.get(PlanWorkspace, workspace["id"]).project_id = None
                 db.commit()
             for path in (root, root + "/conversation"):
-                assert read(path, include_data_model=True) == {"status": 409, "response": {
+                assert exchange(path, include_data_model=True) == {"status": 409, "response": {
                     "detail": "The board or project changed. Go back to Plans and refresh the list.",
                 }}
             with plan_workspace_db["session"]() as db:
@@ -150,14 +213,17 @@ def test_scoped_plan_reads_handle_missing_and_changed_scope_over_relay(plan_work
                 db.get(KanbanBoard, board_id).default_project_id = replacement.id
                 db.commit()
             for path in (root, root + "/conversation"):
-                result = read(path)
+                result = exchange(path)
                 assert result["status"] == 409
                 assert set(result["response"]) == {"detail"}
+            assert exchange(outline_path, method="PATCH", body={
+                "content": source, "expected_revision": saved["response"]["revision_count"],
+            })["status"] == 409
             with plan_workspace_db["session"]() as db:
                 db.delete(db.get(PlanWorkspace, workspace["id"]))
                 db.commit()
             for path in (root, root + "/conversation"):
-                assert read(path) == {"status": 404, "response": {"detail": "Plan workspace not found."}}
+                assert exchange(path) == {"status": 404, "response": {"detail": "Plan workspace not found."}}
         finally:
             server.should_exit = True
             thread.join(timeout=5)

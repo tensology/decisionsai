@@ -17,6 +17,65 @@ _WRITE_LOCK = Lock()
 _FIELDS = ("title", "start_at", "end_at", "project_id")
 _DRAFT_PREFIX = "report-draft:"
 
+# Live time-entry sync (2026-11-13). Tensology pushes ``decisions_time_entry`` over the
+# /ws/decisions stream for every create/update/delete; Decisions edits write through to
+# the Tensology API immediately. Both paths end in ``notify_time_entry_changed``, which
+# tells open Reports views (topic ``time_entries`` on /api/ws) to refresh the calendar.
+TIME_ENTRY_TOPIC = "time_entries"
+ECHO_WINDOW_SECONDS = 15.0
+_CHANGE_LOCK = Lock()
+_change_version = 0
+_recent_local_writes: dict[int, float] = {}
+
+
+def time_entry_change_version():
+    with _CHANGE_LOCK:
+        return _change_version
+
+
+def _record_local_write(entry_id):
+    import time
+
+    with _CHANGE_LOCK:
+        now = time.monotonic()
+        for key, at in list(_recent_local_writes.items()):
+            if now - at > ECHO_WINDOW_SECONDS:
+                _recent_local_writes.pop(key, None)
+        try:
+            _recent_local_writes[int(entry_id)] = now
+        except (TypeError, ValueError):
+            pass
+
+
+def is_local_echo(entry_id):
+    """True when a pushed Tensology change is the echo of this machine's own write."""
+    import time
+
+    try:
+        key = int(entry_id)
+    except (TypeError, ValueError):
+        return False
+    with _CHANGE_LOCK:
+        at = _recent_local_writes.get(key)
+    return at is not None and time.monotonic() - at <= ECHO_WINDOW_SECONDS
+
+
+def notify_time_entry_changed(*, entry_id=None, event="updated", origin="tensology", echo=False):
+    """Bump the change version and push one ``time_entry_changed`` to open Reports views."""
+    global _change_version
+    with _CHANGE_LOCK:
+        _change_version += 1
+        version = _change_version
+    payload = {"type": "time_entry_changed", "entry_id": entry_id, "event": str(event or "updated")[:32],
+               "origin": origin, "echo": bool(echo), "version": version}
+    try:
+        from distr.gui.web.routes.chat import publish_topic_event_threadsafe
+
+        publish_topic_event_threadsafe(TIME_ENTRY_TOPIC, payload)
+    except Exception:
+        pass
+    return payload
+
 
 class CalendarEditError(ValueError):
     def __init__(self, message, status=400):
@@ -150,7 +209,9 @@ def save_entry(*, entry_id, draft_id, version, original_start, original_end, tit
             receipt = json.loads(path.read_text()) if path.exists() else {}
             if receipt.get("event_id"):
                 return {"id": receipt["event_id"]}
-            body.update(billable=False, ticket_source="decisionsai", ticket_key=_DRAFT_PREFIX + draft_id)
+            # A saved draft takes its project's billable flag (no project: not billable).
+            billable = bool(project_id is not None and projects.get(project_id, {}).get("is_billable"))
+            body.update(billable=billable, ticket_source="decisionsai", ticket_key=_DRAFT_PREFIX + draft_id)
             if receipt and receipt["body"] != body:
                 raise CalendarEditError("A previous save is unconfirmed. Retry with its original values or check the Tensology calendar.", 409)
             _write_receipt(path, {"body": body})
@@ -162,6 +223,8 @@ def save_entry(*, entry_id, draft_id, version, original_start, original_end, tit
                     path.unlink(missing_ok=True)
                 raise
             _write_receipt(path, {"event_id": response["id"]})
+            _record_local_write(response["id"])
+            notify_time_entry_changed(entry_id=response["id"], event="created", origin="decisions")
             return {"id": response["id"]}
         if not version or original_start is None or original_end is None or original_end <= original_start:
             raise CalendarEditError("Reload Reports before editing this entry.", 409)
@@ -181,5 +244,68 @@ def save_entry(*, entry_id, draft_id, version, original_start, original_end, tit
                 changes["billable"] = False
             request_id = uuid4().hex
             _write_receipt(review_path().parent / "calendar_write_receipts" / f"edit-{entry_id}-{request_id}.json", current)
+            _record_local_write(entry_id)
             current = client.patch(f"time-entries/{entry_id}", changes, idempotency_key=request_id)
+            notify_time_entry_changed(entry_id=entry_id, event="updated", origin="decisions")
         return {"id": current["id"]}
+
+
+def _write_drafts(drafts):
+    path = review_path().with_name("time_drafts.json")
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
+        temporary = Path(output.name)
+        try:
+            json.dump(drafts, output, indent=2, ensure_ascii=False)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+            os.chmod(temporary, 0o600)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def delete_entry(*, entry_id=None, draft_id=None, version=None, original_start=None, original_end=None):
+    """Delete one Tensology time entry, or drop one unsaved local draft.
+
+    Entries go through the same version check and invoiced/allocation lock as edits;
+    Tensology also refuses invoiced time on its side. Drafts never reached Tensology,
+    so removing one only rewrites ``time_drafts.json``.
+    """
+    if (entry_id is None) == (draft_id is None):
+        raise CalendarEditError("Select one time entry.")
+    if draft_id is not None:
+        with _WRITE_LOCK:
+            drafts = load_drafts()
+            entries = drafts.get("entries", [])
+            if not any(item.get("id") == draft_id for item in entries):
+                raise CalendarEditError("This draft is no longer available.", 404)
+            path = _receipt_path(draft_id)
+            if path.exists():
+                raise CalendarEditError("This draft was already sent to Tensology. Reload Reports and delete the saved entry.", 409)
+            drafts["entries"] = [item for item in entries if item.get("id") != draft_id]
+            _write_drafts(drafts)
+        notify_time_entry_changed(entry_id=None, event="draft_deleted", origin="decisions")
+        return {"draft_id": draft_id, "deleted": True}
+    client = _client()
+    if client is None:
+        raise CalendarEditError("Connect Tensology in Settings to delete this entry.", 409)
+    with _WRITE_LOCK:
+        if not version or original_start is None or original_end is None or original_end <= original_start:
+            raise CalendarEditError("Reload Reports before deleting this entry.", 409)
+        rows = _events(client, stamp(original_start.isoformat()), stamp(original_end.isoformat()))
+        current = next((event for event in rows if event["id"] == entry_id), None)
+        if current is None or edit_version(current) != version:
+            raise CalendarEditError("This entry changed in Tensology. Reload Reports before deleting it.", 409)
+        locked = edit_lock(current, load_review() or {})
+        if locked:
+            raise CalendarEditError(locked, 403)
+        _write_receipt(review_path().parent / "calendar_write_receipts" / f"delete-{entry_id}-{uuid4().hex}.json", current)
+        _record_local_write(entry_id)
+        try:
+            client.delete(f"time-entries/{entry_id}")
+        except TensologyApiError as exc:
+            if exc.status != 404:
+                raise
+        notify_time_entry_changed(entry_id=entry_id, event="deleted", origin="decisions")
+    return {"id": entry_id, "deleted": True}

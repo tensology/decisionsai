@@ -32,7 +32,11 @@ def _inspect_wireframe(source, *, page_id=None):
         raise ValueError("Wireframe validation could not finish. No changes were saved.") from exc
     errors = [item for item in diagnostics if item["severity"] == "error"]
     if errors:
-        details = "; ".join(f"line {item['line']}: {item['message']}" for item in errors[:5])
+        def where(item):
+            # Show the offending source (e.g. which page) so the error is actionable, not just a line number.
+            evidence = " ".join(str(item.get("evidence") or "").split())[:120]
+            return f"line {item['line']}: {item['message']}" + (f" ({evidence})" if evidence else "")
+        details = "; ".join(where(item) for item in errors[:5])
         raise PlanValidationError(f"Invalid wireframe: {details}")
     return inspection
 

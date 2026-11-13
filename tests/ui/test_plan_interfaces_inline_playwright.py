@@ -67,7 +67,7 @@ def _surface_ok(page):
         return { callout: Boolean(s.querySelector(':scope > .plan-canvas-callout')), first: s.firstElementChild?.classList.contains('plan-canvas-callout'),
                  paneBottom: document.querySelector('#plan-artifacts').getBoundingClientRect().bottom, bottom: s.getBoundingClientRect().bottom,
                  panels: document.querySelectorAll('.plan-conversation').length }; }""")
-    assert g["callout"] and g["first"], g
+    assert not g["callout"], g                                                # summary banner retired; quiet map status instead
     assert -1 <= g["paneBottom"] - g["bottom"] <= 24, g                      # footer flush, surface fills the pane
     assert g["panels"] == 1, g                                                # single shared chat panel
 

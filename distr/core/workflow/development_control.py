@@ -700,30 +700,169 @@ def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 2) -> dic
         item = db.query(DevelopmentWorkItem).filter_by(chat_id=int(chat_id)).first()
         if item is None:
             raise LookupError("Development thread not found.")
-        if not item.time_paused and item.time_started_at:
-            from distr.core.workflow.thread_time_bounds import settled_segment_end, thread_turns
-
-            # Close at the end of the first continuous stretch of work after the segment
-            # started, not at the latest reply. An unpolled timer on a daily automation
-            # thread otherwise swallowed a week of separate runs into one auto_pause row.
-            # The timer still gets a deadline when a worker never produced a response.
-            activity_at = settled_segment_end(
-                item.time_started_at,
-                thread_turns(db, int(chat_id), item.time_started_at),
-                last_activity_at=item.time_last_activity_at,
-                now=now,
-                grace_seconds=0,
-            )
-            if not agent_active and (now - activity_at).total_seconds() >= auto_pause_after_seconds:
-                pause_at = activity_at + timedelta(seconds=auto_pause_after_seconds)
-                item.time_accumulated_seconds = _close_running_segment(db, item, pause_at, "auto_pause")
-                item.time_started_at = None
-                item.time_paused = True
+        _close_idle_segment(
+            db, item, now=now, agent_active=agent_active,
+            grace_seconds=auto_pause_after_seconds, min_idle_seconds=auto_pause_after_seconds,
+        )
         payload = _thread_time_payload(item, now)
         payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
         db.commit()
         return payload
+
+
+# A run row in one of these states still owns the thread's timer.
+LIVE_RUN_STATUSES = ("initializing", "queued", "running", "waiting")
+# The background sweep only closes timers idle at least this long, so it never
+# races a run that has just started its timer but not yet marked itself active.
+TIMER_SWEEP_IDLE_SECONDS = 5 * 60
+# An automation run row left "running" longer than this is a dead worker, not work.
+LIVE_AUTOMATION_RUN_MAX_SECONDS = 6 * 60 * 60
+
+
+def _close_idle_segment(
+    db,
+    item: DevelopmentWorkItem,
+    *,
+    now: datetime,
+    agent_active: bool,
+    grace_seconds: int = 2,
+    min_idle_seconds: int = 2,
+) -> bool:
+    """Auto-pause a running segment whose work went idle; return True when closed.
+
+    Closes at the end of the first continuous stretch of work after the segment
+    started (plus grace), not at the latest reply or at ``now``. An unpolled timer
+    on a daily automation thread otherwise swallowed a week of separate runs into
+    one auto_pause row. The timer still gets a deadline when a worker never
+    produced a response.
+    """
+    if item.time_paused or not item.time_started_at or agent_active:
+        return False
+    from distr.core.workflow.thread_time_bounds import settled_segment_end, thread_turns
+
+    activity_at = settled_segment_end(
+        item.time_started_at,
+        thread_turns(db, int(item.chat_id), item.time_started_at),
+        last_activity_at=item.time_last_activity_at,
+        now=now,
+        grace_seconds=0,
+    )
+    if (now - activity_at).total_seconds() < max(int(grace_seconds), int(min_idle_seconds)):
+        return False
+    pause_at = min(activity_at + timedelta(seconds=max(0, int(grace_seconds))), now)
+    item.time_accumulated_seconds = _close_running_segment(db, item, pause_at, "auto_pause")
+    item.time_started_at = None
+    item.time_paused = True
+    return True
+
+
+def _thread_has_live_run(db, chat_id: int, now: datetime) -> bool:
+    """True when a workflow or automation run still holds this thread open."""
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    live_workflow = (
+        db.query(AutoWorkflowRun.id)
+        .filter(AutoWorkflowRun.chat_id == int(chat_id), AutoWorkflowRun.status.in_(LIVE_RUN_STATUSES))
+        .first()
+    )
+    if live_workflow is not None:
+        return True
+    from distr.core.db.automation import AutomationRun
+
+    cutoff = now - timedelta(seconds=LIVE_AUTOMATION_RUN_MAX_SECONDS)
+    rows = (
+        db.query(AutomationRun.run_data)
+        .filter(AutomationRun.status.in_(LIVE_RUN_STATUSES), AutomationRun.started_at >= cutoff)
+        .all()
+    )
+    for (raw,) in rows:
+        try:
+            data = json.loads(raw or "{}")
+            if isinstance(data, dict) and int(data.get("chat_id") or 0) == int(chat_id):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _execution_active_or_unknown(chat_id: int) -> bool:
+    from distr.core.workflow.development_harness import development_execution_active
+
+    try:
+        return bool(development_execution_active(int(chat_id)))
+    except Exception:
+        # When the state cannot be read, leave the timer alone.
+        return True
+
+
+def settle_finished_thread_time(
+    chat_id: int,
+    *,
+    finished_at: datetime | None = None,
+    _session_provider=None,
+) -> bool:
+    """Pause a thread timer because the run that started it has finished.
+
+    Ends the segment at ``finished_at`` (clamped between the segment start and
+    now). Leaves the timer running when another run or a live agent execution
+    still holds the thread. Returns True when a running segment was closed.
+    """
+    agent_active = _execution_active_or_unknown(int(chat_id))
+    if agent_active:
+        return False
+    now = utc_now_naive()
+    with (_session_provider or get_session)() as db:
+        item = db.query(DevelopmentWorkItem).filter_by(chat_id=int(chat_id)).first()
+        if item is None or item.time_paused or not item.time_started_at:
+            return False
+        if _thread_has_live_run(db, int(chat_id), now):
+            return False
+        end = min(max(finished_at or now, item.time_started_at), now)
+        item.time_accumulated_seconds = _close_running_segment(db, item, end, "auto_pause")
+        item.time_started_at = None
+        item.time_paused = True
+        _sync_ticket_time(db, item, int(item.time_accumulated_seconds or 0))
+        db.commit()
+        return True
+
+
+def sweep_idle_thread_timers(*, now: datetime | None = None, _session_provider=None) -> list[int]:
+    """Safety net: auto-pause every running thread timer that no live run backs.
+
+    Auto-pause used to happen only when the UI polled one open thread, so timers
+    on unattended automation threads ran until someone opened them. This sweep
+    applies the same idle rule to all running timers and closes each at the end
+    of its own work, never at sweep time. Returns the chat ids it paused.
+    """
+    provider = _session_provider or get_session
+    with provider() as db:
+        chat_ids = [
+            int(row[0])
+            for row in db.query(DevelopmentWorkItem.chat_id)
+            .filter(DevelopmentWorkItem.time_paused.is_(False), DevelopmentWorkItem.time_started_at.isnot(None))
+            .all()
+        ]
+    paused: list[int] = []
+    for chat_id in chat_ids:
+        agent_active = _execution_active_or_unknown(chat_id)
+        if agent_active:
+            continue
+        moment = now or utc_now_naive()
+        with provider() as db:
+            item = db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).first()
+            if item is None or item.time_paused or not item.time_started_at:
+                continue
+            if _thread_has_live_run(db, chat_id, moment):
+                continue
+            if _close_idle_segment(
+                db, item, now=moment, agent_active=False,
+                grace_seconds=2, min_idle_seconds=TIMER_SWEEP_IDLE_SECONDS,
+            ):
+                _sync_ticket_time(db, item, int(item.time_accumulated_seconds or 0))
+                db.commit()
+                paused.append(chat_id)
+    return paused
 
 
 def clear_stale_execution_status(chat_id: int, *, _session_provider=None) -> bool:

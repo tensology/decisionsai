@@ -20,6 +20,8 @@ export function createSidebar({ context, actions, el }) {
         revealPending: null,
         boardsCollapsed: false,
         boardsExpanded: false,
+        // "No project" is its own folder (threads with no board or project), never a project entry.
+        noProjectExpanded: false,
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
         showAllRecents: new URLSearchParams(window.location.search).get('recent') === '1',
         contextBoardKey: '',
@@ -35,11 +37,17 @@ export function createSidebar({ context, actions, el }) {
         state.pinnedBoardKeys = Array.isArray(pinned) ? pinned : [];
         state.collapsedBoardKeys = new Set(Array.isArray(collapsed) ? collapsed : []);
         state.boardsCollapsed = window.localStorage.getItem('decisions-development-boards-collapsed') === 'true';
+        state.noProjectExpanded = window.localStorage.getItem('decisions-development-no-project-expanded') === 'true';
     } catch (_) {
         /* Keep default preferences if storage is unavailable. */
     }
     function threadRowHtml(chat, active, pinned = false) {
-        return `<div class="task-row-wrap${active ? ' active' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}>${actions.threadRowContentHtml(chat, pinned)}</button></div>`;
+        // Unread (finished, not yet opened) threads get an orange pin in the row's reserved left
+        // gutter (.task-row padding-left). It sits inside the row button, so clicking it opens the
+        // thread through the same handler, and the re-render after opening drops it.
+        const unread = threadNeedsReview(chat);
+        const unreadPin = unread ? '<span class="task-row-unread-pin" aria-hidden="true"></span>' : '';
+        return `<div class="task-row-wrap${active ? ' active' : ''}${unread ? ' unread' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}${unread ? ' aria-description="Unread"' : ''}>${unreadPin}${actions.threadRowContentHtml(chat, pinned)}</button></div>`;
     }
     let pinRevision = 0;
     let pinWritePending = false;
@@ -141,6 +149,55 @@ export function createSidebar({ context, actions, el }) {
         if (threadNeedsReview(chat) || (row && threadNeedsReview(row))) readySeen.markSeen(chat);
     }
 
+    // 2026-11-13: two sections above Pinned/Boards that are not projects.
+    // - Running automations: every automation thread that is processing right now (project-linked
+    //   ones also stay in their project folder). Hidden when nothing runs; refreshed by the ~6s shell poll.
+    // - No project: threads with no board/project. Its own folder, outside the projects list.
+    function ensureExtraSections() {
+        const anchor = el('pinned-board-section');
+        if (!anchor || document.getElementById('running-automations-section')) return;
+        anchor.insertAdjacentHTML('beforebegin',
+            '<section class="sidebar-bucket sidebar-running-automations hidden" id="running-automations-section" aria-label="Running automations">'
+            + '<div class="sidebar-section-label"><span>Running automations</span><small class="sidebar-section-count" id="running-automations-count"></small></div>'
+            + '<div class="task-list" id="running-automations-group" aria-live="polite"></div></section>'
+            + '<section class="sidebar-bucket sidebar-no-project hidden" id="no-project-section" aria-label="Threads with no project">'
+            + '<div class="sidebar-section-label"><button class="sidebar-section-toggle" type="button" id="no-project-toggle" aria-expanded="false" aria-controls="no-project-content">'
+            + '<span class="chevron" aria-hidden="true">▶</span><span>No project</span><small class="sidebar-section-count" id="no-project-count"></small></button></div>'
+            + '<div class="task-list hidden" id="no-project-content"></div></section>');
+        document.getElementById('no-project-toggle').addEventListener('click', () => {
+            state.noProjectExpanded = !state.noProjectExpanded;
+            try {
+                window.localStorage.setItem('decisions-development-no-project-expanded', String(state.noProjectExpanded));
+            } catch (_) { /* keep the in-memory choice */ }
+            renderSidebar();
+            document.getElementById('no-project-toggle')?.focus({ preventScroll: true });
+        });
+    }
+    function renderExtraSections() {
+        ensureExtraSections();
+        const runningSection = document.getElementById('running-automations-section');
+        const noProjectSection = document.getElementById('no-project-section');
+        if (!runningSection || !noProjectSection) return;
+        const byNewest = (a, b) => String(b.modified_date || '').localeCompare(String(a.modified_date || '')) || Number(b.id) - Number(a.id);
+        const running = context.chats
+            .filter((chat) => chat.development_source_type === 'automation' && actions.threadIsProcessing?.(chat))
+            .sort(byNewest);
+        runningSection.classList.toggle('hidden', !running.length);
+        document.getElementById('running-automations-count').textContent = running.length ? String(running.length) : '';
+        document.getElementById('running-automations-group').innerHTML = running.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join('');
+        const loose = context.chats.filter((chat) => !chat.pinned && !threadBoard(chat)).sort(byNewest);
+        // Open while one of its threads is the open thread, so the highlighted row stays visible.
+        const expanded = state.noProjectExpanded || loose.some((chat) => isThreadActive(chat));
+        noProjectSection.classList.toggle('hidden', !loose.length);
+        noProjectSection.classList.toggle('has-running-thread', loose.some((chat) => actions.threadIsProcessing?.(chat)));
+        const toggle = document.getElementById('no-project-toggle');
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.querySelector('.chevron').textContent = expanded ? '▼' : '▶';
+        document.getElementById('no-project-count').textContent = loose.length ? String(loose.length) : '';
+        const content = document.getElementById('no-project-content');
+        content.classList.toggle('hidden', !expanded);
+        content.innerHTML = loose.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join('');
+    }
     function renderSidebar() {
         settleRevealedBoards();
         readySeen.prune(context.chats);
@@ -232,6 +289,7 @@ export function createSidebar({ context, actions, el }) {
             .join('');
         el('archived-task-group').innerHTML = archived;
         el('recents-show-more').classList.toggle('hidden', state.showAllRecents || recentThreads.length <= 5);
+        renderExtraSections();
 
         document.querySelectorAll('[data-board-toggle]').forEach(bindProjectToggle);
         document.querySelectorAll('[data-project-threads-more]').forEach(button => {

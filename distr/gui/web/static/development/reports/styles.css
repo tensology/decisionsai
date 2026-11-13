@@ -205,6 +205,12 @@ body.reports-modal-open { overflow: hidden; }
 .reports-calendar-editor textarea { resize: vertical; }
 .reports-calendar-editor :is(input, select, textarea):focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 1px; }
 .reports-calendar-editor .primary-button { justify-self: start; min-height: 44px; }
+.reports-calendar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.reports-calendar-actions .reports-calendar-delete { min-height: 44px; color: #fca5a5; border-color: rgba(248, 113, 113, 0.35); }
+.reports-calendar-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 8px; background: rgba(127, 29, 29, 0.18); }
+.reports-calendar-confirm[hidden] { display: none; }
+.reports-calendar-confirm p { flex: 1 1 100%; margin: 0; color: #fecaca; font-size: 12px; }
+.reports-calendar-confirm button { min-height: 40px; }
 .reports-calendar-error { margin: 0; color: var(--studio-text); overflow-wrap: anywhere; }
 @media (max-width: 520px) {
     .reports-calendar-times { grid-template-columns: 1fr; }

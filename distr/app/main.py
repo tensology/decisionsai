@@ -658,6 +658,15 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             logger.warning("Automation startup reconciliation failed: %s", _automation_cleanup_err)
 
         try:
+            from distr.core.workflow.development_control import sweep_idle_thread_timers
+
+            _swept_timers = sweep_idle_thread_timers()
+            if _swept_timers:
+                logger.info("Auto-paused %d idle thread timer(s) on startup: %s", len(_swept_timers), _swept_timers)
+        except Exception as _timer_sweep_err:
+            logger.warning("Thread timer startup sweep failed: %s", _timer_sweep_err)
+
+        try:
             from distr.core.orchestrator_memory import run_weekly_machine_activity_compaction
 
             run_weekly_machine_activity_compaction()

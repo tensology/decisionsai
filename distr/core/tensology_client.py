@@ -225,6 +225,9 @@ class TensologyClient:
             approved=approved,
         )
 
+    def delete(self, path: str) -> Any:
+        return self._request("DELETE", path)
+
 
 def configured_tensology_client(source: str = "decisionsai") -> TensologyClient:
     from distr.core.settings import load_settings_from_db

@@ -169,9 +169,9 @@ def test_interfaces_surface_fills_window_with_callout(page, backend, size):
     _open(page, "Interfaces", '.iface-viewport', size)
     surface = box(page, '.iface-viewport')
     body = box(page, '.iface-canvas .erd-body')
-    callout = box(page, '.iface-canvas .plan-canvas-callout')
-    assert abs(callout['x'] - body['x']) <= 2 and abs(callout['width'] - body['width']) <= 2, (callout, body)
-    assert callout['y'] + callout['height'] <= surface['y'] + 1
+    assert page.locator('.iface-canvas .plan-canvas-callout').count() == 0             # banner retired (planning fixes)
+    callout = box(page, '.iface-canvas .iface-map-status')                              # quiet one-line status instead
+    assert inside(callout, box(page, '.iface-canvas'), pad=4), (callout, body)
     pane = box(page, '#plan-artifacts')
     assert -1 <= pane['y'] + pane['height'] - (surface['y'] + surface['height']) <= 24, (surface, pane)
     edit = box(page, '.iface-canvas .erd-dock-left')
@@ -182,8 +182,6 @@ def test_interfaces_surface_fills_window_with_callout(page, backend, size):
     assert any('Customers' in name for name in pages.all_text_contents())
     page.screenshot(path=str(OUT / f'interfaces-chrome-{size[0]}.png'), animations='disabled')
     record(f'interfaces-{size[0]}', {"surface": surface, "callout": callout})
-    page.get_by_label("Dismiss interfaces summary").click()
-    assert page.locator('.iface-canvas .plan-canvas-callout').is_hidden()
     assert pages.count() == 2
     page.wait_for_function("""() => {
         const pane = document.querySelector('#plan-artifacts').getBoundingClientRect();

@@ -17,7 +17,7 @@ def test_hint_text_per_state():
 import assert from 'node:assert/strict';
 const m = await import(SOURCE);
 assert.deepEqual(m.scanHint({state: 'scanning'}), {text: 'Scanning project…', kind: 'scanning'});
-assert.deepEqual(m.scanHint({state: 'error', error: 'folder gone'}), {text: 'Project scan failed: folder gone', kind: 'error'});
+assert.deepEqual(m.scanHint({state: 'error', error: 'folder gone'}), {text: 'Project scan failed: folder gone Plan still shows the last successful scan.', kind: 'error'});
 assert.equal(m.scanHint({state: 'done'}), null);
 assert.match(m.scanHint({state: 'done', coverage: 'none'}).text, /could not map.*Review/);
 assert.match(m.scanHint({state: 'done', coverage: 'partial'}).text, /partial/);

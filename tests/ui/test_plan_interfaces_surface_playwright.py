@@ -35,18 +35,21 @@ def _open(page, w, h, content, surface):
 
 def _check(page):
     g = page.evaluate("""() => {
-        const s = document.querySelector('#plan-preview'), c = s.querySelector('.plan-canvas-callout');
+        const s = document.querySelector('#plan-preview'), c = s.querySelector('.iface-map-status');
         const grid = s.querySelector('.iface-viewport') || s;
         const rs = s.getBoundingClientRect(), rc = c ? c.getBoundingClientRect() : null;
         const top = rc ? document.elementFromPoint(rc.left + rc.width / 2, rc.top + rc.height / 2) : null;
         const pane = document.querySelector('#plan-artifacts').getBoundingClientRect();
         return { surface: [rs.left, rs.top, rs.width, rs.height], callout: rc && [rc.left, rc.top, rc.width, rc.height],
-                 uncovered: Boolean(top && c.contains(top)), grid: getComputedStyle(grid).backgroundImage, paneBottom: pane.bottom, surfaceBottom: rs.bottom };
+                 uncovered: Boolean(top && c.contains(top)), grid: getComputedStyle(grid).backgroundImage, paneBottom: pane.bottom, surfaceBottom: rs.bottom,
+                 banner: Boolean(s.querySelector('.plan-canvas-callout')), map: Boolean(s.querySelector('.iface-viewport')) };
     }""")
     s, c = g["surface"], g["callout"]
-    assert c and c[2] > 0 and c[3] > 0, g
-    assert s[0] - .5 <= c[0] and c[0] + c[2] <= s[0] + s[2] + .5 and s[1] - .5 <= c[1] and c[1] + c[3] <= s[1] + s[3] + .5, g
-    assert g["uncovered"], g
+    assert not g["banner"], g                                 # the old summary banner is gone (planning fixes 12 Nov)
+    if g["map"]:                                              # the map carries a quiet one-line status instead
+        assert c and c[2] > 0 and c[3] > 0, g
+        assert s[0] - .5 <= c[0] and c[0] + c[2] <= s[0] + s[2] + .5 and s[1] - .5 <= c[1] and c[1] + c[3] <= s[1] + s[3] + .5, g
+        assert g["uncovered"], g
     assert 'radial-gradient' in g["grid"], g
     assert -1 <= g["paneBottom"] - g["surfaceBottom"] <= 24, g
     return g
@@ -63,8 +66,8 @@ def test_interfaces_surface_and_callout_visible(page, w, h, kind):
         assert page.locator('#plan-preview .iface-node').count() >= 2
     else:
         kids = page.evaluate("() => [...document.querySelector('#plan-preview').children].map((n) => n.className || n.tagName)")
-        assert len(kids) >= 2 and kids[0] == 'plan-canvas-callout' or 'plan-canvas-callout' in kids[0], kids
-        assert len(kids) >= 2, kids                                   # the rendered page content is still there
+        assert not any('plan-canvas-callout' in str(k) for k in kids), kids
+        assert len(kids) >= 1, kids                                   # the rendered page content is still there
     g = _check(page)
     page.set_viewport_size({"width": w, "height": h - 60}); page.wait_for_timeout(400)      # resize keeps it
     _check(page)
@@ -72,9 +75,7 @@ def test_interfaces_surface_and_callout_visible(page, w, h, kind):
     suffix = {"populated": "", "single": "-single", "empty": "-empty"}[kind]
     page.screenshot(path=str(OUT / f'interfaces-chrome-fixed{suffix}-{w}.png'))
     print('MEASURE', kind, w, json.dumps(g))
-    page.get_by_label("Dismiss interfaces summary").click()
-    assert page.locator('.plan-canvas-callout').is_hidden()
     page.get_by_role("button", name="Data", exact=True).click(); page.wait_for_timeout(300)
     page.get_by_role("button", name="Interfaces", exact=True).click(); page.wait_for_timeout(600)
-    assert page.locator('.plan-canvas-callout').count() == 1 and page.locator('.plan-canvas-callout').is_hidden()   # stays dismissed this session
+    assert page.locator('#plan-preview .plan-canvas-callout').count() == 0   # no banner comes back on return
     assert surface.is_visible()

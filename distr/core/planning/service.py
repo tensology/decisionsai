@@ -626,20 +626,27 @@ def workspace_exists(workspace_id: int) -> bool:
         return db.get(PlanWorkspace, int(workspace_id)) is not None
 
 
-def validate_board_plan_read(workspace_id: int, board_id: int | None, project_id: int | None) -> None:
-    """Validate the board and project selected by a remote Planning reader."""
+class PlanBoardScopeChanged(ValueError):
+    """The selected board and project no longer own the workspace."""
+
+
+def _require_board_plan_scope(db, workspace, board_id, project_id, *, lock=False):
     from distr.core.workflow.development_sidebar import board_key_for
 
+    if workspace is None:
+        raise LookupError('Plan workspace not found.')
+    board = db.get(KanbanBoard, board_id, with_for_update=lock) if board_id is not None else None
+    project = db.get(Project, project_id, with_for_update=lock) if project_id is not None else None
+    if (board is None or board.archived or project is None or project.deleted_at is not None
+            or workspace.board_key != board_key_for(board)
+            or workspace.project_id != project.id or board.default_project_id != project.id):
+        raise PlanBoardScopeChanged('The board or project changed. Go back to Plans and refresh the list.')
+
+
+def validate_board_plan_read(workspace_id: int, board_id: int | None, project_id: int | None) -> None:
+    """Validate the board and project selected by a remote Planning reader."""
     with get_session() as db:
-        workspace = db.get(PlanWorkspace, workspace_id)
-        if workspace is None:
-            raise LookupError('Plan workspace not found.')
-        board = db.get(KanbanBoard, board_id) if board_id is not None else None
-        project = db.get(Project, project_id) if project_id is not None else None
-        if (board is None or board.archived or project is None or project.deleted_at is not None
-                or workspace.board_key != board_key_for(board)
-                or workspace.project_id != project.id or board.default_project_id != project.id):
-            raise ValueError('The board or project changed. Go back to Plans and refresh the list.')
+        _require_board_plan_scope(db, db.get(PlanWorkspace, workspace_id), board_id, project_id)
 
 
 def get_workspace(workspace_id: int, include_data_model: bool = False) -> dict[str, Any] | None:
@@ -747,15 +754,31 @@ def _finish_file_projection(item_id):
             return f"Saved in Decisions; file synchronization is pending: {exc}"
 
 
-def create_item(*, workspace_id: int, item_type: str, title: str = "", content: str = "", content_format: str = "", source: str = "user", instruction: str = "") -> dict[str, Any]:
+def create_item(*, workspace_id: int, item_type: str, title: str = "", content: str = "", content_format: str = "", source: str = "user", instruction: str = "", outline_scope: tuple[int, int] | None = None) -> dict[str, Any]:
     clean_type = str(item_type or "brief").strip().lower()
     if clean_type in RETIRED_ITEM_TYPES:
         raise ValueError("Handover and Skills documents are no longer part of Plan.")
     default_title, default_format, default_content = ITEM_TYPES.get(clean_type, ("Document", "markdown", "# Document\n\n"))
+    if outline_scope is not None:
+        from distr.core.planning.validation import project_image_ids, validate_flow_sidecar, validate_wireframe
+
+        if clean_type != "wireframe" or content_format != "wire":
+            raise ValueError("Only page outlines can be created here.")
+        validate_wireframe(content)
     with get_session() as db:
-        workspace = db.get(PlanWorkspace, int(workspace_id))
+        if outline_scope is not None and db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        workspace = db.get(PlanWorkspace, int(workspace_id), with_for_update=outline_scope is not None)
         if workspace is None:
             raise LookupError("Plan workspace not found.")
+        if outline_scope is not None:
+            _require_board_plan_scope(db, workspace, *outline_scope, lock=True)
+            existing = _live(db.query(PlanItem.id).filter(
+                PlanItem.workspace_id == workspace.id, PlanItem.content_format == "wire", PlanItem.item_type == "wireframe",
+            )).first()
+            if existing:
+                raise PlanRevisionConflict("This plan already has an outline. Reload it before adding a page.")
+            validate_flow_sidecar(content, "wire", asset_ids=project_image_ids(db, workspace.project_id))
         current_max = db.query(func.coalesce(func.max(PlanItem.sort_order), -1)).filter(PlanItem.workspace_id == workspace.id).scalar()
         position = int(current_max if current_max is not None else -1) + 1
         if clean_type == "file_structure" and not content and workspace.project_id:
@@ -811,7 +834,7 @@ class PlanRevisionConflict(ValueError):
     """The caller's expected_revision is stale (HTTP 409); other ValueErrors are validation (422)."""
 
 
-def update_item(item_id: int, *, title: str | None = None, content: str | None = None, status: str | None = None, instruction: str = "", source: str = "user", expected_revision: int | None = None, workspace_id: int | None = None) -> dict[str, Any] | None:
+def update_item(item_id: int, *, title: str | None = None, content: str | None = None, status: str | None = None, instruction: str = "", source: str = "user", expected_revision: int | None = None, workspace_id: int | None = None, outline_scope: tuple[int, int] | None = None) -> dict[str, Any] | None:
     flow_warnings: list[str] = []
     if content is not None:
         # Same guards as the agent edit path: size cap, and Mermaid must parse (ERDs must be erDiagram).
@@ -851,6 +874,12 @@ def update_item(item_id: int, *, title: str | None = None, content: str | None =
         if expected_revision is not None and current_revision != expected_revision:
             raise PlanRevisionConflict("This plan item has a newer revision. Your draft has been kept. Review the newer version before saving.")
         workspace = db.get(PlanWorkspace, item.workspace_id)
+        if outline_scope is not None:
+            _require_board_plan_scope(db, workspace, *outline_scope, lock=True)
+            if item.item_type not in ("wireframe", "flows") or item.content_format != "wire":
+                raise ValueError("This artifact is not an editable page outline.")
+            if expected_revision is None or content is None:
+                raise ValueError("Saving an outline requires its current revision and source.")
         previous_hash = item.content_hash
         changed = (title is not None and (str(title).strip() or item.title) != item.title) or (content is not None and str(content) != item.content)
         if title is not None:

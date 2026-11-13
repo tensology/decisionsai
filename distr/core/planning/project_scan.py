@@ -181,6 +181,42 @@ def _quote(value: str) -> str:
     return str(value or "").replace('"', "'")
 
 
+_TEMPLATE_EXPR = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}|\{%[^%]*%\}")
+_WIRE_LOCAL_ROUTE = re.compile(r"^(?:#[^\s\\]*|/(?!/)[^\s\\]*)$")
+
+
+def _wire_route(url: str) -> str | None:
+    """A ``route=`` value the wireframe DSL accepts (local anchor or absolute local path), or None.
+
+    Template hrefs such as Django's ``/files/{{ language.iso_code }}/0`` become ``{language.iso_code}``
+    placeholders instead of failing the whole project scan; anything still unsafe is left unrouted.
+    """
+    value = _TEMPLATE_EXPR.sub(
+        lambda m: "{" + re.sub(r"\s+", "", m.group(1)) + "}" if m.group(1) is not None else "",
+        str(url or "").strip(),
+    )
+    if not _WIRE_LOCAL_ROUTE.match(value) or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        return None
+    return value
+
+
+# Default page skip rules (planning fixes, 12 Nov 2026). A page is skipped only when it is a template
+# placeholder or a vendored admin leftover, never because it is unusual:
+#   - template expressions or printf/format placeholders: {{ }}, {% %}, %s, {url}, {qs}
+#   - the vendored translations-admin language page ({language.iso_code} once {{ }} is unwrapped);
+#     the rest of the translations app is first-party and stays
+#   - an unresolved Django admin URL name with no route (admin:index, admin:...)
+# Example/seed folders are already pruned by _SKIP_DIR / _source_files.
+_JUNK_PAGE_TOKEN = re.compile(r"\{\{|\{%|%s|\{url\}|\{qs\}|\{language\.iso_code\}", re.IGNORECASE)
+
+
+def _is_junk_page(route: str = "", label: str = "") -> bool:
+    route, label = str(route or "").strip(), str(label or "").strip()
+    if _JUNK_PAGE_TOKEN.search(route) or _JUNK_PAGE_TOKEN.search(label):
+        return True
+    return not route and bool(re.match(r"admin:", label, re.IGNORECASE))
+
+
 def _group_for_route(url: str, name: str) -> str:
     path = (url or "").split("?")[0]
     token = f"{path} {name}".lower()
@@ -1062,8 +1098,8 @@ def build_erd(models: list[dict[str, Any]]) -> str:
 def _emit_links(screen: list[str], links: list[dict[str, str]]) -> None:
     for link in links[:4]:
         label = _quote(link.get("label") or "")
-        route = str(link.get("route") or "")
-        if route.startswith("/") and " " not in route and "*" not in route:
+        route = _wire_route(str(link.get("route") or "")) or ""
+        if route.startswith("/") and "*" not in route:
             screen.append(f'    link "{label}" route="{_quote(route)}"')
         elif label:
             screen.append(f'    link "{label}"')
@@ -1085,8 +1121,9 @@ def _screen_lines(
     if cue.get("synthetic"):
         cue = {}
     title = _quote(row["title"])
+    route = _wire_route(row["url"])
     screen = [
-        f'screen "{title}" device=desktop route="{_quote(row["url"])}"',
+        f'screen "{title}" device=desktop' + (f' route="{_quote(route)}"' if route else ""),
         "  stack",
     ]
     regions = cue.get("regions") or {}
@@ -1095,7 +1132,6 @@ def _screen_lines(
     if regions.get("hero"):
         screen.append(f'    hero "{_quote(str(regions["hero"])[:48])}"')
     screen.append(f'    heading "{title}"')
-    screen.append(f'    text "Route {_quote(row["url"])} · group {_quote(row["group"])}"')
     fields = list(cue.get("fields") or [])[:6]
     buttons = list(cue.get("buttons") or [])[:3]
     headings: list[str] = []
@@ -1167,7 +1203,8 @@ def build_flows(
     for group, items in groups.items():
         overview.append(f'    heading "{_quote(group)}"')
         for row in items[:12]:
-            overview.append(f'    link "{_quote(row["title"])}" route="{_quote(row["url"])}"')
+            route = _wire_route(row["url"])
+            overview.append(f'    link "{_quote(row["title"])}"' + (f' route="{_quote(route)}"' if route else ""))
     chunks.append("\n".join(overview))
 
     fr_by_url = {}
@@ -1378,6 +1415,8 @@ def build_plan(
         "depth": 0,
     }
     context["widen"] = widen_routes_with_sitemap(root, context["routes"], context)
+    context["routes"] = [row for row in context["routes"]
+                         if not _is_junk_page(row.get("url"), row.get("title") or row.get("name"))]
     # Collect every supported source before judging depth. An HTML form is not
     # evidence that the React component at the same route has been inspected.
     context['cues'] = scan_page_cues(root, context['routes'])
@@ -1467,7 +1506,7 @@ def build_plan(
 # The sitemap never reads React routes or JS page modules.
 # ---------------------------------------------------------------------------
 
-_SITEMAP_VERSION = 4
+_SITEMAP_VERSION = 5   # 5: default junk-page skip rules (cached v4 maps rebuild)
 _SITEMAP_EDGE_KINDS = ("parent", "navigation", "journey", "auth", "redirect", "success", "failure")
 _SITEMAP_STATUSES = ("verified", "inferred", "incomplete", "missing")
 _MAX_SITEMAP_SOURCES = 2800
@@ -2048,6 +2087,8 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
     def ensure_missing(token: str) -> str | None:
         if len(nodes) >= _MAX_SITEMAP_NODES:
             return None
+        if _is_junk_page(token if str(token or "").startswith("/") else "", token):
+            return None   # placeholder / vendored-admin link target: not a page
         existing = resolve_target(token)
         if existing:
             return existing

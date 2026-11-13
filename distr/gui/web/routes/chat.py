@@ -24,6 +24,19 @@ _chat_ws_connections: Dict[int, Set[WebSocket]] = {}
 _chat_ws_lock = threading.Lock()
 
 
+def _forward_to_remote_app(payload: Dict[str, Any], topic: Optional[str] = None) -> None:
+    """Mirror live chat / time-entry events to the paired phone app via the relay."""
+    try:
+        from distr.core.integrations.telegram import remote_chat_events
+
+        if topic is None:
+            remote_chat_events.forward_chat_event(payload)
+        else:
+            remote_chat_events.forward_topic_event(topic, payload)
+    except Exception as exc:
+        logger.debug("Remote app forward failed: %s", exc)
+
+
 async def broadcast_chat_event(payload: Dict[str, Any]) -> int:
     """Broadcast an already validated event to subscribers for its chat."""
     chat_id = int(payload["chat_id"])
@@ -44,6 +57,7 @@ async def broadcast_chat_event(payload: Dict[str, Any]) -> int:
                 registered.difference_update(failed)
                 if not registered:
                     _chat_ws_connections.pop(chat_id, None)
+    _forward_to_remote_app(payload)
     if payload.get("event") in {"message_added", "stream_finished"}:
         await broadcast_topic_event("chat_list", {"type": "chat_list_changed", "chat_id": chat_id})
     return len(conns) - len(failed)
@@ -58,6 +72,7 @@ INCOMING_MESSAGE_EVENT = "incoming_message"
 async def broadcast_topic_event(topic: str, payload: Dict[str, Any]) -> int:
     """Broadcast an event to every socket subscribed to ``topic``."""
     encoded = json.dumps(payload)
+    _forward_to_remote_app(payload, topic=topic)
     with _chat_ws_lock:
         conns = list(_topic_ws_connections.get(topic, set()))
     failed = []
@@ -1028,7 +1043,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         )
                         continue
                     topic = msg.get("subscribe_topic")
-                    if topic in {INCOMING_TOPIC, "chat_list"}:
+                    if topic in {INCOMING_TOPIC, "chat_list", "time_entries"}:
                         with _chat_ws_lock:
                             _topic_ws_connections.setdefault(topic, set()).add(websocket)
                         await websocket.send_json({"type": "subscribed", "topic": topic})

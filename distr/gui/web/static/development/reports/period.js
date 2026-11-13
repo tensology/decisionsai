@@ -561,6 +561,68 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
     const buildKey = (period, selection) => `${period?.start}/${period?.end}/${selection}`;
     let clockTimer;
 
+    // Live time-entry sync (2026-11-13). Tensology pushes every time-entry change to
+    // Decisions (/ws/decisions), which publishes topic "time_entries" on /api/ws. While
+    // Reports is open the calendar refreshes in the background (calendar_only=1 reuses the
+    // local collation and re-reads Tensology). Hidden: marked stale, refreshed on enter.
+    // Fallbacks: socket reopen, tab becoming visible, and every 5 minutes while open.
+    const LIVE_RECONCILE_MS = 5 * 60_000;
+    let liveSocket = null;
+    let liveRetry = null;
+    let liveDelay = 2000;
+    let liveTimer = null;
+    let liveReconcile = null;
+    let liveStale = false;
+
+    function connectLiveSync() {
+        if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
+        if (liveSocket && liveSocket.readyState <= WebSocket.OPEN) return;
+        const token = document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+        const params = new URLSearchParams();
+        if (token) params.set('internal_token', token);
+        const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/ws?${params}`);
+        liveSocket = socket;
+        socket.onopen = () => {
+            liveDelay = 2000;
+            socket.send(JSON.stringify({ subscribe_topic: 'time_entries' }));
+            if (liveStale) scheduleLiveRefresh();
+        };
+        socket.onmessage = (event) => {
+            let message;
+            try { message = JSON.parse(event.data); } catch (_) { return; }
+            if (message?.type === 'time_entry_changed' && !message.echo) scheduleLiveRefresh();
+        };
+        socket.onclose = () => {
+            if (liveSocket !== socket) return;
+            liveSocket = null;
+            liveStale = true;
+            clearTimeout(liveRetry);
+            liveRetry = setTimeout(connectLiveSync, liveDelay);
+            liveDelay = Math.min(liveDelay * 2, 60000);
+        };
+    }
+
+    function scheduleLiveRefresh(delay = 400) {
+        if (!state.visible) { liveStale = true; return; }
+        clearTimeout(liveTimer);
+        liveTimer = setTimeout(runLiveRefresh, delay);
+    }
+
+    function runLiveRefresh() {
+        if (!state.visible) { liveStale = true; return; }
+        const panel = view.querySelector('#reports-block-detail');
+        // Never replace the view under an open entry editor or a running load/build.
+        if (state.loading || state.building || (panel && !panel.hidden)) { scheduleLiveRefresh(2000); return; }
+        liveStale = false;
+        load({ calendarOnly: true, background: true });
+    }
+
+    if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && state.visible && state.data) scheduleLiveRefresh();
+        });
+    }
+
     function updateCalendarClock() {
         const { day, minutes } = sastClock();
         const isToday = state.cursor === day;
@@ -600,17 +662,19 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         return params;
     }
 
-    async function load() {
+    async function load({ calendarOnly = false, background = false } = {}) {
         state.request?.abort();
         state.request = new AbortController();
         const current = ++state.generation;
         const selection = selectionKey(state.projects);
         state.loading = true;
         state.error = '';
-        render();
+        if (!background) render();
         try {
             // Do not call the cost route here. list_entries and cost_rollups run ensure_tables.
-            const data = await api(`/workflows/studio/reports/period?${query(selection)}`, { signal: state.request.signal });
+            const params = query(selection);
+            if (calendarOnly) params.set('calendar_only', '1');
+            const data = await api(`/workflows/studio/reports/period?${params}`, { signal: state.request.signal });
             if (!state.visible || current !== state.generation) return;
             state.ledger = null;
             state.ledgerFailure = '';
@@ -624,7 +688,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         } finally {
             if (current === state.generation) {
                 state.loading = false;
-                render();
+                render({ preserveScroll: background });
             }
         }
     }
@@ -917,7 +981,15 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             <div class="reports-calendar-project"><label for="${projectInput}">Project</label><select id="${projectInput}" name="project_id">${options.join('')}</select></div>
             ${b.calendar_draft_id ? '<p class="reports-detail-note">Saves as non-billable time.</p>' : ''}
             <p class="reports-calendar-error" role="alert" hidden></p>
-            <button type="submit" class="primary-button">Save to Tensology</button>
+            <div class="reports-calendar-actions">
+                <button type="submit" class="primary-button">Save to Tensology</button>
+                <button type="button" class="secondary-button reports-calendar-delete" data-calendar-delete="${esc(b.id)}">${b.calendar_draft_id ? 'Delete draft' : 'Delete entry'}</button>
+            </div>
+            <div class="reports-calendar-confirm" data-calendar-confirm hidden>
+                <p>${b.calendar_draft_id ? 'Delete this draft? It has not been sent to Tensology.' : 'Delete this entry from Tensology? This cannot be undone.'}</p>
+                <button type="button" class="danger-button" data-calendar-delete-confirm="${esc(b.id)}">Delete</button>
+                <button type="button" class="secondary-button" data-calendar-delete-cancel>Cancel</button>
+            </div>
         </form>`;
     }
 
@@ -1323,6 +1395,44 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
         event.preventDefault();
         openBlockDetail(blockEl.dataset.blockIds ? blockEl.dataset.blockIds.split(',') : [blockEl.dataset.blockId], blockEl);
     });
+    view.addEventListener('click', async (event) => {
+        const ask = event.target.closest('[data-calendar-delete]');
+        const cancel = event.target.closest('[data-calendar-delete-cancel]');
+        const confirmButton = event.target.closest('[data-calendar-delete-confirm]');
+        if (!ask && !cancel && !confirmButton) return;
+        const form = event.target.closest('[data-calendar-edit]');
+        if (!form) return;
+        event.preventDefault();
+        const confirmRow = form.querySelector('[data-calendar-confirm]');
+        const errorLine = form.querySelector('[role="alert"]');
+        if (ask || cancel) {
+            confirmRow.hidden = Boolean(cancel);
+            (cancel ? form.querySelector('[data-calendar-delete]') : confirmRow.querySelector('[data-calendar-delete-confirm]'))?.focus();
+            return;
+        }
+        const block = state.data?.blocks.find((item) => item.id === confirmButton.dataset.calendarDeleteConfirm);
+        if (!block || confirmButton.disabled) return;
+        const buttons = [...form.querySelectorAll('button')];
+        buttons.forEach((button) => { button.disabled = true; });
+        confirmButton.textContent = 'Deleting…';
+        errorLine.hidden = true;
+        try {
+            await api('/workflows/studio/reports/calendar-entry/delete', { method: 'POST', body: {
+                entry_id: block.calendar_event_id || null,
+                draft_id: block.calendar_draft_id || null,
+                version: block.calendar_version || null,
+                original_start: block.entry_start,
+                original_end: block.entry_end,
+            }});
+            closeBlockDetail();
+            await load({ calendarOnly: true });
+        } catch (error) {
+            errorLine.textContent = error.message || 'Could not delete this entry.';
+            errorLine.hidden = false;
+            confirmButton.textContent = 'Delete';
+            buttons.forEach((button) => { button.disabled = false; });
+        }
+    });
     view.addEventListener('submit', async (event) => {
         const form = event.target.closest('[data-calendar-edit]');
         if (!form) return;
@@ -1350,7 +1460,7 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
                 project_id: fields.get('project_id') ? Number(fields.get('project_id')) : null,
             }});
             closeBlockDetail();
-            await load();
+            await load({ calendarOnly: true });
         } catch (error) {
             errorLine.textContent = error.message || 'Could not save to Tensology.';
             errorLine.hidden = false;
@@ -1468,12 +1578,20 @@ export function createPeriodReport({ api, root, escapeHtml, getPinnedProjectIds 
             state.tab = tab;
             state.visible = true;
             scheduleCalendarClock();
+            connectLiveSync();
+            clearInterval(liveReconcile);
+            liveReconcile = setInterval(() => scheduleLiveRefresh(), LIVE_RECONCILE_MS);
             if (!state.data || state.error) load();
-            else render();
+            else {
+                render();
+                if (liveStale) scheduleLiveRefresh(0);
+            }
         },
         refresh: load,
         leave() {
             clearTimeout(clockTimer);
+            clearTimeout(liveTimer);
+            clearInterval(liveReconcile);
             closeBlockDetail();
             state.visible = false;
             state.generation++;

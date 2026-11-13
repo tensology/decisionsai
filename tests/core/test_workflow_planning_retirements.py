@@ -145,7 +145,7 @@ def test_plan_scaffold_and_ui_drop_retired_sections(plan_workspace_db, monkeypat
     assert snapshot["workspaces"] and snapshot["coverage"]["item_total"] >= 4
 
     conversation_js = (STATIC / "planning" / "conversation.js").read_text()
-    assert 'id="plan-build"' not in conversation_js
+    assert 'id="plan-build"' in conversation_js   # plan -> tickets restored 12 Nov 2026 (Paul); uses the existing build turn
     assert "databasesButton(" not in (STATIC / "planning" / "erd" / "mount.js").read_text()
     order_line = next(line for line in (STATIC / "planning" / "documents.js").read_text().splitlines()
                       if line.startswith("export const DOCUMENT_ORDER"))

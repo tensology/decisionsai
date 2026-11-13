@@ -26,15 +26,15 @@ def test_interfaces_dock_matches_data_dock(page, backend, size):
     advanced = page.locator(f'{dock_selector} .plan-advanced-open')
     advanced.wait_for(state='visible', timeout=10000)
     page.wait_for_timeout(350)
-    dock, surface, callout = box(page, dock_selector), box(page, '.iface-viewport'), box(page, '.plan-canvas-callout')
+    dock, surface, status = box(page, dock_selector), box(page, '.iface-viewport'), box(page, '.iface-map-status')
     assert inside(dock, surface, pad=4), (dock, surface)
     dx, dy = corner(dock, surface)
     ddx, ddy = corner(data_dock, data_canvas)
     assert abs(dx - ddx) <= 2 and abs(dy - ddy) <= 2, ((dx, dy), (ddx, ddy))          # same inset as Data
     assert abs(dock['height'] - data_dock['height']) <= 1
     assert page.evaluate(STYLE, dock_selector)[:4] == data_style[:4]                  # same chrome
-    assert callout['y'] + callout['height'] <= surface['y'] + 1
-    assert abs((surface['x'] + surface['width'] - callout['x'] - callout['width']) - (data_canvas['x'] + data_canvas['width'] - data_callout['x'] - data_callout['width'])) <= 24
+    assert page.locator('.iface-canvas .plan-canvas-callout').count() == 0             # no summary banner on Interfaces
+    assert inside(status, box(page, '.iface-canvas'), pad=4), (status, surface)        # quiet status line sits on the map
     assert page.locator('.plan-preview-toolbar .plan-advanced-open').count() == 0        # no longer above the surface
     page.screenshot(path=str(OUT / f'ifaces-match-{size[0]}.png'))
     page.locator('#plan-preview').evaluate('n => n.scrollTop = n.scrollHeight')        # content scrolls, dock stays

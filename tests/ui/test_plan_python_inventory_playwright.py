@@ -1,4 +1,5 @@
 """Render actual AST-discovered artifacts through Development, with isolated APIs."""
+import re
 from pathlib import Path
 
 import pytest
@@ -51,7 +52,7 @@ async def project_page(request):
     guidance=page.locator('.iface-node[data-lane="guidance"]')
     expect(guidance).to_contain_text('Overview')
     expect(guidance.locator('.iface-route')).to_have_text('guidance')
-    expect(page.locator('.plan-canvas-callout')).to_contain_text('2 pages · 1 guidance item')
+    expect(page.locator('.iface-map-status')).to_have_attribute('title', re.compile('2 pages · 1 guidance item'))
     capture(page,width,'interfaces')
     page.locator('.iface-node').filter(has_text='Development').first.focus()
     page.keyboard.press('Enter')
@@ -135,13 +136,11 @@ def test_model_only_discovery_does_not_count_an_application_page(page,width,heig
     page.set_viewport_size({'width':width,'height':height})
     page.goto(PLAN_URL)
     page.get_by_role('button',name='Interfaces',exact=True).click()
-    expect(page.locator('.plan-canvas-callout')).to_contain_text('0 pages · 1 guidance item')
-    close=page.get_by_role('button',name='Dismiss interfaces summary',exact=True)
-    rebuild=page.locator('#plan-rebuild-sitemap')
-    assert close.evaluate('''(n, other)=>{
-      const a=n.getBoundingClientRect(), b=other.getBoundingClientRect();
-      return a.bottom<=b.top || a.top>=b.bottom || a.right<=b.left || a.left>=b.right;
-    }''',rebuild.element_handle()), 'Rebuild and summary dismissal must not overlap'
+    # Only the guidance card exists, so it opens directly (no map, no page count, no summary banner).
+    expect(page.locator('#plan-preview iframe')).to_have_count(1)
+    expect(page.locator('.iface-map-status')).to_have_count(0)
+    expect(page.locator('#plan-preview .plan-canvas-callout')).to_have_count(0)
+    expect(page.locator('#plan-rebuild-sitemap')).to_be_visible()
     frame=page.frame_locator('#plan-preview iframe')
     assert frame.locator('.canvas').evaluate('''canvas=>{
       const bounds=canvas.getBoundingClientRect();

@@ -88,3 +88,13 @@ def builderio_skills_reference_dir() -> Path:
 
 def open_design_reference_dir() -> Path:
     return _PROJECT_ROOT.parent / "reference" / "open-design"
+
+
+def open_pencil_reference_dir() -> Path:
+    """OpenPencil (open-pencil/open-pencil, MIT) reference clone, pinned; not Open Design."""
+    return _PROJECT_ROOT.parent / "reference" / "open-pencil"
+
+
+def open_pencil_cli_dir() -> Path:
+    """Exact-version @open-pencil/cli install used by distr.core.open_pencil."""
+    return _PROJECT_ROOT.parent / "reference" / "open-pencil-cli"

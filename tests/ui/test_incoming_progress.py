@@ -306,7 +306,8 @@ def test_open_thread_refreshes_telegram_receipt_without_reloading_transcript(pag
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])
-def test_development_merge_attachment_conflict_keeps_draft_for_retry(page, fixture_base, width):
+@pytest.mark.parametrize('conflict', ['attachment', 'project'])
+def test_development_merge_conflict_keeps_draft_for_retry(page, fixture_base, width, conflict):
     from distr.core.incoming.proposals import ReviewedMergeAttachmentUnavailable
 
     _install_api(page, [], current_board_linked=True, direct_execution=True, terminal_session=False)
@@ -314,19 +315,23 @@ def test_development_merge_attachment_conflict_keeps_draft_for_retry(page, fixtu
     draft = 'Work from the reviewed attachment.'
     accepted = False
     submits = []
-    detail = str(ReviewedMergeAttachmentUnavailable(['scope.txt']))
+    attachment_conflict = conflict == 'attachment'
+    detail = (str(ReviewedMergeAttachmentUnavailable(['scope.txt'])) if attachment_conflict
+              else "This workflow must run in the merged proposal's reviewed project.")
 
     def chat(route):
         messages = [{'role': 'user', 'content': draft, 'chat_row_id': 21}] if accepted else []
         route.fulfill(json={'id': 17, 'title': 'Merged delivery', 'project_id': 7, 'development': True,
                            'development_board_key': 'decisions:70', 'messages': messages,
-                           'unavailable_attachment_names': [] if accepted else ['scope.txt']})
+                           'unavailable_attachment_names': ['scope.txt'] if attachment_conflict and not accepted else []})
 
     def submit(route):
         nonlocal accepted
         submits.append(route.request.post_data_json['message'])
         if len(submits) == 1:
-            return route.fulfill(status=409, json={'code': 'proposal_attachment_unavailable', 'detail': detail})
+            code = 'proposal_attachment_unavailable' if attachment_conflict else 'proposal_project_scope_changed'
+            payload = {'detail': detail, 'code': code}
+            return route.fulfill(status=409, json=payload)
         accepted = True
         return route.fulfill(json={'success': True, 'started': True, 'turn_id': 21})
 
@@ -335,7 +340,10 @@ def test_development_merge_attachment_conflict_keeps_draft_for_retry(page, fixtu
     page.route('**/api/workflows/studio/tasks/17/messages', submit)
     page.goto(f'{fixture_base}/development/threads/17/')
     warning = page.locator('#thread-attachment-warning')
-    expect(warning).to_have_text('Files unavailable: scope.txt')
+    if attachment_conflict:
+        expect(warning).to_have_text('Files unavailable: scope.txt')
+    else:
+        expect(warning).to_be_hidden()
     composer = page.locator('#task-prompt')
     composer.fill(draft)
     page.locator('#send-button').click()
@@ -343,14 +351,83 @@ def test_development_merge_attachment_conflict_keeps_draft_for_retry(page, fixtu
     expect(composer).to_have_value(draft)
     expect(page.get_by_text(draft, exact=True)).to_have_count(0)
     SHOTS.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=SHOTS / f'thread-merge-attachment-held-{width}.png', animations='disabled')
+    page.screenshot(path=SHOTS / f'thread-merge-{conflict}-held-{width}.png', animations='disabled')
     page.locator('#send-button').click()
     expect(warning).to_be_hidden()
     expect(page.locator('#studio-toast')).to_have_text('Work started.')
     expect(composer).to_have_value('')
     expect(page.locator('#message-list').get_by_text(draft, exact=True)).to_have_count(1)
     assert submits == [draft, draft]
-    page.screenshot(path=SHOTS / f'thread-merge-attachment-restored-{width}.png', animations='disabled')
+    page.screenshot(path=SHOTS / f'thread-merge-{conflict}-restored-{width}.png', animations='disabled')
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+def test_linked_workflow_rejection_and_retry_use_real_message_route(page, fixture_base, monkeypatch, width):
+    import json
+    from unittest.mock import Mock
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.core.chat import ChatService
+    from distr.core.db import Chat, get_session
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
+    from distr.core.workflow import dispatcher
+    from distr.gui.web.routes.development.threads import register_routes
+
+    with get_session() as db:
+        workflow = AutoWorkflow(name="Review", status="archived")
+        workflow.steps.append(AutoWorkflowStep(name="Verify", action_type="run_command", instruction="true"))
+        db.add(workflow)
+        db.flush()
+        chat = Chat(title="Linked review", params=json.dumps({"development": {"workflow_id": workflow.id}}))
+        db.add(chat)
+        db.flush()
+        chat_id, workflow_id = chat.id, workflow.id
+        db.commit()
+    worker = Mock()
+    monkeypatch.setattr(dispatcher.threading, "Timer", worker)
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    api = TestClient(app)
+    _install_api(page, [], current_board_linked=True, direct_execution=True, terminal_session=False)
+    page.set_viewport_size({'width': width, 'height': 960})
+    page.route('**/api/chats/17?*', lambda route: route.fulfill(json={
+        "id": 17, "title": "Linked review", "development": True, "messages": ChatService.get_chat_history(chat_id),
+    }))
+    page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json={}))
+
+    def submit(route):
+        response = api.post(f"/workflows/studio/tasks/{chat_id}/messages", json=route.request.post_data_json)
+        route.fulfill(status=response.status_code, json=response.json())
+
+    page.route('**/api/workflows/studio/tasks/17/messages', submit)
+    page.goto(f'{fixture_base}/development/threads/17/')
+    draft = "Review the final instructions."
+    composer = page.locator('#task-prompt')
+    toast = page.locator('#studio-toast')
+    composer.fill(draft)
+    page.locator('#send-button').click()
+    expect(toast).to_contain_text("This workflow is archived.")
+    expect(composer).to_have_value(draft)
+    expect(page.locator('#message-list').get_by_text(draft, exact=True)).to_have_count(0)
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=SHOTS / f'linked-workflow-rejected-{width}.png', animations='disabled')
+    with get_session() as db:
+        assert db.query(Chat).filter_by(parent_id=chat_id, input=draft).count() == 0
+        assert db.query(AutoWorkflowRun).filter_by(chat_id=chat_id).count() == 0
+        db.get(AutoWorkflow, workflow_id).status = "active"
+        db.commit()
+
+    page.locator('#send-button').click()
+    expect(toast).to_have_text('Work started.')
+    expect(composer).to_have_value('')
+    expect(page.locator('#message-list').get_by_text(draft, exact=True)).to_have_count(1)
+    worker.assert_called_once()
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter_by(chat_id=chat_id).one()
+        with dispatcher._runs_lock:
+            dispatcher._initializing_runs.discard(run.id)
+    page.screenshot(path=SHOTS / f'linked-workflow-accepted-{width}.png', animations='disabled')
 
 
 @pytest.mark.parametrize('width', [390, 768, 1280, 1440])

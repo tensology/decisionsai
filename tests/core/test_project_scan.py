@@ -371,7 +371,7 @@ class Profile(models.Model):
     assert "ShopSettings" not in home
     assert "ContactMessage" not in home
     assert 'section "Search by categories"' in home
-    assert 'group Core' in home
+    assert 'group Core' not in home   # scanner metadata is no longer drawn inside the page outline
     assert '\n    form ' not in home
     assert 'button "X"' not in login
     assert 'input "Email" type=email' in login

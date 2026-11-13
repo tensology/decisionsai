@@ -502,6 +502,15 @@ def _automation_worker(
         release_workflow_run(workflow_id)
         with _thread_lock:
             _active_threads.pop(int(run_id), None)
+        if tool_name and chat_id:
+            # The run that started this thread's timer is over (completed, failed,
+            # skipped or crashed). Instruction runs are settled by the timer sweep.
+            try:
+                from distr.core.workflow.development_control import settle_finished_thread_time
+
+                settle_finished_thread_time(int(chat_id))
+            except Exception:
+                logger.debug("Automation thread timer settle failed for chat %s", chat_id, exc_info=True)
 
 
 def start_automation_subagent(

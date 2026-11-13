@@ -17,6 +17,7 @@ import hashlib
 import os
 import re
 import subprocess
+import threading
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
@@ -1622,9 +1623,39 @@ def attach_report_extras(snapshot: dict, project_ids: list[int] | None) -> dict:
     return snapshot
 
 
-def get_period_report(period: Period, project_ids: list[int] | None, *, saved_project_ids: list[int] | None = None, **kwargs) -> dict:
-    """Live collation plus the newest saved analysis for this period, projects and automation choice."""
+# Live time-entry sync (2026-11-13): local collation takes ~9 s, the Tensology calendar
+# ~1.5 s. A pushed time-entry change reloads with calendar_only=True, which reuses the
+# last local collation (up to _COLLATE_REUSE_SECONDS old) and re-reads Tensology live.
+_COLLATE_REUSE_SECONDS = 900.0
+_COLLATE_CACHE: dict = {}
+_COLLATE_CACHE_LOCK = threading.Lock()
+
+
+def _collate_for_report(period: Period, project_ids: list[int] | None, *, calendar_only: bool = False, **kwargs) -> dict:
+    import copy
+    import time as _time
+
+    if kwargs.get('get_session') is not None:
+        return collate(period, project_ids, **kwargs)
+    key = (period.start.isoformat(), period.end.isoformat(), tuple(sorted(project_ids or ())),
+           tuple(sorted((name, repr(value)) for name, value in kwargs.items())))
+    if calendar_only:
+        with _COLLATE_CACHE_LOCK:
+            cached = _COLLATE_CACHE.get(key)
+        if cached and _time.monotonic() - cached[0] <= _COLLATE_REUSE_SECONDS:
+            return copy.deepcopy(cached[1])
     snapshot = collate(period, project_ids, **kwargs)
+    with _COLLATE_CACHE_LOCK:
+        if len(_COLLATE_CACHE) >= 8:
+            _COLLATE_CACHE.clear()
+        _COLLATE_CACHE[key] = (_time.monotonic(), copy.deepcopy(snapshot))
+    return snapshot
+
+
+def get_period_report(period: Period, project_ids: list[int] | None, *, saved_project_ids: list[int] | None = None,
+                      calendar_only: bool = False, **kwargs) -> dict:
+    """Live collation plus the newest saved analysis for this period, projects and automation choice."""
+    snapshot = _collate_for_report(period, project_ids, calendar_only=calendar_only, **kwargs)
     from distr.core.reports.calendar_sync import project_report
     if kwargs.get('get_session') is None:
         snapshot = project_report(snapshot, period)

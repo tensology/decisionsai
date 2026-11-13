@@ -1,11 +1,21 @@
 """Planning HTTP boundary. Existing URLs remain compatible."""
-from fastapi import File, Request, UploadFile
+from fastapi import Depends, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
 import asyncio
 import logging
+from distr.gui.web.security import require_internal_token_dependency
 from .models import PlanBuildRequest, PlanChatActionRequest, PlanInterfaceShotRequest, PlanMemoryRequest, PlanRestoreRequest, PlanChatCreateRequest, PlanChatUpdateRequest, PlanMessageRequest, PlanFileReconcileRequest, PlanInstructionRequest, PlanItemCreateRequest, PlanItemUpdateRequest, PlanWorkspaceEnsureRequest
 
 logger = logging.getLogger(__name__)
+
+
+class PlanOutlineSource(BaseModel):
+    content: str = Field(min_length=1, max_length=200_000)
+
+
+class PlanOutlineEdit(PlanOutlineSource):
+    expected_revision: int = Field(ge=1)
 
 
 async def _plan_call(function, *args, **kwargs):
@@ -18,6 +28,19 @@ async def _plan_call(function, *args, **kwargs):
     except Exception:
         logger.exception("Plan operation failed")
         return JSONResponse({"detail": "The planning operation failed. Your saved artifacts are retained. Check the selected model and retry."}, status_code=500)
+
+
+async def _outline_call(function, *args, **kwargs):
+    from distr.core.planning.service import PlanBoardScopeChanged, PlanRevisionConflict
+
+    try:
+        return JSONResponse(await asyncio.to_thread(function, *args, **kwargs))
+    except LookupError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+    except (PlanBoardScopeChanged, PlanRevisionConflict) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
 
 
 def _read_scoped_plan(reader, workspace_id, board_id, project_id, *args):
@@ -34,6 +57,32 @@ def _read_scoped_plan(reader, workspace_id, board_id, project_id, *args):
 
 
 def register_routes(router, templates):
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/outlines",
+                 dependencies=[Depends(require_internal_token_dependency)])
+    async def plan_outline_create(workspace_id: int, board_id: int, project_id: int, data: PlanOutlineSource):
+        from distr.core.planning.service import create_item
+
+        return await _outline_call(
+            create_item, workspace_id=workspace_id, item_type="wireframe", content_format="wire",
+            content=data.content, outline_scope=(board_id, project_id),
+        )
+
+    @router.patch("/workflows/studio/plan-workspaces/{workspace_id}/outlines/{item_id}",
+                  dependencies=[Depends(require_internal_token_dependency)])
+    async def plan_outline_update(workspace_id: int, item_id: int, board_id: int, project_id: int, data: PlanOutlineEdit):
+        from distr.core.planning.service import update_item
+
+        def save():
+            result = update_item(
+                item_id, workspace_id=workspace_id, content=data.content,
+                expected_revision=data.expected_revision, outline_scope=(board_id, project_id),
+            )
+            if result is None:
+                raise LookupError("Plan item not found.")
+            return result
+
+        return await _outline_call(save)
+
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/attachments/{asset_id}/preview-info")
     async def plan_pdf_info(workspace_id: int, asset_id: int):
         from distr.core.planning.assets import pdf_preview_info
@@ -215,7 +264,13 @@ def register_routes(router, templates):
                                              project_id: int | None = None, include_data_model: bool = False):
         from distr.core.planning.service import get_workspace
 
-        return await _plan_call(_read_scoped_plan, get_workspace, workspace_id, board_id, project_id, include_data_model)
+        def read():
+            workspace = _read_scoped_plan(get_workspace, workspace_id, board_id, project_id, include_data_model)
+            if board_id is not None and project_id is not None:
+                workspace["outline_editing"] = True
+            return workspace
+
+        return await _plan_call(read)
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/scan-status")
     async def workflow_studio_plan_scan_status(workspace_id: int):
