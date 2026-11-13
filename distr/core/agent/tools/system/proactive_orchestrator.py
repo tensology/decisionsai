@@ -13,7 +13,8 @@ class ProactiveOrchestratorInput(BaseModel):
     action: str = Field(
         default="scan",
         description=(
-            "scan to find important work and reviewable workflow drafts; daily_plan to build today's plan; "
+            "scan to find important work, reviewable workflow drafts and approved runs that need attention; "
+            "daily_plan to build today's plan; "
             "dispatch to send an explicitly approved direct candidate to the project backend; "
             "enable_jira_intake to turn on the Jira morning intake automation by voice; "
             "run_jira_intake to run one Jira email intake batch now."
@@ -67,6 +68,7 @@ class ProactiveOrchestratorTool(BaseTool):
         "stage Jira/email intake in batches and dispatch approved direct work to the project backend. "
         "Show any returned workflow draft with its scope and steps for human review. "
         "Drafts require separate approval and cannot launch through direct dispatch. "
+        "When the scan returns an approved run, use its status and review link to discuss the existing run. "
         "After work finishes, prepare a client message for Telegram review "
         "(send / revise by voice / leave)."
     )

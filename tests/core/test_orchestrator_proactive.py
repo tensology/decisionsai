@@ -470,6 +470,41 @@ def test_approved_draft_launch_is_atomic_and_duplicate_clicks_return_one_run(tmp
         assert responses[1].json() == receipt == client.get(path).json()
         assert receipt["status"] == "launched"
         assert len(workers) == 1
+        if drift is None:
+            other = _seed_work_signal(factory, tmp_path / "separate-project")
+            with provider() as db:
+                db.get(Project, other.project_id).name = "Another project"
+                for position, title in enumerate(("Reproduce import", "Repair import", "Verify import")):
+                    db.add(KanbanTicketTodo(ticket_id=other.ticket_id, text=title, position=position))
+            scan = proactive.run_proactive_check()
+            by_ticket = {row["ticket_id"]: row for row in scan["candidates"]}
+            active = by_ticket[ids.ticket_id]
+            assert active["recommended_action"] == "review_workflow_run"
+            assert active["workflow_receipt"] == receipt
+            assert active["development_url"] == receipt["development_url"]
+            assert active["candidate_id"] == approval["candidate_id"]
+            assert "workflow_draft" not in active
+            pending = by_ticket[other.ticket_id]
+            assert pending["recommended_action"] == "review_workflow_draft"
+            assert pending["project_id"] == other.project_id
+            assert pending["candidate_id"] != active["candidate_id"]
+            assert "workflow_receipt" not in pending
+            with provider() as db:
+                db.get(AutoWorkflowRun, receipt["run_id"]).status = "waiting"
+                db.get(KanbanTicket, ids.ticket_id).workflow_status = "waiting"
+            waiting = proactive.run_proactive_check(project_id=ids.project_id, emit=False)
+            assert waiting["candidates"][0]["workflow_receipt"]["run_status"] == "waiting"
+            assert "waiting" in waiting["spoken_summary"]
+            from distr.core.agent.tools.system.proactive_orchestrator import ProactiveOrchestratorTool
+
+            spoken, reference = ProactiveOrchestratorTool()._run(action="scan").split("REFERENCE:", 1)
+            assert "Merrypak" in spoken and "waiting" in spoken
+            assert "Another project" in spoken and "ready for review before launch" in spoken
+            live = {row["ticket_id"]: row for row in json.loads(reference)["candidates"]}
+            assert live[ids.ticket_id]["development_url"] == receipt["development_url"]
+            assert live[ids.ticket_id]["workflow_receipt"]["run_id"] == receipt["run_id"]
+            assert live[other.ticket_id]["recommended_action"] == "review_workflow_draft"
+            assert len(workers) == 1
         with provider() as db:
             run = db.query(AutoWorkflowRun).one()
             workflow = db.query(AutoWorkflow).one()
@@ -653,9 +688,13 @@ def test_approved_draft_launch_is_atomic_and_duplicate_clicks_return_one_run(tmp
             assert rerun["chat_id"] == receipt["chat_id"] and rerun["run_id"] != receipt["run_id"]
             assert len(workers) == 2
             return
-        proactive.run_proactive_check(board_id=ids.board_id)
+        scan = proactive.run_proactive_check(board_id=ids.board_id)
         recovered = client.get(path).json()
         assert recovered["run_id"] == receipt["run_id"] and recovered["run_status"] == "failed"
+        failed = scan["candidates"][0]
+        assert failed["recommended_action"] == "review_workflow_run"
+        assert failed["workflow_receipt"] == recovered
+        assert "failed" in scan["spoken_summary"]
         assert client.post(path + "/approve", json=approval).json() == recovered
         assert len(workers) == 1
 
@@ -665,6 +704,12 @@ def test_approved_draft_launch_is_atomic_and_duplicate_clicks_return_one_run(tmp
             root = db.get(Chat, receipt["chat_id"])
             root.project_id = foreign.project_id
         assert client.get(path).json() == {"status": "unconfirmed"}
+        scan = proactive.run_proactive_check(board_id=ids.board_id, emit=False)
+        uncertain = scan["candidates"][0]
+        assert uncertain["recommended_action"] == "review_workflow_run"
+        assert uncertain["workflow_receipt"] == {"status": "unconfirmed"}
+        assert "development_url" not in uncertain and "workflow_draft" not in uncertain
+        assert "could not be confirmed" in scan["spoken_summary"]
         rejected = client.post(path + "/approve", json=approval)
         assert rejected.status_code == 409 and "could not be confirmed" in rejected.json()["detail"]
         unaffected = proactive.run_proactive_check(board_id=foreign.board_id)["candidates"]
@@ -1106,6 +1151,22 @@ def test_proactive_orchestrator_tool_is_voice_first(monkeypatch):
     assert "REFERENCE:" in result
     assert "candidate_id" in result
     assert "Hermes" not in result.split("REFERENCE:")[0]
+
+
+def test_proactive_brief_prioritizes_a_failed_workflow_among_approved_runs():
+    from distr.core.orchestrator_proactive import _spoken_summary
+
+    result = _spoken_summary([
+        {"recommended_action": "review_workflow_run", "project_name": "Engineering", "title": "Build",
+         "workflow_receipt": {"status": "launched", "run_status": "running"}},
+        {"recommended_action": "review_workflow_run", "project_name": "Operations", "title": "Import",
+         "workflow_receipt": {"status": "launched", "run_status": "failed"}},
+        {"recommended_action": "review_workflow_draft", "project_name": "Support", "workflow_draft": {"steps": [{}]}},
+    ])
+
+    assert result.startswith("The workflow for Import in Operations failed.")
+    assert "1 other approved workflow run." in result
+    assert "Support" in result and "ready for review before launch" in result
 
 
 def test_proactive_orchestrator_tool_builds_daily_plan_from_context(monkeypatch):

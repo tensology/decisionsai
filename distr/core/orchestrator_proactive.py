@@ -75,7 +75,10 @@ def run_proactive_check(
     emitted_ids: list[int] = []
     if emit:
         for candidate in candidates:
-            event_id = _emit_candidate(candidate)
+            if candidate.get("recommended_action") == "review_workflow_run":
+                event_id = candidate["workflow_receipt"].get("candidate_id")
+            else:
+                event_id = _emit_candidate(candidate)
             if event_id:
                 candidate["candidate_id"] = int(event_id)
                 emitted_ids.append(int(event_id))
@@ -306,7 +309,7 @@ def _collect_board_signals(
         signals: list[dict[str, Any]] = []
         for ticket, lane, board, linked_project in rows:
             lane_name = str(getattr(lane, "name", "") or "")
-            if _inactive_ticket(ticket, lane, board, session):
+            if _closed_ticket_lane(lane, board):
                 continue
             source = _signal_source(ticket)
             if wanted_source and source != wanted_source:
@@ -323,6 +326,14 @@ def _collect_board_signals(
                 continue  # Hidden from the agent in Projects.
             if source not in ACTIVE_SOURCES and not project:
                 continue
+            inactive = _inactive_ticket(ticket, lane, board, session)
+            receipt = None
+            if inactive:
+                if not project or str(ticket.workflow_status or "").lower() not in {"queued", "running", "waiting"}:
+                    continue
+                receipt = _scanned_workflow_receipt(session, board.id, ticket.id, project.id, ticket.linked_workflow_id)
+                if not receipt:
+                    continue
             assignment = _workflow_assignment(ticket, board) if project else None
             signal = {
                 "ticket_id": ticket.id,
@@ -350,6 +361,8 @@ def _collect_board_signals(
                 "created_at": ticket.created_date.isoformat() if ticket.created_date else "",
                 "modified_at": ticket.modified_date.isoformat() if ticket.modified_date else "",
             }
+            if receipt:
+                signal["workflow_receipt"] = receipt
             signal["priority_score"] = _priority_score(signal)
             signals.append(signal)
             # Stream the collection while retaining only its strongest signals.
@@ -362,6 +375,14 @@ def _collect_board_signals(
             assignment = signal.pop("assigned_workflow", None)
             can_draft = signal.pop("can_draft_workflow")
             source_chat_id = signal.pop("source_chat_id")
+            if assignment and assignment[1] == "ticket" and "workflow_receipt" not in signal:
+                receipt = _scanned_workflow_receipt(
+                    session, signal["board_id"], signal["ticket_id"], signal["project_id"], assignment[0],
+                )
+                if receipt:
+                    signal["workflow_receipt"] = receipt
+            if "workflow_receipt" in signal:
+                continue
             if not (assignment or can_draft):
                 continue
             ticket_id = signal["ticket_id"]
@@ -620,10 +641,37 @@ def _workflow_draft(signal: dict[str, Any], checklist: list[str] | None, *, comp
     }
 
 
+def _workflow_candidate_events(session, board_id, ticket_id, project_id):
+    from distr.core.db.orchestrator import OrchestratorEvent
+
+    return session.query(OrchestratorEvent).filter_by(
+        source="proactive_orchestrator", event_type="proactive_work_candidate",
+        board_id=board_id, ticket_id=ticket_id, project_id=project_id,
+    ).order_by(OrchestratorEvent.id.desc())
+
+
+def _latest_workflow_launch(events, workflow_id):
+    from distr.core.db.orchestrator import OrchestratorEvent
+
+    return events.filter(
+        OrchestratorEvent.status.in_(("workflow_launched", "workflow_review_invalidated")),
+        OrchestratorEvent.workflow_id == workflow_id,
+    ).first() if workflow_id is not None else None
+
+
+def _scanned_workflow_receipt(session, board_id, ticket_id, project_id, workflow_id):
+    from distr.core.workflow.draft_launch import approved_draft_receipt
+
+    events = _workflow_candidate_events(session, board_id, ticket_id, project_id)
+    launch = _latest_workflow_launch(events, workflow_id)
+    if launch and launch.status == "workflow_launched":
+        return approved_draft_receipt(session, launch)
+    return None
+
+
 def review_workflow_draft(*, board_id: int, ticket_id: int, _session=None) -> dict[str, Any]:
     """Read the latest candidate draft when it still matches the ticket."""
     from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
-    from distr.core.db.orchestrator import OrchestratorEvent
     from distr.core.db.projects import Project
     from distr.core.workflow.development_threads import ticket_development_thread_ids
 
@@ -637,20 +685,13 @@ def review_workflow_draft(*, board_id: int, ticket_id: int, _session=None) -> di
         project = session.get(Project, project_id) if project_id is not None else None
         if not project or project.deleted_at is not None:
             return {"status": "unavailable"}
-        events = session.query(OrchestratorEvent).filter_by(
-            source="proactive_orchestrator", event_type="proactive_work_candidate",
-            board_id=board_id, ticket_id=ticket_id, project_id=project_id,
-        ).order_by(OrchestratorEvent.id.desc())
+        events = _workflow_candidate_events(session, board_id, ticket_id, project_id)
         event = events.first()
-        if ticket.linked_workflow_id is not None:
-            launch = events.filter(
-                OrchestratorEvent.status.in_(("workflow_launched", "workflow_review_invalidated")),
-                OrchestratorEvent.workflow_id == ticket.linked_workflow_id,
-            ).first()
-            if launch and (launch.status == "workflow_launched" or event.id == launch.id):
-                from distr.core.workflow.draft_launch import approved_draft_receipt
+        launch = _latest_workflow_launch(events, ticket.linked_workflow_id)
+        if launch and (launch.status == "workflow_launched" or event.id == launch.id):
+            from distr.core.workflow.draft_launch import approved_draft_receipt
 
-                return approved_draft_receipt(session, launch)
+            return approved_draft_receipt(session, launch)
         if project.agent_ignored:
             return {"status": "blocked", "error": PROJECT_HIDDEN_FROM_AGENT}
         if event is None:
@@ -705,6 +746,17 @@ def _build_candidate(signal: dict[str, Any], context: dict[str, list[str]]) -> d
         "recent_codex_titles": _unique(context.get("titles", []))[:3],
         "has_recent_developer_context": bool(surfaces),
     }
+    if receipt := candidate.get("workflow_receipt"):
+        candidate["recommended_action"] = "review_workflow_run"
+        candidate["candidate_id"] = None
+        candidate["approval_question"] = _workflow_run_summary(candidate)
+        if receipt["status"] == "launched":
+            candidate.update(chat_id=receipt["chat_id"], development_url=receipt["development_url"])
+        else:
+            candidate["review_url"] = (
+                f"/development/boards/decisions/{candidate['board_id']}/kanban/?ticket_id={candidate['ticket_id']}"
+            )
+        return candidate
     candidate["recommended_action"] = (
         "ask_approval_to_dispatch" if signal.get("project_id") else "ask_project_mapping"
     )
@@ -873,11 +925,47 @@ def _approval_question(candidate: dict[str, Any]) -> str:
     return f"{source} has important work for {project}: {title}. Should I send it to {backend}?"
 
 
+def _workflow_run_summary(candidate: dict[str, Any]) -> str:
+    receipt = candidate["workflow_receipt"]
+    project = candidate.get("project_name") or "the linked project"
+    title = candidate.get("title") or "this work item"
+    if receipt["status"] == "unconfirmed":
+        return f"The approved workflow run for {title} in {project} could not be confirmed. Check its launch status."
+    status = str(receipt["run_status"] or "in an unknown state").replace("_", " ")
+    if receipt.get("phase") == "initializing" and status == "running":
+        status = "starting"
+    warning = f" {receipt['warning']}" if receipt.get("warning") else ""
+    state = "failed" if status == "failed" else f"is {status}"
+    return f"The workflow for {title} in {project} {state}. Open its Development thread to review.{warning}"
+
+
 def _spoken_summary(candidates: list[dict[str, Any]]) -> str:
     if not candidates:
         return "I checked the work sources and did not find anything that needs approval right now."
-    review = [candidate for candidate in candidates if candidate.get("recommended_action") == "review_dispatch_outcome"]
-    if len(review) == len(candidates):
+    workflow_reviews = [candidate for candidate in candidates if candidate.get("recommended_action") == "review_workflow_run"]
+    pending = [candidate for candidate in candidates if candidate.get("recommended_action") != "review_workflow_run"]
+    parts = []
+    if workflow_reviews:
+        status_priority = {"unconfirmed": 0, "failed": 0, "waiting": 1, "paused": 1}
+
+        def review_priority(candidate):
+            receipt = candidate["workflow_receipt"]
+            status = receipt.get("run_status") or receipt["status"]
+            return status_priority.get(status, 2)
+
+        parts.append(_workflow_run_summary(min(workflow_reviews, key=review_priority)))
+        remaining = len(workflow_reviews) - 1
+        if remaining:
+            noun = "run" if remaining == 1 else "runs"
+            parts.append(f"I also found {remaining} other approved workflow {noun}.")
+    if pending:
+        parts.append(_pending_spoken_summary(pending))
+    return " ".join(parts)
+
+
+def _pending_spoken_summary(pending: list[dict[str, Any]]) -> str:
+    review = [candidate for candidate in pending if candidate.get("recommended_action") == "review_dispatch_outcome"]
+    if len(review) == len(pending):
         if len(review) == 1:
             project = review[0].get("project_name") or "the linked project"
             if review[0].get("chat_id") is not None:
@@ -886,8 +974,8 @@ def _spoken_summary(candidates: list[dict[str, Any]]) -> str:
                 return f"The dispatch outcome for {project} is unconfirmed. Review it before approving the work again."
             return f"The work item for {project} has already been submitted. Review its dispatch outcome."
         return f"I found {len(review)} work items that need their dispatch outcomes reviewed."
-    top = next(candidate for candidate in candidates if candidate.get("recommended_action") != "review_dispatch_outcome")
-    count = len(candidates)
+    top = next(candidate for candidate in pending if candidate.get("recommended_action") != "review_dispatch_outcome")
+    count = len(pending)
     project = top.get("project_name") or "an unmatched project"
     source = _source_label(top.get("source"))
     if top.get("workflow_draft"):
@@ -934,10 +1022,14 @@ def _dispatch_instruction(candidate: dict[str, Any], ticket: Any | None) -> str:
     )
 
 
+def _closed_ticket_lane(lane, board) -> bool:
+    name = str(lane.name or "").strip().casefold()
+    return (board.archived or name in DONE_LANE_HINTS
+            or bool(board.agent_done_lane and name == board.agent_done_lane.strip().casefold()))
+
+
 def _inactive_ticket(ticket, lane, board, session, *, own_execution_id=None) -> bool:
-    if board.archived or str(lane.name or '').strip().lower() in DONE_LANE_HINTS:
-        return True
-    if board.agent_done_lane and str(lane.name or '').strip().casefold() == board.agent_done_lane.strip().casefold():
+    if _closed_ticket_lane(lane, board):
         return True
     if str(ticket.workflow_status or '').lower() in {'completed', 'cancelled', 'canceled', 'queued', 'running', 'waiting'}:
         return True
