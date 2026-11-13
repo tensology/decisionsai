@@ -512,7 +512,8 @@ class DevelopmentProjectTree(QtWidgets.QTreeWidget):
 class DevelopmentHotCornerPanel(QtWidgets.QWidget):
     """Slide in a compact Development board selector after a short dwell."""
 
-    DWELL_SECONDS = 2.5
+    # 2026-11-13: 500 ms (was 2.5 s), like a macOS hot corner. Corner area stays 8 px.
+    DWELL_SECONDS = 0.5
     LEAVE_SECONDS = 0.45
     WIDTH = 400
     CORNER_TOLERANCE = 8
@@ -600,6 +601,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._hiding = False
 
         self._timer = QtCore.QTimer(self)
+        # Precise timer: the default coarse timer may fire up to 5% late and gets batched by macOS.
+        self._timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self._timer.setInterval(100)
         self._timer.timeout.connect(self._tick)
         if self._enabled:
@@ -877,6 +880,14 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             self._corner_started_at = now
             return
         if self._corner_started_at is not None and now - self._corner_started_at >= self.DWELL_SECONDS:
+            waited = now - self._corner_started_at
+            if waited > self.DWELL_SECONDS + 0.5:
+                # Ticks run on the UI thread; a long gap means that thread was busy.
+                logger.info(
+                    "Development hot corner opened %.0f ms after the pointer reached the corner "
+                    "(configured %.0f ms); the UI thread was busy",
+                    waited * 1000, self.DWELL_SECONDS * 1000,
+                )
             self._show_for_screen(screen)
             self._reset_dwell()
 
@@ -898,8 +909,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._corner_started_at = None
 
     def _show_for_screen(self, screen: QtGui.QScreen) -> None:
-        self._refresh_threads()
-        self._refresh_proposals()
+        # Slide in first (with the last rendered list), then reload the data on the next
+        # event-loop turn so loading never delays the panel appearing.
         available = screen.availableGeometry()
         width = min(self.WIDTH, available.width())
         end = QtCore.QRect(available.left(), available.top(), width, available.height())
@@ -911,6 +922,13 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self.show()
         self._ensure_macos_overlay_level()
         self._animate_geometry(start, end)
+        QtCore.QTimer.singleShot(0, self._load_after_show)
+
+    def _load_after_show(self) -> None:
+        if not self.isVisible() or self._hiding:
+            return
+        self._refresh_threads()
+        self._refresh_proposals()
 
     def _set_panel_pinned(self, pinned: bool) -> None:
         self.panel_pin.setToolTip("Allow sidebar to hide" if pinned else "Keep sidebar open")

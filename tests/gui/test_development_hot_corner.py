@@ -148,12 +148,15 @@ def test_projects_section_remembers_collapsed_state_on_new_panel(monkeypatch, tm
     app.processEvents()
 
 
-def test_two_and_a_half_second_dwell_opens_once_and_leaving_resets(monkeypatch) -> None:
+def test_half_second_dwell_opens_once_and_leaving_resets(monkeypatch) -> None:
     app = _app()
     panel = DevelopmentHotCornerPanel(enabled=False)
+    assert panel.DWELL_SECONDS == 0.5
+    assert panel.CORNER_TOLERANCE == 8
+    assert panel._timer.timerType() == QtCore.Qt.TimerType.PreciseTimer
     screen = object()
     shown = []
-    times = iter((10.0, 12.4, 12.5, 20.0, 24.0))
+    times = iter((10.0, 10.4, 10.5, 20.0, 24.0))
     panel._enabled = True
     monkeypatch.setattr(
         "distr.gui.development_hot_corner.time.monotonic", lambda: next(times)
@@ -990,4 +993,23 @@ def test_panel_pin_is_remembered_across_restarts_and_reopens_on_launch(monkeypat
     for panel in (first, second, third):
         panel.close()
         panel.deleteLater()
+    app.processEvents()
+
+
+def test_panel_slides_in_before_loading_data(monkeypatch):
+    app = _app()
+    panel = DevelopmentHotCornerPanel(enabled=False)
+    calls = []
+    monkeypatch.setattr(panel, "_refresh_threads", lambda: calls.append("threads"))
+    monkeypatch.setattr(panel, "_refresh_proposals", lambda: calls.append("proposals"))
+    monkeypatch.setattr(panel, "_ensure_macos_overlay_level", lambda: None)
+    monkeypatch.setattr(panel, "_animate_geometry", lambda start, end: calls.append("slide"))
+    screen = type("Screen", (), {"availableGeometry": lambda self: QtCore.QRect(0, 0, 1440, 900)})()
+    panel._show_for_screen(screen)
+    # The slide starts at once; data loads on the next event-loop turn.
+    assert calls == ["slide"]
+    app.processEvents()
+    assert calls == ["slide", "threads", "proposals"]
+    panel.close()
+    panel.deleteLater()
     app.processEvents()
