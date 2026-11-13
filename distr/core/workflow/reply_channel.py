@@ -270,6 +270,7 @@ def proposal_origin(ticket: Any) -> dict[str, Any] | None:
         # An explicit, valid contact already on the ticket wins; otherwise use the original sender.
         if not _reply_mailbox(str(contact).strip()):
             contact = found_contact
+    topic_unavailable = source == "telegram" and _proposal_telegram_topic_unavailable(ticket, thread)
     return {
         "source_provider": source,
         "source_thread_id": thread,
@@ -278,6 +279,7 @@ def proposal_origin(ticket: Any) -> dict[str, Any] | None:
         "source_external_id": "",
         "external_id": "",
         "source_message_id": message_id,
+        **({"telegram_topic_unavailable": True} if topic_unavailable else {}),
     }
 
 
@@ -346,6 +348,24 @@ def _proposal_mail_contact(ticket: Any, source: str, thread: str) -> tuple[str, 
     return contact, message_id
 
 
+def _proposal_telegram_topic_unavailable(ticket: Any, thread: str) -> bool:
+    from distr.core.db import get_session
+    from distr.core.incoming.source_reply import source_choices
+    from distr.core.incoming.telegram_topics import split_telegram_source, telegram_source_has_topic, telegram_source_matches_topic
+
+    _, topic = split_telegram_source(thread)
+    proposal = _retained_proposal_for_ticket(ticket)
+    if proposal is None:
+        return topic is not None
+    source = next((choice for choice in source_choices(proposal) if choice["key"] == f"telegram:{thread}"), None)
+    if source is None:
+        return topic is not None
+    with get_session() as db:
+        if topic is not None:
+            return not telegram_source_matches_topic(db, thread, source["primary_message_ids"])
+        return telegram_source_has_topic(db, thread, source["primary_message_ids"])
+
+
 def resolve_reply_target(ticket: Any) -> ReplyTarget:
     """Resolve a ticket's provenance into a sendable reply target.
 
@@ -399,6 +419,12 @@ def resolve_reply_target(ticket: Any) -> ReplyTarget:
             missing.append("source_thread_id")
     elif not thread_id and not url:
         missing.append("source_thread_id")
+    if profile.key == "telegram":
+        from distr.core.incoming.telegram_topics import split_telegram_source, telegram_topic_id
+
+        _, topic = split_telegram_source(thread_id)
+        if _get(ticket, "telegram_topic_unavailable", False) or (topic is not None and telegram_topic_id(topic) is None):
+            missing.append("telegram_topic_delivery_unavailable")
     if profile.key in {"email", "mailshot"}:
         contact = _reply_mailbox(contact)
         if not contact:

@@ -135,14 +135,16 @@ def test_merged_reply_keeps_independent_recipient_selectable(page, width, fixtur
 @pytest.mark.parametrize('surface', ['desktop', 'paired'])
 def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_base, intake, monkeypatch):
     import json
+    from types import SimpleNamespace
     from unittest.mock import Mock
     from urllib.parse import urlsplit
 
     from fastapi import APIRouter, FastAPI
     from fastapi.testclient import TestClient
-    from distr.core.db import Chat, SourceReplyDraft
+    from distr.core.db import Chat, SourceReplyDraft, TelegramGroupMessage
     from distr.core.incoming import source_reply as replies
     from distr.core.orchestrator_proactive import _add_proactive_turn_event, PROACTIVE_RESULT_HELD
+    from distr.core.workflow import telegram_reply_receipts as receipts
     from distr.gui.web.routes import chat as chat_routes
     from distr.gui.web.routes.development.thread_tools import register_routes
     from tests.core.test_chat_development_surface_isolation import _client
@@ -154,6 +156,7 @@ def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_ba
     proposal['source_scope'] = [
         {'source': 'whatsapp', 'source_thread_id': 'first@g.us', 'message_ids': ['one']},
         {'source': 'whatsapp', 'source_thread_id': 'second@g.us', 'message_ids': ['two']},
+        {'source': 'telegram', 'source_thread_id': '-100777~topic~101', 'message_ids': ['55'], 'participant': 'Client Telegram group'},
     ]
     with session() as db:
         root = Chat(id=17, title='Merged proposal', project_id=projects[0],
@@ -162,17 +165,27 @@ def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_ba
         db.flush()
         response = Chat(parent_id=root.id, response='The work is ready.')
         db.add(response)
+        db.add(TelegramGroupMessage(chat_id='-100777', chat_title='Client Telegram group', telegram_message_id=55,
+                                    raw_data=json.dumps({'is_topic_message': True, 'message_thread_id': 101})))
         db.flush()
         chat_id, response_id = root.id, response.id
         db.commit()
-    monkeypatch.setattr(replies, 'resolve_target', lambda source: {
+    real_resolve = replies.resolve_target
+    monkeypatch.setattr(replies, 'resolve_target', lambda source: real_resolve(source) if source['channel'] == 'telegram' else {
         'channel': 'whatsapp', 'jid': source['thread_id'], 'label': source['label'],
     })
     monkeypatch.setattr(replies, 'generate_draft', lambda *a, **kw: ('The work is ready.', {}))
     sender = Mock()
     move_during_preflight = []
+    queue = Mock(return_value=True)
+    manager = SimpleNamespace(telegram_user_id=12345, _closing_reply_topics=False, queue_closing_reply=queue)
+    monkeypatch.setattr('distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app', lambda: manager)
+    monkeypatch.setattr('distr.core.incoming.project_links.source_project_index', lambda: {('telegram', '-100777'): {projects[0]}})
+    real_send = replies.send_reply
 
-    def send(target, text, draft_id, *, before_send):
+    def send(target, text, draft_id, *, before_send, **options):
+        if target['channel'] == 'telegram':
+            return real_send(target, text, draft_id, before_send=before_send, **options)
         if move_during_preflight:
             move_during_preflight.clear()
             with session() as db:
@@ -312,6 +325,34 @@ def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_ba
     expect(dialog.get_by_role('status')).to_contain_text('Check the original conversation')
     expect(approve).to_be_disabled()
     sender.assert_called_once()
+    recipient.select_option('telegram:-100777~topic~101')
+    expect(dialog.get_by_text('Telegram topic: Client Telegram group · Topic 101', exact=True)).to_be_visible()
+    expect(approve).to_be_enabled()
+    dialog.get_by_label('Reply', exact=True).fill('Telegram reply for this topic.')
+    shot(page, f'{width}-{surface}-telegram-review')
+    approve.click()
+    expect(dialog.get_by_role('status')).to_contain_text('The Telegram relay cannot verify delivery to this topic.')
+    expect(dialog.get_by_label('Reply', exact=True)).to_have_value('Telegram reply for this topic.')
+    expect(approve).to_be_enabled()
+    queue.assert_not_called()
+    shot(page, f'{width}-{surface}-telegram-older-relay')
+    manager._closing_reply_topics = True
+    approve.click()
+    expect(dialog.get_by_role('status')).to_contain_text('awaiting confirmation')
+    expect(approve).to_be_disabled()
+    shot(page, f'{width}-{surface}-telegram-awaiting')
+    queue.assert_called_once()
+    frame = queue.call_args.args[0]
+    assert frame['chat_id'] == -100777 and frame['text'] == 'Telegram reply for this topic.'
+    assert frame['message_thread_id'] == 101
+    assert receipts.authorize(frame, owner=12345, relay_topics=True)
+    assert not receipts.confirm(frame['client_message_id'], telegram_chat_id=-100777, telegram_message_id=44, message_thread_id=102)
+    assert receipts.confirm(frame['client_message_id'], telegram_chat_id=-100777, telegram_message_id=44, message_thread_id=101)
+    dialog.get_by_role('button', name='Check send status', exact=True).click()
+    expect(dialog.get_by_text('Previously sent.', exact=True)).to_be_visible()
+    expect(approve).to_be_disabled()
+    shot(page, f'{width}-{surface}-telegram-confirmed')
+    queue.assert_called_once()
     with session() as db:
         original = db.get(SourceReplyDraft, first['id'])
         assert (original.status, original.payload, original.claimed_source_key) == (

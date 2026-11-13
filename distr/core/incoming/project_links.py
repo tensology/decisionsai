@@ -92,6 +92,8 @@ def apply_project_links(items, *, refresh=False):
     (a linked thread changed subject) and ``needs_link`` with ``suggested_project_ids``
     (a forward or new thread that looks like a linked conversation).
     """
+    from distr.core.incoming.telegram_topics import split_telegram_source
+
     index = source_project_index(refresh=refresh)
     try:
         from distr.core.initiative import attention
@@ -102,7 +104,8 @@ def apply_project_links(items, *, refresh=False):
     flags = []
     for item in items:
         source, thread = str(item.get('source')), str(item.get('source_thread_id'))
-        ids = set(index.get((source, thread), set()))
+        linked_thread = split_telegram_source(thread)[0] if source == "telegram" else thread
+        ids = set(index.get((source, linked_thread), set()))
         via = 'thread' if ids else ''
         if not ids and source in _MAIL_SOURCES and attention is not None:
             try:
@@ -215,6 +218,8 @@ def source_project_index(*, refresh=False):
 
 
 def proposal_in_scope(proposal, index=None, *, allow_review=False):
+    from distr.core.incoming.telegram_topics import split_telegram_source
+
     if not allow_review and proposal.get('needs_project') is True:
         return False
     index = source_project_index() if index is None else index
@@ -234,10 +239,19 @@ def proposal_in_scope(proposal, index=None, *, allow_review=False):
             return False
     else:
         refs = [{'source': source, 'source_thread_id': thread}, *refs]
+
+    def linked_projects(ref):
+        if not isinstance(ref, dict):
+            return set()
+        channel = str(ref.get('source') or ref.get('channel') or '')
+        conversation = str(ref.get('source_thread_id') or '')
+        key = channel, conversation
+        if channel == 'telegram' and key not in index:
+            conversation, _ = split_telegram_source(conversation)
+            key = channel, conversation
+        return index.get(key, set())
+
     selected = proposal.get('project_id')
     if allow_review and selected is None and proposal.get('needs_project') is True:
-        return all(isinstance(ref, dict) and bool(index.get((
-            str(ref.get('source') or ref.get('channel') or ''), str(ref.get('source_thread_id') or '')), set())) for ref in refs)
-    return type(selected) is int and bool(refs) and all(
-        selected in index.get((str(ref.get('source') or ref.get('channel') or ''), str(ref.get('source_thread_id') or '')), set())
-        for ref in refs if isinstance(ref, dict)) and all(isinstance(ref, dict) for ref in refs)
+        return all(linked_projects(ref) for ref in refs)
+    return type(selected) is int and bool(refs) and all(selected in linked_projects(ref) for ref in refs)

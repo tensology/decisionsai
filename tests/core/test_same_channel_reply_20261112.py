@@ -114,6 +114,83 @@ def test_telegram_unconfirmed_send_is_not_reported_as_sent(monkeypatch):
         replies.send_reply({"channel": "telegram", "thread_id": "-100777", "project_id": 9}, "t", "k")
 
 
+@pytest.mark.parametrize("refusal", [None, "unverified_relay", "unlinked_group", "changed_response", "expired_before_transport"])
+def test_manual_telegram_approval_waits_for_exact_provider_receipt(monkeypatch, refusal):
+    from distr.core.workflow import telegram_reply_receipts as receipts
+
+    group = "-100777"
+    sent_frames = []
+
+    def queue(frame):
+        sent_frames.append(frame)
+        return True
+
+    manager = SimpleNamespace(telegram_user_id=12345, queue_closing_reply=queue,
+                              is_connected=lambda: True, _send_websocket_message=lambda frame: True)
+    monkeypatch.setattr("distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app", lambda: manager)
+    links = {("telegram", group): {9}}
+    monkeypatch.setattr("distr.core.incoming.project_links.source_project_index", lambda: links)
+    monkeypatch.setattr(replies, "resolve_target", lambda source: {"channel": "telegram", "thread_id": group, "label": "Shop team"})
+    with get_session() as db:
+        proposal = {"source": "telegram", "source_thread_id": group, "project_id": 9, "message_ids": ["55"]}
+        root = Chat(title="Telegram receipt fixture", project_id=9, params=json.dumps({"incoming_reply_context": proposal}))
+        db.add(root)
+        db.flush()
+        turn = Chat(parent_id=root.id, response="The checkout has been repaired.")
+        db.add(turn)
+        db.commit()
+        thread = (root.id, turn.id)
+    draft = replies.create_draft(*thread, f"telegram:{group}", complete=lambda *_: "The checkout is fixed.")
+    assert replies.act_on_draft(thread[0], draft["id"], "approve", "Reviewed text.")["status"] == "sending"
+    assert len(sent_frames) == 1
+    frame = sent_frames[0]
+    token = frame["client_message_id"]
+    if refusal:
+        if refusal == "unlinked_group":
+            links.clear()
+        elif refusal == "changed_response":
+            with get_session() as db:
+                db.get(Chat, thread[1]).response = "The repair has been withdrawn."
+                db.commit()
+        if refusal == "expired_before_transport":
+            with get_session() as db:
+                row, payload = receipts._match(db, token)
+                payload["telegram_attempt"]["deadline"] = 0
+                row.payload = json.dumps(payload)
+                db.commit()
+            assert replies.reply_drafts(*thread)[0]["status"] == "unconfirmed"
+            assert token not in receipts.recovery_page(0, limit=100)[1]
+        else:
+            assert not receipts.authorize(frame, owner=12345, relay_verified=refusal != "unverified_relay")
+        assert not receipts.confirm(token, telegram_chat_id=int(group), telegram_message_id=44)
+        retained = replies.reply_drafts(*thread)[0]
+        assert retained["status"] == "draft" and retained["text"] == "Reviewed text."
+        if refusal == "changed_response":
+            assert retained["rewrite_required"]
+            return
+        links[("telegram", group)] = {9}
+        assert replies.act_on_draft(thread[0], draft["id"], "approve", "Reviewed text.")["status"] == "sending"
+        frame = sent_frames[1]
+        assert frame["client_message_id"] != token
+        assert not receipts.authorize(sent_frames[0], owner=12345)
+        token = frame["client_message_id"]
+    expected_frames = 2 if refusal else 1
+    assert not receipts.confirm(token, telegram_chat_id=int(group), telegram_message_id=44)
+    assert receipts.authorize(frame, owner=12345)
+    assert not receipts.authorize(frame, owner=12345)
+    assert token in receipts.recovery_page(0)[1]
+    assert not receipts.confirm(token, telegram_chat_id=-100999, telegram_message_id=44)
+    assert receipts.confirm(token, uncertain=True)
+    assert replies.reply_drafts(*thread)[0]["status"] == "unconfirmed"
+    with pytest.raises(ValueError, match="unconfirmed"):
+        replies.act_on_draft(thread[0], draft["id"], "approve", "Another send.")
+    assert receipts.confirm(token, telegram_chat_id=int(group), telegram_message_id=44)
+    assert not receipts.confirm(token, telegram_chat_id=int(group), telegram_message_id=44)
+    saved = replies.act_on_draft(thread[0], draft["id"], "approve", "Another send.")
+    assert saved["status"] == "sent" and saved["already_sent"] and saved["text"] == "Reviewed text."
+    assert len(sent_frames) == expected_frames
+
+
 @pytest.mark.parametrize("channel", ["slack", "sms", "", "outlook"])
 def test_unknown_channel_never_falls_through_to_mailshot_or_gmail(monkeypatch, channel):
     def boom(*a, **k):

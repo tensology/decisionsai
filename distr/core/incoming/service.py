@@ -121,6 +121,8 @@ def list_whatsapp_history(thread_id: str, before_id: int = 0, limit: int = 40) -
 
 
 def telegram_incoming_item(row: TelegramGroupMessage) -> dict[str, Any]:
+    from distr.core.incoming.telegram_topics import telegram_message_source, telegram_topic_label
+
     sender = ""
     try:
         payload = json.loads(row.sender_data or "{}")
@@ -140,14 +142,16 @@ def telegram_incoming_item(row: TelegramGroupMessage) -> dict[str, Any]:
     body = str(row.text or row.caption or "").strip()
     if not body and row.media_type:
         body = f"[{row.media_type} message]"
+    source_thread = telegram_message_source(row)
+    label = telegram_topic_label(str(row.chat_title or row.chat_username or row.chat_id or "Telegram"), source_thread)
     return {
         "key": f"telegram:{row.id}",
         "source": "telegram",
         "source_label": "Telegram",
         "source_message_id": str(row.telegram_message_id or row.id),
-        "source_thread_id": str(row.chat_id or ""),
-        "conversation_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
-        "thread_label": str(row.chat_title or row.chat_username or row.chat_id or "Telegram"),
+        "source_thread_id": source_thread,
+        "conversation_label": label,
+        "thread_label": label,
         "chat_type": str(row.chat_type or "group"),
         "sender": sender or "Unknown sender",
         "text": body,

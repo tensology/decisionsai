@@ -169,7 +169,7 @@ def _save_managed_outcome(session, row: Any, details: dict[str, Any], outcome: d
 
 
 def _expire(session, row) -> None:
-    if row.status in {'sending', 'unconfirmed'}:
+    if row.status in {'sending', 'unconfirmed', 'sent'}:
         from distr.core.workflow.dev_approvals import telegram_managed_reply
 
         details = _managed_details(row)

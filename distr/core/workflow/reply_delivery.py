@@ -120,6 +120,7 @@ def _send_telegram(*, target: str, body: str, subject: str = "", project_id=None
     id); any other chat is refused before sending.
     """
     from distr.core.incoming.source_reply import ReplyPreflightError
+    from distr.core.incoming.telegram_topics import split_telegram_source, telegram_topic_id
     from distr.core.incoming.telegram_updates import _recipient_id
     from distr.core.integrations.telegram.chat_send import GroupSendRefused, MAX_TEXT, linked_group_projects, send_to_chat
     from distr.core.kanban.ticket_workflow_engagement import _telegram_manager_from_app
@@ -127,7 +128,11 @@ def _send_telegram(*, target: str, body: str, subject: str = "", project_id=None
     manager = _telegram_manager_from_app()
     if manager is None:
         raise ReplyPreflightError("Nothing was sent. Telegram is not connected right now.")
-    chat = str(target or "").strip()
+    chat, topic = split_telegram_source(str(target or "").strip())
+    topic_id = telegram_topic_id(topic)
+    if topic is not None and (topic_id is None or attempt_token is None
+                              or getattr(manager, '_closing_reply_topics', False) is not True):
+        raise ReplyPreflightError("Nothing was sent. The Telegram relay cannot verify delivery to this topic. Open the original topic in Telegram to reply.")
     private = _recipient_id(getattr(manager, "telegram_user_id", None))
     is_owner = private is not None and chat == str(private)
 
@@ -143,8 +148,10 @@ def _send_telegram(*, target: str, body: str, subject: str = "", project_id=None
         if len(body.encode('utf-16-le')) // 2 > MAX_TEXT or _audit_outbound_telegram_text(body) != body:
             raise ReplyPreflightError("Nothing was sent. Review a shorter, client-ready Telegram reply.")
         queue = getattr(manager, 'queue_closing_reply', None)
-        if not callable(queue) or not queue({'type': 'send_message', 'chat_id': int(chat), 'text': body,
-                                              'client_message_id': attempt_token}):
+        frame = {'type': 'send_message', 'chat_id': int(chat), 'text': body, 'client_message_id': attempt_token}
+        if topic_id is not None:
+            frame['message_thread_id'] = topic_id
+        if not callable(queue) or not queue(frame):
             raise ReplyPreflightError("Nothing was sent. Telegram could not queue the reviewed reply.")
         return {'awaiting_confirmation': True}
     if is_owner:
@@ -205,10 +212,11 @@ POSTURE_ADAPTERS: dict[str, Callable[..., dict[str, Any]]] = {
 
 def _protected_attempts(db, ticket_id, workflow):
     from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.workflow.telegram_reply_receipts import workflow_outcome
 
     attempts = db.query(OrchestratorEvent).filter_by(
         ticket_id=ticket_id, source='reply_delivery', event_type=REPLY_EVENT_TYPE,
-    ).filter(OrchestratorEvent.status.in_({'sent', 'sending', 'unconfirmed', 'failed'}))
+    ).filter(OrchestratorEvent.status.in_({'sent', 'sending', 'unconfirmed', 'failed', 'not_sent'}))
     legacy = {}
     for attempt in attempts.order_by(OrchestratorEvent.id.desc()):
         try:
@@ -216,6 +224,10 @@ def _protected_attempts(db, ticket_id, workflow):
         except (ValueError, TypeError):
             payload = None
         payload = payload if isinstance(payload, dict) else {}
+        if attempt.status == 'not_sent':
+            managed = workflow_outcome(attempt, payload)
+            if managed is None or not managed['unconfirmed']:
+                continue
         scopes = (_receipt_scope(attempt), payload.get('workflow'))
         known_runs = {str(scope['run_id']) for scope in scopes
                       if isinstance(scope, dict) and scope.get('run_id') is not None}
@@ -300,15 +312,16 @@ def recover_prior_reply(db, run, packets: list[str], reply: str, *, workflow: di
             outcome = {'delivered': sent, 'unconfirmed': not sent, 'channel': channel,
                        'target': envelope['recipient'], 'body': body, 'result': payload.get('detail')}
             if scoped and channel == 'telegram':
-                from distr.core.workflow.telegram_reply_receipts import run_status
+                from distr.core.workflow.telegram_reply_receipts import workflow_outcome
 
-                if delivery_status := run_status(db, run, attempt.event_uid):
-                    outcome.update(delivery_key=attempt.event_uid, delivery_status=delivery_status,
-                                   unconfirmed=delivery_status == 'unconfirmed')
+                if managed := workflow_outcome(attempt, payload):
+                    outcome.update(managed)
             return outcome
         except (ValueError, TypeError, KeyError, AttributeError):
             if scoped:
-                return _receipt_conflict(attempt.status)
+                from distr.core.workflow.telegram_reply_receipts import damaged_workflow_outcome
+
+                return damaged_workflow_outcome(attempt, ticket_id=run.ticket_id, workflow=workflow) or _receipt_conflict(attempt.status)
     return None
 
 
@@ -473,8 +486,9 @@ def _validate_delivery_scope(db, ticket_id, envelope, workflow):
     if workflow is not None:
         _validate_workflow_context(db, workflow, envelope, ticket_id)
     ticket = db.get(KanbanTicket, ticket_id)
-    if ticket is None or _delivery_envelope(db, ticket, resolve_reply_target(ticket), envelope['subject'],
-                                            envelope.get('resolved_target')) != envelope:
+    target = resolve_reply_target(ticket) if ticket is not None else None
+    if (not target or not target.can_send
+            or _delivery_envelope(db, ticket, target, envelope['subject'], envelope.get('resolved_target')) != envelope):
         raise ValueError('The ticket or reply destination changed while waiting. Review a new reply before sending.')
 
 
@@ -499,6 +513,7 @@ def _claim(key, *, ticket_id, envelope, body, supported, legacy_key=None, workfl
     from sqlalchemy.exc import IntegrityError
     from distr.core.db import get_session
     from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.workflow.telegram_reply_receipts import damaged_workflow_outcome, workflow_outcome
     with get_session() as db:
         try:
             if db.get_bind().dialect.name == 'sqlite':
@@ -508,14 +523,25 @@ def _claim(key, *, ticket_id, envelope, body, supported, legacy_key=None, workfl
                         .order_by((OrchestratorEvent.event_uid == key).desc()).all())
             retry_unsent = None
             for receipt in existing:
-                if (receipt.event_uid == key and supported and _is_delivery_row(receipt, ticket_id)
-                        and receipt.status in {'not_sent', 'unsupported'}):
-                    retry_unsent = receipt
-                    continue
                 payload = (_matching_receipt(receipt, ticket_id=ticket_id, envelope=envelope, body=body, workflow=workflow)
                            if receipt.event_uid == key else None)
+                managed = None
+                if payload and envelope['channel'] == 'telegram':
+                    managed = workflow_outcome(receipt, payload)
+                if (receipt.event_uid == key and supported and _is_delivery_row(receipt, ticket_id)
+                        and receipt.status in {'not_sent', 'unsupported'}
+                        and (receipt.status == 'unsupported' or telegram_attempt is None or payload is not None)
+                        and (managed is None or managed['delivery_status'] == receipt.status)):
+                    retry_unsent = receipt
+                    continue
                 if payload is None:
+                    if receipt.event_uid == key and envelope['channel'] == 'telegram' and workflow is not None:
+                        if damaged := damaged_workflow_outcome(receipt, ticket_id=ticket_id, workflow=workflow):
+                            return {**damaged, 'duplicate': True}
                     return _receipt_conflict(receipt.status)
+                if managed is not None:
+                    return {**managed, 'delivered': False, 'duplicate': True, 'receipt_matches': True,
+                            'target': envelope['recipient'], 'body': body}
                 outcome = {'delivered': False, 'duplicate': True,
                            'unconfirmed': receipt.status in {'sending', 'unconfirmed', 'failed'},
                            'channel': envelope['channel'], 'target': envelope['recipient']}
@@ -832,6 +858,12 @@ def recover_sent_workflow_reply(db, details):
         payload = _matching_receipt(row, ticket_id=ticket_id, envelope=envelope, body=body, workflow=details['workflow'])
         if payload is None:
             return None
+        if envelope['channel'] == 'telegram':
+            from distr.core.workflow.telegram_reply_receipts import workflow_outcome
+
+            managed = workflow_outcome(row, payload)
+            if managed is not None and not managed['delivered']:
+                return None
         return {'delivered': True, 'delivery_status': 'sent', 'channel': envelope['channel'],
                 'target': envelope['recipient'], 'body': body, 'result': payload.get('detail')}
     except (ValueError, TypeError, KeyError, AttributeError):

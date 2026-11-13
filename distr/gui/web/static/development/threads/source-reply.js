@@ -103,7 +103,9 @@ export async function openSourceReply({ chatId, responseId, api, opener, onClose
         destination.replaceChildren();
         destination.hidden = target.channel === 'whatsapp';
         if (destination.hidden) return;
-        const lines = [`${target.channel === 'gmail' ? 'Gmail' : 'Mailshot'}: Reply all`, ...(target.from ? [`From: ${target.from}`] : []), `To: ${target.to.join(', ')}`,
+        const lines = target.channel === 'telegram' ? [target.topic_label
+            ? `Telegram topic: ${target.topic_label}` : `Telegram group: ${target.label || target.thread_id}`]
+            : [`${target.channel === 'gmail' ? 'Gmail' : 'Mailshot'}: Reply all`, ...(target.from ? [`From: ${target.from}`] : []), `To: ${target.to.join(', ')}`,
                ...(target.cc.length ? [`Cc: ${target.cc.join(', ')}`] : []), `Subject: ${target.subject}`];
         for (const line of lines) {
             const paragraph = document.createElement('p');
@@ -239,6 +241,12 @@ export async function openSourceReply({ chatId, responseId, api, opener, onClose
             const pendingDraft = draft;
             const reviewedText = text.value;
             const result = await api(`${endpoint}/${draft.id}/approve`, { method: 'POST', body: { approved: true, text: reviewedText } });
+            if (result.status === 'sending') {
+                sending = false;
+                showDraft(result);
+                checkStatus.focus();
+                return;
+            }
             if (result.status !== 'sent') throw new Error('Send was not confirmed. Check the original conversation before sending again.');
             if (toast && (!result.already_sent || result.text === reviewedText)) {
                 finish();

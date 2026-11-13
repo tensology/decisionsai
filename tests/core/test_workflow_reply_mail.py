@@ -358,11 +358,13 @@ def test_approved_jira_uses_exact_issue_and_rechecks_scope_after_account_lookup(
 
 
 @pytest.mark.parametrize('change', [None, 'ticket', 'link', 'old-relay'])
-def test_approved_telegram_group_rechecks_ticket_and_project_before_relay_write(store, monkeypatch, change):
+@pytest.mark.parametrize('topic', [None, 101])
+def test_approved_telegram_group_rechecks_ticket_and_project_before_relay_write(store, monkeypatch, change, topic):
     from types import SimpleNamespace
 
     chat_id = '-1001234567'
-    ticket = _ticket(store, source_provider='telegram', source_thread_id=chat_id, linked_project_id=7)
+    source = f'{chat_id}~topic~{topic}' if topic is not None else chat_id
+    ticket = _ticket(store, source_provider='telegram', source_thread_id=source, linked_project_id=7)
     details = reviewed_workflow(store, ticket, 'Exact reviewed Telegram reply.')
     with store.begin() as db:
         db.get(Chat, details['workflow']['chat_id']).project_id = 7
@@ -380,7 +382,7 @@ def test_approved_telegram_group_rechecks_ticket_and_project_before_relay_write(
         return True
 
     queued = []
-    manager = SimpleNamespace(telegram_user_id=12345, _send_websocket_message=write, is_connected=connected,
+    manager = SimpleNamespace(telegram_user_id=12345, _closing_reply_topics=True, _send_websocket_message=write, is_connected=connected,
                               queue_closing_reply=lambda frame: queued.append(frame) or True)
     monkeypatch.setattr('distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app', lambda: manager)
     monkeypatch.setattr('distr.core.incoming.project_links.source_project_index',
@@ -392,38 +394,50 @@ def test_approved_telegram_group_rechecks_ticket_and_project_before_relay_write(
 
     assert connected()
     frame = queued[0]
+    assert frame.get('message_thread_id') == topic
     if change:
-        assert not receipts.authorize(frame, owner=12345, relay_verified=change != 'old-relay')
+        assert not receipts.authorize(frame, owner=12345, relay_verified=change != 'old-relay', relay_topics=True)
         write.assert_not_called()
     else:
-        assert receipts.authorize(frame, owner=12345)
-        assert not receipts.authorize(frame, owner=12345)
+        assert receipts.authorize(frame, owner=12345, relay_topics=True)
+        assert not receipts.authorize(frame, owner=12345, relay_topics=True)
         assert not receipts.confirm(frame['client_message_id'], telegram_chat_id=-1009999999, telegram_message_id=44)
-        assert receipts.confirm(frame['client_message_id'], telegram_chat_id=int(chat_id), telegram_message_id=44)
+        assert not receipts.confirm(frame['client_message_id'], telegram_chat_id=int(chat_id),
+                                    telegram_message_id=44, message_thread_id=102)
+        assert receipts.confirm(frame['client_message_id'], telegram_chat_id=int(chat_id),
+                                telegram_message_id=44, message_thread_id=topic)
         assert delivery.execute_approved_workflow_reply(details)['duplicate']
         assert frame['chat_id'] == int(chat_id) and frame['text'] == details['body']
     with store() as db:
         assert db.query(OrchestratorEvent).one().status == ('not_sent' if change else 'sent')
 
 
-def test_telegram_closing_receipt_survives_a_local_write_outage(store, monkeypatch, tmp_path):
+@pytest.mark.parametrize('topic', [None, 101])
+def test_telegram_closing_receipt_survives_a_local_write_outage(store, monkeypatch, tmp_path, topic):
     from sqlalchemy.exc import OperationalError
     from types import SimpleNamespace
     from distr.core.integrations.telegram import receipt_writes
     from distr.core.workflow import telegram_reply_receipts as receipts
 
-    ticket = _ticket(store, source_provider='telegram', source_thread_id='12345')
+    chat = 12345 if topic is None else -1001234567
+    source = str(chat) if topic is None else f'{chat}~topic~{topic}'
+    ticket = _ticket(store, source_provider='telegram', source_thread_id=source, **({'linked_project_id': 7} if topic else {}))
     details = reviewed_workflow(store, ticket, 'Exact reviewed Telegram reply.')
     queue = Mock(return_value=True)
-    manager = SimpleNamespace(telegram_user_id=12345, queue_closing_reply=queue)
+    manager = SimpleNamespace(telegram_user_id=12345, _closing_reply_topics=True, queue_closing_reply=queue)
+    if topic:
+        with store.begin() as db:
+            db.get(Chat, details['workflow']['chat_id']).project_id = 7
+        monkeypatch.setattr('distr.core.incoming.project_links.source_project_index', lambda: {('telegram', str(chat)): {7}})
     monkeypatch.setattr('distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app', lambda: manager)
     monkeypatch.setattr(receipt_writes, '_journal_path', lambda: tmp_path / 'receipts')
     assert delivery.execute_approved_workflow_reply(details)['delivery_status'] == 'sending'
     frame = queue.call_args.args[0]
-    assert receipts.authorize(frame, owner=12345)
+    assert receipts.authorize(frame, owner=12345, relay_topics=True)
     real_confirm = receipts.confirm
     monkeypatch.setattr(receipts, 'confirm', Mock(side_effect=OperationalError('busy', {}, Exception('locked'))))
-    assert receipts.accept_receipt(frame['client_message_id'], telegram_chat_id=12345, telegram_message_id=77) is None
+    assert receipts.accept_receipt(frame['client_message_id'], telegram_chat_id=chat,
+                                   telegram_message_id=77, message_thread_id=topic) is None
     assert list((tmp_path / 'receipts').glob('*.json'))
     receipt_writes._pending.clear()
     monkeypatch.setattr(receipts, 'confirm', real_confirm)
@@ -432,3 +446,66 @@ def test_telegram_closing_receipt_survives_a_local_write_outage(store, monkeypat
     with store() as db:
         assert receipts.reviewed_outcome(db, details)['result']['telegram_message_id'] == 77
     queue.assert_called_once()
+
+
+@pytest.mark.parametrize('damage', ['topic', 'chat', 'message', 'missing_attempt', 'changed_target', 'marked_not_sent', 'unreadable'])
+def test_damaged_telegram_receipt_only_holds_its_own_topic(store, monkeypatch, damage):
+    from types import SimpleNamespace
+    from distr.core.workflow import telegram_reply_receipts as receipts
+
+    chat = -1001234567
+    queue = Mock(return_value=True)
+    manager = SimpleNamespace(telegram_user_id=12345, _closing_reply_topics=True, queue_closing_reply=queue)
+    monkeypatch.setattr('distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app', lambda: manager)
+    monkeypatch.setattr('distr.core.incoming.project_links.source_project_index', lambda: {('telegram', str(chat)): {7}})
+    reviews = []
+    for topic in (101, 102):
+        ticket = _ticket(store, source_provider='telegram', source_thread_id=f'{chat}~topic~{topic}', linked_project_id=7)
+        details = reviewed_workflow(store, ticket, 'The reviewed result is ready.')
+        with store.begin() as db:
+            db.get(Chat, details['workflow']['chat_id']).project_id = 7
+        outcome = delivery.execute_approved_workflow_reply(details)
+        assert outcome['delivery_status'] == 'sending'
+        frame = queue.call_args.args[0]
+        assert frame['message_thread_id'] == topic
+        assert receipts.authorize(frame, owner=12345, relay_topics=True)
+        assert receipts.confirm(frame['client_message_id'], telegram_chat_id=chat,
+                                telegram_message_id=topic + 200, message_thread_id=topic)
+        reviews.append((details, outcome['delivery_key']))
+
+    (affected, affected_key), (unaffected, unaffected_key) = reviews
+    with store.begin() as db:
+        row = db.query(OrchestratorEvent).filter_by(event_uid=affected_key).one()
+        payload = json.loads(row.payload)
+        if damage == 'topic':
+            payload['detail']['message_thread_id'] = 102
+        elif damage == 'chat':
+            payload['detail']['chat_id'] = -1007654321
+        elif damage == 'message':
+            payload['detail']['telegram_message_id'] = True
+        elif damage == 'missing_attempt':
+            payload.pop('telegram_attempt')
+        elif damage == 'changed_target':
+            payload['target'] = f'{chat}~topic~102'
+            payload['detail']['message_thread_id'] = 102
+        elif damage == 'marked_not_sent':
+            row.status = 'not_sent'
+        row.payload = '{' if damage == 'unreadable' else json.dumps(payload)
+
+    with store() as db:
+        outcome = receipts.reviewed_outcome(db, affected)
+        assert outcome['delivery_status'] == 'unconfirmed' and outcome['delivered'] is False
+        assert delivery.recover_sent_workflow_reply(db, affected) is None
+        run = db.get(AutoWorkflowRun, affected['workflow']['run_id'])
+        assert receipts.run_status(db, run, affected_key) == 'unconfirmed'
+        assert receipts.run_status(db, run, unaffected_key) is None
+        recovered = delivery.recover_prior_reply(db, run, [], affected['body'], workflow=affected['workflow'])
+        assert recovered['delivery_status'] == 'unconfirmed' and recovered['delivered'] is False
+        assert delivery.recover_sent_workflow_reply(db, unaffected)['result']['message_thread_id'] == 102
+
+    duplicate = delivery.execute_approved_workflow_reply(affected)
+    assert duplicate['duplicate'] and duplicate['delivery_status'] == 'unconfirmed'
+    revised = delivery.execute_approved_workflow_reply({**affected, 'body': 'A revised result.'})
+    assert revised['duplicate'] and revised['delivered'] is False
+    assert delivery.execute_approved_workflow_reply(unaffected)['duplicate']
+    assert queue.call_count == 2

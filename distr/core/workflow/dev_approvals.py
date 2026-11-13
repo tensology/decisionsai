@@ -117,7 +117,7 @@ def request_view(row: Any, *, with_secret: Optional[str] = None, receipt_session
     out = {'request_id': row.request_id, 'chat_id': row.chat_id, 'turn_id': row.turn_id,
            'tool': row.tool, 'action': row.action, 'summary': row.summary, 'details': details,
            'status': row.status, 'expires_at': row.expires_at.isoformat() + 'Z'}
-    if row.status in {'sending', 'unconfirmed'} and receipt_session is not None:
+    if row.status in {'sending', 'unconfirmed', 'sent'} and receipt_session is not None:
         telegram = telegram_managed_reply(receipt_session, row, details)
         if telegram:
             status = telegram['delivery_status']

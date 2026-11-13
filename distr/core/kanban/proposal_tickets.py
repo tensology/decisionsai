@@ -15,6 +15,16 @@ def _positive_id(value: Any) -> int | None:
     return number if number > 0 else None
 
 
+def _is_merged_proposal(proposal: dict[str, Any]) -> bool:
+    return (bool(proposal.get('merged_from') or proposal.get('requires_merge_receipt'))
+            or str(proposal.get('id') or '').startswith(('local:merge:', 'local:merged:')))
+
+
+def _requires_scoped_ticket_match(proposal: dict[str, Any]) -> bool:
+    source = str(proposal.get('source') or proposal.get('source_label') or '').strip().lower()
+    return source == 'telegram' or _is_merged_proposal(proposal)
+
+
 def _proposal_keys(proposal: dict[str, Any]) -> set[str]:
     from distr.core.incoming.proposals import _proposal_handoff_key, _tensology_id
 
@@ -23,6 +33,8 @@ def _proposal_keys(proposal: dict[str, Any]) -> set[str]:
         key = _proposal_handoff_key(proposal)
     except Exception:
         key = ""
+    if _requires_scoped_ticket_match(proposal):
+        return {key} if key else set()
     if key:
         keys.add(str(key))
         keys.add(str(key).split(":", 1)[-1] if ":" in str(key) else str(key))
@@ -48,6 +60,35 @@ def _message_ids(proposal: dict[str, Any]) -> set[str]:
         if proposal.get(field):
             ids.add(str(proposal.get(field)))
     return ids
+
+
+def _find_scoped_proposal_ticket(session, proposal, project_id):
+    from sqlalchemy import and_, or_
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.incoming.proposals import _tensology_id
+
+    query = (session.query(KanbanTicket)
+             .join(KanbanLane, KanbanLane.id == KanbanTicket.lane_id)
+             .join(KanbanBoard, KanbanBoard.id == KanbanLane.board_id))
+    if project_id:
+        query = query.filter(or_(KanbanTicket.linked_project_id == project_id, and_(
+            KanbanTicket.linked_project_id.is_(None), KanbanBoard.default_project_id == project_id,
+        )))
+    keys = _proposal_keys(proposal)
+    if keys:
+        exact = [KanbanTicket.source_external_id.in_(keys), KanbanTicket.external_id.in_(keys)]
+        if (remote_id := _tensology_id(proposal.get('id'))) is not None:
+            exact.append(and_(KanbanTicket.external_source == 'tensology', KanbanTicket.external_id == str(remote_id)))
+        match = query.filter(or_(*exact)).order_by(KanbanTicket.id).first()
+        if match is not None:
+            return match
+    if _is_merged_proposal(proposal):
+        return None
+    thread = proposal.get('source_thread_id')
+    if isinstance(thread, str) and thread and (messages := _message_ids(proposal)):
+        return query.filter(KanbanTicket.source_provider == 'telegram', KanbanTicket.source_thread_id == thread,
+                            KanbanTicket.source_external_id.in_(messages)).order_by(KanbanTicket.id).first()
+    return None
 
 
 def ensure_linked_project_board(session: Any, project_id: int):
@@ -98,6 +139,9 @@ def find_existing_ticket_for_proposal(session: Any, proposal: dict[str, Any], pr
             if ticket is not None:
                 return ticket
 
+    if _requires_scoped_ticket_match(proposal):
+        return _find_scoped_proposal_ticket(session, proposal, project_id)
+
     message_ids = _message_ids(proposal)
     keys = _proposal_keys(proposal)
     source = str(proposal.get("source") or proposal.get("source_label") or "").strip().lower()
@@ -106,19 +150,36 @@ def find_existing_ticket_for_proposal(session: Any, proposal: dict[str, Any], pr
     if project_id:
         query = query.filter(KanbanTicket.linked_project_id == int(project_id))
 
+    def first_legacy_match(candidates):
+        from distr.core.chat import _chat_params
+        from distr.core.db import Chat
+
+        for ticket in candidates.order_by(KanbanTicket.id):
+            if str(ticket.source_provider or '').lower() == 'telegram':
+                continue
+            # Older Development cards kept a bare message number on the card
+            # and the provider only in the thread's saved proposal context.
+            chat = session.get(Chat, ticket.source_chat_id) if ticket.source_chat_id else None
+            if chat is not None:
+                params = _chat_params(chat.params)
+                handoff = params.get('incoming_proposal_handoff')
+                saved = handoff.get('proposal') if isinstance(handoff, dict) else None
+                context = params.get('incoming_reply_context')
+                if any(isinstance(item, dict) and _requires_scoped_ticket_match(item) for item in (saved, context)):
+                    continue
+            return ticket
+        return None
+
     if message_ids:
-        match = query.filter(KanbanTicket.source_external_id.in_(list(message_ids))).order_by(KanbanTicket.id.asc()).first()
+        match = first_legacy_match(query.filter(KanbanTicket.source_external_id.in_(message_ids)))
         if match is not None:
             return match
 
     if keys:
-        match = query.filter(KanbanTicket.source_external_id.in_(list(keys))).order_by(KanbanTicket.id.asc()).first()
+        match = first_legacy_match(query.filter(KanbanTicket.source_external_id.in_(keys)))
         if match is not None:
             return match
-        match = query.filter(KanbanTicket.external_id.in_(list(keys))).order_by(KanbanTicket.id.asc()).first()
-        if match is not None:
-            return match
-        match = query.filter(KanbanTicket.external_source == "tensology", KanbanTicket.external_id.in_(list(keys))).first()
+        match = first_legacy_match(query.filter(KanbanTicket.external_id.in_(keys)))
         if match is not None:
             return match
 
@@ -131,13 +192,11 @@ def find_existing_ticket_for_proposal(session: Any, proposal: dict[str, Any], pr
             for row in session.query(KanbanBoard).filter(KanbanBoard.default_project_id == int(project_id)).all()
         ]
         if board_ids:
-            candidates = (
+            candidates = first_legacy_match(
                 session.query(KanbanTicket)
                 .join(KanbanLane, KanbanLane.id == KanbanTicket.lane_id)
                 .filter(KanbanLane.board_id.in_(board_ids))
-                .filter(KanbanTicket.source_external_id.in_(list(message_ids or keys)))
-                .order_by(KanbanTicket.id.asc())
-                .first()
+                .filter(KanbanTicket.source_external_id.in_(message_ids or keys))
             )
             if candidates is not None:
                 return candidates
@@ -299,11 +358,14 @@ def _stamp_proposal_source_on_ticket(chat_id: int, proposal: dict[str, Any]) -> 
     """Persist a stable source key so later Tensology/Gmail lookups can reuse the card."""
     from distr.core.db import get_session
     from distr.core.db.kanban import KanbanTicket
-    from distr.core.incoming.proposals import _tensology_id
+    from distr.core.incoming.proposals import _proposal_handoff_key, _tensology_id
 
     tensology_id = _tensology_id(proposal.get("id"))
     message_ids = _message_ids(proposal)
-    preferred = f"tensology:{tensology_id}" if tensology_id is not None else (next(iter(message_ids), None))
+    if _requires_scoped_ticket_match(proposal) or tensology_id is not None:
+        preferred = _proposal_handoff_key(proposal)
+    else:
+        preferred = next(iter(message_ids), None)
     if not preferred:
         return
     with get_session() as db:

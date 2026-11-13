@@ -2,6 +2,7 @@
 import hashlib
 import json
 from collections import Counter
+from itertools import islice
 
 from sqlalchemy import and_, func, or_
 
@@ -10,6 +11,7 @@ from distr.core.incoming.service import (
     _email_created_at, _mail_plain_and_html, _whatsapp_incoming_item, _with_mail_preview_urls,
     telegram_incoming_item,
 )
+from distr.core.incoming.telegram_topics import split_telegram_source, telegram_message_source
 
 BEFORE = 12
 AFTER = 27
@@ -65,12 +67,17 @@ def _conversation_origins(proposal):
     return origins
 
 
-def _read_local_rows(query, timestamp, row_id, anchor):
+def _read_local_rows(query, timestamp, row_id, anchor, *, matches=None):
     sent_at, anchor_id = anchor
     before = query.filter(or_(timestamp < sent_at, and_(timestamp == sent_at, row_id < anchor_id)))
     after = query.filter(or_(timestamp > sent_at, and_(timestamp == sent_at, row_id >= anchor_id)))
-    return [*reversed(before.order_by(timestamp.desc(), row_id.desc()).limit(BEFORE).all()),
-            *after.order_by(timestamp, row_id).limit(AFTER + 1).all()]
+    def page(rows, limit):
+        if matches is None:
+            return rows.limit(limit).all()
+        return list(islice(filter(matches, rows.yield_per(128)), limit))
+
+    return [*reversed(page(before.order_by(timestamp.desc(), row_id.desc()), BEFORE)),
+            *page(after.order_by(timestamp, row_id), AFTER + 1)]
 
 
 def _local_conversation(source, thread, ids):
@@ -87,10 +94,22 @@ def _local_conversation(source, thread, ids):
         else:
             model = TelegramGroupMessage
             timestamp = model.telegram_message_id
-            query = db.query(model).filter(model.chat_id == thread)
+            group_id, topic = split_telegram_source(thread)
+            query = db.query(model).filter(model.chat_id == group_id)
             message_id = model.telegram_message_id
             ids = [int(item) for item in ids if item.isascii() and item.isdecimal() and len(item) <= 18]
-            serialize = telegram_incoming_item
+            anchors = query.filter(message_id.in_(ids)).order_by(timestamp, model.id).all()
+            scopes = {telegram_message_source(row) for row in anchors}
+            if not scopes or (topic is not None and scopes != {thread}):
+                return [], ""
+            if len(scopes) != 1:
+                raise LookupError("The original messages span different Telegram topics. Open them in Telegram.")
+            scope = scopes.pop()
+            anchor = anchors[0]
+            rows = _read_local_rows(query, timestamp, model.id, (anchor.telegram_message_id, anchor.id),
+                                    matches=lambda row: telegram_message_source(row) == scope)
+            # Older proposals still verify the saved group identity in the reader.
+            return [{**telegram_incoming_item(row), "source_thread_id": thread} for row in rows], str(anchor.telegram_message_id)
         anchor = query.with_entities(timestamp, model.id, message_id).filter(
             message_id.in_(ids),
         ).order_by(timestamp, model.id).first()

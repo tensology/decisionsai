@@ -12,6 +12,12 @@ from email.message import EmailMessage
 from email.utils import getaddresses
 from hashlib import sha256
 from uuid import uuid4
+from distr.core.incoming.telegram_topics import (
+    split_telegram_source, telegram_message_source, telegram_source_has_topic, telegram_source_matches_topic,
+    telegram_topic_id, telegram_topic_label,
+)
+
+_TELEGRAM_TOPIC_REPLY_UNAVAILABLE = 'Open the original topic in Telegram to reply. Decisions AI cannot verify delivery to this topic yet.'
 
 
 class ReplyPreflightError(ValueError):
@@ -253,14 +259,21 @@ def resolve_target(source):
                     'source_message_ids': context_ids if source.get('scoped_ids') else [row.message_id for row in rows]}
     if channel == 'telegram':
         # Only the Telegram group the request came from; never the owner's private chat or another chat.
-        if not thread.startswith('-') or not thread[1:].isdigit():
+        chat, topic = split_telegram_source(thread)
+        if topic is not None and telegram_topic_id(topic) is None:
+            raise ValueError(_TELEGRAM_TOPIC_REPLY_UNAVAILABLE)
+        if not chat.startswith('-') or not chat[1:].isdigit():
             raise ValueError('Telegram replies from here only go back to the group the request came from.')
         import json as _json
         from distr.core.db import TelegramGroupMessage, get_session
-        wanted = [int(i) for i in ids if str(i).lstrip('-').isdigit()]
+        wanted = [int(value) for item in ids if (value := str(item)).isascii() and value.isdecimal() and len(value) <= 18]
         with get_session() as db:
-            rows = db.query(TelegramGroupMessage).filter(TelegramGroupMessage.chat_id == thread,
+            rows = db.query(TelegramGroupMessage).filter(TelegramGroupMessage.chat_id == chat,
                 TelegramGroupMessage.telegram_message_id.in_(wanted)).order_by(TelegramGroupMessage.id.desc()).all() if wanted else []
+            if any(telegram_message_source(row) != thread for row in rows):
+                raise ValueError(_TELEGRAM_TOPIC_REPLY_UNAVAILABLE)
+            if topic is not None and not telegram_source_matches_topic(db, thread, ids):
+                raise ValueError(_TELEGRAM_TOPIC_REPLY_UNAVAILABLE)
             names = []
             for row in reversed(rows):
                 try:
@@ -274,6 +287,7 @@ def resolve_target(source):
             if not rows:
                 raise ValueError('The original Telegram group message is unavailable.')
         return {'channel': channel, 'thread_id': thread, 'label': source['label'],
+                **({'topic_label': telegram_topic_label(rows[0].chat_title or 'Telegram group', thread)} if topic else {}),
                 'recipient_names': list(dict.fromkeys(names)),
                 'source_message_ids': context_ids if source.get('scoped_ids') else [str(row.telegram_message_id) for row in rows]}
     if channel not in ('gmail', 'mailshot'):
@@ -398,6 +412,7 @@ def _matches_claim(draft, claim):
 
 def _saved_drafts(db, chat_id, response_id, source_key=None):
     from distr.core.db import SourceReplyDraft
+    from distr.core.workflow.telegram_reply_receipts import manual_display_status
 
     rows = db.query(SourceReplyDraft).filter(
         SourceReplyDraft.chat_id == int(chat_id),
@@ -428,7 +443,7 @@ def _saved_drafts(db, chat_id, response_id, source_key=None):
             continue
         # A newer editable duplicate must never hide a prior send.
         if saved_source not in drafts or (drafts[saved_source]["status"] == "draft" and row.status != "draft"):
-            drafts[saved_source] = {**draft, "status": row.status}
+            drafts[saved_source] = {**draft, "status": manual_display_status(db, draft, row.status)}
     return {key: draft for key, draft in drafts.items() if key not in blocked_sources}, blocked_sources
 
 
@@ -687,7 +702,7 @@ def create_draft(chat_id, response_id, source_key, *, previous='', instruction='
     return draft
 
 
-def send_reply(target, text, key, *, before_send=None):
+def send_reply(target, text, key, *, before_send=None, telegram_attempt=None):
     """Called only after the durable approval claim."""
     send_options = {'before_send': before_send} if before_send is not None else {}
     if target['channel'] == 'whatsapp':
@@ -702,10 +717,17 @@ def send_reply(target, text, key, *, before_send=None):
         # Same channel only: the linked group the request came from. Refusals are checked
         # failures (nothing sent, text kept); there is no fallback to another channel.
         from distr.core.workflow.reply_delivery import _send_telegram
-        chat = str(target.get('thread_id') or '').strip()
+        thread = str(target.get('thread_id') or '').strip()
+        chat, topic = split_telegram_source(thread)
         if not chat.startswith('-') or not chat[1:].isdigit() or target.get('project_id') is None:
             raise ReplyPreflightError('Nothing was sent. Telegram replies from here only go back to the linked group the request came from.')
-        result = _send_telegram(target=chat, body=text, project_id=target['project_id'], key=key, **send_options)
+        if topic is not None and (telegram_topic_id(topic) is None or telegram_attempt is None):
+            raise ReplyPreflightError('Nothing was sent. ' + _TELEGRAM_TOPIC_REPLY_UNAVAILABLE)
+        if telegram_attempt is not None:
+            send_options['attempt_token'] = telegram_attempt
+        result = _send_telegram(target=thread, body=text, project_id=target['project_id'], key=key, **send_options)
+        if telegram_attempt is not None and isinstance(result, dict) and result.get('awaiting_confirmation') is True:
+            return result
         if not isinstance(result, dict) or result.get('success') is not True:
             raise RuntimeError('Telegram did not confirm the send.')
         return result
@@ -824,6 +846,13 @@ def _approval_scope_error(db, root, draft, scope_revision, *, approved_scope=Non
         if choices:
             return ReplySourceChangedError('Nothing was sent. The proposal source changed since this reply was drafted. Reopen Reply to choose a current source and review a new draft.')
         return ReplySourceChangedError('Nothing was sent. This proposal no longer has a reply source. Your draft text is retained.')
+    if current_source['channel'] == 'telegram':
+        thread, ids = current_source['thread_id'], current_source['primary_message_ids']
+        _, topic = split_telegram_source(thread)
+        valid = (telegram_source_matches_topic(db, thread, ids) if topic is not None
+                 else not telegram_source_has_topic(db, thread, ids))
+        if not valid:
+            return ReplyRewriteRequiredError('Nothing was sent. ' + _TELEGRAM_TOPIC_REPLY_UNAVAILABLE)
     reviewed_ids = draft.get('source_message_ids', draft['target'].get('source_message_ids')) or []
     primary_ids = draft.get('primary_message_ids')
     if primary_ids is None:
@@ -855,8 +884,10 @@ def _recheck_approved_reply(chat_id, draft, approved_scope):
 
 def act_on_draft(chat_id, draft_id, action, text='', *, sender=None):
     from distr.core.db import Chat, SourceReplyDraft, get_session
+    from distr.core.workflow import telegram_reply_receipts
     if action not in {'approve', 'cancel'}:
         raise ValueError('Choose Approve or Cancel.')
+    telegram_attempt = None
     with get_session() as db:
         db.connection().exec_driver_sql('BEGIN IMMEDIATE')
         row = db.get(SourceReplyDraft, draft_id)
@@ -899,6 +930,8 @@ def act_on_draft(chat_id, draft_id, action, text='', *, sender=None):
             draft['text'] = text  # Exact human-reviewed edits, not another model rewrite.
             updates[SourceReplyDraft.claimed_response_id] = draft['response_id']
             updates[SourceReplyDraft.claimed_source_key] = draft['source_key']
+            if sender is None and draft['target']['channel'] == 'telegram' and _saved_target_key(draft) == draft['source_key']:
+                telegram_attempt = telegram_reply_receipts.reserve_manual_reply(db, draft, int(chat_id), approved_scope)
         updates[SourceReplyDraft.payload] = json.dumps(draft)
         changed = db.query(SourceReplyDraft).filter(SourceReplyDraft.id == draft_id,
             SourceReplyDraft.chat_id == int(chat_id), SourceReplyDraft.status == 'draft').update(updates, synchronize_session=False)
@@ -915,13 +948,19 @@ def act_on_draft(chat_id, draft_id, action, text='', *, sender=None):
             recheck()
             sender(draft['target'], draft['text'], draft_id)
         else:
-            send_reply(draft['target'], draft['text'], draft_id, before_send=recheck)
+            options = {'telegram_attempt': telegram_attempt} if telegram_attempt is not None else {}
+            delivery = send_reply(draft['target'], draft['text'], draft_id, before_send=recheck, **options)
+            if telegram_attempt is not None and delivery.get('awaiting_confirmation') is True:
+                return draft
     except ReplyRewriteRequiredError as exc:
         draft.update(status='draft', rewrite_required=True, rewrite_notice=str(exc))
         _finish_send(draft_id, 'draft', draft=draft)
         raise
     except ReplyPreflightError:
-        _finish_send(draft_id, 'draft')
+        if telegram_attempt is not None:
+            telegram_reply_receipts.finish_manual_preflight(telegram_attempt)
+        else:
+            _finish_send(draft_id, 'draft')
         raise
     except Exception:
         _finish_send(draft_id, 'unconfirmed')

@@ -666,7 +666,8 @@ class TelegramSenderMixin:
                         break
                     try:
                         authorized = closing.authorize(msg, owner=_recipient_id(self.telegram_user_id),
-                                                       relay_verified=relay_verified)
+                                                       relay_verified=relay_verified,
+                                                       relay_topics=getattr(self, '_closing_reply_topics', False))
                     except OperationalError:
                         self._outbound_retry_message = msg
                         break

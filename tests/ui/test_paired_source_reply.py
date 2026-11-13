@@ -273,7 +273,10 @@ def test_paired_reply_keeps_definite_no_send_and_unknown_outcomes_distinct(page,
     opener.click()
     blocked = dialog.get_by_role("status")
     expect(blocked).to_contain_text("Check the original conversation")
-    expect(blocked).to_be_focused()
+    # Headless Chrome reports hasFocus() false inside the sandboxed srcdoc.
+    # Verify both links of the focus chain across the frame boundary.
+    assert blocked.evaluate("(element) => element.ownerDocument.activeElement === element")
+    assert page.evaluate("document.hasFocus() && document.activeElement.matches('iframe[title=\"Development source reply\"]')")
     expect(dialog.get_by_label("To:", exact=True)).to_be_hidden()
     expect(dialog.locator('label[for="source-reply-source"]')).to_be_hidden()
     expect(approve).to_be_disabled()

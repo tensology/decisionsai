@@ -159,6 +159,20 @@ def test_telegram_closing_reply_waits_for_verified_receipt(page, width, review, 
     reveal(card.locator('.dev-approval-head'))
     shot(page, f'{width}-telegram-closing-sent')
     assert decide(review, request['request_id']).json()['status'] == 'sent'
+    with factory.begin() as db:
+        row = db.query(OrchestratorEvent).filter_by(source='reply_delivery').one()
+        payload = json.loads(row.payload)
+        payload['detail']['chat_id'] = 999
+        row.payload = '{' if width in {390, 1280} else json.dumps(payload)
+    refreshed = api.get(path).json()
+    assert refreshed['status'] == 'unconfirmed'
+    refreshed_event = {**event, 'metadata': {**event['metadata'], 'approval_request': refreshed}}
+    damaged_card, _, _, _ = install(page, projected=refreshed_event)
+    expect(damaged_card.locator('.dev-approval-status')).to_have_text('Send not confirmed')
+    expect(damaged_card.get_by_role('button', name='Approve', exact=True)).to_have_count(0)
+    reveal(damaged_card.locator('.dev-approval-head'))
+    shot(page, f'{width}-telegram-closing-damaged')
+    assert decide(review, request['request_id']).json()['status'] == 'unconfirmed'
     sender._process_message_queue()
     assert sender.websocket_attempts == [frame] and len(actions) == 1
 

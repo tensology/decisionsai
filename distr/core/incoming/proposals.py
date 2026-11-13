@@ -29,6 +29,7 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any
 from distr.core.incoming.expiry import ACTIVE_STATUSES, proposal_expiry, proposal_source_started_at, proposal_source_order_key, source_instant
+from distr.core.incoming.telegram_topics import split_telegram_source
 
 # A local candidate must be *work*: an explicit request or a reported problem.
 # Matches Tensology's "is_actionable" intent; the LLM triage phase makes it exact.
@@ -842,7 +843,8 @@ def _proposal_from_triage(conversation: dict[str, Any], project: dict[str, Any],
         "source": conversation["source"],
         "source_label": conversation["source"].title(),
         "source_thread_id": conversation["thread_id"],
-        "participant": conversation["participant"],
+        "participant": (conversation["label"] if conversation["source"] == "telegram"
+                        and split_telegram_source(conversation["thread_id"])[1] else conversation["participant"]),
         "status": "candidate",
         "created_at": str(latest.get("created_at") or ""),
         "message_ids": [str(row.get("source_message_id")) for row in rows if row.get("source_message_id") and not row.get('from_me') and row.get('direction') != 'outbound'],
@@ -869,6 +871,18 @@ def _proposal_from_triage(conversation: dict[str, Any], project: dict[str, Any],
     return proposal
 
 
+def _covered_incoming_message(row, covered):
+    source, thread = row.get("source"), row.get("source_thread_id")
+    message_id = str(row.get("source_message_id") or "")
+    if message_id in covered.get(f"{source}:{thread}", ()):
+        return True
+    if source == "telegram":
+        # Legacy submission and dismissal receipts used the group with exact message IDs.
+        group, topic = split_telegram_source(thread)
+        return topic is not None and message_id in covered.get(f"telegram:{group}", ())
+    return False
+
+
 def _triage_conversations(
     items: list[dict[str, Any]], settings: dict[str, Any], complete=None
 ) -> list[dict[str, Any]]:
@@ -881,8 +895,7 @@ def _triage_conversations(
     by_id = {project["id"]: project for project in projects}
     out: list[dict[str, Any]] = []
     covered = _dismissed_message_coverage()
-    items = [row for row in items
-             if str(row.get('source_message_id') or '') not in covered.get(f"{row.get('source')}:{row.get('source_thread_id')}", set())]
+    items = [row for row in items if not _covered_incoming_message(row, covered)]
     for conversation in _group_conversations(items):
         if not _worth_triaging(conversation):
             continue
@@ -3115,7 +3128,7 @@ def list_incoming_proposals(*, limit: int = 100, refresh_local: bool = True, for
             request_forced_triage()
             from distr.core.incoming.proposal_sync import wait_for_triage
             wait_for_triage(reconcile_request_id)
-        items = [row for row in incoming.get('items') or [] if str(row.get('source_message_id') or '') not in covered.get(f"{row.get('source')}:{row.get('source_thread_id')}", set())]
+        items = [row for row in incoming.get('items') or [] if not _covered_incoming_message(row, covered)]
         local = _local_proposals(items, load_settings_from_db()) if refresh_local else list(_TRIAGE_CACHE.get("proposals") or [])
         _record_local_proposals(local)
         by_key = {_proposal_handoff_key(row): row for row in local}

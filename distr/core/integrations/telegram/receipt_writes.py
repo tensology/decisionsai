@@ -28,6 +28,7 @@ _ReceiptEntry = (
     | tuple[Literal["checkpoint-error"], str, int | None, bool]
     | tuple[Literal["closing-uncertain"], str]
     | tuple[Literal["closing-sent"], str, int, int]
+    | tuple[Literal["closing-sent"], str, int, int, int]
 )
 
 
@@ -88,10 +89,11 @@ def _read_journaled_receipt(path: Path):
         from distr.core.workflow.telegram_reply_receipts import confirm
 
         return partial(confirm, entry[1], uncertain=True)
-    if len(entry) == 4 and entry[0] == "closing-sent":
+    if len(entry) in (4, 5) and entry[0] == "closing-sent":
         from distr.core.workflow.telegram_reply_receipts import confirm
 
-        return partial(confirm, entry[1], telegram_chat_id=entry[2], telegram_message_id=entry[3])
+        return partial(confirm, entry[1], telegram_chat_id=entry[2], telegram_message_id=entry[3],
+                       message_thread_id=entry[4] if len(entry) == 5 else None)
     if len(entry) == 2:
         kind, token = entry
         if kind == "proposal-unconfirmed" and isinstance(token, str) and token.startswith("proposal-update:"):

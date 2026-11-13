@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
 from distr.core.db import Chat, TelegramGroupMessage, WhatsAppMessage
 from distr.core.incoming import proposal_conversation, proposals
+from distr.core.incoming.service import telegram_incoming_item
 from distr.core.workflow.development_threads import ensure_development_thread
 from distr.gui.web.routes.development.incoming import register_routes
 from tests.core.test_proposal_continuity_integration import intake  # noqa: F401
@@ -136,6 +137,93 @@ def test_submitted_source_requires_the_linked_thread_and_uses_its_handoff(intake
         db.commit()
     assert client.get(endpoint, params={"review_key": original_key, "chat_id": chat_id}).status_code == 404
     assert checked == ["source-a"]
+
+
+def test_telegram_forum_intake_and_previews_isolate_topics_and_legacy_messages(intake, monkeypatch):
+    from types import SimpleNamespace
+    from distr.core.incoming import project_links
+    from distr.core.incoming import source_reply
+    from distr.core.workflow.reply_channel import resolve_reply_target
+
+    session, original, projects = intake
+    monkeypatch.setattr(proposal_conversation, "get_session", session)
+    group = "-100777"
+    monkeypatch.setattr(project_links, "source_project_index", lambda **_: {("telegram", group): {projects[0]}})
+
+    def message(message_id, text, **topic):
+        return TelegramGroupMessage(chat_id=group, chat_title="Client group", telegram_message_id=message_id, text=text,
+                                    raw_data=json.dumps({"chat": {"is_forum": True}, **topic}))
+
+    with session() as db:
+        rows = [
+            message(10, "Original request", is_topic_message=True, message_thread_id=101),
+            message(11, "Another topic", is_topic_message=True, message_thread_id=102),
+            message(12, "Same topic update", is_topic_message=True, message_thread_id=101),
+            message(13, "General discussion", is_topic_message=False),
+            message(14, "Older relay message"),
+            message(15, "Another older relay message"),
+        ]
+        db.add_all(rows)
+        db.flush()
+        items = [telegram_incoming_item(row) for row in rows]
+        db.commit()
+    project_links.apply_project_links(items)
+    conversations = proposals._group_conversations(items)
+    assert [[row["source_message_id"] for row in entry["items"]] for entry in conversations] == [
+        ["10", "12"], ["11"], ["13"], ["14"], ["15"],
+    ]
+    assert all(entry["project_id"] == projects[0] for entry in conversations)
+    assert proposals._covered_incoming_message(items[0], {f"telegram:{group}": {"10"}})
+    assert not proposals._covered_incoming_message(items[1], {f"telegram:{group}": {"10"}})
+    topic = items[0]["source_thread_id"]
+    original = {**original, "source": "telegram", "source_thread_id": topic, "message_ids": ["10"]}
+    exact = proposal_conversation.read_proposal_conversation(original)
+    assert [row["text"] for row in exact["items"]] == ["Original request", "Same topic update"]
+    saved = proposal_conversation.read_proposal_conversation({**original, "source_thread_id": group})
+    assert [row["text"] for row in saved["items"]] == ["Original request", "Same topic update"]
+    assert {row["source_thread_id"] for row in saved["items"]} == {saved["thread_id"]} == {group}
+    unknown = proposal_conversation.read_proposal_conversation({**original, "source_thread_id": group, "message_ids": ["14"]})
+    assert [row["text"] for row in unknown["items"]] == ["Older relay message"]
+    with pytest.raises(LookupError):
+        proposal_conversation.read_proposal_conversation({**original, "message_ids": ["11"]})
+    with pytest.raises(LookupError):
+        proposal_conversation.read_proposal_conversation({**original, "source_thread_id": group, "message_ids": ["10", "11"]})
+    for thread in (topic, group):
+        retained = {**original, "source_thread_id": thread, "project_id": projects[0]}
+        with session() as db:
+            root = Chat(title="Topic workflow", project_id=projects[0], params=json.dumps({"incoming_reply_context": retained}))
+            db.add(root)
+            db.flush()
+            result = Chat(parent_id=root.id, response="The requested change was verified.")
+            db.add(result)
+            db.flush()
+            chat_id, response_id = root.id, result.id
+            db.commit()
+        ticket = SimpleNamespace(source_provider="incoming_proposal", source_chat_id=chat_id,
+                                 source_external_id=f"local:telegram:{thread}:aabbccddeeff")
+        target = resolve_reply_target(ticket)
+        if thread == topic:
+            assert target.can_send and target.thread_id == topic
+            draft_target = source_reply.resolve_target(source_reply.source_choices(retained)[0])
+            assert draft_target["thread_id"] == topic and draft_target["topic_label"] == "Client group · Topic 101"
+        if thread == group:
+            assert not target.can_send and "telegram_topic_delivery_unavailable" in target.missing
+            with pytest.raises(ValueError, match="original topic"):
+                source_reply.resolve_target(source_reply.source_choices(retained)[0])
+            with session() as db:
+                anchor = db.query(TelegramGroupMessage).filter_by(chat_id=group, telegram_message_id=10).one()
+                topic_data, anchor.raw_data = anchor.raw_data, "{}"
+                db.commit()
+            draft = source_reply.create_draft(chat_id, response_id, f"telegram:{group}", complete=lambda *_: "Reviewed reply.")
+            with session() as db:
+                db.query(TelegramGroupMessage).filter_by(chat_id=group, telegram_message_id=10).one().raw_data = topic_data
+                db.commit()
+            from unittest.mock import Mock
+
+            sender = Mock()
+            with pytest.raises(source_reply.ReplyRewriteRequiredError, match="original topic"):
+                source_reply.act_on_draft(chat_id, draft["id"], "approve", "Exact approved wording.", sender=sender)
+            sender.assert_not_called()
 
 
 def test_merged_source_selection_follows_each_retained_origin_before_and_after_handoff(intake, monkeypatch):
