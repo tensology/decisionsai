@@ -2558,3 +2558,13 @@ html.dev-chat-route #chrome-cli-divider { display: none !important; }
 .message-status-chip { display: inline-flex; min-height: 18px; align-items: center; padding: 0 7px; border-radius: 999px; background: rgba(34,197,94,.12); color: #86efac; font-size: 10px; font-weight: 650; letter-spacing: .02em; text-transform: capitalize; }
 .message-status-chip.warn { background: rgba(245,158,11,.14); color: #fcd34d; }
 .message-status-chip.bad { background: rgba(239,68,68,.14); color: #fca5a5; }
+
+/* 2026-11-13 event rows as section dividers: thin full-width rule, centered label + time in a gap. */
+#conversation .studio-message.thread-event { align-self: stretch; width: 100%; max-width: none; margin: -4px 0; }
+#conversation .thread-status-event { display: flex; width: 100%; max-width: 100%; min-height: 22px; align-items: center; justify-content: center; gap: 6px; padding: 2px 0; border-radius: 0; background: transparent; text-align: center; }
+#conversation .thread-status-event::before,
+#conversation .thread-status-event::after { content: ""; flex: 1 1 24px; min-width: 24px; height: 1px; background: var(--studio-line-soft, var(--studio-line)); }
+#conversation .thread-status-event::before { margin-right: 4px; }
+#conversation .thread-status-event::after { margin-left: 4px; }
+#conversation .thread-status-event strong { flex: 0 1 auto; min-width: 0; }
+#conversation .thread-status-event time { margin-left: 2px; }

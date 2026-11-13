@@ -41,3 +41,26 @@ def test_notice_orders_by_time_status_becomes_chip_and_time_is_utc(page):
     assert 'Status:' not in rows[2]['text']
     assert rows[2]['chip'].lower() == 'completed'
     assert rows[2]['time'] == '14:49'
+
+
+def test_event_row_is_a_centered_divider(page):
+    page.goto(URL.split('/development/')[0] + '/robots.txt')
+    page.set_content('<link rel="stylesheet" href="/static/development/shell.css">'
+                     '<link rel="stylesheet" href="/static/development/threads/styles.css">'
+                     '<main id="conversation" style="width:800px"><div id="message-list" style="display:flex;flex-direction:column">'
+                     '<article class="studio-message thread-event"><div class="thread-status-event">'
+                     '<span class="thread-status-dot"></span>Ticket created in <strong>Backlog</strong><time>14:49</time>'
+                     '</div></article></div></main>')
+    page.wait_for_function("getComputedStyle(document.querySelector('.thread-status-event'),'::before').height === '1px'")
+    m = page.evaluate("""() => {
+        const e = document.querySelector('.thread-status-event'), r = e.getBoundingClientRect(), list = document.querySelector('#message-list').getBoundingClientRect();
+        const items = [...e.children].map(c => c.getBoundingClientRect());
+        const left = Math.min(...items.map(i => i.left)), right = Math.max(...items.map(i => i.right));
+        const before = getComputedStyle(e, '::before'), after = getComputedStyle(e, '::after');
+        return {rowWidth: r.width, listWidth: list.width, offCenter: (left + right) / 2 - (r.left + r.right) / 2,
+                before: parseFloat(before.width), after: parseFloat(after.width), height: r.height};
+    }""")
+    assert abs(m['rowWidth'] - m['listWidth']) < 1          # rule spans the thread width
+    assert abs(m['offCenter']) < 2                            # label + time centered together
+    assert m['before'] > 40 and abs(m['before'] - m['after']) < 2  # line on both sides, gap around text
+    assert m['height'] <= 30                                  # compact
