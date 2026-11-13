@@ -136,3 +136,13 @@
 /* Pinned section header toggle (same look as No project / Recent). */
 #pinned-board-section .sidebar-section-label .sidebar-section-toggle { min-height: 34px; }
 #running-automations-section .sidebar-section-label .sidebar-section-toggle { min-height: 34px; color: inherit; }
+/* Edit board dialog: Terminal commands | Notes tabs (same underline tabs as the ticket dialog). */
+.board-edit-tabs { display: flex; min-height: var(--studio-tab-height); gap: var(--studio-tab-gap); margin: 14px 16px 0; border-bottom: 1px solid var(--studio-line); }
+.board-edit-tabs button { position: relative; min-height: var(--studio-tab-height); padding: var(--studio-tab-padding); border: 0; background: transparent; color: var(--studio-muted); font: inherit; font-size: var(--studio-tab-font-size); font-weight: var(--studio-tab-font-weight); cursor: pointer; }
+.board-edit-tabs button:hover, .board-edit-tabs button:focus-visible { color: var(--studio-text); outline: 0; }
+.board-edit-tabs button[aria-selected="true"] { color: var(--studio-text); }
+.board-edit-tabs button[aria-selected="true"]::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--studio-accent); content: ""; }
+.board-edit-panel { display: grid; gap: 6px; margin: 10px 16px 0; }
+.board-edit-panel.hidden { display: none; }
+.board-edit-panel > small { color: #9ca3af; font-size: 0.75rem; line-height: 1.4; }
+#board-edit-notes { min-height: 11rem; font-family: var(--studio-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 0.82rem; }

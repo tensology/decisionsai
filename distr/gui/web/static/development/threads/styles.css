@@ -2568,3 +2568,11 @@ html.dev-chat-route #chrome-cli-divider { display: none !important; }
 #conversation .thread-status-event::after { margin-left: 4px; }
 #conversation .thread-status-event strong { flex: 0 1 auto; min-width: 0; }
 #conversation .thread-status-event time { margin-left: 2px; }
+/* Run environment note (DB used, refresh command, production check) above the reply footer. */
+.turn-environment-note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 8px 0 2px; padding: 6px 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.03); color: #9ca3af; font-size: 11px; line-height: 1.45; }
+.turn-environment-note b { color: #d1d5db; font-weight: 600; margin-right: 2px; }
+.turn-environment-note .env-note-sep { color: #4b5563; }
+.turn-environment-note .env-note-scope { font-style: normal; padding: 0 6px; border-radius: 999px; background: rgba(148,163,184,.12); color: #cbd5e1; }
+.turn-environment-note .env-note-scope.ok { background: rgba(34,197,94,.12); color: #86efac; }
+.turn-environment-note .env-note-scope.warn { background: rgba(245,158,11,.14); color: #fcd34d; }
+.turn-environment-note .env-note-scope.bad { background: rgba(239,68,68,.14); color: #fca5a5; }

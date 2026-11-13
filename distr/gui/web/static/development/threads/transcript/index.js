@@ -325,6 +325,39 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return { changes: saved, carried: true };
     }
 
+    // Environment note (outcome.environment): which DB the run used, whether the project's refresh
+    // command (e.g. load_latest_db) ran and when, and whether production was checked. Recorded by
+    // the server from the run's own commands; shown as one compact row above the reply footer.
+    function environmentNoteHtml() {
+        const note = context.currentRun?.outcome?.environment;
+        if (!note || typeof note !== 'object') return '';
+        const esc = actions.escapeHtml;
+        const db = note.database || {};
+        const refresh = note.refresh || {};
+        const prod = note.production_check || {};
+        const parts = [];
+        if (db.name || db.engine) {
+            const where = db.port ? `${db.host}:${db.port}` : db.host || '';
+            parts.push(`<span title="${esc(db.settings_file || '')}"><b>DB</b> ${esc([db.engine, db.name].filter(Boolean).join(' '))}${where ? ` @ ${esc(where)}` : ''} <i class="env-note-scope ${db.scope === 'remote' ? 'warn' : 'ok'}">${esc(db.scope || 'unknown')}</i>${db.settings_module ? ` · ${esc(db.settings_module)}` : ''}</span>`);
+        } else if (db.settings_module) {
+            parts.push(`<span><b>DB</b> ${esc(db.settings_module)} (not detected)</span>`);
+        }
+        if (refresh.ran) {
+            const failed = refresh.status === 'failed';
+            parts.push(`<span><b>Refresh</b> ${esc(refresh.command || '')} <i class="env-note-scope ${failed ? 'bad' : 'ok'}">${failed ? 'failed' : 'ran'} ${esc(messageTime(refresh.at))}</i></span>`);
+        } else if (refresh.command) {
+            parts.push(`<span><b>Refresh</b> ${esc(refresh.command)} <i class="env-note-scope ${note.support_project ? 'warn' : 'muted'}">not run</i></span>`);
+        }
+        if (prod.checked) {
+            const tone = prod.result === 'failed' || prod.read_only === false ? 'bad' : prod.result === 'passed' ? 'ok' : 'warn';
+            parts.push(`<span><b>Production</b> ${esc(prod.how || 'checked')} <i class="env-note-scope ${tone}">${esc(prod.result || 'checked')}${prod.read_only === false ? ', possible write' : ''} ${esc(messageTime(prod.at))}</i></span>`);
+        } else if (note.support_project) {
+            parts.push('<span><b>Production</b> <i class="env-note-scope warn">not checked</i></span>');
+        }
+        if (!parts.length) return '';
+        return `<div class="turn-environment-note" role="note" aria-label="Run environment" title="${esc(note.summary || '')}">${parts.join('<span class="env-note-sep" aria-hidden="true">·</span>')}</div>`;
+    }
+
     function turnChangesHtml() {
         const { changes, carried } = sessionTurnChanges();
         const files = Array.isArray(changes.files) ? changes.files : [];
@@ -885,7 +918,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const content = statusMarker.content;
         const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
         const canReply = latest && !messages.slice(index + 1).some((item) => item.role === 'user');
-        return `<article class="studio-message assistant"${clientDraft.draft ? ` data-client-draft="${actions.escapeHtml(clientDraft.draft)}"` : ''}><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${messageActionsHtml(message, index, latest, canReply, statusMarker.status)}${clientCalloutHtml(message, index, canReply, messages)}</div></article>`;
+        return `<article class="studio-message assistant"${clientDraft.draft ? ` data-client-draft="${actions.escapeHtml(clientDraft.draft)}"` : ''}><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">${completedTurnActivityHtml(turnActivity)}<div class="message-markdown">${assistantMarkdown(content)}</div>${latest ? turnChangesHtml() : ''}${latest ? environmentNoteHtml() : ''}${messageActionsHtml(message, index, latest, canReply, statusMarker.status)}${clientCalloutHtml(message, index, canReply, messages)}</div></article>`;
     }
 
     // Spoken versions from the Read response button: quiet row, Copy only, never "final".

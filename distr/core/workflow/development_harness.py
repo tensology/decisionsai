@@ -1575,6 +1575,7 @@ def _project_and_scope(chat_id: int) -> tuple[Any, dict[str, Any], int | None, i
                 folder_location=str(folder.resolve()),
                 coding_backend=project.coding_backend or "pi",
                 coding_backend_model=project.coding_backend_model or "",
+                notes=project.notes or "",
             )
     if project_snapshot is not None:
         return project_snapshot, metadata, ticket_id, board_id
@@ -1848,10 +1849,17 @@ def _ticket_lane_scope_line(metadata: dict[str, Any]) -> str:
     return f"Ticket lane: {lane}.{suffix}"
 
 
-def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, autonomy_level: str) -> str:
+def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, autonomy_level: str, project: Any = None) -> str:
     from distr.core.chat_agents import agent_instructions
     from distr.core.incoming.source_context import thread_source_instructions
     from distr.core.turn_runtime.context import DEVELOPMENT_RESPONSE_GUIDANCE
+    from distr.core.turn_runtime.environment_note import project_notes_block
+
+    try:
+        notes_block = project_notes_block(project) if project is not None else ""
+    except Exception:
+        logger.debug("Project notes block failed", exc_info=True)
+        notes_block = ""
 
     history = ChatService.get_chat_history(int(chat_id))
     if history and history[-1].get("role") == "user" and str(history[-1].get("content") or "").strip() == prompt.strip():
@@ -1936,6 +1944,7 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
             _runtime_identity_text(metadata),
             agent_instructions(chat_id),
             thread_source_instructions(chat_id),
+            notes_block,
             skill_instruction,
             "\n".join(item for item in scope if item),
             "Conversation context since the latest context checkpoint:\n" + "\n\n".join(transcript) if transcript else "",
@@ -2324,7 +2333,9 @@ async def _run_execution(
     native_tool_events: dict[str, str] = {}
     worker_identity: dict[str, str] = {}
     from distr.core.turn_runtime.verification import VerificationReceipts
+    from distr.core.turn_runtime.environment_note import EnvironmentReceipts, build_environment_note
     verification_receipts = VerificationReceipts(prompt)
+    environment_receipts = EnvironmentReceipts()
     # 2026-11-12 agent-conversational: mid-task updates lead with a monotonic percent.
     mid_task_progress: dict[str, int] = {}
     audit_only = _audit_only_request(prompt) or development_execution_state(chat_id).get('work_mode') == 'audit'
@@ -2351,6 +2362,10 @@ async def _run_execution(
         if state.get("job_id") != job_id or state.get("status") != "running":
             return
         verification_receipts.observe(event)
+        try:
+            environment_receipts.observe(event)
+        except Exception:
+            logger.debug("Environment receipt failed", exc_info=True)
         call_id = str(event.details.get("call_id") or "")
         merged_worker = (
             bool(tool_event_id)
@@ -2458,7 +2473,7 @@ async def _run_execution(
             from distr.core.planning.prerequisites import require_plan_prerequisites
             require_plan_prerequisites(ticket_id, chat_id=chat_id, project_id=project.id, board_id=board_id)
         request = TurnRequest(
-            instruction=_agent_instruction(chat_id, prompt, runtime_metadata, autonomy_level=autonomy_level),
+            instruction=_agent_instruction(chat_id, prompt, runtime_metadata, autonomy_level=autonomy_level, project=project),
             project=project,
             route=ModelRoute(
                 provider=str(adapter_options.get("model_provider") or ""),
@@ -2522,7 +2537,7 @@ async def _run_execution(
         runtime_metadata["skill_recommendation"] = skill_recommendation
         request = replace(
             request,
-            instruction=_agent_instruction(chat_id, prompt, runtime_metadata, autonomy_level=autonomy_level),
+            instruction=_agent_instruction(chat_id, prompt, runtime_metadata, autonomy_level=autonomy_level, project=project),
             context_messages=build_development_context(
                 int(chat_id),
                 prompt,
@@ -2725,6 +2740,12 @@ async def _run_execution(
         outcome.update(verification=verification, work_mode='audit' if audit_only else 'implementation',
                        implementation_status='changed' if git_change_count else 'unchanged',
                        deployment_status='not_verified')
+        # Environment note: which DB the run used, whether the refresh command ran, prod check.
+        try:
+            outcome['environment'] = build_environment_note(
+                str(project.folder_location or ""), str(getattr(project, "notes", "") or ""), environment_receipts)
+        except Exception:
+            logger.debug("Environment note failed", exc_info=True)
         actual_provider = str(adapter_options.get("model_provider") or "").strip().lower()
         if (
             str(result.backend_id or "").strip().lower() == str(adapter_options.get("fallback_backend") or "").strip().lower()

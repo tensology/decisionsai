@@ -615,11 +615,76 @@ export function createSidebar({ context, actions, el }) {
         el('board-edit-name').value = board?.name || '';
         el('board-edit-folder').value = board?.folder_location || board?.default_project_folder || '';
         el('board-edit-terminals').value = board?.startup_instructions || '';
+        el('board-edit-notes').value = board?.notes || '';
+        el('board-edit-notes').disabled = false;
+        selectBoardEditTab(storedBoardEditTab());
+        loadBoardNotes(board);
         el('delete-board-button').classList.toggle('hidden', !board || board.provider !== 'decisions');
         closeBoardContextMenu();
         state.contextBoardKey = board?.key || '';
         el('board-link-dialog').showModal();
         window.setTimeout(() => el('board-edit-name').focus(), 0);
+    }
+
+    // Board dialog tabs: Terminal commands | Notes. The last tab is remembered for this browser session.
+    const BOARD_EDIT_TAB_KEY = 'decisions.boardEditTab';
+    function storedBoardEditTab() {
+        try {
+            return window.sessionStorage?.getItem(BOARD_EDIT_TAB_KEY) === 'notes' ? 'notes' : 'terminals';
+        } catch (_error) {
+            return 'terminals';
+        }
+    }
+    function selectBoardEditTab(tab, { remember = false, focus = false } = {}) {
+        const active = tab === 'notes' ? 'notes' : 'terminals';
+        for (const name of ['terminals', 'notes']) {
+            const selected = name === active;
+            const button = el(`board-edit-${name}-tab`);
+            button.setAttribute('aria-selected', selected ? 'true' : 'false');
+            button.tabIndex = selected ? 0 : -1;
+            el(`board-edit-${name}-panel`).classList.toggle('hidden', !selected);
+        }
+        if (remember) {
+            try { window.sessionStorage?.setItem(BOARD_EDIT_TAB_KEY, active); } catch (_error) { /* storage optional */ }
+        }
+        if (focus) el(`board-edit-${active}-tab`).focus();
+    }
+    function bindBoardEditTabs() {
+        el('board-edit-tabs').addEventListener('click', (event) => {
+            const button = event.target.closest('[data-board-edit-tab]');
+            if (button) selectBoardEditTab(button.dataset.boardEditTab, { remember: true });
+        });
+        el('board-edit-tabs').addEventListener('keydown', (event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            const next = el('board-edit-notes-tab').getAttribute('aria-selected') === 'true' ? 'terminals' : 'notes';
+            selectBoardEditTab(next, { remember: true, focus: true });
+        });
+        el('board-edit-notes').addEventListener('input', () => { el('board-edit-notes').dataset.dirty = '1'; });
+        el('board-link-dialog').addEventListener('close', () => { delete el('board-edit-notes').dataset.dirty; });
+    }
+    function boardProjectId(board) {
+        return Number(board?.project_id || board?.default_project_id || 0);
+    }
+    async function loadBoardNotes(board) {
+        const projectId = boardProjectId(board);
+        const dialog = el('board-link-dialog');
+        if (!projectId) return;
+        const boardKey = board?.key || '';
+        const notes = el('board-edit-notes');
+        try {
+            const data = await actions.api(`/projects/${projectId}/notes`);
+            notes.disabled = false;
+            // Ignore a late answer for another board or after the user started typing.
+            if (dialog.dataset.boardKey !== boardKey || notes.dataset.dirty === '1') return;
+            notes.value = data?.notes || '';
+        } catch (error) {
+            // Older server without the notes API: do not let typed notes be silently dropped.
+            if (dialog.dataset.boardKey === boardKey && (error?.status === 404 || error?.status === 405)) {
+                notes.disabled = true;
+                notes.value = 'Project notes need a Decisions restart before they can be edited here.';
+            }
+        }
     }
 
     async function saveBoardLink(event) {
@@ -632,6 +697,7 @@ export function createSidebar({ context, actions, el }) {
             folder_location: el('board-edit-folder').value.trim(),
             startup_instructions: el('board-edit-terminals').value
         };
+        if (!el('board-edit-notes').disabled) body.notes = el('board-edit-notes').value;
         try {
             if (!board) {
                 const created = await actions.api('/tickets/boards', {
@@ -652,6 +718,8 @@ export function createSidebar({ context, actions, el }) {
                         }
                     }
                 );
+                if (boardProjectId(board) && body.notes !== undefined)
+                    await actions.api(`/projects/${boardProjectId(board)}/notes`, { method: 'PUT', body: { notes: body.notes } });
             }
             el('board-link-dialog').close();
             await actions.refreshShell({ preserveConversation: true });
@@ -1032,6 +1100,7 @@ export function createSidebar({ context, actions, el }) {
             if (chatId) actions.deleteThread(chatId);
         });
         el('board-link-form').addEventListener('submit', saveBoardLink);
+        bindBoardEditTabs();
         el('board-folder-browse').addEventListener('click', browseBoardFolder);
         el('delete-board-button').addEventListener('click', () => {
             const board = actions.boardByKey(el('board-link-dialog').dataset.boardKey);
@@ -1081,6 +1150,8 @@ export function createSidebar({ context, actions, el }) {
         closeThreadContextMenu,
         openBoardContextMenu,
         openBoardLinkDialog,
+        saveBoardLink,
+        bindBoardEditTabs,
         openRecents() {
             state.recentsExpanded = true;
             state.showAllRecents = true;

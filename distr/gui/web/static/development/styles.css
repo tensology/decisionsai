@@ -1,7 +1,7 @@
 @import './shell.css?v=20261111-client-message';
 @import './shared/components.css?v=20261102-verify';
-@import './threads/styles.css?v=20261112-queue-handoff';
-@import './sidebar/styles.css?v=20261111-nav-apply-ack';
+@import './threads/styles.css?v=20261113-env-note';
+@import './sidebar/styles.css?v=20261113-board-notes';
 @import './boards/styles.css?v=20261111-nav-apply-chrome7';
 @import './planning/styles.css?v=20261112-plan-tabs2';
 @import './incoming/styles.css?v=20261111-submitted-proposal-source';

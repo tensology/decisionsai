@@ -4,7 +4,17 @@
             <input id="board-edit-id" type="hidden">
             <label>Board name<input id="board-edit-name" type="text" autocomplete="off" required></label>
             <label>Project folder<div class="folder-input-row"><input id="board-edit-folder" type="text" autocomplete="off" placeholder="Choose the repository folder"><button type="button" class="secondary-button" id="board-folder-browse">Browse...</button></div></label>
-            <label>Terminal commands<textarea id="board-edit-terminals" rows="5" placeholder="One command per line"></textarea></label>
+            <div class="board-edit-tabs" id="board-edit-tabs" role="tablist" aria-label="Board settings">
+                <button type="button" id="board-edit-terminals-tab" role="tab" data-board-edit-tab="terminals" aria-selected="true" aria-controls="board-edit-terminals-panel">Terminal commands</button>
+                <button type="button" id="board-edit-notes-tab" role="tab" data-board-edit-tab="notes" aria-selected="false" aria-controls="board-edit-notes-panel" tabindex="-1">Notes</button>
+            </div>
+            <section class="board-edit-panel" id="board-edit-terminals-panel" role="tabpanel" aria-labelledby="board-edit-terminals-tab">
+                <textarea id="board-edit-terminals" rows="5" placeholder="One command per line" aria-labelledby="board-edit-terminals-tab"></textarea>
+            </section>
+            <section class="board-edit-panel hidden" id="board-edit-notes-panel" role="tabpanel" aria-labelledby="board-edit-notes-tab">
+                <textarea id="board-edit-notes" rows="9" aria-labelledby="board-edit-notes-tab" placeholder="Project notes for proposals and runs (markdown). For a support project, e.g.:&#10;Project type: support&#10;Refresh command: ./load_latest_db.sh&#10;Local DB: Postgres via core/settings_local.py&#10;Tests: --keepdb --noinput&#10;Verify outcomes against production read-only."></textarea>
+                <small>Included in every proposal and Development run for this project.</small>
+            </section>
             <menu><button type="button" class="danger-button hidden" id="delete-board-button">Delete board</button><span class="menu-spacer"></span><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button">Save board</button></menu>
         </form>
     </dialog>

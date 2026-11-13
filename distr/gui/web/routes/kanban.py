@@ -1749,7 +1749,12 @@ class BoardCreate(BaseModel):
     description: Optional[str] = ""
     folder_location: Optional[str] = ""
     startup_instructions: Optional[str] = ""
+    notes: Optional[str] = ""
     start_time_tracker: bool = True
+
+
+class ProjectNotesUpdate(BaseModel):
+    notes: str = Field(default="", max_length=20000)
 
 class BoardUpdate(BaseModel):
     name: Optional[str] = None
@@ -1763,6 +1768,7 @@ class BoardUpdate(BaseModel):
     orchestrator_policy: Optional[dict] = None
     folder_location: Optional[str] = None
     startup_instructions: Optional[str] = None
+    notes: Optional[str] = None
     start_time_tracker: Optional[bool] = None
 
 
@@ -3291,6 +3297,7 @@ def create_routes():
                     **_project_context_payload(default_project, "default"),
                     "folder_location": default_project.folder_location if default_project else "",
                     "startup_instructions": default_project.startup_instructions if default_project else "",
+                    "notes": (default_project.notes or "") if default_project else "",
                     "start_time_tracker": bool(default_project.start_time_tracker) if default_project else True,
                     "default_workflow_id": b.default_workflow_id,
                 })
@@ -3307,6 +3314,7 @@ def create_routes():
                 description=payload.description or "",
                 folder_location=str(payload.folder_location or "").strip() or None,
                 startup_instructions=payload.startup_instructions or "",
+                notes=payload.notes or "",
                 start_time_tracker=bool(payload.start_time_tracker),
                 kanban_board_id=int(board.id),
             )
@@ -3322,6 +3330,27 @@ def create_routes():
             except Exception:
                 pass
             return JSONResponse({"success": True, "id": board.id, "project_id": project.id})
+
+    # Project Notes (projects.notes): one editable markdown note per project. Development and
+    # proposal runs for the project include it in their instruction (see project_notes_block).
+    @router.get("/projects/{project_id}/notes")
+    async def get_project_notes(project_id: int):
+        with get_session() as s:
+            project = s.get(Project, int(project_id))
+            if project is None or project.deleted_at is not None:
+                raise HTTPException(404, "Project not found")
+            return JSONResponse({"project_id": int(project.id), "notes": project.notes or ""})
+
+    @router.put("/projects/{project_id}/notes")
+    async def update_project_notes(project_id: int, payload: ProjectNotesUpdate):
+        with get_session() as s:
+            project = s.get(Project, int(project_id))
+            if project is None or project.deleted_at is not None:
+                raise HTTPException(404, "Project not found")
+            project.notes = payload.notes
+            project.modified_date = datetime.utcnow()
+            s.commit()
+            return JSONResponse({"success": True, "project_id": int(project_id), "notes": payload.notes})
 
     @router.put("/tickets/boards/{board_id}")
     async def update_board(board_id: int, payload: BoardUpdate):
@@ -3356,7 +3385,7 @@ def create_routes():
                 board.orchestrator_policy = _json.dumps(payload.orchestrator_policy or {})
             project_fields_changed = any(
                 value is not None
-                for value in (payload.folder_location, payload.startup_instructions, payload.start_time_tracker)
+                for value in (payload.folder_location, payload.startup_instructions, payload.notes, payload.start_time_tracker)
             )
             project = s.get(Project, int(board.default_project_id)) if board.default_project_id else None
             if project is None and project_fields_changed:
@@ -3373,6 +3402,8 @@ def create_routes():
                     project.folder_location = str(payload.folder_location or "").strip() or None
                 if payload.startup_instructions is not None:
                     project.startup_instructions = payload.startup_instructions
+                if payload.notes is not None:
+                    project.notes = payload.notes
                 if payload.start_time_tracker is not None:
                     project.start_time_tracker = bool(payload.start_time_tracker)
                 project.kanban_board_id = int(board.id)

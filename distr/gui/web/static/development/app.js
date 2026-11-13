@@ -11,7 +11,7 @@ import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadc
 import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261111-nav-apply-chrome3';
 
-import { createSidebar } from './sidebar/index.js?v=20261111-nav-apply';
+import { createSidebar } from './sidebar/index.js?v=20261113-board-notes';
 
 import { createAutomations } from './automations/index.js?v=20261111-automation-inplace3';
 
@@ -24,7 +24,7 @@ import { createBoards } from './boards/index.js?v=20261112-ticket-draft-project'
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261112-queue-handoff';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261113-env-note';
 import { openSourceReply } from './threads/source-reply.js?v=20261112-recipient-select';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261112-human-review';
