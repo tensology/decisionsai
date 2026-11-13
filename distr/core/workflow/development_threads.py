@@ -833,15 +833,22 @@ def mark_development_thread(
     board_ticket_title: str | None = None,
     board_ticket_lane: str | None = None,
     require_current_local_ticket: bool = False,
+    expected_workflow_project: tuple[int, int | None] | None = None,
     _session_provider=None,
 ) -> None:
     session_provider = _session_provider or get_session
     with session_provider() as db:
-        if require_current_local_ticket and db.get_bind().dialect.name == "sqlite":
+        if (require_current_local_ticket or expected_workflow_project is not None) and db.get_bind().dialect.name == "sqlite":
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
-        root = db.get(Chat, int(chat_id))
+        root = (db.get(Chat, int(chat_id), with_for_update=True)
+                if expected_workflow_project is not None else db.get(Chat, int(chat_id)))
         if root is None:
             raise ValueError(f"Development thread #{chat_id} was not found.")
+        if expected_workflow_project is not None:
+            expected_workflow_id, expected_project_id = expected_workflow_project
+            if (root.parent_id is not None or root.project_id != expected_project_id
+                    or str(development_thread_metadata(root).get("workflow_id")) != str(expected_workflow_id)):
+                raise DevelopmentThreadConflict("The Development thread's project or workflow changed. Refresh and retry.")
         if ticket_id is not None:
             from distr.core.db.kanban import KanbanTicket
 

@@ -112,10 +112,12 @@ def dispatch_work_item(
     start_step_id: int | None = None,
     event_queue: Any = None,
     dispatch_async: bool = False,
+    save_prompt: bool = False,
     _session_provider=None,
 ) -> dict[str, Any]:
     """Prepare the durable thread, then and only then start its workflow run."""
     from distr.core.workflow.development_threads import (
+        DevelopmentThreadConflict,
         development_thread_metadata,
         development_identity_key,
         ensure_development_thread,
@@ -198,19 +200,25 @@ def dispatch_work_item(
             if str(existing.get("board_provider") or "").strip().lower() not in {"", "local", "database", "decisions"}:
                 for key in ("board_provider", "board_key", "board_ticket_key", "board_ticket_title", "board_ticket_lane"):
                     scope[key] = existing.get(key) or scope.get(key)
-            mark_development_thread(
-                int(chat_id),
-                workflow_id=int(workflow_id),
-                ticket_id=int(ticket_id) if ticket_id is not None else existing.get("ticket_id"),
-                source_type=existing.get("source_type") or "prompt",
-                source_ref=existing.get("source_ref"),
-                board_key=scope["board_key"] or existing.get("board_key"),
-                board_provider=scope["board_provider"] or existing.get("board_provider"),
-                board_ticket_key=scope["board_ticket_key"] or existing.get("board_ticket_key"),
-                board_ticket_title=scope["board_ticket_title"] or existing.get("board_ticket_title"),
-                board_ticket_lane=scope["board_ticket_lane"] or existing.get("board_ticket_lane"),
-                _session_provider=_session_provider,
-            )
+            try:
+                mark_development_thread(
+                    int(chat_id),
+                    workflow_id=int(workflow_id),
+                    ticket_id=int(ticket_id) if ticket_id is not None else existing.get("ticket_id"),
+                    source_type=existing.get("source_type") or "prompt",
+                    source_ref=existing.get("source_ref"),
+                    board_key=scope["board_key"] or existing.get("board_key"),
+                    board_provider=scope["board_provider"] or existing.get("board_provider"),
+                    board_ticket_key=scope["board_ticket_key"] or existing.get("board_ticket_key"),
+                    board_ticket_title=scope["board_ticket_title"] or existing.get("board_ticket_title"),
+                    board_ticket_lane=scope["board_ticket_lane"] or existing.get("board_ticket_lane"),
+                    _session_provider=_session_provider,
+                    **({"expected_workflow_project": (int(workflow_id), project_id)} if save_prompt else {}),
+                )
+            except DevelopmentThreadConflict as exc:
+                if save_prompt:
+                    return {"status": "blocked", "error": str(exc)}
+                raise
         else:
             chat_id = ensure_development_thread(
                 workflow_id=int(workflow_id),
@@ -261,6 +269,8 @@ def dispatch_work_item(
         sync_thread_files_safely(int(chat_id), int(ticket_id))
 
     metadata = dict(run_metadata or {})
+    if save_prompt:
+        metadata["expected_thread_project_id"] = project_id
     routing_assessment = (
         dict(metadata.get("routing_assessment") or {})
         if isinstance(metadata.get("routing_assessment"), dict)
@@ -345,6 +355,7 @@ def dispatch_work_item(
         run_metadata=metadata,
         event_queue=event_queue,
         dispatch_async=dispatch_async,
+        **({"save_prompt": True} if save_prompt else {}),
     )
     if not isinstance(result, dict):
         result = {"status": "running"}

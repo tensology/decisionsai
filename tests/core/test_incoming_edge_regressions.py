@@ -398,6 +398,101 @@ def test_damaged_merge_receipt_keeps_originals_protected_and_other_proposals_usa
         dismiss.assert_not_called()
 
 
+def test_workflow_launch_cannot_use_a_different_project_from_reviewed_merge(monkeypatch, merge_case, tmp_path):
+    from distr.core.db import get_session
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
+    from distr.core.workflow.dispatcher import StepDispatcher
+    from distr.core.workflow.work_dispatch import dispatch_work_item
+
+    first, second = merge_case
+    merged = merge(first, second)
+    with get_session() as db:
+        foreign = Project(name="Other workspace", folder_location=str(tmp_path / "other"))
+        workflow = AutoWorkflow(name="Reviewed merge execution")
+        workflow.steps.append(AutoWorkflowStep(name="Verify scope", action_type="run_command", instruction="true"))
+        db.add_all([foreign, workflow])
+        db.commit()
+        foreign_id, workflow_id = foreign.id, workflow.id
+
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(StepDispatcher, "run_in_workflow", dispatch)
+    arguments = {"workflow_id": workflow_id, "chat_id": merged["chat_id"], "source_type": "studio_thread"}
+    blocked = dispatch_work_item(**arguments, project_id=foreign_id)
+    assert blocked.get("status") == "blocked", blocked
+    assert blocked["code"] == "proposal_project_scope_changed"
+    assert "project" in blocked["error"].lower()
+    dispatch.assert_not_called()
+    with get_session() as db:
+        assert db.query(AutoWorkflowRun).filter_by(workflow_id=workflow_id).count() == 0
+
+    started = dispatch_work_item(**arguments, project_id=first["project_id"])
+    dispatch.assert_called_once()
+    with get_session() as db:
+        run = db.get(AutoWorkflowRun, started["run_id"])
+        assert run.chat_id == merged["chat_id"]
+        assert json.loads(run.run_data)["project_id"] == first["project_id"]
+
+
+@pytest.mark.parametrize("refusal", ["archived", "relinked"])
+def test_linked_merge_retry_saves_only_the_admitted_turn(monkeypatch, merge_case, refusal):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    from distr.core.db import Chat, get_session
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
+    from distr.core.workflow import dispatcher, service
+    from distr.core.workflow.development_threads import mark_development_thread
+    from distr.gui.web.routes.development.threads import register_routes
+
+    merged = merge(*merge_case)
+    chat_id = merged["chat_id"]
+    with get_session() as db:
+        workflow = AutoWorkflow(name="Linked review", status="archived" if refusal == "archived" else "active")
+        workflow.steps.append(AutoWorkflowStep(name="Verify", action_type="run_command", instruction="true"))
+        db.add(workflow)
+        db.commit()
+        workflow_id = workflow.id
+    mark_development_thread(chat_id, workflow_id=workflow_id)
+    if refusal == "relinked":
+        start = service.start_workflow_run
+
+        def change_workflow_before_admission(*args, **kwargs):
+            monkeypatch.setattr(service, "start_workflow_run", start)
+            mark_development_thread(chat_id, workflow_id=workflow_id + 10000)
+            return start(*args, **kwargs)
+
+        monkeypatch.setattr(service, "start_workflow_run", change_workflow_before_admission)
+    worker = Mock()
+    monkeypatch.setattr(dispatcher.threading, "Timer", worker)
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    api = TestClient(app)
+    url = f"/workflows/studio/tasks/{chat_id}/messages"
+    prompt = "Check the reviewed material again."
+    rejected = api.post(url, json={"message": prompt})
+    assert rejected.status_code == 409, rejected.json()
+    worker.assert_not_called()
+    with get_session() as db:
+        assert db.query(Chat).filter_by(parent_id=chat_id, input=prompt).count() == 0
+        assert db.query(AutoWorkflowRun).filter_by(chat_id=chat_id).count() == 0
+        db.get(AutoWorkflow, workflow_id).status = "active"
+        db.commit()
+    mark_development_thread(chat_id, workflow_id=workflow_id)
+
+    accepted = api.post(url, json={"message": prompt})
+    assert accepted.status_code == 200 and accepted.json()["started"], accepted.json()
+    duplicate = api.post(url, json={"message": prompt})
+    assert duplicate.json().get("duplicate"), duplicate.json()
+    worker.assert_called_once()
+    with get_session() as db:
+        turn = db.query(Chat).filter_by(parent_id=chat_id, input=prompt).one()
+        run = db.query(AutoWorkflowRun).filter_by(chat_id=chat_id).one()
+        assert json.loads(run.run_data)["development_turn_id"] == accepted.json()["turn_id"] == turn.id
+        with dispatcher._runs_lock:
+            dispatcher._initializing_runs.discard(run.id)
+
+
 def test_partial_merge_reserves_original_against_a_different_pair(monkeypatch, merge_case):
     a, b = merge_case
     c = {**b, 'id': b['id'] + '-c', 'source_thread_id': b['source_thread_id'] + '-c',

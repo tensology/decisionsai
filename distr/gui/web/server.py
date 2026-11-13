@@ -1183,6 +1183,8 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _cancel_orphaned_workflow_runs():
+        import asyncio
+
         try:
             from distr.core.workflow.dispatcher import _cleanup_orphaned_runs_on_startup
             from distr.core.workflow.interactions import recover_interrupted_checkpoint_decisions
@@ -1191,6 +1193,8 @@ def create_app() -> FastAPI:
             unconfirmed, checkpoint_steps = recover_interrupted_checkpoint_decisions()
             from distr.core.workflow.dispatcher import _auto_resume_interrupted_runs
             _auto_resume_interrupted_runs(unconfirmed_checkpoint_steps=unconfirmed, checkpoint_steps=checkpoint_steps)
+            from distr.core.workflow.queued_submissions import recover_completed_followups
+            asyncio.create_task(asyncio.to_thread(recover_completed_followups))
         except Exception as e:
             logger.warning("Orphaned workflow run cleanup could not run: %s", e)
 

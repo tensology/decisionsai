@@ -5,9 +5,11 @@ from __future__ import annotations
 import contextlib
 import json
 import time
+from unittest.mock import patch
 
 import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
+from distr.core.db import Chat, ChatTurnEvent
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.db.projects import Project
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
@@ -16,6 +18,7 @@ from distr.core.project_cli_backends import registry as backend_registry
 from tests.core.workflow_e2e_harness import (
     MatrixFakeBackend,
     apply_preset_to_workflow,
+    get_session_factory,
     make_factory,
     wait_for_terminal_run,
     workflow_patch_stack,
@@ -119,6 +122,7 @@ def _set_sequential_run_settings(factory, workflow_id: int) -> None:
 
 def test_sequential_queue_auto_starts_next_ticket(tmp_path):
     from distr.core.workflow.dispatcher import _active_runs, _runs_lock, start_workflow_run
+    from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
 
     # Queue handoff crosses worker threads.  A StaticPool in-memory SQLite
     # connection cannot safely serve concurrent cursors and causes intermittent
@@ -137,8 +141,13 @@ def test_sequential_queue_auto_starts_next_ticket(tmp_path):
     second_run_id = None
     try:
         with contextlib.ExitStack() as stack:
+            report = WorkflowAgentBridge._generate_report
             for patcher in workflow_patch_stack(factory, tmp_path):
                 stack.enter_context(patcher)
+            stack.enter_context(patch("distr.core.chat_turns.get_session", get_session_factory(factory)))
+            stack.enter_context(patch("distr.core.chat_turns._broadcast"))
+            stack.enter_context(patch("distr.core.chat.record_chat_audit_event"))
+            stack.enter_context(patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge._generate_report", report))
 
             result = start_workflow_run(
                 workflow_id,
@@ -172,7 +181,25 @@ def test_sequential_queue_auto_starts_next_ticket(tmp_path):
             assert second_run_id is not None, "expected auto-started run for second ticket"
 
             if second_run_id:
-                wait_for_terminal_run(factory, second_run_id, timeout=90.0)
+                second_run = wait_for_terminal_run(factory, second_run_id, timeout=90.0)
+                assert second_run.status == "completed"
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    with factory() as session:
+                        run = session.get(AutoWorkflowRun, second_run_id)
+                        data = json.loads(run.run_data or "{}")
+                        if data.get("terminal_receipt") and "terminal_turn_pending" not in data:
+                            turn_id = data["development_turn_id"]
+                            assert session.query(ChatTurnEvent).filter_by(
+                                chat_id=run.chat_id, turn_id=turn_id, event_type="turn_completed",
+                            ).count() == 1
+                            notices = session.query(Chat).filter_by(parent_id=run.chat_id).all()
+                            assert sum(json.loads(row.params or "{}").get("workflow_reply")
+                                       == {"run_id": run.id, "turn_id": turn_id} for row in notices) == 1
+                            break
+                    time.sleep(0.05)
+                else:
+                    pytest.fail("The queued workflow did not finish publishing its launch turn.")
 
             with _runs_lock:
                 for run_id in list(_active_runs.keys()):

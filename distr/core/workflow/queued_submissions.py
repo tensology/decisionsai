@@ -1,5 +1,6 @@
 """Editable queued submissions and their explicitly attached files."""
 import json
+import logging
 import time
 from uuid import uuid4
 from pathlib import Path
@@ -9,6 +10,8 @@ from distr.core.db import Chat
 from distr.core.db.projects import Project
 from distr.core.db.workflow import AutoWorkflowRun, DevelopmentCommand
 from distr.core.db.time import utc_now_naive
+
+logger = logging.getLogger(__name__)
 
 
 def submission_metadata(chat_id, metadata):
@@ -66,7 +69,7 @@ def record_submission_message(chat_id, command_id, content):
     ChatService.add_user_message(chat_id, content, metadata={'queued_command_id': command_id})
 
 
-def start_next_followup(chat_id: int, command_id: int, revision: str) -> dict:
+def start_next_followup(chat_id: int, command_id: int, revision: str, *, after_completion=None) -> dict:
     """Start the queue head only when the Development thread can accept a new turn."""
     from . import development_control as control
     from . import development_harness as harness
@@ -96,12 +99,15 @@ def start_next_followup(chat_id: int, command_id: int, revision: str) -> dict:
             raise ValueError("This thread needs the desktop workflow or approval controls. The item remains queued.")
         content, metadata = command.content, control._json(command.metadata_json, {})
     if metadata.get("retry_new_thread") is True:
+        if after_completion is not None:
+            raise ValueError("This follow-up needs a new thread. It remains queued for review.")
         return {"command_id": command_id, **run_submission(command_id, new_thread=True, revision=revision)}
     metadata = submission_metadata(chat_id, metadata)
     execution = harness.dispatch_development_prompt(
         chat_id, content, save_prompt=True, attachments=metadata["attachments"],
         skill_ids=metadata.get("skill_ids") or [], use_playwright=bool(metadata.get("composer", {}).get("use_playwright")),
-        queued_followup={"next_followup": True, "command_id": command_id, "modified_at": revision},
+        queued_followup={"next_followup": True, "command_id": command_id, "modified_at": revision,
+                         **({"after_completion": after_completion} if after_completion is not None else {})},
     )
     receipt = {"chat_id": chat_id, "command_id": command_id, "turn_id": execution.get("turn_id")}
     with control.get_session() as db:
@@ -111,6 +117,55 @@ def start_next_followup(chat_id: int, command_id: int, revision: str) -> dict:
         if command and command.status == "queued" and control._json(command.metadata_json, {}).get("review_after_startup_failure"):
             raise ValueError(command.result_summary)
     return {**receipt, "starting": True}
+
+
+def recover_completed_followup(chat_id: int) -> None:
+    """Resume only the queue item saved by this direct turn's completion."""
+    from . import development_control as control, development_harness as harness
+    from distr.core.chat_turns import complete_turn
+
+    with control.get_session() as db:
+        root = db.get(Chat, chat_id)
+        if root is None or root.parent_id is not None or root.is_archived:
+            return
+        development = control._json(root.params, {}).get("development") or {}
+        execution = development.get("execution") or {}
+        completion = execution.get("followup_completion_pending")
+        if (not isinstance(completion, dict) or type(completion.get("command_id")) is not int
+                or not isinstance(completion.get("modified_at"), str)
+                or not harness._completed_followup_matches(db, root, execution, completion)
+                or not harness._direct_record_owns_scope(db, root, development, execution)):
+            return
+        turn = db.get(Chat, completion["turn_id"])
+        project_id, response = root.project_id, turn.response if turn is not None else None
+    if not response:
+        return
+    event = complete_turn(chat_id, turn_id=completion["turn_id"], display_text=response,
+                          expected_root_scope=(chat_id, project_id))
+    if event is None or event["status"] != "completed":
+        return
+    try:
+        start_next_followup(chat_id, completion["command_id"], completion["modified_at"], after_completion=completion)
+    except (ValueError, LookupError):
+        # Scope or queue changes require the existing explicit review controls.
+        return
+
+
+def recover_completed_followups() -> None:
+    from sqlalchemy import case, func
+    from . import development_control as control
+
+    with control.get_session() as db:
+        data = case((func.json_valid(Chat.params) == 1, Chat.params), else_="{}")
+        chats = db.query(Chat.id).filter(
+            Chat.parent_id.is_(None),
+            func.json_type(data, "$.development.execution.followup_completion_pending") == "object",
+        ).all()
+    for (chat_id,) in chats:
+        try:
+            recover_completed_followup(chat_id)
+        except Exception:
+            logger.exception("Could not recover the queued follow-up for thread %s", chat_id)
 
 
 def _manual_start_matches(command, target, token):

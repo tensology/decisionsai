@@ -900,7 +900,10 @@ def _auto_resume_interrupted_runs(
             ),
             and_(
                 AutoWorkflowRun.status.in_(("completed", "failed", "cancelled")),
-                func.json_extract(valid_data, "$.terminal_receipt_pending") == AutoWorkflowRun.status,
+                or_(
+                    func.json_extract(valid_data, "$.terminal_receipt_pending") == AutoWorkflowRun.status,
+                    func.json_extract(valid_data, "$.terminal_turn_pending.status") == AutoWorkflowRun.status,
+                ),
             ),
         )).all()
         for run in runs:
@@ -914,6 +917,13 @@ def _auto_resume_interrupted_runs(
                 if not data.get("queue_terminal_pending") and (run.id, run.current_step_id) not in unconfirmed:
                     queued_outcomes.append((_recover_terminal_receipt, (
                         int(run.id), int(run.workflow_id), run.status, "queue_handoff_pending" in data,
+                    )))
+                continue
+            if (isinstance(data.get("terminal_turn_pending"), dict)
+                    and data["terminal_turn_pending"].get("status") == run.status):
+                if not data.get("queue_terminal_pending") and (run.id, run.current_step_id) not in unconfirmed:
+                    queued_outcomes.append((_publish_saved_workflow_turn, (
+                        int(run.id), "queue_handoff_pending" in data,
                     )))
                 continue
             if run.status == "completed" and "queue_handoff_pending" in data:
@@ -1094,31 +1104,36 @@ def _enter_controlled_restart_recovery(run_id: int, step_id: int) -> bool:
 
 
 def _finalize_development_chat_turn(
-    chat_id: Optional[int], status: str, run_result: Dict[str, Any], *, turn_id: Optional[int]
-) -> None:
+    chat_id: Optional[int], status: str, run_result: Dict[str, Any], *, turn_id: Optional[int],
+    expected_root_scope: tuple[int, int | None] | None = None,
+) -> bool:
     """Close a linked Development turn and put its result in the transcript."""
     if not chat_id or turn_id is None:
-        return
+        return False
     try:
         from distr.core.chat_turns import complete_turn, terminal_turn
         from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
 
         report = WorkflowAgentBridge._generate_report(run_result)
         terminal_status = (status or "failed").strip().lower()
+        scope = {} if expected_root_scope is None else {"expected_root_scope": expected_root_scope}
         if terminal_status == "completed":
             run_id = run_result.get("run_id")
             provenance = {"transcript_workflow_run_id": run_id} if type(run_id) is int and run_id > 0 else {}
-            complete_turn(chat_id, turn_id=turn_id, display_text=report, transcript_notice=report, **provenance)
+            return complete_turn(chat_id, turn_id=turn_id, display_text=report,
+                                 transcript_notice=report, **provenance, **scope) is not None
         else:
-            terminal_turn(
+            return terminal_turn(
                 chat_id,
                 "turn_cancelled" if terminal_status == "cancelled" else "turn_failed",
                 turn_id=turn_id,
                 summary=report,
                 transcript_notice=report,
-            )
+                **scope,
+            ) is not None
     except Exception:
         logger.exception("Could not finalize Development chat %s", chat_id)
+        return False
 
 
 def _deliver_run_reply(ticket_id: int, result_text: str | list[str], *, previous_packets: list[str] | None = None,
@@ -1341,6 +1356,16 @@ def _record_terminal_receipt(run_id: int, workflow_id: int, status: str, *, reco
                     run_result['reply_delivery'] = latest_reply
                 if 'reply_delivery' in run_result:
                     run_data['reply_delivery'] = run_result['reply_delivery']
+                if (type(chat_id) is int and type(turn_id) is int and not run_data.get("terminal_receipt")
+                        and run_rec.chat_id == chat_id and run_data.get("development_turn_id") == turn_id):
+                    from distr.core.db import Chat
+
+                    root = db.get(Chat, chat_id)
+                    if root is not None and root.parent_id is None:
+                        run_data["terminal_turn_pending"] = {
+                            "status": status, "chat_id": chat_id, "turn_id": turn_id,
+                            "project_id": project_id if project_id is not None else root.project_id,
+                        }
                 run_data["terminal_receipt"] = run_result
                 if (run_data.get("terminal_receipt_pending") == status
                         and not _terminal_reply_review_unavailable(run_result)):
@@ -1355,6 +1380,49 @@ def _record_terminal_receipt(run_id: int, workflow_id: int, status: str, *, reco
     return run_result, chat_id, turn_id, approval_definition_changed, ticket_lifecycle_committed
 
 
+def _publish_saved_workflow_turn(run_id: int, resume_queue: bool = False) -> None:
+    """Publish the receipt to its launch turn, then acknowledge the saved work."""
+    with get_session() as db:
+        run = db.get(AutoWorkflowRun, run_id)
+        if run is None or run.status not in {"completed", "failed", "cancelled"}:
+            return
+        status, workflow_id = run.status, run.workflow_id
+        try:
+            data = json.loads(run.run_data or "{}")
+        except (TypeError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        scope, receipt = data.get("terminal_turn_pending"), data.get("terminal_receipt")
+        valid = (
+            isinstance(scope, dict) and isinstance(receipt, dict) and scope.get("status") == status
+            and type(scope.get("chat_id")) is int and scope["chat_id"] == run.chat_id
+            and type(scope.get("turn_id")) is int and scope["turn_id"] == data.get("development_turn_id")
+            and "project_id" in scope
+            and (scope["project_id"] is None or type(scope["project_id"]) is int)
+            and receipt.get("project_id") in (None, scope["project_id"])
+            and (receipt.get("run_id"), receipt.get("workflow_id"), receipt.get("status"))
+                == (run_id, workflow_id, status)
+        )
+    if valid and _finalize_development_chat_turn(
+        scope["chat_id"], status, receipt, turn_id=scope["turn_id"],
+        expected_root_scope=(scope["chat_id"], scope["project_id"]),
+    ):
+        try:
+            with get_session() as db:
+                run = lock_step_result_run(db, run_id)
+                if run is not None and run.workflow_id == workflow_id and run.status == status:
+                    data = json.loads(run.run_data or "{}")
+                    if isinstance(data, dict) and data.get("terminal_turn_pending") == scope:
+                        data.pop("terminal_turn_pending")
+                        run.run_data = json.dumps(data)
+                        db.commit()
+        except Exception:
+            logger.warning("Could not acknowledge the published turn for workflow run %s", run_id, exc_info=True)
+    if resume_queue:
+        _complete_ticket_queue_handoff(run_id, workflow_id)
+
+
 def _recover_terminal_receipt(run_id: int, workflow_id: int, status: str, resume_queue: bool) -> None:
     # The local approval endpoint may still be starting. Retry only a review
     # without a durable request, never a claimed or unconfirmed delivery.
@@ -1365,9 +1433,9 @@ def _recover_terminal_receipt(run_id: int, workflow_id: int, status: str, resume
         if result is None or not _terminal_reply_review_unavailable(result[0]):
             break
     if result is not None:
-        receipt, chat_id, turn_id, _, _ = result
+        _, _, turn_id, _, _ = result
         if turn_id is not None:
-            _finalize_development_chat_turn(chat_id, status, receipt, turn_id=turn_id)
+            _publish_saved_workflow_turn(run_id)
     if resume_queue:
         _complete_ticket_queue_handoff(run_id, workflow_id)
 
@@ -1379,7 +1447,8 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
         _record_terminal_receipt(run_id, workflow_id, status)
     )
 
-    _finalize_development_chat_turn(chat_id, status, run_result, turn_id=turn_id)
+    if turn_id is not None:
+        _publish_saved_workflow_turn(run_id)
 
     # Sync terminal status back to the linked ticket so the board always
     # reflects the actual workflow outcome without waiting for a lane move.
@@ -2104,6 +2173,7 @@ def start_workflow_run(
     event_queue: Optional[Any] = None,
     dispatch_async: bool = False,
     *,
+    save_prompt: bool = False,
     _approval_session=None,
     _approval_event=None,
 ) -> Dict[str, Any]:
@@ -2142,6 +2212,8 @@ def start_workflow_run(
             )
             if error:
                 return {"status": "blocked", "error": error}
+        merged_project_id = None
+        thread = None
         if metadata_scope.get('chat_id') is not None:
             from distr.core.chat import _chat_params
             from distr.core.db import Chat
@@ -2149,14 +2221,35 @@ def start_workflow_run(
                 MergeHandoffPending, ReviewedMergeAttachmentUnavailable, require_ready_merge_handoff,
             )
 
-            thread = db.get(Chat, int(metadata_scope['chat_id']))
+            thread = (db.get(Chat, int(metadata_scope['chat_id']), with_for_update=True)
+                      if save_prompt else db.get(Chat, int(metadata_scope['chat_id'])))
             if thread is not None:
                 try:
-                    require_ready_merge_handoff(_chat_params(thread.params), thread.project_id, db=db, verify_attachments=True)
+                    merge = require_ready_merge_handoff(
+                        _chat_params(thread.params), thread.project_id, db=db, verify_attachments=True,
+                    )
                 except MergeHandoffPending as exc:
                     return {'success': False, 'status': 'blocked', 'error': str(exc)}
                 except ReviewedMergeAttachmentUnavailable as exc:
                     return {'success': False, 'status': 'blocked', 'code': 'proposal_attachment_unavailable', 'error': str(exc)}
+                if merge is not None:
+                    merged_project_id = thread.project_id
+                    for project_id in (metadata_scope.get("project_id"), getattr(run_ctx, "active_project_id", None)):
+                        if project_id is not None and str(project_id) != str(merged_project_id):
+                            return {
+                                "success": False, "status": "blocked",
+                                "code": "proposal_project_scope_changed",
+                                "error": "This workflow must run in the merged proposal's reviewed project.",
+                            }
+        if save_prompt:
+            from distr.core.workflow.development_threads import development_thread_metadata
+
+            if (thread is None or thread.parent_id is not None
+                    or thread.project_id != metadata_scope.get("expected_thread_project_id")
+                    or str(development_thread_metadata(thread).get("workflow_id")) != str(workflow_id)):
+                return {"status": "blocked", "error": "The Development thread's project or workflow changed. Refresh and retry."}
+            if not (context or "").strip():
+                return {"status": "blocked", "error": "A development instruction is required."}
         if metadata_scope.get("source_type") == "workflow_queue":
             predecessor_id = metadata_scope.get("auto_queued_from_run_id")
             if type(predecessor_id) is not int or predecessor_id <= 0:
@@ -2210,6 +2303,9 @@ def start_workflow_run(
 
         run_settings = _workflow_run_settings(wf)
         normalized_metadata = dict(run_metadata or {})
+        normalized_metadata.pop("expected_thread_project_id", None)
+        if merged_project_id is not None:
+            normalized_metadata["project_id"] = merged_project_id
         process_owner = current_owner()
         normalized_metadata["workflow_process_owner"] = process_owner
         requested_project_id = str(normalized_metadata.get("project_id") or "") or None
@@ -2435,7 +2531,16 @@ def start_workflow_run(
         normalized_metadata["phase"] = "initializing"
         launch_chat_id = normalized_metadata.get('chat_id')
         launch_turn_id = None
-        if launch_chat_id is not None:
+        if save_prompt:
+            from distr.core.chat import _append_user_turn
+
+            params = _chat_params(thread.params)
+            skill_ids = normalized_metadata.get("skill_ids")
+            launch_turn_id = _append_user_turn(
+                db, thread, params, context.strip(), {"skill_ids": skill_ids} if skill_ids else None,
+            )
+            thread.params = json.dumps(params)
+        elif launch_chat_id is not None:
             from distr.core.chat_turns import _root_and_turn
             root_id, active_turn_id = _root_and_turn(db, int(launch_chat_id))
             if root_id == int(launch_chat_id) and active_turn_id is not None:
@@ -2513,6 +2618,17 @@ def start_workflow_run(
     # emit_event uses its own database session. Emit only after the run creation
     # transaction commits; otherwise file-backed SQLite can reject this second
     # writer and silently lose the Mission Control/chat trace event.
+    if save_prompt:
+        try:
+            from distr.core.chat import record_chat_audit_event
+            from distr.core.chat_turns import ensure_turn_started
+
+            ensure_turn_started(int(launch_chat_id), launch_turn_id)
+            record_chat_audit_event(
+                chat_id=int(launch_chat_id), chat_row_id=launch_turn_id, role="user", content=context.strip(),
+            )
+        except Exception:
+            logger.debug("Could not publish the admitted workflow prompt", exc_info=True)
     if loop_contract:
         try:
             from distr.core.orchestrator import emit_event
@@ -2972,9 +3088,11 @@ def start_workflow_run(
             "status": "started",
             "phase": "initializing",
             "async": True,
+            **({"turn_id": launch_turn_id} if save_prompt else {}),
         }
 
-    return _initialize_then_continue()
+    result = _initialize_then_continue()
+    return {**result, "turn_id": launch_turn_id} if save_prompt else result
 
 
 def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
@@ -3008,6 +3126,8 @@ def cancel_run(run_id: int, *, workflow_id: Optional[int] = None, expected_check
             if isinstance(data, dict):
                 if data.get('waiting_kind') == 'restart_recovery' and restart_owner_block_reason(db, run, data):
                     return False
+                data["terminal_receipt_pending"] = "cancelled"
+                run.run_data = json.dumps(data)
         run.status = "cancelled"
         run.completed_at = utc_now_naive()
         if run.current_step_id:

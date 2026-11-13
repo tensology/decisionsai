@@ -553,8 +553,10 @@ def test_followup_queue_recovers_an_unknown_receipt_and_does_not_interrupt(page,
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280, 1440])
-def test_followup_startup_rejection_restores_the_reviewed_item(page, monkeypatch, scoped_direct_ticket, fixture_base, width):
+@pytest.mark.parametrize("startup", ["manual", "restart"])
+def test_followup_startup_rejection_restores_the_reviewed_item(page, monkeypatch, scoped_direct_ticket, fixture_base, width, startup):
     from threading import Event
+    from distr.core.workflow.queued_submissions import recover_completed_followups
 
     url = os.environ.get("DECISIONS_REMOTE_APP_TEST_URL")
     if not url:
@@ -625,14 +627,32 @@ def test_followup_startup_rejection_restores_the_reviewed_item(page, monkeypatch
     queue.get_by_text("Follow-ups (1)", exact=True).click()
     start = queue.get_by_role("button", name="Run next")
     expect(start).to_be_enabled()
-    start.click()
+    if startup == "restart":
+        with scope.session() as db:
+            root = db.get(Chat, scope.chat_id)
+            params = json.loads(root.params)
+            params["development"]["execution"] = {
+                "status": "running", "job_id": "previous", "turn_id": scope.previous_turn, "board_id": scope.board_id,
+            }
+            root.params = json.dumps(params)
+            db.commit()
+        state = development_harness._update_execution(
+            scope.chat_id, job_id="previous", status="completed", turn_response="Previous work completed.",
+            queue_after_completion=True,
+        )
+        assert state["followup_completion_pending"]["command_id"] == item["id"]
+        recover_completed_followups()
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    else:
+        start.click()
     EVIDENCE.mkdir(exist_ok=True)
     try:
         expect(queue.get_by_text("Starting", exact=True)).to_be_visible()
         assert probing.wait(5)
-        expect(queue.get_by_text("Follow-up submitted for startup.")).to_be_visible()
+        if startup == "manual":
+            expect(queue.get_by_text("Follow-up submitted for startup.")).to_be_visible()
         expect(start).to_be_disabled()
-        page.screenshot(path=EVIDENCE / f"{width}-followup-starting.png", animations="disabled")
+        page.screenshot(path=EVIDENCE / f"{width}-{startup}-followup-starting.png", animations="disabled")
         scope.move("board")
     finally:
         release.set()
@@ -645,9 +665,12 @@ def test_followup_startup_rejection_restores_the_reviewed_item(page, monkeypatch
     expect(queue.get_by_text("Follow-up submitted for startup.")).to_have_count(0)
     expect(queue.get_by_role("button", name="Retry follow-up")).to_be_enabled()
     expect(page.get_by_role("region", name="Development execution").get_by_text("Failed", exact=True)).to_be_visible()
-    page.screenshot(path=EVIDENCE / f"{width}-followup-restored.png", animations="disabled")
+    page.screenshot(path=EVIDENCE / f"{width}-{startup}-followup-restored.png", animations="disabled")
     assert not worker_calls
-    assert len(writes) == 1 and writes[0][1]["starting"] is True
+    if startup == "manual":
+        assert len(writes) == 1 and writes[0][1]["starting"] is True
+    else:
+        assert writes == []
 
     _install_api(page, [], current_board_linked=True, direct_execution=True, run_status="completed", terminal_session=False)
 
@@ -668,11 +691,11 @@ def test_followup_startup_rejection_restores_the_reviewed_item(page, monkeypatch
     expect(desktop_queue.get_by_text(instruction)).to_be_visible()
     expect(desktop_queue.get_by_text("Startup stopped. The follow-up remains queued for review.")).to_be_visible()
     expect(desktop_queue.get_by_role("button", name="Retry follow-up")).to_be_enabled()
-    page.screenshot(path=EVIDENCE / f"{width}-desktop-followup-restored.png", animations="disabled")
+    page.screenshot(path=EVIDENCE / f"{width}-{startup}-desktop-followup-restored.png", animations="disabled")
     desktop_queue.get_by_role("button", name="Retry follow-up").click()
     expect(desktop_queue.get_by_role("alert")).to_contain_text("changed before work started")
     expect(desktop_queue.get_by_text(instruction)).to_be_visible()
-    page.screenshot(path=EVIDENCE / f"{width}-desktop-followup-retry-blocked.png", animations="disabled")
+    page.screenshot(path=EVIDENCE / f"{width}-{startup}-desktop-followup-retry-blocked.png", animations="disabled")
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280, 1440])

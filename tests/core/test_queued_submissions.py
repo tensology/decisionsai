@@ -178,6 +178,57 @@ def test_deferred_queue_is_never_consumed_by_passive_dispatch_and_automatic_turn
     dispatch.assert_called_once()
 
 
+@pytest.mark.parametrize("changed", ["none", "edited", "newer", "project"])
+def test_completed_turn_recovers_only_the_saved_queue_item(development_db, monkeypatch, changed):
+    from distr.core.db import Chat, ChatTurnEvent
+    from distr.core.db.projects import Project
+
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    finalized = _finish_simulated_direct_worker(development_db, monkeypatch)
+    first = submission(development_db)
+    second = control.enqueue_command(chat_id, "Second follow-up", command_type="followup")
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        original = Chat(parent_id=chat_id, project_id=root.project_id, input="Original work")
+        db.add(original)
+        db.flush()
+        turn_id = original.id
+        params = json.loads(root.params)
+        params["active_turn_chat_row_id"] = turn_id
+        params["development"]["execution"] = {"status": "running", "job_id": "original", "turn_id": turn_id}
+        root.params = json.dumps(params)
+        db.commit()
+    state = harness._update_execution(chat_id, job_id="original", status="completed",
+                                      turn_response="Original work completed.", queue_after_completion=True)
+    assert state["followup_completion_pending"]["command_id"] == first["id"]
+    if changed == "edited":
+        control.update_command(first["id"], content="Changed follow-up", expected_modified_at=first["modified_at"])
+    elif changed in {"newer", "project"}:
+        with session() as db:
+            root = db.get(Chat, chat_id)
+            if changed == "newer":
+                db.add(Chat(parent_id=chat_id, project_id=root.project_id, input="Newer instruction"))
+            else:
+                project = Project(name="Other project")
+                db.add(project)
+                db.flush()
+                root.project_id = project.id
+            db.commit()
+    dispatch = Mock(wraps=harness.dispatch_development_prompt)
+    monkeypatch.setattr(harness, "dispatch_development_prompt", dispatch)
+    queue.recover_completed_followups()
+    if changed == "none":
+        assert finalized.wait(5)
+    queue.recover_completed_followups()
+    assert dispatch.call_count == (1 if changed == "none" else 0)
+    assert control.list_commands_for_id(first["id"])["status"] == ("delivered" if changed == "none" else "queued")
+    assert control.list_commands_for_id(second["id"])["status"] == "queued"
+    with session() as db:
+        assert db.query(ChatTurnEvent).filter_by(chat_id=chat_id, turn_id=turn_id, event_type="turn_completed").count() == (
+            0 if changed in {"newer", "project"} else 1
+        )
+
+
 def test_steer_stops_existing_turn_and_delivers_files_once_failure_keeps_item(development_db, monkeypatch):
     finalized = _finish_simulated_direct_worker(development_db, monkeypatch)
     command = submission(development_db)

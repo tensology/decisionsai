@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from copy import copy
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -423,11 +424,12 @@ def _patch_studio_dependencies(
 
     @contextlib.contextmanager
     def fake_session():
+        row = copy(chat) if detach_on_exit else chat
         try:
-            yield _FakeSession(chat)
+            yield _FakeSession(row)
         finally:
             if detach_on_exit:
-                chat.detached = True
+                row.detached = True
 
     def fake_create_new_chat(**kwargs):
         calls["chat_kwargs"] = kwargs
@@ -752,7 +754,9 @@ def test_existing_thread_message_uses_its_explicit_workflow(monkeypatch):
         "source_type": "studio_thread",
         "run_metadata": {"skill_ids": [], "routing_assessment": {}},
         "dispatch_async": True,
+        "save_prompt": True,
     }
+    assert not calls.get("messages")
 
 
 def test_workflow_thread_copies_project_id_before_its_session_closes(monkeypatch):

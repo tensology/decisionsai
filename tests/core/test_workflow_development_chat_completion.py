@@ -128,6 +128,93 @@ def test_workflow_completion_without_launch_turn_leaves_chat_alone(monkeypatch):
     terminal.assert_not_called()
 
 
+@pytest.mark.parametrize('interruption', [
+    'before_event', 'after_event', 'moved_project', 'moved_at_event', 'stopped', 'cancelled_before_receipt',
+])
+def test_restart_publishes_the_saved_result_for_the_exact_turn(store, monkeypatch, interruption):
+    from distr.core import chat_turns
+    from distr.core.db import Chat, ChatTurnEvent
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
+    from distr.core.workflow import dispatcher
+
+    monkeypatch.setattr(chat_turns, 'get_session', store)
+    monkeypatch.setattr(chat_turns, '_broadcast', Mock())
+    monkeypatch.setattr(dispatcher, 'get_session', store)
+    monkeypatch.setattr('distr.core.chat.record_chat_audit_event', Mock())
+    monkeypatch.setattr('distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge._generate_report',
+                        lambda _: 'Recovered workflow result')
+    with store.begin() as db:
+        root = Chat(title='Recovery', project_id=9)
+        workflow = AutoWorkflow(name='Recovery workflow')
+        db.add_all([root, workflow])
+        db.flush()
+        original = Chat(parent_id=root.id, input='Original request')
+        newer = Chat(parent_id=root.id, input='Newer request')
+        db.add_all([original, newer])
+        db.flush()
+        root.params = json.dumps({'active_turn_chat_row_id': newer.id})
+        run = AutoWorkflowRun(chat_id=root.id, workflow_id=workflow.id, status='running',
+                              run_data=json.dumps({'project_id': 9, 'development_turn_id': original.id}))
+        db.add(run)
+        db.flush()
+        run_id, workflow_id, chat_id, turn_id, newer_id = run.id, workflow.id, root.id, original.id, newer.id
+
+    publish = dispatcher._finalize_development_chat_turn
+
+    def power_loss(*args, **kwargs):
+        if interruption == 'after_event':
+            publish(*args, **kwargs)
+        raise RuntimeError('Power lost while publishing the result')
+
+    cancelled = interruption == 'cancelled_before_receipt'
+    status = 'cancelled' if cancelled else 'completed'
+    with monkeypatch.context() as patch:
+        if cancelled:
+            patch.setattr(dispatcher, 'increment_workflow_updated', power_loss)
+        else:
+            patch.setattr(dispatcher, '_finalize_development_chat_turn', power_loss)
+        with pytest.raises(RuntimeError, match='Power lost while publishing the result'):
+            (dispatcher.cancel_run if cancelled else dispatcher.complete_run)(run_id)
+    with store.begin() as db:
+        data = json.loads(db.get(AutoWorkflowRun, run_id).run_data)
+        if cancelled:
+            assert data.get('terminal_receipt_pending') == 'cancelled'
+        else:
+            assert data['terminal_receipt']['status'] == 'completed'
+        if interruption == 'moved_project':
+            db.get(Chat, chat_id).project_id = 10
+
+    if interruption == 'moved_at_event':
+        complete = chat_turns.complete_turn
+
+        def move_then_complete(*args, **kwargs):
+            with store.begin() as db:
+                db.get(Chat, chat_id).project_id = 10
+            return complete(*args, **kwargs)
+
+        monkeypatch.setattr(chat_turns, 'complete_turn', move_then_complete)
+    if interruption == 'stopped':
+        chat_turns.terminal_turn(chat_id, 'turn_cancelled', turn_id=turn_id, summary='Stopped by user.')
+
+    for _ in range(2):
+        dispatcher._auto_resume_interrupted_runs(background=False)
+    assert dispatcher.cancel_run(run_id, workflow_id=workflow_id) is False
+
+    with store() as db:
+        expected = 1 if interruption in {'before_event', 'after_event', 'cancelled_before_receipt'} else 0
+        assert db.query(ChatTurnEvent).filter_by(chat_id=chat_id, turn_id=turn_id,
+                                                 event_type=f'turn_{status}').count() == expected
+        notices = db.query(Chat).filter_by(parent_id=chat_id, response='Recovered workflow result').all()
+        assert len(notices) == expected
+        if notices and not cancelled:
+            assert json.loads(notices[0].params)['workflow_reply'] == {'run_id': run_id, 'turn_id': turn_id}
+        assert db.query(ChatTurnEvent).filter_by(turn_id=newer_id).count() == 0
+        assert json.loads(db.get(Chat, chat_id).params)['active_turn_chat_row_id'] == newer_id
+        metadata = json.loads(db.get(AutoWorkflowRun, run_id).run_data)
+        assert metadata['terminal_receipt']['status'] == status
+        assert ('terminal_turn_pending' in metadata) is interruption.startswith('moved')
+
+
 def test_concurrent_finalizers_publish_one_result(store, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier

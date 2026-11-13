@@ -219,6 +219,7 @@ def create_event(
     broadcast: bool = True,
     transcript_notice: str = "",
     transcript_workflow_run_id: int | None = None,
+    expected_root_scope: tuple[int, int | None] | None = None,
 ) -> Optional[dict[str, Any]]:
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Unsupported chat turn event type: {event_type}")
@@ -234,6 +235,13 @@ def create_event(
                 root_id, resolved_turn_id = _root_and_turn(session, int(chat_id), turn_id)
                 if resolved_turn_id is None:
                     return None
+                if expected_root_scope is not None:
+                    root = session.get(Chat, root_id)
+                    turn = session.get(Chat, resolved_turn_id)
+                    if (root is None or root.parent_id is not None
+                            or (root_id, root.project_id) != expected_root_scope or turn is None
+                            or (turn.id != root_id and turn.parent_id != root_id)):
+                        return None
                 if is_terminal:
                     existing = session.query(ChatTurnEvent).filter(
                         ChatTurnEvent.chat_id == root_id,
@@ -578,6 +586,7 @@ def complete_turn(
     speech_text: str = "",
     transcript_notice: str = "",
     transcript_workflow_run_id: int | None = None,
+    expected_root_scope: tuple[int, int | None] | None = None,
 ) -> Optional[dict[str, Any]]:
     return create_event(
         chat_id,
@@ -589,6 +598,7 @@ def complete_turn(
         metadata={"display_text": display_text, "speech_text": speech_text or display_text, "speak": True},
         transcript_notice=transcript_notice,
         transcript_workflow_run_id=transcript_workflow_run_id,
+        expected_root_scope=expected_root_scope,
     )
 
 
@@ -606,6 +616,7 @@ def _clear_active_pointer(root: Chat, turn_id: int) -> None:
 def terminal_turn(
     chat_id: int, event_type: str, *, turn_id: Optional[int] = None,
     summary: str = "", transcript_notice: str = "",
+    expected_root_scope: tuple[int, int | None] | None = None,
 ) -> Optional[dict[str, Any]]:
     if event_type not in {"turn_failed", "turn_cancelled"}:
         raise ValueError("terminal_turn requires turn_failed or turn_cancelled")
@@ -617,6 +628,7 @@ def terminal_turn(
         title="Request failed" if event_type == "turn_failed" else "Request stopped",
         summary=summary,
         transcript_notice=transcript_notice,
+        expected_root_scope=expected_root_scope,
     )
 
 

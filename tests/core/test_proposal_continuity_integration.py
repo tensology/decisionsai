@@ -34,6 +34,8 @@ def intake(tmp_path, monkeypatch):
     modules = [importlib.import_module(name) for name in (
         'distr.core.db', 'distr.core.chat', 'distr.core.chat_turns',
         'distr.core.workflow.development_threads', 'distr.core.workflow.development_harness',
+        'distr.core.workflow.development_control', 'distr.core.workflow.dispatcher',
+        'distr.core.workflow.service', 'distr.core.workflow.work_dispatch',
         'distr.core.incoming.media',
     )]
     for module in modules:
@@ -659,6 +661,117 @@ def test_source_and_file_registration_preserve_concurrent_progress(intake, monke
         assert {item['id'] for item in params[member]} == {'concurrent-file', 'new-file'}
     else:
         assert params[member]['message_ids'] == ['concurrent-message', 'message-a']
+
+
+@pytest.mark.parametrize('first_source', ['other_group', 'other_topic', 'gmail'])
+def test_telegram_proposal_does_not_adopt_another_conversations_ticket(intake, monkeypatch, first_source):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.incoming import project_links
+    from distr.core.kanban.proposal_tickets import find_thread_for_proposal
+
+    session, proposal, projects = intake
+    group = '-100777'
+    project = projects[0]
+    first_channel = 'gmail' if first_source == 'gmail' else 'telegram'
+    first_thread = {'other_group': '-100888', 'other_topic': f'{group}~topic~101', 'gmail': 'source-a'}[first_source]
+    second_thread = f'{group}~topic~102' if first_source == 'other_topic' else group
+    monkeypatch.setattr(project_links, 'source_project_index', lambda: {
+        (first_channel, first_thread.split('~topic~')[0]): {project}, ('telegram', group): {project},
+    })
+    first = {**proposal, 'id': f'local:{first_channel}:{first_thread}', 'source': first_channel,
+             'source_thread_id': first_thread, 'message_ids': ['55'], 'title': 'First conversation'}
+    second = {**proposal, 'id': f'local:telegram:{second_thread}', 'source': 'telegram',
+              'source_thread_id': second_thread, 'message_ids': ['55'], 'title': 'Second conversation'}
+    first_chat = proposals.create_proposal_thread(first)
+    with session() as db:
+        old = db.query(KanbanTicket).filter_by(source_chat_id=first_chat).one()
+        old.source_external_id = '55'
+        old.source_provider, old.source_thread_id = first_channel, first_thread
+        first_ticket_id = old.id
+        db.commit()
+
+    assert find_thread_for_proposal(second, project) is None
+    second_chat = proposals.create_proposal_thread(second)
+    assert first_chat != second_chat
+    for source, chat_id in [(first, first_chat), (second, second_chat)]:
+        assert proposals.create_proposal_thread(source) == chat_id
+        assert proposals.resolve_proposal_review(proposals.proposal_review_key(source)) == {
+            'status': 'thread', 'chat_id': chat_id,
+        }
+    with session() as db:
+        first_ticket = db.get(KanbanTicket, first_ticket_id)
+        second_ticket = db.query(KanbanTicket).filter_by(source_chat_id=second_chat).one()
+        assert first_ticket.source_chat_id == first_chat and first_ticket.source_thread_id == first_thread
+        assert second_ticket.id != first_ticket.id
+        assert second_ticket.source_external_id == proposals._proposal_handoff_key(second)
+
+
+def test_starting_a_mixed_merge_keeps_its_own_ticket_and_both_sources(intake, monkeypatch):
+    from unittest.mock import Mock
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.incoming import project_links, source_reply
+
+    session, proposal, projects = intake
+    project = projects[0]
+    group = '-100777'
+    topic = f'{group}~topic~101'
+    monkeypatch.setattr(project_links, 'source_project_index', lambda: {
+        ('telegram', group): {project}, ('gmail', 'source-a'): {project},
+    })
+    first = {**proposal, 'id': 'local:gmail:original', 'message_ids': ['81']}
+    second = {**proposal, 'id': f'local:telegram:{topic}', 'source': 'telegram',
+              'source_thread_id': topic, 'message_ids': ['55']}
+    unrelated = proposals.create_proposal_thread({**proposal, 'id': 'local:gmail:unrelated', 'message_ids': ['55']})
+    merged = proposals.merge_proposals(first, second, complete=lambda *args: '{}')
+    dispatch = Mock(return_value={'status': 'initializing'})
+    monkeypatch.setattr(harness, 'dispatch_development_prompt', dispatch)
+    assert proposals.create_proposal_thread(merged['merged'], start_work=True) == merged['chat_id']
+    assert proposals.create_proposal_thread(merged['merged'], start_work=True) == merged['chat_id']
+    dispatch.assert_called_once()
+    with session() as db:
+        tickets = {row.source_chat_id: row for row in db.query(KanbanTicket).all()}
+        assert set(tickets) == {unrelated, merged['chat_id']}
+        assert tickets[unrelated].source_external_id == '55'
+        assert tickets[merged['chat_id']].source_external_id == proposals._proposal_handoff_key(merged['merged'])
+        context = json.loads(db.get(Chat, merged['chat_id']).params)['incoming_reply_context']
+    assert {choice['key'] for choice in source_reply.source_choices(context)} == {'gmail:source-a', f'telegram:{topic}'}
+
+
+def test_gmail_proposal_ignores_a_legacy_telegram_card_with_the_same_message_number(intake, monkeypatch):
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.incoming import project_links
+
+    session, proposal, projects = intake
+    group = '-100777'
+    monkeypatch.setattr(project_links, 'source_project_index', lambda: {
+        ('telegram', group): {projects[0]}, ('gmail', 'source-a'): {projects[0]},
+    })
+    telegram = {**proposal, 'id': f'local:telegram:{group}', 'source': 'telegram',
+                'source_thread_id': group, 'message_ids': ['55']}
+    telegram_chat = proposals.create_proposal_thread(telegram)
+    with session() as db:
+        old = db.query(KanbanTicket).filter_by(source_chat_id=telegram_chat).one()
+        old.source_external_id = '55'
+        db.commit()
+
+    gmail_chat = proposals.create_proposal_thread({**proposal, 'message_ids': ['55']})
+    assert gmail_chat != telegram_chat
+    with session() as db:
+        assert {row.source_chat_id for row in db.query(KanbanTicket).all()} == {telegram_chat, gmail_chat}
+
+
+def test_telegram_proposal_topic_uses_only_its_explicit_link_or_its_groups_link():
+    from distr.core.incoming.project_links import proposal_in_scope
+
+    topic = '-100777~topic~101'
+    proposal = {'source': 'telegram', 'source_thread_id': topic, 'project_id': 9}
+    group_link = {('telegram', '-100777'): {9}}
+    assert proposal_in_scope(proposal, group_link)
+    assert not proposal_in_scope(proposal, {('telegram', '-100888'): {9}})
+    assert not proposal_in_scope(proposal, {**group_link, ('telegram', topic): {8}})
+    review = {**proposal, 'project_id': None, 'needs_project': True}
+    assert proposal_in_scope(review, group_link, allow_review=True)
+    assert not proposal_in_scope(review, {**group_link, ('telegram', topic): set()}, allow_review=True)
 
 
 def test_acknowledged_remote_proposal_retry_reopens_only_its_started_thread(intake, monkeypatch):

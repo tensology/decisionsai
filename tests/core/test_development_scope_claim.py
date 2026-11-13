@@ -146,7 +146,7 @@ def test_simultaneous_studio_submissions_save_only_the_claimed_turn(intake, monk
     assert len(calls) == 1
     assert calls[0].scope.turn_id == payload["turn_id"]
     with session() as db:
-        assert db.get(Chat, payload["turn_id"]).response == "Fixture result"
+        assert db.get(Chat, payload["turn_id"]).response == "25% done. Fixture result"
         assert db.get(Chat, unrelated_turn).response is None
         routes = json.loads(db.get(Chat, chat_id).params)["development"]["turn_routes"]
         assert str(unrelated_turn) not in routes

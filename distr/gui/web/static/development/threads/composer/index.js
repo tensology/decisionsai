@@ -25,7 +25,7 @@ export function createThreadsComposer({ context, actions, el, token }) {
     let composerSelectionRevision = 0;
     let editedCommand = null;
     let previousDraft = null;
-    let attachmentBlockedChatId = null;
+    let launchBlockedChatId = null;
     const queue = createSubmissionQueue({ context, actions, el, edit: restoreQueuedDraft });
     el('queued-edit-cancel')?.addEventListener('click', cancelQueuedEdit);
 
@@ -633,8 +633,8 @@ export function createThreadsComposer({ context, actions, el, token }) {
                         use_playwright: Boolean(context.usePlaywright)
                     }
                 });
-                if (result?.started === true && attachmentBlockedChatId === submissionChatId) {
-                    attachmentBlockedChatId = null;
+                if (result?.started === true && launchBlockedChatId === submissionChatId) {
+                    launchBlockedChatId = null;
                     actions.toast('Work started.', 'success');
                 }
                 await actions.refreshShell({ preserveConversation: false });
@@ -647,7 +647,9 @@ export function createThreadsComposer({ context, actions, el, token }) {
         } catch (error) {
             el('task-prompt').value = prompt;
             actions.resizePrompt();
-            if (error.data?.code === 'proposal_attachment_unavailable') attachmentBlockedChatId = submissionChatId;
+            if (['proposal_attachment_unavailable', 'proposal_project_scope_changed', 'development_workflow_launch_blocked'].includes(error.data?.code)) {
+                launchBlockedChatId = submissionChatId;
+            }
             if (error.data?.code === 'development_execution_busy' && context.currentChat?.id === submissionChatId) {
                 await actions.refreshShell({ preserveConversation: true });
             }

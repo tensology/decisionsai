@@ -2771,6 +2771,8 @@ def start_workflow_run(
     run_metadata: Optional[Dict[str, Any]] = None,
     event_queue: Optional[Any] = None,
     dispatch_async: bool = False,
+    *,
+    save_prompt: bool = False,
 ):
     """Service-level wrapper preserving legacy patch points for tests/callers."""
     from distr.core.planning.prerequisites import PlanPrerequisiteError, execution_ticket_id, require_plan_prerequisites
@@ -2784,7 +2786,7 @@ def start_workflow_run(
                 project_id=metadata_scope.get('project_id') or getattr(run_ctx, 'active_project_id', None), board_id=board_id, session=db)
     except PlanPrerequisiteError as exc:
         return {'success':False, 'status':'blocked', 'error':str(exc)}
-    if "unittest.mock" not in str(type(_dispatch_step)):
+    if save_prompt or "unittest.mock" not in str(type(_dispatch_step)):
         return _dispatcher_start_workflow_run(
             workflow_id=workflow_id,
             context=context,
@@ -2795,6 +2797,7 @@ def start_workflow_run(
             run_metadata=run_metadata,
             event_queue=event_queue,
             dispatch_async=dispatch_async,
+            **({"save_prompt": True} if save_prompt else {}),
         )
 
     with get_session() as db:

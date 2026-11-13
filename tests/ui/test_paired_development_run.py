@@ -26,8 +26,8 @@ EVIDENCE = Path("/tmp/decisions-paired-development-run")
 def test_completed_workflow_shows_only_its_unresolved_queue_hold(
     page, review, fixture_base, monkeypatch, tmp_path, width, surface,
 ):
-    from distr.core import orchestrator
-    from distr.core.db import Chat
+    from distr.core import chat_turns, orchestrator
+    from distr.core.db import Chat, ChatTurnEvent
     from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, ProjectExecutionSession
     from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
     from distr.core.workflow import dispatcher
@@ -41,6 +41,7 @@ def test_completed_workflow_shows_only_its_unresolved_queue_hold(
         pytest.skip("Set DECISIONS_REMOTE_APP_TEST_URL to the local App View development server.")
     _, factory, details, _ = review
     run_id = details["workflow"]["run_id"]
+    turn_id = details["workflow"]["turn_id"]
     ticket = details["ticket_id"]
     workflow_id, board_id = 44, 1
     with factory.begin() as db:
@@ -91,9 +92,36 @@ def test_completed_workflow_shows_only_its_unresolved_queue_hold(
     assert "queue_handoff_hold" not in client.get(EXECUTION).json()
     with factory.begin() as db:
         db.get(KanbanTicket, ticket).lane_id = original_lane
+        root = db.get(Chat, 17)
+        follow_up = Chat(parent_id=root.id, input="Keep the newer turn open.")
+        db.add(follow_up)
+        db.flush()
+        newer_id = follow_up.id
+        root.params = json.dumps({**json.loads(root.params), "active_turn_chat_row_id": newer_id})
+        run = db.get(AutoWorkflowRun, run_id)
+        run.run_data = json.dumps({
+            "project_id": 9, "development_turn_id": turn_id,
+            "terminal_receipt": dispatcher.build_workflow_run_receipt(
+                run_id=run_id, workflow_id=workflow_id, status="completed", project_id=9, steps_summary=[]),
+            "terminal_turn_pending": {"status": "completed", "chat_id": 17, "project_id": 9, "turn_id": turn_id},
+        })
+    monkeypatch.setattr(dispatcher, "get_session", factory)
+    monkeypatch.setattr(chat_turns, "get_session", factory)
+    monkeypatch.setattr(chat_turns, "_broadcast", lambda _: None)
+    monkeypatch.setattr("distr.core.chat.record_chat_audit_event", lambda **_: None)
+    with monkeypatch.context() as patch:
+        patch.setattr("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge._generate_report",
+                      lambda _: "The first ticket is complete.")
+        dispatcher._auto_resume_interrupted_runs(background=False)
+        dispatcher._auto_resume_interrupted_runs(background=False)
+    with factory() as db:
+        recovered = db.query(Chat).filter_by(parent_id=17, response="The first ticket is complete.").one()
+        recovered_id, recovered_text = recovered.id, recovered.response
+        assert db.query(ChatTurnEvent).filter_by(chat_id=17, turn_id=turn_id, status="completed").count() == 1
+        assert json.loads(db.get(Chat, 17).params)["active_turn_chat_row_id"] == newer_id
     chat = {"id": 17, "title": "Delivery proposal", "project_id": 9, "development": True,
             "development_workflow_id": workflow_id, "messages": [
-                {"role": "assistant", "content": "The first ticket is complete.", "chat_row_id": 19},
+                {"role": "assistant", "content": recovered_text, "chat_row_id": recovered_id},
             ]}
     if surface == "desktop":
         _install_api(page, [])
@@ -134,17 +162,17 @@ def test_completed_workflow_shows_only_its_unresolved_queue_hold(
     messages = page.locator("#message-list" if surface == "desktop" else ".av-messages")
     result = messages.get_by_text("The first ticket is complete.", exact=True)
     expect(notice).to_contain_text(reason)
+    expect(result).to_have_count(1)
     expect(result).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     EVIDENCE.mkdir(exist_ok=True)
     notice.scroll_into_view_if_needed()
-    page.screenshot(path=EVIDENCE / f"{width}-{surface}-terminal-queue-held.png", animations="disabled")
+    page.screenshot(path=EVIDENCE / f"{width}-{surface}-recovered-workflow-result.png", animations="disabled")
     result.evaluate("(node) => { window.originalQueueResult = node; }")
     if surface == "desktop":
         draft = page.locator("#task-prompt")
         draft.fill("Keep this follow-up unsent.")
 
-    monkeypatch.setattr(dispatcher, "get_session", factory)
     monkeypatch.setattr("distr.core.workflow.ticket_dispatch.get_session", factory)
     monkeypatch.setattr("distr.gui.web.kanban_events.increment_kanban_updated", lambda **_: None)
     with factory.begin() as db:
@@ -346,6 +374,14 @@ def test_paired_telegram_closing_reply_tracks_the_exact_receipt(page, review, mo
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
     check("Client reply sent", "sent")
     assert decide(review, approval["request_id"]).json()["status"] == "sent"
+    with factory.begin() as db:
+        row = db.query(OrchestratorEvent).filter_by(source="reply_delivery").one()
+        payload = json.loads(row.payload)
+        payload["detail"]["chat_id"] = 999
+        row.payload = "{" if width in {390, 1280} else json.dumps(payload)
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    check("Client reply unconfirmed. Check the original conversation before sending again.", "damaged")
+    assert decide(review, approval["request_id"]).json()["status"] == "unconfirmed"
     sender._process_message_queue()
     assert sender.websocket_attempts == [frame]
 

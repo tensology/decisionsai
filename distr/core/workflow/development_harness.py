@@ -814,7 +814,7 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
                       scope_lost: bool = False, startup_scope: tuple | None = None,
                       runtime_scope: tuple | None = None, output_delta: str = "",
                       turn_response: str | None = None,
-                      start_followup: bool = False, **changes: Any) -> dict[str, Any]:
+                      start_followup: bool = False, queue_after_completion: bool = False, **changes: Any) -> dict[str, Any]:
     with get_session() as db:
         # Execution updates replace the root parameters, which also hold delivery receipts.
         if db.get_bind().dialect.name == 'sqlite':
@@ -916,6 +916,16 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
             if turn is not None and turn.parent_id == root.id:
                 turn.response = turn_response
                 turn.modified_date = utc_now_naive()
+                if queue_after_completion and job_id and execution.get("status") in {"completed", "completed_noop"}:
+                    command = _queue_head(db, root)
+                    if (command is not None and command.status == "queued" and command.command_type == "followup"
+                            and command.workflow_id is None and command.run_id is None
+                            and not _json(command.metadata_json).get("review_after_startup_failure")):
+                        execution["followup_completion_pending"] = {
+                            "job_id": job_id, "turn_id": turn.id, "command_id": command.id,
+                            "modified_at": command.modified_at.isoformat(),
+                            "scope": list(development_scope_identity(root.project_id, development, chat_id=root.id)),
+                        }
         if start_followup or changes.get("status") in {"failed", "cancelled", "blocked"}:
             _settle_followup_start(db, root, execution, started=start_followup)
         if changes.get("route_receipt") is not None:
@@ -2103,6 +2113,13 @@ def _accept_next_followup(db, root, development, followup) -> int:
         raise DevelopmentExecutionBusy("This thread is unavailable for execution. The item remains queued.")
     _require_saved_followup_scope(command, root)
     execution = development.get("execution") or {}
+    completion = followup.get("after_completion")
+    if completion is not None:
+        if (execution.get("followup_completion_pending") != completion
+                or not _completed_followup_matches(db, root, execution, completion)
+                or not _direct_record_owns_scope(db, root, development, execution)
+                or _json(command.metadata_json).get("review_after_startup_failure")):
+            raise DevelopmentExecutionBusy("The completed turn or follow-up changed. The item remains queued.")
     scope_metadata = development
     if execution.get("status") == "waiting" and execution.get("completed_at"):
         scope_metadata = {**development, "execution": {**execution, "status": "completed"}}
@@ -2111,6 +2128,21 @@ def _accept_next_followup(db, root, development, followup) -> int:
     command.status = "dispatching"
     command.result_summary = "Starting in this Development thread."
     return command.id
+
+
+def _completed_followup_matches(db, root, execution, completion) -> bool:
+    """A saved handoff belongs to the last user turn and its exact execution."""
+    if (execution.get("status") not in {"completed", "completed_noop"}
+            or not completion.get("job_id") or completion["job_id"] != execution.get("job_id")
+            or type(completion.get("turn_id")) is not int or completion["turn_id"] != execution.get("turn_id")
+            or completion.get("scope") != list(development_scope_identity(
+                root.project_id, development_thread_metadata(root), chat_id=root.id))):
+        return False
+    latest = db.query(Chat.id).filter(
+        Chat.parent_id == root.id, Chat.input.isnot(None), Chat.input != "",
+    ).order_by(Chat.id.desc()).first()
+    active = _chat_params(root.params).get("active_turn_chat_row_id")
+    return bool(latest and latest.id == completion["turn_id"] and active in (None, completion["turn_id"]))
 
 
 def _settle_followup_start(db, root, execution, *, started):
@@ -2705,6 +2737,7 @@ async def _run_execution(
             job_id=job_id,
             runtime_scope=expected_scope,
             turn_response=response,
+            queue_after_completion=success and not waiting and not audit_only,
             status=status,
             runtime_id=result.runtime_id,
             backend_id=result.backend_id,
@@ -2772,7 +2805,12 @@ async def _run_execution(
         ):
             _unload_ollama_model(model)
         if not waiting and success and not audit_only:
-            _start_next_queued_instruction(chat_id)
+            if state.get("followup_completion_pending"):
+                from .queued_submissions import recover_completed_followup
+
+                recover_completed_followup(chat_id)
+            else:
+                _start_next_queued_instruction(chat_id)
     except DevelopmentScopeChanged as exc:
         hold_result(str(exc))
     except Exception as exc:

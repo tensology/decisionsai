@@ -500,6 +500,7 @@ def register_routes(router, templates):
             workflow_id = int(metadata.get("workflow_id") or 0) or None
             direct = autonomy_level != "approval" and workflow_id is None
             save_with_claim = direct and str(metadata.get("source_type") or "").lower() != "automation"
+            save_with_workflow = workflow_id is not None and autonomy_level != "approval"
             if direct:
                 existing_execution = metadata.get("execution")
                 if isinstance(existing_execution, dict):
@@ -507,7 +508,7 @@ def register_routes(router, templates):
             elif workflow_id is not None and autonomy_level != "approval" and project_id is not None:
                 await asyncio.to_thread(restore_reviewed_thread_merge_attachments, int(chat_id), project_id)
             turn_id = None
-            if not save_with_claim:
+            if not save_with_claim and not save_with_workflow:
                 turn_id = await asyncio.to_thread(
                     ChatService.add_user_message,
                     int(chat_id),
@@ -531,6 +532,10 @@ def register_routes(router, templates):
 
                 relaunch = await asyncio.to_thread(relaunch_decision, int(chat_id), workflow_id, message)
                 if not relaunch.get("allow", True):
+                    turn_id = await asyncio.to_thread(
+                        ChatService.add_user_message, int(chat_id), message,
+                        metadata={"skill_ids": skill_ids} if skill_ids else None,
+                    )
                     await asyncio.to_thread(
                         ChatService.append_assistant_notice,
                         int(chat_id),
@@ -566,7 +571,9 @@ def register_routes(router, templates):
                     source_type="studio_thread",
                     run_metadata=run_metadata,
                     dispatch_async=True,
+                    save_prompt=True,
                 )
+                turn_id = execution.get("turn_id")
             else:
                 from distr.core.workflow.development_harness import dispatch_development_prompt
 
@@ -584,12 +591,16 @@ def register_routes(router, templates):
                 if save_with_claim:
                     turn_id = execution.get("turn_id")
             if isinstance(execution, dict) and execution.get("error"):
-                await asyncio.to_thread(
-                    ChatService.append_assistant_notice,
-                    int(chat_id),
-                    f"Execution could not start: {execution['error']}",
-                )
-                return JSONResponse({"detail": execution["error"], **({"code": execution["code"]} if execution.get("code") else {})}, status_code=409)
+                code = execution.get("code")
+                if save_with_workflow and not code:
+                    code = "development_workflow_launch_blocked"
+                if not save_with_workflow:
+                    await asyncio.to_thread(
+                        ChatService.append_assistant_notice,
+                        int(chat_id),
+                        f"Execution could not start: {execution['error']}",
+                    )
+                return JSONResponse({"detail": execution["error"], **({"code": code} if code else {})}, status_code=409)
             from distr.core.workflow.development_control import resume_thread_time
 
             track_time = True
