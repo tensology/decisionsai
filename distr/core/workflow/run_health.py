@@ -76,8 +76,8 @@ def run_health(db, run, data, *, now=None, execution=None):
     label = run_label(data, ticket_id=run.ticket_id)
     minutes = max(0, int((now - run.started_at).total_seconds() // 60)) if run.started_at else 0
     kind = str(data.get("waiting_kind") or "")
-    recovery = data.get("restart_recovery") or {}
-    reason = str(recovery.get("blocked_reason") or "")
+    recovery = data.get("restart_recovery")
+    reason = str(recovery.get("blocked_reason") or "") if isinstance(recovery, dict) else ""
     if run.status == "waiting":
         doing = ("paused after restart" + (f": {reason}" if reason else "")) if kind == "restart_recovery" else f"waiting ({kind.replace('_', ' ') or 'checkpoint'})"
     elif stalled:

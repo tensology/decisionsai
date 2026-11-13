@@ -463,9 +463,10 @@ function setTaskState(status) {
     node.classList.toggle('proactive-state', state.currentRun?.origin === 'proactive_orchestrator');
     node.classList.toggle('ide-waiting', value === 'waiting' && state.currentRun?.waiting_kind === 'ide_handoff');
     node.classList.toggle('review-waiting', value === 'blocked' && state.currentRun?.waiting_kind === 'human_review');
+    const interrupted = value === 'waiting' && state.currentRun?.waiting_kind === 'restart_recovery';
     node.querySelector('b').textContent =
-        value === 'running' && state.currentRun?.work_mode === 'audit' ? 'Assessing' : statusLabel(value);
-    const stoppable = isActiveAgentRun(state.currentRun) && state.currentRun?.can_stop !== false;
+        interrupted ? 'Interrupted' : value === 'running' && state.currentRun?.work_mode === 'audit' ? 'Assessing' : statusLabel(value);
+    const stoppable = !interrupted && isActiveAgentRun(state.currentRun) && state.currentRun?.can_stop !== false;
     el('stop-run-button').classList.toggle('hidden', !stoppable);
     updateElapsedTime();
 }

@@ -1188,9 +1188,9 @@ def create_app() -> FastAPI:
             from distr.core.workflow.interactions import recover_interrupted_checkpoint_decisions
 
             _cleanup_orphaned_runs_on_startup()
-            unconfirmed = recover_interrupted_checkpoint_decisions()
+            unconfirmed, checkpoint_steps = recover_interrupted_checkpoint_decisions()
             from distr.core.workflow.dispatcher import _auto_resume_interrupted_runs
-            _auto_resume_interrupted_runs(unconfirmed_checkpoint_steps=unconfirmed)
+            _auto_resume_interrupted_runs(unconfirmed_checkpoint_steps=unconfirmed, checkpoint_steps=checkpoint_steps)
         except Exception as e:
             logger.warning("Orphaned workflow run cleanup could not run: %s", e)
 

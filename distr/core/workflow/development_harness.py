@@ -1301,6 +1301,12 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                     approval = approval if isinstance(approval, dict) else {}
                     model = approval.get("name") or approval.get("model")
                     question = run_data.get("waiting_prompt")
+                    if run_data.get('waiting_kind') == 'restart_recovery':
+                        from distr.core.workflow.dispatcher import restart_owner_block_reason
+
+                        if scope_reason := restart_owner_block_reason(db, run, run_data):
+                            question = scope_reason
+                            workflow_execution['can_stop'] = False
                     if run_data.get("waiting_kind") == "provider_preflight" and model:
                         question = f"Use {model} for this step and continue the workflow."
                     workflow_execution["waiting_prompt"] = redact_text(question or "", limit=12000)

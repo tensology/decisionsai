@@ -253,7 +253,7 @@ def create_workflow_interaction(
                 """), {"run_id": run_id}).first()
                 if unresolved:
                     raise ValueError("The previous checkpoint decision is still unresolved.")
-                current_actions = ["stop"] if _restart_checkpoint_block_reason(conn, run_id) else ["continue", "stop"]
+                current_actions = _restart_review_actions(*_restart_checkpoint_reasons(conn, run_id))
             if normalized_kind=='provider_preflight':
                 raw=conn.execute(text('SELECT run_data FROM auto_workflow_runs WHERE id=:id'),{'id':int(run_id)}).scalar()
                 candidates=json.loads(raw or '{}').get('provider_free_candidates') or []
@@ -630,17 +630,26 @@ def pending_interactions(
     return pending
 
 
-def _restart_checkpoint_block_reason(conn, run_id: int) -> str:
+def _restart_review_actions(owner_reason: str, resume_reason: str) -> list[str]:
+    if owner_reason:
+        return []
+    return ['stop'] if resume_reason else ['continue', 'stop']
+
+
+def _restart_checkpoint_reasons(conn, run_id: int) -> tuple[str, str]:
     from distr.core.db.workflow import AutoWorkflowRun
-    from distr.core.workflow.dispatcher import restart_resume_block_reason
+    from distr.core.workflow.dispatcher import restart_owner_block_reason, restart_resume_block_reason
 
     with Session(bind=conn) as db:
         run = db.get(AutoWorkflowRun, run_id)
         data = json.loads(run.run_data or "{}")
+        owner_reason = restart_owner_block_reason(db, run, data)
+        if owner_reason:
+            return owner_reason, ''
         recovery = data.get("restart_recovery")
         if isinstance(recovery, dict) and recovery.get("auto_resume_pending"):
-            return "Automatic recovery is in progress. Check the current workflow state."
-        return restart_resume_block_reason(db, run, data)
+            return '', 'Automatic recovery is in progress. Check the current workflow state.'
+        return '', restart_resume_block_reason(db, run, data)
 
 
 def development_pending_interactions(*, run_id: int | None, development_chat_id: int | None) -> list[dict[str, Any]]:
@@ -651,7 +660,7 @@ def development_pending_interactions(*, run_id: int | None, development_chat_id:
         return pending
     from distr.core.db import get_session
     from distr.core.db.workflow import AutoWorkflowRun
-    from distr.core.workflow.dispatcher import restart_resume_block_reason
+    from distr.core.workflow.dispatcher import restart_owner_block_reason, restart_resume_block_reason
 
     with get_session() as db:
         run = db.get(AutoWorkflowRun, run_id)
@@ -666,7 +675,8 @@ def development_pending_interactions(*, run_id: int | None, development_chat_id:
         recovery = data.get("restart_recovery")
         if isinstance(recovery, dict) and recovery.get("auto_resume_pending"):
             return []
-        reason = restart_resume_block_reason(db, run, data)
+        owner_reason = restart_owner_block_reason(db, run, data)
+        resume_reason = '' if owner_reason else restart_resume_block_reason(db, run, data)
         workflow_id, step_id = run.workflow_id, run.current_step_id
 
     if not pending:
@@ -678,11 +688,11 @@ def development_pending_interactions(*, run_id: int | None, development_chat_id:
         except ValueError:
             return []
         pending = pending_interactions(**filters)
-    if reason:
-        for item in pending:
-            if item["kind"] == "restart_recovery" and item["status"] == "pending":
-                item["allowed_actions"] = json.dumps(["stop"])
-                item["review_notice"] = reason
+    for item in pending:
+        if item['kind'] == 'restart_recovery' and item['status'] == 'pending':
+            item['allowed_actions'] = json.dumps(_restart_review_actions(owner_reason, resume_reason))
+            if reason := owner_reason or resume_reason:
+                item['review_notice'] = reason
     return pending
 
 
@@ -734,10 +744,13 @@ def resolve_interaction(
             conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE token=:token AND status='pending'"), {"token": token})
             return {"error": "Interaction expired", "status_code": 410}
         allowed = json.loads(item["allowed_actions"] or "[]")
-        if item["kind"] == "restart_recovery" and action == "continue":
-            reason = _restart_checkpoint_block_reason(conn, item["run_id"])
+        if item['kind'] == 'restart_recovery' and action in {'continue', 'stop'}:
+            owner_reason, resume_reason = _restart_checkpoint_reasons(conn, item['run_id'])
+            reason = owner_reason or (resume_reason if action == 'continue' else '')
             if reason:
                 return {"error": reason, "status_code": 409}
+            if bound_chat is None:
+                allowed = _restart_review_actions(owner_reason, resume_reason)
         if action not in allowed:
             return {"error": f"Action {action!r} is not allowed", "status_code": 400}
         if (
@@ -766,8 +779,13 @@ def resolve_interaction(
             return {"error": "Interaction was resolved concurrently", "status_code": 409, "idempotent": True}
 
     if background:
-        _start_checkpoint_worker(item=item, token=token, claim_id=claim_id, action=action, response_text=response_text,
-                                 source=source, resolved_at=now, resolver_id=resolver_id)
+        try:
+            _start_checkpoint_worker(item=item, token=token, claim_id=claim_id, action=action, response_text=response_text,
+                                     source=source, resolved_at=now, resolver_id=resolver_id)
+        except RuntimeError:
+            logger.exception("Could not start checkpoint decision worker for run %s", item["run_id"])
+            if _release_unstarted_checkpoint_claim(token, claim_id):
+                return {"error": "Could not start the workflow decision. Please try again.", "status_code": 503}
         return {
             "success": True,
             "run_id": item["run_id"],
@@ -807,8 +825,18 @@ def _start_checkpoint_worker(**decision: Any) -> None:
     ).start()
 
 
-def recover_interrupted_checkpoint_decisions() -> set[tuple[int, int | None]]:
-    """Resume only saved decisions whose worker never reached the apply boundary."""
+def _release_unstarted_checkpoint_claim(token: str, claim_id: str) -> bool:
+    with engine.begin() as conn:
+        released = conn.execute(text("""
+            UPDATE workflow_interactions SET status='pending', apply_claim_id=NULL,
+              resolved_action=NULL, response_text=NULL, response_source=NULL, resolver_id=NULL
+            WHERE token=:token AND status='resolving' AND apply_claim_id=:claim AND apply_worker_id=''
+        """), {"token": token, "claim": claim_id})
+        return released.rowcount == 1
+
+
+def recover_interrupted_checkpoint_decisions() -> tuple[set[tuple[int, int | None]], set[tuple[int, int | None]]]:
+    """Recover saved decisions and return unconfirmed and explicitly reviewed steps."""
     _ensure_table()
     now = time.time()
     queued = []
@@ -825,21 +853,34 @@ def recover_interrupted_checkpoint_decisions() -> set[tuple[int, int | None]]:
             SELECT run_id, step_id FROM workflow_interactions WHERE status='unconfirmed'
         """)).tuples())
         rows = conn.execute(text("""
-            SELECT * FROM workflow_interactions WHERE status='resolving' AND apply_worker_id=''
-            ORDER BY id
+            SELECT interaction.* FROM workflow_interactions AS interaction
+            JOIN auto_workflow_runs AS run ON run.id=interaction.run_id
+            WHERE (interaction.status='resolving' AND interaction.apply_worker_id='')
+              OR (run.status='waiting' AND interaction.kind='restart_recovery'
+                AND (interaction.status='pending'
+                  OR (interaction.status='expired' AND interaction.resolved_action='stop')))
+            ORDER BY interaction.id
         """)).mappings().all()
+        checkpoint_steps = set()
         for row in rows:
             item = dict(row)
+            matches = _scope_matches(conn, item)
+            step = (item["run_id"], item["step_id"])
+            if item["kind"] == "restart_recovery" and matches:
+                checkpoint_steps.add(step)
+            if item["status"] != "resolving":
+                continue
             try:
                 allowed = json.loads(item["allowed_actions"] or "[]")
             except (TypeError, ValueError):
                 allowed = []
             action = item["resolved_action"]
-            if (not item["apply_claim_id"] or item["expires_at"] <= now or not _scope_matches(conn, item)
+            if (not item["apply_claim_id"] or item["expires_at"] <= now or not matches
                     or not isinstance(allowed, list) or action not in allowed):
                 conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE id=:id"), {"id": item["id"]})
                 continue
             queued.append(item)
+            checkpoint_steps.add(step)
     for item in queued:
         try:
             _start_checkpoint_worker(
@@ -849,7 +890,8 @@ def recover_interrupted_checkpoint_decisions() -> set[tuple[int, int | None]]:
             )
         except RuntimeError:
             logger.exception("Could not start recovery worker for checkpoint run %s", item["run_id"])
-    return unconfirmed
+            _release_unstarted_checkpoint_claim(item["token"], item["apply_claim_id"])
+    return unconfirmed, checkpoint_steps
 
 
 def _apply_claimed_interaction(

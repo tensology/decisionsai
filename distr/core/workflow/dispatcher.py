@@ -713,25 +713,29 @@ def _cleanup_orphaned_runs_on_startup() -> None:
             logger.warning("Run %s cannot auto-resume: no saved current step", run.id)
         for run in recoverable:
             try:
-                run_data = json.loads(run.run_data or "{}") or {}
-            except Exception:
-                run_data = {}
+                run_data = json.loads(run.run_data or "{}")
+            except (ValueError, TypeError):
+                run_data = None
+            if not isinstance(run_data, dict):
+                run_data = {"restart_recovery": {"unreadable_run_data": run.run_data}}
             run_data = hydrate_identity(run, run_data)
             run.status = "waiting"
             run.completed_at = None
             from distr.core.workflow.run_prompts import restart_prompt, run_label
-            previous_recovery = dict(run_data.get("restart_recovery") or {})
+            previous_recovery = run_data.get("restart_recovery")
+            interrupted_kind = run_data.get("waiting_kind") or ""
             run_data.update({
                 "waiting_kind": "restart_recovery",
                 "waiting_prompt": restart_prompt(run_label(run_data, ticket_id=run.ticket_id)),
-                "restart_recovery": {
-                    **previous_recovery,
-                    "interrupted_waiting_kind": run_data.get("waiting_kind") or "",
+            })
+            if previous_recovery is None or isinstance(previous_recovery, dict):
+                run_data["restart_recovery"] = {
+                    **(previous_recovery or {}),
+                    "interrupted_waiting_kind": interrupted_kind,
                     "available": True,
                     "step_id": int(run.current_step_id),
                     "recovered_at": completed_at.isoformat(),
-                },
-            })
+                }
             run.run_data = json.dumps(run_data)
         from distr.core.db.kanban import KanbanTicket
 
@@ -759,6 +763,8 @@ def _cleanup_orphaned_runs_on_startup() -> None:
                 except (TypeError, ValueError):
                     metadata = None
                 if isinstance(metadata, dict):
+                    if metadata.get('waiting_kind') == 'restart_recovery' and restart_owner_block_reason(db, latest_run, metadata):
+                        continue
                     if "queue_handoff_pending" in metadata or metadata.get("queue_handoff_finished") is True:
                         continue
                     if (metadata.get("source_type") == "workflow_queue"
@@ -869,13 +875,14 @@ def _recover_queued_ide_report(run_id: int, step_id: int) -> None:
 
 def _auto_resume_interrupted_runs(
     *, background: bool = True, unconfirmed_checkpoint_steps: set[tuple[int, int | None]] | None = None,
+    checkpoint_steps: set[tuple[int, int | None]] | None = None,
 ) -> None:
     """Run only after startup reconciliation, never across an approval gate."""
     from sqlalchemy import and_, case, func, or_
 
     from distr.core.workflow.run_prompts import auto_resume_decision, restart_prompt, run_label
 
-    eligible = []
+    eligible = {}
     queued_outcomes = []
     unconfirmed = unconfirmed_checkpoint_steps or set()
     with get_session() as db:
@@ -927,26 +934,38 @@ def _auto_resume_interrupted_runs(
                 continue
             if data.get("waiting_kind") != "restart_recovery":
                 continue
-            recovery = dict(data.get("restart_recovery") or {})
-            recovery.pop("auto_resume_pending", None)
-            allowed, attempts = auto_resume_decision(data, run.current_step_id or 0)
-            if (run.id, run.current_step_id) in unconfirmed:
-                recovery["decision_unconfirmed"] = True
-            data["restart_recovery"] = recovery
-            reason = restart_resume_block_reason(db, run, data)
-            if not reason and not allowed:
-                reason = "Automatic recovery retry limit reached"
+            if checkpoint_steps and (run.id, run.current_step_id) in checkpoint_steps:
+                recovery = data.get("restart_recovery")
+                if isinstance(recovery, dict) and "auto_resume_pending" in recovery:
+                    recovery.pop("auto_resume_pending")
+                    run.run_data = json.dumps(data)
+                continue
+            recovery = data.get("restart_recovery")
+            if recovery is None:
+                recovery = data["restart_recovery"] = {}
+            if isinstance(recovery, dict):
+                recovery.pop("auto_resume_pending", None)
+                if (run.id, run.current_step_id) in unconfirmed:
+                    recovery["decision_unconfirmed"] = True
+            owner_reason = restart_owner_block_reason(db, run, data)
+            reason = owner_reason or restart_resume_block_reason(db, run, data)
+            if not reason:
+                allowed, attempts = auto_resume_decision(data, run.current_step_id or 0)
+                if not allowed:
+                    reason = "Automatic recovery retry limit reached"
             if reason:
-                recovery["blocked_reason"] = reason
-                data["waiting_prompt"] = restart_prompt(run_label(data, ticket_id=run.ticket_id)) + " Recovery blocked: " + reason + "."
+                if isinstance(recovery, dict):
+                    recovery["blocked_reason"] = reason
+                if not owner_reason:
+                    data["waiting_prompt"] = restart_prompt(run_label(data, ticket_id=run.ticket_id)) + " Recovery blocked: " + reason + "."
                 logger.warning("Run %s cannot auto-resume: %s", run.id, reason)
             else:
+                retry_data = json.dumps(data)
                 counts = dict(recovery.get("auto_resume_counts") or {})
                 counts[str(run.current_step_id)] = attempts + 1
                 recovery.update({"auto_resume_counts": counts, "auto_resume_pending": True})
                 recovery.pop("blocked_reason", None)
-                eligible.append(int(run.id))
-            data["restart_recovery"] = recovery
+                eligible[int(run.id)] = (json.dumps(data), retry_data)
             run.run_data = json.dumps(data)
         db.commit()
     def resume(run_id):
@@ -984,7 +1003,17 @@ def _auto_resume_interrupted_runs(
                 db.commit()
     for target, args in queued_outcomes + [(resume, (run_id,)) for run_id in eligible]:
         if background:
-            threading.Thread(target=target, args=args, name=f"restart-recovery-{args[0]}", daemon=True).start()
+            try:
+                threading.Thread(target=target, args=args, name=f"restart-recovery-{args[0]}", daemon=True).start()
+            except RuntimeError:
+                logger.exception("Could not launch startup recovery worker for run %s", args[0])
+                if target is resume:
+                    claimed_data, retry_data = eligible[args[0]]
+                    with get_session() as db:
+                        db.query(AutoWorkflowRun).filter_by(id=args[0], status="waiting", run_data=claimed_data).update(
+                            {AutoWorkflowRun.run_data: retry_data}, synchronize_session=False,
+                        )
+                        db.commit()
         else:
             target(*args)
     increment_workflow_updated()
@@ -2961,19 +2990,24 @@ def cancel_run(run_id: int, *, workflow_id: Optional[int] = None, expected_check
     with get_session() as db:
         from distr.core.workflow.interactions import guard_workflow_checkpoint
         guard_workflow_checkpoint(db,run_id,expected_checkpoint)
-        if expected_chat_id is not None and expected_checkpoint is None and db.get_bind().dialect.name == "sqlite":
+        if expected_checkpoint is None and db.get_bind().dialect.name == "sqlite":
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         query = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id)
         if workflow_id is not None:
             query = query.filter(AutoWorkflowRun.workflow_id == workflow_id)
         if expected_chat_id is not None:
-            query = query.filter(
-                AutoWorkflowRun.chat_id == expected_chat_id,
-                AutoWorkflowRun.status.in_(["initializing", "queued", "running", "waiting", "paused"]),
-            )
+            query = query.filter(AutoWorkflowRun.chat_id == expected_chat_id)
         run = query.first()
-        if not run:
+        if not run or run.status not in {"initializing", "queued", "running", "waiting", "paused"}:
             return False
+        if isinstance(run, AutoWorkflowRun):
+            try:
+                data = json.loads(run.run_data or "{}")
+            except (TypeError, ValueError):
+                data = None
+            if isinstance(data, dict):
+                if data.get('waiting_kind') == 'restart_recovery' and restart_owner_block_reason(db, run, data):
+                    return False
         run.status = "cancelled"
         run.completed_at = utc_now_naive()
         if run.current_step_id:
@@ -3403,20 +3437,46 @@ def _resume_worker_needs_input(run_id: int, feedback: str, *, expected_checkpoin
     }
 
 
+def restart_owner_block_reason(db, run, data) -> str:
+    from distr.core.db import Chat
+    from distr.core.db.kanban import KanbanTicket
+
+    saved_project = data.get('project_id')
+    if run.chat_id is not None and saved_project is not None:
+        chat = db.get(Chat, run.chat_id)
+        if chat is not None and chat.parent_id is not None:
+            chat = db.get(Chat, chat.parent_id)
+        if chat is None or str(chat.project_id) != str(saved_project):
+            return 'The Development thread no longer belongs to the saved project. Review the original workflow scope.'
+    if run.ticket_id is not None:
+        recovery = data.get("restart_recovery")
+        if isinstance(recovery, dict) and "unreadable_run_data" in recovery:
+            return "The saved workflow scope could not be read. Review the run history."
+        ticket = db.get(KanbanTicket, run.ticket_id)
+        board = ticket.lane.board if ticket is not None and ticket.lane is not None else None
+        project = (ticket.linked_project_id or board.default_project_id) if board is not None else None
+        if (board is None or board.archived or (run.board_id is not None and board.id != run.board_id)
+                or (project is not None and saved_project is not None and str(project) != str(saved_project))):
+            return 'The workflow ticket no longer belongs to the saved board or project. Review the original workflow scope.'
+    return ''
+
+
 def restart_resume_block_reason(db, run, data) -> str:
     """Check whether replaying the saved step could repeat work or skip a decision."""
     from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+    from distr.core.workflow.run_prompts import restart_recovery_attempts
 
     step = db.get(AutoWorkflowStep, run.current_step_id) if run.current_step_id else None
     if step is None or step.workflow_id != run.workflow_id:
         return "No valid saved step is available to resume."
     recovery = data.get("restart_recovery") or {}
-    if not isinstance(recovery, dict):
+    if restart_recovery_attempts(data, step.id) is None or "unreadable_run_data" in recovery:
         return "The saved recovery context is invalid. Review the run history."
     if recovery.get("decision_unconfirmed"):
         return "The previous checkpoint decision could not be confirmed. Review the run history."
+    if data.get('pending_route_approval'):
+        return 'The interrupted step was already waiting for route approval. Review the run history.'
     if (recovery.get("interrupted_waiting_kind") not in (None, "", "restart_recovery")
-            or data.get("pending_route_approval")
             or data.get("human_intervention_state") == "needs_human_input"):
         return "The interrupted step was already waiting for a decision. Review the run history."
     started = (
@@ -3511,7 +3571,8 @@ def continue_waiting_step(
     if waiting_kind == "restart_recovery":
         clean = (optional_input or "").strip()
         if not literal_feedback and clean.lower() in {"stop", "cancel", "abort"}:
-            cancel_run(run_id,expected_checkpoint=expected_checkpoint)
+            if not cancel_run(run_id, expected_checkpoint=expected_checkpoint):
+                return {'error': 'The saved workflow scope changed. Review the run before stopping it.', 'status_code': 409}
             return {"success": True, "action": "end_run", "status": "cancelled"}
         with get_session() as db:
             from distr.core.workflow.interactions import guard_workflow_checkpoint
@@ -3529,6 +3590,12 @@ def continue_waiting_step(
                 return {"error": "The workflow checkpoint changed before it could resume", "status_code": 409}
             from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
 
+            if owner_reason := restart_owner_block_reason(db, run, run_data):
+                recovery = run_data.get('restart_recovery')
+                if isinstance(recovery, dict) and recovery.pop('auto_resume_pending', None):
+                    run.run_data = json.dumps(run_data)
+                    db.commit()
+                return {'error': owner_reason, 'status_code': 409}
             reason = restart_resume_block_reason(db, run, run_data)
             if reason:
                 recovery = run_data.get("restart_recovery")

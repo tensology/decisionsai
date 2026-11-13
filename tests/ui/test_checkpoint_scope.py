@@ -2,13 +2,15 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from playwright.sync_api import expect
 
 from tests.core.test_workflow_interactions import (
-    _clear_interactions, crowded_development_checkpoints, paired_checkpoint, restart_checkpoint,
+    _bind_moved_restart_ticket, _clear_interactions, crowded_development_checkpoints, paired_checkpoint, restart_checkpoint,
 )
 from tests.ui.test_development_harness_playwright import URL, _install_api, _open_details
 from tests.ui.test_incoming_dismiss_undo import fixture_base
@@ -17,20 +19,67 @@ pytestmark = pytest.mark.e2e_playwright
 EVIDENCE = Path("/tmp/decisions-checkpoint-scope")
 
 
-@pytest.mark.parametrize("surface,width", [("desktop", 1440), ("desktop", 390), ("paired", 1440), ("paired", 390)])
-@pytest.mark.parametrize("blocked", [False, True])
-def test_development_thread_reviews_interrupted_workflow(page, fixture_base, restart_checkpoint, surface, width, blocked):
+@pytest.mark.parametrize('width', [390, 768, 1280, 1440])
+@pytest.mark.parametrize('surface', ['desktop', 'paired'])
+@pytest.mark.parametrize('scenario', [
+    'ready', 'blocked', 'moved', 'launch_failure', 'startup_failure', 'auto_startup_failure', 'damaged_recovery',
+    'unreadable_scope',
+])
+def test_development_thread_reviews_interrupted_workflow(page, fixture_base, restart_checkpoint, surface, width, scenario,
+                                                         monkeypatch):
     from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher, interactions
 
     scope = restart_checkpoint
     execution = "/api/workflows/studio/tasks/17/execution"
     title = "Review interrupted workflow"
-    if blocked:
+    if scenario in {'moved', 'unreadable_scope'}:
+        _bind_moved_restart_ticket(scope)
+    if scenario == 'unreadable_scope':
+        with scope.factory.begin() as db:
+            run = db.get(AutoWorkflowRun, 20)
+            run.status = 'running'
+            run.run_data = '{"project_id":9,"execution_route":'
+        dispatcher._cleanup_orphaned_runs_on_startup()
+        dispatcher._auto_resume_interrupted_runs(background=False)
+    if scenario == 'blocked':
         with scope.factory.begin() as db:
             worker = ProjectExecutionSession(project_id=9, workflow_id=10, run_id=20, step_id=30)
             db.add(worker)
             db.flush()
             db.add(ProjectExecutionEvent(session_id=worker.id, event_type="executor_start"))
+    if scenario in {'launch_failure', 'startup_failure'}:
+        save_worker = interactions._start_checkpoint_worker
+
+        def fail_launch(**_):
+            monkeypatch.setattr(interactions, '_start_checkpoint_worker', save_worker)
+            raise RuntimeError("can't start new thread")
+
+        if scenario == 'startup_failure':
+            token = scope.client.get(execution).json()['checkpoint']['token']
+            response = scope.client.post(execution + '/checkpoint', headers=scope.headers,
+                                         json={'run_id': 20, 'token': token, 'action': 'continue'})
+            assert response.json()['queued']
+            scope.workers.clear()
+        monkeypatch.setattr(interactions, '_start_checkpoint_worker', fail_launch)
+        if scenario == 'startup_failure':
+            unconfirmed, checkpoint_steps = interactions.recover_interrupted_checkpoint_decisions()
+            dispatcher._auto_resume_interrupted_runs(background=False, unconfirmed_checkpoint_steps=unconfirmed,
+                                                     checkpoint_steps=checkpoint_steps)
+    if scenario == 'auto_startup_failure':
+        start = Mock(side_effect=RuntimeError("can't start new thread"))
+        with monkeypatch.context() as patch:
+            patch.setattr(dispatcher, 'threading', SimpleNamespace(Thread=Mock(return_value=SimpleNamespace(start=start))))
+            dispatcher._auto_resume_interrupted_runs()
+        start.assert_called_once()
+    if scenario == 'damaged_recovery':
+        with scope.factory.begin() as db:
+            run = db.get(AutoWorkflowRun, 20)
+            data = json.loads(run.run_data)
+            data['restart_recovery'] = {'auto_resume_counts': {'30': 'broken'}}
+            run.run_data = json.dumps(data)
+        dispatcher._auto_resume_interrupted_runs(background=False)
     page.set_viewport_size({"width": width, "height": 900})
 
     if surface == "desktop":
@@ -58,12 +107,15 @@ def test_development_thread_reviews_interrupted_workflow(page, fixture_base, res
         if not remote:
             pytest.skip("Set DECISIONS_REMOTE_APP_TEST_URL to the local App View development server.")
         project = {"id": 9, "name": "Workflow test project"}
-        chat = {"id": 17, "title": "Workflow test thread", "project_id": 9, "development": True, "messages": []}
+        chat = {"id": 17, "title": "Workflow test thread", "project_id": 9, "development": True, "messages": [],
+                "development_board_key": "decisions:70"}
         reads = {
+            "/api/tickets/boards": [{"id": 70, "name": project['name'], "default_project_id": 9}],
             "/api/projects": [project],
             "/api/projects/9": project,
             "/api/chats?surface=development": [chat],
             "/api/chats/17?surface=development": chat,
+            "/api/workflows/studio/tasks/17/commands?include_terminal=false": {"items": []},
         }
 
         def relay(socket):
@@ -91,25 +143,59 @@ def test_development_thread_reviews_interrupted_workflow(page, fixture_base, res
         page.route_web_socket("**/ws/telegram?*", relay)
         page.goto(f"{remote}?channel=paired-test")
         page.get_by_title("App View", exact=True).click()
-        page.get_by_role("button", name="Projects", exact=True).click()
-        page.get_by_text(project["name"], exact=True).click()
+        page.get_by_role("button", name="Boards", exact=True).click()
+        page.get_by_role("button", name=project["name"], exact=True).click()
         page.get_by_role("button", name=chat["title"]).click()
-        page.get_by_role("button", name=title, exact=True).click()
-        panel = page.get_by_role("dialog", name=title)
+        if scenario in {'moved', 'unreadable_scope'}:
+            panel = page.get_by_role('region', name='Development execution')
+            expect(panel.get_by_role('button', name=title, exact=True)).to_have_count(0)
+        else:
+            page.get_by_role("button", name=title, exact=True).click()
+            panel = page.get_by_role("dialog", name=title)
 
     resume = panel.get_by_role("button", name="Resume saved step", exact=True)
-    expect(panel.get_by_role("button", name="Stop workflow", exact=True)).to_be_enabled()
-    if blocked:
-        expect(panel).to_contain_text("already started")
+    stop = panel.get_by_role("button", name="Stop workflow", exact=True)
+    if scenario in {'moved', 'unreadable_scope'}:
+        expected = ('no longer belongs to the saved board or project' if scenario == 'moved'
+                    else 'The saved workflow scope could not be read.')
+        expect(panel).to_contain_text(expected)
+        expect(resume).to_have_count(0)
+        expect(stop).to_have_count(0)
+        expect(page.get_by_role('button', name='Stop', exact=True)).to_have_count(0)
+    elif scenario in {'blocked', 'damaged_recovery'}:
+        expect(stop).to_be_enabled()
+        expected = 'already started' if scenario == 'blocked' else 'The saved recovery context is invalid.'
+        expect(panel).to_contain_text(expected)
         expect(resume).to_have_count(0)
     else:
+        expect(stop).to_be_enabled()
         expect(panel).to_contain_text(scope.prompt)
         expect(resume).to_be_enabled()
+    if surface == 'desktop':
+        expect(page.locator('#task-state b')).to_have_text('Interrupted')
+        expect(page.locator('#stop-run-button')).to_be_hidden()
+        expect(page.locator('#development-task-header .task-breadcrumb')).to_have_css('overflow-x', 'hidden')
+        assert page.locator('#header-task').evaluate('''node => {
+            const title = node.getBoundingClientRect();
+            const breadcrumb = node.parentElement.getBoundingClientRect();
+            return Math.min(title.right, breadcrumb.right) - title.left >= 24;
+        }''')
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     EVIDENCE.mkdir(exist_ok=True)
-    page.screenshot(path=EVIDENCE / f"{width}-{surface}-restart-{'blocked' if blocked else 'ready'}.png", animations="disabled")
+    page.screenshot(path=EVIDENCE / f"{width}-{surface}-restart-{scenario}.png", animations="disabled")
     assert not scope.workers
-    if not blocked:
+    if scenario == 'launch_failure':
+        resume.click()
+        if surface == 'desktop':
+            expect(page.get_by_text('Could not start the workflow decision. Please try again.', exact=True)).to_be_visible()
+        else:
+            expect(panel.get_by_text('Decision could not be confirmed.', exact=False)).to_be_visible()
+        assert not scope.workers
+        page.screenshot(path=EVIDENCE / f"{width}-{surface}-restart-retry.png", animations="disabled")
+        if surface == 'paired':
+            panel.get_by_role('button', name='Check checkpoint status').click()
+        expect(resume).to_be_enabled()
+    if scenario in {'ready', 'launch_failure', 'startup_failure', 'auto_startup_failure'}:
         resume.click()
         expect(page.get_by_text("Applying checkpoint decision", exact=False).first).to_be_visible()
         assert [worker["action"] for worker in scope.workers] == ["continue"]
@@ -276,7 +362,7 @@ def test_paired_checkpoint_review_recovers_lost_decisions(page, paired_checkpoin
         with pytest.raises(SystemExit, match="desktop restarted"):
             interactions._apply_claimed_interaction(**scope.workers[0])
         monkeypatch.setattr(interactions, "_APPLY_WORKER_ID", "restarted-desktop")
-        assert interactions.recover_interrupted_checkpoint_decisions() == {(20, 30)}
+        assert interactions.recover_interrupted_checkpoint_decisions() == ({(20, 30)}, set())
     elif delivered:
         with scope.factory.begin() as db:
             db.get(AutoWorkflowRun, 20).status = "running"

@@ -22,7 +22,8 @@ def isolated_database(monkeypatch):
     session = lambda: _real_session(factory)
     monkeypatch.setattr(__name__ + '.get_session', session)
     for module in ('distr.core.db', 'distr.core.workflow.dispatcher',
-                   'distr.core.workflow.service', 'distr.core.workflow.step_executor', 'distr.core.workflow.router'):
+                   'distr.core.workflow.service', 'distr.core.workflow.step_executor', 'distr.core.workflow.router',
+                   'distr.core.workflow.post_execution'):
         monkeypatch.setattr(module + '.get_session', session)
     monkeypatch.setattr(dispatcher, 'record_workflow_chat_event', Mock())
 

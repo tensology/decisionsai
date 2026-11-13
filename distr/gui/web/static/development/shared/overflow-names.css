@@ -41,6 +41,9 @@
     flex-wrap: nowrap;
     min-width: 0;
 }
+#development-task-header.chat-mode > .task-breadcrumb {
+    overflow: hidden;
+}
 .task-breadcrumb > #header-project,
 .development-kanban-breadcrumb > span,
 .development-kanban-breadcrumb #development-kanban-board {

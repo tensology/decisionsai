@@ -223,6 +223,28 @@ def is_stalled(*, status: str, last_activity_at: Optional[datetime], started_at:
 DEFAULT_MAX_AUTO_RESUMES = 2
 
 
+def restart_recovery_attempts(run_data: dict, step_id: int) -> int | None:
+    """Return the saved retry count, or None if it cannot be trusted."""
+    if not isinstance(run_data, dict):
+        return None
+    recovery = run_data.get("restart_recovery")
+    if recovery is not None and not isinstance(recovery, dict):
+        return None
+    counts = (recovery or {}).get("auto_resume_counts")
+    if counts is not None and not isinstance(counts, dict):
+        return None
+    saved = (counts or {}).get(str(step_id))
+    if saved is None:
+        return 0
+    if isinstance(saved, bool) or not isinstance(saved, (int, str)):
+        return None
+    try:
+        count = int(saved)
+    except ValueError:
+        return None
+    return count if count >= 0 else None
+
+
 def auto_resume_decision(run_data: dict, step_id: int, *, max_resumes: int = DEFAULT_MAX_AUTO_RESUMES,
                          enabled: bool = True) -> tuple[bool, int]:
     """Return (should_auto_resume, attempts_so_far_for_this_step).
@@ -230,9 +252,9 @@ def auto_resume_decision(run_data: dict, step_id: int, *, max_resumes: int = DEF
     Only plain mid-step restarts qualify: never when the run was already
     waiting on a human gate (callers only pass status=='running' runs).
     """
-    rec = run_data.get("restart_recovery") if isinstance(run_data, dict) else None
-    counts = (rec or {}).get("auto_resume_counts") if isinstance(rec, dict) else None
-    attempts = int((counts or {}).get(str(int(step_id))) or 0)
+    attempts = restart_recovery_attempts(run_data, step_id)
+    if attempts is None:
+        return False, 0
     if not enabled or max_resumes <= 0:
         return False, attempts
     return attempts < max_resumes, attempts

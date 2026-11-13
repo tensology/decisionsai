@@ -627,6 +627,231 @@ def test_development_restart_review_resumes_saved_step_once(restart_checkpoint, 
     assert len(scope.workers) == 1
 
 
+@pytest.mark.parametrize("surface", ["desktop", "remote"])
+def test_development_resume_worker_start_failure_keeps_review_retryable(restart_checkpoint, monkeypatch, surface):
+    from unittest.mock import Mock
+    from distr.core.workflow import dispatcher, interactions
+
+    scope = restart_checkpoint
+    execution = "/api/workflows/studio/tasks/17/execution"
+    token = scope.client.get(execution).json()["checkpoint"]["token"]
+    body = {"run_id": 20, "token": token, "action": "continue"}
+    path = execution + "/checkpoint"
+    if surface == "desktop":
+        path = f"/api/workflows/studio/interactions/{token}/resolve"
+
+    launch = Mock(side_effect=[RuntimeError("can't start new thread"), None])
+    monkeypatch.setattr(interactions, "_start_checkpoint_worker", launch)
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    monkeypatch.setattr(dispatcher, "record_workflow_chat_event", lambda *_, **__: None)
+
+    failed = scope.client.post(path, json=body, headers=scope.headers)
+    assert failed.status_code == 503 and "try again" in failed.json()["detail"].lower()
+    state = scope.client.get(execution).json()
+    assert state["checkpoint"]["token"] == token
+    assert not state.get("checkpoint_decision_pending")
+    dispatch.assert_not_called()
+
+    assert scope.client.post(path, json=body, headers=scope.headers).json()["queued"]
+    assert scope.client.post(path, json=body, headers=scope.headers).json()["idempotent"]
+    failed_claim, retry_claim = [call.kwargs for call in launch.call_args_list]
+    assert interactions._apply_claimed_interaction(**failed_claim)["status_code"] == 409
+    assert interactions._apply_claimed_interaction(**retry_claim)["success"]
+    dispatch.assert_called_once_with(20, 30)
+
+
+@pytest.mark.parametrize("recovery", ["queued", "launch_failure", "expired"])
+def test_startup_recovery_does_not_resume_over_a_saved_stop(restart_checkpoint, monkeypatch, recovery):
+    from unittest.mock import Mock
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher, interactions
+
+    scope = restart_checkpoint
+    execution = "/api/workflows/studio/tasks/17/execution"
+    path = execution + "/checkpoint"
+    token = scope.client.get(execution).json()["checkpoint"]["token"]
+    body = {"run_id": 20, "token": token, "action": "stop"}
+    assert scope.client.post(path, json=body, headers=scope.headers).json()["queued"]
+    original_claim, = scope.workers
+    scope.workers.clear()
+    launch = interactions._start_checkpoint_worker
+    if recovery == "launch_failure":
+        monkeypatch.setattr(interactions, "_start_checkpoint_worker", Mock(side_effect=RuntimeError("can't start new thread")))
+    if recovery == "expired":
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE workflow_interactions SET expires_at=0 WHERE token=:token"), {"token": token})
+
+    recovered = interactions.recover_interrupted_checkpoint_decisions()
+    if recovery != "queued":
+        assert interactions.recover_interrupted_checkpoint_decisions() == (set(), {(20, 30)})
+        retry_token = scope.client.get(execution).json()["checkpoint"]["token"]
+        assert (retry_token == token) is (recovery == "launch_failure")
+    unconfirmed, checkpoint_steps = recovered
+    assert not unconfirmed and checkpoint_steps == {(20, 30)}
+    with scope.factory.begin() as db:
+        run = db.get(AutoWorkflowRun, 20)
+        data = json.loads(run.run_data)
+        data["restart_recovery"] = {"auto_resume_pending": True}
+        run.run_data = json.dumps(data)
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    dispatcher._auto_resume_interrupted_runs(
+        background=False, unconfirmed_checkpoint_steps=unconfirmed, checkpoint_steps=checkpoint_steps,
+    )
+    dispatch.assert_not_called()
+    with scope.factory() as db:
+        assert "auto_resume_pending" not in json.loads(db.get(AutoWorkflowRun, 20).run_data)["restart_recovery"]
+
+    if recovery != "queued":
+        monkeypatch.setattr(interactions, "_start_checkpoint_worker", launch)
+        assert scope.client.post(path, json={**body, "token": retry_token}, headers=scope.headers).json()["queued"]
+        assert interactions._apply_claimed_interaction(**original_claim)["status_code"] == 409
+    worker, = scope.workers
+    assert interactions._apply_claimed_interaction(**worker)["success"]
+    dispatch.assert_not_called()
+    with scope.factory() as db:
+        assert db.get(AutoWorkflowRun, 20).status == "cancelled"
+
+
+def test_automatic_resume_launch_failure_reopens_review_and_recovers_the_other_run(restart_checkpoint, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher, interactions
+
+    scope = restart_checkpoint
+    with scope.factory.begin() as db:
+        other = db.get(AutoWorkflowRun, 21)
+        other.run_data = json.dumps({
+            "project_id": 10, "waiting_kind": "restart_recovery", "waiting_prompt": "Other interrupted step.",
+        })
+
+    def launch(*, target, args, **_):
+        def start():
+            if args[0] == 20:
+                raise RuntimeError("can't start new thread")
+            target(*args)
+
+        return SimpleNamespace(start=start)
+
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "threading", SimpleNamespace(Thread=launch))
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    monkeypatch.setattr(dispatcher, "record_workflow_chat_event", lambda *_, **__: None)
+    dispatcher._auto_resume_interrupted_runs()
+    dispatch.assert_called_once_with(21, 31)
+    with scope.factory() as db:
+        saved = db.get(AutoWorkflowRun, 20)
+        recovery = json.loads(saved.run_data)["restart_recovery"]
+        assert saved.status == "waiting" and "auto_resume_pending" not in recovery
+        assert recovery.get("auto_resume_counts", {}).get("30", 0) == 0
+
+    execution = "/api/workflows/studio/tasks/17/execution"
+    token = scope.client.get(execution).json()["checkpoint"]["token"]
+    body = {"run_id": 20, "token": token, "action": "continue"}
+    assert scope.client.post(execution + "/checkpoint", json=body, headers=scope.headers).json()["queued"]
+    worker, = scope.workers
+    assert interactions._apply_claimed_interaction(**worker)["success"]
+    assert [call.args for call in dispatch.call_args_list] == [(21, 31), (20, 30)]
+
+
+@pytest.mark.parametrize("damaged_recovery", ["invalid recovery", [], {"auto_resume_counts": "broken"},
+                                             {"auto_resume_counts": {"30": "broken"}},
+                                             {"auto_resume_counts": {"30": -1}}])
+def test_damaged_restart_context_holds_only_its_own_run(restart_checkpoint, monkeypatch, damaged_recovery):
+    from unittest.mock import Mock
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher, interactions
+
+    scope = restart_checkpoint
+    with scope.factory.begin() as db:
+        damaged = db.get(AutoWorkflowRun, 20)
+        damaged.status = "running"
+        damaged.run_data = json.dumps({"project_id": 9, "restart_recovery": damaged_recovery})
+        healthy = db.get(AutoWorkflowRun, 21)
+        healthy.status = "running"
+        healthy.run_data = json.dumps({"project_id": 10, "restart_recovery": {"auto_resume_counts": {"31": "0"}}})
+
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    monkeypatch.setattr(dispatcher, "record_workflow_chat_event", lambda *_, **__: None)
+    dispatcher._cleanup_orphaned_runs_on_startup()
+    dispatcher._auto_resume_interrupted_runs(background=False)
+    dispatch.assert_called_once_with(21, 31)
+    with scope.factory() as db:
+        damaged = db.get(AutoWorkflowRun, 20)
+        assert damaged.status == "waiting"
+        saved = json.loads(damaged.run_data)["restart_recovery"]
+        if isinstance(damaged_recovery, dict):
+            assert saved["auto_resume_counts"] == damaged_recovery["auto_resume_counts"]
+        else:
+            assert saved == damaged_recovery
+
+    path = "/api/workflows/studio/tasks/17/execution"
+    state = scope.client.get(path).json()
+    assert "saved recovery context is invalid" in state["waiting_prompt"]
+    checkpoint = state["checkpoint"]
+    assert checkpoint["allowed_actions"] == ["stop"]
+    body = {"run_id": 20, "token": checkpoint["token"], "action": "continue"}
+    result = scope.client.post(path + "/checkpoint", headers=scope.headers, json=body)
+    assert result.status_code == 409 and "saved recovery context is invalid" in result.json()["detail"]
+    assert not scope.workers
+    stop = scope.client.post(path + "/checkpoint", headers=scope.headers, json={**body, "action": "stop"})
+    assert stop.json()["queued"]
+    worker, = scope.workers
+    assert interactions._apply_claimed_interaction(**worker)["success"]
+    with scope.factory() as db:
+        assert db.get(AutoWorkflowRun, 20).status == "cancelled"
+        assert db.get(AutoWorkflowRun, 21).status == "running"
+    dispatch.assert_called_once_with(21, 31)
+
+
+@pytest.mark.parametrize(("saved_data", "ticketed"), [
+    ('{"project_id":9,"execution_route":', False), ('["original context"]', False), ('null', False),
+    ('{"project_id":9,"execution_route":', True),
+])
+def test_unreadable_run_data_cannot_replay_or_stop_a_reassigned_ticket(restart_checkpoint, monkeypatch, saved_data, ticketed):
+    from unittest.mock import Mock
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow import dispatcher
+
+    scope = restart_checkpoint
+    ticket_id = _bind_moved_restart_ticket(scope) if ticketed else None
+    with scope.factory.begin() as db:
+        damaged = db.get(AutoWorkflowRun, 20)
+        damaged.status, damaged.run_data = "running", saved_data
+        healthy = db.get(AutoWorkflowRun, 21)
+        healthy.status, healthy.run_data = "running", '{"project_id":10}'
+
+    dispatch = Mock(return_value={"success": True})
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    monkeypatch.setattr(dispatcher, "record_workflow_chat_event", lambda *_, **__: None)
+    dispatcher._cleanup_orphaned_runs_on_startup()
+    dispatcher._auto_resume_interrupted_runs(background=False)
+    dispatch.assert_called_once_with(21, 31)
+
+    path = "/api/workflows/studio/tasks/17/execution"
+    state = scope.client.get(path).json()
+    assert state["status"] == "waiting"
+    assert "unreadable_run_data" not in json.dumps(state)
+    assert dispatcher.continue_waiting_step(20)["status_code"] == 409
+    if ticketed:
+        assert "saved workflow scope could not be read" in state["waiting_prompt"]
+        assert "checkpoint" not in state and state["can_stop"] is False
+        assert dispatcher.cancel_run(20) is False
+    else:
+        assert "saved recovery context is invalid" in state["waiting_prompt"]
+        assert state["checkpoint"]["allowed_actions"] == ["stop"]
+    with scope.factory() as db:
+        data = json.loads(db.get(AutoWorkflowRun, 20).run_data)
+        assert data["restart_recovery"]["unreadable_run_data"] == saved_data
+        if ticketed:
+            assert db.get(KanbanTicket, ticket_id).workflow_status == "queued"
+    dispatch.assert_called_once_with(21, 31)
+
+
 def test_development_restart_refuses_replay_after_executor_started(restart_checkpoint):
     from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
 
@@ -659,6 +884,73 @@ def test_development_restart_rejects_a_stale_review_after_saved_step_changes(res
     assert scope.client.post(execution + "/checkpoint", json=body, headers=scope.headers).status_code == 409
     assert scope.client.get(execution).json()["checkpoint"]["token"] != token
     assert not scope.workers
+
+
+def _bind_moved_restart_ticket(scope):
+    from distr.core.db import Chat
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    with scope.factory.begin() as db:
+        board = KanbanBoard(name='Delivery', default_project_id=9)
+        db.add(board)
+        db.flush()
+        lane = KanbanLane(name='In Progress', board_id=board.id, position=0)
+        db.add(lane)
+        db.flush()
+        ticket = KanbanTicket(title='Delivery scope', lane_id=lane.id, linked_project_id=10,
+                              source_chat_id=17, workflow_status='queued')
+        db.add(ticket)
+        db.flush()
+        ticket_id = ticket.id
+        run = db.get(AutoWorkflowRun, 20)
+        run.board_id, run.ticket_id = board.id, ticket_id
+        db.get(Chat, 17).params = json.dumps({'development': {'source_type': 'workflow', 'ticket_id': ticket_id}})
+        return ticket_id
+
+
+def test_development_restart_checks_saved_ticket_project_before_first_review(restart_checkpoint, monkeypatch):
+    from unittest.mock import Mock
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.workflow import dispatcher, interactions
+
+    scope = restart_checkpoint
+    ticket_id = _bind_moved_restart_ticket(scope)
+    dispatch = Mock(return_value={'success': True})
+    monkeypatch.setattr(dispatcher, '_dispatch_workflow_step', dispatch)
+    monkeypatch.setattr(dispatcher, 'record_workflow_chat_event', lambda *args, **kwargs: None)
+    execution = '/api/workflows/studio/tasks/17/execution'
+
+    blocked = scope.client.get(execution).json()
+    assert 'no longer belongs to the saved board or project' in blocked['waiting_prompt']
+    assert 'checkpoint' not in blocked and blocked['exact_stop'] is None
+    controls = scope.client.get('/api/workflows/studio/control-state', params={'chat_id': 17, 'run_id': 20}).json()
+    [checkpoint] = controls['interactions']
+    assert checkpoint['allowed_actions'] == []
+    body = {'run_id': 20, 'token': checkpoint['token']}
+    for action in ('continue', 'stop'):
+        assert scope.client.post(execution + '/checkpoint', json={**body, 'action': action}, headers=scope.headers).status_code == 409
+    assert not scope.workers
+    assert not dispatcher.cancel_run(20)
+    assert dispatcher.continue_waiting_step(20)['status_code'] == 409
+    dispatcher._auto_resume_interrupted_runs(background=False)
+    dispatch.assert_not_called()
+
+    with scope.factory.begin() as db:
+        ticket = db.get(KanbanTicket, ticket_id)
+        assert ticket.workflow_status == 'queued'
+        ticket.linked_project_id = 9
+    state = scope.client.get(execution).json()
+    assert state['waiting_prompt'] == scope.prompt
+    restored = state['checkpoint']
+    assert restored['allowed_actions'] == ['continue', 'stop']
+    assert restored['token'] != body['token']
+    body = {**body, 'action': 'continue', 'token': restored['token']}
+    assert scope.client.post(execution + '/checkpoint', json=body, headers=scope.headers).json()['queued']
+    assert scope.client.post(execution + '/checkpoint', json=body, headers=scope.headers).json()['idempotent']
+    assert len(scope.workers) == 1
+    assert interactions._apply_claimed_interaction(**scope.workers[0])['success']
+    dispatch.assert_called_once_with(20, 30)
 
 
 def test_checkpoint_revision_replay_preserves_the_first_guidance_across_surfaces(paired_checkpoint):
@@ -762,8 +1054,9 @@ def test_checkpoint_startup_recovers_only_a_decision_that_never_started(
 
     scope.workers.clear()
     monkeypatch.setattr(interactions, "_APPLY_WORKER_ID", "restarted-process")
-    blocked = interactions.recover_interrupted_checkpoint_decisions()
+    blocked, checkpoint_steps = interactions.recover_interrupted_checkpoint_decisions()
     assert blocked == ({(20, 30)} if interruption in {"started", "legacy"} else set())
+    assert checkpoint_steps == ({(20, 30)} if interruption == "queued" else set())
     if interruption == "queued":
         interactions.recover_interrupted_checkpoint_decisions()
         first_recovery, repeated_recovery = scope.workers
