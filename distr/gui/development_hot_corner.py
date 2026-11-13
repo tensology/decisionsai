@@ -273,6 +273,38 @@ def recent_development_threads(groups: list[dict[str, Any]]) -> list[dict[str, A
     )
 
 
+def running_automation_threads(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Automation threads with a live run right now (same rule as the web sidebar group)."""
+    seen: set[int] = set()
+    threads = []
+    for group in groups:
+        for thread in group["threads"]:
+            chat_id = int(thread["chat_id"])
+            if thread.get("source_type") == "automation" and thread.get("active") and chat_id not in seen:
+                seen.add(chat_id)
+                threads.append(thread)
+    return sorted(
+        threads,
+        key=lambda thread: (float(thread.get("modified_at") or 0), int(thread["chat_id"])),
+        reverse=True,
+    )
+
+
+# Sidebar sections, top to bottom, matching the web sidebar:
+# Running automations, No project, Pinned, Boards, Recent. Each collapses on its own.
+SECTION_SETTINGS = {
+    "running": "sidebar/runningExpanded",
+    "no_project": "sidebar/noProjectExpanded",
+    "pinned": "sidebar/pinnedExpanded",
+    "projects": "sidebar/projectsExpanded",
+    "proposals": "sidebar/proposalsExpanded",
+}
+
+
+def section_title_text(title: str, expanded: bool) -> str:
+    return f"{'▾' if expanded else '▸'} {title}"
+
+
 def weekly_entry_seconds(entries: list[DevelopmentTimeEntry]) -> int:
     reset_id = max(
         (int(entry.id) for entry in entries if entry.source == "reset"),
@@ -527,6 +559,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._section_rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
         self._view_settings = QtCore.QSettings("Tensology", "DecisionsAI")
         self._section_expanded = {
+            "running": self._view_settings.value("sidebar/runningExpanded", True, type=bool),
+            "no_project": self._view_settings.value("sidebar/noProjectExpanded", False, type=bool),
+            "pinned": self._view_settings.value("sidebar/pinnedExpanded", True, type=bool),
             "recent": False,
             "projects": self._view_settings.value("sidebar/projectsExpanded", True, type=bool),
             "proposals": self._view_settings.value("sidebar/proposalsExpanded", False, type=bool),
@@ -539,6 +574,9 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._proposal_change_version = 0
         self._proposal_tasks = {}
         self._project_expanded: dict[int | None, bool] = {}
+        # Threads with no project live in their own section, not as a project row.
+        self._no_project_weekly = 0
+        self._no_project_threads: list[dict[str, Any]] = []
         self._context_menu: QtWidgets.QMenu | None = None
         self._rendered_at = time.monotonic()
         self._last_live_sync = self._rendered_at
@@ -892,7 +930,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
     def _refresh_threads(self) -> None:
         selected_key = self._selected_item_key
         for key, item in self._section_rows.items():
-            if key in self._section_expanded:
+            # A childless section reports collapsed; keep the remembered choice instead.
+            if key in self._section_expanded and item.childCount():
                 self._section_expanded[key] = item.isExpanded()
         for item, group in self._project_rows:
             self._project_expanded[group["project_id"]] = item.isExpanded()
@@ -907,20 +946,28 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             logger.warning("Could not load Development hot-corner list: %s", exc)
             groups = []
         self._sync_pinned_projects(groups)
-        pinned_groups = [group for group in groups if group["project_id"] in self._pinned_project_ids]
-        regular_groups = [group for group in groups if group not in pinned_groups]
+        no_project = next((group for group in groups if group["project_id"] is None), None)
+        project_groups = [group for group in groups if group["project_id"] is not None]
+        pinned_groups = [group for group in project_groups if group["project_id"] in self._pinned_project_ids]
+        regular_groups = [group for group in project_groups if group not in pinned_groups]
         recent_threads = recent_development_threads(groups)
+        running_threads = running_automation_threads(groups)
+        self._no_project_weekly = int(no_project["weekly_seconds"]) if no_project else 0
+        self._no_project_threads = list(no_project["threads"]) if no_project else []
 
         for section_key, section_title, section_groups in (
+            ("running", "Running automations", running_threads),
+            ("no_project", "No project", self._no_project_threads),
             ("pinned", "Pinned", pinned_groups),
-            ("projects", "Projects", regular_groups),
+            ("projects", "Boards", regular_groups),
             ("recent", "Recent", recent_threads),
         ):
             if not section_groups and section_key != "pinned":
                 continue
-            section = QtWidgets.QTreeWidgetItem([section_title])
+            section = QtWidgets.QTreeWidgetItem([section_title_text(section_title, self._section_expanded[section_key])])
             section.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
-            section.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "section", "key": section_key})
+            section.setData(0, QtCore.Qt.ItemDataRole.UserRole,
+                            {"kind": "section", "key": section_key, "title": section_title})
             section_font = section.font(0)
             section_font.setBold(True)
             section_font.setUnderline(True)
@@ -928,10 +975,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             section.setFont(0, section_font)
             section.setForeground(0, QtGui.QColor("#c6cad1"))
             self.tree.addTopLevelItem(section)
-            if section_key == "pinned":
-                section.setChildIndicatorPolicy(QtWidgets.QTreeWidgetItem.ChildIndicatorPolicy.DontShowIndicator)
-            else:
-                section.setExpanded(self._section_expanded[section_key])
+            if section_key == "running":
+                section.setForeground(0, QtGui.QColor("#f59e0b"))
             self._section_rows[section_key] = section
 
             if section_key == "recent":
@@ -942,9 +987,14 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
                     more.setData(0, QtCore.Qt.ItemDataRole.UserRole, {"kind": "recent_more"})
                     more.setForeground(0, QtGui.QColor("#8f949e"))
                     section.addChild(more)
+            elif section_key in {"running", "no_project"}:
+                for thread in section_groups:
+                    self._add_recent_row(section, thread, selected_key)
             else:
                 for group in section_groups:
-                    self._add_project_row(None if section_key == "pinned" else section, group, selected_key)
+                    self._add_project_row(section, group, selected_key)
+            # Expand after the rows exist so Qt keeps the state; each section is independent.
+            section.setExpanded(self._section_expanded[section_key])
 
         self._rendered_at = time.monotonic()
         self._refresh_elapsed_labels(self._rendered_at)
@@ -1267,6 +1317,8 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             weekly = int(group["weekly_seconds"]) + delta * running
             item.setText(1, format_duration(weekly))
             total += weekly
+        running_loose = sum(1 for thread in self._no_project_threads if thread["time_running"])
+        total += int(self._no_project_weekly) + delta * running_loose
         self.footer.setText(f"Total  {format_duration(total)}")
 
     def _sync_live_state(self, now: float) -> None:
@@ -1289,6 +1341,19 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         if set(fresh_threads) != {int(thread["chat_id"]) for _, thread in self._thread_rows}:
             self._refresh_threads()
             return
+        running_now = [int(thread["chat_id"]) for thread in running_automation_threads(fresh_groups)]
+        running_section = self._section_rows.get("running")
+        running_shown = [
+            int(value["chat_id"])
+            for index in range(running_section.childCount() if running_section is not None else 0)
+            if isinstance(value := running_section.child(index).data(0, QtCore.Qt.ItemDataRole.UserRole), dict)
+        ]
+        if running_now != running_shown:
+            self._refresh_threads()
+            return
+        self._no_project_weekly = next(
+            (int(group["weekly_seconds"]) for group in fresh_groups if group["project_id"] is None), 0
+        )
         for item, group in self._project_rows:
             fresh_group = fresh_by_project.get(group["project_id"])
             if fresh_group is None:
@@ -1400,8 +1465,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             key = value.get("key")
             if key in self._section_expanded:
                 self._section_expanded[key] = item.isExpanded()
-                if key in {"projects", "proposals"}:
-                    self._view_settings.setValue(f"sidebar/{key}Expanded", item.isExpanded())
+                if key in SECTION_SETTINGS:
+                    self._view_settings.setValue(SECTION_SETTINGS[key], item.isExpanded())
+                if value.get("title"):
+                    item.setText(0, section_title_text(str(value["title"]), item.isExpanded()))
                 if key == 'proposals':
                     item.setText(0, f"{'▾' if item.isExpanded() else '▸'} Proposals ({len(self._proposals)})")
 

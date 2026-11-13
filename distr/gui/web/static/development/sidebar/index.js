@@ -27,6 +27,8 @@ export function createSidebar({ context, actions, el }) {
         noProjectRevealedFor: 0,
         // Whole Pinned section collapsed (its header toggle). Pinned folders keep their own collapse.
         pinnedSectionCollapsed: false,
+        // Running automations header toggle (default open).
+        runningSectionCollapsed: false,
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
         showAllRecents: new URLSearchParams(window.location.search).get('recent') === '1',
         contextBoardKey: '',
@@ -45,6 +47,7 @@ export function createSidebar({ context, actions, el }) {
         state.noProjectExpanded = window.localStorage.getItem('decisions-development-no-project-expanded') === 'true';
         state.noProjectRevealedFor = Number(window.localStorage.getItem('decisions-development-no-project-revealed') || 0);
         state.pinnedSectionCollapsed = window.localStorage.getItem('decisions-development-pinned-section-collapsed') === 'true';
+        state.runningSectionCollapsed = window.localStorage.getItem('decisions-development-running-section-collapsed') === 'true';
     } catch (_) {
         /* Keep default preferences if storage is unavailable. */
     }
@@ -165,12 +168,21 @@ export function createSidebar({ context, actions, el }) {
         if (!anchor || document.getElementById('running-automations-section')) return;
         anchor.insertAdjacentHTML('beforebegin',
             '<section class="sidebar-bucket sidebar-running-automations hidden" id="running-automations-section" aria-label="Running automations">'
-            + '<div class="sidebar-section-label"><span>Running automations</span><small class="sidebar-section-count" id="running-automations-count"></small></div>'
+            + '<div class="sidebar-section-label"><button class="sidebar-section-toggle" type="button" id="running-automations-toggle" aria-expanded="true" aria-controls="running-automations-group">'
+            + '<span class="chevron" aria-hidden="true">▼</span><span>Running automations</span><small class="sidebar-section-count" id="running-automations-count"></small></button></div>'
             + '<div class="task-list" id="running-automations-group" aria-live="polite"></div></section>'
             + '<section class="sidebar-bucket sidebar-no-project hidden" id="no-project-section" aria-label="Threads with no project">'
             + '<div class="sidebar-section-label"><button class="sidebar-section-toggle" type="button" id="no-project-toggle" aria-expanded="false" aria-controls="no-project-content">'
             + '<span class="chevron" aria-hidden="true">▶</span><span>No project</span><small class="sidebar-section-count" id="no-project-count"></small></button></div>'
             + '<div class="task-list hidden" id="no-project-content"></div></section>');
+        document.getElementById('running-automations-toggle').addEventListener('click', () => {
+            state.runningSectionCollapsed = !state.runningSectionCollapsed;
+            try {
+                window.localStorage.setItem('decisions-development-running-section-collapsed', String(state.runningSectionCollapsed));
+            } catch (_) { /* keep the in-memory choice */ }
+            renderSidebar();
+            document.getElementById('running-automations-toggle')?.focus({ preventScroll: true });
+        });
         document.getElementById('no-project-toggle').addEventListener('click', () => {
             state.noProjectExpanded = !state.noProjectExpanded;
             // The open thread's one-time auto-open is used up: the user's choice wins from here.
@@ -222,6 +234,10 @@ export function createSidebar({ context, actions, el }) {
         runningSection.classList.toggle('hidden', !running.length);
         document.getElementById('running-automations-count').textContent = running.length ? String(running.length) : '';
         document.getElementById('running-automations-group').innerHTML = running.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join('');
+        const runningToggle = document.getElementById('running-automations-toggle');
+        runningToggle.setAttribute('aria-expanded', String(!state.runningSectionCollapsed));
+        runningToggle.querySelector('.chevron').textContent = state.runningSectionCollapsed ? '▶' : '▼';
+        document.getElementById('running-automations-group').classList.toggle('hidden', state.runningSectionCollapsed);
         const loose = context.chats.filter((chat) => !chat.pinned && !threadBoard(chat)).sort(byNewest);
         // Auto-open once when the user lands on one of its threads; never override an explicit collapse.
         const activeLoose = loose.find((chat) => isThreadActive(chat));

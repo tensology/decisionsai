@@ -354,7 +354,7 @@ def test_desktop_uses_shared_web_board_pins_and_preserves_unrelated_keys(monkeyp
     panel = DevelopmentHotCornerPanel(enabled=False)
     panel._refresh_threads()
     assert panel._pinned_project_ids == {9}
-    assert _project_item(panel, 9).parent() is None
+    assert _project_item(panel, 9).parent() is panel._section_rows["pinned"]
     panel._toggle_project_pin(9)
     assert saved == [('decisions:7', False)]
     assert keys == ['jira:OTHER']
@@ -362,7 +362,7 @@ def test_desktop_uses_shared_web_board_pins_and_preserves_unrelated_keys(monkeyp
     keys.append('decisions:7')
     panel._sync_live_state(10.0)
     assert panel._pinned_project_ids == {9}
-    assert _project_item(panel, 9).parent() is None
+    assert _project_item(panel, 9).parent() is panel._section_rows["pinned"]
     panel.close()
     panel.deleteLater()
     app.processEvents()
@@ -687,9 +687,10 @@ def test_pinned_projects_move_to_own_section_and_collapse_state_survives(monkeyp
     panel._toggle_project_pin(2)
 
     assert saved == [[2]]
-    assert panel.tree.topLevelItem(0).text(0) == "Pinned"
+    assert panel.tree.topLevelItem(0) is panel._section_rows["pinned"]
+    assert panel.tree.topLevelItem(0).text(0).endswith("Pinned")
     assert _project_item(panel, 2).text(0) == "Second"
-    assert _project_item(panel, 2).parent() is None
+    assert _project_item(panel, 2).parent() is panel._section_rows["pinned"]
     assert panel._section_rows["projects"].child(0).text(0) == "First"
     assert not panel._section_rows["projects"].isExpanded()
 
@@ -714,7 +715,7 @@ def test_pinned_section_remains_visible_when_no_projects_are_pinned(monkeypatch)
 
     panel._refresh_threads()
 
-    assert panel.tree.topLevelItem(0).text(0) == "Pinned"
+    assert panel.tree.topLevelItem(0).text(0).endswith("Pinned")
     assert panel._section_rows["pinned"].childCount() == 0
     assert panel.tree.indexOfTopLevelItem(panel._section_rows["pinned"]) < panel.tree.indexOfTopLevelItem(panel._section_rows["projects"])
 
@@ -896,3 +897,66 @@ def test_live_timer_sync_updates_rows_without_resetting_collapsed_state(monkeypa
     panel.deleteLater()
     app.processEvents()
 
+
+
+def _sections(panel):
+    return [panel.tree.topLevelItem(i).data(0, QtCore.Qt.ItemDataRole.UserRole)["key"]
+            for i in range(panel.tree.topLevelItemCount())
+            if isinstance(panel.tree.topLevelItem(i).data(0, QtCore.Qt.ItemDataRole.UserRole), dict)
+            and panel.tree.topLevelItem(i).data(0, QtCore.Qt.ItemDataRole.UserRole).get("key") != "proposals"]
+
+
+def _thread(chat_id, title, *, automation=False, active=False):
+    return {"chat_id": chat_id, "title": title, "modified_at": float(chat_id),
+            "source_type": "automation" if automation else "prompt", "status": "running" if active else "idle",
+            "active": active, "elapsed_seconds": 0, "weekly_seconds": 0, "time_running": False}
+
+
+def test_sections_match_web_order_and_each_collapse_independently(monkeypatch):
+    app = _app()
+    snapshot = [
+        {"project_id": 1, "board_key": "decisions:1", "name": "Pinned board", "weekly_seconds": 0,
+         "threads": [_thread(11, "Load DB", automation=True, active=True)]},
+        {"project_id": 2, "board_key": "decisions:2", "name": "Other board", "weekly_seconds": 0,
+         "threads": [_thread(21, "Work")]},
+        {"project_id": None, "board_key": None, "name": "No Project", "weekly_seconds": 0,
+         "threads": [_thread(31, "Email action items", automation=True, active=True), _thread(32, "Daily plan", automation=True)]},
+    ]
+    monkeypatch.setattr("distr.gui.development_hot_corner.load_development_groups", lambda _p: snapshot)
+    panel = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[1])
+    panel._refresh_threads()
+    assert _sections(panel) == ["running", "no_project", "pinned", "projects", "recent"]
+    # No project is its own section of threads, never a project row.
+    assert all(group["project_id"] is not None for _item, group in panel._project_rows)
+    loose = panel._section_rows["no_project"]
+    assert [loose.child(i).data(0, QtCore.Qt.ItemDataRole.UserRole)["chat_id"] for i in range(loose.childCount())] == [31, 32]  # loader order (newest first)
+    running = panel._section_rows["running"]
+    assert sorted(running.child(i).data(0, QtCore.Qt.ItemDataRole.UserRole)["chat_id"] for i in range(running.childCount())) == [11, 31]
+    assert _project_item(panel, 1).parent() is panel._section_rows["pinned"]
+    # Defaults: running, pinned, boards open; No project collapsed.
+    assert [panel._section_rows[k].isExpanded() for k in ("running", "no_project", "pinned", "projects")] == [True, False, True, True]
+    for key in ("running", "no_project", "pinned", "projects"):
+        before = {k: panel._section_rows[k].isExpanded() for k in ("running", "no_project", "pinned", "projects")}
+        item = panel._section_rows[key]
+        panel._toggle_section(QtCore.QPersistentModelIndex(panel.tree.indexFromItem(item)), key)
+        after = {k: panel._section_rows[k].isExpanded() for k in before}
+        assert after[key] is not before[key]
+        assert {k: v for k, v in after.items() if k != key} == {k: v for k, v in before.items() if k != key}
+        assert panel._section_rows[key].text(0).startswith("▾" if after[key] else "▸")
+        panel._sync_live_state(5.0)
+        panel._refresh_threads()
+        assert {k: panel._section_rows[k].isExpanded() for k in before} == after
+    state = {k: panel._section_rows[k].isExpanded() for k in ("running", "no_project", "pinned", "projects")}
+    fresh = DevelopmentHotCornerPanel(enabled=False, pinned_project_ids=[1])
+    fresh._refresh_threads()
+    assert {k: fresh._section_rows[k].isExpanded() for k in state} == state
+    # Running section disappears when nothing runs, and live sync rebuilds for it.
+    for group in snapshot:
+        for thread in group["threads"]:
+            thread["active"] = False
+    fresh._sync_live_state(6.0)
+    assert "running" not in _sections(fresh)
+    for widget in (panel, fresh):
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()

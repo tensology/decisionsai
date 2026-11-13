@@ -135,3 +135,4 @@
 .sidebar-running-automations { padding-bottom: 6px; border-bottom: 1px solid var(--studio-line-soft); }
 /* Pinned section header toggle (same look as No project / Recent). */
 #pinned-board-section .sidebar-section-label .sidebar-section-toggle { min-height: 34px; }
+#running-automations-section .sidebar-section-label .sidebar-section-toggle { min-height: 34px; color: inherit; }
