@@ -1013,3 +1013,27 @@ def test_panel_slides_in_before_loading_data(monkeypatch):
     panel.close()
     panel.deleteLater()
     app.processEvents()
+
+
+def test_running_section_lists_background_threads_but_not_user_prompts(monkeypatch):
+    app = _app()
+    from distr.gui.development_hot_corner import is_background_source
+    for source in ("automation", "incoming_proposal", "scheduled", "workflow_queue", "ticket_send_to_workflow"):
+        assert is_background_source(source)
+    for source in ("prompt", "", None, "studio_thread"):
+        assert not is_background_source(source)
+    def thread(chat_id, source, active):
+        return {"chat_id": chat_id, "title": str(chat_id), "modified_at": float(chat_id), "source_type": source,
+                "status": "running" if active else "idle", "active": active, "elapsed_seconds": 0,
+                "weekly_seconds": 0, "time_running": False}
+    snapshot = [{"project_id": 2, "board_key": "decisions:2", "name": "Merrypak", "weekly_seconds": 0, "threads": [
+        thread(1284, "incoming_proposal", True), thread(5, "prompt", True), thread(6, "automation", False)]}]
+    monkeypatch.setattr("distr.gui.development_hot_corner.load_development_groups", lambda _p: snapshot)
+    panel = DevelopmentHotCornerPanel(enabled=False)
+    panel._refresh_threads()
+    running = panel._section_rows["running"]
+    assert running.text(0).endswith("Running")
+    assert [running.child(i).data(0, QtCore.Qt.ItemDataRole.UserRole)["chat_id"] for i in range(running.childCount())] == [1284]
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()

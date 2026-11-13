@@ -406,3 +406,12 @@
         min-height: 50px;
     }
 }
+
+/* 2026-11-13: the thread title marquee could be squeezed to ~15px, so the header read
+   "Merrypak / te" (a scrolling slice of the title). Keep a readable slot for it. */
+#development-task-header.chat-mode > .task-breadcrumb {
+    min-width: min(240px, 32vw);
+}
+#development-task-header .task-breadcrumb > #header-task {
+    min-width: min(150px, 20vw);
+}

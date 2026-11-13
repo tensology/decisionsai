@@ -273,14 +273,27 @@ def recent_development_threads(groups: list[dict[str, Any]]) -> list[dict[str, A
     )
 
 
+# Threads nobody typed into: automations, Incoming-dispatched work (WhatsApp/Gmail proposals),
+# scheduled/initiative/orchestrator runs and workflow runs. Ordinary user prompts stay out.
+# Same rule as BACKGROUND_SOURCE_TYPES in static/development/sidebar/index.js.
+BACKGROUND_SOURCE_TYPES = frozenset({
+    "automation", "incoming_proposal", "scheduled", "initiative", "orchestrator", "proactive_orchestrator",
+})
+
+
+def is_background_source(source_type: Any) -> bool:
+    source = str(source_type or "").strip().lower()
+    return source in BACKGROUND_SOURCE_TYPES or "workflow" in source
+
+
 def running_automation_threads(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Automation threads with a live run right now (same rule as the web sidebar group)."""
+    """Background-started threads with a live run right now (same rule as the web "Running" group)."""
     seen: set[int] = set()
     threads = []
     for group in groups:
         for thread in group["threads"]:
             chat_id = int(thread["chat_id"])
-            if thread.get("source_type") == "automation" and thread.get("active") and chat_id not in seen:
+            if is_background_source(thread.get("source_type")) and thread.get("active") and chat_id not in seen:
                 seen.add(chat_id)
                 threads.append(thread)
     return sorted(
@@ -291,7 +304,7 @@ def running_automation_threads(groups: list[dict[str, Any]]) -> list[dict[str, A
 
 
 # Sidebar sections, top to bottom, matching the web sidebar:
-# Running automations, No project, Pinned, Boards, Recent. Each collapses on its own.
+# Running, No project, Pinned, Boards, Recent. Each collapses on its own.
 SECTION_SETTINGS = {
     "running": "sidebar/runningExpanded",
     "no_project": "sidebar/noProjectExpanded",
@@ -1006,7 +1019,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         self._no_project_threads = list(no_project["threads"]) if no_project else []
 
         for section_key, section_title, section_groups in (
-            ("running", "Running automations", running_threads),
+            ("running", "Running", running_threads),
             ("no_project", "No project", self._no_project_threads),
             ("pinned", "Pinned", pinned_groups),
             ("projects", "Boards", regular_groups),

@@ -163,13 +163,21 @@ export function createSidebar({ context, actions, el }) {
     // - Running automations: every automation thread that is processing right now (project-linked
     //   ones also stay in their project folder). Hidden when nothing runs; refreshed by the ~6s shell poll.
     // - No project: threads with no board/project. Its own folder, outside the projects list.
+    // Threads nobody typed into: automations, Incoming-dispatched work (WhatsApp/Gmail proposals),
+    // scheduled/initiative/orchestrator runs and workflow runs. Ordinary user prompts stay out.
+    // Same rule as BACKGROUND_SOURCE_TYPES in distr/gui/development_hot_corner.py.
+    const BACKGROUND_SOURCE_TYPES = new Set(['automation', 'incoming_proposal', 'scheduled', 'initiative', 'orchestrator', 'proactive_orchestrator']);
+    function isBackgroundThread(chat) {
+        const source = String(chat?.development_source_type || '').toLowerCase();
+        return BACKGROUND_SOURCE_TYPES.has(source) || source.includes('workflow');
+    }
     function ensureExtraSections() {
         const anchor = el('pinned-board-section');
         if (!anchor || document.getElementById('running-automations-section')) return;
         anchor.insertAdjacentHTML('beforebegin',
-            '<section class="sidebar-bucket sidebar-running-automations hidden" id="running-automations-section" aria-label="Running automations">'
+            '<section class="sidebar-bucket sidebar-running-automations hidden" id="running-automations-section" aria-label="Running">'
             + '<div class="sidebar-section-label"><button class="sidebar-section-toggle" type="button" id="running-automations-toggle" aria-expanded="true" aria-controls="running-automations-group">'
-            + '<span class="chevron" aria-hidden="true">▼</span><span>Running automations</span><small class="sidebar-section-count" id="running-automations-count"></small></button></div>'
+            + '<span class="chevron" aria-hidden="true">▼</span><span>Running</span><small class="sidebar-section-count" id="running-automations-count"></small></button></div>'
             + '<div class="task-list" id="running-automations-group" aria-live="polite"></div></section>'
             + '<section class="sidebar-bucket sidebar-no-project hidden" id="no-project-section" aria-label="Threads with no project">'
             + '<div class="sidebar-section-label"><button class="sidebar-section-toggle" type="button" id="no-project-toggle" aria-expanded="false" aria-controls="no-project-content">'
@@ -229,11 +237,11 @@ export function createSidebar({ context, actions, el }) {
         if (!runningSection || !noProjectSection) return;
         const byNewest = (a, b) => String(b.modified_date || '').localeCompare(String(a.modified_date || '')) || Number(b.id) - Number(a.id);
         const running = context.chats
-            .filter((chat) => chat.development_source_type === 'automation' && actions.threadIsProcessing?.(chat))
+            .filter((chat) => isBackgroundThread(chat) && actions.threadIsProcessing?.(chat))
             .sort(byNewest);
         runningSection.classList.toggle('hidden', !running.length);
         document.getElementById('running-automations-count').textContent = running.length ? String(running.length) : '';
-        document.getElementById('running-automations-group').innerHTML = running.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join('');
+        setHtml(document.getElementById('running-automations-group'), running.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join(''));
         const runningToggle = document.getElementById('running-automations-toggle');
         runningToggle.setAttribute('aria-expanded', String(!state.runningSectionCollapsed));
         runningToggle.querySelector('.chevron').textContent = state.runningSectionCollapsed ? '▶' : '▼';
@@ -258,7 +266,31 @@ export function createSidebar({ context, actions, el }) {
         document.getElementById('no-project-count').textContent = loose.length ? String(loose.length) : '';
         const content = document.getElementById('no-project-content');
         content.classList.toggle('hidden', !expanded);
-        content.innerHTML = loose.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join('');
+        setHtml(content, loose.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join(''));
+    }
+    // Rewrite a container only when its markup changed. Replacing identical rows on every ~6s
+    // refresh restarted the folder glow and the row spinner animations (visible flicker).
+    const htmlContainers = new Set();
+    function setHtml(node, html) {
+        if (!node) return false;
+        htmlContainers.add(node);
+        if (node.__sidebarHtml === html) return false;
+        node.innerHTML = html;
+        node.__sidebarHtml = html;
+        return true;
+    }
+    // Forget the cached markup (after code outside the render touched rows, e.g. terminal buttons).
+    function forgetRenderedHtml() {
+        htmlContainers.forEach((node) => { node.__sidebarHtml = null; });
+    }
+    // Rows that survive a render keep their listeners: bind each element once per selector.
+    function unbound(selector) {
+        const flag = `__sidebarBound${selector}`;
+        return [...document.querySelectorAll(selector)].filter((node) => {
+            if (node[flag]) return false;
+            node[flag] = true;
+            return true;
+        });
     }
     function renderSidebar() {
         settleRevealedBoards();
@@ -274,7 +306,7 @@ export function createSidebar({ context, actions, el }) {
                 return threadRowHtml(chat, active, true);
             })
             .join('');
-        el('pinned-board-tree').innerHTML = pinnedRows + pinnedBoards.map(boardGroupHtml).join('');
+        setHtml(el('pinned-board-tree'), pinnedRows + pinnedBoards.map(boardGroupHtml).join(''));
         el('pinned-board-section').classList.toggle('hidden', !pinnedThreads.length && !pinnedBoards.length);
         const boardsCollapsible = pinnedBoards.length > 0;
         const boardsCollapsed = boardsCollapsible && state.boardsCollapsed;
@@ -289,13 +321,13 @@ export function createSidebar({ context, actions, el }) {
                 boards: visible.filter((board) => board.provider === provider)
             }))
             .filter((group) => group.boards.length);
-        el('board-task-tree').innerHTML =
+        setHtml(el('board-task-tree'),
             groupedBoards
                 .map(
                     (group) =>
                         `<div class="board-provider-label">${actions.escapeHtml(actions.providerName(group.provider))}</div>${group.boards.map(boardGroupHtml).join('')}`
                 )
-                .join('') || '<div class="sidebar-empty">No ticket boards connected.</div>';
+                .join('') || '<div class="sidebar-empty">No ticket boards connected.</div>');
         el('boards-show-more').classList.toggle('hidden', unpinned.length <= 6);
         el('boards-show-more').textContent = state.boardsExpanded ? 'Show less' : `Show ${unpinned.length - 6} more`;
         const ruleMode = ['automations', 'automation_rules'].includes(context.workspaceMode);
@@ -343,18 +375,18 @@ export function createSidebar({ context, actions, el }) {
         el('recents-content').classList.toggle('hidden', !state.recentsExpanded);
         el('recents-toggle').setAttribute('aria-expanded', String(state.recentsExpanded));
         el('recents-toggle').querySelector('.chevron').textContent = state.recentsExpanded ? '▼' : '▶';
-        el('recent-task-group').innerHTML = visibleRecent
+        setHtml(el('recent-task-group'), visibleRecent
             .map((chat) => {
                 const active = isThreadActive(chat);
                 return threadRowHtml(chat, active);
             })
-            .join('');
-        el('archived-task-group').innerHTML = archived;
+            .join(''));
+        setHtml(el('archived-task-group'), archived);
         el('recents-show-more').classList.toggle('hidden', state.showAllRecents || recentThreads.length <= 5);
         renderExtraSections();
 
-        document.querySelectorAll('[data-board-toggle]').forEach(bindProjectToggle);
-        document.querySelectorAll('[data-project-threads-more]').forEach(button => {
+        unbound('[data-board-toggle]').forEach(bindProjectToggle);
+        unbound('[data-project-threads-more]').forEach(button => {
             button.addEventListener('click', () => {
                 const key = button.dataset.projectThreadsMore;
                 if (state.expandedThreadBoards.has(key)) state.expandedThreadBoards.delete(key);
@@ -363,40 +395,40 @@ export function createSidebar({ context, actions, el }) {
                 document.querySelector(`[data-project-threads-more="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
             });
         });
-        document.querySelectorAll('[data-board-select]').forEach((button) => {
+        unbound('[data-board-select]').forEach((button) => {
             button.addEventListener('click', () => actions.openBoardFromSidebar(button.dataset.boardSelect));
             button.addEventListener('contextmenu', (event) => {
                 event.preventDefault();
                 openBoardContextMenu(event, button.dataset.boardSelect);
             });
         });
-        document.querySelectorAll('[data-board-kanban]').forEach((button) => {
+        unbound('[data-board-kanban]').forEach((button) => {
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
                 actions.openBoardKanban(button.dataset.boardKanban);
             });
         });
-        document.querySelectorAll('[data-board-new-chat]').forEach((button) => {
+        unbound('[data-board-new-chat]').forEach((button) => {
             button.addEventListener('click', async (event) => {
                 event.stopPropagation();
                 await actions.waitForRouteReady();
                 actions.startBoardDevelopment(button.dataset.boardNewChat);
             });
         });
-        document.querySelectorAll('[data-board-terminal]').forEach((button) => {
+        unbound('[data-board-terminal]').forEach((button) => {
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
                 toggleBoardTerminal(button);
             });
         });
-        document.querySelectorAll('[data-board-edit-commands]').forEach((button) => {
+        unbound('[data-board-edit-commands]').forEach((button) => {
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
                 openBoardLinkDialog(button.dataset.boardEditCommands);
             });
         });
         primeBoardTerminalSessions();
-        document.querySelectorAll('[data-chat-id]').forEach((button) => {
+        unbound('[data-chat-id]').forEach((button) => {
             button.addEventListener('click', () => actions.loadChat(Number(button.dataset.chatId)));
             button.addEventListener('contextmenu', (event) => {
                 event.preventDefault();
@@ -722,6 +754,7 @@ export function createSidebar({ context, actions, el }) {
             console.warn(`Board terminal ${running ? 'stop' : 'start'} failed:`, error?.message || error);
         } finally {
             state.pendingTerminalBoards.delete(boardKey);
+            forgetRenderedHtml();
             renderSidebar();
         }
     }
