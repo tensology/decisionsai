@@ -130,7 +130,10 @@ def test_ids_are_explicit_and_secrets_are_absent(tmp_path):
     assert execution["outcome"]["event_type"] == "cli_completed"
     assert execution["project_id"] == project_id and execution["project_provenance"] == "stored_on_row"
     timer = next(row for row in result["items"] if row["ref"] == f"time:{entry_id}")
-    assert timer["outcome"]["tool_name"] == "read_file"
+    # _timer deliberately no longer borrows a chat completion as the timer's outcome
+    # ("a chat completion somewhere in the window is not proof that this interval was
+    # worked"), so a timer row stays unknown even with a tool event in the same chat.
+    assert timer["outcome"] is None
     assert timer["project_provenance"] == "work_item"
     outside = read_work_evidence(
         get_session,

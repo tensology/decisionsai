@@ -92,7 +92,12 @@ def test_notify_respects_off_switch(monkeypatch):
 def test_footprint_reads_this_process():
     from distr.core.mempalace.selfimprove.memguard import footprint_mb
 
-    assert 5 < footprint_mb() < 4096
+    import os
+
+    # The full suite's own process passes 4 GB by this point, so bound by physical RAM
+    # rather than a fixed 4096 MB that only held when the file ran alone.
+    total_mb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**20
+    assert 5 < footprint_mb() < total_mb
 
 
 def test_iter_new_streams_and_skips_huge_lines(home):
@@ -112,6 +117,10 @@ def test_batches_and_checkpoint_resume(home, monkeypatch):
 
     monkeypatch.setenv("DECISIONS_CAPTURE_BATCH_SIZE", "5")
     monkeypatch.setenv("DECISIONS_CAPTURE_MAX_TURNS", "12")
+    # Budget relative to this process: late in the full suite pytest itself is past the
+    # 3 GB default, which tripped "memory cap" before the turn cap this test checks.
+    from distr.core.mempalace.selfimprove.memguard import footprint_mb
+    monkeypatch.setenv("DECISIONS_CAPTURE_MAX_RSS_MB", str(int(footprint_mb()) + 4096))
     f = _pi_session(home, "s1", 30)
     r1 = capture.run(dry_run=True)
     assert r1["stopped_early"].startswith("per-run turn cap") and r1["user_turns"] == 12

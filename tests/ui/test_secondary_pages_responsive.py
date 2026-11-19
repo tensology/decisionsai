@@ -3,49 +3,52 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import expect
+
+from tests.browser_launch import launch_chromium
 
 OUTPUT = Path('/tmp/decisions-secondary-responsive')
 BASE = 'http://127.0.0.1:8765'
 
 
 @pytest.fixture
-def secondary_page():
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        page = browser.new_page()
-        skill = {'id': 'responsive-review', 'name': 'Review responsive interfaces',
-                 'description': 'Check readable tables, controls, navigation, and layouts.',
-                 'tags': ['design'], 'editable': True, 'content': '# Review\n\nCheck every screen and viewport.'}
+def secondary_page(playwright):
+    # pytest-playwright's session Playwright, not a second sync_playwright(): nesting
+    # one after a `page`-fixture test raised "no running event loop" here.
+    browser = launch_chromium(playwright)
+    page = browser.new_page()
+    skill = {'id': 'responsive-review', 'name': 'Review responsive interfaces',
+             'description': 'Check readable tables, controls, navigation, and layouts.',
+             'tags': ['design'], 'editable': True, 'content': '# Review\n\nCheck every screen and viewport.'}
 
-        def api(route):
-            path = urlparse(route.request.url).path
-            if path == '/docs/api/endpoints':
-                route.continue_()
-                return
-            if path == '/api/skills':
-                data = [skill]
-            elif path.startswith('/api/skills/'):
-                data = skill
-            elif path == '/api/projects':
-                data = [{'id': 1, 'name': 'Responsive review', 'path': '/tmp/review'}]
-            elif path == '/api/diagrams/history':
-                data = {'diagrams': []}
-            elif path == '/api/diagrams/1':
-                data = {'id': 1, 'title': 'A readable responsive diagram', 'code': 'flowchart TD\n A[Open page] --> B[Review layout]\n B --> C[Confirm readability]'}
-            elif path == '/api/workflows':
-                data = [{'id': 1, 'name': 'Review the interface across all screen sizes'}]
-            elif path == '/api/workflows/1':
-                data = {'id': 1, 'name': 'Review the interface across all screen sizes',
-                        'steps': [{'id': 1, 'name': 'Check readability and alignment', 'step_type': 'instruction',
-                                   'instruction': 'Review the current screen.'}], 'runs': []}
-            else:
-                data = {}
-            route.fulfill(json=data)
+    def api(route):
+        path = urlparse(route.request.url).path
+        if path == '/docs/api/endpoints':
+            route.continue_()
+            return
+        if path == '/api/skills':
+            data = [skill]
+        elif path.startswith('/api/skills/'):
+            data = skill
+        elif path == '/api/projects':
+            data = [{'id': 1, 'name': 'Responsive review', 'path': '/tmp/review'}]
+        elif path == '/api/diagrams/history':
+            data = {'diagrams': []}
+        elif path == '/api/diagrams/1':
+            data = {'id': 1, 'title': 'A readable responsive diagram', 'code': 'flowchart TD\n A[Open page] --> B[Review layout]\n B --> C[Confirm readability]'}
+        elif path == '/api/workflows':
+            data = [{'id': 1, 'name': 'Review the interface across all screen sizes'}]
+        elif path == '/api/workflows/1':
+            data = {'id': 1, 'name': 'Review the interface across all screen sizes',
+                    'steps': [{'id': 1, 'name': 'Check readability and alignment', 'step_type': 'instruction',
+                               'instruction': 'Review the current screen.'}], 'runs': []}
+        else:
+            data = {}
+        route.fulfill(json=data)
 
-        page.context.route('**/api/**', api)
-        yield page
-        browser.close()
+    page.context.route('**/api/**', api)
+    yield page
+    browser.close()
 
 
 def capture(page, name, width):
@@ -164,7 +167,8 @@ def test_secondary_pages(secondary_page, width):
     page.goto(BASE + '/board/')
     capture(page, 'board-empty', width)
     page.goto(BASE + '/chat/')
-    expect(page.locator('.message-input')).to_be_visible()
+    # The group-chat view added a second (hidden) .message-input; check the main one.
+    expect(page.locator('#inputContainer .message-input')).to_be_visible()
     expect(page.locator('#emptyStateForm')).to_be_visible()
     capture(page, 'chat', width)
     assert page.locator('#inputContainer').evaluate('(node) => node.getBoundingClientRect().bottom <= innerHeight')

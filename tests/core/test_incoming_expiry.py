@@ -212,16 +212,20 @@ def test_canonical_terminal_coverage_filters_local_before_model(monkeypatch):
     monkeypatch.setattr('distr.core.incoming.service.list_development_incoming', lambda **kw: {'items': items})
     triage = Mock(return_value=[])
     monkeypatch.setattr(proposals, '_local_proposals', triage)
-    assert proposals.list_incoming_proposals(force=True)['proposals'] == []
+    # Forced reads now reconcile through proposal_sync.fetch_remote_proposals; the
+    # ordinary read is the one that pulls decided rows from fetch_pending_work_requests.
+    assert proposals.list_incoming_proposals()['proposals'] == []
     assert triage.call_args.args[0] == [items[1]]
-    fetch.assert_called_once_with(include_decided=True)
+    fetch.assert_called_once_with(include_decided=True, strict=True)
 
 
 def test_expiry_does_not_remove_context_before_triage(monkeypatch):
     now = datetime.now(timezone.utc)
     monkeypatch.setattr(proposals, '_triage_model', lambda settings: ('fixture', 'fixture'))
     monkeypatch.setattr(proposals, '_candidate_projects', lambda: [{'id': 7, 'name': 'Fixture'}])
-    old = {'source': 'gmail', 'source_thread_id': 'context', 'source_message_id': 'historical',
+    # Triage only sends conversations with an explicit project link to the model, so
+    # link this one to the fixture project; the test is about old context surviving.
+    old = {'source': 'gmail', 'source_thread_id': 'context', 'source_message_id': 'historical', 'project_ids': [7],
            'created_at': (now - timedelta(hours=100)).isoformat(), 'text': 'Please fix old request', 'sender': 'Client'}
     fresh = {**old, 'source_message_id': 'fresh', 'created_at': now.isoformat(), 'text': 'Please review new requirement'}
     complete = Mock(return_value='{"is_actionable":false}')

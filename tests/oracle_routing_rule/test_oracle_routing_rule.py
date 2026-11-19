@@ -60,7 +60,10 @@ def test_ide_thread_prompt_blocked_unless_ide_named():
     from distr.core.agent.services.llm.tool_execution_policy import (
         IDE_MISROUTE_REASON, tool_execution_block_reason)
     t = PROJECT_WORK[0][0]
-    assert tool_execution_block_reason(SimpleNamespace(), "ide_thread", {"action": "prompt"}, t) == IDE_MISROUTE_REASON
+    # The block now appends development_redirect_hint (the exact development_control
+    # call to retry with), so match the fixed reason as a prefix.
+    reason = tool_execution_block_reason(SimpleNamespace(), "ide_thread", {"action": "prompt"}, t)
+    assert reason.startswith(IDE_MISROUTE_REASON) and "development_control" in reason[len(IDE_MISROUTE_REASON):]
     assert tool_execution_block_reason(SimpleNamespace(), "ide_thread", {"action": "prompt"}, "ask Codex to " + t) == ""
     assert tool_execution_block_reason(SimpleNamespace(), "ide_thread", {"action": "read"}, t) == ""
 

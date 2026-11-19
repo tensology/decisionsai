@@ -78,7 +78,6 @@ def test_new_chat_captures_own_skin_without_changing_other_threads():
 def test_chat_api_lists_identity_marks_read_and_does_not_restore_skin_on_view(monkeypatch):
     from distr.gui.web.routes import chat as routes
     from distr.core import chat_sidebar
-    from distr.core.signals import signal_manager
     monkeypatch.setattr(routes, "load_settings_from_db", lambda: {"selected_oracle": "oracle"})
     monkeypatch.setattr(routes, "_voice_model_to_display_name", lambda *args: "Hayley Williams")
     monkeypatch.setattr(chat_sidebar, "validate_chat_skin", lambda skin: skin)
@@ -98,7 +97,10 @@ def test_chat_api_lists_identity_marks_read_and_does_not_restore_skin_on_view(mo
     row = next(r for r in client.get('/api/chats').json()['chats'] if r['id'] == chat_id)
     assert row['unread'] is True
     signal = Mock()
-    monkeypatch.setattr(signal_manager, 'web_load_chat_in_agent_requested', signal, raising=False)
+    # Replace the module-level manager rather than patch the shared QObject: an earlier
+    # test can leave it deleted ("wrapped C/C++ object ... has been deleted").
+    from distr.core import signals as signals_module
+    monkeypatch.setattr(signals_module, 'signal_manager', Mock(web_load_chat_in_agent_requested=signal))
     viewed = client.get(f'/api/chats/{chat_id}')
     assert viewed.status_code == 200, viewed.text
     assert viewed.json()['skin_name'] == 'saved-character'

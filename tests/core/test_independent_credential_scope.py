@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from test_ledger_credential import credential_home
+from tests.core.test_ledger_credential import credential_home
 from distr.gui.web.security import provision_ledger_operator_token,ledger_header_authorizes_write,LedgerProvisionError
 
 @pytest.mark.parametrize('path,method',[

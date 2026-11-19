@@ -241,7 +241,12 @@ def test_only_one_slow_retry_cycle_is_scheduled(clock):
 def qt_app():
     from PyQt6 import QtCore
     assert not getattr(QtCore, '_decisions_stub', False), 'These checks require real Qt'
-    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    # A GUI-capable app (offscreen): a bare QCoreApplication outlives this module and
+    # later QPixmap/QImage tests (gui/test_animation_async) then render black frames.
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6 import QtGui
+    app = QtCore.QCoreApplication.instance() or QtGui.QGuiApplication([])
     yield app
 
 

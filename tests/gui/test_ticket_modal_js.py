@@ -134,9 +134,16 @@ def test_ticket_and_proposal_modals_share_one_constant_height():
     assert '--ticket-modal-height: min(640px, calc(100vh - 2rem))' in shared
     assert '.kanban-ticket-dialog { width: var(--ticket-modal-width); height: var(--ticket-modal-height);' in boards
     assert 'height: fit-content' not in boards.split('.kanban-ticket-dialog {', 1)[1].split('}', 1)[0]
-    assert 'height: var(--ticket-modal-height); min-height: var(--ticket-modal-height);' in incoming
+    # ad6a8a18 swapped the proposal modal's min-height for max-height: calc(100dvh - 2rem)
+    # so it fits short windows; the height itself is still the shared constant.
+    modal = incoming.split('.proposal-modal {', 1)[1].split('}', 1)[0]
+    assert 'height: var(--ticket-modal-height);' in modal and 'fit-content' not in modal
     proposals = (STATIC / 'incoming/index.js').read_text()
-    assert "from '../shared/ticket-modal.js" in proposals
+    # Incoming no longer imports ticket-modal.js itself: app.js imports it and injects
+    # fileDropZoneHtml through createIncoming({ shared }), so the helper stays shared.
+    assert "shared: { fileDropZoneHtml, proposalThreadToast }" in proposals
+    app = (STATIC / 'app.js').read_text()
+    assert "import { fileDropZoneHtml, proposalThreadToast } from './shared/ticket-modal.js" in app
     assert "fileDropZoneHtml('proposal-file-drop'" in proposals
 
 

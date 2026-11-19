@@ -1094,7 +1094,11 @@ def _qt_telegram_messages():
             QObject.__init__(self)
             DummyTelegramMessages.__init__(self)
 
-    app = QCoreApplication.instance() or QCoreApplication([])
+    # GUI-capable (offscreen) so the process-wide app still supports later QPixmap tests.
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QGuiApplication
+    app = QCoreApplication.instance() or QGuiApplication([])
     manager = QtMessages()
     manager.telegram_user_id = 12345
     return app, manager

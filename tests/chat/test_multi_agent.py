@@ -190,13 +190,17 @@ def test_mentions_pick_responders_and_run_concurrently(ma):
 
     ids = ma['ids']
     group = ag.create_group([ids['Hayley'], ids['Uncle Roger'], ids['Ada']])
-    barrier = threading.Barrier(2, timeout=5)
+    # 5 s was too tight under full-suite load (each agent builds its prompt and
+    # transcript first), and a broken barrier only became an error *reply*, which
+    # this test never checked, so serial runs could pass and loaded runs flaked.
+    barrier = threading.Barrier(2, timeout=30)
 
     def generate(agent, messages, emit):
         barrier.wait()  # both agents must be generating at the same time
         return f"{agent.name} ok"
     replies = ag.run_turn(group['id'], '@Ada and @Uncle Roger, thoughts?', generate=generate)
     assert sorted(r['agent_name'] for r in replies) == ['Ada', 'Uncle Roger']
+    assert not any(r['error'] for r in replies), [r['content'] for r in replies]
 
 
 def test_orchestrator_answers_first_and_delegates(ma):

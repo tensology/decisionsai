@@ -110,7 +110,8 @@ def test_gmail_preview_serves_link_filename_when_lookup_is_generic(client, monke
         def is_connected(self):
             return True
 
-        def fetch_email_attachment_bytes(self, message_id, attachment_id, *, content_id=""):
+        # Mirrors GoogleWorkspaceConnector, which now also takes filename_hint=.
+        def fetch_email_attachment_bytes(self, message_id, attachment_id, *, content_id="", filename_hint=""):
             assert (message_id, attachment_id) == ("1a1cab76218b6393", "ANG-1")
             return b"%PDF-1.7\n", "application/pdf", "attachment"
 

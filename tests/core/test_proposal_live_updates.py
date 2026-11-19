@@ -362,11 +362,13 @@ def test_ack_and_append_from_independent_writers_keep_both_updates(tmp_path, mon
     entered, release, ack_started, ack_finished = Event(), Event(), Event(), Event()
     write = updates._write_receipt
 
-    def pause_append(db, chat_id, receipt):
+    # _write_receipt gained a keyword-only handoff= argument; forward it so the
+    # wrapper does not raise TypeError before signalling (which hid the race test).
+    def pause_append(db, chat_id, receipt, **kwargs):
         if (receipt.get("pending") or {}).get("key") == "first:done" and receipt.get("backlog"):
             entered.set()
             assert release.wait(5)
-        write(db, chat_id, receipt)
+        write(db, chat_id, receipt, **kwargs)
 
     def ack():
         ack_started.set()

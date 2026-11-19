@@ -722,3 +722,102 @@ def _reset_leaked_running_loop(request):
                 fh.write(request.node.nodeid + "\n")
         except OSError:
             pass
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging_state():
+    """Undo logging changes a test leaves behind.
+
+    setup_logging()/setup_worker_logging() set ``distr`` (and every other logger)
+    to propagate=False and add handlers. Tests that ran them left caplog blind to
+    distr.* records for the rest of the session, so unrelated "warning is logged"
+    tests failed only in the full suite.
+    """
+    import logging
+
+    manager = logging.root.manager
+    disable = manager.disable
+    root = logging.getLogger()
+    root_handlers, root_level = list(root.handlers), root.level
+    snapshot = {
+        name: (lg.propagate, list(lg.handlers), lg.level, lg.disabled)
+        for name, lg in list(manager.loggerDict.items())
+        if isinstance(lg, logging.Logger)
+    }
+    yield
+    changed = False
+    for name, lg in list(manager.loggerDict.items()):
+        if not isinstance(lg, logging.Logger):
+            continue
+        before = snapshot.get(name)
+        if before is None:
+            if name == "distr" or name.startswith("distr."):
+                if not lg.propagate or lg.disabled:
+                    lg.propagate, lg.disabled, changed = True, False, True
+            continue
+        propagate, handlers, level, disabled = before
+        if (lg.propagate, lg.level, lg.disabled) != (propagate, level, disabled) or lg.handlers != handlers:
+            lg.propagate, lg.disabled = propagate, disabled
+            lg.handlers = handlers
+            lg.setLevel(level)
+            changed = True
+    if root.handlers != root_handlers or root.level != root_level:
+        root.handlers = root_handlers
+        root.setLevel(root_level)
+        changed = True
+    if manager.disable != disable:
+        logging.disable(disable)
+        changed = True
+    if changed:
+        manager._clear_cache()
+
+
+# --- Playwright: one sync Playwright per module, not per session -------------
+# pytest-playwright keeps a session-scoped sync Playwright (and its event loop)
+# alive from the first `page` test to the end of the run. Many of our modules
+# start their own sync_playwright(); after a `page` test those failed with
+# "Sync API inside the asyncio loop" / "no running event loop", and the session
+# browser's own teardown then errored on whichever test ran last. Module scope
+# stops the shared loop before the next module starts.
+try:
+    from playwright.sync_api import sync_playwright as _sync_playwright
+except Exception:  # pragma: no cover - playwright not installed
+    _sync_playwright = None
+
+if _sync_playwright is not None:
+
+    @pytest.fixture(scope="module")
+    def playwright():
+        with _sync_playwright() as pw:
+            yield pw
+
+    @pytest.fixture(scope="module")
+    def browser_type(playwright, browser_name):
+        return getattr(playwright, browser_name or "chromium")
+
+    @pytest.fixture(scope="module")
+    def launch_browser(browser_type_launch_args, browser_type, connect_options):
+        def launch(**kwargs):
+            options = {**browser_type_launch_args, **kwargs}
+            if connect_options:
+                return browser_type.connect(**connect_options)
+            return browser_type.launch(**options)
+        return launch
+
+    @pytest.fixture(scope="module")
+    def browser(launch_browser):
+        browser = launch_browser()
+        yield browser
+        browser.close()
+
+    @pytest.fixture(scope="module")
+    def browser_context_args(pytestconfig, playwright, device, base_url, _pw_artifacts_folder):
+        # Same as pytest-playwright's, at module scope because it needs `playwright`.
+        context_args = {}
+        if device:
+            context_args.update(playwright.devices[device])
+        if base_url:
+            context_args["base_url"] = base_url
+        if pytestconfig.getoption("--video") in ["on", "retain-on-failure"]:
+            context_args["record_video_dir"] = _pw_artifacts_folder.name
+        return context_args

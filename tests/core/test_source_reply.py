@@ -588,6 +588,8 @@ def test_draft_greets_relevant_people_before_a_plain_language_update(monkeypatch
     from distr.core import read_response, settings
     monkeypatch.setattr(settings, 'load_settings_from_db', lambda: {})
     monkeypatch.setattr(read_response, 'resolve_oracle_model', lambda settings: ('fixture', 'fixture'))
+    # The sender's name comes from config (DECISIONS_OWNER_NAME), not a hard-coded owner.
+    monkeypatch.setenv('DECISIONS_OWNER_NAME', 'Alex Owner')
     seen = []
     text, _ = replies.generate_draft(
         {'evidence': [{'id': 'current', 'sender_name': 'Greg', 'body': 'Can you change the billing?'},
@@ -600,7 +602,8 @@ def test_draft_greets_relevant_people_before_a_plain_language_update(monkeypatch
     context = json.loads(seen[1]['content'])
     assert 'Start with a friendly greeting' in rules
     assert 'Hi when the recipients\' local time is unknown' in rules
-    assert 'Do not greet Paul' in rules and 'invent a name' in rules
+    assert 'Do not greet Alex' in rules and 'invent a name' in rules
+    assert 'Write a reply from Alex ' in rules
     assert 'everyday language' in rules and 'test counts' in rules
     assert 'Do not claim completion' in rules
     assert context['recipient_names'] == ['Greg']
