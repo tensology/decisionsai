@@ -177,3 +177,109 @@ def test_memory_capture_dedupes_and_feeds_the_prompt(tmp_path):
     assert "What you remember from earlier chats" in block
     assert "agent minutes" in block
     assert "You told me earlier" in block  # the agent is asked to say which memory it used
+
+
+# --- DNS outage fails over fast -------------------------------------------
+
+def _dns_service(fail_create):
+    import asyncio
+    import socket
+    from types import SimpleNamespace
+
+    from distr.core.agent.services.llm.openai_compat import OpenAICompatibleLLMService
+
+    calls = {"create": 0}
+
+    def _dns_error():
+        try:
+            raise socket.gaierror(8, "nodename nor servname provided, or not known")
+        except socket.gaierror as cause:
+            try:
+                raise RuntimeError("Connection error.") from cause
+            except RuntimeError as exc:
+                return exc
+
+    async def create(**kwargs):
+        calls["create"] += 1
+        if fail_create:
+            raise _dns_error()
+
+        async def gen():
+            raise _dns_error()
+            yield  # pragma: no cover
+
+        return gen()
+
+    svc = OpenAICompatibleLLMService.__new__(OpenAICompatibleLLMService)
+    svc.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    svc._model_name = "m"
+    svc.SERVICE_NAME = "OpenRouterLLMService"
+    return svc, calls, asyncio
+
+
+def test_dns_failure_on_request_is_not_retried():
+    svc, calls, asyncio = _dns_service(fail_create=True)
+    sleeps = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(d):
+        sleeps.append(d)
+
+    async def run():
+        async for _ in svc._iter_stream_with_retry([{"role": "user", "content": "hi"}]):
+            pass
+
+    asyncio.sleep = fake_sleep
+    try:
+        with pytest.raises(RuntimeError):
+            asyncio.run(run())
+    finally:
+        asyncio.sleep = real_sleep
+    assert calls["create"] == 1
+    assert sleeps == []
+
+
+def test_dns_failure_mid_stream_is_not_retried():
+    svc, calls, asyncio = _dns_service(fail_create=False)
+
+    async def run():
+        async for _ in svc._iter_stream_with_retry([{"role": "user", "content": "hi"}]):
+            pass
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(run())
+    assert calls["create"] == 1
+
+
+def test_request_retries_are_not_multiplied():
+    import asyncio
+    from types import SimpleNamespace
+
+    from distr.core.agent.services.llm.openai_compat import OpenAICompatibleLLMService
+
+    calls = {"create": 0}
+
+    async def create(**kwargs):
+        calls["create"] += 1
+        raise RuntimeError("503 service unavailable")
+
+    svc = OpenAICompatibleLLMService.__new__(OpenAICompatibleLLMService)
+    svc.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    svc._model_name = "m"
+    svc.SERVICE_NAME = "OpenRouterLLMService"
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(d):
+        return None
+
+    async def run():
+        async for _ in svc._iter_stream_with_retry([{"role": "user", "content": "hi"}]):
+            pass
+
+    asyncio.sleep = fake_sleep
+    try:
+        with pytest.raises(RuntimeError):
+            asyncio.run(run())
+    finally:
+        asyncio.sleep = real_sleep
+    assert calls["create"] == 3  # was 9 (3 x 3)

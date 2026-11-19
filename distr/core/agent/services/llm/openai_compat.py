@@ -684,6 +684,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     logger.warning("%s: Model rejects system instruction, retrying without it", self.SERVICE_NAME)
                     continue
 
+                if self._is_unresolvable_host_error(e):
+                    # DNS for the provider is gone; retrying only delays failover.
+                    raise
+
                 if self._is_transient_provider_error(err):
                     if attempt < max_retries - 1:
                         logger.warning("%s: attempt %d/%d failed: %s. Retrying in %.1fs…",
@@ -695,6 +699,27 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 raise
 
         raise last_error or Exception(f"Failed to create {self.SERVICE_NAME} stream")
+
+    @staticmethod
+    def _is_unresolvable_host_error(error: BaseException) -> bool:
+        """True when the provider host cannot be resolved (offline, DNS outage)."""
+        import socket
+
+        seen = 0
+        current = error
+        while current is not None and seen < 8:
+            if isinstance(current, socket.gaierror):
+                return True
+            text = str(current).lower()
+            if any(token in text for token in (
+                "[errno 8]", "nodename nor servname", "name or service not known",
+                "temporary failure in name resolution", "getaddrinfo failed",
+                "no address associated with hostname",
+            )):
+                return True
+            current = current.__cause__ or current.__context__
+            seen += 1
+        return False
 
     @staticmethod
     def _is_transient_provider_error(error: object) -> bool:
@@ -710,14 +735,21 @@ class OpenAICompatibleLLMService(BaseLLMService):
         delay = 1.0
         for attempt in range(max_retries):
             emitted = False
+            # _call_stream already retries a failed request; repeating that
+            # here multiplied the wait before failover (about 24s offline).
+            stream = await self._call_stream(messages, tools_list, max_retries=max_retries)
             try:
-                stream = await self._call_stream(messages, tools_list, max_retries=max_retries)
                 async for chunk in stream:
                     emitted = True
                     yield chunk
                 return
             except Exception as exc:
-                if emitted or attempt == max_retries - 1 or not self._is_transient_provider_error(exc):
+                if (
+                    emitted
+                    or attempt == max_retries - 1
+                    or OpenAICompatibleLLMService._is_unresolvable_host_error(exc)
+                    or not self._is_transient_provider_error(exc)
+                ):
                     raise
                 logger.warning(
                     "%s: stream failed before first chunk: %s. Retrying in %.1fs",
