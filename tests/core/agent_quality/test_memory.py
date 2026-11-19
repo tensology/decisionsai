@@ -65,27 +65,48 @@ def test_1392_my_name_is_paul_is_recognised_as_the_owner(monkeypatch):
     assert owner_name("root") == "Paul"  # configured name wins over a generic OS account
 
 
-def test_mempalace_recall_injection_is_logged_at_info(monkeypatch, caplog):
+class _Records(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+@pytest.fixture
+def core_log(monkeypatch):
+    """Records from the core_mixin logger, even if an earlier test disabled
+    or detached it (caplog relies on propagation to the root logger)."""
+    log = logging.getLogger("distr.core.agent.services.llm.core_mixin")
+    monkeypatch.setattr(log, "disabled", False)
+    monkeypatch.setattr(log, "level", logging.INFO)
+    monkeypatch.setattr(logging.root.manager, "disable", 0)
+    handler = _Records()
+    log.addHandler(handler)
+    yield handler
+    log.removeHandler(handler)
+
+
+def test_mempalace_recall_injection_is_logged_at_info(monkeypatch, core_log):
     svc = _service()
     monkeypatch.setattr("distr.core.mempalace.wiring.prefer_read_rag_context",
                         lambda text: "Merrypak delivery uses R140 flat rate for Gauteng.")
     monkeypatch.setattr("distr.core.agent.services.llm.oracle_context.filter_rag_snippets",
                         lambda text, ctx: ctx)
-    with caplog.at_level(logging.INFO, logger="distr.core.agent.services.llm.core_mixin"):
-        out = svc._maybe_inject_rag_context("What is the Merrypak delivery fee again?")
+    out = svc._maybe_inject_rag_context("What is the Merrypak delivery fee again?")
     assert "R140 flat rate" in out
     assert out.rstrip().endswith("What is the Merrypak delivery fee again?")
-    hits = [r for r in caplog.records if "MemPalace RAG inject" in r.getMessage()]
+    hits = [r for r in core_log.records if "MemPalace RAG inject" in r.getMessage()]
     assert hits and hits[0].levelno == logging.INFO
 
 
-def test_mempalace_recall_miss_is_logged_too(monkeypatch, caplog):
+def test_mempalace_recall_miss_is_logged_too(monkeypatch, core_log):
     svc = _service()
     monkeypatch.setattr("distr.core.mempalace.wiring.prefer_read_rag_context", lambda text: None)
     monkeypatch.setattr("distr.core.mempalace.wiring._enabled", lambda settings=None: True)
-    with caplog.at_level(logging.INFO, logger="distr.core.agent.services.llm.core_mixin"):
-        svc._maybe_inject_rag_context("What did we decide about the Snuza dashboard?")
-    assert any("MemPalace recall: no match" in r.getMessage() and r.levelno == logging.INFO for r in caplog.records)
+    svc._maybe_inject_rag_context("What did we decide about the Snuza dashboard?")
+    assert any("MemPalace recall: no match" in r.getMessage() and r.levelno == logging.INFO for r in core_log.records)
 
 
 def test_app_logging_writes_distr_info_to_the_log_file():
