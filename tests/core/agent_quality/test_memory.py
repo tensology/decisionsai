@@ -80,12 +80,17 @@ def core_log(monkeypatch):
     or detached it (caplog relies on propagation to the root logger)."""
     log = logging.getLogger("distr.core.agent.services.llm.core_mixin")
     monkeypatch.setattr(log, "disabled", False)
-    monkeypatch.setattr(log, "level", logging.INFO)
-    monkeypatch.setattr(logging.root.manager, "disable", 0)
+    old_level, old_disable = log.level, logging.root.manager.disable
+    # setLevel/disable (not a bare attribute write) clear the isEnabledFor cache;
+    # otherwise a "no" cached by an earlier test silently drops the INFO record.
+    logging.disable(logging.NOTSET)
+    log.setLevel(logging.INFO)
     handler = _Records()
     log.addHandler(handler)
     yield handler
     log.removeHandler(handler)
+    log.setLevel(old_level)
+    logging.disable(old_disable)
 
 
 def test_mempalace_recall_injection_is_logged_at_info(monkeypatch, core_log):
