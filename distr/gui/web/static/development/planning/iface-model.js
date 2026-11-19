@@ -36,7 +36,54 @@ const routeKey = (value) => {
     return path === '/' ? '/' : (path.replace(/\/+$/, '') || '/');
 };
 
+// Overview journey-map cards must not own "/" or bind to Home. A real page named
+// "Overview" at /overview stays a page; "Overview · …" or route / is guidance.
+export function isJourneyMap(label, route = '', layer = '') {
+    if (!/^overview\b/i.test(String(label || ''))) return false;
+    const r = String(route || '');
+    const ly = String(layer || '').toLowerCase();
+    if (ly === 'guidance' || r === '' || r === '/') return true;
+    return /[·]|journey\s*map/i.test(String(label || ''));
+}
+
+function screenSlug(label, route, taken) {
+    const raw = String(label || route || 'page').normalize('NFKD').replace(/[^\w\s-]/g, ' ').trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^[^a-z]+/, '') || 'page';
+    const base = raw.slice(0, 56);
+    let id = base, n = 2;
+    while (taken.has(id)) id = `${base}-${n++}`;
+    taken.add(id);
+    return id;
+}
+
+function routePrefix(route) {
+    const part = String(route || '').split('/').filter(Boolean)[0];
+    if (!part || part.startsWith(':') || part === '*') return '';
+    return `/${part}`;
+};
+
 const AJAX = /\/(ajax|api)(\/|$)|xhr|\.json$/i;
+const DOWNLOAD = /\/(download|export|import|publish)(\/|$)/i;
+const LOOKUP = /\/(perk-card|per-card|profile)\/(lookup|receiver)$/i;
+const TRANSLATE = /^\/(files|translate|publish|export|import)(\/|$)/i;
+
+// JSON, file, POST-only, media, robots, and scan-marked AJAX routes are compact URL cards, not pages.
+export function isEndpoint(node = {}, screen = null) {
+    const explicit = String(screen?.attrs?.layer || node.layer || node.lane || '').toLowerCase();
+    if (explicit === 'ajax') return true;
+    const route = String(node.route || screen?.attrs?.route || '');
+    const path = route.split(/[?#]/)[0].replace(/\/+$/, '') || (route ? '/' : '');
+    if (AJAX.test(path) || API.test(path) || DOWNLOAD.test(path) || LOOKUP.test(path) || TRANSLATE.test(path)) return true;
+    const methods = node.methods || screen?.attrs?.methods;
+    const listed = Array.isArray(methods) ? methods.map((m) => String(m).toUpperCase()) : [];
+    const single = String(screen?.attrs?.method || node.method || '').toUpperCase();
+    const verbs = listed.length ? listed : (single ? [single] : []);
+    if (verbs.length && verbs.every((m) => m !== 'GET' && m !== 'HEAD')) return true;
+    const view = String(node.view || screen?.attrs?.view || '');
+    const kind = String(node.scanKind || screen?.attrs?.kind || '').toLowerCase();
+    if (kind === 'api' || kind === 'endpoint' || kind === 'ajax') return true;
+    if (/JsonResponse|APIView|ViewSet|FileResponse|StreamingResponse/i.test(view) && !/Template|render/i.test(view)) return true;
+    return false;
+}
 
 // First `#|` line under each screen, keyed by screen id. The wire parser skips those lines.
 export function screenComments(source) {
@@ -69,7 +116,7 @@ export function pageLayer(node = {}, screen = null) {
     const route = String(node.route || '');
     const template = String(node.template || '');
     const id = String(screen?.attrs?.id || node.screenKey || '');
-    if (AJAX.test(route) || API.test(route)) return 'ajax';
+    if (isEndpoint(node, screen) || AJAX.test(route) || API.test(route)) return 'ajax';
     if (route.startsWith('/admin') || template.startsWith('admin/') || /(^|-)admin($|-)/.test(id)) return 'backend';
     return 'frontend';
 }
@@ -82,18 +129,23 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
     const comments = screenComments(source);
     const used = new Set();
     const nodes = [];
+    const takenKeys = new Set();
+    for (const screen of screens) if (screen?.attrs?.id) takenKeys.add(screen.attrs.id);
     const add = (base, screen) => {
+        const journey = isJourneyMap(base.label || screen?.label, base.route, screen?.attrs?.layer);
+        if (journey) base.route = '';
         const shot = captures?.pages?.[base.sitemapId] || null;
-        const screenKey = screen?.attrs?.id || '';
+        const screenKey = screen?.attrs?.id || (screen ? screenSlug(base.label, base.route, takenKeys) : '');
         const sidecar = screenKey ? (meta[screenKey] || null) : null;
         const shape = sidecar?.shape || defaultShape(base, shot);
         const note = sidecar?.note || comments.get(screenKey) || '';
         const rawMethod = String(screen?.attrs?.method || '').toUpperCase();
         const method = /^(GET|POST|PUT|PATCH|DELETE|HEAD)$/.test(rawMethod) ? rawMethod : '';
-        const lane = pageLayer({ ...base, shape, screenKey }, screen);
+        const lane = journey ? 'guidance' : pageLayer({ ...base, shape, screenKey }, screen);
+        const kind = journey ? 'guidance' : (isEndpoint({ ...base, shape, screenKey, method, lane }, screen) || lane === 'ajax' ? 'endpoint' : 'page');
         nodes.push({ ...base, key: base.key, screenId: screen ? String(screen.id) : '', screenKey, shot,
             shape, shapeSource: sidecar?.shape ? 'sidecar' : 'default', note, method, links: sidecar?.links || {},
-            lane, quiet: Boolean(shot?.notFound) && !screen });
+            lane, kind, quiet: Boolean(shot?.notFound) && !screen });
     };
     for (const n of graph.nodes) {
         const screen = n.screenId ? byScreen.get(n.screenId) : null;
@@ -107,6 +159,12 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         add(base, screen);
     }
     const hidden = hideJunkPages(nodes);
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+        const node = nodes[i];
+        if (!isJourneyMap(node.label, node.route, node.lane)) continue;
+        hidden.unshift({ label: node.label, route: node.route, reason: 'journey map' });
+        nodes.splice(i, 1);
+    }
     const byKey = new Map(nodes.map((n) => [n.key, n]));
     const bySitemap = new Map(nodes.filter((n) => n.sitemapId).map((n) => [n.sitemapId, n]));
     const byScreenKey = new Map(nodes.filter((n) => n.screenKey).map((n) => [n.screenKey, n]));
@@ -118,8 +176,7 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         edges.push({ from, to, kind, label: label || '' });
     };
     for (const e of graph.edges) {
-        if (e.kind === 'parent') continue;                      // URL hierarchy is inferred, not flow data
-        const a = bySitemap.get(e.from), b = bySitemap.get(e.to);
+const a = bySitemap.get(e.from), b = bySitemap.get(e.to);
         if (a && b) addEdge(a.key, b.key, e.kind, e.label || '');
     }
     for (const n of nodes) for (const [target, label] of Object.entries(n.links || {})) {
@@ -127,7 +184,10 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         if (b) addEdge(n.key, b.key, 'link', String(label || ''));
     }
     const byRoute = new Map();
-    for (const n of nodes) if (n.route && !byRoute.has(n.route)) byRoute.set(n.route, n);
+    for (const n of nodes) {
+        if (!n.route || n.lane === 'guidance' || isJourneyMap(n.label, n.route, n.lane)) continue;
+        if (!byRoute.has(n.route)) byRoute.set(n.route, n);
+    }
     const walkLinks = (screenNode, found) => {
         if (!screenNode || typeof screenNode !== 'object') return;
         const route = routeKey(screenNode.attrs?.route || screenNode.attrs?.href || '');
@@ -143,9 +203,77 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         walkLinks(screen, found);
         for (const link of found) addEdge(from.key, byRoute.get(link.route)?.key, 'link', link.label);
     }
-    // Outlined counts pages only, like the page count beside it (guidance cards are not pages).
+    for (const n of nodes) {
+        if (!n.route || n.route === '/' || n.lane === 'guidance' || isJourneyMap(n.label, n.route, n.lane)) continue;
+        const parts = n.route.split('/').filter(Boolean);
+        let parent = null;
+        while (parts.length && !parent) {
+            parts.pop();
+            parent = byRoute.get(parts.length ? `/${parts.join('/')}` : '/') || null;
+            if (parent && (parent.key === n.key || parent.lane === 'guidance' || parent.route === '/')) parent = null;
+        }
+        if (parent) addEdge(parent.key, n.key, 'parent', 'URL hierarchy');
+    }
+    markChromeEdges(nodes, edges);
+    const states = pageStates(source, meta);
+    for (const node of nodes) node.state = states.get(node.screenKey) || states.get(node.key) || 'normal';
+    // Outlined counts real pages only (guidance and endpoints are not pages).
     return { nodes, edges, byKey, coverage: graph.coverage, note: graph.note, hidden,
-        outlined: nodes.filter((n) => n.screenId && n.lane !== 'guidance').length };
+        outlined: nodes.filter((n) => n.screenId && n.lane !== 'guidance' && n.kind !== 'endpoint').length };
+}
+
+const GENERATED = /^\s*#\s*@generated\s+scan:\S+\s+hash:([0-9a-f]{8})\s*$/;
+const STALE_MARK = /^\s*#\s*@stale\s+scan:\S+\s+/;
+const STALE_LABEL = /\s*\(stale\)\s*$/i;
+
+// Derive normal / changed / deleted from generated-hash and stale markers, or a sidecar state.
+export function pageStates(source = '', meta = {}) {
+    const states = new Map();
+    const lines = String(source || '').split('\n');
+    let marker = '';
+    let stale = false;
+    let hasMarkers = false;
+    const screens = [];
+    for (const line of lines) {
+        if (GENERATED.test(line)) { marker = 'generated'; hasMarkers = true; stale = false; continue; }
+        if (STALE_MARK.test(line)) { marker = 'stale'; hasMarkers = true; stale = true; continue; }
+        const screen = /^\s*screen\b(.*)$/.exec(line);
+        if (screen) {
+            const id = (/\bid=([A-Za-z][\w-]*)/.exec(screen[1]) || [])[1] || '';
+            const label = (/"([^"]*)"/.exec(screen[1]) || [])[1] || '';
+            screens.push({ id, label, marker, stale: stale || STALE_LABEL.test(label) });
+            marker = '';
+            stale = false;
+        }
+    }
+    for (const screen of screens) {
+        if (!screen.id) continue;
+        const sidecar = meta[screen.id]?.state;
+        if (sidecar === 'deleted' || sidecar === 'changed' || sidecar === 'normal') states.set(screen.id, sidecar);
+        else if (screen.stale) states.set(screen.id, 'deleted');
+        else if (screen.marker === 'generated') states.set(screen.id, 'normal');
+        else if (hasMarkers) states.set(screen.id, 'changed');
+        else states.set(screen.id, 'normal');
+    }
+    return states;
+}
+
+function markChromeEdges(nodes, edges) {
+    const pages = nodes.filter((node) => node.lane !== 'guidance').length || nodes.length;
+    const threshold = Math.max(3, Math.ceil(pages * 0.4));
+    const incoming = new Map();
+    const outgoing = new Map();
+    for (const edge of edges) {
+        incoming.set(edge.to, (incoming.get(edge.to) || 0) + 1);
+        outgoing.set(edge.from, (outgoing.get(edge.from) || 0) + 1);
+    }
+    const byKey = new Map(nodes.map((node) => [node.key, node]));
+    for (const edge of edges) {
+        const from = byKey.get(edge.from);
+        const manyIn = (incoming.get(edge.to) || 0) >= threshold;
+        const overviewOut = from && (isJourneyMap(from.label, from.route, from.lane) || (/^overview\b/i.test(from.label || '') && (outgoing.get(edge.from) || 0) >= threshold));
+        edge.chrome = Boolean(manyIn || overviewOut);
+    }
 }
 
 const HUB_LINKS = 3;
@@ -153,7 +281,7 @@ const MAX_RADIAL_PAGES = 40;
 
 function cardHeight(node) {
     if (node.lane === 'guidance') return NODE.guideH;
-    if (node.lane === 'ajax') return NODE.partH;
+    if (node.kind === 'endpoint' || node.lane === 'ajax') return NODE.quietH;
     return node.quiet ? NODE.quietH : NODE.h;
 }
 
@@ -306,10 +434,13 @@ function flowChains(rows, edges) {
 // Lanes stacked top to bottom. A connected chain is its own row, with linkGap of open space between cards.
 // Pages with no flow stay in a wrapped grid. Compact "not found" cards start a new row. `aspect` is canvas
 // width / height so the board fits the viewport about right.
-export function layoutIface(model, { aspect = 1.6 } = {}) {
+export function layoutIface(model, { aspect = 1.6, pinned = {} } = {}) {
     const large = model.nodes.length > MAX_RADIAL_PAGES;
     const hub = large ? null : hubNode(model.nodes, model.edges || []);
-    if (hub) return layoutRadial(model, hub);
+    if (hub) {
+        const radial = layoutRadial(model, hub);
+        return applyPinned(model, radial, pinned);
+    }
     const lanes = [];
     let y = 0, width = NODE.w;
     const counts = LANES.map((l) => model.nodes.filter((n) => n.lane === l.id).length);
@@ -333,7 +464,9 @@ export function layoutIface(model, { aspect = 1.6 } = {}) {
         const rows = model.nodes.filter((n) => n.lane === lane.id)
             .sort((a, b) => Number(a.quiet) - Number(b.quiet) || a.label.localeCompare(b.label) || a.route.localeCompare(b.route));
         if (!rows.length) continue;
-        const { chains, rest } = large ? { chains: [], rest: rows } : flowChains(rows, model.edges || []);
+        const { chains, rest } = large
+            ? flowClusters(rows, model.edges || [])
+            : flowChains(rows, model.edges || []);
         const top = y;
         y += NODE.laneHead;
         for (const chain of chains) {
@@ -358,7 +491,72 @@ export function layoutIface(model, { aspect = 1.6 } = {}) {
         y += NODE.laneGap - NODE.gapY;
     }
     for (const lane of lanes) lane.w = width + 28;
-    return { lanes, width, height: Math.max(NODE.h, y - NODE.laneGap + NODE.gapY), cols, large };
+    return applyPinned(model, { lanes, width, height: Math.max(NODE.h, y - NODE.laneGap + NODE.gapY), cols, large }, pinned);
+}
+
+// Connected groups on real flow edges (shared-nav / overview-star edges are ignored).
+function flowClusters(rows, edges) {
+    const ids = new Set(rows.map((node) => node.key));
+    const byKey = new Map(rows.map((node) => [node.key, node]));
+    const adj = new Map(rows.map((node) => [node.key, []]));
+    for (const edge of edges) {
+        if (edge.chrome || !ids.has(edge.from) || !ids.has(edge.to)) continue;
+        adj.get(edge.from).push(edge.to);
+        adj.get(edge.to).push(edge.from);
+    }
+    const byPrefix = new Map();
+    for (const node of rows) {
+        const prefix = routePrefix(node.route);
+        if (!prefix || node.lane === 'guidance') continue;
+        const list = byPrefix.get(prefix) || [];
+        list.push(node.key);
+        byPrefix.set(prefix, list);
+    }
+    for (const keys of byPrefix.values()) {
+        for (let i = 1; i < keys.length; i += 1) {
+            adj.get(keys[0]).push(keys[i]);
+            adj.get(keys[i]).push(keys[0]);
+        }
+    }
+    const seen = new Set();
+    const clusters = [];
+    const rest = [];
+    for (const node of rows) {
+        if (seen.has(node.key)) continue;
+        const group = [];
+        const queue = [node.key];
+        seen.add(node.key);
+        while (queue.length) {
+            const key = queue.shift();
+            group.push(byKey.get(key));
+            for (const next of adj.get(key) || []) {
+                if (seen.has(next)) continue;
+                seen.add(next);
+                queue.push(next);
+            }
+        }
+        if (group.length > 1) {
+            const chained = flowChains(group, edges);
+            if (chained.chains.length === 1 && chained.rest.length === 0) clusters.push(chained.chains[0]);
+            else clusters.push(group);
+        } else rest.push(node);
+    }
+    return { chains: clusters, rest };
+}
+
+function applyPinned(model, layout, pinned) {
+    const pins = pinned && typeof pinned === 'object' ? pinned : {};
+    for (const node of model.nodes) {
+        const pin = pins[node.screenKey] || pins[node.key];
+        if (!pin || !Number.isFinite(Number(pin.x)) || !Number.isFinite(Number(pin.y))) continue;
+        node.x = Number(pin.x);
+        node.y = Number(pin.y);
+        node.pinned = true;
+        layout.width = Math.max(layout.width, node.x + node.w);
+        layout.height = Math.max(layout.height, node.y + node.h);
+    }
+    for (const lane of layout.lanes || []) lane.w = layout.width + 28;
+    return layout;
 }
 
 // Stable page id for a new screen (same rule as flow-meta slugId: letters first, 64 max).

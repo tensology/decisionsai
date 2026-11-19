@@ -10,14 +10,14 @@ import { DOCUMENT_ORDER, orderDocuments, documentLabel, openDocument, moveTab, n
 import { userDocumentsEnabled, USER_DOCUMENT_TYPE } from './documents-config.js?v=20261103-ifaces3';
 import { mountErdItem, isErdMermaid, erdIsDirty } from './erd/mount.js?v=20261112-readable-data';
 import { availableBottom, fillToWindow, createCallout, advancedButton, pinDock, openDrawer } from './canvas-chrome.js?v=20261103-ifaces3';
-import { readSidecar, nodeIds, writeSidecar, slugId } from './flow-meta.js?v=20261103-ifaces3';
-import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261112-skip';
-import { createIfaceCanvas } from './iface-canvas.js?v=20261112-map-pan';
-import { mountPagePicker } from './page-picker.js?v=20261112-route-details';
-import { decorateNode, nodeButton, openNodePopover, openNodePicker, closeNodePopover, warningsNotice } from './flow-nodes.js?v=20261103-ifaces3';
+import { readSidecar, nodeIds, writeSidecar, slugId } from './flow-meta.js?v=20261113-rebuild-map15';
+import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261113-rebuild-map15';
+import { createIfaceCanvas } from './iface-canvas.js?v=20261113-rebuild-map15';
+import { decorateNode, nodeButton, openNodePopover, openNodePicker, closeNodePopover, warningsNotice } from './flow-nodes.js?v=20261113-rebuild-map15';
 import { rememberedRoute, rememberRoute, routeStore } from './route-memory.js?v=20261102-verify';
-import { chatHeaderHtml, chatStore, rememberChat, rememberedChat, pickActiveChat, validateImageFiles, rejectionMessage, isImageAsset, imageLabel } from './chat-header.js?v=20261103-chat2';
-import { toolCardsHtml, draftsPayload, memoryPanelHtml } from './chat-tools.js?v=20261103-chat2';
+import { chatHeaderHtml, chatStore, rememberChat, rememberedChat, pickActiveChat, validateImageFiles, rejectionMessage, isImageAsset, imageLabel } from './chat-header.js?v=20261113-rebuild-map15';
+import { toolCardsHtml, draftsPayload } from './chat-tools.js?v=20261113-rebuild-map15';
+import { animateDocumentEdit } from './doc-edit-anim.js?v=20261114-plan-docs9';
 
 // Planning providers are the same for every board: fetch once per page, not per plan open.
 let planningProviders = null;
@@ -53,6 +53,10 @@ export function createPlanConversation(host, root) {
     // plan UI state is never written to browser storage).
     let chatCollapseChoice = null;
     const storedChatCollapse = () => chatCollapseChoice;
+    // Horizontally flipped Development sidebar collapse icon (rail on the right).
+    const CHAT_ICON_COLLAPSE = '<svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M10 3v10"/><path d="M5.5 6l2 2-2 2"/></svg>';
+    const CHAT_ICON_EXPAND = '<svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M10 3v10"/><path d="M7.5 6 5.5 8l2 2"/></svg>';
+
     function setChatCollapsed(session, collapsed, { remember = false } = {}) {
         session.chatCollapsed = Boolean(collapsed);
         if (remember) chatCollapseChoice = Boolean(collapsed);
@@ -64,7 +68,11 @@ export function createPlanConversation(host, root) {
         toggle.setAttribute('aria-expanded', String(!session.chatCollapsed));
         toggle.title = session.chatCollapsed ? 'Show chat' : 'Hide chat';
         toggle.setAttribute('aria-label', toggle.title);
-        toggle.querySelector('.plan-chat-toggle-icon').textContent = session.chatCollapsed ? '‹' : '›';
+        const icon = session.chatCollapsed ? CHAT_ICON_EXPAND : CHAT_ICON_COLLAPSE;
+        const label = toggle.querySelector('.plan-chat-toggle-label');
+        toggle.querySelectorAll('svg').forEach((node) => node.remove());
+        toggle.insertAdjacentHTML('afterbegin', icon);
+        if (label) toggle.append(label);
         if (!session.chatCollapsed) toggle.classList.remove('has-activity');
         if (was !== session.chatCollapsed) requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
     }
@@ -90,16 +98,16 @@ export function createPlanConversation(host, root) {
             read: () => api(conversationPath(session)),
             apply: async (conversation, valid) => {
                 const running = ['running', 'pending', 'processing'].includes(conversation.status);
-                if (!running) {
-                    const workspace = await api(path(session));
-                    if (!valid()) return false;
-                    session.workspace = workspace;
-                }
                 const changed = JSON.stringify(session.conversation) !== JSON.stringify(conversation);
                 session.conversation = conversation;
                 reconcileMessage(session);
                 session.pollError = '';
-                if (changed || !running) refresh(session);
+                if (!running) {
+                    if (!valid()) return false;
+                    await applyCompletedTurn(session);
+                    return running;
+                }
+                if (changed) refresh(session);
                 else controls(session);
                 return running;
             },
@@ -157,10 +165,38 @@ export function createPlanConversation(host, root) {
         header.classList.add('plan-context-controls');
         slot.replaceChildren(header);
         bar = header;
+        placePlanHeaderEnd();
+    }
+    function planHeaderEnd() {
+        return document.querySelector('#development-task-header > .plan-header-end');
+    }
+    function placePlanHeaderEnd() {
+        const headerEl = document.getElementById('development-task-header');
+        const chrome = document.getElementById('board-chrome-unit');
+        if (!headerEl || !chrome) return null;
+        let end = planHeaderEnd();
+        if (!end) {
+            end = document.createElement('div');
+            end.className = 'plan-header-end';
+            chrome.before(end);
+        }
+        if (chrome.parentElement !== end) end.append(chrome);
+        const build = document.getElementById('plan-build')?.closest('.plan-header-actions');
+        const hint = document.querySelector('.plan-scan-hint');
+        if (hint) end.insertBefore(hint, chrome);
+        if (build) end.insertBefore(build, chrome);
+        return end;
+    }
+    function restorePlanHeaderEnd() {
+        const end = planHeaderEnd();
+        const chrome = document.getElementById('board-chrome-unit');
+        if (end && chrome) end.after(chrome);
+        end?.remove();
     }
 
     // Interfaces actions live on the canvas (not the header). Held here so a preview re-render cannot drop them.
     let ifaceActions = null;
+    let ifaceRebuild = null;
 
     // ⋯ menu (same .board-context-menu popover as the thread header menu). Fixed under its button.
     function closePlanMenu() {
@@ -168,6 +204,26 @@ export function createPlanConversation(host, root) {
         if (!menu || menu.classList.contains('hidden')) return;
         menu.classList.add('hidden');
         ifaceActions.querySelector('#plan-more-button')?.setAttribute('aria-expanded', 'false');
+    }
+    function closeRebuildMenu() {
+        const menu = ifaceRebuild?.querySelector('#plan-rebuild-menu');
+        if (!menu || menu.classList.contains('hidden')) return;
+        menu.classList.add('hidden');
+    }
+    function openRebuildMenu(event) {
+        const menu = ifaceRebuild?.querySelector('#plan-rebuild-menu');
+        const button = ifaceRebuild?.querySelector('#plan-rebuild-sitemap');
+        if (!menu || !button) return;
+        menu.classList.remove('hidden');
+        const width = menu.offsetWidth || 176;
+        const height = menu.offsetHeight || 64;
+        const x = event.clientX ?? button.getBoundingClientRect().left;
+        const y = event.clientY ?? button.getBoundingClientRect().bottom;
+        menu.style.position = 'fixed';
+        menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - width - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - height - 8))}px`;
+        menu.style.right = 'auto';
+        menu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
     }
     function togglePlanMenu() {
         const menu = ifaceActions?.querySelector('#plan-header-menu');
@@ -188,12 +244,15 @@ export function createPlanConversation(host, root) {
     if (typeof document !== 'undefined') {
         document.addEventListener('click', (event) => {
             if (!event.target.closest?.('#plan-header-menu') && !event.target.closest?.('#plan-more-button')) closePlanMenu();
+            if (!event.target.closest?.('#plan-rebuild-menu') && !event.target.closest?.('#plan-rebuild-sitemap')) closeRebuildMenu();
+            if (!event.target.closest?.('#plan-doc-tab-menu')) closeDocTabMenu();
             if (!event.target.closest?.('#plan-chat-menu') && !event.target.closest?.('#plan-chat-switch')) {
                 root.querySelector('#plan-chat-menu')?.classList.add('hidden');
                 root.querySelector('#plan-chat-switch')?.setAttribute('aria-expanded', 'false');
             }
         });
         document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && document.getElementById('plan-doc-tab-menu')) { closeDocTabMenu(); return; }
             const menu = ifaceActions?.querySelector('#plan-header-menu');
             if (!menu || menu.classList.contains('hidden')) return;
             if (event.key === 'Escape') { closePlanMenu(); ifaceActions?.querySelector('#plan-more-button')?.focus(); return; }
@@ -210,7 +269,7 @@ export function createPlanConversation(host, root) {
     // summary call-out. The wire renderers below replace the preview's contents (innerHTML), so the call-out
     // is re-attached whenever it is wiped; the observer and fill-height go away with previewCleanup.
     function interfacesSurface(preview) {
-        // The old summary call-out banner was removed (it repeated what Find page and the map already show).
+        // The old summary call-out banner was removed (it repeated what the map already shows).
         preview.classList.add('plan-canvas-surface');
         const unfill = fillToWindow(preview);
         return () => { unfill?.(); };
@@ -228,9 +287,9 @@ export function createPlanConversation(host, root) {
             const unsaved = Boolean(session.inlineDrafts?.[doc.id]);
             return `<button type="button" role="tab" class="plan-doc-tab" id="plan-doc-tab-${esc(doc.id)}" data-doc="${esc(doc.id)}" aria-selected="${on}" aria-controls="plan-preview" tabindex="${on ? 0 : -1}"${isUserDocument(doc) ? ' data-user-doc="true"' : ''}${unsaved ? ' data-unsaved="true"' : ''} title="${esc(doc.title || '')}">${esc(documentLabel(doc, docs))}<span class="plan-doc-dot" aria-hidden="true"></span><span class="visually-hidden plan-doc-draft-label">${unsaved ? ' (unsaved)' : ''}</span></button>`;
         }).join('') : '<button type="button" role="tab" class="plan-doc-tab" aria-selected="true" tabindex="0" aria-controls="plan-preview" disabled>FRAC</button>';
-        const userActions = userDocs ? `<button type="button" class="plan-doc-add" id="plan-doc-add" aria-label="Add document" title="Add document">+</button>${open && isUserDocument(open) ? `<button type="button" class="plan-doc-rename" id="plan-doc-rename" aria-label="Rename ${esc(open.title || 'document')}" title="Rename">Rename</button><button type="button" class="plan-doc-delete" id="plan-doc-delete" aria-label="Delete ${esc(open.title || 'document')}" title="Delete">Delete</button>` : ''}` : '';
+        const addTab = userDocs ? `<button type="button" role="tab" class="plan-doc-tab plan-doc-add" id="plan-doc-add" aria-label="Add document" title="Add document">+</button>` : '';
         return `<div class="plan-docs-bar">
-            <div class="plan-doc-tabs" role="tablist" aria-label="Documents">${tabs}</div>${userActions}
+            <div class="plan-doc-tabs" role="tablist" aria-label="Documents">${tabs}${addTab}</div>
             <span class="plan-docs-actions">
                 <span class="plan-doc-modes" role="group" aria-label="Editor mode">
                     <button type="button" data-doc-mode="inline" aria-pressed="${mode === 'inline'}">Editor</button>
@@ -274,20 +333,91 @@ export function createPlanConversation(host, root) {
         const print = panel.querySelector('#plan-doc-print');
         if (print && open) print.onclick = () => printDocument(session, open, documentLabel(open, docs));
         const add = panel.querySelector('#plan-doc-add');
-        if (add) add.onclick = async () => {
-            add.disabled = true;
-            try {
-                const created = await api(path(session, '/items'), { method: 'POST', body: { item_type: USER_DOCUMENT_TYPE, title: 'Untitled document', content: '# Untitled document\n\n', content_format: 'markdown' } });
-                session.workspace.items = [...(session.workspace.items || []), created];
-                session.selection.requirements = created.id;
-                renderArtifacts(session);
-                renameDocument(session, created);
-            } catch (error) { host.toast?.(`Could not add the document: ${error?.message || 'unknown error'}`, 'error'); add.disabled = false; }
-        };
-        const rename = panel.querySelector('#plan-doc-rename');
-        if (rename && open) rename.onclick = () => renameDocument(session, open);
-        const remove = panel.querySelector('#plan-doc-delete');
-        if (remove && open) remove.onclick = () => deleteDocument(session, open);
+        if (add) add.onclick = () => createNamedDocument(session, add);
+        tabs.forEach((tab) => {
+            if (!tab.hasAttribute('data-user-doc')) return;
+            tab.oncontextmenu = (event) => {
+                const doc = docs.find((item) => String(item.id) === String(tab.dataset.doc));
+                if (doc) openDocTabMenu(event, session, doc);
+            };
+        });
+    }
+    function closeDocTabMenu() {
+        document.getElementById('plan-doc-tab-menu')?.remove();
+    }
+    function openDocTabMenu(event, session, doc) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDocTabMenu();
+        const menu = document.createElement('div');
+        menu.id = 'plan-doc-tab-menu';
+        menu.className = 'board-context-menu plan-doc-tab-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', 'Document');
+        menu.innerHTML = '<button type="button" role="menuitem" data-doc-menu="rename">Rename</button><button type="button" role="menuitem" class="danger-menu-item" data-doc-menu="delete">Delete</button>';
+        document.body.append(menu);
+        const width = menu.offsetWidth || 176;
+        const height = menu.offsetHeight || 64;
+        menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8))}px`;
+        menu.querySelector('[data-doc-menu="rename"]').onclick = () => { closeDocTabMenu(); renameDocument(session, doc); };
+        menu.querySelector('[data-doc-menu="delete"]').onclick = () => { closeDocTabMenu(); deleteDocument(session, doc); };
+        menu.querySelector('button')?.focus({ preventScroll: true });
+    }
+    function promptDocumentName({ title = 'New document', value = '', confirmLabel = 'Create' } = {}) {
+        closeDocTabMenu();
+        document.getElementById('plan-doc-name-overlay')?.remove();
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.id = 'plan-doc-name-overlay';
+            overlay.className = 'plan-doc-name-overlay';
+            overlay.setAttribute('role', 'dialog');
+            overlay.setAttribute('aria-modal', 'true');
+            overlay.setAttribute('aria-labelledby', 'plan-doc-name-title');
+            overlay.innerHTML = `<form class="plan-doc-name-modal"><h3 id="plan-doc-name-title">${esc(title)}</h3><input type="text" id="plan-doc-name-input" aria-label="Document name" value="${esc(value)}" autocomplete="off"><div class="plan-doc-name-actions"><button type="button" class="plan-doc-name-cancel">Cancel</button><button type="submit" class="plan-doc-name-ok">${esc(confirmLabel)}</button></div></form>`;
+            document.body.append(overlay);
+            const input = overlay.querySelector('#plan-doc-name-input');
+            const ok = overlay.querySelector('.plan-doc-name-ok');
+            const form = overlay.querySelector('form');
+            let settled = false;
+            const sync = () => { ok.disabled = !input.value.trim(); };
+            const finish = (result) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', onKey, true);
+                overlay.remove();
+                resolve(result);
+            };
+            const onKey = (event) => {
+                if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); }
+            };
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                const name = input.value.trim();
+                if (name) finish(name);
+            });
+            overlay.querySelector('.plan-doc-name-cancel').addEventListener('click', () => finish(null));
+            overlay.addEventListener('click', (event) => { if (event.target === overlay) finish(null); });
+            document.addEventListener('keydown', onKey, true);
+            input.addEventListener('input', sync);
+            sync();
+            input.focus();
+            input.select();
+        });
+    }
+    async function createNamedDocument(session, add) {
+        const title = await promptDocumentName({ title: 'New document', confirmLabel: 'Create' });
+        if (!title) return;
+        if (add) add.disabled = true;
+        try {
+            const created = await api(path(session, '/items'), { method: 'POST', body: { item_type: USER_DOCUMENT_TYPE, title, content: `# ${title}\n\n`, content_format: 'markdown' } });
+            session.workspace.items = [...(session.workspace.items || []), created];
+            session.selection.requirements = created.id;
+            renderArtifacts(session);
+        } catch (error) {
+            host.toast?.(`Could not add the document: ${error?.message || 'unknown error'}`, 'error');
+            if (add) add.disabled = false;
+        }
     }
     // Delete = archive on the server (DELETE .../plan-items/{id}?expected_revision=N): only user documents,
     // history and the moved file are kept. Built-in documents never show the button and the route refuses them.
@@ -317,32 +447,20 @@ export function createPlanConversation(host, root) {
     }
     // Rename = the existing PATCH with title + expected_revision (a title change is a new revision, so it
     // waits until the document has no unsaved draft).
-    function renameDocument(session, doc) {
+    async function renameDocument(session, doc) {
         if (!userDocumentsEnabled() || !isUserDocument(doc)) return;
         if (session.inlineDrafts?.[doc.id]) { host.toast?.('Save or undo your changes to this document before renaming it.', 'error'); return; }
-        const tab = root.querySelector(`.plan-doc-tab[data-doc="${CSS.escape(String(doc.id))}"]`);
-        if (!tab) return;
-        const input = document.createElement('input');
-        input.className = 'plan-doc-rename-input';
-        input.value = doc.title || '';
-        input.setAttribute('aria-label', 'Document name');
-        tab.replaceWith(input);
-        input.focus(); input.select();
-        let done = false;
-        const finish = async (commit) => {
-            if (done) return; done = true;
-            const title = input.value.trim();
-            if (commit && title && title !== doc.title) {
-                try {
-                    const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(doc.id)}`, { method: 'PATCH', body: { title, expected_revision: revisionOf(doc) } });
-                    Object.assign(doc, updated);
-                } catch (error) { host.toast?.(`Could not rename: ${error?.message || 'unknown error'}`, 'error'); }
-            }
-            renderArtifacts(session);
+        const title = await promptDocumentName({ title: 'Rename document', value: doc.title || '', confirmLabel: 'Rename' });
+        if (!title || title === doc.title) {
             root.querySelector(`.plan-doc-tab[data-doc="${CSS.escape(String(doc.id))}"]`)?.focus();
-        };
-        input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); finish(true); } else if (event.key === 'Escape') { event.preventDefault(); finish(false); } });
-        input.addEventListener('blur', () => finish(true));
+            return;
+        }
+        try {
+            const updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(doc.id)}`, { method: 'PATCH', body: { title, expected_revision: revisionOf(doc) } });
+            Object.assign(doc, updated);
+        } catch (error) { host.toast?.(`Could not rename: ${error?.message || 'unknown error'}`, 'error'); }
+        renderArtifacts(session);
+        root.querySelector(`.plan-doc-tab[data-doc="${CSS.escape(String(doc.id))}"]`)?.focus();
     }
     // Print PDF: a print-only container with the open document (its unsaved draft if any) rendered from
     // markdown; @media print hides all app chrome (styles.css "Documents print"). No PDF export route exists.
@@ -364,6 +482,8 @@ export function createPlanConversation(host, root) {
 
     function shell(session) {
         bar?.remove();
+        const staleEnd = planHeaderEnd();
+        if (staleEnd) [...staleEnd.children].forEach((el) => { if (el.id !== 'board-chrome-unit') el.remove(); });
         root.innerHTML = `<div class="plan-detail">
             <header class="plan-detail-header">
                 <strong class="plan-project" title="${esc(session.workspace.board_name)}">${esc(session.workspace.board_name)}</strong>
@@ -372,13 +492,10 @@ export function createPlanConversation(host, root) {
             <div class="plan-detail-body">
                 <section class="plan-artifacts" id="plan-artifacts" aria-label="Artifacts"></section>
                 <section class="plan-conversation" id="plan-conversation" aria-label="Plan conversation">
-                    <button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide chat" aria-label="Hide chat"><span class="plan-chat-toggle-icon" aria-hidden="true">›</span><span class="plan-chat-toggle-label">Chat</span></button>
-                    <header class="plan-chat-header" id="plan-chat-header" aria-label="Chat"></header>
+                    <header class="plan-chat-header" id="plan-chat-header" aria-label="Chat"><button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide chat" aria-label="Hide chat">${CHAT_ICON_COLLAPSE}<span class="plan-chat-toggle-label">Chat</span></button></header>
                     <div class="composer-drop-overlay plan-drop-overlay" id="plan-drop-overlay" hidden><strong>Drop images to attach</strong><span>PNG, JPEG or WebP, up to 10 MB each</span></div>
                     <div class="plan-messages" id="plan-messages" role="log" aria-label="Messages" aria-live="polite"></div>
                     <div class="plan-composer-wrap">
-                        <div id="plan-operation-status" role="status" aria-live="polite"></div>
-                        <div class="plan-context-hint" id="plan-context-hint" hidden></div>
                         <form class="studio-composer plan-language" id="plan-language">
                             <div id="plan-draft-assets" class="composer-context"></div>
                             <textarea id="plan-language-input" rows="2" placeholder="Ask about pages, data, or what to build." aria-label="Message"></textarea>
@@ -412,20 +529,34 @@ export function createPlanConversation(host, root) {
         });
         root.querySelector('#plan-language').addEventListener('submit', (event) => { event.preventDefault(); send(session); });
         mountBar();
+        ifaceRebuild = document.createElement('div');
+        ifaceRebuild.className = 'plan-iface-rebuild';
+        ifaceRebuild.setAttribute('role', 'group');
+        ifaceRebuild.setAttribute('aria-label', 'Rebuild interfaces');
+        ifaceRebuild.innerHTML = `<button type="button" class="header-button" id="plan-rebuild-sitemap">Rebuild</button><div class="board-context-menu plan-rebuild-menu hidden" id="plan-rebuild-menu" role="menu" aria-label="Rebuild"><button type="button" role="menuitem" data-rebuild-action="rebuild">Rebuild</button><button type="button" role="menuitem" data-rebuild-action="rescan">Rescan images</button></div>`;
+        const rebuildBtn = ifaceRebuild.querySelector('#plan-rebuild-sitemap');
+        rebuildBtn.onclick = () => { closePlanMenu(); closeRebuildMenu(); rebuildSitemap(session); };
+        rebuildBtn.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            closePlanMenu();
+            openRebuildMenu(event);
+        });
+        ifaceRebuild.querySelector('[data-rebuild-action="rebuild"]').onclick = () => { closeRebuildMenu(); rebuildSitemap(session); };
+        ifaceRebuild.querySelector('[data-rebuild-action="rescan"]').onclick = () => { closeRebuildMenu(); rescanImages(session); };
         ifaceActions = document.createElement('div');
         ifaceActions.className = 'plan-iface-actions';
         ifaceActions.id = 'plan-header-actions';
         ifaceActions.setAttribute('role', 'group');
-        ifaceActions.setAttribute('aria-label', 'Interface actions');
-        ifaceActions.innerHTML = `<button type="button" class="header-button" id="plan-rebuild-sitemap">Rebuild</button>`;
-        ifaceActions.querySelector('#plan-rebuild-sitemap').onclick = () => { closePlanMenu(); rebuildSitemap(session); };
+        ifaceActions.setAttribute('aria-label', 'Interface link filters');
+        ifaceActions.innerHTML = `<button type="button" class="iface-all-links" id="plan-all-links" aria-pressed="false" title="Show all links" aria-label="Show all links"><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l1.83-1.83a5 5 0 0 0-7.07-7.07L10.7 6.24"/><path d="M14 11a5 5 0 0 0-7.54-.54L4.63 12.3a5 5 0 0 0 7.07 7.07L13.3 17.76"/></svg></button>`;
         // Plan -> gaps -> tickets (restored 12 Nov 2026): the existing build turn reads the plan and the sitemap's
         // outstanding pages, asks when a decision is open, and creates or reuses tickets on this project's board.
         const buildActions = document.createElement('span');
         buildActions.className = 'plan-header-actions';
         buildActions.innerHTML = `<button type="button" class="header-button primary" id="plan-build">Build tickets</button>`;
         (bar || root.querySelector('.plan-detail-header'))?.append(buildActions);
-        planBar().querySelector('#plan-build').onclick = () => { closePlanMenu(); build(session); };
+        document.getElementById('plan-build').onclick = () => { closePlanMenu(); build(session); };
+        placePlanHeaderEnd();
         root.querySelector('#plan-provider').onchange = async (event) => {
             session.provider = event.target.value;
             session.model = '';
@@ -463,10 +594,14 @@ export function createPlanConversation(host, root) {
     }
 
     function syncRebuildButton(session) {
-        const rebuild = ifaceActions?.querySelector('#plan-rebuild-sitemap');
+        const rebuild = ifaceRebuild?.querySelector('#plan-rebuild-sitemap') || root.querySelector('#plan-rebuild-sitemap');
         if (!rebuild) return;
-        rebuild.textContent = session.rebuildingInterfaces ? 'Rebuilding' : 'Rebuild';
-        rebuild.disabled = blocked(session) || session.rebuildingInterfaces || !modelAvailable(session);
+        const rescanning = session.rescanningImages;
+        rebuild.textContent = rescanning ? 'Rescanning' : (session.rebuildingInterfaces ? 'Rebuilding' : 'Rebuild');
+        rebuild.disabled = blocked(session) || session.rebuildingInterfaces || rescanning || !modelAvailable(session);
+        ifaceRebuild?.querySelectorAll('#plan-rebuild-menu [role="menuitem"]').forEach((item) => {
+            item.disabled = rebuild.disabled;
+        });
     }
 
     function controls(session) {
@@ -475,7 +610,7 @@ export function createPlanConversation(host, root) {
         if (!Object.keys(session.inlineDrafts || {}).length && !erdIsDirty(session)) session.planSaveWarning = '';
         const busy = blocked(session);
         root.querySelector('#plan-send').disabled = busy || !modelAvailable(session) || !session.draft.trim();
-        const buildButton = planBar().querySelector('#plan-build');
+        const buildButton = document.getElementById('plan-build');
         syncRebuildButton(session);
         if (buildButton) buildButton.disabled = busy || !modelAvailable(session);
         const resetZoom = root.querySelector('[data-iface="reset-zoom"]');
@@ -487,59 +622,7 @@ export function createPlanConversation(host, root) {
             if (button.dataset.chatSwitch !== undefined || button.id === 'plan-chat-switch') button.disabled = busy;
             else button.disabled = busy || button.dataset.staticDisabled === 'true';
         });
-        const status = root.querySelector('#plan-operation-status');
-        status.replaceChildren();
-        if (session.scanHint && session.scanHint.kind !== 'scanning') {
-            const hint = document.createElement('p');
-            hint.className = 'plan-scan-hint';
-            hint.dataset.kind = session.scanHint.kind;
-            hint.textContent = session.scanHint.text;
-            status.append(hint);
-        }
-        if (session.error || session.planSaveWarning) {
-            const error = document.createElement('p');
-            error.className = 'plan-error';
-            error.setAttribute('role', 'alert');
-            error.textContent = session.error || session.planSaveWarning;
-            status.append(error);
-        }
-        root.querySelector('#plan-chat-toggle')?.classList.toggle('has-alert', Boolean(session.error || session.planSaveWarning || session.scanHint?.kind === 'error'));
-        const persistedStatus = ['running', 'pending', 'processing'].includes(session.conversation.status) ? 'Assistant is working...' : '';
-        const note = session.pending || session.pollError || (!session.loaded && !session.error ? 'Loading conversation...' : '') || session.outcome || persistedStatus;
-        if (note) {
-            const text = document.createElement('p');
-            text.textContent = String(note);
-            status.append(text);
-        }
-        const log = root.querySelector('#plan-messages');
-        const latestBuild = Array.from(log.querySelectorAll('.plan-build-results')).at(-1);
-        const firstTicket = latestBuild?.querySelector('[data-plan-ticket]');
-        if (firstTicket && !session.pending) {
-            const jump = document.createElement('button');
-            jump.type = 'button';
-            jump.className = 'plan-ticket-jump';
-            jump.textContent = 'View generated tickets';
-            jump.onclick = () => {
-                firstTicket.focus({ preventScroll: true });
-                firstTicket.scrollIntoView({ block: 'center', inline: 'nearest' });
-            };
-            status.append(jump);
-        }
-        if (session.undoClear && !session.pending) {
-            const undo = document.createElement('button');
-            undo.type = 'button';
-            undo.id = 'plan-chat-undo-clear';
-            undo.textContent = 'Undo clear';
-            undo.onclick = () => undoClear(session);
-            status.append(undo);
-        }
-        if (!session.pending && (session.error || !session.loaded)) {
-            const retry = document.createElement('button');
-            retry.type = 'button';
-            retry.textContent = 'Refresh conversation';
-            retry.onclick = () => load(session);
-            status.append(retry);
-        }
+        root.querySelector('#plan-chat-toggle')?.classList.toggle('has-alert', Boolean(session.error || session.planSaveWarning));
     }
 
     function refresh(session) {
@@ -564,11 +647,7 @@ export function createPlanConversation(host, root) {
             const item = (session.workspace.items || []).find((item) => String(item.id) === String(id));
             return item ? `<button type="button" data-message-artifact="${esc(item.id)}">${esc(item.title)}</button>` : '';
         }).join('')}${isAssistant ? toolCardsHtml(message, session.workspace.items, esc, session.dismissedCards || new Set()) : ''}${isAssistant && message.memory_used ? `<p class="plan-memory-hint">Used ${esc(message.memory_used)} note${message.memory_used === 1 ? '' : 's'} from earlier chats</p>` : ''}${isAssistant ? buildResultsHtml(message.build_result, esc, { boardKey: session.workspace.board_key }) : ''}</article>`;
-        }).join('') || (session.loaded
-            ? `<div class="plan-conversation-empty">${allStarters(session)
-                ? `<p><strong>Start from the project</strong></p><ol class="plan-empty-steps"><li>Pages map themselves from HTML templates, views, and URLs</li><li>Open a page on the sitemap (or use Find page) to see and edit its outline</li><li>Ask here to change pages, data or documents</li></ol>`
-                : `<p><strong>No messages yet</strong></p><p class="plan-empty-hint">Start with the pages, then define requirements and data before building tasks.</p>`}</div>`
-            : '');
+        }).join('');
         wireToolCards(session, log);
         const messageCount = (session.conversation.messages || []).length;
         if (session.pending && session.chatCollapsed) setChatCollapsed(session, false);
@@ -617,6 +696,7 @@ export function createPlanConversation(host, root) {
         renderArtifacts(session);
         // Status/composer height can change during a turn. Follow only after
         // those layout changes, and preserve position when reading older text.
+        if (session.streamText != null) mountStreamBubble(session, log, nearBottom);
         if (nearBottom) log.scrollTop = log.scrollHeight;
     }
 
@@ -624,6 +704,140 @@ export function createPlanConversation(host, root) {
         if (!current(session)) return;
         const log = root.querySelector('#plan-messages');
         log.scrollTop = log.scrollHeight;
+    }
+
+    function streamMarkdown(text) {
+        try {
+            return markdownToEditableHtml(text).html || esc(text);
+        } catch {
+            return esc(text);
+        }
+    }
+
+    function findStreamBubble(log) {
+        return log.querySelector('[data-plan-stream], [data-plan-thinking], .plan-thinking, .plan-message-thinking');
+    }
+
+    function atMessageBottom(log) {
+        return Boolean(log) && log.scrollHeight - log.scrollTop - log.clientHeight < 64;
+    }
+
+    function mountStreamBubble(session, log, nearBottom) {
+        if (!log) return null;
+        let article = findStreamBubble(log);
+        if (!article) {
+            const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+            const name = esc(window.DecisionsAssistantIdentity?.name() || 'Assistant');
+            article = document.createElement('article');
+            article.className = 'plan-message plan-message-stream';
+            article.dataset.planStream = '1';
+            article.innerHTML = `<strong class="plan-message-author"><span class="plan-message-avatar" data-assistant-identity>${assistantIdentity}</span><span data-assistant-name>${name}</span></strong><div class="plan-message-content" data-plan-stream-content></div>`;
+            log.append(article);
+        } else {
+            article.dataset.planStream = '1';
+            if (!article.querySelector('[data-plan-stream-content], .plan-message-content')) {
+                const content = document.createElement('div');
+                content.className = 'plan-message-content';
+                content.dataset.planStreamContent = '1';
+                article.append(content);
+            }
+        }
+        paintStream(session, article, nearBottom);
+        return article;
+    }
+
+    function paintStream(session, article, nearBottom) {
+        const log = root.querySelector('#plan-messages');
+        const content = article.querySelector('[data-plan-stream-content], .plan-message-content') || article;
+        const text = session.streamText || '';
+        content.innerHTML = text ? streamMarkdown(text) : '<span class="plan-stream-waiting">Thinking</span>';
+        if (nearBottom ?? atMessageBottom(log)) log.scrollTop = log.scrollHeight;
+    }
+
+    function scheduleStreamPaint(session) {
+        if (session.streamPaint) return;
+        session.streamPaint = setTimeout(() => {
+            session.streamPaint = 0;
+            if (!current(session) || session.streamText == null) return;
+            const log = root.querySelector('#plan-messages');
+            const article = mountStreamBubble(session, log);
+            if (article) paintStream(session, article);
+        }, 40);
+    }
+
+    function stopStreamPaint(session) {
+        if (session.streamPaint) {
+            clearTimeout(session.streamPaint);
+            session.streamPaint = 0;
+        }
+        session.streamText = null;
+    }
+
+    async function readSseEvents(response, onEvent) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+            const parts = buffer.split('\n\n');
+            buffer = done ? '' : parts.pop();
+            for (const block of parts) {
+                let event = 'message';
+                const data = [];
+                for (const line of block.split('\n')) {
+                    if (line.startsWith('event:')) event = line.slice(6).trim();
+                    else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+                }
+                if (data.length) await onEvent(event, data.join('\n'));
+            }
+            if (done) break;
+        }
+    }
+
+    async function postPlanMessage(session, body) {
+        const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+        const token = document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+        if (token) headers['X-DecisionsAI-Internal-Token'] = token;
+        const response = await fetch(`/api${path(session, '/messages/stream')}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+        });
+        const type = response.headers.get('content-type') || '';
+        if (response.ok && type.includes('text/event-stream') && response.body) {
+            let conversation = null;
+            let streamError = '';
+            await readSseEvents(response, async (event, raw) => {
+                let payload = {};
+                try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { detail: raw }; }
+                if (event === 'delta' && payload.text) {
+                    session.streamText = (session.streamText || '') + payload.text;
+                    scheduleStreamPaint(session);
+                } else if (event === 'done') {
+                    conversation = payload;
+                    session.conversation = payload;
+                    // Reload artifacts as soon as `done` arrives. Do not wait for the
+                    // SSE stream to close — a hung reader would otherwise leave the
+                    // open document on stale text after the server has already saved.
+                    // Do not await here: a slow workspace GET must not stall the reader.
+                    session._completedTurn = applyCompletedTurn(session);
+                } else if (event === 'error') {
+                    streamError = payload.detail || 'Message failed. Your draft is preserved.';
+                }
+            });
+            stopStreamPaint(session);
+            if (streamError) throw new Error(typeof streamError === 'string' ? streamError : 'Message failed. Your draft is preserved.');
+            if (!conversation) throw new Error('Message failed. Your draft is preserved.');
+            return conversation;
+        }
+        if (response.status === 404 || response.status === 405 || !type.includes('text/event-stream')) {
+            return api(path(session, '/messages'), { method: 'POST', body });
+        }
+        const text = await response.text();
+        let data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
+        throw new Error(data.detail || data.error || `Request failed (${response.status})`);
     }
 
     async function renderDiagram(target, content) {
@@ -960,8 +1174,58 @@ export function createPlanConversation(host, root) {
         if (warnings.length) panel.insertBefore(warningsNotice(warnings, () => { if (session.flowWarnings) session.flowWarnings[item.id] = []; }), preview);
     }
 
+    function rememberDocContents(session) {
+        const map = new Map();
+        for (const row of session.workspace?.items || []) {
+            if (row?.id != null) map.set(String(row.id), row.content || '');
+        }
+        session._docContents = map;
+    }
+    function rememberDocContent(session, item) {
+        if (item?.id == null) return;
+        session._docContents ||= new Map();
+        session._docContents.set(String(item.id), item.content || '');
+    }
+    function documentDraft(session, item) {
+        if (!item) return null;
+        return session.inlineDrafts?.[item.id] ?? session.inlineDrafts?.[String(item.id)] ?? null;
+    }
+    function takeDocEditAnim(session, item) {
+        if (session.tab !== 'requirements' || !item) return null;
+        const previous = session._docContents?.get(String(item.id));
+        const next = item.content || '';
+        if (previous == null || previous === next) return null;
+        const stored = documentDraft(session, item);
+        const draft = stored?.draft;
+        // Skip only when the person has real unsaved edits on the same revision.
+        // A leftover draft based on an older revision must not hide an applied agent edit
+        // (and must not remount the editor on that stale text).
+        if (draft != null && draft !== previous && draft !== next) {
+            const base = stored.baseRevision;
+            const currentRev = revisionOf(item);
+            if (base == null || currentRev == null || Number(base) === Number(currentRev)) return null;
+        }
+        if (session.inlineDrafts) {
+            delete session.inlineDrafts[item.id];
+            delete session.inlineDrafts[String(item.id)];
+        }
+        return { oldText: previous, newText: next };
+    }
     function renderArtifacts(session) {
         if (!current(session)) return;
+        const itemForAnim = session.tab === 'requirements' ? selected(session) : null;
+        const pendingDocAnim = takeDocEditAnim(session, itemForAnim);
+        // A later refresh (send finally + monitor, chat title, etc.) must not remount
+        // #plan-preview and kill an in-flight agent-edit animation of the same text.
+        if (!pendingDocAnim && session._docAnimPlaying
+            && itemForAnim && String(session._docAnimPlaying.id) === String(itemForAnim.id)
+            && (itemForAnim.content || '') === session._docAnimPlaying.newText) {
+            rememberDocContents(session);
+            return;
+        }
+        session.docAnimGen = (session.docAnimGen || 0) + 1;
+        const renderGen = session.docAnimGen;
+        rememberDocContents(session);
         ifaceActions?.remove();
         session.previewCleanup?.();
         session.previewCleanup = null;
@@ -984,8 +1248,6 @@ export function createPlanConversation(host, root) {
         const previewAssets = assets.filter(asset => asset.url === `/api/workflows/studio/plan-workspaces/${session.id}/attachments/${asset.id}`)
             .map(asset => ({...asset, url: new URL(asset.url, window.location.origin).href}));
         const docsTab = session.tab === 'requirements';
-        const hint = root.querySelector('#plan-context-hint');
-        if (hint) { hint.hidden = !(docsTab && item); hint.textContent = docsTab && item ? `Context: ${documentLabel(item, choices)}` : ''; }
         panel.innerHTML = `${docsTab ? documentsBarHtml(session, choices, item) : choices.length > 1 || showDiscoveryChoice ? `<label class="plan-artifact-picker"><select id="plan-artifact-select" aria-label="Select artifact">${choices.map((choice) => `<option value="${esc(choice.id)}"${String(choice.id) === String(item?.id) ? ' selected' : ''}>${esc(choice.title)}${choice.is_starter ? ' · needs content' : ''}</option>`).join('')}${discoveryOption}</select></label>` : ''}
             ${item && !session.viewedAsset && (item.is_starter || item.db_only) ? `<div class="plan-artifact-revision" data-plan-provenance="${esc(item.origin || '')}"${provenanceText(item) ? ` title="${esc(provenanceText(item))}"` : ''}>${item.is_starter ? 'Not generated yet · Plan fills this from the project scan or the approved design' : 'Stored in Decisions only'}</div>` : ''}
             ${item?.file_sync_error ? `<div class="plan-file-status" role="alert">${esc(item.file_sync_error)}<button type="button" id="plan-review-file">Review file changes</button></div>` : ''}
@@ -1005,8 +1267,8 @@ export function createPlanConversation(host, root) {
         const review = panel.querySelector('#plan-review-file');
         if (review) { review.disabled = Boolean(session.pending); review.onclick = () => reviewFile(session, item); }
         const preview = panel.querySelector('#plan-preview');
-        if (session.tab === 'wireframes' && session.rebuildingInterfaces) {
-            preview.innerHTML = rebuildStatusHtml(session.rebuildPercent || 0);
+        if (session.tab === 'wireframes' && (session.rebuildingInterfaces || session.rescanningImages)) {
+            preview.innerHTML = rebuildStatusHtml(session.rebuildPercent || 0, session.rebuildStatusLabel || (session.rescanningImages ? 'Rescanning images' : 'Rebuilding interface'));
             parkIfaceActions(session, preview);
             return;
         }
@@ -1103,12 +1365,9 @@ export function createPlanConversation(host, root) {
                     function returnToMap() {
                         delete session.openPage[item.id];
                         renderArtifacts(session);
-                        return panel.querySelector('.plan-find-page');
                     }
-                    toolbar.querySelector('[data-iface-back]')?.addEventListener('click', () => {
-                        returnToMap()?.focus({ preventScroll: true });
-                    });
-                    toolbar.querySelector('[data-iface-page-results]')?.addEventListener('click', () => returnToMap()?.click());
+                    toolbar.querySelector('[data-iface-back]')?.addEventListener('click', () => returnToMap());
+                    toolbar.querySelector('[data-iface-page-results]')?.addEventListener('click', () => returnToMap());
                     toolbar.querySelectorAll('[data-layer]').forEach(button => {
                         button.onclick = () => { session.pageLayers[item.id] = button.dataset.layer; renderArtifacts(session); };
                     });
@@ -1271,21 +1530,67 @@ export function createPlanConversation(host, root) {
             // Markdown documents are edited in place: rich inline editor + floating toolbar, or (Documents
             // "Edit markdown") a raw textarea. Both share the per-document draft, so switching mode keeps edits.
             const raw = session.tab === 'requirements' && docMode() === 'raw';
-            preview.append(inlineEditorFor(session, item, raw ? 'markdown-raw' : 'markdown', item.title || 'Document', () => markDocTabs(session)).el);
+            const mountEditor = ({ afterAnim = false } = {}) => {
+                const editor = inlineEditorFor(session, item, raw ? 'markdown-raw' : 'markdown', item.title || 'Document', () => markDocTabs(session)).el;
+                if (!afterAnim) {
+                    preview.replaceChildren();
+                    preview.append(editor);
+                    return Promise.resolve();
+                }
+                // Swap over the finished animation in place: mount the editor hidden
+                // (out of flow so the preview does not jump), wait two frames, then
+                // drop the anim view and reveal. Never leave #plan-preview empty.
+                const anim = preview.querySelector('.plan-doc-anim');
+                const prevPos = preview.style.position;
+                if (getComputedStyle(preview).position === 'static') preview.style.position = 'relative';
+                editor.setAttribute('data-plan-editor-handoff', '');
+                editor.style.position = 'absolute';
+                editor.style.inset = '0';
+                editor.style.pointerEvents = 'none';
+                preview.append(editor);
+                void editor.offsetHeight;
+                return new Promise((resolve) => {
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        if (preview.contains(editor)) {
+                            anim?.remove();
+                            editor.removeAttribute('data-plan-editor-handoff');
+                            editor.style.position = '';
+                            editor.style.inset = '';
+                            editor.style.pointerEvents = '';
+                            preview.style.position = prevPos;
+                        }
+                        resolve();
+                    }));
+                });
+            };
+            if (pendingDocAnim && session.tab === 'requirements') {
+                const alive = () => session.docAnimGen === renderGen && current(session) && preview.isConnected;
+                session._docAnimPlaying = { id: item.id, newText: pendingDocAnim.newText, gen: renderGen };
+                const run = window.__planDocEditAnim?.animateDocumentEdit || animateDocumentEdit;
+                Promise.resolve(run(preview, pendingDocAnim.oldText, pendingDocAnim.newText, { alive })).then(async (finished) => {
+                    if (finished && alive()) await mountEditor({ afterAnim: true });
+                    if (session._docAnimPlaying?.gen === renderGen) session._docAnimPlaying = null;
+                });
+            } else mountEditor();
         }
         parkIfaceActions(session, preview);
     }
 
-    // Top-right of the interfaces container, same right inset as the zoom dock. Hidden on other plan sections.
+    // Top-right inside the bordered map (same overlay cell as the zoom dock). Hidden on other plan sections.
     function parkIfaceActions(session, preview) {
-        if (!ifaceActions) return;
-        if (session.tab !== 'wireframes' || !preview?.isConnected) { ifaceActions.remove(); return; }
-        const anchor = preview.querySelector('.iface-navigation') || preview.querySelector('.erd-body');
-        if (!anchor) {
-            const callout = preview.querySelector(':scope > .plan-canvas-callout');
-            if (callout) callout.after(ifaceActions);
-            else preview.prepend(ifaceActions);
-        } else anchor.append(ifaceActions);
+        const widgets = [ifaceRebuild, ifaceActions].filter(Boolean);
+        if (!widgets.length) return;
+        if (session.tab !== 'wireframes' || !preview?.isConnected) {
+            for (const el of widgets) el.remove();
+            return;
+        }
+        const anchor = preview.querySelector('.erd-body');
+        const callout = preview.querySelector(':scope > .plan-canvas-callout');
+        for (const el of widgets) {
+            if (anchor) anchor.append(el);
+            else if (callout) callout.after(el);
+            else preview.prepend(el);
+        }
         syncRebuildButton(session);
     }
 
@@ -1319,6 +1624,7 @@ export function createPlanConversation(host, root) {
                     method: 'PATCH', body: { content, expected_revision: base },
                 });
                 Object.assign(item, updated);
+                rememberDocContent(session, item);
                 const remaining = session.inlineDrafts[item.id];
                 if (remaining?.draft === content) delete session.inlineDrafts[item.id];
                 else if (remaining) remaining.baseRevision = revisionOf(updated);
@@ -1606,11 +1912,19 @@ export function createPlanConversation(host, root) {
         const ctx = item ? nodeCtx(session, item) : null;
         const pickerState = (session.ifacePicker ||= {})[viewKey] ||= {};
         const allLinks = session.ifaceAllLinks ||= {};
+        if (allLinks[viewKey] == null) allLinks[viewKey] = true;
         const panelSource = item ? advancedButton({ title: 'Advanced · page source', text: () => item.content || '', onApply: (text) => applyPageSource(session, item, text) }) : null;
+        ensureIfaceLayout(session);
+        if (session.ifaceLayoutLoaded) session.ifaceLayoutMounted = true;
         const canvas = createIfaceCanvas({
             model, aspect: Math.min(2.4, Math.max(0.5, width / height)),
             view: session.ifaceView[viewKey] || null, selectedKey: session.ifaceSel[viewKey] || null,
+            pinned: session.ifaceLayout || {},
             showAllLinks: allLinks[viewKey],
+            onPin: (nodes) => {
+                session.ifaceLayout = nodes;
+                api(path(session, '/interface-layout'), { method: 'PUT', body: { nodes } }).catch(() => {});
+            },
             ...(item && {
                 canUndo: history.undo.length > 0, canRedo: history.redo.length > 0,
                 onAddPage: (opener) => addPageDrawer(session, item, { opener }),
@@ -1639,51 +1953,30 @@ export function createPlanConversation(host, root) {
                 }
             },
         });
-        if (panelSource) canvas.dock.append(panelSource);
-        else canvas.dock.remove();
+        if (panelSource) canvas.setAdvanced?.(panelSource);
         const docs = choices.length;
-        const guidance = model.nodes.filter(node => node.lane === 'guidance').length;
-        const pages = model.nodes.length - guidance;
-        // Quiet one-line status instead of the old summary banner; the detail lives in its tooltip.
-        const summary = document.createElement('span');
-        summary.className = 'iface-map-status';
-        summary.textContent = `${pages} ${pages === 1 ? 'page' : 'pages'} · ${model.outlined} outlined`;
-        summary.title = [
-            `${pages} ${pages === 1 ? 'page' : 'pages'}${guidance ? ` · ${guidance} guidance ${guidance === 1 ? 'item' : 'items'}` : ''} · ${model.outlined} with outlines · ${docs} ${docs === 1 ? 'document' : 'documents'}`,
-            model.hidden?.length ? `${model.hidden.length} placeholder, example or stale ${model.hidden.length === 1 ? 'page' : 'pages'} hidden` : '',
-            model.note || '', provenanceText(item), 'Find page searches by name, route or template.'
+        const endpoints = model.nodes.filter((node) => node.kind === 'endpoint').length;
+        const guidance = model.nodes.filter((node) => node.lane === 'guidance').length;
+        const pages = model.nodes.filter((node) => node.lane !== 'guidance' && node.kind !== 'endpoint').length;
+        // Quiet one-line status at the end of the bottom-left dock; the detail lives in its tooltip.
+        const countText = `${pages} ${pages === 1 ? 'page' : 'pages'}`;
+        const countTitle = [
+            `${countText}${endpoints ? ` · ${endpoints} ${endpoints === 1 ? 'endpoint' : 'endpoints'}` : ''}${guidance ? ` · ${guidance} guidance ${guidance === 1 ? 'item' : 'items'}` : ''}${docs ? ` · ${docs} ${docs === 1 ? 'document' : 'documents'}` : ''}`,
+            model.hidden?.length ? `${model.hidden.length} placeholder, example, stale or journey-map ${model.hidden.length === 1 ? 'item' : 'items'} hidden` : '',
+            provenanceText(item),
         ].filter(Boolean).join('\n');
-        const header = document.createElement('div');
-        header.className = 'iface-map-header';
-        const navigation = document.createElement('div');
-        navigation.className = 'iface-navigation';
-        header.append(navigation);
-        canvas.el.prepend(header);
-        const openPicker = mountPagePicker(navigation, model.nodes, (node) => {
-            pickerState.hasSelection = true;
-            if (openIfacePage(session, item, node)) {
-                panel.querySelector('[data-iface-back]')?.focus({ preventScroll: true });
-            } else {
-                canvas.select(node.key, { focus: true });
-                canvas.reveal(node.key, { readable: true });
-            }
-        }, pickerState);
-        if (canvas.canFilterLinks) {
-            const links = document.createElement('button');
-            links.type = 'button';
-            links.className = 'header-button iface-all-links';
-            links.textContent = 'Show all links';
+        canvas.setPageCount?.(countText, countTitle);
+        const links = ifaceActions?.querySelector('#plan-all-links');
+        if (links) {
+            links.hidden = !canvas.canFilterLinks;
             links.setAttribute('aria-pressed', String(Boolean(allLinks[viewKey])));
-            links.addEventListener('click', () => {
+            links.onclick = () => {
                 const show = !allLinks[viewKey];
                 allLinks[viewKey] = show;
                 canvas.setAllLinks(show);
                 links.setAttribute('aria-pressed', String(show));
-            });
-            navigation.append(links);
+            };
         }
-        navigation.append(summary);
-        syncMapWarning(session);
         preview.classList.add('plan-erd', 'plan-iface');
         const hostEl = document.createElement('div');
         hostEl.className = 'erd-host';
@@ -1772,6 +2065,85 @@ export function createPlanConversation(host, root) {
 
     async function reload(session) {
         session.workspace = await api(path(session));
+        ensureIfaceLayout(session, { refresh: true });
+    }
+
+    // Every completed planning turn (SSE `done`, non-stream POST, send() finally,
+    // or the monitor noticing the turn left `running`) must reload the workspace
+    // and render artifacts so an open document animates to the applied text.
+    async function applyCompletedTurn(session) {
+        const prior = session._completedTurn;
+        const run = (async () => {
+            if (prior) {
+                try { await prior; } catch { /* still reload so we are not stuck on a failed first pass */ }
+            }
+            try { await reload(session); }
+            catch (error) { session.error = `Response received, but artifacts could not refresh: ${error.message}`; }
+            if (!current(session)) return;
+            try { refresh(session); }
+            catch (error) {
+                console.error(error);
+                renderArtifacts(session);
+            }
+        })();
+        session._completedTurn = run;
+        return run;
+    }
+
+    // SSE `done` can lag behind the server marking the turn complete (buffering, a
+    // reader waiting on stream close). Poll independently of `session.pending` so
+    // an open document still reloads and animates once the turn is saved.
+    function watchTurnCompletion(session, request) {
+        session.turnWatch?.stop();
+        let stopped = false;
+        session.turnWatch = { stop() { stopped = true; } };
+        const tick = async () => {
+            while (!stopped && current(session) && session.messageRequest?.id === request.id) {
+                try {
+                    const conversation = await api(conversationPath(session));
+                    if (stopped) return;
+                    const receipt = messageReceipt(conversation, request);
+                    // Only this turn's receipt — conversation.status may already be
+                    // complete from another chat and must not stop the watcher early.
+                    const status = receipt?.status;
+                    if (status && (savedMessageStatuses.includes(status) || status === 'error' || status === 'interrupted')) {
+                        session.conversation = conversation;
+                        if (conversation.chat_id && !session.chatId) {
+                            session.chatId = conversation.chat_id;
+                            rememberPlanChat(session);
+                        }
+                        reconcileMessage(session);
+                        await applyCompletedTurn(session);
+                        return;
+                    }
+                } catch { /* retry until the turn settles or send() stops the watch */ }
+                await new Promise((resolve) => setTimeout(resolve, 250));
+            }
+        };
+        tick();
+    }
+
+    function ensureIfaceLayout(session, { refresh = false } = {}) {
+        if (!session?.id) return null;
+        if (!refresh && session.ifaceLayoutLoaded) return session.ifaceLayoutPromise || null;
+        const previous = session.ifaceLayoutPromise;
+        session.ifaceLayoutPromise = api(path(session, '/interface-layout')).then((result) => {
+            const incoming = result?.nodes && typeof result.nodes === 'object' ? result.nodes : {};
+            session.ifaceLayout = { ...incoming, ...(session.ifaceLayout || {}) };
+            session.ifaceLayoutLoaded = true;
+            if (!session.ifaceLayoutMounted && Object.keys(incoming).length && current(session) && session.tab === 'wireframes') {
+                session.ifaceLayoutMounted = true;
+                renderArtifacts(session);
+            }
+            session.ifaceLayoutMounted = true;
+            return session.ifaceLayout;
+        }).catch(() => {
+            session.ifaceLayout ||= {};
+            session.ifaceLayoutLoaded = true;
+            session.ifaceLayoutMounted = true;
+            return session.ifaceLayout;
+        });
+        return previous || session.ifaceLayoutPromise;
     }
 
     function rememberPlanChat(session) {
@@ -1941,16 +2313,18 @@ export function createPlanConversation(host, root) {
             payload, version: session.draftVersion, attachments,
         };
         session.messageRequest = request;
-        session.undoClear = null;
         session.pending = 'Waiting for assistant...';
+        session.streamText = '';
         session.error = '';
         session.outcome = '';
         controls(session);
+        refresh(session);
         followSubmittedTurn(session);
+        watchTurnCompletion(session, request);
         try {
             let recovered = false;
             try {
-                session.conversation = await api(path(session, '/messages'), { method: 'POST', body: { ...body, request_id: request.id } });
+                session.conversation = await postPlanMessage(session, { ...body, request_id: request.id });
             } catch (error) {
                 session.error = error.message || 'Message failed. Your draft is preserved.';
                 recovered = true;
@@ -1981,9 +2355,21 @@ export function createPlanConversation(host, root) {
                 acknowledgeMessage(session, request);
                 if (firstChat) moveFirstDraft(session);
             }
-            try { await reload(session); }
-            catch (error) { session.error = `Response received, but artifacts could not refresh: ${error.message}`; }
-        } finally { session.pending = ''; refresh(session); monitor(session); }
+        } finally {
+            session.pending = '';
+            stopStreamPaint(session);
+            session.turnWatch?.stop();
+            session.turnWatch = null;
+            try {
+                if (session._completedTurn) await session._completedTurn;
+                else await applyCompletedTurn(session);
+            } catch (error) {
+                session.error = session.error || (error.message || 'Artifacts could not refresh.');
+            }
+            session._completedTurn = null;
+            if (current(session)) refresh(session);
+            monitor(session);
+        }
     }
 
     async function upload(session, files) {
@@ -2045,10 +2431,12 @@ export function createPlanConversation(host, root) {
     function renderChatHeader(session) {
         const header = root.querySelector('#plan-chat-header');
         if (!header) return;
-        // A server without multi-chat (Python not restarted yet) returns no `chats`: keep the single-chat UI.
-        header.hidden = !Array.isArray(session.conversation.chats);
-        if (header.hidden) { header.replaceChildren(); return; }
-        header.innerHTML = chatHeaderHtml(session, esc);
+        // Keep the collapse toggle even before the chat list arrives.
+        const collapse = header.querySelector('#plan-chat-toggle');
+        header.hidden = false;
+        header.innerHTML = Array.isArray(session.conversation.chats) ? chatHeaderHtml(session, esc) : '';
+        if (collapse) header.prepend(collapse);
+        if (!Array.isArray(session.conversation.chats)) return;
         header.querySelectorAll('button:disabled').forEach((button) => { button.dataset.staticDisabled = 'true'; });
         const menu = header.querySelector('#plan-chat-menu');
         const toggle = header.querySelector('#plan-chat-switch');
@@ -2076,13 +2464,8 @@ export function createPlanConversation(host, root) {
         };
         menu.addEventListener('keydown', (event) => { if (event.key === 'Escape') { close(); toggle.focus(); } });
         menu.querySelectorAll('[data-chat-switch]').forEach((button) => { button.onclick = () => { close(); switchChat(session, Number(button.dataset.chatSwitch)); }; });
-        menu.querySelectorAll('[data-chat-restore]').forEach((button) => { button.onclick = () => { close(); chatAction(session, Number(button.dataset.chatRestore), 'restore', 'Chat restored.', true); }; });
-        header.querySelector('#plan-chat-rename').onclick = () => { close(); renameChat(session); };
-        header.querySelector('#plan-chat-archive').onclick = () => { close(); archiveChat(session); };
-        header.querySelector('#plan-chat-memory').onclick = () => { close(); openMemory(session); };
+        menu.querySelectorAll('[data-chat-delete]').forEach((button) => { button.onclick = (event) => { event.stopPropagation(); close(); deleteChat(session, Number(button.dataset.chatDelete)); }; });
         header.querySelector('#plan-chat-new').onclick = () => newChat(session);
-        header.querySelector('#plan-chat-compact').onclick = () => chatAction(session, session.chatId, 'compact', 'Compacted: earlier turns are now a summary for the assistant.');
-        header.querySelector('#plan-chat-clear').onclick = () => clearChat(session);
     }
     const currentChat = (session) => (session.conversation.chats || []).find((chat) => chat.id === session.chatId) || session.conversation.chat;
     async function chatRequest(session, label, run) {
@@ -2103,7 +2486,6 @@ export function createPlanConversation(host, root) {
             const conversation = await api(`${path(session, '/conversation')}?chat_id=${encodeURIComponent(chatId)}`);
             activateChatConversation(session, conversation);
             await loadModels(session);
-            session.undoClear = null;
             rememberPlanChat(session);
             return conversation;
         });
@@ -2151,91 +2533,25 @@ export function createPlanConversation(host, root) {
     async function newChat(session) {
         await chatRequest(session, 'Starting a new chat...', async () => {
             const created = await api(path(session, '/chats'), { method: 'POST', body: {} });
-            session.undoClear = null;
             await openChat(session, created.chat_id);
-            session.outcome = 'New chat started.';
         });
         refresh(session);
     }
-    async function chatAction(session, chatId, action, done, open = false) {
+    async function deleteChat(session, chatId) {
         const chat = (session.conversation.chats || []).find((row) => row.id === chatId);
-        if (!chatId) return;
-        await chatRequest(session, 'Updating chat...', async () => {
-            await api(path(session, `/chats/${encodeURIComponent(chatId)}/${action}`), { method: 'POST', body: { expected_revision: chat?.revision ?? null } });
-            await openChat(session, open ? chatId : session.chatId);
-            session.outcome = done;
+        if (!chatId || !chat) return;
+        if (!confirm(`Delete "${chat.title || 'chat'}"?`)) return;
+        await chatRequest(session, 'Deleting chat...', async () => {
+            const result = await api(path(session, `/chats/${encodeURIComponent(chatId)}`), { method: 'DELETE' });
+            const remaining = (result.chats || []).filter((row) => !row.archived);
+            const next = remaining.some((row) => row.id === session.chatId)
+                ? session.chatId
+                : (remaining.length ? remaining[remaining.length - 1].id : null);
+            await openChat(session, next);
         });
         refresh(session);
-    }
-    async function clearChat(session) {
-        const chat = currentChat(session);
-        if (!chat) return;
-        await chatRequest(session, 'Clearing chat...', async () => {
-            const result = await api(path(session, `/chats/${encodeURIComponent(chat.id)}/clear`), { method: 'POST', body: { expected_revision: chat.revision ?? null } });
-            await openChat(session, result.chat_id);
-            session.undoClear = { archived: result.archived_chat_id, fresh: result.chat_id };
-            session.outcome = `"${chat.title}" was archived; this is a fresh chat.`;
-        });
-        refresh(session);
-    }
-    async function undoClear(session) {
-        const undo = session.undoClear;
-        if (!undo) return;
-        await chatRequest(session, 'Restoring chat...', async () => {
-            await api(path(session, `/chats/${encodeURIComponent(undo.archived)}/restore`), { method: 'POST', body: {} });
-            const fresh = (session.conversation.chats || []).find((row) => row.id === undo.fresh);
-            // The fresh chat is archived again only while it is still empty (never loses a message).
-            if (fresh && !fresh.messages) await api(path(session, `/chats/${encodeURIComponent(undo.fresh)}/archive`), { method: 'POST', body: { expected_revision: fresh.revision } });
-            session.undoClear = null;
-            await openChat(session, undo.archived);
-            session.outcome = 'Chat restored.';
-        });
-        refresh(session);
-    }
-    async function archiveChat(session) {
-        const chat = currentChat(session);
-        if (!chat) return;
-        const confirm = window.DecisionsAPI?.confirm;
-        const ok = confirm ? Boolean(await confirm({ title: 'Archive chat', message: `Archive "${chat.title}"? It moves to Archived in the chat list and can be restored.`, confirmLabel: 'Archive' })) : true;
-        if (!ok) return;
-        await chatRequest(session, 'Archiving chat...', async () => {
-            await api(path(session, `/chats/${encodeURIComponent(chat.id)}/archive`), { method: 'POST', body: { expected_revision: chat.revision ?? null } });
-            await openChat(session, null);
-            session.undoClear = null;
-            session.outcome = `"${chat.title}" archived.`;
-        });
-        refresh(session);
-    }
-    function renameChat(session) {
-        const chat = currentChat(session);
-        const button = root.querySelector('#plan-chat-switch');
-        if (!chat || !button || blocked(session)) return;
-        const input = document.createElement('input');
-        input.className = 'plan-chat-rename-input';
-        input.value = chat.title || '';
-        input.maxLength = 120;
-        input.setAttribute('aria-label', 'Chat name');
-        button.replaceWith(input);
-        input.focus(); input.select();
-        let finished = false;
-        const finish = async (commit) => {
-            if (finished) return; finished = true;
-            const title = input.value.trim();
-            if (commit && title && title !== chat.title) {
-                await chatRequest(session, 'Renaming chat...', async () => {
-                    await api(path(session, `/chats/${encodeURIComponent(chat.id)}`), { method: 'PATCH', body: { title, expected_revision: chat.revision ?? null } });
-                    await openChat(session, chat.id);
-                });
-            }
-            refresh(session);
-            root.querySelector('#plan-chat-switch')?.focus();
-        };
-        input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); finish(true); } else if (event.key === 'Escape') { event.preventDefault(); finish(false); } });
-        input.addEventListener('blur', () => finish(true));
     }
 
-    // ---- Item 7: tool-call cards (Open / Undo, or Apply AI version / Keep mine for unsaved items) -------------
-    const cardOf = (session, el) => (session.conversation.messages || []).find((m) => m.role === 'assistant' && String(m.id) === el.dataset.turn)?.tool_calls?.[Number(el.dataset.card)];
     function wireToolCards(session, log) {
         log.querySelectorAll('[data-tool-open]').forEach((button) => {
             button.onclick = () => {
@@ -2278,45 +2594,6 @@ export function createPlanConversation(host, root) {
     }
 
     // ---- Item 8: memory panel (view, switch on/off, forget chat / project) ------------------------------
-    async function openMemory(session) {
-        const chat = currentChat(session);
-        if (!chat) return;
-        const base = path(session, `/chats/${encodeURIComponent(chat.id)}/memory`);
-        let view;
-        try { view = await api(base); } catch (error) { session.error = error.message || 'Could not load chat memory.'; controls(session); return; }
-        const dialog = document.createElement('dialog');
-        dialog.className = 'plan-memory-dialog';
-        const paint = () => {
-            dialog.innerHTML = memoryPanelHtml(view, esc);
-            dialog.querySelector('[data-memory-close]').onclick = () => dialog.close();
-            dialog.querySelector('#plan-memory-enabled').onchange = async (event) => {
-                try { view = await api(base, { method: 'PUT', body: { enabled: event.target.checked } }); }
-                catch (error) { host.toast?.(error.message || 'Could not change memory.', 'error'); }
-                paint();
-            };
-            dialog.querySelectorAll('[data-memory-forget]').forEach((button) => {
-                button.onclick = async () => {
-                    const scope = button.dataset.memoryForget;
-                    const confirm = window.DecisionsAPI?.confirm;
-                    const ok = confirm ? Boolean(await confirm({ title: 'Forget memory', message: scope === 'project' ? 'Forget the saved memory of every plan chat in this project? Messages stay visible.' : 'Forget this chat\'s saved memory? Messages stay visible.', confirmLabel: 'Forget', danger: true })) : true;
-                    if (!ok) return;
-                    try { view = await api(`${base}?scope=${scope}`, { method: 'DELETE' }); host.toast?.(`Forgot ${view.removed} saved note${view.removed === 1 ? '' : 's'}.`); }
-                    catch (error) { host.toast?.(error.message || 'Could not forget memory.', 'error'); }
-                    paint();
-                };
-            });
-        };
-        paint();
-        root.append(dialog);
-        dialog.addEventListener('close', async () => {
-            dialog.remove();
-            try { await openChat(session, session.chatId); } catch { /* keep the current view */ }
-            refresh(session);
-        }, { once: true });
-        dialog.showModal();
-    }
-
-    // "<item_type>: message" (service.materialize_project_scan) -> { [item id]: [message, …] }, merged.
     function scanWarnings(items, warnings, previous = {}) {
         const out = { ...(previous || {}) };
         for (const raw of Array.isArray(warnings) ? warnings : []) {
@@ -2328,10 +2605,10 @@ export function createPlanConversation(host, root) {
         return out;
     }
 
-    function rebuildStatusHtml(percent) {
+    function rebuildStatusHtml(percent, label = 'Rebuilding interface') {
         const n = Math.max(0, Math.min(100, Math.round(percent)));
         return `<div class="plan-rebuild-status" role="status">
-            <p>Rebuilding interface</p>
+            <p>${label}</p>
             <div class="plan-rebuild-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${n}" aria-valuetext="${n}%">
                 <span class="plan-rebuild-bar" style="width:${n}%"></span>
                 <span class="plan-rebuild-pct" aria-hidden="true">${n}%</span>
@@ -2355,7 +2632,7 @@ export function createPlanConversation(host, root) {
         clearInterval(session.rebuildTimer);
         session.rebuildPercent = 4;
         session.rebuildTimer = setInterval(() => {
-            if (!session.rebuildingInterfaces) { clearInterval(session.rebuildTimer); session.rebuildTimer = 0; return; }
+            if (!session.rebuildingInterfaces && !session.rescanningImages) { clearInterval(session.rebuildTimer); session.rebuildTimer = 0; return; }
             const current = session.rebuildPercent || 0;
             if (current >= 90) return;
             session.rebuildPercent = Math.min(90, current + Math.max(0.8, (90 - current) * 0.08));
@@ -2368,7 +2645,7 @@ export function createPlanConversation(host, root) {
         return value;
     }
     function mountShotEye(canvas, text) {
-        if (canvas.el.querySelector('.iface-shot-eye')) return;
+        if (root.querySelector('.iface-shot-eye') || canvas.el.querySelector('.iface-shot-eye')) return;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'iface-shot-eye';
@@ -2376,37 +2653,147 @@ export function createPlanConversation(host, root) {
         button.setAttribute('aria-label', text);
         button.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span></span>';
         button.querySelector('span').textContent = text;
-        canvas.el.querySelector('.iface-navigation')?.append(button);
+        const rebuild = root.querySelector('#plan-rebuild-sitemap');
+        if (rebuild) rebuild.after(button);
+        else (root.querySelector('.plan-iface-actions') || canvas.el.querySelector('.erd-body'))?.append(button);
     }
     async function loadIfaceShots(session, model, canvas, generation) {
         let status;
+        const imageUrl = (screenKey) => `/api${path(session, `/interface-shots/${encodeURIComponent(screenKey)}`)}`;
+        const shotSlug = (value) => String(value || '').normalize('NFKD').replace(/[^\w\s-]/g, ' ').trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^[^a-z]+/, '');
+        const matchSavedShot = (status, node) => {
+            const saved = new Set(status.saved || []);
+            const shots = status.shots && typeof status.shots === 'object' ? status.shots : {};
+            const route = String(node.route || '').split(/[?#]/)[0].replace(/\/+$/, '');
+            const candidates = [node.screenKey, shotSlug(node.label), shotSlug(route), route.replace(/^\/+/, '').replace(/\//g, '-')].filter(Boolean);
+            for (const name of candidates) {
+                if (shots[name] || ['.png', '.jpg', '.jpeg', '.webp'].some((ext) => saved.has(`${name}${ext}`))) return name;
+            }
+            return '';
+        };
+        const shotBlobs = session.ifaceShotBlobs ||= {};
+        const shotSrc = async (name) => {
+            if (shotBlobs[name]) return shotBlobs[name];
+            const headers = {};
+            const token = document.querySelector('meta[name="decisionsai-internal-api-token"]')?.content || '';
+            if (token) headers['X-DecisionsAI-Internal-Token'] = token;
+            try {
+                const res = await fetch(imageUrl(name), { headers, credentials: 'same-origin' });
+                if (!res.ok) return imageUrl(name);
+                const blob = await res.blob();
+                if (!blob || !blob.size) return imageUrl(name);
+                shotBlobs[name] = URL.createObjectURL(blob);
+                return shotBlobs[name];
+            } catch {
+                return imageUrl(name);
+            }
+        };
+        const paintCardShot = (card, href, capturedAt) => {
+            if (!card || !href) return;
+            const existing = card.querySelector('img.iface-shot');
+            if (existing && (existing.getAttribute('src') === href || existing.dataset.shotSrc === href)) return;
+            const img = document.createElement('img');
+            img.className = 'iface-shot';
+            img.alt = '';
+            img.draggable = false;
+            img.decoding = 'async';
+            img.loading = 'eager';
+            img.dataset.shotSrc = href;
+            img.src = href;
+            if (capturedAt) img.title = `Captured ${capturedAt}`;
+            const slot = card.querySelector('.iface-shot');
+            if (slot) slot.replaceWith(img);
+            else card.querySelector('.iface-node-head')?.insertAdjacentElement('afterend', img);
+        };
+        let applyingShots = false;
+        const applyCachedShots = async (status) => {
+            if (applyingShots || !status) return 0;
+            applyingShots = true;
+            const preview = root.querySelector('#plan-preview');
+            const live = preview?.querySelector('.iface-canvas') || (canvas.el.isConnected ? canvas.el : null);
+            const shots = status.shots && typeof status.shots === 'object' ? status.shots : {};
+            const pages = model.nodes.filter((node) => (node.lane === 'frontend' || node.lane === 'backend') && node.kind !== 'endpoint');
+            let applied = 0, skipped = 0, err = '';
+            const writeDebug = (extra = '') => {
+                const debug = `${applied} applied, ${skipped} unmatched, saved=${(status.saved || []).length}, live=${Boolean(live)}${err ? `, err=${err}` : ''}${extra}`;
+                if (live) live.dataset.ifaceShotDebug = debug;
+                if (preview) preview.dataset.ifaceShotDebug = debug;
+            };
+            const cardFor = (node, name) => (live || preview)?.querySelector(`[data-screen-key="${CSS.escape(node.screenKey || name)}"]`)
+                || (live || preview)?.querySelector(`[data-screen-key="${CSS.escape(name)}"]`)
+                || (live || preview)?.querySelector(`[data-node="${CSS.escape(node.key)}"]`);
+            try {
+                // Paint API URLs immediately. GET /interface-shots/{id} is a same-origin
+                // image/png and does not need a token header, so <img src> works and the
+                // browser can decode visible cards first. Waiting to blob-ify every PNG
+                // first left cards as placeholders and stalled decode of 2880x1800 shots.
+                for (const node of pages) {
+                    const name = matchSavedShot(status, node);
+                    if (!name) { skipped += 1; continue; }
+                    const meta = shots[name];
+                    const href = imageUrl(name);
+                    if (canvas.el.isConnected) {
+                        canvas.setShot(node.key, {
+                            image: href,
+                            captured_at: meta?.captured_at || '',
+                            current: meta ? meta.current !== false : true,
+                        });
+                    }
+                    paintCardShot(cardFor(node, name), href, meta?.captured_at || '');
+                    applied += 1;
+                }
+            } catch (error) {
+                err = String(error && error.message || error);
+            } finally {
+                writeDebug();
+                applyingShots = false;
+            }
+            return applied;
+        };
+        const watchPreviewShots = () => {
+            const preview = root.querySelector('#plan-preview');
+            if (!preview || preview.dataset.ifaceShotWatch === '1') return;
+            preview.dataset.ifaceShotWatch = '1';
+            const remountedCanvas = (mutations) => mutations.some((mutation) => {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType !== 1) continue;
+                    if (node.matches?.('.iface-canvas, .erd-wrap, .erd-body') || node.querySelector?.('.iface-canvas')) return true;
+                }
+                return false;
+            });
+            const obs = new MutationObserver((mutations) => {
+                if (applyingShots || !session.ifaceShotStatus) return;
+                if (remountedCanvas(mutations)) applyCachedShots(session.ifaceShotStatus);
+            });
+            obs.observe(preview, { childList: true, subtree: true });
+        };
+        watchPreviewShots();
+        if (session.ifaceShotStatus) applyCachedShots(session.ifaceShotStatus);
         try { status = await api(path(session, '/interface-shots')); }
         catch { return; }
-        if (session.ifaceShots !== generation || !canvas.el.isConnected) return;
-        const saved = new Set(status.saved || []);
-        const imageUrl = (screenKey) => `/api${path(session, `/interface-shots/${encodeURIComponent(screenKey)}`)}`;
-        const pages = model.nodes.filter((node) => (node.lane === 'frontend' || node.lane === 'backend') && node.screenKey && concretePageRoute(node.route) && !node.shot?.image);
-        for (const node of pages) {
-            const hit = ['.png', '.jpg', '.jpeg', '.webp'].some((ext) => saved.has(`${node.screenKey}${ext}`));
-            if (hit) canvas.setShot(node.key, { image: imageUrl(node.screenKey) });
-        }
-        const reason = status.reason || 'Images cannot be fetched because the terminals are down. If they were up, this could show the frontend and the backend.';
-        if (!status.terminals_up || (!status.frontend_url && !status.backend_url)) {
+        session.ifaceShotStatus = status;
+        await applyCachedShots(status);
+        const canFetch = Boolean(status.production_url || (status.terminals_up && (status.frontend_url || status.backend_url)));
+        if (!canFetch) {
+            const reason = status.reason || 'Images cannot be fetched because the terminals are down. If they were up, this could show the frontend and the backend.';
             mountShotEye(canvas, reason);
             return;
         }
+        const pages = model.nodes.filter((node) => (node.lane === 'frontend' || node.lane === 'backend') && node.kind !== 'endpoint');
         for (const node of pages) {
             if (session.ifaceShots !== generation || !canvas.el.isConnected) return;
-            if (node.shot?.image) continue;
-            const base = node.lane === 'backend' ? status.backend_url : status.frontend_url;
-            if (!base) {
-                canvas.setShot(node.key, { reason: node.lane === 'backend' ? 'No backend address is published in the running terminals.' : 'No frontend address is published in the running terminals.' });
-                continue;
-            }
+            if (!node.screenKey || !concretePageRoute(node.route)) continue;
+            const name = matchSavedShot(status, node);
+            // Reload and Rebuild load cached images only. Recapture happens from "Rescan images".
+            if (name || node.shot?.image) continue;
             try {
                 const result = await api(path(session, '/interface-shots'), { method: 'POST', body: { screen_id: node.screenKey, route: node.route, lane: node.lane } });
                 if (session.ifaceShots !== generation || !canvas.el.isConnected) return;
-                if (result.image) canvas.setShot(node.key, { image: result.image });
+                if (result.image) canvas.setShot(node.key, {
+                    image: result.image,
+                    captured_at: result.captured_at || '',
+                    current: result.current !== false,
+                });
                 else if (result.reason) canvas.setShot(node.key, { reason: result.reason });
             } catch { /* leave the card placeholder */ }
         }
@@ -2420,15 +2807,78 @@ export function createPlanConversation(host, root) {
         session.planSaveWarning = `Save your changes${names.length ? ` in ${names.join(', ')}` : ''} before ${action}.`;
         session.outcome = '';
         controls(session);
-        root.querySelector('#plan-operation-status')?.scrollIntoView({ block: 'nearest' });
         return false;
     }
 
+    function capturableShotPages(session) {
+        const item = (session.workspace?.items || []).find((row) => row.item_type === 'flows' && row.content_format === 'wire')
+            || (session.workspace?.items || []).find((row) => row.content_format === 'wire');
+        if (!item) return [];
+        let parsed;
+        try { parsed = parseWireframe(item.content || ''); } catch { return []; }
+        const model = buildIfaceModel({
+            sitemap: session.workspace?.sitemap,
+            screens: parsed?.screens || [],
+            captures: pageCaptureFor(session.workspace),
+            meta: readSidecar(item.content || '', 'wire').nodes,
+            source: item.content || '',
+        });
+        return model.nodes.filter((node) => (node.lane === 'frontend' || node.lane === 'backend') && node.kind !== 'endpoint' && node.screenKey && concretePageRoute(node.route));
+    }
+
+    async function rescanImages(session) {
+        if (blocked(session) || session.rebuildingInterfaces || session.rescanningImages || !modelAvailable(session)) return;
+        closePlanMenu();
+        closeRebuildMenu();
+        const pages = capturableShotPages(session);
+        session.rescanningImages = true;
+        session.rebuildingInterfaces = true;
+        session.rebuildStatusLabel = 'Rescanning images';
+        session.rebuildPercent = 4;
+        session.error = '';
+        session.outcome = '';
+        controls(session);
+        if (current(session)) renderArtifacts(session);
+        startRebuildProgress(session);
+        try {
+            await api(path(session, '/interface-shots/rescan'), { method: 'POST', body: {} });
+            for (let i = 0; i < pages.length; i += 1) {
+                if (!session.rescanningImages) break;
+                const node = pages[i];
+                try {
+                    await api(path(session, '/interface-shots'), {
+                        method: 'POST',
+                        body: { screen_id: node.screenKey, route: node.route, lane: node.lane, force: true },
+                    });
+                } catch { /* leave this page for the next load if capture fails */ }
+                session.rebuildPercent = Math.max(session.rebuildPercent || 0, Math.round(((i + 1) / Math.max(pages.length, 1)) * 100));
+                paintRebuildPercent(session.rebuildPercent);
+            }
+            session.rebuildPercent = 100;
+            paintRebuildPercent(100);
+            session.outcome = pages.length ? `Rescanned ${pages.length} page ${pages.length === 1 ? 'image' : 'images'}.` : 'Cleared cached page images.';
+        } catch (error) {
+            const message = error.message || 'Could not rescan page images.';
+            session.error = /404|405|not found/i.test(message)
+                ? 'Rescan images needs a Decisions restart so the new endpoint is available.'
+                : message;
+        } finally {
+            clearInterval(session.rebuildTimer);
+            session.rebuildTimer = 0;
+            session.rescanningImages = false;
+            session.rebuildingInterfaces = false;
+            session.rebuildStatusLabel = '';
+            refresh(session);
+        }
+    }
+
     async function rebuildSitemap(session) {
-        if (blocked(session) || session.rebuildingInterfaces || !modelAvailable(session)) return;
+        if (blocked(session) || session.rebuildingInterfaces || session.rescanningImages || !modelAvailable(session)) return;
         if (!requireSavedPlan(session, 'rebuilding interfaces')) return;
         closePlanMenu();
+        closeRebuildMenu();
         session.rebuildingInterfaces = true;
+        session.rebuildStatusLabel = 'Rebuilding interface';
         session.rebuildPercent = 4;
         session.error = '';
         session.outcome = '';
@@ -2455,6 +2905,7 @@ export function createPlanConversation(host, root) {
             clearInterval(session.rebuildTimer);
             session.rebuildTimer = 0;
             session.rebuildingInterfaces = false;
+            session.rebuildStatusLabel = '';
             refresh(session);
         }
     }
@@ -2538,29 +2989,10 @@ export function createPlanConversation(host, root) {
     // Background refresh of an already-open plan: update artifacts without rebuilding the shell.
     // Scan hint lives in the plan toolbar (contextual header area).
     // Red/amber line beside the map status. Redrawn whenever the scan settles, not only on map render.
-    function syncMapWarning(session) {
-        const navigation = root.querySelector('.iface-navigation');
-        if (!navigation) return;
-        const problem = session?.scanHint && ['error', 'warning'].includes(session.scanHint.kind) ? session.scanHint : null;
-        let warning = navigation.querySelector('.iface-map-warning');
-        if (!problem) { warning?.remove(); return; }
-        if (!warning) {
-            warning = document.createElement('span');
-            warning.className = 'iface-map-warning';
-            warning.setAttribute('role', 'status');
-        }
-        const status = navigation.querySelector('.iface-map-status');
-        if (status) status.after(warning); else navigation.append(warning);   // beside the count, before Rebuild
-        warning.dataset.kind = problem.kind;
-        warning.textContent = problem.kind === 'error' ? 'Last scan failed — showing the previous scan' : 'Map is partial';
-        warning.title = problem.text || '';
-    }
-
     function setScanHint(hint) {
         const bar = planBar().querySelector('.plan-detail-header') || planBar();
         let node = bar.querySelector?.('.plan-scan-hint');
         if (active) active.scanHint = hint;
-        if (active) syncMapWarning(active);
         if (hint?.kind !== 'scanning') {
             node?.remove();
             if (active) controls(active);
@@ -2571,7 +3003,12 @@ export function createPlanConversation(host, root) {
             node = document.createElement('span');
             node.className = 'plan-scan-hint';
             node.setAttribute('role', 'status');
-            bar.append(node);
+            const end = placePlanHeaderEnd();
+            (end || bar).append(node);
+            if (end) {
+                const chrome = document.getElementById('board-chrome-unit');
+                if (chrome && chrome.parentElement === end) end.insertBefore(node, chrome);
+            }
         }
         node.dataset.kind = hint.kind;
         node.textContent = hint.text;
@@ -2584,8 +3021,11 @@ export function createPlanConversation(host, root) {
     }
     function leave() {
         root.querySelector('.plan-file-dialog')?.close();
+        closeDocTabMenu();
+        document.getElementById('plan-doc-name-overlay')?.remove();
         bar?.remove();
         bar = null;
+        restorePlanHeaderEnd();
         active?.polling?.stop();
         active = null;
     }
@@ -2594,5 +3034,17 @@ export function createPlanConversation(host, root) {
         || [...(session.chatStates?.values() || [])].some(chat => chat.draft || chat.attachments.length)
         || Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
     addUnsavedCheck(() => [...sessions.values()].some((session) => Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
+    const animApi = () => window.__planDocEditAnim;
+    if (animApi()) {
+        animApi().reloadAndRefresh = async () => {
+            const session = active;
+            if (!session) throw new Error('no active planning session');
+            await reload(session);
+            refresh(session);
+        };
+    }
+
     return { open, refreshWorkspace, setScanHint, leave, hasDraft };
 }
+
+

@@ -93,9 +93,64 @@ def create_stream(provider, model, messages, settings, *, project_id, project_na
         autonomy_level="plan", required_capabilities=(),
         metadata={"source": "plan_workspace"},
     )
-    result = asyncio.run(execute_turn(request, runtime_id="cli_harness"))
-    if not result.success or result.waits_for_human:
+    # Pi/Codex already emit OUTPUT_DELTA (text_delta) on the harness event
+    # path. Yield those chunks as they arrive so the JSON "reply" field can
+    # typewriter; never switch this route to the provider API.
+    import threading
+    from queue import Queue
+
+    from distr.core.turn_runtime.contracts import TurnEventKind
+
+    events: Queue = Queue()
+
+    def on_event(event):
+        delta = str(getattr(event, "output_delta", "") or "")
+        if getattr(event, "kind", None) == TurnEventKind.OUTPUT_DELTA and delta:
+            events.put(("delta", delta))
+
+    def run():
+        try:
+            events.put(("done", asyncio.run(execute_turn(
+                request, on_event=on_event, runtime_id="cli_harness"))))
+        except Exception as exc:
+            events.put(("error", exc))
+
+    worker = threading.Thread(target=run, name="plan-proposal-stream", daemon=True)
+    worker.start()
+    emitted = ""
+    result = None
+    error = None
+    while True:
+        kind, payload = events.get()
+        if kind == "delta":
+            text = str(payload or "")
+            if text.startswith(emitted):
+                extra = text[len(emitted):]
+                emitted = text
+            elif not text or text in emitted:
+                extra = ""
+            else:
+                extra = text
+                emitted += text
+            if extra:
+                yield extra
+            continue
+        if kind == "error":
+            error = payload
+        else:
+            result = payload
+        break
+    worker.join(timeout=5)
+    if error:
+        raise error
+    if not result or not result.success or result.waits_for_human:
         if backend == 'codex':
             raise PlanningRuntimeError('Codex could not complete the planning proposal. Check CLI authentication, model availability and startup errors, then retry. No API fallback was used.')
-        raise PlanningRuntimeError(_failure_message(result.evidence.get("proposal_error")))
-    yield result.output
+        raise PlanningRuntimeError(_failure_message((result.evidence if result else {}).get("proposal_error") if result else None))
+    output = result.output or ""
+    if output.startswith(emitted):
+        extra = output[len(emitted):]
+        if extra:
+            yield extra
+    elif not emitted and output:
+        yield output

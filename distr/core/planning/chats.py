@@ -2,7 +2,7 @@
 
 Chat #1 is the legacy root linked through the workspace's DevelopmentWorkItem; further chats are root
 ``chats`` rows with autonomy_level="plan", execution_profile="design" and params.plan_workspace_id.
-Delete is a soft archive (is_archived=1), never a row delete. Rename / archive / restore / compact take
+Delete removes the chat and its turns. Archive/restore remain as unused backend helpers. Rename / compact take
 ``expected_revision`` (params.chat_revision) and raise ValueError on a stale value (409 at the route).
 Compaction is extractive and deterministic (no model call): older turns become params.summary and stop
 being replayed as history; the messages stay visible.
@@ -138,6 +138,30 @@ def create_chat(workspace_id, title=None):
         chat_id = chat.id
         db.commit()
     return {"chat_id": chat_id, "chats": list_chats(workspace_id)}
+
+
+def delete_chat(workspace_id, chat_id):
+    """Permanently delete a plan chat and its turns. This is not an archive."""
+    from distr.core.chat import cleanup_chat_dependencies, remove_chat_transcript_audit_events
+    from distr.core.db import Chat
+
+    with _conv().get_session() as db:
+        chat, params = _locked(db, workspace_id, chat_id, None)
+        _not_running(params)
+        children = db.query(Chat).filter(Chat.parent_id == chat.id).all()
+        child_ids = [child.id for child in children]
+        for child in children:
+            db.delete(child)
+        cleanup_chat_dependencies(db, chat.id, delete_owned_ticket=False, delete_owned_workflows=False)
+        db.delete(chat)
+        db.commit()
+    try:
+        remove_chat_transcript_audit_events(int(chat_id))
+        for child_id in child_ids:
+            remove_chat_transcript_audit_events(int(child_id))
+    except Exception:  # noqa: BLE001 - audit cleanup must not fail the delete
+        pass
+    return {"deleted": int(chat_id), "chats": list_chats(workspace_id)}
 
 
 def _locked(db, workspace_id, chat_id, expected_revision):

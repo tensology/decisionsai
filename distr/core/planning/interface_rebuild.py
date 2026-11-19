@@ -203,6 +203,49 @@ def overlay(previous: str, generated: str, *, revision: int) -> tuple[str, dict[
     return content, {**counts, "first_rebuild": False, "kept_screens": kept_names[:20]}
 
 
+def screen_hashes(text: str) -> dict[str, str]:
+    """Current body hash for each screen, keyed by screen id= (else the scan key)."""
+    out: dict[str, str] = {}
+    for block in _blocks(text)["blocks"]:
+        line = block["lines"][0] if block["lines"] else ""
+        ident = ID_RE.search(line)
+        # ID_RE matches the whole ' id=...' group; take the value.
+        raw = ident.group(0) if ident else ""
+        name = raw.split("=", 1)[-1].strip() if raw else (block.get("key") or "")
+        if name:
+            out[name] = body_hash(block["lines"])
+    return out
+
+
+def screen_states(text: str) -> dict[str, str]:
+    """Map screen id (or scan key) to normal, changed, or deleted.
+
+    Deleted is a stale marker or a '(stale)' label. Changed is a hand-made or
+    edited screen (no current generated marker) when the document uses markers.
+    When the document has no generated markers at all, pages stay normal so a
+    fresh rewrite does not paint the whole map yellow.
+    """
+    parsed = _blocks(text)
+    has_markers = any(block.get("marker") or block.get("stale_marker") for block in parsed["blocks"])
+    out: dict[str, str] = {}
+    for block in parsed["blocks"]:
+        line = block["lines"][0] if block["lines"] else ""
+        ident = ID_RE.search(line)
+        raw = ident.group(0) if ident else ""
+        name = raw.split("=", 1)[-1].strip() if raw else (block.get("key") or "")
+        if not name:
+            continue
+        if block.get("stale_marker") or STALE in line:
+            out[name] = "deleted"
+        elif block.get("marker") and body_hash(block["lines"]) == block["marker"].group(2):
+            out[name] = "normal"
+        elif has_markers:
+            out[name] = "changed"
+        else:
+            out[name] = "normal"
+    return out
+
+
 def summary_text(s: dict[str, Any]) -> str:
     summary = f"Interfaces: {s['regenerated']} regenerated, {s['added']} added, {s['kept']} kept (hand-made), {s['stale']} stale."
     return summary + (f" {s['restored']} returned routes reconciled." if s.get("restored") else "")

@@ -1,11 +1,11 @@
 """Planning HTTP boundary. Existing URLs remain compatible."""
 from fastapi import Depends, File, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 import asyncio
 import logging
 from distr.gui.web.security import require_internal_token_dependency
-from .models import PlanBuildRequest, PlanChatActionRequest, PlanInterfaceShotRequest, PlanMemoryRequest, PlanRestoreRequest, PlanChatCreateRequest, PlanChatUpdateRequest, PlanMessageRequest, PlanFileReconcileRequest, PlanInstructionRequest, PlanItemCreateRequest, PlanItemUpdateRequest, PlanWorkspaceEnsureRequest
+from .models import PlanBuildRequest, PlanChatActionRequest, PlanInterfaceShotRequest, PlanInterfaceLayoutRequest, PlanMemoryRequest, PlanRestoreRequest, PlanChatCreateRequest, PlanChatUpdateRequest, PlanMessageRequest, PlanFileReconcileRequest, PlanInstructionRequest, PlanItemCreateRequest, PlanItemUpdateRequest, PlanWorkspaceEnsureRequest
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,11 @@ def register_routes(router, templates):
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=422)
 
+    @router.delete("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}")
+    async def plan_chat_delete(workspace_id: int, chat_id: int):
+        from distr.core.planning.chats import delete_chat
+        return await _plan_call(delete_chat, workspace_id, chat_id)
+
     @router.post("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/{action}")
     async def plan_chat_action(workspace_id: int, chat_id: int, action: str, data: PlanChatActionRequest):
         from distr.core.planning import chats
@@ -175,6 +180,72 @@ def register_routes(router, templates):
     async def plan_message(workspace_id: int, data: PlanMessageRequest):
         from distr.core.planning.conversation import send_message
         return await _plan_call(send_message, workspace_id, **data.model_dump())
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/messages/stream")
+    async def plan_message_stream(workspace_id: int, data: PlanMessageRequest, request: Request):
+        """Stream the assistant reply as SSE deltas, then the finished conversation."""
+        import json as json_lib
+        from distr.core.planning.conversation import send_message
+
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def emit(item):
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+
+        def on_delta(delta: str):
+            emit(("delta", delta))
+
+        def run():
+            try:
+                result = send_message(workspace_id, on_delta=on_delta, **data.model_dump())
+                emit(("done", result))
+            except LookupError as exc:
+                emit(("error", 404, str(exc)))
+            except ValueError as exc:
+                emit(("error", 409, str(exc)))
+            except Exception:
+                logger.exception("Plan stream failed")
+                emit(("error", 500, "The planning operation failed. Your saved artifacts are retained. Check the selected model and retry."))
+
+        async def events():
+            worker = asyncio.create_task(asyncio.to_thread(run))
+            try:
+                yield "event: start\ndata: {}\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    kind = item[0]
+                    if kind == "delta":
+                        yield f"event: delta\ndata: {json_lib.dumps({'text': item[1]})}\n\n"
+                    elif kind == "done":
+                        yield f"event: done\ndata: {json_lib.dumps(item[1], default=str)}\n\n"
+                        break
+                    else:
+                        yield f"event: error\ndata: {json_lib.dumps({'detail': item[2], 'status': item[1]})}\n\n"
+                        break
+            finally:
+                if not worker.done():
+                    worker.cancel()
+                try:
+                    await worker
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @router.post("/workflows/studio/plan-workspaces/{workspace_id}/build")
     async def plan_build(workspace_id: int, data: PlanBuildRequest):
@@ -196,8 +267,23 @@ def register_routes(router, templates):
         from distr.core.planning.iface_shots import capture_interface_shot
         return await _plan_call(
             capture_interface_shot, workspace_id,
-            screen_id=data.screen_id, route=data.route, lane=data.lane,
+            screen_id=data.screen_id, route=data.route, lane=data.lane, force=data.force,
         )
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/interface-shots/rescan")
+    async def plan_interface_shot_rescan(workspace_id: int):
+        from distr.core.planning.iface_shots import clear_interface_shots
+        return await _plan_call(clear_interface_shots, workspace_id)
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/interface-layout")
+    async def plan_interface_layout(workspace_id: int):
+        from distr.core.planning.iface_shots import interface_layout
+        return await _plan_call(interface_layout, workspace_id)
+
+    @router.put("/workflows/studio/plan-workspaces/{workspace_id}/interface-layout")
+    async def plan_interface_layout_save(workspace_id: int, data: PlanInterfaceLayoutRequest):
+        from distr.core.planning.iface_shots import save_interface_layout
+        return await _plan_call(save_interface_layout, workspace_id, nodes=data.nodes)
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/interface-shots/{screen_id}")
     async def plan_interface_shot_file(workspace_id: int, screen_id: str):

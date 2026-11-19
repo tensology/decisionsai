@@ -400,7 +400,7 @@ def test_image_reaches_selected_local_provider(store, monkeypatch):
     from distr.core.turn_runtime.contracts import TurnResult
     store[1].context_assets = lambda wid, ids: [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]
     calls = []
-    async def execute(request, *, runtime_id):
+    async def execute(request, *, runtime_id, **kwargs):
         calls.append(request)
         assert runtime_id == "cli_harness"
         return TurnResult(True, runtime_id, "pi", request.route.model, output='{"reply":"Seen","edits":[]}')
@@ -741,3 +741,148 @@ def test_real_local_model_builds_dependency_tasks_and_reuses_them(store, monkeyp
     assert repeated["created"] == repeated["updated"] == 0
     assert repeated["reused"] == len(tasks)
     assert {task["id"] for task in repeated["tasks"]} == ids
+
+
+
+def test_partial_reply_extracts_streaming_json():
+    assert c._partial_reply("") == ""
+    assert c._partial_reply('{"edits": []}') == ""
+    assert c._partial_reply('{"reply": "Hel') == "Hel"
+    assert c._partial_reply(json.dumps({"reply": "Hello \nworld"})) == "Hello \nworld"
+    assert c._partial_reply(json.dumps({"reply": 'Hi "there"'})) == 'Hi "there"'
+    assert c._partial_reply('{"reply": "A\\u0042C"}') == "ABC"
+    assert c._partial_reply('{"reply": "hello' + chr(92)) == "hello"
+    assert c._partial_reply('{"reply": "hello\\n') == "hello\n"
+    assert c._partial_reply('{"reply": "hello\\u00') == "hello"
+    assert c._partial_reply('{"reply": "hello\\u004') == "hello"
+    assert c._partial_reply('{"edits": [], "reply": "Hi", "questions": []}') == "Hi"
+    raw, visible, deltas = "", "", []
+    for chunk in ['{"rep', 'ly": "', 'He', 'llo', chr(92), 'nwo', 'rld"}']:
+        raw += chunk
+        prefix = c._partial_reply(raw)
+        if prefix.startswith(visible) and len(prefix) > len(visible):
+            deltas.append(prefix[len(visible):])
+            visible = prefix
+    assert visible == "Hello\nworld"
+    assert "".join(deltas) == "Hello\nworld"
+
+
+def test_send_message_streams_reply_deltas(store, monkeypatch):
+    payload = json.dumps({"reply": "Hello there", "edits": []})
+
+    def stream(*args, **kwargs):
+        for index in range(0, len(payload), 4):
+            yield payload[index:index + 4]
+
+    monkeypatch.setattr(c.runtime, "create_stream", stream)
+    deltas = []
+    result = send(on_delta=deltas.append)
+    assert "".join(deltas) == "Hello there"
+    assert result["messages"][-1]["content"] == "Hello there"
+    assert result["messages"][-1]["role"] == "assistant"
+
+
+# Captured 2026-11-14 from an in-process workspace-12 document-edit turn
+# (openrouter / deepseek-v4.1-flash) that applied successfully.
+_CAPTURED_DOCUMENT_EDIT = {
+    "reply": "Updated the second paragraph in the Edit animation test document.",
+    "edits": [{
+        "id": 187,
+        "item_type": "document",
+        "title": "Edit animation test",
+        "content": (
+            "# Edit animation test\n\n"
+            "Customers can browse products.\n\n"
+            "Shipping is free on orders over R500.\n\n"
+            "Support is available on weekdays.\n"
+        ),
+        "content_format": "markdown",
+        "expected_revision": 1,
+        "tool": "update_document",
+    }],
+    "tasks": [],
+}
+CAPTURED_DOCUMENT_EDIT_PROPOSAL = json.dumps(_CAPTURED_DOCUMENT_EDIT, separators=(",", ":"))
+
+# Reconstructed from the live HTTP /messages/stream turn on workspace 12 that
+# ended in the sanitized planning error. SSE deltas showed the model putting
+# raw quotes in `reply` (`... document to "Shipping is free on orders over R500."`)
+# while still emitting a valid `edits` array.
+CAPTURED_UNESCAPED_REPLY_PROPOSAL = (
+    '{"reply":"Updated the second paragraph in the *Edit animation test* document to '
+    '"Shipping is free on orders over R500.","edits":'
+    + json.dumps(_CAPTURED_DOCUMENT_EDIT["edits"], separators=(",", ":"))
+    + ',"tasks":[]}'
+)
+
+
+def test_decode_accepts_captured_document_edit_proposal():
+    value = c._decode(CAPTURED_DOCUMENT_EDIT_PROPOSAL, {187: 1})
+    assert "Shipping is free on orders over R500." in value["edits"][0]["content"]
+    assert value["edits"][0]["id"] == 187
+    assert value["edits"][0]["expected_revision"] == 1
+    assert value["edits"][0]["tool"] == "update_document"
+
+
+def test_decode_recovers_document_edit_when_reply_has_unescaped_quotes():
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(CAPTURED_UNESCAPED_REPLY_PROPOSAL)
+    value = c._decode(CAPTURED_UNESCAPED_REPLY_PROPOSAL, {187: 1})
+    assert "Shipping is free on orders over R500." in value["edits"][0]["content"]
+    # 10:43 SAST e2e (doc 194, source=ai rev 3) stored "Shipping is." — recovery
+    # must not clip the content string at an unescaped reply quote.
+    assert "\nShipping is.\n" not in value["edits"][0]["content"]
+    assert value["edits"][0]["item_type"] == "document"
+    assert value["edits"][0]["expected_revision"] == 1
+    assert "Customers can browse products." in value["edits"][0]["content"]
+    assert "Support is available on weekdays." in value["edits"][0]["content"]
+
+
+def test_decode_accepts_fenced_document_edit_proposal():
+    value = c._decode("```json\n" + CAPTURED_DOCUMENT_EDIT_PROPOSAL + "\n```", {187: 1})
+    assert value["edits"][0]["id"] == 187
+
+
+def test_decode_still_rejects_non_json_proposal():
+    with pytest.raises(json.JSONDecodeError):
+        c._decode("I updated the second paragraph in prose.", {187: 1})
+
+
+def test_safe_error_logs_underlying_exception_but_sanitizes_the_reply(caplog):
+    caplog.set_level("ERROR")
+    message = c._safe_error(ValueError("Edit revision does not match the workspace snapshot."))
+    assert message == (
+        "Planning failed: invalid input, model response, or changed plan. "
+        "No unvalidated edits were applied."
+    )
+    assert "Edit revision does not match the workspace snapshot." in caplog.text
+    assert "ValueError" in caplog.text
+
+
+def test_decode_recovers_edits_when_colon_is_missing():
+    payload = CAPTURED_DOCUMENT_EDIT_PROPOSAL.replace('"edits":', '"edits"', 1)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(payload)
+    value = c._decode(payload, {187: 1})
+    assert value["edits"][0]["id"] == 187
+    assert "Shipping is free on orders over R500." in value["edits"][0]["content"]
+
+
+def test_decode_recovers_edits_when_closing_brace_is_missing():
+    payload = CAPTURED_DOCUMENT_EDIT_PROPOSAL.rstrip()
+    assert payload.endswith("}")
+    payload = payload[:-1]
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(payload)
+    value = c._decode(payload, {187: 1})
+    assert value["edits"][0]["id"] == 187
+    assert value["edits"][0]["expected_revision"] == 1
+
+
+def test_load_planning_json_logs_payload_preview_when_recovery_fails(caplog):
+    caplog.set_level("ERROR")
+    with pytest.raises(json.JSONDecodeError):
+        c._load_planning_json('{"reply":"broken","edits" not-an-array}')
+    assert "Planning JSON decode failed" in caplog.text
+    assert "not-an-array" in caplog.text
+

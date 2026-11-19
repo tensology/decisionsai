@@ -10,7 +10,7 @@ export const LINK_LABEL_LIMIT = 120;
 export const META_LIMIT_BYTES = 16 * 1024;
 const PREFIX = { wire: '# decisions-flow:', mermaid: '%% decisions-flow:' };
 const ID = /^[A-Za-z][\w-]{0,63}$/;
-const FIELDS = ['shape', 'image', 'note', 'links'];
+const FIELDS = ['shape', 'image', 'note', 'links', 'state'];
 
 export const sidecarPrefix = (format) => PREFIX[format] || null;
 const isSidecar = (line, format) => Boolean(PREFIX[format]) && line.trim().startsWith(PREFIX[format]);
@@ -59,6 +59,7 @@ function cleanNode(meta, format) {
     if (format === 'wire' && SHAPES.includes(meta.shape) && meta.shape !== 'page') node.shape = meta.shape;
     if (meta.image != null && /^[1-9]\d{0,15}$/.test(String(meta.image))) node.image = String(meta.image);
     if (typeof meta.note === 'string' && meta.note.trim()) node.note = meta.note.slice(0, NOTE_LIMIT);
+    if (meta.state === 'changed' || meta.state === 'deleted' || meta.state === 'normal') node.state = meta.state;
     if (meta.links && typeof meta.links === 'object') {
         const links = {};
         for (const [target, label] of Object.entries(meta.links)) if (ID.test(target)) links[target] = String(label ?? '').slice(0, LINK_LABEL_LIMIT);

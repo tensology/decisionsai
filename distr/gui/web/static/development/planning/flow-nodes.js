@@ -1,7 +1,7 @@
 // Interfaces node shapes, images, notes and links (N6): canvas decoration + the node popover.
 // All metadata lives in the item's trailing sidecar line (flow-meta.js); saves go through ctx.save(content),
 // which is the existing PATCH /plan-items/{id} with expected_revision (409 / 422 handled here like the inline editor).
-import { SHAPES, NOTE_LIMIT, LINK_LABEL_LIMIT, readSidecar, updateNodeMeta, renameNodeId } from './flow-meta.js?v=20261103-ifaces3';
+import { SHAPES, NOTE_LIMIT, LINK_LABEL_LIMIT, readSidecar, updateNodeMeta, renameNodeId } from './flow-meta.js?v=20261113-rebuild-map15';
 import { createInlineEditor, isRevisionConflict } from './inline-edit/editor.js?v=20261103-ifaces3';
 
 const SHAPE_LABEL = { page: 'Page', rectangle: 'Rectangle', square: 'Square', circle: 'Circle', oval: 'Oval', diamond: 'Diamond (decision)' };

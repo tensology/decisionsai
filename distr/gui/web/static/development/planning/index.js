@@ -1,4 +1,4 @@
-import { createPlanConversation } from './conversation.js?v=20261112-open-created-outline';
+import { createPlanConversation } from './conversation.js?v=20261114-plan-docs9';
 import { scanHint, watchPlanScan } from './scan-watch.js?v=20261112-scan-refresh';
 import { createLoadGuard, isAbort } from './load-guard.js?v=20261102-verify';
 

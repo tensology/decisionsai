@@ -33,6 +33,6 @@ const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const html = chatHeaderHtml({ chatId: 3, conversation: { chats: [{ ...chats[0], title: '<b>x</b>' }, chats[1], chats[2]] } }, esc);
 assert.ok(html.includes('&lt;b&gt;x&lt;/b&gt;') && !html.includes('<b>x</b>'));
 assert.ok(html.includes('aria-checked="true" data-chat-switch="3"'));
-assert.ok(html.includes('data-chat-restore="9"') && !html.includes('data-chat-switch="9"'));
-assert.ok(html.includes('id="plan-chat-clear"') && html.includes('id="plan-chat-compact"') && html.includes('id="plan-chat-new"'));
+assert.ok(!html.includes('data-chat-restore="9"') && !html.includes('data-chat-switch="9"'));
+assert.ok(html.includes('id="plan-chat-new"') && html.includes('data-chat-delete="3"') && !html.includes('id="plan-chat-clear"') && !html.includes('id="plan-chat-compact"') && !html.includes('id="plan-chat-archive"') && !html.includes('Rename chat') && !html.includes('Memory:') && !html.includes('Archive chat'));
 console.log('plan chat header: ok');

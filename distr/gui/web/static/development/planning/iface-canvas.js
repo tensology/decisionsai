@@ -2,18 +2,19 @@
 // .erd-viewport (dot grid, drag to pan, Command+wheel zooms, plain wheel pans) > transformed
 // .erd-stage, bottom-left edit dock, bottom-right zoom dock, top-right call-out, selection panel.
 // Pages are cards (screenshot or placeholder, title, route) on lanes. No saving here: the host passes actions.
-import { SHAPE_KIND, layoutIface } from './iface-model.js?v=20261112-readable-map';
+import { SHAPE_KIND, layoutIface, NODE } from './iface-model.js?v=20261113-rebuild-map15';
 import { shapeGlyph } from './flow-nodes.js?v=20261103-ifaces3';
 import { esc, availableBottom } from './canvas-chrome.js?v=20261103-ifaces3';
 
 const MIN_ZOOM = 0.05, MAX_ZOOM = 2;
 const icon = (d) => `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
-// opts: { model, aspect, view, selectedKey, canUndo, canRedo, onAddPage, onUndo, onRedo, onRebuild, onOpen(node),
-//         onSelect(node|null), onViewChange(view), panelHtml(node) -> trusted html, onPanel(panelEl, node) }
+// opts: { model, aspect, view, selectedKey, pinned, canUndo, canRedo, onAddPage, onUndo, onRedo, onRebuild, onOpen(node),
+//         onSelect(node|null), onViewChange(view), onPin(nodes), panelHtml(node) -> trusted html, onPanel(panelEl, node) }
 export function createIfaceCanvas(opts) {
     const { model } = opts;
-    const layout = layoutIface(model, { aspect: opts.aspect || 1.6 });
+    const pins = { ...(opts.pinned || {}) };
+    let layout = layoutIface(model, { aspect: opts.aspect || 1.6, pinned: pins });
     let view = opts.view || null;
     let selectedKey = opts.selectedKey && model.byKey.get(opts.selectedKey) ? opts.selectedKey : null;
     const el = document.createElement('div');
@@ -27,6 +28,9 @@ export function createIfaceCanvas(opts) {
             <span class="erd-dock-divider" aria-hidden="true"></span>
             <button type="button" class="erd-dock-button" data-iface="undo" aria-label="Undo" title="Undo (⌘Z)">${icon('M6 4 3 7l3 3M3.5 7H10a3 3 0 0 1 0 6H8')}</button>
             <button type="button" class="erd-dock-button" data-iface="redo" aria-label="Redo" title="Redo (⇧⌘Z)">${icon('M10 4l3 3-3 3M12.5 7H6a3 3 0 0 0 0 6h2')}</button>
+            <span data-iface="advanced-slot"></span>
+            <span class="erd-dock-divider" data-iface="count-divider" hidden aria-hidden="true"></span>
+            <span class="iface-map-status" data-iface="page-count" hidden></span>
         </div>
         <div class="erd-dock erd-dock-right" role="toolbar" aria-label="Zoom">
             <button type="button" class="erd-dock-button erd-zoom-100" data-iface="reset-zoom" aria-label="Reset zoom" title="Reset zoom to 100%"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="6.5" cy="6.5" r="4.1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M9.7 9.7 13 13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><text x="6.5" y="7.7" text-anchor="middle" font-size="3.2" font-weight="700" fill="currentColor" stroke="none">100</text></svg></button>
@@ -50,13 +54,13 @@ export function createIfaceCanvas(opts) {
     const lastCardBottom = orderedNodes.reduce((bottom, node) => Math.max(bottom, node.y + node.h), 0);
     let activeKey = selectedKey || orderedNodes[0]?.key;
     nodesEl.innerHTML = orderedNodes.map((n) => {
-        const part = n.lane === 'ajax';
+        const part = n.lane === 'ajax' || n.kind === 'endpoint';
         const comment = n.note ? `<small class="iface-note" title="${esc(n.note)}">${esc(n.note)}</small>` : '';
-        const thumb = part || n.quiet || n.lane === 'guidance' || (layout.large && !n.screenId && !n.shot?.image && n.route) ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" src="${esc(n.shot.image)}">`
+        const thumb = part || n.quiet || n.lane === 'guidance' || (layout.large && !n.screenId && !n.shot?.image && n.route) ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" draggable="false" src="${esc(n.shot.image)}">`
             : `<span class="iface-shot iface-shot-missing" aria-hidden="true"${n.shot?.reason ? ` title="${esc(n.shot.reason)}"` : ''}><i></i><i></i><i></i></span>`);
         const method = part && n.method ? `<span class="iface-part-method">${esc(n.method)}</span>` : '';
-        const kind = part ? 'Part' : (SHAPE_KIND[n.shape] || 'Page');
-        return `<div class="erd-table iface-node${part ? ' iface-part' : ''}${n.quiet ? ' iface-node-quiet' : ''}${n.key === selectedKey ? ' selected' : ''}" role="listitem" tabindex="${layout.large && n.key !== activeKey ? -1 : 0}" data-node="${esc(n.key)}" data-shape="${esc(n.shape)}" data-shape-source="${n.shapeSource}" data-lane="${esc(n.lane)}" data-outline="${n.screenId ? 'yes' : 'no'}"
+        const kind = part ? (n.kind === 'endpoint' ? 'Endpoint' : 'Part') : (SHAPE_KIND[n.shape] || 'Page');
+        return `<div class="erd-table iface-node${part ? ' iface-part' : ''}${n.kind === 'endpoint' ? ' iface-endpoint' : ''}${n.quiet ? ' iface-node-quiet' : ''}${n.key === selectedKey ? ' selected' : ''}${n.pinned ? ' iface-pinned' : ''}" role="listitem" tabindex="${layout.large && n.key !== activeKey ? -1 : 0}" data-node="${esc(n.key)}" data-shape="${esc(n.shape)}" data-shape-source="${n.shapeSource}" data-lane="${esc(n.lane)}" data-kind="${esc(n.kind || '')}" data-screen-key="${esc(n.screenKey || '')}" data-outline="${n.screenId ? 'yes' : 'no'}" data-page-state="${esc(n.state || 'normal')}"
             aria-label="${esc(`${n.label}${n.method ? `, ${n.method}` : ''}${n.route ? `, ${n.route}` : ''}${n.note ? `. ${n.note}` : ''}. ${kind}${n.screenId ? '' : ', no page outline yet'}. Enter opens.`)}"
             style="transform: translate(${n.x}px, ${n.y}px); width: ${n.w}px; height: ${n.h}px">
             <header class="erd-table-head iface-node-head"><span class="iface-glyph" title="${esc(kind)}${n.shapeSource === 'default' ? ' (default)' : ''}">${shapeGlyph(n.shape)}</span><strong title="${esc(n.label)}">${esc(n.label)}</strong></header>
@@ -77,25 +81,64 @@ export function createIfaceCanvas(opts) {
         if (Math.abs(dx) >= Math.abs(dy)) return [dx >= 0 ? n.x + n.w : n.x, cy];
         return [cx, dy >= 0 ? n.y + n.h : n.y];
     };
-    lines.setAttribute('width', String(layout.width + 40));
-    lines.setAttribute('height', String(layout.height + 40));
-    lines.innerHTML = `<defs><marker id="iface-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>` +
-        model.edges.map((e) => {
-            const a = model.byKey.get(e.from), b = model.byKey.get(e.to);
-            if (!a || !b) return '';
-            const [x1, y1] = port(a, b.x + b.w / 2, b.y + b.h / 2);
-            const [x2, y2] = port(b, a.x + a.w / 2, a.y + a.h / 2);
-            return `<g class="iface-edge" data-kind="${esc(e.kind)}" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><path class="erd-line" d="M${x1},${y1} L${x2},${y2}" marker-end="url(#iface-arrow)"/>${e.label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}">${esc(e.label)}</text>` : ''}</g>`;
-        }).join('');
-    const edges = [...lines.querySelectorAll('.iface-edge')];
+    const hits = (x1, y1, x2, y2, skip) => {
+        const left = Math.min(x1, x2), right = Math.max(x1, x2), top = Math.min(y1, y2), bottom = Math.max(y1, y2);
+        const pad = 6;
+        for (const node of model.nodes) {
+            if (skip.has(node.key)) continue;
+            const nx = node.x - pad, ny = node.y - pad, nw = node.w + pad * 2, nh = node.h + pad * 2;
+            if (x1 === x2) {
+                if (x1 >= nx && x1 <= nx + nw && bottom >= ny && top <= ny + nh) return true;
+            } else if (y1 === y2) {
+                if (y1 >= ny && y1 <= ny + nh && right >= nx && left <= nx + nw) return true;
+            }
+        }
+        return false;
+    };
+    const orthogonal = (x1, y1, x2, y2, skip) => {
+        const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+        const candidates = [];
+        const offsets = [0, 28, -28, 56, -56, 84, -84, 120, -120, 160, -160];
+        for (const off of offsets) {
+            const mx = midX + off;
+            if (!hits(x1, y1, mx, y1, skip) && !hits(mx, y1, mx, y2, skip) && !hits(mx, y2, x2, y2, skip)) {
+                candidates.push(`M${x1},${y1} H${mx} V${y2} H${x2}`);
+                break;
+            }
+        }
+        if (candidates.length) return candidates[0];
+        for (const off of offsets) {
+            const my = midY + off;
+            if (!hits(x1, y1, x1, my, skip) && !hits(x1, my, x2, my, skip) && !hits(x2, my, x2, y2, skip)) {
+                return `M${x1},${y1} V${my} H${x2} V${y2}`;
+            }
+        }
+        return `M${x1},${y1} L${x2},${y2}`;
+    };
+    function drawEdges() {
+        lines.setAttribute('width', String(layout.width + 40));
+        lines.setAttribute('height', String(layout.height + 40));
+        lines.innerHTML = `<defs><marker id="iface-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>` +
+            model.edges.map((e) => {
+                const a = model.byKey.get(e.from), b = model.byKey.get(e.to);
+                if (!a || !b) return '';
+                const [x1, y1] = port(a, b.x + b.w / 2, b.y + b.h / 2);
+                const [x2, y2] = port(b, a.x + a.w / 2, a.y + a.h / 2);
+                const d = orthogonal(x1, y1, x2, y2, new Set([a.key, b.key]));
+                return `<g class="iface-edge${e.chrome ? ' iface-edge-chrome' : ''}" data-kind="${esc(e.kind)}" data-from="${esc(e.from)}" data-to="${esc(e.to)}" data-chrome="${e.chrome ? 'yes' : 'no'}"><path class="erd-line" d="${d}" marker-end="url(#iface-arrow)"/>${e.label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}">${esc(e.label)}</text>` : ''}</g>`;
+            }).join('');
+        labelsPlaced = false;
+        return [...lines.querySelectorAll('.iface-edge')];
+    }
+    let labelsPlaced = false;
+    let edges = drawEdges();
     const canFilterLinks = layout.large && edges.length > 0;
     function setAllLinks(show) {
         lines.classList.toggle('selected-links-only', canFilterLinks && !show);
     }
-    setAllLinks(opts.showAllLinks);
+    setAllLinks(opts.showAllLinks !== false);
 
     // Keep reciprocal and dense-hub captions distinct without changing navigation paths.
-    let labelsPlaced = false;
     function placeEdgeLabels() {
         if (labelsPlaced || !el.isConnected) return;
         const occupied = model.nodes.map((n) => ({ x: n.x - 4, y: n.y - 4, width: n.w + 8, height: n.h + 8 }));
@@ -139,6 +182,38 @@ export function createIfaceCanvas(opts) {
         fitted = floor ? null : view;
         applyView();
         return zoom;
+    }
+    // First load/refresh: zoom 0.5, centre on the actual card bounds (or left-align
+    // with padding when the map is wider than the viewport), first row ~24px from the top.
+    function contentBounds() {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const include = (x, y, w, h) => {
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + (Number(w) || 0));
+            maxY = Math.max(maxY, y + (Number(h) || 0));
+        };
+        for (const node of model.nodes || []) include(node.x, node.y, node.w, node.h);
+        if (!Number.isFinite(minX)) return { x: -14, y: -4, w: (layout.width || 0) + 28, h: (layout.height || 0) + 18 };
+        return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+    }
+    function initialView() {
+        const vw = viewport.clientWidth || 0;
+        if (!vw) {
+            requestAnimationFrame(() => { if (!view) initialView(); });
+            return;
+        }
+        const b = contentBounds();
+        const zoom = 0.5;
+        const pad = 24;
+        const x = (b.w * zoom + pad * 2 <= vw)
+            ? (vw - b.w * zoom) / 2 - b.x * zoom
+            : pad - b.x * zoom;
+        const y = pad - b.y * zoom;
+        view = { zoom, x, y };
+        fitted = null;
+        applyView();
     }
     function zoomAt(factor, cx = (viewport.clientWidth || 800) / 2, cy = (viewport.clientHeight || 500) / 2) {
         const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.zoom * factor));
@@ -237,30 +312,124 @@ export function createIfaceCanvas(opts) {
         }
     }
 
-    // ---- pointer: pan, click selects, double-click opens ------------------------------
+    function placeCard(node) {
+        const card = byKeyEl.get(node.key);
+        if (card) card.style.transform = `translate(${node.x}px, ${node.y}px)`;
+    }
+    function neighborsOf(key) {
+        const found = [];
+        for (const edge of model.edges) {
+            if (edge.chrome) continue;
+            if (edge.from === key) found.push(edge.to);
+            else if (edge.to === key) found.push(edge.from);
+        }
+        return found.map((id) => model.byKey.get(id)).filter(Boolean);
+    }
+    function applyDrag(g, clientX, clientY) {
+        const node = model.byKey.get(g.node);
+        if (!node) return;
+        node.x = g.nodeOrigin[0] + (clientX - g.start[0]) / view.zoom;
+        node.y = g.nodeOrigin[1] + (clientY - g.start[1]) / view.zoom;
+        placeCard(node);
+        const rest = NODE.w + NODE.gapX + NODE.linkGap;
+        for (const other of g.springs || []) {
+            const restPos = g.rest.get(other.key);
+            if (!restPos) continue;
+            const cx = node.x + node.w / 2, cy = node.y + node.h / 2;
+            const ox = restPos[0] + other.w / 2, oy = restPos[1] + other.h / 2;
+            const dx = ox - cx, dy = oy - cy;
+            const dist = Math.hypot(dx, dy) || 1;
+            const shift = (dist - rest) * 0.18;
+            other.x = restPos[0] + (dx / dist) * shift;
+            other.y = restPos[1] + (dy / dist) * shift;
+            placeCard(other);
+        }
+        edges = drawEdges();
+        markRelated();
+    }
+    function markRelated() {
+        lines.classList.toggle('has-selected-page', Boolean(selectedKey));
+        edges.forEach((edge) => edge.classList.toggle('related',
+            Boolean(selectedKey) && (edge.dataset.from === selectedKey || edge.dataset.to === selectedKey)));
+    }
+    function relayoutPinned() {
+        layout = layoutIface(model, { aspect: opts.aspect || 1.6, pinned: pins });
+        for (const lane of lanesEl.querySelectorAll('.iface-lane')) {
+            const row = layout.lanes.find((item) => item.id === lane.dataset.lane);
+            if (!row) continue;
+            lane.style.transform = `translate(${row.x}px, ${row.y - 4}px)`;
+            lane.style.width = `${row.w}px`;
+            lane.style.height = `${row.h}px`;
+        }
+        for (const node of model.nodes) placeCard(node);
+        edges = drawEdges();
+        markRelated();
+    }
+
+    // ---- pointer: drag a card to move it, drag empty canvas to pan, click selects, double-click opens
     let gesture = null, raf = 0;
     function panGesture() {
-        if (gesture?.last) panTo(gesture.origin[0] + gesture.last[0], gesture.origin[1] + gesture.last[1]);
+        if (gesture?.last && !gesture.dragging) panTo(gesture.origin[0] + gesture.last[0], gesture.origin[1] + gesture.last[1]);
     }
     viewport.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         const node = e.target.closest('[data-node]');
-        gesture = { start: [e.clientX, e.clientY], origin: [view.x, view.y], moved: false, node: node?.dataset.node || null, id: e.pointerId };
+        const target = node ? model.byKey.get(node.dataset.node) : null;
+        gesture = {
+            start: [e.clientX, e.clientY], origin: [view.x, view.y], moved: false,
+            node: target?.key || null, id: e.pointerId, dragging: false,
+            nodeOrigin: target ? [target.x, target.y] : null,
+        };
     });
     viewport.addEventListener('pointermove', (e) => {
         if (!gesture) return;
         const dx = e.clientX - gesture.start[0], dy = e.clientY - gesture.start[1];
         if (!gesture.moved && Math.hypot(dx, dy) < 4) return;
-        if (!gesture.moved) { try { viewport.setPointerCapture(gesture.id); } catch { /* synthetic pointer */ } }
+        if (!gesture.moved) {
+            try { viewport.setPointerCapture(gesture.id); } catch { /* synthetic pointer */ }
+            if (gesture.node) {
+                gesture.dragging = true;
+                const node = model.byKey.get(gesture.node);
+                gesture.rest = new Map();
+                gesture.springs = neighborsOf(gesture.node).filter((other) => !other.pinned || other.key === gesture.node);
+                for (const other of gesture.springs) gesture.rest.set(other.key, [other.x, other.y]);
+                if (node) {
+                    const card = byKeyEl.get(node.key);
+                    if (card) card.classList.add('iface-dragging');
+                }
+            }
+        }
         gesture.moved = true;
         gesture.last = [dx, dy];
         if (raf) return;
-        raf = requestAnimationFrame(() => { raf = 0; panGesture(); });
+        raf = requestAnimationFrame(() => {
+            raf = 0;
+            if (gesture?.dragging) applyDrag(gesture, gesture.start[0] + gesture.last[0], gesture.start[1] + gesture.last[1]);
+            else panGesture();
+        });
     });
     const end = () => {
-        panGesture();
         const g = gesture; gesture = null;
-        if (!g || g.moved) return;
+        if (!g) return;
+        if (g.dragging) {
+            const node = model.byKey.get(g.node);
+            byKeyEl.get(g.node)?.classList.remove('iface-dragging');
+            if (node) {
+                if (g.rest) for (const other of g.springs || []) {
+                    const rest = g.rest.get(other.key);
+                    if (!rest || other.pinned) continue;
+                    other.x = rest[0];
+                    other.y = rest[1];
+                }
+                pins[node.screenKey || node.key] = { x: node.x, y: node.y, pinned: true };
+                node.pinned = true;
+                relayoutPinned();
+                opts.onPin?.({ ...(pins) });
+            }
+            return;
+        }
+        panGesture();
+        if (g.moved) return;
         select(g.node);
     };
     viewport.addEventListener('pointerup', end);
@@ -333,17 +502,27 @@ export function createIfaceCanvas(opts) {
 
     function setShot(key, shot) {
         const node = model.byKey.get(key);
-        if (!node || node.lane === 'ajax' || node.lane === 'guidance') return;
+        if (!node || node.lane === 'ajax' || node.lane === 'guidance' || node.kind === 'endpoint') return;
         node.shot = { ...(node.shot || {}), ...shot };
         const card = byKeyEl.get(key);
         if (!card) return;
         if (shot?.image) {
+            const existing = card.querySelector('img.iface-shot');
+            if (existing && (existing.getAttribute('src') === shot.image || existing.dataset.shotSrc === shot.image)) {
+                if (shot.current !== false) existing.classList.add('iface-shot-current');
+                if (shot.captured_at) existing.title = `Captured ${shot.captured_at}`;
+                return;
+            }
             const img = document.createElement('img');
             img.className = 'iface-shot';
             img.alt = '';
+            img.draggable = false;
             img.decoding = 'async';
-            img.loading = 'lazy';
+            img.loading = 'eager';
+            img.dataset.shotSrc = shot.image;
             img.src = shot.image;
+            if (shot.current !== false) img.classList.add('iface-shot-current');
+            if (shot.captured_at) img.title = `Captured ${shot.captured_at}`;
             const slot = card.querySelector('.iface-shot');
             if (slot) slot.replaceWith(img);
             else card.querySelector('.iface-node-head')?.insertAdjacentElement('afterend', img);
@@ -353,14 +532,32 @@ export function createIfaceCanvas(opts) {
         }
     }
 
+    function setPageCount(text, title) {
+        const count = $('[data-iface="page-count"]');
+        const divider = $('[data-iface="count-divider"]');
+        if (!count) return;
+        const label = String(text || '');
+        count.textContent = label;
+        count.title = title || label;
+        count.hidden = !label;
+        if (divider) divider.hidden = !label;
+    }
+
+    function setAdvanced(node) {
+        const slot = $('[data-iface="advanced-slot"]');
+        if (!slot) return;
+        slot.replaceChildren();
+        if (node) slot.append(node);
+    }
+
     return {
-        el, dock, layout, fit, zoomAt, resetZoom, reveal, select, setHistory, setShot, canFilterLinks, setAllLinks,
+        el, dock, get layout() { return layout; }, fit, zoomAt, resetZoom, reveal, select, setHistory, setShot, setPageCount, setAdvanced, canFilterLinks, setAllLinks,
         get view() { return view; },
         get selectedKey() { return selectedKey; },
         mounted() {
             sizeToWindow();
-            if (!view && layout.large) view = { zoom: 1, x: 26, y: 16 };
-            if (view) applyView(); else fit({ floor: layout.focus === 'hub' ? 0.55 : 0 });
+            // First load/refresh: Fit positioning at zoom 0.5, top of the map visible. The Fit button still does a full fit.
+            if (view) applyView(); else initialView();
             if (selectedKey) select(selectedKey);
         },
         destroy() { resizeObserver?.disconnect(); window.removeEventListener('resize', onResize); cancelAnimationFrame(frame); cancelAnimationFrame(raf); el.remove(); },

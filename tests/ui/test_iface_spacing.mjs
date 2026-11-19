@@ -105,8 +105,30 @@ test('an ajax route is a short part, not a page card', () => {
     layoutIface(model);
     const feed = model.nodes[0];
     assert.equal(feed.lane, 'ajax');
-    assert.equal(feed.h, NODE.partH);
+    assert.equal(feed.kind, 'endpoint');
+    assert.equal(feed.h, NODE.quietH);
     assert.ok(feed.h < NODE.h);
+});
+
+test('JSON and file endpoints are compact URL cards and are not counted as pages', () => {
+    const model = buildIfaceModel({
+        screens: [
+            screen('home', 'Home', '/'),
+            screen('publish', 'Translation.translate publish', '/publish'),
+            screen('files', 'Translation file list redirect', '/files'),
+            screen('robots', 'Robots txt', '/robots.txt'),
+            screen('lookup', 'Perk card lookup', '/perk-card/lookup'),
+        ],
+    });
+    layoutIface(model);
+    const byKey = Object.fromEntries(model.nodes.map((node) => [node.screenKey, node]));
+    assert.equal(byKey.home.kind, 'page');
+    for (const id of ['publish', 'files', 'robots', 'lookup']) {
+        assert.equal(byKey[id].kind, 'endpoint', id);
+        assert.equal(byKey[id].lane, 'ajax', id);
+        assert.equal(byKey[id].h, NODE.quietH, id);
+    }
+    assert.equal(model.outlined, 1);
 });
 
 test('a hub with many outgoing links sits at the center and neighbors sit farther out', () => {
@@ -142,4 +164,70 @@ test('a hub with many outgoing links sits at the center and neighbors sit farthe
     assert.ok(hub.y > minY && hub.y + hub.h < maxY);
     assert.ok(targets.some((node) => center(node).x < hubCenter.x));
     assert.ok(targets.some((node) => center(node).x > hubCenter.x));
+});
+
+
+test('shared navigation and an overview map are marked as chrome links', () => {
+    const link = (label, route) => ({ type: 'link', label, attrs: { route }, children: [] });
+    const overviewLinks = Array.from({ length: 8 }, (_, index) => link(`Page ${index}`, `/p${index}`));
+    const screens = [
+        screen('overview', 'Overview · Shop', '', overviewLinks),
+        screen('home', 'Home', '/', [link('Shop', '/shop')]),
+        screen('shop', 'Shop', '/shop'),
+        ...Array.from({ length: 8 }, (_, index) => screen(`p${index}`, `Page ${index}`, `/p${index}`, [
+            link('Home', '/'),
+        ])),
+    ];
+    const model = buildIfaceModel({ screens });
+    assert.ok(!model.nodes.some((node) => /^overview/i.test(node.label)));
+    const chrome = model.edges.filter((edge) => edge.chrome);
+    assert.ok(chrome.length >= 8, 'shared-nav edges are chrome');
+});
+
+test('pinned pages keep their coordinates while unpinned pages are still placed', () => {
+    const model = buildIfaceModel({ screens: [
+        screen('home', 'Home', '/home'),
+        screen('shop', 'Shop', '/shop'),
+        screen('about', 'About', '/about'),
+    ] });
+    layoutIface(model, { pinned: { home: { x: 900, y: 40 } } });
+    const home = model.nodes.find((node) => node.screenKey === 'home');
+    const shop = model.nodes.find((node) => node.screenKey === 'shop');
+    assert.equal(home.x, 900);
+    assert.equal(home.y, 40);
+    assert.equal(home.pinned, true);
+    assert.notEqual(shop.x, 900);
+});
+
+test('an Overview journey-map does not take / or bind to Home, and checkout clusters on URL links', () => {
+    const link = (label, route) => ({ type: 'link', label, attrs: { route }, children: [] });
+    const screens = [
+        screen('overview', 'Overview · Merrypak', '/', [
+            link('Home', '/'),
+            link('Checkout', '/shop/checkout'),
+            link('Gateway failed', '/shop/checkout/gateway/failed'),
+        ]),
+        screen('home', 'Home', '/', [link('Shop', '/shop')]),
+        { id: 'wf-checkout', label: 'Checkout', attrs: { route: '/shop/checkout' }, children: [link('Gateway', '/shop/checkout/gateway')] },
+        { id: 'wf-gateway', label: 'Checkout gateway', attrs: { route: '/shop/checkout/gateway' }, children: [] },
+        { id: 'wf-failed', label: 'Checkout gateway failed', attrs: { route: '/shop/checkout/gateway/failed' }, children: [] },
+        { id: 'wf-basket', label: 'Basket', attrs: { route: '/shop/basket' }, children: [] },
+        ...Array.from({ length: 40 }, (_, i) => ({ id: `wf-p${i}`, label: `Page ${i}`, attrs: { route: `/other/page-${i}` }, children: [] })),
+    ];
+    const model = buildIfaceModel({ screens });
+    layoutIface(model);
+    const overview = model.nodes.find((node) => /^overview/i.test(node.label));
+    const home = model.nodes.find((node) => node.label === 'Home');
+    const failed = model.nodes.find((node) => node.label === 'Checkout gateway failed');
+    const gateway = model.nodes.find((node) => node.label === 'Checkout gateway');
+    const checkout = model.nodes.find((node) => node.label === 'Checkout');
+    assert.ok(!overview, 'journey-map overview is hidden from the map');
+    assert.ok(home && failed && gateway && checkout);
+    assert.equal(home.route, '/');
+    assert.ok(model.hidden?.some((row) => /^overview/i.test(row.label) && row.reason === 'journey map'));
+    assert.ok(failed.screenKey);
+    assert.ok(model.edges.some((edge) => edge.from === checkout.key && edge.to === gateway.key && !edge.chrome));
+    assert.ok(model.edges.some((edge) => edge.from === gateway.key && edge.to === failed.key && !edge.chrome));
+    assert.ok(!model.edges.some((edge) => /overview/i.test(String(edge.from)) || /overview/i.test(String(edge.to))));
+    assert.ok(Math.abs(gateway.y - failed.y) < 40 || Math.abs(gateway.x - checkout.x) < NODE.w + NODE.gapX + NODE.linkGap * 2);
 });

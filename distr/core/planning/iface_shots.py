@@ -1,15 +1,23 @@
-"""Page screenshots for the Interfaces map.
+"""Page screenshots and pinned map positions for the Interfaces map.
 
-Reads images already stored in the linked project's /.planning/ folder. When the
-project's startup terminals are up and they published a local web address, a
-missing page can be captured with Playwright. A Python or desktop project with
-no local URL is left alone. This does not scan the project tree and does not
-crawl any host the project is not already serving.
+Images and layout JSON live in the linked project's planning/ folder (the same
+folder as the plan documents). Older captures in /.planning/ are still read.
+When the project's startup terminals are up and they published a local web
+address, a missing or stale page is captured from that local URL. If no local
+address is available, the project's production host is used when one is known.
+A Python or desktop project with no local or production URL is left alone.
+This does not scan the project tree and does not crawl any host the project
+did not already publish or that is not the project's own production host.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -18,9 +26,12 @@ logger = logging.getLogger(__name__)
 _SCREEN = re.compile(r"^[A-Za-z][\w-]{0,63}$")
 _ROUTE = re.compile(r"^/[A-Za-z0-9._~/-]*$")
 _URL = re.compile(r"https?://[^\s\"'<>]+")
+_HOST = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
 _IMAGE = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 _FRONT = ("frontend", "vite", "ng serve", "npm run dev", "yarn dev", "pnpm dev", "bun dev", "next dev")
 _BACK = ("backend", "runserver", "uvicorn", "gunicorn", "manage.py", "django", "flask", "fastapi")
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_LAYOUT_FILE = "iface-layout.json"
 
 TERMINALS_DOWN = (
     "Images cannot be fetched because the terminals are down. "
@@ -40,7 +51,11 @@ def concrete_route(route: str) -> str:
     return value
 
 
-def _clean_url(value) -> str:
+def _host(value: str) -> str:
+    return (urlparse(value).hostname or "").lower().rstrip(".")
+
+
+def _clean_url(value, allowed_hosts: set[str] | None = None) -> str:
     raw = str(value or "").strip().rstrip(".,;)")
     if not raw:
         return ""
@@ -48,7 +63,10 @@ def _clean_url(value) -> str:
         raw = raw.replace("0.0.0.0", "127.0.0.1", 1)
     parsed = urlparse(raw)
     host = (parsed.hostname or "").lower().rstrip(".")
-    if parsed.scheme not in {"http", "https"} or host not in {"127.0.0.1", "localhost", "::1"}:
+    if parsed.scheme not in {"http", "https"} or not host:
+        return ""
+    allowed = _LOCAL_HOSTS | {h.lower().rstrip(".") for h in (allowed_hosts or set()) if h}
+    if host not in allowed:
         return ""
     return raw.rstrip("/")
 
@@ -64,35 +82,63 @@ def _kind(command: str) -> str:
     return ""
 
 
-def _session_urls(session: dict) -> list[str]:
+def _session_urls(session: dict, allowed_hosts: set[str] | None = None) -> list[str]:
     found = []
     for item in session.get("urls") or []:
         raw = item.get("url") if isinstance(item, dict) else item
-        url = _clean_url(raw)
-        if url and url not in found:
+        url = _clean_url(raw, allowed_hosts)
+        if url and url not in found and _host(url) in _LOCAL_HOSTS:
             found.append(url)
     return found
 
 
-def _instruction_urls(startup_instructions: str) -> list[tuple[str, str]]:
+def _instruction_urls(startup_instructions: str, allowed_hosts: set[str] | None = None) -> list[tuple[str, str]]:
     found = []
     for line in str(startup_instructions or "").splitlines():
         kind = _kind(line)
         for match in _URL.findall(line):
-            url = _clean_url(match)
-            if url:
+            url = _clean_url(match, allowed_hosts)
+            if url and _host(url) in _LOCAL_HOSTS:
                 found.append((kind, url))
     return found
 
 
-def describe_targets(running: bool, sessions: list | None, startup_instructions: str = "") -> dict:
+def production_url(folder: str, startup_instructions: str = "") -> str:
+    """The project's own production origin, or empty.
+
+    Prefers a folder name that is already a hostname (for example
+    www.merrypak.co.za). Otherwise uses a non-local http(s) URL written in the
+    startup instructions. Never invents a host from a generic folder name.
+    """
+    name = Path(str(folder or "")).name.strip().lower().rstrip(".")
+    if name.startswith("www."):
+        name = name  # already a host-looking name
+    if _HOST.fullmatch(name):
+        return f"https://{name}"
+    for match in _URL.findall(str(startup_instructions or "")):
+        cleaned = str(match).strip().rstrip(".,;)")
+        host = _host(cleaned)
+        if urlparse(cleaned).scheme in {"http", "https"} and host and host not in _LOCAL_HOSTS and _HOST.fullmatch(host):
+            return cleaned.rstrip("/")
+    return ""
+
+
+def describe_targets(running: bool, sessions: list | None, startup_instructions: str = "",
+                     production: str = "") -> dict:
     """Frontend and backend addresses from live terminals, then startup instructions.
 
     Instruction URLs are used only when the terminals are already up. They never
-    invent a host the project did not write down.
+    invent a host the project did not write down. production is the project's
+    own production origin and is never used as a local terminal address.
     """
+    prod = _clean_url(production, {_host(production)} if production else None)
+    if prod and _host(prod) in _LOCAL_HOSTS:
+        prod = ""
     if not running:
-        return {"terminals_up": False, "frontend_url": "", "backend_url": "", "reason": TERMINALS_DOWN}
+        return {
+            "terminals_up": False, "frontend_url": "", "backend_url": "",
+            "production_url": prod, "reason": "" if prod else TERMINALS_DOWN,
+        }
     front, back = "", ""
     for session in sessions or []:
         urls = _session_urls(session if isinstance(session, dict) else {})
@@ -119,27 +165,39 @@ def describe_targets(running: bool, sessions: list | None, startup_instructions:
                 front = url
             elif not kind and not back and url != front:
                 back = url
-    if not front and not back:
-        return {"terminals_up": True, "frontend_url": "", "backend_url": "", "reason": NO_WEB}
-    return {"terminals_up": True, "frontend_url": front, "backend_url": back, "reason": ""}
+    if not front and not back and not prod:
+        return {"terminals_up": True, "frontend_url": "", "backend_url": "",
+                "production_url": "", "reason": NO_WEB}
+    reason = ""
+    if not front and not back and prod:
+        reason = ""
+    return {"terminals_up": True, "frontend_url": front, "backend_url": back,
+            "production_url": prod, "reason": reason}
 
 
-def capture_plan(targets: dict, *, lane: str, route: str, saved: bool) -> dict:
-    """Choose read, grab, or skip. Does not launch a browser."""
-    if saved:
+def capture_plan(targets: dict, *, lane: str, route: str, saved: bool, stale: bool = False, force: bool = False) -> dict:
+    """Choose read, grab, or skip. Does not launch a browser.
+
+    Prefers a saved image on disk. A hash mismatch (stale=True) does not
+    recapture; only force=True (Rescan images) overwrites an existing file.
+    """
+    if saved and not force:
         return {"action": "read", "url": "", "reason": ""}
     if lane not in {"frontend", "backend"}:
         return {"action": "skip", "url": "", "reason": "This is not a page capture."}
     path = concrete_route(route)
     if not path:
         return {"action": "skip", "url": "", "reason": "This route has no concrete page to open."}
+    base = targets.get("frontend_url") if lane == "frontend" else targets.get("backend_url")
+    if base:
+        return {"action": "grab", "url": str(base).rstrip("/") + path, "reason": ""}
+    prod = str(targets.get("production_url") or "").rstrip("/")
+    if prod:
+        return {"action": "grab", "url": prod + path, "reason": ""}
     if not targets.get("terminals_up"):
         return {"action": "skip", "url": "", "reason": targets.get("reason") or TERMINALS_DOWN}
-    base = targets.get("frontend_url") if lane == "frontend" else targets.get("backend_url")
-    if not base:
-        which = "frontend" if lane == "frontend" else "backend"
-        return {"action": "skip", "url": "", "reason": f"No {which} address is published in the running terminals."}
-    return {"action": "grab", "url": str(base).rstrip("/") + path, "reason": ""}
+    which = "frontend" if lane == "frontend" else "backend"
+    return {"action": "skip", "url": "", "reason": targets.get("reason") or f"No {which} address is published in the running terminals."}
 
 
 def _load(workspace_id: int):
@@ -160,49 +218,132 @@ def _load(workspace_id: int):
     return workspace, project
 
 
-def _planning_dir(folder: str) -> Path:
+def _planning_dir(folder: str, root_path: str = "") -> Path:
+    if str(root_path or "").strip():
+        planning = Path(root_path).expanduser().resolve()
+        root = Path(folder).expanduser().resolve() if str(folder or "").strip() else planning.parent
+        if folder and (planning.parent != root and planning != root / "planning"):
+            # Allow workspace.root_path when it is folder/planning.
+            if planning.parent != root:
+                raise ValueError("Invalid project folder.")
+        return planning
     root = Path(folder).expanduser().resolve()
-    planning = (root / ".planning").resolve()
+    planning = (root / "planning").resolve()
     if planning.parent != root:
         raise ValueError("Invalid project folder.")
     return planning
 
 
-def _find_saved(folder: str, screen_id: str) -> Path | None:
-    if not _SCREEN.fullmatch(str(screen_id or "")) or not str(folder or "").strip():
+def _legacy_dir(folder: str) -> Path | None:
+    if not str(folder or "").strip():
         return None
-    planning = _planning_dir(folder)
-    if not planning.is_dir():
+    root = Path(folder).expanduser().resolve()
+    legacy = (root / ".planning").resolve()
+    if legacy.parent != root:
         return None
-    for ext in _IMAGE:
-        path = planning / f"{screen_id}{ext}"
-        if path.is_file():
-            return path
+    return legacy
+
+
+def _find_saved(folder: str, screen_id: str, root_path: str = "") -> Path | None:
+    if not _SCREEN.fullmatch(str(screen_id or "")):
+        return None
+    dirs = []
+    if str(folder or "").strip() or str(root_path or "").strip():
+        dirs.append(_planning_dir(folder, root_path))
+    legacy = _legacy_dir(folder)
+    if legacy is not None:
+        dirs.append(legacy)
+    for directory in dirs:
+        if not directory.is_dir():
+            continue
+        for ext in _IMAGE:
+            path = directory / f"{screen_id}{ext}"
+            if path.is_file():
+                return path
     return None
 
 
-def _saved_names(folder: str) -> list[str]:
-    if not str(folder or "").strip():
-        return []
-    planning = _planning_dir(folder)
-    if not planning.is_dir():
-        return []
-    names = []
-    for path in sorted(planning.iterdir()):
-        if path.is_file() and path.suffix.lower() in _IMAGE:
-            names.append(path.name)
-        if len(names) >= 80:
-            break
+def _meta_path(image: Path) -> Path:
+    return image.with_suffix(".json")
+
+
+def _read_meta(image: Path) -> dict:
+    path = _meta_path(image)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_meta(image: Path, payload: dict) -> None:
+    path = _meta_path(image)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _saved_names(folder: str, root_path: str = "") -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    dirs = []
+    if str(folder or "").strip() or str(root_path or "").strip():
+        dirs.append(_planning_dir(folder, root_path))
+    legacy = _legacy_dir(folder)
+    if legacy is not None:
+        dirs.append(legacy)
+    for directory in dirs:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            if path.is_file() and path.suffix.lower() in _IMAGE and path.stem not in seen:
+                seen.add(path.stem)
+                names.append(path.name)
     return names
+
+
+def _shot_records(folder: str, root_path: str = "", hashes: dict[str, str] | None = None) -> dict[str, dict]:
+    records = {}
+    hashes = hashes or {}
+    dirs = []
+    if str(folder or "").strip() or str(root_path or "").strip():
+        dirs.append(_planning_dir(folder, root_path))
+    legacy = _legacy_dir(folder)
+    if legacy is not None:
+        dirs.append(legacy)
+    for directory in dirs:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            if not path.is_file() or path.suffix.lower() not in _IMAGE or path.stem in records:
+                continue
+            if not _SCREEN.fullmatch(path.stem):
+                continue
+            meta = _read_meta(path)
+            captured = str(meta.get("captured_at") or "")
+            wire_hash = str(meta.get("wire_hash") or "")
+            expected = hashes.get(path.stem)
+            current = bool(captured) and (not expected or not wire_hash or wire_hash == expected)
+            records[path.stem] = {"captured_at": captured, "current": current, "name": path.name}
+    return records
 
 
 def _image_url(workspace_id: int, screen_id: str) -> str:
     return f"/api/workflows/studio/plan-workspaces/{int(workspace_id)}/interface-shots/{screen_id}"
 
 
-def interface_shot_status(workspace_id: int) -> dict:
-    """Whether page images can be fetched, plus filenames already in /.planning/."""
-    _workspace, project = _load(workspace_id)
+def _wire_hashes(workspace: dict) -> dict[str, str]:
+    from distr.core.planning.interface_rebuild import screen_hashes
+
+    item = next((row for row in workspace.get("items") or []
+                 if row.get("item_type") == "flows" and row.get("content_format") == "wire"), None)
+    if not item:
+        return {}
+    return screen_hashes(item.get("content") or "")
+
+
+def _targets_for(project) -> dict:
     from distr.core.project_startup_terminals import project_startup_terminals_running
     from distr.core.terminal import get_startup_sessions_for_project
 
@@ -213,66 +354,343 @@ def interface_shot_status(workspace_id: int) -> dict:
     except Exception:
         logger.exception("Interface shot status failed")
         running, sessions = False, []
-    targets = describe_targets(running, sessions, project.startup_instructions or "")
-    if not running and not targets["reason"]:
+    prod = production_url(project.folder_location or "", project.startup_instructions or "")
+    targets = describe_targets(running, sessions, project.startup_instructions or "", production=prod)
+    if not running and not targets["production_url"] and not targets["reason"]:
         targets["reason"] = TERMINALS_DOWN
-    return {**targets, "saved": _saved_names(project.folder_location or "")}
+    return targets
+
+
+def interface_shot_status(workspace_id: int) -> dict:
+    """Whether page images can be fetched, plus filenames already in planning/."""
+    workspace, project = _load(workspace_id)
+    targets = _targets_for(project)
+    root_path = str(workspace.get("root_path") or "")
+    hashes = _wire_hashes(workspace)
+    return {
+        **targets,
+        "saved": _saved_names(project.folder_location or "", root_path),
+        "shots": _shot_records(project.folder_location or "", root_path, hashes),
+    }
 
 
 def interface_shot_file(workspace_id: int, screen_id: str) -> tuple[Path, str]:
-    """One image already saved for this screen id. No directory walk past /.planning/."""
+    """One image already saved for this screen id. No directory walk past planning/."""
     if not _SCREEN.fullmatch(str(screen_id or "")):
         raise ValueError("Invalid page id.")
-    _workspace, project = _load(workspace_id)
-    path = _find_saved(project.folder_location or "", screen_id)
+    workspace, project = _load(workspace_id)
+    path = _find_saved(project.folder_location or "", screen_id, str(workspace.get("root_path") or ""))
     if path is None:
         raise LookupError("No screenshot for that page.")
     return path, _IMAGE[path.suffix.lower()]
 
 
-def _grab(url: str, dest: Path) -> None:
+# Viewport capture: 1440x900 at retina scale, settled page, no interactive dismissals.
+_SHOT_VIEWPORT = {"width": 1440, "height": 900}
+_SHOT_SCALE = 2
+_SHOT_GOTO_MS = 15000
+_SHOT_STEP_MS = 8000
+_SHOT_SETTLE_MS = 800
+_SHOT_PAGE_MS = 25000
+_SHOT_LOADERS = ".spinner, .loading, [aria-busy=true], .skeleton, .spinner-border, .loader"
+_SHOT_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+_SHOT_STEALTH = (
+    "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+)
+_PAYMENT_HOST_MARKERS = ("payfast", "yoco", "paypal.com", "payu.co", "peachpayments")
+
+
+
+def _is_payment_url(url: str) -> bool:
+    host = (urlparse(str(url or "")).hostname or "").lower()
+    return any(marker in host for marker in _PAYMENT_HOST_MARKERS)
+
+
+def _origin(url: str) -> str:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _shot_remaining(deadline: float) -> int:
+    return max(300, int((deadline - time.monotonic()) * 1000))
+
+
+def _wait_for_shot(page, deadline: float) -> None:
+    """Settle a loaded page before capture. Never dismisses interactive UI."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=min(_SHOT_STEP_MS, _shot_remaining(deadline)))
+    except Exception:
+        pass
+    try:
+        page.evaluate("() => document.fonts.ready", timeout=min(_SHOT_STEP_MS, _shot_remaining(deadline)))
+    except Exception:
+        pass
+    try:
+        page.wait_for_function(
+            "() => [...document.images].every((img) => img.complete)",
+            timeout=min(_SHOT_STEP_MS, _shot_remaining(deadline)),
+        )
+    except Exception:
+        pass
+    try:
+        page.wait_for_function(
+            """(sel) => [...document.querySelectorAll(sel)].every((el) => {
+                const st = getComputedStyle(el);
+                return st.display === 'none' || st.visibility === 'hidden'
+                    || st.opacity === '0' || el.getClientRects().length === 0;
+            })""",
+            _SHOT_LOADERS,
+            timeout=min(_SHOT_STEP_MS, _shot_remaining(deadline)),
+        )
+    except Exception:
+        pass
+    page.wait_for_timeout(min(_SHOT_SETTLE_MS, _shot_remaining(deadline)))
+
+
+def _prepare_shot_page(context, allowed_hosts):
+    page = context.new_page()
+
+    def _on_route(route):
+        if _is_payment_url(route.request.url):
+            route.abort()
+            return
+        route.continue_()
+
+    page.route("**/*", _on_route)
+
+    def _on_frame(frame):
+        try:
+            frame_url = frame.url
+        except Exception:
+            return
+        if _is_payment_url(frame_url):
+            try:
+                page.go_back(wait_until="domcontentloaded", timeout=3000)
+            except Exception:
+                pass
+
+    page.on("framenavigated", _on_frame)
+    return page
+
+
+def _open_shot_url(page, url: str, allowed_hosts: set[str], deadline: float):
+    """Warm up via the site home, then open the target. Never follows payment providers."""
+    origin = _origin(url)
+    target_path = urlparse(url).path or "/"
+    if target_path not in {"/", ""}:
+        try:
+            page.goto(origin + "/", wait_until="domcontentloaded",
+                      timeout=min(_SHOT_GOTO_MS, _shot_remaining(deadline)))
+        except Exception:
+            pass
+        if page.url and not _clean_url(page.url, allowed_hosts) and not _is_payment_url(page.url):
+            raise ValueError("The page left the project.")
+        if _is_payment_url(page.url):
+            raise ValueError("Aborted navigation to a payment provider.")
+    response = page.goto(url, wait_until="load", timeout=min(_SHOT_GOTO_MS, _shot_remaining(deadline)))
+    if _is_payment_url(page.url):
+        raise ValueError("Aborted navigation to a payment provider.")
+    if not _clean_url(page.url, allowed_hosts):
+        raise ValueError("The page left the project.")
+    if response is not None and response.status >= 400:
+        raise ValueError(f"The page returned {response.status}.")
+    try:
+        page.wait_for_function(
+            """() => performance.getEntriesByType('resource').some((e) =>
+                /\/api\//.test(e.name) && (!e.responseStatus || e.responseStatus < 500)
+            )""",
+            timeout=min(6000, _shot_remaining(deadline)),
+        )
+    except Exception:
+        pass
+    return response
+
+
+def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> None:
     from playwright.sync_api import sync_playwright
 
-    if not _clean_url(url):
-        raise ValueError("Refusing a non-local page.")
+    if not _clean_url(url, allowed_hosts):
+        raise ValueError("Refusing a page outside the project.")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        try:
-            page = browser.new_page(viewport={"width": 960, "height": 600})
-            response = page.goto(url, wait_until="domcontentloaded", timeout=8000)
-            if not _clean_url(page.url):
-                raise ValueError("The page left the local project.")
-            if response is not None and response.status >= 400:
-                raise ValueError(f"The page returned {response.status}.")
-            page.screenshot(path=str(dest), type="png")
-        finally:
-            browser.close()
+    last_error = None
+    for attempt in range(2):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage", "--disable-gpu"],
+            )
+            try:
+                context = browser.new_context(
+                    viewport=dict(_SHOT_VIEWPORT),
+                    device_scale_factor=_SHOT_SCALE,
+                    user_agent=_SHOT_UA,
+                    locale="en-ZA",
+                )
+                context.add_init_script(_SHOT_STEALTH)
+                page = _prepare_shot_page(context, allowed_hosts)
+                deadline = time.monotonic() + (_SHOT_PAGE_MS / 1000)
+                _open_shot_url(page, url, allowed_hosts, deadline)
+                _wait_for_shot(page, deadline)
+                # Viewport PNG at device_scale_factor 2 (2880x1800). Not a full-page shot, to keep size reasonable.
+                page.screenshot(path=str(dest), type="png")
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                logger.info("Interface shot attempt %s failed: %s", attempt + 1, exc)
+            finally:
+                browser.close()
+        if last_error is None:
+            break
+    if last_error is not None:
+        raise last_error
 
 
-def capture_interface_shot(workspace_id: int, *, screen_id: str, route: str, lane: str) -> dict:
-    """Return a saved image, capture one local page, or explain why it was skipped."""
+def _clear_shot_files(directory: Path) -> int:
+    """Delete screenshot PNG/JPEG/WebP files and their sidecar JSON in planning/.
+
+    Never touches iface-layout.json, wire documents, or other plan files.
+    """
+    if not directory.is_dir():
+        return 0
+    cleared = 0
+    skip = {"iface-layout"}
+    for path in list(directory.iterdir()):
+        if not path.is_file():
+            continue
+        stem = path.stem
+        if stem in skip or not _SCREEN.fullmatch(stem):
+            continue
+        if path.suffix.lower() in _IMAGE:
+            meta = _meta_path(path)
+            path.unlink(missing_ok=True)
+            if meta.is_file():
+                meta.unlink(missing_ok=True)
+            cleared += 1
+        elif path.suffix.lower() == ".json":
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                continue
+            if isinstance(data, dict) and (data.get("captured_at") or data.get("screen_id") or data.get("url")):
+                if not any((directory / f"{stem}{ext}").is_file() for ext in _IMAGE):
+                    path.unlink(missing_ok=True)
+                    cleared += 1
+    return cleared
+
+
+def clear_interface_shots(workspace_id: int) -> dict:
+    """Remove cached page screenshots from the project's planning/ folder."""
+    workspace, project = _load(workspace_id)
+    root_path = str(workspace.get("root_path") or "")
+    folder = _planning_dir(project.folder_location or "", root_path)
+    cleared = _clear_shot_files(folder)
+    return {"cleared": cleared, "saved": []}
+
+
+def capture_interface_shot(workspace_id: int, *, screen_id: str, route: str, lane: str, force: bool = False) -> dict:
+    """Return a saved image, capture one page, or explain why it was skipped."""
     if not _SCREEN.fullmatch(str(screen_id or "")):
         raise ValueError("Invalid page id.")
-    _workspace, project = _load(workspace_id)
-    from distr.core.project_startup_terminals import project_startup_terminals_running
-    from distr.core.terminal import get_startup_sessions_for_project
-
-    project_id = int(project.id)
-    running = bool(project_startup_terminals_running(project_id))
-    sessions = get_startup_sessions_for_project(project_id, purpose="startup") if running else []
-    targets = describe_targets(running, sessions, project.startup_instructions or "")
-    saved = _find_saved(project.folder_location or "", screen_id)
-    plan = capture_plan(targets, lane=str(lane or ""), route=str(route or ""), saved=saved is not None)
+    workspace, project = _load(workspace_id)
+    root_path = str(workspace.get("root_path") or "")
+    targets = _targets_for(project)
+    saved = _find_saved(project.folder_location or "", screen_id, root_path)
+    hashes = _wire_hashes(workspace)
+    meta = _read_meta(saved) if saved is not None else {}
+    expected = hashes.get(screen_id)
+    plan = capture_plan(
+        targets, lane=str(lane or ""), route=str(route or ""),
+        saved=saved is not None, force=bool(force),
+    )
     image = _image_url(workspace_id, screen_id)
+    captured_at = str(meta.get("captured_at") or "")
     if plan["action"] == "read":
-        return {"image": image, "reason": ""}
+        return {"image": image, "reason": "", "captured_at": captured_at, "current": True}
     if plan["action"] != "grab":
-        return {"image": "", "reason": plan["reason"]}
-    dest = _planning_dir(project.folder_location or "") / f"{screen_id}.png"
+        return {"image": image if saved is not None else "", "reason": plan["reason"],
+                "captured_at": captured_at, "current": False}
+    dest = _planning_dir(project.folder_location or "", root_path) / f"{screen_id}.png"
+    allowed = set(_LOCAL_HOSTS)
+    if targets.get("production_url"):
+        allowed.add(_host(targets["production_url"]))
     try:
-        _grab(plan["url"], dest)
+        _grab(plan["url"], dest, allowed)
     except Exception as exc:
         logger.info("Interface shot skipped: %s", exc)
-        return {"image": "", "reason": "The page did not load from the running project."}
-    return {"image": image, "reason": ""}
+        if saved is not None:
+            return {"image": image, "reason": "", "captured_at": captured_at, "current": not stale}
+        return {"image": "", "reason": "The page did not load from the running project or production site.",
+                "captured_at": "", "current": False}
+    stamp = datetime.now(timezone.utc).isoformat()
+    _write_meta(dest, {
+        "captured_at": stamp,
+        "url": plan["url"],
+        "screen_id": screen_id,
+        "wire_hash": expected or "",
+    })
+    return {"image": image, "reason": "", "captured_at": stamp, "current": True}
+
+
+def _layout_path(workspace: dict, project) -> Path:
+    return _planning_dir(project.folder_location or "", str(workspace.get("root_path") or "")) / _LAYOUT_FILE
+
+
+def _clean_layout(nodes) -> dict[str, dict]:
+    out = {}
+    if not isinstance(nodes, dict) or len(nodes) > 400:
+        return out
+    for key, value in nodes.items():
+        if not _SCREEN.fullmatch(str(key or "")) or not isinstance(value, dict):
+            continue
+        try:
+            x = float(value.get("x"))
+            y = float(value.get("y"))
+        except (TypeError, ValueError):
+            continue
+        if not (abs(x) < 100_000 and abs(y) < 100_000):
+            continue
+        out[str(key)] = {"x": round(x, 2), "y": round(y, 2), "pinned": True}
+        if len(out) >= 200:
+            break
+    return out
+
+
+def interface_layout(workspace_id: int) -> dict:
+    """Pinned card positions stored in planning/iface-layout.json."""
+    workspace, project = _load(workspace_id)
+    path = _layout_path(workspace, project)
+    if not path.is_file():
+        return {"nodes": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {"nodes": {}}
+    nodes = data.get("nodes") if isinstance(data, dict) else {}
+    return {"nodes": _clean_layout(nodes)}
+
+
+def save_interface_layout(workspace_id: int, nodes: dict) -> dict:
+    """Replace the pinned-position file. Does not rewrite plan documents."""
+    workspace, project = _load(workspace_id)
+    clean = _clean_layout(nodes)
+    path = _layout_path(workspace, project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"v": 1, "nodes": clean}, indent=2, sort_keys=True) + "\n"
+    staged = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".iface-layout-", delete=False) as stream:
+            staged = Path(stream.name)
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(staged, path)
+        staged = None
+    finally:
+        if staged is not None and staged.exists():
+            staged.unlink()
+    return {"nodes": clean}

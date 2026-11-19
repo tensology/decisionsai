@@ -13,7 +13,7 @@ def run(provider="ollama", messages=None):
 @pytest.mark.parametrize("provider", ["ollama", "openrouter"])
 def test_selected_pi_route_uses_restricted_runtime_without_execution_bindings(monkeypatch, provider):
     observed = []
-    async def execute(request, *, runtime_id):
+    async def execute(request, *, runtime_id, **kwargs):
         observed.append(request)
         assert runtime_id == "cli_harness"
         return TurnResult(True, runtime_id, "pi", request.route.model, output='{"reply":"Done"}')
@@ -63,7 +63,7 @@ def test_other_provider_keeps_its_explicit_api_route(monkeypatch):
 
 def test_codex_selection_uses_exact_cli_route_and_catalog_without_api_fallback(monkeypatch):
     monkeypatch.setattr('distr.core.project_cli_backends.codex_proposal.available_models', lambda:['exact-model'])
-    async def execute(request, *, runtime_id):
+    async def execute(request, *, runtime_id, **kwargs):
         assert runtime_id == 'cli_harness'
         assert (request.route.backend_id, request.route.provider, request.route.model) == ('codex','openai','exact-model')
         assert request.project.folder_location == ''
@@ -84,3 +84,26 @@ def test_transport_code_produces_actionable_safe_error(monkeypatch):
     with pytest.raises(runtime.PlanningRuntimeError, match="timed out") as error:
         run()
     assert "secret" not in str(error.value)
+
+
+def test_cli_route_yields_output_deltas_as_they_arrive(monkeypatch):
+    from distr.core.turn_runtime.contracts import TurnEvent, TurnEventKind, TurnStatus
+
+    async def execute(request, *, runtime_id, on_event=None, **kwargs):
+        assert runtime_id == "cli_harness"
+        if on_event:
+            on_event(TurnEvent(kind=TurnEventKind.OUTPUT_DELTA, status=TurnStatus.WORKING,
+                               summary="Writing an update.", runtime_id=runtime_id,
+                               output_delta='{"reply": "He'))
+            on_event(TurnEvent(kind=TurnEventKind.OUTPUT_DELTA, status=TurnStatus.WORKING,
+                               summary="Writing an update.", runtime_id=runtime_id,
+                               output_delta='llo"}'))
+            # Completed snapshot of the same text must not be yielded twice.
+            on_event(TurnEvent(kind=TurnEventKind.OUTPUT_DELTA, status=TurnStatus.WORKING,
+                               summary="Writing an update.", runtime_id=runtime_id,
+                               output_delta='{"reply": "Hello"}'))
+        return TurnResult(True, runtime_id, "pi", request.route.model, output='{"reply": "Hello"}')
+
+    monkeypatch.setattr(runtime, "execute_turn", execute)
+    monkeypatch.setattr(runtime.llm_factory, "create_stream", lambda *a: pytest.fail("No API fallback"))
+    assert run("openrouter") == ['{"reply": "He', 'llo"}']
