@@ -300,9 +300,82 @@
       "source": "vendored",
       "overwrite": true,
       "note": "Design craft skill. Explicit use except impeccable and web-design-guidelines."
+    },
+    {
+      "id": "better-interface",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/better-interface)."
+    },
+    {
+      "id": "better-accessibility",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/better-accessibility)."
+    },
+    {
+      "id": "better-colors",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/better-colors)."
+    },
+    {
+      "id": "better-layout",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/better-layout)."
+    },
+    {
+      "id": "better-typography",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/better-typography)."
+    },
+    {
+      "id": "better-ui",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/better-ui)."
+    },
+    {
+      "id": "better-writing",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/better-writing)."
+    },
+    {
+      "id": "interface-review",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/jakubkrehel/skills at 6c2120103600407a1a9986afd834e73144ef8998 (skills/interface-review)."
+    },
+    {
+      "id": "product-design",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/mblode/agent-skills at 7df4b7edff1dc1c991331061373d4ba42ecacdbe (skills/product-design)."
+    },
+    {
+      "id": "ui-design",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/mblode/agent-skills at 7df4b7edff1dc1c991331061373d4ba42ecacdbe (skills/ui-design)."
+    },
+    {
+      "id": "ui-verification",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "From https://github.com/mblode/agent-skills at 7df4b7edff1dc1c991331061373d4ba42ecacdbe (skills/ui-verification)."
+    },
+    {
+      "id": "web-ux-patterns",
+      "source": "vendored",
+      "overwrite": false,
+      "note": "Reference entry for alphagov/govuk-design-system and w3c/aria-practices."
     }
   ],
   "index_only": [
+    "ui-ux-system",
     "decisions-marketing-skills",
     "decisions-design-aesthetics",
     "web-artifacts-builder"

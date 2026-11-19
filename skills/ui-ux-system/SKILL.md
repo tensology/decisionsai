@@ -17,6 +17,7 @@ app, dashboard and product UI they defer to this skill. Load references only whe
 
 | Need | Read |
 |---|---|
+| Sequencing a frontend audit, redesign, or verification pass | `references/workflow.md` |
 | Exact token values, Tailwind mapping, adopting a project's tokens | `references/tokens.md` |
 | Buttons, forms, tables, modals/drawers, nav, menus, toasts | `references/components.md` |
 | Empty / loading / error / partial / success / denied / offline + copy | `references/states.md` |
@@ -24,6 +25,11 @@ app, dashboard and product UI they defer to this skill. Load references only whe
 | Scoring before you finish | `references/rubric.md` |
 | Where each rule comes from | `references/sources.md` |
 | Paul's dated corrections (read the last 20 entries before UI work; append new ones) | `references/taste-log.md` |
+
+Use `product-design` for interaction choices and recovery, `better-interface` for
+a cross-discipline visual critique, and `ui-verification` to measure a rendered
+screen. Consult `web-ux-patterns` for form and accessibility examples. Apply the
+project's conventions and this skill when resolving conflicting advice.
 
 ## 0. Order of authority
 

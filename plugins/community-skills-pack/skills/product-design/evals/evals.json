@@ -1,0 +1,88 @@
+{
+  "skill_name": "product-design",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We're adding a 'Delete workspace' button to the settings page. It should be a red button with a confirm dialog that says 'Are you sure?' with OK and Cancel. Spec the right interaction.",
+      "expected_output": "A spec that names object, scope, and consequence; treats the action as irreversible and wide-scope; replaces OK/Cancel with a typed or named confirmation; enumerates in-progress and failure states; routes the build to ui-design and final wording to ghostwriter.",
+      "files": [],
+      "assertions": [
+        "Cites rule/irreversible-action-safeguard or rule/destructive-proportional for the safeguard choice",
+        "Cites rule/destructive-names-action or rule/no-confirm-ok-labels and rejects OK as the confirm label",
+        "States the scope (everything in the workspace, every member) before the user commits",
+        "Does not emit a code patch, className, or prop change",
+        "Every cited rule ID appears verbatim in references/rules.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Design the flow for reordering items in our mobile task list. Product wants drag-to-reorder like Things 3.",
+      "expected_output": "Drag-to-reorder accepted as the primary interaction, with a single-pointer alternative (move up/down or a Move-to menu) required, the states enumerated (sparse list, drag in progress, save failure with rollback), and the gesture physics routed to ui-animation.",
+      "files": [],
+      "assertions": [
+        "Cites rule/gesture-has-control-alternative and names a concrete non-drag alternative",
+        "Lists a failure state for the reorder save",
+        "Cites rule/cover-reachable-states",
+        "Routes the gesture implementation to ui-animation, not to itself",
+        "Includes an internal brief with job, desired outcome, and consequence filled"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "What breaks here? Our checkout collects shipping address on step 2, then asks for the billing address on step 4 with no prefill. Session times out after 10 minutes and dumps you back to the cart. Unsaved fields are lost.",
+      "expected_output": "A harden-mode findings list ordered P0 to P3: redundant entry (billing not prefilled from shipping), silent session expiry that discards input, lost user input, each with rule ID, user consequence, and the smallest fix and owning skill.",
+      "files": [],
+      "assertions": [
+        "Cites rule/no-redundant-entry for the billing address re-entry",
+        "Cites rule/time-limit-adjustable for the session timeout and proposes a warning plus extension or draft persistence",
+        "Cites rule/preserve-user-input for the lost fields",
+        "Findings carry a P0-P3 level and a user consequence, not only a code observation"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Support keeps getting tickets about accidental archives, so the squad wants a confirm dialog on Archive project. Do we need it? Notes are in archive-flow.md.",
+      "expected_output": "A short action-mode answer: no confirmation on Archive because it is fully restorable, the existing Delete forever safeguard left as it is, and at most a pointer from the toast to where the project went.",
+      "files": [
+        "evals/files/archive/archive-flow.md"
+      ],
+      "assertions": [
+        "Recommends against adding the confirmation dialog to Archive project",
+        "Gives the unlimited Restore from the Archived tab as the reason Archive needs no confirmation",
+        "Says that confirming a reversible action teaches people to click through confirmations",
+        "Does not recommend changing the Delete forever dialog",
+        "Cites rule/destructive-proportional"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Review this invite flow for product correctness before we build it. The spec is invite-flow.md.",
+      "expected_output": "Review-mode findings ordered by user impact: pasted addresses lost on any failure, a seat charge the dialog never states, a dialog stacked on a dialog, each with the consequence and the smallest decision-level fix.",
+      "files": [
+        "evals/files/invite/invite-flow.md"
+      ],
+      "assertions": [
+        "Flags that a failed Submit discards the pasted email addresses",
+        "Flags that the dialog does not tell the user each invite reserves a paid seat before they commit",
+        "Flags the personal note dialog opening on top of the Invite dialog",
+        "Lists the lost-addresses finding above the stacked-dialog finding",
+        "Every finding carries a rule ID written in the rule/<name> form"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Choose the controls for our notification settings screen. Brief is in notification-brief.md, the UI team builds it after.",
+      "expected_output": "A shape-mode decision per setting: a single-choice control for frequency, a multi-select for channels, a searchable picker for time zone, the native time inputs kept, with translated label length accounted for.",
+      "files": [
+        "evals/files/notifications/notification-brief.md"
+      ],
+      "assertions": [
+        "Chooses a single-choice control (radio group or segmented control) for digest frequency instead of checkboxes",
+        "Chooses a multi-select control (checkboxes or switches) for channels instead of the single-select dropdown",
+        "Chooses a searchable select or combobox for time zone instead of the radio list",
+        "Keeps the native time inputs for quiet hours",
+        "Says how the digest frequency control copes with longer German or Japanese labels"
+      ]
+    }
+  ]
+}

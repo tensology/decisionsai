@@ -55,7 +55,7 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
     cursor_rule = (tmp_path / ".cursor" / "rules" / "decisions-browser-content.mdc").read_text(
         encoding="utf-8"
     )
-    assert "apple-design and impeccable together" in cursor_rule
+    assert "references/workflow.md" in cursor_rule
     assert "% Done." in cursor_rule
     registry = (tmp_path / ".decisions" / "harness" / "capabilities-skills-registry.json").read_text(
         encoding="utf-8"
@@ -82,21 +82,20 @@ def test_recommend_design_skills_says_why():
     from distr.core.capabilities_pack import recommend_design_skills
 
     skills, reason = recommend_design_skills("Redesign the settings screen and fix the data table focus")
-    assert skills[:2] == ["apple-design", "impeccable"]
-    assert "web-design-guidelines" in skills
+    assert skills == ["ui-ux-system", "product-design", "better-layout"]
     assert reason.startswith("We will use")
     assert recommend_design_skills("Implement the API endpoint") == ([], "")
     assert recommend_design_skills("Preserve the existing frontend and TrackPlayer work.") == ([], "")
 
 
-def test_merge_browser_content_pre_chain_routes_ui_tools_on_demand(tmp_path, monkeypatch):
+def test_merge_browser_content_pre_chain_routes_ui_tools_on_demand(tmp_path):
     from distr.core.capabilities_pack import merge_browser_content_pre_chain
 
-    monkeypatch.setattr("distr.core.design_reference_pack.impeccable_skill_available", lambda: True)
     chain = merge_browser_content_pre_chain(["frontend-polish"], project_folder=str(tmp_path))
 
-    assert "impeccable" in chain
-    assert "apple-design" in chain
+    assert "ui-ux-system" in chain
+    assert "impeccable" not in chain
+    assert "apple-design" not in chain
     assert "decisions-playwright" in chain
     assert "browser-qa" not in chain
     assert "decisions-design-references" not in chain

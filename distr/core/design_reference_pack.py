@@ -49,14 +49,6 @@ def _skill_ids_mention_ui(skill_ids: list[str]) -> bool:
     return any(token in blob for token in ui_tokens)
 
 
-def impeccable_skill_available(*, home: Path | None = None) -> bool:
-    base_home = Path(home).expanduser() if home is not None else Path.home()
-    return any(
-        (base_home / candidate / "SKILL.md").is_file()
-        for candidate in (".agents/skills/impeccable", ".codex/skills/impeccable")
-    )
-
-
 def default_design_pre_chain(*, project_folder: str = "", skill_ids: list[str] | None = None) -> list[str]:
     _ = project_folder
     chain: list[str] = []
@@ -66,8 +58,6 @@ def default_design_pre_chain(*, project_folder: str = "", skill_ids: list[str] |
             "decisions-design-references",
             "frontend-design-direction",
         ]
-        if impeccable_skill_available():
-            chain.insert(2, "impeccable")
     return chain
 
 
@@ -75,6 +65,8 @@ def merge_design_reference_pre_chain(skill_ids: list[str], *, project_folder: st
     baseline = default_design_pre_chain(project_folder=project_folder, skill_ids=skill_ids)
     merged: list[str] = list(skill_ids)
     anchor = "decisions-harness-stack"
+    if "ui-ux-system" in merged:
+        anchor = "ui-ux-system"
     insert_at = merged.index(anchor) + 1 if anchor in merged else 0
     offset = 0
     for skill_id in baseline:

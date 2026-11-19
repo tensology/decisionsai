@@ -1,0 +1,108 @@
+{
+  "skill_name": "ui-verification",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The ui-design audit flagged these on /settings and /billing: interaction-target-size on the close button in the API-keys dialog, states-no-error-state on the invoices table, and focus-not-restored on the delete-key confirm. Verify them in the browser. The app is running on :3000; /billing needs a logged-in user and there is no seeded session.",
+      "expected_output": "A session block naming the driver, build mode, and the two routes with their status; the target-size and focus-walk probes run on /settings with measured observed values; every /billing finding returned as unknown with reason auth-required; no tier or ship verdict assigned to anything; the probesSkipped array populated rather than inferred from absence.",
+      "files": [],
+      "assertions": [
+        "Maps each rule id to its probe through references/rule-coverage.md rather than improvising a check",
+        "Returns unknown with reason auth-required for the states-no-error-state finding on /billing; does not report it as pass, and does not report failure-injection as having run there",
+        "Every reproduced finding carries route, viewport, and theme, and an observed value in units (px, not 'too small')",
+        "Does not assign a tier, bump a tier, or print SHIP VERDICT; the findings are handed back for ui-design to tier",
+        "Lists probesSkipped explicitly with a reason for each probe that did not run"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The audit says the icon button in TableRowActions.tsx line 41 fails interaction-target-size because it is h-8 w-8. Check it on a real page.",
+      "expected_output": "The target-size probe run at a 360px touch viewport reporting a 32x32 bounding box whose sampled hit-test grid resolves to the button because a ::before pseudo-element expands the hit area, so the finding is not-reproduced and withdrawn into consideredAndRejected with the measurement as the guard.",
+      "files": [],
+      "assertions": [
+        "Measures at a touch viewport with touch emulation on, and says so in the conditions",
+        "Reports both the bounding box and the effective hit area, not the bounding box alone",
+        "Emits the result as not-reproduced and moves the finding to consideredAndRejected naming target-size and the measured hit area as the guard; does not silently drop it and does not leave it as a fail",
+        "Does not require duplicate runs of a deterministic measured result; retries inconsistent measurements",
+        "Cites an evidence artifact path that was written to disk before the verdict"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I fixed the invoices skeleton so it reserves height now. Did the fix actually work? Same route as before, /invoices.",
+      "expected_output": "The layout-shift probe re-run under the identical conditions of the original finding (route, viewport, theme, held data response, production build), the before artifact preserved, a clearedBy block recorded on the finding, and any new failure on another probe for the same route reported as a separate new finding rather than folded into the old one.",
+      "files": [],
+      "assertions": [
+        "Re-runs layout-shift with the same route, viewport, theme, injected delay, and build mode as the original finding; does not compare a dev-build re-run against a production-build original",
+        "Does not overwrite the before capture; the clearedBy evidence path is distinct from the original evidence path",
+        "If the re-run still reproduces, reports the finding as applied with clearedBy.result reproduced and says the fix did not clear it, rather than reporting the fix and omitting the re-run",
+        "If a different probe now fails on /invoices, emits it as a new finding, not a note on the cleared one",
+        "Does not re-run the whole battery; the clearing re-run is scoped to the probe that produced the finding"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "A static race finding occurs when a second request overtakes the first. A browser probe tested only one request and passed. Is the finding disproved?",
+      "expected_output": "Retains an unknown finding because the triggering request order was not exercised.",
+      "files": [],
+      "assertions": [
+        "Does not withdraw the race finding based on the single-request run",
+        "Names the missing ordering condition",
+        "Proposes a controlled overlapping-request probe"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Review the onboarding checkbox change at mobile and desktop widths. Functional tests pass, but the mobile checkbox is visibly offset from its label. Capture the base and branch and tell me what changed. Serve evals/files/onboarding.html locally; use ?revision=base and ?revision=head.",
+      "expected_output": "Opens the captured images, describes the unexpected alignment defect separately from functional results, and records matched capture conditions.",
+      "files": [
+        "evals/files/onboarding.html"
+      ],
+      "assertions": [
+        "Reports the mobile checkbox alignment defect from inspected image evidence.",
+        "Records the revision of each capture.",
+        "Does not use passing functional tests as proof of visual correctness."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Verify the loading and loaded stories for the billing panel. Both screenshots are identical because the loading story never activates its fixture. Serve evals/files/billing.html locally with ?state=loading and ?state=loaded.",
+      "expected_output": "Investigates the duplicate pixels, checks the intended state, reports a capture or fixture problem, and reruns after correcting it rather than declaring the product broken.",
+      "files": [
+        "evals/files/billing.html"
+      ],
+      "assertions": [
+        "Investigates whether the loading fixture activated.",
+        "Reports the duplicate state as a harness problem rather than a confirmed product defect.",
+        "Records whether the corrected capture reached the loading state."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Compare the two theme captures. They intentionally render the same monochrome logo. There is no base capture for this new component.",
+      "expected_output": "Explains the intentional duplicate, inspects the new component directly, and does not manufacture a baseline or call identical pixels a failure.",
+      "files": [],
+      "assertions": [
+        "Explains why the logo captures are intentionally identical.",
+        "Reports after-only evidence without inventing a baseline."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "The invoice editor passed its acceptance criteria and CI. Try to break it like a real user before I merge. Preview is at https://pr-412.preview.example.dev with seeded test accounts; the ticket is in .captain/tasks/t-412.md.",
+      "expected_output": "A charter written from the ticket, each named path driven end to end on the preview, then pressure on navigation, double submit, permissions, concurrent edits, and inputs; every finding replayed in a fresh context with numbered steps and the test account; findings split into defects and contract gaps under explore:<slug>; no code edits, no tier or verdict, nothing sent outside the preview.",
+      "files": [],
+      "assertions": [
+        "Reads the ticket for intent and does not open the implementation diff before exploring",
+        "Drives each path the ticket names end to end before trying edge cases",
+        "Every reported finding has numbered reproduction steps and the test account used",
+        "Each reported finding was replayed in a fresh browser context, or is marked unknown with reason flaky",
+        "Labels each finding as defect or contract-gap",
+        "Routes each contract gap to the task owner as a question, not to the builder as a failure",
+        "Uses rule values of the form explore:<slug> and assigns no tier or ship verdict",
+        "Edits no source file during the pass",
+        "Takes no action against a production URL or a live payment or email provider"
+      ]
+    }
+  ]
+}

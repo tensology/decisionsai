@@ -12,34 +12,20 @@ def test_merge_design_reference_skips_generic_work(tmp_path):
     assert "tdd-workflow" in chain
 
 
-def test_merge_design_reference_ui_project(tmp_path, monkeypatch):
+def test_merge_design_reference_ui_project(tmp_path):
     from distr.core.design_reference_pack import merge_design_reference_pre_chain
-
-    monkeypatch.setattr("distr.core.design_reference_pack.impeccable_skill_available", lambda: True)
 
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     chain = merge_design_reference_pre_chain(
-        ["decisions-harness-stack", "ui-ideation"],
+        ["decisions-harness-stack", "ui-ux-system", "ui-ideation"],
         project_folder=str(tmp_path),
     )
     assert chain[1:5] == [
+        "ui-ux-system",
         "decisions-ui-ideation",
         "decisions-design-references",
-        "impeccable",
         "frontend-design-direction",
     ]
-
-
-def test_merge_design_reference_skips_missing_impeccable(tmp_path, monkeypatch):
-    from distr.core.design_reference_pack import merge_design_reference_pre_chain
-
-    monkeypatch.setattr("distr.core.design_reference_pack.impeccable_skill_available", lambda: False)
-    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
-
-    chain = merge_design_reference_pre_chain(
-        ["decisions-harness-stack", "ui-ideation"],
-        project_folder=str(tmp_path),
-    )
 
     assert "impeccable" not in chain
 

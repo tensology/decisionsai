@@ -205,3 +205,9 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-11-11 | Did: Voyager Add Device put the title, subtitle, and close icon in one crowded row | Wanted: Title above subtitle with enough space for the header and form | Why: Paul explicitly said the existing panel looked bunched up
 
 2026-11-11 | Did: Wrapped only the Breakdown date controls and left list date controls in a scrolling strip | Wanted: One compact Period, From and To widget with labels in the borders across Finance tabs | Why: Paul asked for consistent controls in Documents, Adjustments and the other tabs
+
+2026-11-16 | Did: The Snuza account console used a scrolling strip for mobile and tablet navigation | Wanted: A hamburger menu with a polished compact layout | Why: The user showed the clipped navigation and excessive space in the responsive shell.
+
+2026-11-16 | Did: The Snuza public site showed a single row of links at the bottom | Wanted: A proper public site footer | Why: Paul asked where the footer was after reviewing the public site.
+
+2026-11-18 | Did: SpoorTrack device Details added Profile Summary, Warranty Context and Contact your distributor panels | Wanted: Remove all three and restrict sharing to an existing person in the device team or billing account | Why: Paul identified these as outside the original device screen and questioned whether Snuza concepts had been carried across

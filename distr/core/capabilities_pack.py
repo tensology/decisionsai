@@ -114,7 +114,7 @@ EXTERNAL_SKILL_CANDIDATES: dict[str, tuple[str, ...]] = {
     skill_id: _home_skill_candidates(skill_id) for skill_id in _DESIGN_SKILL_IDS
 }
 
-# First match wins. One lead, then at most two supports. Reasons are said to the agent.
+# First match supplies specialist guidance to the UI/UX workflow.
 _DESIGN_RECOMMENDATIONS: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...] = (
     (
         ("wcag", "accessibility", "screen reader", "contrast"),
@@ -128,13 +128,13 @@ _DESIGN_RECOMMENDATIONS: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...
     ),
     (
         ("brutalist",),
-        ("industrial-brutalist-ui", "impeccable"),
-        "We will use industrial-brutalist-ui and impeccable because the request asks for a brutalist look, and impeccable keeps the interface workable.",
+        ("industrial-brutalist-ui",),
+        "Use industrial-brutalist-ui for the requested visual style.",
     ),
     (
         ("minimalist",),
-        ("minimalist-ui", "impeccable"),
-        "We will use minimalist-ui and impeccable because the request asks for a minimalist look, and impeccable keeps hierarchy and type honest.",
+        ("minimalist-ui",),
+        "Use minimalist-ui for the requested visual style.",
     ),
     (
         ("landing page", "portfolio", "marketing page", "hero section"),
@@ -143,13 +143,13 @@ _DESIGN_RECOMMENDATIONS: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...
     ),
     (
         ("dashboard", "settings", "data table"),
-        ("impeccable", "web-design-guidelines", "frontend-design"),
-        "We will use impeccable, web-design-guidelines, and frontend-design because this is product UI: Impeccable shapes the screen, web-design-guidelines checks the table, focus, and labels, and frontend-design sets the visual direction.",
+        ("product-design", "better-layout"),
+        "Use product-design for interactions and better-layout for placement.",
     ),
     (
         ("redesign", "looks generic", "ai slop"),
-        ("impeccable", "redesign-existing-projects", "web-design-guidelines"),
-        "We will use impeccable, redesign-existing-projects, and web-design-guidelines because this is a redesign: Impeccable critiques what is there, the redesign skill raises the quality, and web-design-guidelines checks the interface still holds.",
+        ("better-interface", "better-layout"),
+        "Use better-interface for critique and better-layout for placement.",
     ),
     (
         ("font pairing", "palette", "chart type"),
@@ -158,8 +158,8 @@ _DESIGN_RECOMMENDATIONS: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...
     ),
     (
         ("frontend", "interface", "layout", "component", "css"),
-        ("impeccable", "web-design-guidelines"),
-        "We will use impeccable and web-design-guidelines because this is interface work: Impeccable decides how the screen should look, and web-design-guidelines checks focus, labels, and structure.",
+        ("better-layout", "ui-verification"),
+        "Use better-layout for placement and ui-verification for browser evidence.",
     ),
 )
 
@@ -183,20 +183,11 @@ def recommend_design_skills(text: str) -> tuple[list[str], str]:
             continue
         if phrases == generic and not ui_work:
             return [], ""
-        specialist = next(
-            (skill_id for skill_id in skill_ids if skill_id not in {"apple-design", "impeccable"}),
-            "",
-        )
-        selected = ["apple-design", "impeccable", *([specialist] if specialist else [])]
-        return selected, (
-            "We will use apple-design and impeccable together because all UI work must follow "
-            "platform conventions and accessibility as well as visual craft. " + reason
+        return ["ui-ux-system", *skill_ids[:2]], (
+            "We will use ui-ux-system to assess, validate placement, and verify the result. " + reason
         )
     if ui_work:
-        return ["apple-design", "impeccable"], (
-            "We will use apple-design and impeccable together because this is UI work: "
-            "Apple Design covers platform conventions and accessibility, while Impeccable covers craft and hierarchy."
-        )
+        return ["ui-ux-system"], "We will use ui-ux-system and its UI/UX workflow."
     return [], ""
 
 
@@ -276,7 +267,7 @@ Hermes workflows, Codex, Cursor, Claude, and Pi without hunting the ECC tree.
 
 ## Installed skill families
 
-- **UI quality:** every interface task must use apple-design and impeccable together, then at most one task-specific specialist. Apple Design covers platform conventions and accessibility; Impeccable covers craft and hierarchy. Say why before editing. Do not load the whole design pack at once.
+- **UI quality:** start with ui-ux-system and read its references/workflow.md. Assess the rendered baseline, validate placement, implement and polish, then verify in a real browser.
 - **Browser / QA:** browser-qa, webapp-testing, e2e-testing, decisions-playwright
 - **Native / cross-app control:** decisions-computer-use when the active runtime exposes computer-use tools
 - **Video / motion:** video-editing, remotion-video-creation, manim-video, videodb
@@ -460,7 +451,7 @@ def merge_browser_content_pre_chain(skill_ids: list[str], *, project_folder: str
         routed.extend(recommended)
         routed.append("decisions-playwright")
     elif any(token in blob for token in ("ui", "frontend", "design", "css", "visual", "polish")):
-        routed.extend(["impeccable", "web-design-guidelines", "decisions-playwright"])
+        routed.extend(["ui-ux-system", "decisions-playwright"])
     elif any(token in blob for token in ("browser", "playwright", "e2e", "webapp")):
         routed.append("decisions-playwright")
     if any(token in blob for token in ("computer use", "computer-use", "native app", "cross-app")):
@@ -573,7 +564,7 @@ def ensure_capabilities_pack_setup(
             "globs:\n"
             "alwaysApply: true\n"
             "---\n\n"
-            "For every interface task, read and use apple-design and impeccable together, then at most one task-specific design specialist. Name them and explain why before editing. Apple Design owns platform conventions and accessibility; Impeccable owns craft and hierarchy.\n"
+            "For interface work, start with ui-ux-system and read its references/workflow.md. Apply each specialist at its stage and verify in a real browser.\n"
             "For ordinary written task updates and final responses, start with `<x>% Done.` using an evidence-based estimate, and reserve 100% until verification is complete. Omit this only when the response itself is requested copy. Never use Unicode em dash or en dash characters.\n"
             "Use humanizer for publishable human-facing copy, and use design-taste only when its visual-direction guidance is relevant.\n"
             "For native or cross-app control use decisions-computer-use only when the runtime exposes computer-use tools.\n"

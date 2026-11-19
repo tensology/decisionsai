@@ -121,7 +121,8 @@ Curated pack (not a bulk dump of 44 marketing or 50 design skills).
 - **minimal**, **enterprise**, **professional**, **shadcn**, **bento** — design aesthetic tokens
 - **decisions-marketing-skills** / **decisions-design-aesthetics** — indexes for on-demand skills
 - **design-taste-frontend** — anti-slop frontend taste and anti-template UI guidance
-- **Design craft pack** — apple-design, impeccable, web-design-guidelines, Taste, Emil, Perfect UI, UI UX Pro Max, Bencium UX, and AccessLint. UI workflows always load apple-design and impeccable together, then at most one specialist.
+- **Design craft pack** — apple-design, impeccable, web-design-guidelines, Taste, Emil, Perfect UI, UI UX Pro Max, Bencium UX, and AccessLint. Follow `ui-ux-system` and its `references/workflow.md`: assess the rendered baseline, validate the flow and placement, implement and polish, then verify in a real browser.
+- **UI and UX specialists** — better-interface for critique, product-design for interaction and recovery, ui-verification for browser evidence, and web-ux-patterns for GOV.UK and W3C examples.
 
 Registry: `{registry_path}`
 
