@@ -734,7 +734,7 @@ function setupEventListeners() {
     // (removed: newChatModal background click handler)
 
     // Single view → load action, placed beside the composer.
-    if (inputLoadButton) inputLoadButton.addEventListener('click', () => { if (currentChatId) loadChat(currentChatId); });
+    if (inputLoadButton) inputLoadButton.addEventListener('click', () => { if (currentChatId) loadAgentChat(currentChatId); });
 
     // Chat context menu: close on click outside
     if (chatContextMenu) {
@@ -778,7 +778,7 @@ function setupEventListeners() {
                     setTimeout(() => selectChat(id), 0);
                 }
                 if (action === 'load') {
-                    setTimeout(() => loadChat(id), 0);
+                    setTimeout(() => loadAgentChat(id), 0);
                 }
                 if (action === 'configure') {
                     setTimeout(async () => {
@@ -799,7 +799,10 @@ function setupEventListeners() {
                     }, 0);
                 }
                 if (action === 'rename') renameChat(id);
-                if (action === 'delete') deleteChat(id);
+                if (action === 'delete') {
+                    const agentId = agentIdForChat(id);
+                    if (agentId != null) deleteAgent(agentId); else deleteChat(id);
+                }
             });
         });
     }
@@ -2299,6 +2302,7 @@ function flushQueuedTranscriptionStatusUpdate() {
 
 let sidebarSkins = null;
 let viewedChatSkin = null;
+let viewedOracleBackground = null;
 let sidebarReadRequest = null;
 let sidebarLoadSequence = 0;
 
@@ -2355,14 +2359,19 @@ async function loadChats() {
         primaryAgentUnread = Boolean(primaryRow?.unread);
         renderPrimaryAgent();
         refreshPrimaryAgentActivity();
-        renderChatList(chats.filter(chat => chat.id !== primaryAgentData?.main_conversation_id));
+        renderChatList(sortAgentChats(chats));
         applyChatsData(data);
         const viewed = chats.find(chat => chat.id === currentChatId);
+        if (viewed && (viewedChatSkin !== (viewed.skin_name || null)
+            || viewedOracleBackground !== (viewed.oracle_background || null))) {
+            setViewedChatAppearance(viewed);
+            void loadAssistantAvatarSkin(true);
+        }
         if (viewed?.unread) acknowledgeChatRead(viewed.id, viewed.latest_reply_id);
         return data;
     } catch (error) {
         console.error('Error loading chats:', error);
-        renderChatList([]);
+        if (sequence === sidebarLoadSequence && !chatList.querySelector('.chat-item')) renderChatList([]);
         return { chats: [], last_chat_id: null, agent_current_chat_id: null };
     }
 }
@@ -2461,17 +2470,34 @@ function getAdjacentChatIdAfterDelete(chatId) {
     return null;
 }
 
+// Agents in their saved manual order (agent_rank); chats without an agent follow, newest first.
+function sortAgentChats(chats) {
+    const rank = chat => (chat.agent_rank == null ? Number.MAX_SAFE_INTEGER : chat.agent_rank);
+    return [...chats].sort((a, b) => rank(a) - rank(b));
+}
+
 function renderChatList(chats) {
-    chatList.innerHTML = '';
+    if (agentDragState) return; // never rebuild under an active drag
     
     if (chats.length === 0) {
-        chatList.innerHTML = '<div style="padding: 12px; color: #8e8ea0; text-align: center; font-size: 14px;">' + (primaryAgentData ? 'No other agents yet' : 'No agents yet') + '</div>';
+        chatList.innerHTML = '<div style="padding: 12px; color: #8e8ea0; text-align: center; font-size: 14px;">No agents yet</div>';
         return;
     }
-    
-    chats.forEach(chat => {
-        const chatItem = createChatItem(chat);
-        chatList.appendChild(chatItem);
+    const existing = new Map([...chatList.querySelectorAll(':scope > .chat-item')].map(row => [row.dataset.chatId, row]));
+    const rows = chats.map(chat => {
+        const id = String(chat.id);
+        const row = existing.get(id);
+        const identity = JSON.stringify([chat.agent_id, chat.is_primary, chat.is_orchestrator]);
+        if (row?.dataset.identity !== identity) return createChatItem(chat);
+        updateChatItem(row, chat);
+        return row;
+    });
+    const keep = new Set(rows);
+    for (const child of [...chatList.children]) {
+        if (!keep.has(child)) child.remove();
+    }
+    rows.forEach((row, index) => {
+        if (chatList.children[index] !== row) chatList.insertBefore(row, chatList.children[index] || null);
     });
     updateActiveChat();
     requestAnimationFrame(applySidebarTitleMarquees);
@@ -2481,8 +2507,7 @@ function createChatItem(chat) {
     const div = document.createElement('div');
     div.className = 'chat-item';
     div.setAttribute('data-chat-id', String(chat.id));
-    div.dataset.chatTitle = chat.title || 'New Chat';
-    div.dataset.agentName = chat.agent_name || '';
+    div.dataset.identity = JSON.stringify([chat.agent_id, chat.is_primary, chat.is_orchestrator]);
     div.setAttribute('title', 'Click to view. Use Load to make it active in the agent.');
     div.setAttribute('tabindex', '0');
     div.setAttribute('role', 'option');
@@ -2492,32 +2517,29 @@ function createChatItem(chat) {
     }
     
     div.innerHTML = `
-        <span class="chat-thread-avatar" aria-hidden="true"><span>${escapeHtml((chat.agent_name || chat.voice_name || 'A').slice(0, 1))}</span></span>
+        <span class="chat-thread-avatar" aria-hidden="true"></span>
         <span class="chat-item-title-wrap">
-            <span class="chat-item-title">${escapeHtml(chat.agent_name || chat.voice_name || chat.voice_model || 'Assistant')}</span>
-            <span class="chat-item-preview">${escapeHtml(chat.latest_message || 'No messages yet')}</span>
+            <span class="chat-item-title"></span>
+            <span class="chat-item-preview"></span>
         </span>
         <span class="chat-unread-dot" ${chat.unread ? '' : 'hidden'} aria-label="Unread replies"></span>
         ${chat.agent_id != null ? `<button type="button" class="agent-star${chat.is_primary ? ' is-primary' : ''}" aria-pressed="${chat.is_primary ? 'true' : 'false'}" aria-label="${chat.is_primary ? 'Active agent' : 'Make this the active agent'}" title="${chat.is_primary ? 'Active agent' : 'Make this the active agent'}">${chat.is_primary ? '★' : '☆'}</button>` : ''}
     `;
-    
-    const skin = (sidebarSkins || []).find(skin => skin.folder_name === chat.skin_name);
-    if (skin) {
-        const file = skin.preview_image || skin.idle_animation;
-        if (file) {
-            const avatar = div.querySelector('.chat-thread-avatar');
-            const media = document.createElement(file.endsWith('.webm') ? 'video' : 'img');
-            media.className = `assistant-avatar-image ${skin.type === 'oracle' ? 'oracle' : 'avatar'}`;
-            media.style.setProperty('--assistant-image-scale', Math.max(0.1, Number(skin.image_scale) || 1));
-            media.style.setProperty('--assistant-image-offset-x', `${((Number(skin.image_offset_x) || 0) / 128) * 100}%`);
-            media.style.setProperty('--assistant-image-offset-y', `${((Number(skin.image_offset_y) || 0) / 128) * 100}%`);
-            media.src = `/api/skins/${encodeURIComponent(skin.folder_name)}/preview/${encodeURIComponent(file)}`;
-            media.setAttribute('aria-hidden', 'true');
-            if (media.tagName === 'VIDEO') { media.autoplay = true; media.muted = true; media.loop = true; media.playsInline = true; }
-            media.addEventListener('error', () => media.remove());
-            avatar.append(media);
-        }
+    if (chat.agent_id != null) {
+        div.dataset.agentId = String(chat.agent_id);
+        if (chat.is_primary) div.classList.add('is-primary-agent');
+        div.dataset.orchestrator = chat.is_orchestrator ? '1' : '0';
+        const star = div.querySelector('.agent-star');
+        star.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!chat.is_primary) makeAgentPrimary(chat.agent_id, chat.id);
+        });
+        star.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); });
+        bindAgentDrag(div);
     }
+
+    updateChatItem(div, chat);
     let clickTimer = null;
     div.addEventListener('click', (e) => {
         // Lock immediately, before the single-vs-double-click delay, so a typed
@@ -2544,6 +2566,32 @@ function createChatItem(chat) {
     });
     paintLayaThreadState(div, chat.id);
     return div;
+}
+
+function updateChatItem(row, chat) {
+    row.dataset.chatTitle = chat.title || 'New Chat';
+    row.dataset.agentName = chat.agent_name || '';
+    const title = row.querySelector('.chat-item-title');
+    const preview = row.querySelector('.chat-item-preview');
+    const name = chat.agent_name || chat.voice_name || chat.voice_model || 'Assistant';
+    const message = chat.latest_message || 'No messages yet';
+    if (title.textContent !== name) title.textContent = name;
+    if (preview.textContent !== message) preview.textContent = message;
+    row.querySelector('.chat-unread-dot').toggleAttribute('hidden', !chat.unread);
+    const avatar = row.querySelector('.chat-thread-avatar');
+    const skin = (sidebarSkins || []).find(item => item.folder_name === chat.skin_name);
+    const key = JSON.stringify([skin, chat.oracle_background, name[0]]);
+    if (avatar.dataset.appearance !== key) {
+        avatar.dataset.appearance = key;
+        const fallback = document.createElement('span');
+        fallback.textContent = (chat.agent_name || chat.voice_name || 'A')[0];
+        const media = primaryAvatarMedia(chat.skin_name, chat.oracle_background, name);
+        avatar.replaceChildren(fallback);
+        if (media.matches('img, video')) {
+            media.addEventListener('error', () => media.remove());
+            avatar.append(media);
+        }
+    }
 }
 
 // Laya submissions: live thread pop-up + in-progress/failed state (events stream).
@@ -2598,6 +2646,11 @@ function showChatContextMenu(e, chatId) {
     contextMenuChatId = chatId;
     if (!chatContextMenu) return;
     chatContextMenu.setAttribute('data-chat-id', String(chatId));
+    const deleteItem = chatContextMenu.querySelector('[data-action="delete"]');
+    if (deleteItem) {
+        const label = Array.from(deleteItem.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
+        if (label) label.textContent = agentIdForChat(chatId) != null ? 'Delete agent' : 'Delete';
+    }
     chatContextMenu.style.display = 'block';
     const rect = chatContextMenu.getBoundingClientRect();
     chatContextMenu.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - rect.width - 8)) + 'px';
@@ -2680,10 +2733,10 @@ async function selectChat(chatId) {
         const data = await response.json();
         // Discard if a newer selectChat/loadChat has already taken over
         if (seq !== _selectSeq) return;
-        viewedChatSkin = data.skin_name || null;
+        setViewedChatAppearance(data);
         await loadAssistantAvatarSkin(true);
         if (seq !== _selectSeq) return;
-        renderMessages(data.messages);
+        renderMessages(data.messages, false, true);
         renderTurnState(data.active_turn, data.turns || []);
         restoreLiveChatState(chatId, data.messages);
         acknowledgeChatRead(chatId, data.latest_reply_id);
@@ -2736,10 +2789,10 @@ async function loadChat(chatId, options = {}) {
         const response = await fetch(`${API_BASE}/chats/${chatId}`);
         const data = await response.json();
         if (seq !== _selectSeq) return; // superseded by another navigation
-        viewedChatSkin = data.skin_name || null;
+        setViewedChatAppearance(data);
         await loadAssistantAvatarSkin(true);
         if (seq !== _selectSeq) return;
-        renderMessages(data.messages);
+        renderMessages(data.messages, false, true);
         renderTurnState(data.active_turn, data.turns || []);
         restoreLiveChatState(chatId, data.messages);
         acknowledgeChatRead(chatId, data.latest_reply_id);
@@ -2921,7 +2974,7 @@ function setViewOnlyChrome(isViewOnly) {
 }
 
 function showEmptyState() {
-    viewedChatSkin = null;
+    setViewedChatAppearance();
     closeTTSPlayer();
     stopChatWebSocket();
     document.body.classList.remove('chat-has-active-thread');
@@ -3484,7 +3537,7 @@ function messagesAreChronological(messages) {
     return true;
 }
 
-function renderMessages(messages, preserveOnEmpty) {
+function renderMessages(messages, preserveOnEmpty, replaceConversation = false) {
     messages = normalizeTraceMessages(sortMessagesForDisplay(normalizeReadAloudAssistantMessages(messages || [])));
     if (_messagesEndWithAssistant(messages)) {
         const liveState = currentChatId != null ? _getLiveChatState(currentChatId) : null;
@@ -3529,10 +3582,8 @@ function renderMessages(messages, preserveOnEmpty) {
         return;
     }
     // Incremental render: only append new messages instead of wiping the whole DOM.
-    // When switching chats, loadChat resets _renderedMessageCount but old rows may still
-    // be in the DOM — compare against live DOM count, not only _renderedMessageCount.
     const domMessageCount = countPersistedDomMessages();
-    const switchingChat = messages.length < domMessageCount || messages.length < _renderedMessageCount;
+    const switchingChat = replaceConversation || messages.length < domMessageCount || messages.length < _renderedMessageCount;
     const orderRegressed = !messagesAreChronological(messages);
     if (!switchingChat && messages.length > _renderedMessageCount && messages.length - _renderedMessageCount <= 10 && !orderRegressed) {
         // Fast path: append only new messages, skipping ones already rendered optimistically
@@ -3579,7 +3630,7 @@ function renderMessages(messages, preserveOnEmpty) {
         return;
     }
     // Full rebuild (chat switch, refresh, etc.)
-    if (preserveLiveUi) return;
+    if (preserveLiveUi && !replaceConversation) return;
     chatMessages.innerHTML = '';
     _optimisticUserMessages.clear();
     _lastStreamFinalizedPlain = null;
@@ -5229,17 +5280,18 @@ function assistantAvatarHtml() {
         || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
 }
 
-function refreshRenderedAssistantAvatars() {
-    if (!chatMessages) return;
-    chatMessages.querySelectorAll('.message.assistant .message-avatar').forEach((avatar) => {
-        avatar.setAttribute('data-assistant-identity', '');
-        avatar.innerHTML = assistantAvatarHtml();
-    });
+function setViewedChatAppearance(chat) {
+    viewedChatSkin = chat?.skin_name || null;
+    viewedOracleBackground = chat?.oracle_background || null;
 }
 
 async function loadAssistantAvatarSkin(force = false) {
-    await window.DecisionsAssistantIdentity?.load({ force, skinName: viewedChatSkin });
-    refreshRenderedAssistantAvatars();
+    chatMessages?.querySelectorAll('.message.assistant .message-avatar').forEach((avatar) => {
+        avatar.setAttribute('data-assistant-identity', '');
+    });
+    await window.DecisionsAssistantIdentity?.load({
+        force, skinName: viewedChatSkin, oracleBackground: viewedOracleBackground,
+    });
 }
 
 // Utility Functions
@@ -5849,6 +5901,7 @@ async function openChatConfigModal(chatId) {
             skinSelect.value = chatData.skin_name || skinData.selected_skin || 'oracle';
         }
         _chatConfigBaseline = selectedChatConfigValues();
+        fillAgentAdvanced(chatData);
     } catch (e) {
         console.error('Open chat config failed:', e);
         _chatConfigBaseline = null;
@@ -5894,7 +5947,9 @@ function voiceProviderDisplayName(voiceProvider) {
 
 function voiceModelDisplayName(voiceProvider, voiceModel, voiceModelDisplay) {
     const display = (voiceModelDisplay || '').trim();
-    if (display) return display;
+    const voiceIdRaw = (voiceModel || '').trim();
+    // A display equal to the raw id is an unresolved id: keep looking.
+    if (display && display !== voiceIdRaw) return display;
     const providerId = canonicalVoiceProviderForSelect({
         tts_provider: voiceProvider,
         voice_provider: voiceProvider
@@ -6109,7 +6164,7 @@ async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
         if (!refreshedRes.ok) {
             throw new Error(refreshed.detail || refreshed.error || 'Failed to reload chat settings');
         }
-        viewedChatSkin = refreshed.skin_name || null;
+        setViewedChatAppearance(refreshed);
         await loadAssistantAvatarSkin(true);
         updateChatSettingsDisplay({
             title: refreshed.title || 'New Chat',
@@ -6140,16 +6195,23 @@ async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
 async function saveChatConfig() {
     if (!currentChatId || !chatConfigSave) return;
     const selected = selectedChatConfigValues();
-    if (!selected.provider || !selected.model_name) {
-        if (chatConfigStatus) chatConfigStatus.textContent = 'Choose an LLM provider and model.';
-        return;
-    }
-    if (!selected.voice_provider || !selected.voice_model) {
-        if (chatConfigStatus) chatConfigStatus.textContent = 'Choose a voice provider and voice.';
-        return;
-    }
     const patch = changedChatConfigFields(_chatConfigBaseline, selected);
+    // Only validate the model/voice pickers when they are being changed, so an
+    // Advanced-only edit (name, scope, orchestrator) always saves.
+    if (Object.keys(patch).length) {
+        if (!selected.provider || !selected.model_name) {
+            if (chatConfigStatus) chatConfigStatus.textContent = 'Choose an LLM provider and model.';
+            return;
+        }
+        if (!selected.voice_provider || !selected.voice_model) {
+            if (chatConfigStatus) chatConfigStatus.textContent = 'Choose a voice provider and voice.';
+            return;
+        }
+    }
+    const agentSaved = await saveAgentAdvanced();
+    if (agentSaved === false) return;
     if (Object.keys(patch).length === 0) {
+        if (agentSaved) await loadChats();
         hideChatConfigModal();
         return;
     }
@@ -6858,12 +6920,12 @@ window.addEventListener('decisionsai-event', async (event) => {
 });
 
 
-function primaryAvatarMedia(skinName) {
+function primaryAvatarMedia(skinName, oracleBackground, name = primaryAgentData?.name || 'A') {
     const skin = (sidebarSkins || []).find(item => item.folder_name === skinName);
-    const file = skin?.preview_image || skin?.idle_animation;
-    if (!file) {
+    const file = (skinName === 'oracle' && oracleBackground) || skin?.preview_image || skin?.idle_animation;
+    if (!skin || !file) {
         const fallback = document.createElement('span');
-        fallback.textContent = (primaryAgentData?.name || 'A').slice(0, 1);
+        fallback.textContent = name.slice(0, 1);
         return fallback;
     }
     const video = /\.webm$/i.test(file);
@@ -6926,16 +6988,18 @@ setInterval(async () => {
 function renderPrimaryAgent() {
     const card = document.getElementById('primaryAgentCard');
     if (!card) return;
-    card.hidden = !primaryAgentData;
+    // The primary now lives in the agent list (star); the separate card stays hidden.
+    card.hidden = true;
     if (!primaryAgentData) return;
     document.getElementById('primaryAgentName').textContent = primaryAgentData.name;
     document.getElementById('primaryAgentName').setAttribute('aria-label', `Open primary agent ${primaryAgentData.name}`);
     const image = document.getElementById('primaryAgentImage');
     const skin = (sidebarSkins || []).find(item => item.folder_name === primaryAgentData.skin_name);
-    if (image.dataset.skin !== primaryAgentData.skin_name || !image.firstChild ||
+    const key = JSON.stringify([primaryAgentData.skin_name, primaryAgentData.oracle_background]);
+    if (image.dataset.skin !== key || !image.firstChild ||
         ((skin?.preview_image || skin?.idle_animation) && !image.querySelector('img, video'))) {
-        image.replaceChildren(primaryAvatarMedia(primaryAgentData.skin_name));
-        image.dataset.skin = primaryAgentData.skin_name;
+        image.replaceChildren(primaryAvatarMedia(primaryAgentData.skin_name, primaryAgentData.oracle_background));
+        image.dataset.skin = key;
     }
     card.classList.toggle('active', currentChatId === primaryAgentData.main_conversation_id);
     renderPrimaryAgentBadge();
@@ -6994,9 +7058,10 @@ async function savePrimaryAvatar(skinName) {
         ++sidebarLoadSequence; // An older GET must not undo this saved avatar.
         renderPrimaryAgent();
         if (currentChatId === primaryAgentData.main_conversation_id) {
-            viewedChatSkin = primaryAgentData.skin_name;
+            setViewedChatAppearance(primaryAgentData);
             await loadAssistantAvatarSkin(true);
         }
+        if (chatList.querySelector('.chat-item')) await loadChats();
         primaryAvatarSaving = false;
         hidePrimaryAvatarPicker();
     } catch (err) { error.textContent = err.message; error.hidden = false; }
@@ -7032,4 +7097,218 @@ document.addEventListener('keydown', event => {
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
+});
+
+
+// ---------------------------------------------------------------------------
+// Multi-agent roster: primary star, manual order (drag), edit Advanced, delete,
+// per-agent memory. Group chats live in chat-groups.js.
+// ---------------------------------------------------------------------------
+let agentDragState = null;
+let _agentAdvancedBaseline = null;
+
+function agentIdForChat(chatId) {
+    const row = chatList && chatList.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
+    const id = row && row.dataset.agentId;
+    return id ? Number(id) : null;
+}
+
+async function makeAgentPrimary(agentId, chatId) {
+    try {
+        const res = await fetch(`${API_BASE}/agents/${agentId}/primary`, { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Could not make this agent primary');
+        primaryAgentData = data.primary_agent || primaryAgentData;
+        await loadChat(chatId);   // load its chat, context and history into the live runtime
+        await loadChats();
+    } catch (error) {
+        showChatSnackbar(error.message || 'Could not make this agent primary', 'error');
+    }
+}
+
+// Explicit load = make this agent the primary you're talking to.
+async function loadAgentChat(chatId) {
+    const agentId = agentIdForChat(chatId);
+    if (agentId != null) return makeAgentPrimary(agentId, chatId);
+    return loadChat(chatId);
+}
+
+function bindAgentDrag(row) {
+    row.draggable = true;
+    row.addEventListener('dragstart', (e) => {
+        agentDragState = { id: row.dataset.agentId };
+        row.classList.add('agent-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', row.dataset.agentId);
+    });
+    row.addEventListener('dragend', () => {
+        row.classList.remove('agent-dragging');
+        chatList.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+        agentDragState = null;
+    });
+    row.addEventListener('dragover', (e) => {
+        if (!agentDragState || row.dataset.agentId === agentDragState.id) return;
+        e.preventDefault();
+        const rect = row.getBoundingClientRect();
+        const after = e.clientY > rect.top + rect.height / 2;
+        chatList.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+        row.classList.add(after ? 'drop-after' : 'drop-before');
+    });
+    row.addEventListener('drop', async (e) => {
+        if (!agentDragState) return;
+        e.preventDefault();
+        const dragged = chatList.querySelector(`.chat-item[data-agent-id="${agentDragState.id}"]`);
+        const after = row.classList.contains('drop-after');
+        row.classList.remove('drop-before', 'drop-after');
+        if (!dragged || dragged === row) return;
+        row.parentNode.insertBefore(dragged, after ? row.nextSibling : row);
+        const order = Array.from(chatList.querySelectorAll('.chat-item[data-agent-id]')).map(el => Number(el.dataset.agentId));
+        agentDragState = null;
+        try {
+            const res = await fetch(`${API_BASE}/agents/order`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent_ids: order })
+            });
+            if (!res.ok) throw new Error('Could not save the order');
+        } catch (error) {
+            showChatSnackbar(error.message, 'error');
+        }
+        await loadChats();
+    });
+}
+
+async function deleteAgent(agentId) {
+    const row = chatList.querySelector(`.chat-item[data-agent-id="${agentId}"]`);
+    const name = row ? (row.dataset.agentName || 'this agent') : 'this agent';
+    if (row && row.classList.contains('is-primary-agent')) {
+        showChatSnackbar('Make another agent primary before deleting this one.', 'error');
+        return false;
+    }
+    const confirmed = await window.DecisionsAPI.confirm({
+        title: 'Delete agent',
+        message: `Delete ${name}, its conversations and its memory? This cannot be undone.`,
+        confirmLabel: 'Delete agent',
+        danger: true,
+    });
+    if (!confirmed) return false;
+    const res = await fetch(`${API_BASE}/agents/${agentId}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { showChatSnackbar(data.detail || 'Could not delete the agent', 'error'); return false; }
+    const removed = (data.deleted_chat_ids || []).map(Number);
+    if (removed.includes(Number(currentChatId))) {
+        currentChatId = null;
+        if (removed.includes(Number(loadedChatId))) loadedChatId = null;
+        chatMessages.innerHTML = '';
+        _renderedMessageCount = 0;
+    }
+    const listData = await loadChats();
+    if (currentChatId == null) {
+        const next = (listData.chats || []).find(chat => chat.is_primary) || (listData.chats || [])[0];
+        if (next) await selectChat(next.id); else showEmptyState();
+    }
+    if (typeof window.DecisionsGroups?.refresh === 'function') window.DecisionsGroups.refresh();
+    return true;
+}
+
+function fillAgentAdvanced(chatData) {
+    const box = document.getElementById('chatConfigAgent');
+    if (!box) return;
+    const agentId = chatData && chatData.agent_id != null ? Number(chatData.agent_id) : null;
+    box.hidden = agentId == null;
+    box.dataset.agentId = agentId == null ? '' : String(agentId);
+    if (agentId == null) { _agentAdvancedBaseline = null; return; }
+    const row = chatList.querySelector(`.chat-item[data-agent-id="${agentId}"]`);
+    const values = {
+        name: chatData.agent_name || '',
+        role: chatData.agent_role || '',
+        is_orchestrator: Boolean(chatData.is_orchestrator ?? (row && row.dataset.orchestrator === '1')),
+    };
+    document.getElementById('chatConfigAgentName').value = values.name;
+    document.getElementById('chatConfigAgentRole').value = values.role;
+    document.getElementById('chatConfigOrchestrator').checked = values.is_orchestrator;
+    const del = document.getElementById('chatConfigDeleteAgent');
+    const isPrimary = Boolean(row && row.classList.contains('is-primary-agent'));
+    del.disabled = isPrimary;
+    del.title = isPrimary ? 'Make another agent primary first' : '';
+    _agentAdvancedBaseline = values;
+    loadAgentMemories(agentId);
+}
+
+// null = nothing to save, true = saved, false = failed (keep the modal open).
+async function saveAgentAdvanced() {
+    const box = document.getElementById('chatConfigAgent');
+    if (!box || box.hidden || !box.dataset.agentId || !_agentAdvancedBaseline) return null;
+    const current = {
+        name: document.getElementById('chatConfigAgentName').value.trim(),
+        role: document.getElementById('chatConfigAgentRole').value.trim(),
+        is_orchestrator: document.getElementById('chatConfigOrchestrator').checked,
+    };
+    const patch = {};
+    Object.keys(current).forEach(key => { if (current[key] !== _agentAdvancedBaseline[key]) patch[key] = current[key]; });
+    if (!Object.keys(patch).length) return null;
+    const res = await fetch(`${API_BASE}/agents/${box.dataset.agentId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        if (chatConfigStatus) chatConfigStatus.textContent = data.detail || 'Could not save the agent.';
+        return false;
+    }
+    _agentAdvancedBaseline = current;
+    return true;
+}
+
+async function loadAgentMemories(agentId) {
+    const list = document.getElementById('agentMemoryList');
+    const clearAll = document.getElementById('agentMemoryClearAll');
+    if (!list) return;
+    list.innerHTML = '';
+    try {
+        const res = await fetch(`${API_BASE}/agents/${agentId}/memories`);
+        const memories = res.ok ? ((await res.json()).memories || []) : [];
+        clearAll.hidden = memories.length === 0;
+        if (!memories.length) {
+            list.innerHTML = '<li class="agent-memory-empty">Nothing remembered yet.</li>';
+            return;
+        }
+        for (const memory of memories) {
+            const li = document.createElement('li');
+            const text = document.createElement('span');
+            text.textContent = memory.content;
+            const forget = document.createElement('button');
+            forget.type = 'button';
+            forget.className = 'agent-memory-forget';
+            forget.setAttribute('aria-label', 'Forget this');
+            forget.title = 'Forget this';
+            forget.textContent = '×';
+            forget.addEventListener('click', async () => {
+                await fetch(`${API_BASE}/agents/${agentId}/memories?memory_id=${encodeURIComponent(memory.id)}`, { method: 'DELETE' });
+                loadAgentMemories(agentId);
+            });
+            li.append(text, forget);
+            list.append(li);
+        }
+    } catch (error) {
+        list.innerHTML = '<li class="agent-memory-empty">Memory unavailable.</li>';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const clearAll = document.getElementById('agentMemoryClearAll');
+    if (clearAll) clearAll.addEventListener('click', async () => {
+        const agentId = document.getElementById('chatConfigAgent').dataset.agentId;
+        if (!agentId) return;
+        const ok = await window.DecisionsAPI.confirm({
+            title: 'Clear memory', message: 'Forget everything this agent remembers? Shared memory is not affected.',
+            confirmLabel: 'Clear all', danger: true,
+        });
+        if (!ok) return;
+        await fetch(`${API_BASE}/agents/${agentId}/memories`, { method: 'DELETE' });
+        loadAgentMemories(agentId);
+    });
+    const del = document.getElementById('chatConfigDeleteAgent');
+    if (del) del.addEventListener('click', async () => {
+        const agentId = document.getElementById('chatConfigAgent').dataset.agentId;
+        if (!agentId) return;
+        if (await deleteAgent(Number(agentId))) hideChatConfigModal();
+    });
 });

@@ -55,7 +55,8 @@ def test_primary_lookup_failure_does_not_hide_other_agents(sidebar_page):
         };
     }''')
     page.evaluate('loadChats()')
-    assert page.evaluate('rendered.map(row=>row.id)') == [2]
+    # The primary is listed with the other agents (starred), so both stay visible.
+    assert page.evaluate('rendered.map(row=>row.id)') == [1, 2]
     assert page.evaluate('primaryAgentData.name') == 'Primary'
 
 

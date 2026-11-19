@@ -58,7 +58,7 @@ async def broadcast_chat_event(payload: Dict[str, Any]) -> int:
                 if not registered:
                     _chat_ws_connections.pop(chat_id, None)
     _forward_to_remote_app(payload)
-    if payload.get("event") in {"message_added", "stream_finished"}:
+    if payload.get("event") in {"message_added", "stream_finished", "appearance_changed"}:
         await broadcast_topic_event("chat_list", {"type": "chat_list_changed", "chat_id": chat_id})
     return len(conns) - len(failed)
 
@@ -161,7 +161,7 @@ def publish_chat_event_threadsafe(payload: Dict[str, Any]):
 
 from distr.core.db import get_session, Chat
 from distr.core.chat import ChatService, record_chat_audit_event
-from distr.core.chat_sidebar import chat_skin, set_chat_skin, sidebar_state, validate_chat_skin
+from distr.core.chat_sidebar import chat_appearance, chat_skin, set_chat_skin, sidebar_state, validate_chat_skin
 from distr.core.chat_agents import agent_identity
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
@@ -996,7 +996,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             raise HTTPException(422, str(exc))
         if not ensure_primary_agent(load_settings_from_db()):
             raise HTTPException(409, 'Create an agent before choosing a primary avatar.')
-        update_oracle_skin(skin)
+        update_oracle_skin(skin, primary_only=True)
         return JSONResponse({'primary_agent': ensure_primary_agent(load_settings_from_db())})
 
     @router.websocket("/ws")
@@ -1166,8 +1166,13 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
                 settings = load_settings_from_db()
                 result = []
+                from distr.core.agent_groups import group_chat_ids, orchestrator_id, ordered_agents, primary_agent_id
+
+                group_ids = group_chat_ids(session)
+                agent_rank = {agent.id: index for index, agent in enumerate(ordered_agents(session))}
+                primary_id, orch_id = primary_agent_id(session), orchestrator_id(session)
                 for chat in chats:
-                    if is_plan_chat(chat):
+                    if is_plan_chat(chat) or chat.id in group_ids:
                         continue
                     owned_by_development = is_development_thread(session, chat)
                     if owned_by_development != (normalized_surface == "development"):
@@ -1223,6 +1228,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                             "archived": bool(chat.is_archived),
                         }
                     )
+                    if result[-1].get("agent_id") is not None:
+                        result[-1]["agent_rank"] = agent_rank.get(result[-1]["agent_id"])
+                        result[-1]["is_primary"] = result[-1]["agent_id"] == primary_id
+                        result[-1]["is_orchestrator"] = result[-1]["agent_id"] == orch_id
                 session.commit()
                 last_chat_id = settings.get("last_chat_id")
                 if last_chat_id is not None and not isinstance(last_chat_id, int):
@@ -1795,7 +1804,13 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         skin_name = validate_chat_skin(request_data.skin_name)
                     except ValueError as exc:
                         raise HTTPException(422, str(exc))
-                    set_chat_skin(chat, skin_name)
+                    from distr.core.chat_agents import agent_for_conversation, set_agent_skin
+
+                    owner = agent_for_conversation(session, chat.id)
+                    if owner:
+                        set_agent_skin(session, owner, skin_name)
+                    else:
+                        set_chat_skin(chat, skin_name)
                     updated = True
                     settings_fields_touched = True
                 if request_data.title is not None:
@@ -1866,7 +1881,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 response_payload = {
                     "id": int(chat.id),
                     "title": chat.title or "New Chat",
-                    "skin_name": chat_skin(chat),
+                    **chat_appearance(session, chat),
                     "provider": chat.provider,
                     "model_name": chat.model_name,
                     "voice_provider": chat.voice_provider,
@@ -2877,4 +2892,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             voices = [{"id": "default", "name": "Default Voice"}]
         return JSONResponse({"voices": voices})
 
+    from distr.gui.web.routes.agent_groups import register_agent_group_routes
+
+    register_agent_group_routes(router)
     return router

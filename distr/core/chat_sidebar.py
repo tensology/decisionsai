@@ -16,6 +16,17 @@ def set_chat_skin(chat, skin):
     chat.additional_context = json.dumps(context, ensure_ascii=False)
 
 
+def chat_appearance(session, chat, default="oracle"):
+    from distr.core.chat_agents import agent_for_conversation
+
+    owner = agent_for_conversation(session, chat.id)
+    context = _chat_additional_context(chat.additional_context)
+    return {
+        "skin_name": (owner.skin_name if owner and owner.skin_name else chat_skin(chat, default)),
+        "oracle_background": owner.oracle_background if owner else context.get("oracle_background"),
+    }
+
+
 def validate_chat_skin(skin):
     from distr.core.paths import AVATARS_DIR
     from distr.core.skin_discovery import get_skin_by_name
@@ -41,7 +52,7 @@ def sidebar_state(session, chat, settings, *, mark_read=None):
     chat.additional_context = json.dumps(context, ensure_ascii=False)
     from distr.core.chat_agents import agent_identity
 
-    return {**agent_identity(session, chat.id), "skin_name": context["skin_name"], "latest_message": latest_message,
+    return {**agent_identity(session, chat.id), **chat_appearance(session, chat), "latest_message": latest_message,
             "latest_reply_id": latest_reply_id,
             "unread": latest_reply_id > context["last_read_reply_id"]}
 
@@ -52,20 +63,21 @@ def restore_chat_skin(chat_id):
     from distr.core.settings import load_settings_from_db
 
     with get_session() as session:
-        from distr.core.chat_agents import primary_agent
+        from distr.core.chat_agents import agent_for_conversation
 
         chat = session.get(Chat, chat_id)
         if not chat:
             return
-        primary = primary_agent(session)
-        skin = primary.skin_name if primary else chat_skin(chat, load_settings_from_db().get("selected_oracle"))
+        # The loaded conversation's own agent decides the skin (Uncle Roger stays Uncle Roger).
+        owner = agent_for_conversation(session, chat.id)
+        skin = (owner.skin_name if owner and owner.skin_name else None) or chat_skin(chat, load_settings_from_db().get("selected_oracle"))
         try:
             skin = validate_chat_skin(skin)
         except ValueError:
             logging.getLogger(__name__).warning("Saved skin %s unavailable; using Oracle for chat %s", skin, chat_id)
             skin = validate_chat_skin("oracle")
         else:
-            if not primary:
+            if not owner:
                 set_chat_skin(chat, skin)
                 session.commit()
     update_oracle_skin(skin, persist_chat=False)

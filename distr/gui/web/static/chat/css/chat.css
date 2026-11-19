@@ -3069,7 +3069,7 @@
     .agent-setup-layout { grid-template-columns:88px minmax(0,1fr); gap:12px; }
 }
 
-/* Active/loaded agent star in the sidebar list */
+/* ---- Multi-agent: primary star, drag order, groups ---------------------- */
 .agent-star {
     flex: 0 0 auto;
     background: none;
@@ -3086,4 +3086,83 @@
 .agent-star:hover { color: #fbbf24; }
 .agent-star.is-primary { color: #fbbf24; cursor: default; }
 .agent-star:focus-visible { opacity: 1; outline: 2px solid #f97316; outline-offset: 1px; border-radius: 4px; }
+.chat-item.agent-dragging { opacity: 0.45; }
+.chat-item.drop-before { box-shadow: inset 0 2px 0 #f97316; }
+.chat-item.drop-after { box-shadow: inset 0 -2px 0 #f97316; }
 
+.group-section { border-top: 1px solid rgba(255, 255, 255, 0.10); padding: 8px; max-height: 40%; display: flex; flex-direction: column; }
+.group-section-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 6px 8px; font-size: 12px; color: #8e8ea0; letter-spacing: 0.02em; }
+.group-new-btn { background: none; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 6px; color: #ececf1; width: 24px; height: 24px; display: grid; place-items: center; cursor: pointer; }
+.group-new-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.group-list { overflow-y: auto; }
+.group-avatar-stack { display: flex; flex: 0 0 auto; }
+.group-avatar-stack .group-avatar + .group-avatar { margin-left: -12px; }
+.group-avatar { position: relative; width: 30px; height: 30px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: #2b2f55; color: #fff; font-size: 13px; border: 2px solid #1c1f3d; flex: 0 0 auto; }
+.group-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.group-avatar--sm { width: 22px; height: 22px; font-size: 11px; border-width: 1px; }
+.group-avatar--msg { width: 32px; height: 32px; margin-top: 4px; }
+
+body.group-mode #chatSettingsHeader, body.group-mode #chatMessages, body.group-mode #inputContainer,
+body.group-mode #emptyState, body.group-mode #ttsPlayerCard { display: none !important; }
+.group-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.group-view[hidden] { display: none; }
+.group-view-header { display: flex; align-items: center; gap: 12px; padding: 0 16px; min-height: 48px; border-bottom: 1px solid rgba(255, 255, 255, 0.10); }
+.group-view-title { font-size: 15px; font-weight: 600; margin: 0; color: #ececf1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-view-members { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; }
+.group-member { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #c5c5d2; padding: 2px 8px 2px 2px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); white-space: nowrap; }
+.group-member.is-orchestrator { box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.5); }
+.group-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 16px; background: rgba(13, 22, 66, 0.35); }
+.group-message.assistant { flex-direction: row; justify-content: flex-start; gap: 12px; }
+.group-message.user { justify-content: flex-end; }
+.group-message.user .message-content { flex: 0 1 auto; max-width: 80%; }
+.group-message-name { font-size: 12px; font-weight: 600; color: #f0abfc; }
+.group-message .message-text { color: #ececf1; line-height: 1.5; overflow-wrap: anywhere; }
+.group-message--error .message-content { border-color: rgba(248, 113, 113, 0.5); }
+.group-message--error .message-text { color: #fca5a5; }
+.group-message--typing .message-text::after { content: '…'; color: #8e8ea0; }
+.group-notice { font-size: 12px; color: #8e8ea0; margin: 0; }
+.group-input { padding: 12px 16px 16px; }
+#groupSpeakerToggle[aria-pressed="false"] { opacity: 0.45; }
+
+.group-modal-content { max-width: 420px; }
+.group-agent-picks { display: flex; flex-direction: column; gap: 6px; }
+.group-agent-pick { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; color: #ececf1; }
+.group-agent-pick:hover { background: rgba(255, 255, 255, 0.06); }
+
+.agent-orchestrator-toggle { display: flex; align-items: center; gap: 8px; color: #ececf1; font-size: 14px; margin: 4px 0 12px; }
+.agent-orchestrator-toggle span { color: #8e8ea0; font-size: 12px; }
+.agent-memory { margin: 8px 0 16px; }
+.agent-memory-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #c5c5d2; margin-bottom: 6px; }
+.link-btn { background: none; border: 0; color: #fca5a5; cursor: pointer; font-size: 12px; padding: 0; }
+.agent-memory-list { list-style: none; margin: 0; padding: 0; max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.agent-memory-list li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: #ececf1; background: rgba(255, 255, 255, 0.04); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-memory-list li span { flex: 1; }
+.agent-memory-list li.agent-memory-empty { color: #8e8ea0; background: none; padding-left: 0; }
+.agent-memory-forget { background: none; border: 0; color: #8e8ea0; cursor: pointer; font-size: 15px; line-height: 1; }
+.agent-memory-forget:hover { color: #fca5a5; }
+.agent-delete-btn { background: transparent; border: 1px solid rgba(248, 113, 113, 0.5); color: #fca5a5; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.agent-delete-btn:hover:not(:disabled) { background: rgba(248, 113, 113, 0.12); }
+.agent-delete-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Configure chat/agent: the body scrolls, the header and Cancel/Save footer always stay visible. */
+#chatConfigModal .chat-config-modal-content {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow: hidden;
+}
+#chatConfigModal .modal-header,
+#chatConfigModal .modal-footer { flex: 0 0 auto; }
+#chatConfigModal .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+#chatConfigModal .modal-footer {
+    position: sticky;
+    bottom: 0;
+    background: #1a1f3a;
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+}

@@ -4,6 +4,7 @@
     let snapshot = null;
     let loadPromise = null;
     let loadSequence = 0;
+    const applied = new WeakMap();
 
     function escapeAttribute(value) {
         return String(value ?? '')
@@ -33,18 +34,19 @@
     }
 
     function apply(root = document) {
+        const markup = html();
         root.querySelectorAll?.('[data-assistant-identity]').forEach((target) => {
-            target.innerHTML = html();
+            if (applied.get(target) === markup) return;
+            target.innerHTML = markup;
+            applied.set(target, markup);
+            target.querySelector('video')?.play().catch(() => {});
         });
         root.querySelectorAll?.('[data-assistant-name]').forEach((target) => {
             target.textContent = name();
         });
-        root.querySelectorAll?.('video.assistant-avatar-image').forEach((video) => {
-            video.play().catch(() => {});
-        });
     }
 
-    async function load({ force = false, skinName = null } = {}) {
+    async function load({ force = false, skinName = null, oracleBackground = null } = {}) {
         if (loadPromise && !force) return loadPromise;
         const sequence = ++loadSequence;
         loadPromise = (async () => {
@@ -61,18 +63,25 @@
             // surface, and an avatar cannot remove it. The static preview image
             // is already a transparent cut-out, so prefer it for those skins.
             const hasChromaKey = Array.isArray(skin.chroma_key) && skin.chroma_key.length === 3;
-            const sourceFile = (hasChromaKey && skin.preview_image)
+            const background = skin.folder_name === 'oracle'
+                ? (skinName ? oracleBackground : data.selected_oracle_background)
+                : null;
+            const sourceFile = background || ((hasChromaKey && skin.preview_image)
                 ? skin.preview_image
-                : (skin.idle_animation || 'idle.webm');
+                : (skin.idle_animation || 'idle.webm'));
             const src = `/api/skins/${encodeURIComponent(skin.folder_name)}/preview/${encodeURIComponent(sourceFile)}`;
             const animated = sourceFile.toLowerCase().endsWith('.webm');
             if (sequence !== loadSequence || !src) return null;
-            snapshot = {
+            const next = {
                 src, animated, type: skin.type, name: skin.name || skin.folder_name,
                 imageScale: skin.image_scale, imageOffsetX: skin.image_offset_x, imageOffsetY: skin.image_offset_y,
             };
+            const changed = JSON.stringify(snapshot) !== JSON.stringify(next);
+            snapshot = next;
             apply(document);
-            document.dispatchEvent(new CustomEvent('decisions:assistant-identity-changed', { detail: { name: snapshot.name, type: snapshot.type } }));
+            if (changed) {
+                document.dispatchEvent(new CustomEvent('decisions:assistant-identity-changed', { detail: { name: snapshot.name, type: snapshot.type } }));
+            }
             return snapshot;
         })().catch((error) => {
             console.warn('Could not load the selected Oracle/avatar identity:', error);

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -115,7 +116,8 @@ def test_chat_api_lists_identity_marks_read_and_does_not_restore_skin_on_view(mo
     assert client.get(f'/api/chats/{chat_id}').json()['skin_name'] == 'other-character'
 
 
-def test_background_reply_notifies_sidebar_subscribers_without_message_content(monkeypatch):
+@pytest.mark.parametrize("event", ["stream_finished", "appearance_changed"])
+def test_chat_event_notifies_sidebar_subscribers_without_message_content(monkeypatch, event):
     import asyncio
     from distr.gui.web.routes import chat as routes
 
@@ -126,5 +128,5 @@ def test_background_reply_notifies_sidebar_subscribers_without_message_content(m
     socket = Socket()
     monkeypatch.setattr(routes, '_topic_ws_connections', {'chat_list': {socket}})
     monkeypatch.setattr(routes, '_chat_ws_connections', {})
-    asyncio.run(routes.broadcast_chat_event({'chat_id': 999, 'event': 'stream_finished', 'response_text': 'Private reply'}))
+    asyncio.run(routes.broadcast_chat_event({'chat_id': 999, 'event': event, 'response_text': 'Private reply'}))
     assert socket.event == {'type': 'chat_list_changed', 'chat_id': 999}
