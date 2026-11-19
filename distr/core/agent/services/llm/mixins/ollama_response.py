@@ -747,6 +747,10 @@ class OllamaResponseMixin:
             # ── Agentic tool loop: keep going while the LLM returns tool calls ──
             MAX_TOOL_ROUNDS = 10
             round_num = 0
+            from distr.core.agent.loop_guard import ReadLoopGuard, observe_tool_calls, stop_instruction
+
+            read_guard = ReadLoopGuard.for_chat()
+            tools_withheld = False
 
             while tool_calls and round_num < MAX_TOOL_ROUNDS and not self._cancelled:
                 round_num += 1
@@ -774,6 +778,16 @@ class OllamaResponseMixin:
                         break
                 filtered_tools_next = self._get_filtered_tools(last_user_msg_next or last_user_msg)
                 ollama_tools_next = self._convert_tools_to_ollama_format(filtered_tools_next)
+                guard_verdict = observe_tool_calls(read_guard, tool_calls)
+                if guard_verdict == "nudge":
+                    validated_next = validated_next + [{"role": "user", "content": read_guard.nudge_message()}]
+                elif guard_verdict == "stop" or tools_withheld:
+                    if not tools_withheld:
+                        logger.warning("Ollama read-loop guard stopped tool use: %s", read_guard.reason)
+                        self._read_loop_stopped = read_guard.reason
+                    tools_withheld = True
+                    validated_next = validated_next + [{"role": "user", "content": stop_instruction(read_guard)}]
+                    ollama_tools_next = []
 
                 chat_kwargs_next = {
                     "model": current_model,
@@ -812,6 +826,12 @@ class OllamaResponseMixin:
             # Log if we hit the limit
             if round_num >= MAX_TOOL_ROUNDS and tool_calls:
                 logger.warning("Ollama inline followup hit MAX_TOOL_ROUNDS (%d)", MAX_TOOL_ROUNDS)
+                from distr.core.agent.loop_guard import round_cap_notice
+
+                pending = [str((tc.get("function") or {}).get("name") or "") for tc in tool_calls]
+                notice = round_cap_notice(MAX_TOOL_ROUNDS, pending)
+                self._round_cap_notice = notice
+                full_response = (full_response.rstrip() + "\n\n" + notice).strip()
 
         except Exception as e:
             logger.error("LLM: inline followup error: %s", e, exc_info=True)

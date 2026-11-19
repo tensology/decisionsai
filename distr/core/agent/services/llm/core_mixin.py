@@ -892,80 +892,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             sticky_names = set(getattr(self, "_sticky_tool_names", set()))
             sticky = [t for t in self._tools if t.name not in retrieved_names and t.name in sticky_names]
 
-            # Provider-aware mail exposure repair.
-            qlow = (last_user_message or "").lower()
-            tensology_mail_keywords = ("tensology mail", "tensology inbox", "mailshot")
-            gmail_keywords = ("gmail", "email", "inbox", "google workspace")
-            calendar_keywords = (
-                "google calendar",
-                "gcal",
-                "calendar event",
-                "calendar events",
-                "event creation",
-                "create calendar",
-                "bulk event",
-                "recurring event",
-            )
-            explicit_tensology_mail = any(k in qlow for k in tensology_mail_keywords)
-            explicit_google_mail = any(k in qlow for k in ("gmail", "google mail", "google workspace"))
-            generic_mail_read = (
-                any(k in qlow for k in ("mail", "email", "inbox"))
-                and any(k in qlow for k in ("check", "read", "show", "list", "new", "unread", "inbox"))
-                and not any(k in qlow for k in ("send", "draft", "reply", "write"))
-            )
-            if explicit_tensology_mail and "tensology_workspace" in self._tools_dict:
-                tensology_tool = self._tools_dict["tensology_workspace"]
-                if tensology_tool.name not in retrieved_names:
-                    retrieved.append(tensology_tool)
-                    retrieved_names.add(tensology_tool.name)
-            if generic_mail_read and not explicit_tensology_mail and not explicit_google_mail:
-                for mail_tool_name in ("tensology_workspace", "google_workspace"):
-                    mail_tool = self._tools_dict.get(mail_tool_name)
-                    if mail_tool is not None and mail_tool.name not in retrieved_names:
-                        retrieved.append(mail_tool)
-                        retrieved_names.add(mail_tool.name)
-            workspace_exposure_keywords = gmail_keywords + calendar_keywords
-            if (
-                not explicit_tensology_mail
-                and not generic_mail_read
-                and any(k in qlow for k in workspace_exposure_keywords)
-                and "google_workspace" in self._tools_dict
-            ):
-                gw_tool = self._tools_dict["google_workspace"]
-                if gw_tool.name not in retrieved_names:
-                    retrieved.append(gw_tool)
-                    retrieved_names.add(gw_tool.name)
-            delegated_source_keywords = ("telegram", "remote", "desktop", "browser", "phone")
-            delegated_work_keywords = (
-                "pdf",
-                "document",
-                "attachment",
-                "file",
-                "scope",
-                "plan",
-                "prep",
-                "prepare",
-                "http://",
-                "https://",
-                "website",
-                "web page",
-                "playwright",
-                "browseruse",
-                "browser use",
-                "screenshot",
-                "click",
-            )
-            delegated_handoff_keywords = ("codex", "cursor", "handoff", "implement", "report back")
-            wants_delegated_plan = (
-                any(k in qlow for k in delegated_source_keywords)
-                and any(k in qlow for k in workspace_exposure_keywords + delegated_work_keywords)
-                and any(k in qlow for k in delegated_handoff_keywords + ("mouse", "keyboard", "copy", "paste"))
-            )
-            if wants_delegated_plan and "delegated_workflow" in self._tools_dict:
-                delegated_tool = self._tools_dict["delegated_workflow"]
-                if delegated_tool.name not in retrieved_names:
-                    retrieved.append(delegated_tool)
-                    retrieved_names.add(delegated_tool.name)
+            # Intent groups (Development state, planning, mail, calendar,
+            # delegated device work) pin the tools that answer them; these
+            # replaced the per-keyword exposure hacks that lived here.
+            from distr.core.agent.tool_relevance import intent_tool_names
+
+            for intent_name in intent_tool_names(last_user_message):
+                intent_tool = self._tools_dict.get(intent_name)
+                if intent_tool is not None and intent_tool.name not in retrieved_names:
+                    retrieved.append(intent_tool)
+                    retrieved_names.add(intent_tool.name)
             return retrieved + sticky
         except Exception as e:
             logger.debug("_get_filtered_tools fallback: %s", e)
@@ -1012,6 +948,26 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         self._last_state_grounding = grounding
         return grounding.to_prompt_block(user_message_content)
 
+    def _apply_plan_step(self, text: str, user_message_content: str) -> str:
+        """Ask for a short numbered plan first when the request has several steps."""
+        try:
+            from distr.core.agent.plan_step import with_plan_step
+
+            content, planned = with_plan_step(text, user_message_content)
+        except Exception:
+            logger.debug("Plan step skipped", exc_info=True)
+            return user_message_content
+        self._last_plan_step = planned
+        if planned:
+            logger.info("Plan step requested for multi-step request")
+            queue = getattr(self, "event_queue", None)
+            if queue is not None:
+                try:
+                    queue.put(("plan_step_requested", {"text": str(text or "")[:200]}), block=False)
+                except Exception:
+                    pass
+        return content
+
     def _maybe_inject_rag_context(self, text: str) -> str:
         """When a local RAG index exists, prepend retrieved context for chat replies."""
         clean = str(text or "").strip()
@@ -1026,6 +982,18 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             )
 
             mp_ctx = prefer_read_rag_context(clean)
+            if not mp_ctx:
+                try:
+                    from distr.core.mempalace.wiring import _enabled as _mempalace_enabled
+
+                    enabled = _mempalace_enabled(None)
+                except Exception:
+                    enabled = False
+                logger.info(
+                    "MemPalace recall: %s (%d words)",
+                    "no match" if enabled else "backend off",
+                    len(clean.split()),
+                )
             if mp_ctx:
                 relevant = filter_rag_snippets(clean, mp_ctx)
                 if not relevant:
@@ -1037,8 +1005,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 block = RAG_HEADER + "\n" + relevant[:2500]
                 logger.info("MemPalace RAG inject (%d of %d chars kept)", len(relevant), len(mp_ctx))
                 return block + USER_REQUEST_MARKER + clean
-        except Exception:
-            logger.debug("MemPalace RAG inject skipped", exc_info=True)
+        except Exception as exc:
+            logger.warning("MemPalace recall failed: %s", exc)
         try:
             from pathlib import Path as _Path
             from distr.core.agent.services.rag.integration import query_rag
@@ -1150,6 +1118,56 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         except Exception:
             logger.exception("Agent WorkIntake routing failed; continuing conversational path")
             return False
+
+    def _recent_user_texts(self, limit: int = 4) -> list[str]:
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+        texts: list[str] = []
+        for message in reversed(getattr(self, "_messages", []) or []):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                texts.append(strip_rag_block(content))
+            if len(texts) >= limit:
+                break
+        return list(reversed(texts))
+
+    def _defer_anaphoric_fast_action(self, fast_action, text: str) -> bool:
+        """Send "read it" to the model when "it" is a thread/message, not the clipboard."""
+        try:
+            from distr.core.agent.anaphora import should_defer_clipboard_read
+            from distr.core.agent.services.llm.fast_action_detector import ActionType
+
+            if fast_action is None or fast_action.action_type not in {ActionType.CLIPBOARD_READ, ActionType.CLIPBOARD_GET}:
+                return False
+            history = self._recent_user_texts()
+            clean = str(text or "").strip()
+            if history and history[-1].strip() == clean:
+                history = history[:-1]
+            referent = should_defer_clipboard_read(clean, history)
+        except Exception:
+            logger.debug("Anaphora check failed", exc_info=True)
+            return False
+        if referent:
+            logger.info("Deferred clipboard fast action: %r refers to %s", clean[:80], referent)
+            self._anaphora_referent = referent
+            messages = getattr(self, "_messages", None) or []
+            from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+            if (
+                messages
+                and messages[-1].get("role") == "user"
+                and isinstance(messages[-1].get("content"), str)
+                and strip_rag_block(messages[-1]["content"]).strip() == clean
+            ):
+                # The user turn is already queued for the model: add the hint now.
+                from distr.core.agent.anaphora import referent_hint
+
+                messages[-1]["content"] = messages[-1]["content"].rstrip() + "\n\n" + referent_hint(referent)
+                self._anaphora_referent = ""
+            return True
+        return False
 
     def _should_defer_type_text_fast_action(self, fast_action, text: str) -> bool:
         """Debounce type_text FAs so partial/growing ASR utterances do not double-fire.
@@ -1285,6 +1303,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         fast_action = detect_fast_action(last_message)
         if fast_action and fast_action.confidence >= 0.9 and fast_action.action_type not in (ActionType.CONVERSATIONAL, ActionType.UNKNOWN):
             if self._should_defer_type_text_fast_action(fast_action, last_message):
+                return None
+            if self._defer_anaphoric_fast_action(fast_action, last_message):
                 return None
             return fast_action
         if normalized not in repeat_phrases:
@@ -1956,6 +1976,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
         persona = getattr(self, '_persona', None)
         content = f"{persona}\n\n{template}" if persona else template
+        try:
+            from distr.core.agent.owner_identity import owner_identity_block, owner_name
+
+            owner_block = owner_identity_block(owner_name(getattr(self, "_username", "")))
+        except Exception:
+            owner_block = ""
+        if owner_block:
+            content = (
+                f"{persona}\n\n{owner_block}\n\n{template}" if persona else f"{owner_block}\n\n{template}"
+            )
 
         # Append recent tool reflection context so the LLM is aware of prior
         # tool outcomes (failures, loop patterns) when composing its response.
@@ -2325,6 +2355,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             user_message_content = self._maybe_inject_rag_context(user_message_content)
         if isinstance(user_message_content, str):
             user_message_content = self._ground_state_question(text, user_message_content)
+        if isinstance(user_message_content, str):
+            user_message_content = self._apply_plan_step(text, user_message_content)
+        referent = getattr(self, "_anaphora_referent", "")
+        if referent and isinstance(user_message_content, str):
+            from distr.core.agent.anaphora import referent_hint
+
+            user_message_content = user_message_content.rstrip() + "\n\n" + referent_hint(referent)
+            self._anaphora_referent = ""
         image_path = get_image_path_from_context(uploaded_image_path)
 
         if image_path and os.path.exists(image_path):
@@ -2649,6 +2687,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 and fast_action.action_type != ActionType.CONVERSATIONAL
                 and (fast_action.action_type != ActionType.UNKNOWN or fast_action.tool_name)
             )
+            if can_execute_directly and self._defer_anaphoric_fast_action(fast_action, text):
+                can_execute_directly = False
             if can_execute_directly:
                 if self._should_defer_type_text_fast_action(fast_action, text):
                     if getattr(self, "_type_text_fa_soft_defer", False):

@@ -312,6 +312,9 @@ class NativeTurnRuntime:
             return True
 
         failed_tool_calls_without_progress = 0
+        from distr.core.agent.loop_guard import ReadLoopGuard, is_harness_read
+
+        read_guard = ReadLoopGuard.for_development()
         for iteration in range(1, self._max_iterations + 1):
             token.raise_if_cancelled()
             apply_steering()
@@ -511,6 +514,7 @@ class NativeTurnRuntime:
                     summary=summary, output_delta="\n\n" if streamed and output else summary + "\n\n",
                     details={"iteration": iteration, "tool_count": len(calls)},
                 )
+            pending_read_nudge = ""
             messages.append(
                 {
                     "role": "assistant",
@@ -590,6 +594,32 @@ class NativeTurnRuntime:
                         "content": self._observation_message(observation),
                     }
                 )
+                read = is_harness_read(call.name, {"command": arguments.get("command")} if call.name == "run_command" else {})
+                guard_verdict = read_guard.observe(call.name, arguments, read=bool(read)) if read is not None else ""
+                if guard_verdict == "nudge":
+                    pending_read_nudge = read_guard.nudge_message()  # after all tool results
+                elif guard_verdict == "stop" and not mutation_completed:
+                    message = read_guard.stop_message("development")
+                    self._emit(
+                        on_event,
+                        kind=TurnEventKind.FAILED,
+                        status=TurnStatus.FAILED,
+                        summary=message,
+                        details={"iteration": iteration, "read_loop_guard": read_guard.reason},
+                    )
+                    return TurnResult(
+                        success=False,
+                        runtime_id=self.runtime_id,
+                        backend_id="native",
+                        model=request.route.model,
+                        error=message,
+                        evidence={
+                            "iterations": iteration,
+                            "read_loop_guard": read_guard.reason,
+                            "total_reads": read_guard.total_reads,
+                            "context_compactions": context_compactions,
+                        },
+                    )
                 if observation.status in {"error", "failed"}:
                     failed_tool_calls_without_progress += 1
                 else:
@@ -623,6 +653,8 @@ class NativeTurnRuntime:
                             "context_compactions": context_compactions,
                         },
                     )
+            if pending_read_nudge:
+                messages.append({"role": "user", "content": pending_read_nudge})
             apply_steering()
 
         message = f"The native Development turn reached its {self._max_iterations}-iteration safety limit."
