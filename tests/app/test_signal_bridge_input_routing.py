@@ -67,6 +67,13 @@ def _fake_signal_manager():
         "speech_volume_changed",
         "vad_threshold_changed",
     ]
+    # Every signal the bridge connects, read from the source so a new signal
+    # (e.g. chat_cancel_requested) doesn't break this fake again.
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "distr/app/signals.py").read_text(encoding="utf-8")
+    names = sorted(set(names) | set(re.findall(r"signal_manager\.(\w+)\.connect", src)))
     return SimpleNamespace(**{name: _Signal() for name in names})
 
 
@@ -399,6 +406,9 @@ def test_web_send_preserves_durable_intake_identity(monkeypatch):
             "text": "Research this artist and summarize the evidence.",
             "speak": False,
             "chat_id": 808,
+            # The chat's own model rides along so the agent can't drift to the global default.
+            "provider": "openai",
+            "model_name": "gpt-5.2",
             "work_intake_uid": captured[0].intake_uid,
         },
     )
