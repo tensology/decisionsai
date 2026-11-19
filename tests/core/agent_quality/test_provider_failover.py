@@ -298,8 +298,10 @@ class _FakeChatManager:
     def get_current_chat(self):
         return 1381
 
-    def add_assistant_message(self, chat_id, text):
+    def add_assistant_message(self, chat_id, text, **kwargs):
+        # The provider notice is saved non-final so the backup's answer closes the turn.
         self.saved.append((chat_id, text))
+        self.kwargs = kwargs
 
 
 def _chat_service(model, provider_class_name="OllamaLLMService"):

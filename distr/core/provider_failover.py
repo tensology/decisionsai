@@ -357,10 +357,82 @@ def failover_candidates(
         if model:
             add(provider, model, "failover order")
             continue
+        before = len(out)
         for cfg_provider, cfg_model in configured:
             if cfg_provider == provider:
                 add(cfg_provider, cfg_model, "configured model")
+        if len(out) == before:
+            # A keyed provider with no model picked anywhere in Settings would
+            # otherwise be skipped, leaving no backup when every route points
+            # at one provider. Use a model that provider is known to serve.
+            for catalog_model in catalog_fallback_models(provider, failed_model):
+                before_catalog = len(out)
+                add(provider, catalog_model, "provider catalog")
+                if len(out) > before_catalog:
+                    break
     return out
+
+
+# Small, inexpensive chat models tried in order when a provider has no model
+# configured. Only ids present in that provider's cached catalog are used.
+PREFERRED_BACKUP_MODELS: dict[str, tuple[str, ...]] = {
+    "openai": ("gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"),
+    "anthropic": ("claude-haiku-4-5", "claude-3-5-haiku-latest"),
+    "gemini": ("gemini-2.5-flash", "gemini-2.0-flash"),
+    "groq": ("llama-3.3-70b-versatile",),
+}
+
+
+def _catalog_model_ids(provider: str) -> list[str]:
+    """Model ids from the provider's cached catalog files (no network)."""
+    try:
+        from distr.core.services.model_catalog_cache import MODEL_CATALOG_CACHE_DIR
+    except Exception:
+        return []
+    norm = normalize_provider(provider)
+    ids: list[str] = []
+    try:
+        names = sorted(os.listdir(MODEL_CATALOG_CACHE_DIR))
+    except OSError:
+        return []
+    for name in names:
+        if not (name.startswith(norm + "_") and name.endswith(".json")) or "_image_" in name or "_video_" in name:
+            continue
+        try:
+            data = json.loads(Path(MODEL_CATALOG_CACHE_DIR, name).read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        models = data.get("models") if isinstance(data, dict) else data
+        for entry in models or []:
+            mid = entry.get("id") or entry.get("name") if isinstance(entry, dict) else entry
+            mid = str(mid or "").strip()
+            if mid and mid not in ids:
+                ids.append(mid)
+    return ids
+
+
+def catalog_fallback_models(provider: str, failed_model: str = "") -> list[str]:
+    """Backup models for a keyed provider that has none configured.
+
+    First the same model under that provider (``vendor/model`` ids are shared by
+    routers such as Kilo, and NVIDIA uses ``vendor-ai/model``), then the
+    provider's preferred inexpensive chat models. Only catalog ids qualify.
+    """
+    ids = _catalog_model_ids(provider)
+    if not ids:
+        return []
+    lowered = {i.lower(): i for i in ids}
+    out: list[str] = []
+    failed = str(failed_model or "").strip().lower()
+    if failed:
+        tail = failed.split("/", 1)[-1]
+        for mid_l, mid in lowered.items():
+            if mid_l == failed or mid_l.split("/", 1)[-1] == tail:
+                out.append(mid)
+    for preferred in PREFERRED_BACKUP_MODELS.get(normalize_provider(provider), ()):
+        if preferred.lower() in lowered:
+            out.append(lowered[preferred.lower()])
+    return [m for m in dict.fromkeys(out) if is_chat_capable_model(m)]
 
 
 def next_failover(

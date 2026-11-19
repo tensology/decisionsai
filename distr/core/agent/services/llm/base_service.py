@@ -477,7 +477,19 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         from distr.core.llm_errors import format_model_error, format_model_error_for_tts
         from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
-        msg = format_model_error(
+        # This override shadows LLMSharedMixin._surface_model_error, so provider
+        # failover must be attempted here too or chat never fails over.
+        notice = ""
+        try_failover = getattr(self, "_try_provider_failover", None)
+        if callable(try_failover):
+            handled, notice = try_failover(exc)
+            if handled:
+                post = getattr(self, "_post_provider_notice", None)
+                if callable(post):
+                    post(notice)
+                return ""
+
+        msg = notice or format_model_error(
             exc,
             provider=self._get_provider_name(),
             model=getattr(self, "_model_name", ""),
