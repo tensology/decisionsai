@@ -311,6 +311,12 @@ class BaseLLMService(LLMSharedMixin, LLMService):
             decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             tool_name = tool_call["function"]["name"]
             if not decision.get("allow", True):
+                from distr.core.agent.loop_guard import log_skipped_tool
+
+                log_skipped_tool(
+                    chat_id, tool_name, tool_call["function"].get("arguments"),
+                    "Skipped by computer-use guard", "computer_use_guard", self.event_queue,
+                )
                 results.append({
                     "role": "tool",
                     "tool_call_id": tool_call["id"],

@@ -158,6 +158,7 @@ def _get_tool_definitions(
         # Select / open a thread in the web UI sidebar (2026-10-22 selthread)
         ("SelectThreadTool", {}),
         ("OpenThreadTool", {}),
+        ("ReadConversationTool", {}),
         # Mermaid diagram viewer
         ("ShowMermaidDiagramTool", dict(chat_manager=chat_manager)),
         # yt-dlp downloads with progress UI
@@ -189,6 +190,7 @@ def _get_tool_definitions(
         # Terminal Overview — query project terminal state
         ("TerminalOverviewTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
         ("DevelopmentControlTool", {}),
+        ("PlanningTool", {}),
         # Laya submissions — route text to a project thread and dispatch an agent turn
         ("LayaSubmitTool", {}),
         ("LayaSubmissionStatusTool", {}),
@@ -558,6 +560,7 @@ TOOL_REGISTRY = {
     "OpenPageTool":            ("chat.open_page", "OpenPageTool"),
     "SelectThreadTool":        ("chat.select_thread", "SelectThreadTool"),
     "OpenThreadTool":          ("chat.select_thread", "OpenThreadTool"),
+    "ReadConversationTool":    ("chat.read_conversation", "ReadConversationTool"),
     "ShowMermaidDiagramTool":  ("chat.show_mermaid_diagram", "ShowMermaidDiagramTool"),
     "YtdlpDownloadTool":       ("integrations.ytdlp_download", "YtdlpDownloadTool"),
     "TensologyWorkspaceTool":  ("integrations.tensology_workspace", "TensologyWorkspaceTool"),
@@ -616,6 +619,7 @@ TOOL_REGISTRY = {
     "RequestToolTool":         ("request_tool", "RequestToolTool"),
     "TerminalOverviewTool":     ("integrations.terminal_overview", "TerminalOverviewTool"),
     "DevelopmentControlTool":   ("integrations.development_control", "DevelopmentControlTool"),
+    "PlanningTool":             ("system.planning_tool", "PlanningTool"),
     "LayaSubmitTool":           ("integrations.laya_submit", "LayaSubmitTool"),
     "LayaSubmissionStatusTool": ("integrations.laya_submit", "LayaSubmissionStatusTool"),
 }
@@ -809,6 +813,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",
     "TerminalOverviewTool": "Get the current state of a project's terminal session — last command and output. Use when the user asks about terminal activity.",
     "DevelopmentControlTool": "Inspect and manage Development threads, workflows, automations, Incoming, and Reports through explicit Development surface identifiers.",
+    "ReadConversationTool": "Read recent messages of another conversation: a chat agent's chat by name (e.g. what I said to Uncle Roger), or a chat or thread by id or title. Read-only.",
+    "PlanningTool": "Read a project's Plan from Development Planning: plan inventory, interfaces, data and documents sections. Read-only. Use for plan status and what the plan says.",
     "LayaSubmitTool": "Hand a request to Laya: route it to a project, select or create a Chat thread, dispatch the agent turn and stream progress.",
     "LayaSubmissionStatusTool": "Get the status of a Laya submission by id (routed, dispatched, done, failed) with project and thread.",
     # meta/
