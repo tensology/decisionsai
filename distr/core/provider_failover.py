@@ -331,6 +331,12 @@ def failover_candidates(
     healthy provider: the same provider may serve a different model.
     """
     failed_norm = normalize_provider(failed_provider)
+    tried = list(tried)
+    # Same-model hints for catalog backups: the failed model, then every model
+    # already tried. After one hop the failed model is the backup's own model
+    # (e.g. gpt-5.4-mini), which Kilo/NVIDIA don't list, so the chain used to
+    # stop after one backup even though the original model was available there.
+    hints = [str(failed_model or "")] + [str(m or "") for _p, m in tried]
     tried_set = {(normalize_provider(p), str(m or "").strip().lower()) for p, m in tried}
     tried_set.add((failed_norm, str(failed_model or "").strip().lower()))
     configured = configured_models(settings)
@@ -365,10 +371,15 @@ def failover_candidates(
             # A keyed provider with no model picked anywhere in Settings would
             # otherwise be skipped, leaving no backup when every route points
             # at one provider. Use a model that provider is known to serve.
-            for catalog_model in catalog_fallback_models(provider, failed_model):
-                before_catalog = len(out)
-                add(provider, catalog_model, "provider catalog")
-                if len(out) > before_catalog:
+            for hint in dict.fromkeys(h for h in hints if h) or [""]:
+                found = False
+                for catalog_model in catalog_fallback_models(provider, hint):
+                    before_catalog = len(out)
+                    add(provider, catalog_model, "provider catalog")
+                    if len(out) > before_catalog:
+                        found = True
+                        break
+                if found:
                     break
     return out
 
